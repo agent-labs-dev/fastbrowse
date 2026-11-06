@@ -149,6 +149,7 @@ impl Agent {
                 }
             };
             self.record_page(state, &observation);
+            state.note_pager_pages(&observation);
             state.choices = self.choices(&decision);
             judge_site(state, &observation, &decision);
             if let Some(probability) = decision.login_required {
@@ -572,11 +573,16 @@ impl Agent {
                 state.hint = Some(self.redact(&hint));
             }
             state.acted_from = Some(observation.clone());
-            state.followed = decision
-                .target
-                .as_ref()
-                .filter(|_| executed && action.operation == Operation::Click)
-                .and_then(|target| url::Url::parse(&observation.url).ok()?.join(target.href.as_deref()?).ok())
+            // The address a click or navigation asked for, so reading where it landed also reads that address: a
+            // site that redirects `/page/2` to `/page/2/` left the asked one unread, and a whole-list answer unverified.
+            let asked = match action.operation {
+                Operation::Click => decision.target.as_ref().and_then(|target| target.href.as_deref()),
+                Operation::Navigate => decision.url.as_deref(),
+                _ => None,
+            };
+            state.followed = asked
+                .filter(|_| executed)
+                .and_then(|href| url::Url::parse(&observation.url).ok()?.join(href).ok())
                 .map(String::from);
             if executed
                 && let Some(target) = &decision.target
@@ -630,7 +636,7 @@ impl Agent {
         let step = StepResult {
             index: state.steps.len() as i64,
             operation: decision.operation,
-            decided_by: if decision.replayed { Decider::Recipe } else { Decider::Jev },
+            decided_by: decision.decider(),
             outcome: act.outcome,
             url: observation.url.clone(),
             target: label,
@@ -714,7 +720,7 @@ impl Agent {
         let step = StepResult {
             index: state.steps.len() as i64,
             operation: decision.operation,
-            decided_by: if decision.replayed { Decider::Recipe } else { Decider::Jev },
+            decided_by: decision.decider(),
             outcome: StepOutcome::Failed,
             page_changed: Some(url != observation.url),
             url: url.clone(),

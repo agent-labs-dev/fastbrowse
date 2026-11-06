@@ -22,6 +22,7 @@ fastbrowse-core = { workspace = true }
 fastbrowse-clients = { workspace = true }
 fastbrowse-agent = { workspace = true }
 fastbrowse-run = { workspace = true }
+fastbrowse-browser = { workspace = true }
 indexmap = { version = "2.14.2", features = ["serde"] }
 log = "0.4.35"
 serde = { version = "1.0.229", features = ["derive"] }

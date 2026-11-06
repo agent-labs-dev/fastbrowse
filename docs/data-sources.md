@@ -1,7 +1,7 @@
 # Benchmark sources
 
-fastbrowse retains source identities in `fastbrowse.evals.sources`. Parallax owns dataset loading, official
-grader adapters and benchmark execution under its `browser-use` family.
+fastbrowse retains source identities in `fastbrowse.evals.sources`. The `evals/` project
+(`fastbrowse_evals`, a Parallax plugin) owns dataset loading, official grader adapters and benchmark execution.
 
 BU Bench uses the pinned Browser Use benchmark dataset and its weighted findings grader. The encrypted
 tasks stay private. The current full task set and a historical subset are separate measurements.

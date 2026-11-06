@@ -13,3 +13,10 @@ condition = "AND"
 paths = ['''^crates/fastbrowse-(core|agent)/tests/golden/[a-z_]+\.json$''']
 regexTarget = "match"
 regexes = ['''(state|step|read|page|document)_key": "[0-9a-f]{16,64}"''']
+
+[[allowlists]]
+description = "the extension's public key, which pins its ID; Chrome's manifest format requires it and it grants nothing"
+condition = "AND"
+paths = ['''^crates/fastbrowse-browser/extension/manifest\.json$''']
+regexTarget = "line"
+regexes = ['''^\s*"key": "MII[A-Za-z0-9+/]+=*",?$''']

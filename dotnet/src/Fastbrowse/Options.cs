@@ -76,6 +76,12 @@ public sealed record BrowserOptions
 
     /// <summary>How long a cloud browser may live, in minutes: 15 when null, and the service allows up to 240.</summary>
     public int? CloudTimeoutMinutes { get; init; }
+
+    /// <summary>Drive the user's own Chrome through the fastbrowse extension, in a tab group of the run's own.</summary>
+    public bool Extension { get; init; }
+
+    /// <summary>The label of the connected browser to use when more than one has the extension.</summary>
+    public string? ExtensionBrowser { get; init; }
 }
 
 /// <summary>A file a run may upload.</summary>

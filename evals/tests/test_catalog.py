@@ -1,0 +1,42 @@
+import pytest
+from fastbrowse.evals.catalog import PATH
+
+from fastbrowse_evals import catalog
+from fastbrowse_evals.catalog import export
+
+
+def test_public_catalog_is_an_exact_export_of_the_private_tasks() -> None:
+    export(PATH, check=True)
+
+
+def test_retired_tasks_are_listed_with_a_reason_and_run_nowhere() -> None:
+    import json
+
+    from fastbrowse_evals import live
+
+    rendered = json.loads(catalog.render())
+    assert rendered["retired"] == list(catalog.RETIRED)
+    running = {t.id for suite in live.SUITES.values() for t in suite}
+    assert {r["id"] for r in catalog.RETIRED} == {"stretch-wizard-correction"}
+    assert all(r["id"] not in running and r["reason"] and r["suite"] in live.SUITES for r in catalog.RETIRED)
+
+
+def test_every_head_to_head_exclusion_is_exported_with_its_reason() -> None:
+    import dataclasses
+    import json
+
+    from fastbrowse_evals import live
+
+    rendered = {t["id"]: t for suite in json.loads(catalog.render())["suites"].values() for t in suite}
+    for task in (t for suite in live.SUITES.values() for t in suite):
+        excluded = rendered[task.id]["excluded"]
+        assert set(excluded) == {arm for arm in live.HEAD_TO_HEAD_ARMS if not live.eligible(arm, task)}
+        assert all(excluded.values())
+    skipped = {arm: {i for i, t in rendered.items() if arm in t["excluded"]} for arm in live.HEAD_TO_HEAD_ARMS}
+    # The hosted agent's final page is read through its browser, so only the unauthorized-step task is left out.
+    assert skipped["browser-use"] == {"saucedemo-pause"}
+    assert skipped["fastbrowse"] == set()
+    assert len(skipped["jev-ultrafast"]) == len(rendered) - 47
+    lookup = next(t for t in live.TASKS if t.id == "pypi-version")
+    with pytest.raises(ValueError, match="without a stated reason"):
+        live.excluded_because("browser-use", dataclasses.replace(lookup, arms=("fastbrowse",)))

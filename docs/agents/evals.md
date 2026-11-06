@@ -5,15 +5,14 @@ has its own rules in [publish-evals.md](publish-evals.md).
 
 ## Iterate and verify
 
-Agent changes are iterated against `dev` only. The separate held-out suite is gone: Parallax moved its tasks
+Agent changes are iterated against `dev` only. The separate held-out suite is gone: its tasks moved
 into `dev`, so any dev task may be one a fix was designed against. When a task shaped the fix, say so in the PR,
 and check the result against the core suite and the local and mock fixtures rather than the task alone.
 Fix the general cause (the no eval tuning rule in [AGENTS.md](../../AGENTS.md)) before the before-and-after run.
 
-The internal live suite, external corpora, comparator adapters and recording tools live in Parallax under
-`parallax.browser_use`, in the private [agent-labs-dev/fastbrowse-evals](https://github.com/agent-labs-dev/fastbrowse-evals)
-repository. The campaign workflows check it out with the `EVALS_DEPLOY_KEY` deploy key. Run its `parallax browser internal --help`, `official --help`, `data --help` and
-`track --help` in the maintainer checkout. The internal comparison runs fastbrowse and Jev Ultrafast live and
+The internal live suite, external corpora, comparator adapters and the official runner live in `evals/`
+(`fastbrowse_evals`, a Parallax plugin). Run `uv run fastbrowse-evals browser internal --help`, `official --help`,
+`track-ledger --help` and `track-official --help` from `evals/`. The internal comparison runs fastbrowse and Jev Ultrafast live and
 reads Browser Use hosted default and Browser Harness from the competitor reference; label the Python SDK agent
 separately when used. An agent shows tasks it cannot attempt as not run. Never pool the best score from separate agents.
 
@@ -27,7 +26,10 @@ A claim about the agent rests on a run made for it, on the build it names:
 
 - Smoke a few tasks live before a full suite. A full suite is for a build whose smoke already passes.
 - Compare a candidate with a baseline measured on the same harness, judge and task set. Figures from
-  different harnesses, judges or task sets are not a comparison.
+  different harnesses, judges or task sets are not a comparison. `benchmark-campaign.yml` measures the build at
+  `fastbrowse_ref` with the tasks at `harness_sha`, and refuses a build whose grading differs from those tasks'
+  versions (`grading changed without a task version update`), so take the baseline from a build with the same
+  task versions, not an older release. Only a build that ships the harness's catalog can be published.
 - Report LLM calls by purpose beside pass rates; the ledger records each call's purpose.
 - Change a default model only on measured runs: measure the candidate on the fixture suites against the
   current default, and record the figures beside the default (`crates/fastbrowse-clients/src/environment.rs`
@@ -66,9 +68,9 @@ Run local checks directly, with owned browsers and containers stopped on exit.
 
 - `gh workflow run` dispatches only a workflow whose file is on the default branch. A new or renamed workflow
   merges to `main` before its first dispatch; `--ref` then picks the code it runs.
-- A campaign measures the ref it was asked to. Parallax pins a fastbrowse commit, so
-  `benchmark-campaign.yml` installs the requested build over that pin and runs every later command with
-  `uv run --no-sync`; a plain `uv run` would sync back to the pin and measure the wrong build.
+- A campaign measures the ref it was asked to. The harness lock pins this checkout's fastbrowse, so the
+  workflows sync with `--no-install-package fastbrowse`, install the requested build over it and run every later
+  command with `uv run --no-sync`; a plain `uv run` would sync back to the pin and measure the wrong build.
 - GitHub artifact downloads and job logs return 502 or 503 under load. Retry them; a failed download is not a
   failed run.
 

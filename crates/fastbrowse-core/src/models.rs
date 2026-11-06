@@ -44,6 +44,8 @@ str_enum! {
         ObservationLimit = "observation_limit",
         /// A model or browser provider stayed unavailable through every retry; the same run later may pass.
         Unavailable = "unavailable",
+        /// Stopped before it finished, by its caller or by the user in the browser it drove.
+        Cancelled = "cancelled",
         Error = "error",
     }
 }
@@ -679,6 +681,8 @@ pub struct RunResult {
     /// The sign-in or bot wall a `needs_login` or `blocked` run stopped at, when the page showed one.
     #[serde(default)]
     pub wall: Option<Wall>,
+    #[serde(default)]
+    pub browser: Option<BrowserUsed>,
 }
 
 impl RunResult {
@@ -714,8 +718,57 @@ impl Schema for RunResult {
                 Field::default("wall", Ty::optional(Wall::ty()), none()).doc(
                     "The sign-in or bot wall a `needs_login` or `blocked` run stopped at, when the page showed one.",
                 ),
+                Field::default("browser", Ty::optional(BrowserUsed::ty()), none())
+                    .doc("The browser the run drove, and how it reached it; none when it read every page over HTTP."),
             ],
         )
+        .ty()
+    }
+}
+
+str_enum! {
+    /// How a run reached the browser it drove.
+    doc: "How a run reached the browser it drove.";
+    pub enum BrowserVia {
+        /// A Browser Use Cloud browser started for the run.
+        Cloud = "cloud",
+        /// A local Chrome the run launched.
+        Launched = "launched",
+        /// A browser the caller was already running, reached over its DevTools address.
+        Attached = "attached",
+        /// The user's own browser, reached through the fastbrowse extension.
+        Extension = "extension",
+    }
+}
+
+/// The browser a run drove.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserUsed {
+    pub via: BrowserVia,
+    /// The profile it ran in, when one was named: a local profile directory, a cloud profile, or the label of a
+    /// browser connected through the extension.
+    #[serde(default)]
+    pub profile: Option<String>,
+    /// The browser's product and version, when known, such as `Chrome 150.0.7400.2`.
+    #[serde(default)]
+    pub browser: Option<String>,
+}
+
+impl Schema for BrowserUsed {
+    fn ty() -> Ty {
+        ModelTy::frozen(
+            "BrowserUsed",
+            vec![
+                Field::required("via", BrowserVia::ty()),
+                Field::default("profile", Ty::optional(Ty::Str), Value::Null).doc(
+                    "The profile it ran in, when one was named: a local profile directory, a cloud profile, or the label of a\nbrowser connected through the extension.",
+                ),
+                Field::default("browser", Ty::optional(Ty::Str), Value::Null)
+                    .doc("The browser's product and version, when known, such as `Chrome 150.0.7400.2`."),
+            ],
+        )
+        .doc("The browser a run drove.")
         .ty()
     }
 }

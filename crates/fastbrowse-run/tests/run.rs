@@ -8,7 +8,7 @@ use fastbrowse_clients::http::{Http, Request, Response, TransportError};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{Answer, DecisionClient, DecisionError, Evaluation, Question};
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
-use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, Event, LLMPurpose, Status};
+use fastbrowse_core::models::{BrowserUsed, BrowserVia, CostBasis, CostComponent, CostLine, Event, LLMPurpose, Status};
 use fastbrowse_core::protocol::CancellationReceipt;
 use fastbrowse_core::telemetry::Ledger;
 use fastbrowse_run::{Cancel, Host, RunError, RunTask, on_cloud, run_task};
@@ -300,7 +300,35 @@ async fn browser_choices_that_contradict_each_other_are_errors_before_any_browse
                 o.local = true;
                 o.attach = true;
             }),
-            "attach and target_match need cdp_url or cdp_port",
+            "attach and target_match need cdp_url, cdp_port or extension",
+        ),
+        (
+            task(|o, _| {
+                o.extension = true;
+                o.local = true;
+            }),
+            "extension drives the browser it is connected in; drop local",
+        ),
+        (
+            task(|o, _| {
+                o.extension_browser = Some("Work".into());
+                o.cdp_port = Some(9222);
+            }),
+            "drop cdp_port",
+        ),
+        (
+            task(|o, _| {
+                o.extension = true;
+                o.fetch = true;
+            }),
+            "cannot be combined with extension",
+        ),
+        (
+            task(|o, _| {
+                o.extension = true;
+                o.allowed_origins = Some(vec!["https://example.com".into()]);
+            }),
+            "allowed_origins cannot be combined with extension",
         ),
         (
             task(|o, h| {
@@ -433,7 +461,9 @@ async fn a_cancelled_run_closes_its_connection_before_it_returns() {
     let mut socket = connected.await.unwrap();
     cancel.trip();
     let refused = running.await.unwrap().unwrap_err();
-    assert_eq!(refused, RunError::Cancelled(CancellationReceipt::default()));
+    // The receipt names the browser it was opening, as a finished result would.
+    let browser = Some(Box::new(BrowserUsed { via: BrowserVia::Attached, profile: None, browser: None }));
+    assert_eq!(refused, RunError::Cancelled(CancellationReceipt { browser, ..CancellationReceipt::default() }));
     // The run has returned, so its end of the connection is closed: what is left to read ends.
     let mut rest = Vec::new();
     let read = tokio::time::timeout(std::time::Duration::from_secs(5), socket.read_to_end(&mut rest)).await;
@@ -934,4 +964,22 @@ async fn a_requested_screenshot_escalates_from_http_to_the_supplied_browser() {
     assert_eq!(opens.load(Ordering::SeqCst), 1, "an HTTP screenshot refusal must trigger browser escalation");
     assert_eq!(result.status, Status::Error);
     assert!(result.error.as_deref().unwrap().contains("screenshot browser was requested"));
+}
+
+#[tokio::test]
+async fn an_extension_run_with_no_browser_connected_ends_before_jev_is_asked() {
+    let hosts = std::env::temp_dir().join(format!("fastbrowse-no-hosts-{}", std::process::id()));
+    std::fs::create_dir_all(&hosts).unwrap();
+    // SAFETY: no other test in this binary reads FASTBROWSE_EXTENSION_DIR.
+    unsafe { std::env::set_var("FASTBROWSE_EXTENSION_DIR", &hosts) };
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let options = task(|o, h| {
+        o.extension = true;
+        h.jev = Some(Arc::new(RecordingDecision(asked.clone())));
+    });
+    let result = run(options).await;
+    let _ = std::fs::remove_dir(&hosts);
+    let message = format!("{result:?}");
+    assert!(message.contains("fastbrowse extension install"), "{message}");
+    assert!(asked.lock().unwrap().is_empty(), "Jev was asked before the run found no browser");
 }

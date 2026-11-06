@@ -1,11 +1,11 @@
 # Publish benchmark results
 
-Full browser campaigns run through Parallax. Its exporter validates clean builds, scheduled slots, source
+Full browser campaigns run through the harness, `evals/`. Its exporter validates clean builds, scheduled slots, source
 identity, physical ledgers and private Langfuse read-back before producing the campaign's `benchmark-candidate.json`.
 The file contains sanitized per-run grades, completion, time, cost, LLM and Jev call counts and model
 throughput. Official rubric scores retain their source meaning.
 
-No attempt of any agent has a time, step or spend limit: it runs until the agent ends it or a provider does. Parallax
+No attempt of any agent has a time, step or spend limit: it runs until the agent ends it or a provider does. The harness
 records the absence of limits in each run and manifest, and publication refuses a run that records any limit. A limit
 a provider imposes and no request can lift, such as Browser Use's 4 hour session maximum, is stated with the figures.
 
@@ -19,7 +19,7 @@ a provider imposes and no request can lift, such as Browser Use's 4 hour session
 
 ## The candidate contract
 
-Three programs share the candidate's schema: Parallax's `parallax browser publish-candidate` writes it,
+Three programs share the candidate's schema: `fastbrowse-evals browser publish-candidate` writes it,
 `fastbrowse.evals.benchmarks` validates and installs it, and `agent-labs-dev/fastbrowse-site` parses it
 (`src/lib/benchmark-feed.ts`). A schema change lands in all three. Before any of them merges, run one candidate written by
 the changed writer through both readers.
@@ -36,7 +36,7 @@ the changed writer through both readers.
 
 ## The candidate contract
 
-Three programs share the candidate's schema: Parallax's `parallax browser publish-candidate` writes it,
+Three programs share the candidate's schema: `fastbrowse-evals browser publish-candidate` writes it,
 `fastbrowse.evals.benchmarks` validates and installs it, and `agent-labs-dev/fastbrowse-site` parses it
 (`src/lib/benchmark-feed.ts`). A schema change lands in all three. Before any of them merges, run one candidate written by
 the changed writer through both readers.
@@ -57,7 +57,7 @@ approved under an older schema keep fastbrowse on a Browser Use Cloud browser th
 Schema 2 and later record each group's agent and runner commits and require them to match the candidate's build.
 
 `internal-hosted` is the head-to-head over the 53 tasks fastbrowse runs; figures approved at 46, 47 or 52 tasks still
-read. A campaign runs `fastbrowse` and `jev-ultrafast` live in one Parallax invocation, on Browser Use Cloud browsers
+read. A campaign runs `fastbrowse` and `jev-ultrafast` live in one harness invocation, on Browser Use Cloud browsers
 with the same settings. Each arm runs every repeat of every task it can attempt: `browser-use` skips the task that
 passes only by stopping before an unauthorized step, and `jev-ultrafast` and `browser-harness` also skip the login
 tasks, so they run 47. The catalog states each reason and the site shows those tasks as not run. Ultrafast returns no
@@ -126,13 +126,13 @@ publish a campaign again, dispatch `publish-evals.yml` with the campaign run's i
 
 Official results reach the same candidate through their public rows. A run directory holds decrypted BU Bench goals
 and upstream records, so it leaves `official-benchmarks.yml` only encrypted, and that job also writes the
-`official-rows-<suite>` artifact: opaque task ids, scores, seconds, dollars and protocol facts, after Parallax
+`official-rows-<suite>` artifact: opaque task ids, scores, seconds, dollars and protocol facts, after the harness
 has held the run to every publication rule. Dispatch it first, then dispatch `benchmark-campaign.yml` on the same
-`fastbrowse_ref` and `parallax_sha` with `official_runs` set to its run id, or give it `campaign_id` and it
+`fastbrowse_ref` and `harness_sha` with `official_runs` set to its run id, or give it `campaign_id` and it
 dispatches the campaign itself once every job has passed, as a release does. The campaign's own stage adds each
 suite as a group; its run facts take each suite's date and judge from those rows.
 
-Both workflows send every result to Langfuse as a step that runs even when the run stopped: `parallax browser
+Both workflows send every result to Langfuse as a step that runs even when the run stopped: `fastbrowse-evals browser
 track-ledger` for each campaign group and `track-official` for each suite. The candidate is refused unless
 Langfuse holds them. An upload to Langfuse does not approve publication.
 

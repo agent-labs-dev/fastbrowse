@@ -215,7 +215,7 @@ public final class Fastbrowse implements AutoCloseable {
                 try {
                     finished = JSON.treeToValue(value, RunResult.class);
                     // A run can finish before the cancellation reaches it, and what it spent is owed all the same.
-                    spent = Optional.of(new CancellationReceipt(finished.steps(), finished.cost(), finished.recordings()));
+                    spent = Optional.of(new CancellationReceipt(finished.steps(), finished.cost(), finished.recordings(), finished.browser()));
                 } catch (JacksonException e) {
                     failure = new FastbrowseException("the result could not be read", e);
                 }
@@ -388,6 +388,8 @@ public final class Fastbrowse implements AutoCloseable {
                 .viewport(viewport)
                 .cloudExtensions(browser.cloudExtensions())
                 .cloudTimeoutMinutes(browser.cloudTimeoutMinutes() == null ? null : (long) browser.cloudTimeoutMinutes())
+                .extension(browser.extension() ? true : null)
+                .extensionBrowser(browser.extensionBrowser())
                 .build();
     }
 
@@ -396,7 +398,7 @@ public final class Fastbrowse implements AutoCloseable {
      * videos of what it did when the reply carried them.
      */
     private static RunResult endedBy(String failure, CancellationReceipt spent) {
-        CancellationReceipt kept = spent != null ? spent : new CancellationReceipt(List.of(), new CostBreakdown(List.of()), List.of());
+        CancellationReceipt kept = spent != null ? spent : new CancellationReceipt(List.of(), new CostBreakdown(List.of()), List.of(), null);
         return RunResult.builder()
                 .status(Status.ERROR)
                 .evidence(List.of())
@@ -406,6 +408,7 @@ public final class Fastbrowse implements AutoCloseable {
                 .citations(List.of())
                 .error(failure)
                 .recordings(kept.recordings())
+                .browser(kept.browser())
                 .build();
     }
 

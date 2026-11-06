@@ -94,6 +94,15 @@ impl Agent {
         if intent != OutputIntent::Image && output_schema.is_none() {
             self.read_drawn_page(state, observation).await?;
         }
+        // A task over a whole list is not done while a next page the list named is unread: Jev judged the extent from
+        // the task, and finishing from the pages reached called part of the list the whole (#750), or ended on one
+        // record's own page after leaving the list (#798). Each such page is opened once at most.
+        if output_schema.is_none()
+            && state.every_page
+            && let Some(next) = state.unread_pager_page().cloned()
+        {
+            return self.open_unread_page(state, observation, next).await;
+        }
         // DONE on nothing read, when the task wants to be told something, is a step short of the answer.
         if output_schema.is_none()
             && state.notes.facts().is_empty()
@@ -136,6 +145,45 @@ impl Agent {
         Ok(extract(&*self.jev, task, &capture, schema, &options).await?)
     }
 
+    /// Open a next page a whole-list task left unread, as a step the run's code chose.
+    async fn open_unread_page(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        next: String,
+    ) -> Step<Option<RunResult>> {
+        state.pager_followed.insert(next.clone());
+        self.event("unread_next_page", || serde_json::Map::from_iter([("url".into(), next.clone().into())]));
+        let decision = crate::policy::Decision {
+            operation: Operation::Navigate,
+            url: Some(next),
+            target: None,
+            tab_id: None,
+            operation_confidence: 1.0,
+            target_confidence: None,
+            login_required: None,
+            offered_controls: 0,
+            reduction: crate::policy::Reduction::None,
+            cost: Vec::new(),
+            input_tokens: 0,
+            bot_check: None,
+            shows_answer: None,
+            site_failure: None,
+            destination: None,
+            replayed: false,
+            by_code: true,
+            offered: Vec::new(),
+            ahead: IndexMap::new(),
+        };
+        match Box::pin(self.step(state, observation, &decision)).await {
+            Err(super::state::Flow::Unsure(unsure)) => {
+                self.recover(state, observation, &unsure.reason, unsure.gives_up_as, None).await?;
+            }
+            other => other?,
+        }
+        Ok(None)
+    }
+
     /// Read a drawn page's screenshot into the notes when nothing read answers the task.
     ///
     /// A drawn page's answer is only in its pixels: the text layer cannot quote it. The task's wording may allow
@@ -162,7 +210,11 @@ impl Agent {
         }
         let reading = crate::retrieval::read_image(&*self.llm, &state.task, png.clone(), Some(&state.ledger)).await?;
         state.ledger.record([reading.cost.clone()])?;
-        if let Some(text) = reading.data.text.filter(|text| !text.trim().is_empty()) {
+        // A look is never in the text layer, so only a reading of text can merely repeat it.
+        let reading_text = reading.data.text.filter(|text| {
+            !text.trim().is_empty() && (state.appearance || !state.notes.repeats_page_text(text, &observation.url))
+        });
+        if let Some(text) = reading_text {
             state.notes.add_image_read(&self.mask(&text), &observation.url, observation.captured_at, &png);
             state.compose = true;
         } else {
@@ -290,6 +342,17 @@ impl Agent {
         let mut data = Value::Null;
         let mut status = if answer_problem.is_some() { Status::Unverified } else { Status::Complete };
         let mut error = answer_problem;
+        // A whole-list answer from part of the list is not the whole: a limit or a refused page left one unread.
+        if state.every_page
+            && let Some(unread) = state.unread_list_pages().next()
+        {
+            status = Status::Unverified;
+            error.get_or_insert_with(|| {
+                self.redact(&format!(
+                    "The list continues at {unread}, which this run did not read, so the answer covers only part of it."
+                ))
+            });
+        }
         if let Some(extraction) = extraction {
             data = extraction.data.unwrap_or(Value::Null);
             evidence.extend(extraction.evidence);

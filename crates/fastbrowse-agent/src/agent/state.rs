@@ -295,6 +295,14 @@ pub(crate) struct RunState {
     pub output_intent: OutputIntent,
     /// Jev's judgement, asked with `output_intent`, that the task asks how the page looks, which only its pixels show.
     pub appearance: bool,
+    /// Jev's reading that the task covers a whole list across its pages, such as a count over a site.
+    pub every_page: bool,
+    /// Each next page a list named, by absolute address, in the order the run saw them.
+    pub pager_pages: Vec<String>,
+    /// The page that began the list `pager_pages` continues.
+    pub pager_start: Option<String>,
+    /// Next pages the run opened itself because a whole-list task tried to finish before reading them.
+    pub pager_followed: HashSet<String>,
     /// Addresses read before the run moved from fetching to a browser, and not read in the browser yet.
     pub fetched: HashSet<String>,
     /// The action being taken commits, by Jev's judgement, so a failure it lands on must not be retried.
@@ -399,6 +407,63 @@ impl RunState {
         self.read_urls.insert(observation.url.clone());
     }
 
+    /// Remember each next page the observed list names, by its absolute address. Only this site's pages count: a link
+    /// to another origin is no more of this list, and its href is not a path joined against this page.
+    ///
+    /// A page with a pager that is not itself one of the noted next pages starts another list, and the next pages of
+    /// the one before are dropped: a shop's category opened from its front page is read to its end, not the front
+    /// page's list of every book. A page with no pager, such as one record's, leaves the list it came from as it was.
+    pub fn note_pager_pages(&mut self, observation: &Observation) {
+        let Ok(here) = url::Url::parse(&observation.url) else { return };
+        let named: Vec<String> = observation
+            .controls
+            .iter()
+            .filter(|control| fastbrowse_core::page::pager_link(control))
+            .filter_map(|control| control.href.as_deref().and_then(|href| here.join(href).ok()))
+            .filter(|page| page.origin() == here.origin())
+            .map(String::from)
+            .collect();
+        // A noted next page that redirected, as `/page/2/` to `/page/2`, continues the list by the address asked for.
+        let requested = self
+            .arrived_by
+            .as_ref()
+            .filter(|(landed, _)| *landed == read_key(observation))
+            .map(|(_, href)| href.as_str());
+        let continues = [Some(here.as_str()), requested]
+            .into_iter()
+            .flatten()
+            .any(|page| self.pager_start.as_deref() == Some(page) || self.pager_pages.iter().any(|next| next == page));
+        if !named.is_empty() && !continues {
+            self.pager_pages.clear();
+            self.pager_start = Some(here.to_string());
+        } else if continues && requested.is_some() && !self.pager_pages.contains(&here.to_string()) {
+            // Where a next page landed is a page of the list too, so a note read there counts as the list's.
+            self.pager_pages.push(here.to_string());
+        }
+        for page in named {
+            if !self.pager_pages.contains(&page) {
+                self.pager_pages.push(page);
+            }
+        }
+    }
+
+    /// The next pages of the list this run reads that it has not read. A list none of whose pages gave the task a note
+    /// is not the one it reads: a shop's front page lists every book, and a one-page category opened from it has no
+    /// pager of its own, so the front page's 49 next pages were opened one by one for a question about the category.
+    pub fn unread_list_pages(&self) -> impl Iterator<Item = &String> {
+        let list: Vec<String> =
+            self.pager_start.iter().chain(&self.pager_pages).map(|page| crate::memory::address(page)).collect();
+        let noted = self.notes.facts().iter().any(|fact| {
+            fact.evidence.as_ref().is_some_and(|evidence| list.contains(&crate::memory::address(&evidence.url)))
+        });
+        self.pager_pages.iter().filter(move |page| noted && !self.read_urls.contains(page.as_str()))
+    }
+
+    /// The first unread next page of the list this run reads that it has not opened for that reason before.
+    pub fn unread_pager_page(&self) -> Option<&String> {
+        self.unread_list_pages().find(|page| !self.pager_followed.contains(page.as_str()))
+    }
+
     /// Mark each link that leads to a page already read. A mark on the link itself tells apart links that share a
     /// label, as every quote's "(about)" does, where a list of labels could not.
     pub fn mark_read_links(&self, observation: &mut Observation) {
@@ -484,6 +549,10 @@ impl RunState {
             to_carry_out: false,
             output_intent: OutputIntent::Unknown,
             appearance: false,
+            every_page: false,
+            pager_pages: Vec::new(),
+            pager_start: None,
+            pager_followed: HashSet::new(),
             fetched: HashSet::new(),
             committing: false,
             read_pages: HashSet::new(),

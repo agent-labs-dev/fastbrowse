@@ -345,6 +345,7 @@ version = "0.9.1"
 dependencies = [
  "bytes",
  "fastbrowse-agent",
+ "fastbrowse-browser",
  "fastbrowse-cli",
  "fastbrowse-clients",
  "fastbrowse-core",

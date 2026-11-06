@@ -63,6 +63,10 @@ pub struct ServerConfig {
     /// A profile on the operator's cloud account whose sign-ins every call runs with. A calling model cannot choose
     /// it: which accounts the browser is signed into is the operator's decision, not the task's.
     pub cloud_profile: Option<String>,
+    /// Every call runs in the operator's own browser through the fastbrowse extension.
+    pub extension: bool,
+    /// Which browser the extension is connected in, by its label, when there is more than one.
+    pub extension_browser: Option<String>,
     pub ceilings: Limits,
     pub allow_authorize: bool,
     pub secrets: Vec<DeclaredSecret>,
@@ -83,6 +87,8 @@ impl Default for ServerConfig {
             chrome: LocalChrome::default(),
             foreground: false,
             cloud_profile: None,
+            extension: false,
+            extension_browser: None,
             ceilings: Limits::default(),
             allow_authorize: false,
             secrets: Vec::new(),
@@ -120,6 +126,10 @@ pub fn next_step(status: Status, allow_authorize: bool) -> Option<&'static str> 
         Status::NeedsInput => {
             "A required value or file is missing, or an upload exceeds its size limit; see error. Add missing text to \
              the task and call again. This tool cannot supply file attachments."
+        }
+        Status::Cancelled => {
+            "The run was stopped before it finished, by its caller or by the user in their browser. Call again only if \
+             the user still wants it."
         }
         Status::BudgetExceeded => "A limit was reached. Call again with a higher explicit limit or split the task.",
         Status::Stuck | Status::ObservationLimit => "Try a start URL closer to the goal, or a narrower task.",
@@ -390,6 +400,8 @@ pub struct McpArgs {
     pub profile: Option<PathBuf>,
     pub foreground: bool,
     pub cloud_profile: Option<String>,
+    pub extension: bool,
+    pub extension_browser: Option<String>,
     pub allow_authorize: bool,
     pub secret: Vec<(String, String, String)>,
     pub bitwarden: Vec<String>,
@@ -417,6 +429,8 @@ pub fn parser() -> Parser {
             Opt::value("--profile"),
             Opt::flag("--foreground"),
             Opt::value("--cloud-profile"),
+            Opt::flag("--extension"),
+            Opt::value("--extension-browser"),
             Opt::flag("--allow-authorize"),
             Opt::append("--secret"),
             Opt::append("--bitwarden"),
@@ -461,6 +475,8 @@ pub fn parse(argv: &[String]) -> Result<McpArgs, Exit> {
         profile: parsed.value("--profile").map(PathBuf::from),
         foreground: parsed.flag("--foreground"),
         cloud_profile: parsed.value("--cloud-profile").map(str::to_string),
+        extension: parsed.flag("--extension"),
+        extension_browser: parsed.value("--extension-browser").map(str::to_string),
         allow_authorize: parsed.flag("--allow-authorize"),
         secret: parsed.all("--secret").iter().filter_map(|value| secret_flag(value).ok()).collect(),
         bitwarden: parsed.all("--bitwarden").to_vec(),
@@ -498,6 +514,8 @@ pub fn configure(
         local: args.local,
         chrome: Some(chrome.clone()),
         cloud_profile: args.cloud_profile.clone(),
+        extension: args.extension,
+        extension_browser: args.extension_browser.clone(),
         ..RunTask::default()
     };
     fastbrowse_run::check(&operator).map_err(|error| ConfigurationError(error.to_string()))?;
@@ -546,6 +564,8 @@ pub fn configure(
         chrome,
         foreground: args.foreground,
         cloud_profile: args.cloud_profile.clone(),
+        extension: args.extension,
+        extension_browser: args.extension_browser.clone(),
         ceilings: Limits {
             max_steps: args.max_steps,
             max_dollars: args.max_dollars,
@@ -923,6 +943,8 @@ impl McpServer {
             chrome: Some(config.chrome.clone()),
             foreground: config.foreground,
             cloud_profile: config.cloud_profile.clone(),
+            extension: config.extension,
+            extension_browser: config.extension_browser.clone(),
             output_schema: schema,
             limits: Some(limits.clone()),
             authorization: Some(Authorization { irreversible_actions: arguments.authorize }),

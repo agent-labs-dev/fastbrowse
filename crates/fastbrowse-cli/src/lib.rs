@@ -11,6 +11,7 @@ pub mod bitwarden;
 pub mod cli;
 pub mod embed;
 pub mod entry;
+pub mod extension;
 pub mod mcp;
 pub mod options;
 pub mod runner;

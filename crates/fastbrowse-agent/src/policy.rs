@@ -301,6 +301,9 @@ pub struct Decision {
     /// A recipe step carried out again: no model chose it in this run, so no model's confidence vouches for it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub replayed: bool,
+    /// A step the run's own code chose rather than Jev, such as opening an unread next page of a whole-list task.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub by_code: bool,
     /// The controls Jev chose among, kept only when `Config.step_choices` asks for them.
     #[serde(skip)]
     pub offered: Vec<Control>,
@@ -310,6 +313,18 @@ pub struct Decision {
 }
 
 impl Decision {
+    /// Who chose this step: a replayed recipe, the run's own code, or Jev.
+    pub fn decider(&self) -> fastbrowse_core::models::Decider {
+        use fastbrowse_core::models::Decider;
+        if self.replayed {
+            Decider::Recipe
+        } else if self.by_code {
+            Decider::Code
+        } else {
+            Decider::Jev
+        }
+    }
+
     /// Weakest link: the action is only as certain as its least certain choice.
     pub fn confidence(&self) -> f64 {
         match self.target_confidence {
@@ -1133,6 +1148,7 @@ async fn evaluate(
         site_failure: noul_probability(&evaluation, "site_failure"),
         destination,
         replayed: false,
+        by_code: false,
         offered: Vec::new(),
         ahead,
     })

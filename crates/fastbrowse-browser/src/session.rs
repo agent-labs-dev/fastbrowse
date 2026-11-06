@@ -14,6 +14,7 @@ use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::{Artifact, ArtifactKind, ArtifactSink, BrowserConnection, FrameHandler};
 use fastbrowse_core::origins::OriginGrant;
 use fastbrowse_core::page::{Dialog, Tab};
+use fastbrowse_core::telemetry::Trace;
 use futures_util::future::{BoxFuture as FBoxFuture, try_join_all};
 use serde_json::{Value, json};
 use tokio::sync::watch;
@@ -174,6 +175,10 @@ pub struct SessionOptions {
     pub on_frame: Option<FrameHandler>,
     pub check_access: Option<CheckAccess>,
     pub viewport: Option<(u32, u32)>,
+    /// Called when the user stops the run in their browser, over the extension backend.
+    pub on_stop: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// The run's trace. Over the extension backend it records every message to and from the extension.
+    pub trace: Trace,
 }
 
 impl Default for SessionOptions {
@@ -184,6 +189,8 @@ impl Default for SessionOptions {
             on_frame: None,
             check_access: None,
             viewport: None,
+            on_stop: None,
+            trace: Trace::disabled(),
         }
     }
 }
@@ -330,6 +337,8 @@ pub(crate) struct Shared {
     pub(crate) max_download_bytes: usize,
     pub(crate) new_document_scripts: Vec<String>,
     pub(crate) on_frame: Option<FrameHandler>,
+    pub(crate) on_stop: Option<Arc<dyn Fn() + Send + Sync>>,
+    pub(crate) trace: Trace,
     pub(crate) viewport: Option<(u32, u32)>,
     pub(crate) client: Mutex<Option<Cdp>>,
     pub(crate) state: Mutex<State>,
@@ -388,6 +397,8 @@ impl BrowserSession {
             max_download_bytes: options.max_download_bytes,
             new_document_scripts,
             on_frame,
+            on_stop: options.on_stop,
+            trace: options.trace,
             viewport: options.viewport,
             client: Mutex::new(None),
             state: Mutex::default(),
@@ -429,9 +440,16 @@ impl BrowserSession {
     pub async fn open(&self) -> Result<(), BrowserError> {
         self.check_access().await?;
         self.0.state.lock().unwrap().closing = false;
-        let client = Cdp::connect(&self.0.connection.cdp_url).await?;
+        let client = Cdp::connect(&self.0.connection.cdp_url, &self.0.trace).await?;
         let weak = Arc::downgrade(&self.0);
+        let on_stop = self.0.on_stop.clone();
         client.on_event(Box::new(move |event| {
+            if event.method == crate::extension::STOPPED_EVENT {
+                if let Some(on_stop) = &on_stop {
+                    on_stop();
+                }
+                return;
+            }
             if let Some(shared) = weak.upgrade() {
                 Shared::on_event(&shared, event);
             }
@@ -849,6 +867,11 @@ impl BrowserSession {
         Ok(self.0.connection.foreground)
     }
 
+    /// Whether the browser is reached through the fastbrowse extension rather than a DevTools endpoint.
+    pub(crate) fn over_extension(&self) -> bool {
+        self.0.connection.cdp_url.starts_with(crate::extension::SCHEME)
+    }
+
     /// Have a tab that joins the run render: in front of its window, or behind it and kept painting.
     pub(crate) async fn show(&self, target_id: &str) -> Result<(), BrowserError> {
         if self.activate(target_id).await? {
@@ -859,6 +882,21 @@ impl BrowserSession {
         // a cast too small and too sparse to cost anything runs on a session of its own, where the casts that deliver
         // live frames and recordings cannot replace it. A start can go unanswered while a tab swaps renderer, and a
         // tab without the cast is only slower to capture, so it is bounded and never fails the run.
+        if self.over_extension() {
+            // `chrome.debugger` gives a tab one session, so the cast runs on the tab's own. A live-frame cast or a
+            // recording there keeps the tab painting already, and a second cast would replace theirs.
+            let session = {
+                let state = self.0.state.lock().unwrap();
+                let casting = self.0.on_frame.is_some() || state.frame_tap.is_some();
+                let session = state.tabs.iter().find(|t| t.target_id == target_id).map(|t| t.session_id.clone());
+                session.filter(|_| !casting)
+            };
+            if let Some(session) = session {
+                self.0.state.lock().unwrap().keepers.insert(target_id.to_owned(), session.clone());
+                self.screencast_command("Page.startScreencast", keep_painting(), Some(&session)).await;
+            }
+            return Ok(());
+        }
         let attach = self.send("Target.attachToTarget", json!({"targetId": target_id, "flatten": true}), None);
         let keeper = match timeout(secs(SCREENCAST_COMMAND_SECONDS), attach).await {
             Ok(Ok(keeper)) => str_of(&keeper["sessionId"]),
@@ -884,7 +922,12 @@ impl BrowserSession {
         if self.activate(&active).await? {
             return Ok(true);
         }
-        let keeper = self.0.state.lock().unwrap().keepers.get(&active).cloned();
+        let keeper = {
+            let state = self.0.state.lock().unwrap();
+            // Over the extension the keeper is the tab's own session, where a recording may have started since.
+            let replaced = self.over_extension() && state.frame_tap.is_some();
+            state.keepers.get(&active).cloned().filter(|_| !replaced)
+        };
         if let Some(keeper) = keeper {
             self.screencast_command("Page.startScreencast", keep_painting(), Some(&keeper)).await;
         }

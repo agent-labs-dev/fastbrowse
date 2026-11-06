@@ -2,6 +2,10 @@
 // Do not edit: change the types there, then run `npm run generate:sdk`.
 
 export type ArtifactKind = 'download' | 'screenshot' | 'capture';
+/**
+ * How a run reached the browser it drove.
+ */
+export type BrowserVia = 'cloud' | 'launched' | 'attached' | 'extension';
 export type Operation =
   | 'click'
   | 'hover'
@@ -52,6 +56,7 @@ export type Status =
   | 'budget_exceeded'
   | 'observation_limit'
   | 'unavailable'
+  | 'cancelled'
   | 'error';
 /**
  * What a sign-in or bot wall asks of the person who has to get the run past it.
@@ -89,6 +94,21 @@ export interface BrowserEvent {
    */
   browser_id: string | null;
 }
+/**
+ * The browser a run drove.
+ */
+export interface BrowserUsed {
+  via: BrowserVia;
+  /**
+   * The profile it ran in, when one was named: a local profile directory, a cloud profile, or the label of a
+   * browser connected through the extension.
+   */
+  profile: string | null;
+  /**
+   * The browser's product and version, when known, such as `Chrome 150.0.7400.2`.
+   */
+  browser: string | null;
+}
 export interface BudgetStop {
   resource: 'steps' | 'dollars' | 'seconds' | 'jev_calls' | 'llm_calls';
   limit: number;
@@ -105,6 +125,7 @@ export interface CancellationReceipt {
   steps: StepResult[];
   cost: CostBreakdown;
   recordings: string[];
+  browser: BrowserUsed | null;
 }
 export interface StepResult {
   index: number;
@@ -395,6 +416,8 @@ export interface RunParams {
   allowed_origins?: string[] | null;
   fetch?: boolean;
   browser?: boolean;
+  extension?: boolean;
+  extension_browser?: string | null;
 }
 export interface SecretRef {
   name: string;
@@ -426,6 +449,10 @@ export interface RunResult {
    * The sign-in or bot wall a `needs_login` or `blocked` run stopped at, when the page showed one.
    */
   wall: Wall | null;
+  /**
+   * The browser the run drove, and how it reached it; none when it read every page over HTTP.
+   */
+  browser: BrowserUsed | null;
 }
 /**
  * The wall a `needs_login` or `blocked` run stopped at, typed so a caller can route it without parsing `error`.

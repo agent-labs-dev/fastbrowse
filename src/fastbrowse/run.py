@@ -131,6 +131,8 @@ async def run_task(
     save_recipe: Path | None = None,
     fetch: bool = False,
     browser: bool = False,
+    extension: bool = False,
+    extension_browser: str | None = None,
     open_browser: Callable[[], Awaitable[str]] | None = None,
     page_ready: Callable[[], Awaitable[None]] | None = None,
     settings: Mapping[str, str] | None = None,
@@ -224,6 +226,14 @@ async def run_task(
     `open_browser` is the caller's own browser, opened only if the run needs one: it returns the address of a tab in
     front to drive, and the caller closes it after the run. `page_ready` is awaited once the browser's first page
     is open, before the first decision, so a caller timing the agent can keep browser setup off its clock.
+
+    `extension` runs in the user's own Chrome, signed in as they are, through the fastbrowse extension
+    (`fastbrowse extension install`), in a tab group of the run's own that closes when the run ends. With the
+    extension connected in more than one browser, `extension_browser` picks one by the label its popup shows. With none
+    connected the run ends `unavailable` before any spend, and it never falls back to another browser. The user
+    stops it from the extension's popup, the browser's debugging bar, or by closing the run's tabs, and the run
+    then ends `cancelled`. It cannot be combined with `allowed_origins`: a popup's first request can leave before
+    the extension reaches it, so it could not be refused first.
 
     `context` is background the run may use but never reads as the task: where the request came from, what the
     caller already knows. Jev sees it as `background`.

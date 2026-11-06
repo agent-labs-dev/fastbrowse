@@ -8,13 +8,12 @@ name: Benchmark campaign
 # files; merging that pull request is the approval. Each group's ledger goes to the private Langfuse project as soon as
 # it stops, finished or not, and the candidate requires it there.
 #
-# `official_runs` names finished Official benchmarks runs of the same `fastbrowse_ref` and `parallax_sha`. Their public
+# `official_runs` names finished Official benchmarks runs of the same `fastbrowse_ref` and `harness_sha`. Their public
 # rows join this candidate as the bu-bench and online-mind2web groups: the site reads one candidate, so every group in
 # it comes from one build. Run them first; this workflow neither starts nor waits for them.
 #
-# The campaign code lives in agent-labs-dev/fastbrowse-evals (parallax.browser_use), pinned by `parallax_sha`. The
-# fastbrowse repo does not depend on parallax, so this workflow checks the pinned parallax out beside fastbrowse
-# with EVALS_DEPLOY_KEY, a read-only deploy key on agent-labs-dev/fastbrowse-evals.
+# The campaign code is `evals/` in this repository (fastbrowse_evals, a Parallax plugin) at `harness_sha`, checked
+# out beside the measured build so the harness and the build can be different commits.
 #
 # Groups:
 #   fastbrowse    fastbrowse alone on every live suite task (internal-fastbrowse).
@@ -32,7 +31,7 @@ name: Benchmark campaign
 # Browser Use Cloud browser through the Codex CLI on gpt-6-luna, installed only for this dispatch.
 #
 # Repository configuration this file needs (checked before any paid call):
-#   secrets: EVALS_DEPLOY_KEY, OPENROUTER_API_KEY, AI_GATEWAY_API_KEY, PARALLAX_JUDGE_API_KEY,
+#   secrets: OPENROUTER_API_KEY, AI_GATEWAY_API_KEY, PARALLAX_JUDGE_API_KEY,
 #            LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY (each ledger is sent there; the candidate reads them back,
 #            with the fixture run)
 #            BROWSER_USE_API_KEY
@@ -65,9 +64,9 @@ on:
         description: The fastbrowse commit the arms measure (a release tag or full sha)
         required: true
         type: string
-      parallax_sha:
-        description: Full 40 character commit SHA of agent-labs-dev/fastbrowse-evals to run
-        required: true
+      harness_sha:
+        description: Full commit SHA of this repository whose evals/ runs the campaign; empty runs this workflow's commit
+        required: false
         type: string
       groups:
         description: Which groups to run
@@ -102,12 +101,29 @@ on:
         required: false
         type: string
         default: ""
+      only:
+        description: Smoke only. Space separated task ids of the chosen suites to run instead of all of them
+        required: false
+        type: string
+        default: ""
+      concurrency:
+        description: Smoke only. Runs in flight at once; empty keeps the default of 8
+        required: false
+        type: string
+        default: ""
+      extra_arms:
+        description: Smoke only. Space separated arms added to every chosen group, from fastbrowse-pool and fastbrowse-hosted
+        required: false
+        type: string
+        default: ""
 
 permissions: {}
 
-# One campaign at a time: the groups share the approved spend and the cloud browser quota.
+# One run per campaign at a time; different campaigns run side by side. Each dispatch checks the OpenRouter key holds
+# its own approved budget, so campaigns started together must fit in what the key has left between them, and the
+# cloud browser quota is shared by any that run head-to-head.
 concurrency:
-  group: benchmark-campaign
+  group: benchmark-campaign-${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
   cancel-in-progress: false
 
 env:
@@ -120,6 +136,9 @@ env:
   REFRESH: ${{ inputs.refresh_competitors || github.event.client_payload.refresh_competitors == true }}
   GROUPS_CHOSEN: ${{ inputs.groups || github.event.client_payload.groups || 'all' }}
   OFFICIAL_RUNS: ${{ inputs.official_runs || github.event.client_payload.official_runs || '' }}
+  ONLY: ${{ inputs.only || github.event.client_payload.only || '' }}
+  RUN_CONCURRENCY: ${{ inputs.concurrency || github.event.client_payload.concurrency || '' }}
+  EXTRA_ARMS: ${{ inputs.extra_arms || github.event.client_payload.extra_arms || '' }}
 
 jobs:
   resolve:
@@ -128,7 +147,7 @@ jobs:
     permissions: {contents: read, actions: read}
     outputs:
       fastbrowse_sha: ${{ steps.pins.outputs.fastbrowse_sha }}
-      parallax_sha: ${{ steps.pins.outputs.parallax_sha }}
+      harness_sha: ${{ steps.pins.outputs.harness_sha }}
       run_on: ${{ steps.pins.outputs.run_on }}
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
@@ -187,6 +206,23 @@ jobs:
           case "$OFFICIAL_RUNS" in
             *[!0-9\ ]*) echo "::error::official_runs must be run ids separated by spaces"; exit 1 ;;
           esac
+          # A published comparison covers every task of its suites under one setting, so only a smoke narrows either.
+          if test "$SMOKE" != true && { test -n "$ONLY" || test -n "$RUN_CONCURRENCY" || test -n "$EXTRA_ARMS"; }; then
+            echo "::error::only, concurrency and extra_arms need smoke"; exit 1
+          fi
+          for arm in $EXTRA_ARMS; do
+            case "$arm" in
+              fastbrowse-pool|fastbrowse-hosted) ;;
+              *) echo "::error::extra_arms takes fastbrowse-pool and fastbrowse-hosted, got '$arm'"; exit 1 ;;
+            esac
+          done
+          case "$ONLY" in
+            *[!a-z0-9\ -]*) echo "::error::only must be task ids separated by spaces"; exit 1 ;;
+          esac
+          case "$RUN_CONCURRENCY" in
+            '') ;;
+            *[!0-9]*|0) echo "::error::concurrency must be a positive integer, got '$RUN_CONCURRENCY'"; exit 1 ;;
+          esac
           # The site stores the candidate as data/benchmark-<campaign_id>.json.
           printf '%s' "$CAMPAIGN_ID" | grep -Eq '^[a-zA-Z0-9_.-]+$' \
             || { echo "::error::campaign_id may hold only letters, digits, '.', '_' and '-'"; exit 1; }
@@ -194,16 +230,16 @@ jobs:
         id: pins
         env:
           FASTBROWSE_REF: ${{ inputs.fastbrowse_ref || github.event.client_payload.fastbrowse_ref }}
-          PARALLAX_SHA: ${{ inputs.parallax_sha || github.event.client_payload.parallax_sha }}
+          HARNESS_SHA: ${{ inputs.harness_sha || github.event.client_payload.harness_sha || github.sha }}
         run: |
           fastbrowse_sha="$(git rev-parse "${FASTBROWSE_REF}^{commit}")"
           printf '%s' "$fastbrowse_sha" | grep -Eq '^[0-9a-f]{40}$' \
             || { echo "::error::fastbrowse_ref did not resolve to a commit"; exit 1; }
-          printf '%s' "$PARALLAX_SHA" | grep -Eq '^[0-9a-f]{40}$' \
-            || { echo "::error::parallax_sha must be a full 40 character lowercase commit SHA"; exit 1; }
+          printf '%s' "$HARNESS_SHA" | grep -Eq '^[0-9a-f]{40}$' \
+            || { echo "::error::harness_sha must be a full 40 character lowercase commit SHA"; exit 1; }
           {
             echo "fastbrowse_sha=$fastbrowse_sha"
-            echo "parallax_sha=$PARALLAX_SHA"
+            echo "harness_sha=$HARNESS_SHA"
             echo "run_on=$(date -u +%F)"
           } >> "$GITHUB_OUTPUT"
       # The stage job needs a passing Evals dispatch on this build, and an integration that can only send a
@@ -230,13 +266,11 @@ jobs:
           PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
-          EVALS_DEPLOY_KEY: ${{ secrets.EVALS_DEPLOY_KEY }}
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
           LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
         run: |
           missing=""
           need() { test -n "$2" || missing="$missing $1"; }
-          need EVALS_DEPLOY_KEY "$EVALS_DEPLOY_KEY"
           need OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
           need AI_GATEWAY_API_KEY "$AI_GATEWAY_API_KEY"
           need PARALLAX_JUDGE_API_KEY "$PARALLAX_JUDGE_API_KEY"
@@ -272,8 +306,9 @@ jobs:
         run: |
           vendors="jev-ultrafast"
           if test "$REFRESH" = true; then vendors="$vendors browser-use browser-harness"; fi
-          fastbrowse='{"label":"fastbrowse","key":"fastbrowse","arms":"fastbrowse","out":"internal-fastbrowse.jsonl"}'
-          head_to_head="{\"label\":\"head-to-head\",\"key\":\"head-to-head\",\"arms\":\"fastbrowse $vendors\",\"out\":\"head-to-head.jsonl\"}"
+          extra="${EXTRA_ARMS:+ $EXTRA_ARMS}"
+          fastbrowse="{\"label\":\"fastbrowse\",\"key\":\"fastbrowse\",\"arms\":\"fastbrowse$extra\",\"out\":\"internal-fastbrowse.jsonl\"}"
+          head_to_head="{\"label\":\"head-to-head\",\"key\":\"head-to-head\",\"arms\":\"fastbrowse $vendors$extra\",\"out\":\"head-to-head.jsonl\"}"
           case "$GROUP_SET" in
             fastbrowse) include="[$fastbrowse]" ;;
             head-to-head) include="[$head_to_head]" ;;
@@ -295,7 +330,8 @@ jobs:
     name: ${{ matrix.label }}
     needs: resolve
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    permissions: {contents: read, statuses: write}
+    # id-token: the fastbrowse-pool arm signs in to GCP to reach the browser pool.
+    permissions: {contents: read, statuses: write, id-token: write}
     # A full campaign is hours, not minutes, but a stuck cloud browser must not hold a runner for a day.
     timeout-minutes: 350
     strategy:
@@ -313,27 +349,24 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with: {python-version: "3.13"}
-      - name: Check out the pinned parallax
+      - name: Check out the harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: agent-labs-dev/fastbrowse-evals
-          ref: ${{ needs.resolve.outputs.parallax_sha }}
-          path: parallax
-          # A read-only deploy key on agent-labs-dev/fastbrowse-evals, the private source this repository cannot read.
-          ssh-key: ${{ secrets.EVALS_DEPLOY_KEY }}
+          ref: ${{ needs.resolve.outputs.harness_sha }}
+          path: harness
           persist-credentials: false
-      - name: Install parallax and fastbrowse
+      - name: Install the harness and fastbrowse
         env:
           FASTBROWSE_SHA: ${{ needs.resolve.outputs.fastbrowse_sha }}
         run: |
-          cd parallax
-          uv sync --locked --extra browser --extra track
-          # Measure this fastbrowse build, not the one parallax pins. Every later command runs with --no-sync:
-          # a syncing `uv run` would reinstall the pinned build over this one.
+          cd harness/evals
+          # The lock pins fastbrowse to the harness checkout; the measured build replaces it. Every later command runs
+          # with --no-sync: a syncing `uv run` would put the harness's own fastbrowse back.
+          uv sync --locked --no-install-package fastbrowse
           # A git+file install records the commit in direct_url.json, so the run names the measured build
           # (fastbrowse.evals.versions.provenance); a plain directory install records none and publication refuses it.
           uv pip install "fastbrowse @ git+file://$GITHUB_WORKSPACE/fastbrowse@$FASTBROWSE_SHA"
-          uv run --no-sync python -c "import fastbrowse, parallax"
+          uv run --no-sync python -c "import fastbrowse, fastbrowse_evals.live"
       # The browser-harness arm's agent; the arm checks this exact version before each attempt.
       - name: Install the Codex CLI Browser Harness drives
         if: ${{ env.REFRESH == 'true' && matrix.key == 'head-to-head' }}
@@ -348,9 +381,33 @@ jobs:
       - name: Report progress
         env:
           GH_TOKEN: ${{ github.token }}
-        run: nohup python3 ci/scripts/eval_progress.py "$OUT" "${{ matrix.label }}" > /dev/null 2>&1 &
+          CAMPAIGN_ID: ${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
+        # Campaigns run side by side on one harness commit, so each reports under its own campaign id.
+        run: nohup python3 ci/scripts/eval_progress.py "$OUT" "$CAMPAIGN_ID / ${{ matrix.label }}" > /dev/null 2>&1 &
+      # The pool serves fastbrowse-hosted's customers and is reachable only inside its cluster, so it is never
+      # exposed: this job signs in as fastbrowse-evals-pool, which may only port-forward to the pool in its namespace
+      # and read the pool's token, and leases through the forward.
+      - name: Sign in to the browser pool's project
+        if: ${{ contains(env.EXTRA_ARMS, 'fastbrowse-pool') }}
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: projects/173247957816/locations/global/workloadIdentityPools/github-pool/providers/github-fastbrowse
+          service_account: fastbrowse-evals-pool@fastbrowse-hosted.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+        if: ${{ contains(env.EXTRA_ARMS, 'fastbrowse-pool') }}
+        with: {install_components: "gke-gcloud-auth-plugin,kubectl"}
+      - name: Forward the browser pool
+        if: ${{ contains(env.EXTRA_ARMS, 'fastbrowse-pool') }}
+        run: |
+          gcloud container clusters get-credentials fastbrowse-pool --zone us-central1-a --project fastbrowse-hosted
+          nohup kubectl -n fastbrowse port-forward svc/browser-pool 18090:8090 > "$RUNNER_TEMP/pool-forward.log" 2>&1 &
+          for _ in $(seq 30); do curl -s -o /dev/null http://127.0.0.1:18090/ && break; sleep 1; done
+          token="$(gcloud secrets versions access latest --secret FBH_BROWSER_POOL_TOKEN --project fastbrowse-hosted)"
+          echo "::add-mask::$token"
+          { echo "PARALLAX_POOL_URL=http://127.0.0.1:18090"; echo "PARALLAX_POOL_TOKEN=$token"; } >> "$GITHUB_ENV"
       - name: Run the group
         env:
+          FASTBROWSE_HOSTED_API_KEY: ${{ secrets.FASTBROWSE_HOSTED_API_KEY }}
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
@@ -359,21 +416,27 @@ jobs:
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
           ARMS: ${{ matrix.arms }}
         run: |
-          cd parallax
+          cd harness/evals
           mkdir -p "$(dirname "$OUT")"
           read -ra arms <<< "$ARMS"
           read -ra suites <<< "$SUITES"
-          uv run --no-sync parallax browser internal \
+          read -ra only <<< "$ONLY"
+          narrow=()
+          test "${#only[@]}" -eq 0 || narrow+=(--only "${only[@]}")
+          test -z "$RUN_CONCURRENCY" || narrow+=(--concurrency "$RUN_CONCURRENCY")
+          uv run --no-sync fastbrowse-evals browser internal \
             --arms "${arms[@]}" \
             --suite "${suites[@]}" \
             --repeat "$REPEAT" \
             --budget "$BUDGET" \
+            "${narrow[@]}" \
             --out "$OUT"
       - name: Report the final progress
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 ci/scripts/eval_progress.py "$OUT" "${{ matrix.label }}" --final
+          CAMPAIGN_ID: ${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
+        run: python3 ci/scripts/eval_progress.py "$OUT" "$CAMPAIGN_ID / ${{ matrix.label }}" --final
       - name: Send the ledger to Langfuse
         # A stopped group is tracked too: every arm's experiment lists what ran.
         if: always()
@@ -382,10 +445,11 @@ jobs:
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
           LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
           PARALLAX_LANGFUSE_PROJECT: fastbrowse-evals
+          CAMPAIGN_ID: ${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
         run: |
           test -s "$OUT" || { echo "::warning::no ledger to track"; exit 0; }
-          cd parallax
-          uv run --no-sync parallax browser track-ledger "$OUT" --push ${{ env.SMOKE == 'true' && '--smoke' || '' }}
+          cd harness/evals
+          uv run --no-sync fastbrowse-evals browser track-ledger "$OUT" --push ${{ env.SMOKE == 'true' && '--smoke' || '' }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -411,21 +475,18 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with: {python-version: "3.13"}
-      - name: Check out the pinned parallax
+      - name: Check out the harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: agent-labs-dev/fastbrowse-evals
-          ref: ${{ needs.resolve.outputs.parallax_sha }}
-          path: parallax
-          # A read-only deploy key on agent-labs-dev/fastbrowse-evals, the private source this repository cannot read.
-          ssh-key: ${{ secrets.EVALS_DEPLOY_KEY }}
+          ref: ${{ needs.resolve.outputs.harness_sha }}
+          path: harness
           persist-credentials: false
-      - name: Install parallax and fastbrowse
+      - name: Install the harness and fastbrowse
         env:
           FASTBROWSE_SHA: ${{ needs.resolve.outputs.fastbrowse_sha }}
         run: |
-          cd parallax
-          uv sync --locked --extra browser --extra track
+          cd harness/evals
+          uv sync --locked --no-install-package fastbrowse
           # A git+file install records the commit in direct_url.json, so the run names the measured build
           # (fastbrowse.evals.versions.provenance); a plain directory install records none and publication refuses it.
           uv pip install "fastbrowse @ git+file://$GITHUB_WORKSPACE/fastbrowse@$FASTBROWSE_SHA"
@@ -442,8 +503,8 @@ jobs:
           done
       - name: Export the catalog
         run: |
-          cd parallax
-          uv run --no-sync parallax browser catalog "$GITHUB_WORKSPACE/catalog.json"
+          cd harness/evals
+          uv run --no-sync fastbrowse-evals browser catalog "$GITHUB_WORKSPACE/catalog.json"
       - name: Find the fixture run
         id: fixture
         # The candidate binds to a passing Evals dispatch on the measured build. A release dispatches one beside this
@@ -477,7 +538,7 @@ jobs:
           RUN_ON: ${{ needs.resolve.outputs.run_on }}
         run: |
           mapfile -t official < <(find "$GITHUB_WORKSPACE/official-rows" -name '*.rows.json' 2> /dev/null | sort)
-          cd parallax
+          cd harness/evals
           args=()
           for spec in \
             "$GITHUB_WORKSPACE/ledgers/internal-fastbrowse.jsonl:--internal-fastbrowse" \
@@ -490,7 +551,7 @@ jobs:
             args+=(--write-reference "$GITHUB_WORKSPACE/candidate/competitor-reference.json" --measured-on "$RUN_ON")
           fi
           mkdir -p "$GITHUB_WORKSPACE/candidate"
-          uv run --no-sync parallax browser publish-candidate \
+          uv run --no-sync fastbrowse-evals browser publish-candidate \
             --campaign-id "$CAMPAIGN_ID" \
             --out "$GITHUB_WORKSPACE/candidate/benchmark-candidate.json" \
             --catalog "$GITHUB_WORKSPACE/catalog.json" \
@@ -501,7 +562,7 @@ jobs:
         # What the site shows beside the figures and the candidate does not hold: the run date, harness and judge.
         env:
           RUN_ON: ${{ needs.resolve.outputs.run_on }}
-          PARALLAX_SHA: ${{ needs.resolve.outputs.parallax_sha }}
+          HARNESS_SHA: ${{ needs.resolve.outputs.harness_sha }}
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
         run: |
@@ -511,7 +572,7 @@ jobs:
             | map({key: .group, value: {run_on: .measured_on, judge: "\(.judge_model) through OpenRouter"}})
             | from_entries' {} + 2> /dev/null || true)"
           test -n "$groups" || groups='{}'
-          jq -n --arg run_on "$RUN_ON" --arg harness "Parallax at ${PARALLAX_SHA:0:7}" \
+          jq -n --arg run_on "$RUN_ON" --arg harness "fastbrowse-evals at ${HARNESS_SHA:0:7}" \
             --arg judge "$PARALLAX_JUDGE_MODELS through $PARALLAX_JUDGE_BASE_URL" --argjson groups "$groups" \
             '{run_on: $run_on, harness: $harness, judge: $judge, groups: $groups}' \
             > "$GITHUB_WORKSPACE/candidate/run-facts.json"

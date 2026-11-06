@@ -1,0 +1,640 @@
+import dataclasses
+import json
+import runpy
+from contextlib import asynccontextmanager
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
+from unittest.mock import AsyncMock, Mock
+
+import httpx
+import pytest
+from fastbrowse.evals.status import Ending, normalize, status_matches
+from fastbrowse.models import CostBasis, CostComponent, CostLine, Status
+
+from fastbrowse_evals import backend, final_page, live, live_tasks, more_tasks
+from fastbrowse_evals.browsers import Browser
+from fastbrowse_evals.final_page import EVIDENCE, LOCATION, RESTORE, UNHIDE, FinalPage
+from fastbrowse_evals.live_tasks import Outcome
+
+
+def test_missing_final_evidence_fails_every_strict_grader() -> None:
+    missing = Outcome("backpack large 43.18 JetBlue $846", None, None)
+    assert live_tasks._ended_on(missing, "/post")
+    assert live_tasks._ended_under(missing, "/abs")
+    assert live_tasks._cart(missing, None)
+    assert live_tasks._paused_before_paying(missing, None)
+    assert live_tasks._flight_results(missing, one_way_nonstop=False)
+    assert more_tasks._submitted(missing, None)
+    assert more_tasks._submitted(dataclasses.replace(missing, final_url="https://fixture.test/post"), None) is None
+
+
+# A correct answer, and the truth it is graded against, for each hosted-agent task whose check reads the page.
+_PAGE_GRADED = {
+    "wiki-godel": ("1931", "1931"),
+    "arxiv-title": ("Attention Is All You Need", "Attention Is All You Need"),
+    "saucedemo-checkout": (live_tasks._SAUCE_TOTAL, live_tasks._SAUCE_TOTAL),
+    "saucedemo-cart": ("Sauce Labs Backpack", None),
+    "expandtesting-login": ("You logged into a secure area!", None),
+    "practice-login": ("Logged In Successfully", None),
+    "google-flights": ("JetBlue, $846", None),
+}
+
+
+@pytest.mark.parametrize(("task_id", "graded"), _PAGE_GRADED.items())
+def test_the_hosted_agent_is_graded_on_its_answer_where_it_cannot_show_a_page(
+    task_id: str, graded: tuple[str, str | None]
+) -> None:
+    """The SDK never reports a final page, so the hosted agent's correct answer passes; any arm whose page the
+    harness observes still fails without one."""
+    (task,) = (t for t in live_tasks.TASKS if t.id == task_id)
+    assert "browser-use" in task.arms
+    answer, truth = graded
+    hosted = Outcome(answer, None, None, unobservable=True)
+    assert task.check(hosted, truth) is None
+    assert task.check(dataclasses.replace(hosted, unobservable=False), truth) is not None
+
+
+def test_an_idle_hosted_session_that_answered_is_done() -> None:
+    assert normalize("idle", hosted=True, answered=True) == Ending.DONE
+    assert normalize("idle", hosted=True, answered=False) != Ending.DONE
+
+
+def test_cart_requires_product_in_the_answer_and_on_the_final_cart() -> None:
+    """The hosted arm is graded on its answer; fastbrowse answering nothing, or denying it, passed on the page."""
+    page = Outcome(
+        "The cart holds the Sauce Labs Backpack",
+        None,
+        "https://www.saucedemo.com/cart.html",
+        quotes=(("https://www.saucedemo.com/cart.html", "Sauce Labs Backpack"),),
+    )
+    assert live_tasks._cart(page, None)
+    page = dataclasses.replace(page, controls=(("Sauce Labs Backpack", None),))
+    assert live_tasks._cart(page, None) is None
+    assert live_tasks._cart(dataclasses.replace(page, answer="No backpack was added"), None)
+    assert live_tasks._cart(dataclasses.replace(page, final_url="https://www.saucedemo.com/inventory.html"), None)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("complete", Ending.DONE),
+        ("DONE", Ending.DONE),
+        ("stopped", Ending.STOPPED),
+        ("needs_login", Ending.STOPPED),
+        ("budget_exceeded", Ending.BUDGET),
+        ("timed_out", Ending.TIMEOUT),
+        ("blocked", Ending.BLOCKED),
+        ("unavailable", Ending.UNAVAILABLE),
+        (None, Ending.ERROR),
+        ("unknown", Ending.ERROR),
+    ],
+)
+def test_status_normalization_fails_closed(raw: str | None, expected: Ending) -> None:
+    assert normalize(raw) == expected
+    assert not status_matches("fastbrowse", "needs_login", Status.NEEDS_CONFIRMATION)
+    assert status_matches("fastbrowse", "needs_confirmation", Status.NEEDS_CONFIRMATION)
+
+
+def test_registry_environment_excludes_unrelated_keys_and_uses_fresh_home() -> None:
+    env = live.arm_environment(
+        "jev-ultrafast",
+        "/tmp/test-home",
+        {
+            "PATH": "/usr/bin",
+            "HOME": "/private",
+            "GH_TOKEN": "private",
+            "AWS_SECRET_ACCESS_KEY": "private",
+            "BROWSER_USE_API_KEY": "private",
+            "PYTHONPATH": "/private",
+            "OPENROUTER_API_KEY": "private",
+        },
+    )
+    assert env["HOME"] == "/tmp/test-home" and env["PATH"] == "/usr/bin"
+    assert "private" not in json.dumps(env)
+    assert {name for name, spec in live.ARMS.items() if spec.default} == {"fastbrowse", "jev-ultrafast", "browser-use"}
+    assert live.ARMS["browser-use-oss"].pin == "browser-use==0.13.10"
+    assert live.prompt(live_tasks.TASKS[0]) == f"Start at {live_tasks.TASKS[0].start}. {live_tasks.TASKS[0].task}"
+
+
+async def test_registry_dispatch_accepts_new_arm_without_branching(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = AsyncMock(return_value=(Outcome("v1", None, None), live.ArmReport(status="done", seconds=3, dollars=None)))
+    monkeypatch.setitem(live.ARMS, "test-arm", live.ArmSpec(runner=runner, pin="test", env_allowlist=(), tier="A"))
+    task = next(t for t in live_tasks.TASKS if t.id == "pypi-version")
+    async with httpx.AsyncClient() as http:
+        row = await live.run_arm("test-arm", task, "v1", http, Path(), record=None)
+    assert row.passed is None
+    runner.assert_awaited_once()
+
+
+@pytest.mark.parametrize("focused", [True, False])
+async def test_observer_chooses_focused_page_or_rejects_ambiguity(
+    focused: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def evaluate(*, params: dict, session_id: str) -> dict:
+        expr = params["expression"]
+        if expr == "document.hasFocus()":
+            return {"result": {"value": focused and session_id == "new"}}
+        if expr == LOCATION:
+            return {"result": {"value": f"https://fixture.test/{session_id}"}}
+        if expr == EVIDENCE:
+            return {"result": {"value": {"inner_width": 1120}}}
+        assert expr in (UNHIDE, RESTORE) and session_id == "new"
+        return {"result": {}}
+
+    client = SimpleNamespace(
+        start=AsyncMock(),
+        stop=AsyncMock(),
+        send=SimpleNamespace(
+            Target=SimpleNamespace(
+                getTargets=AsyncMock(
+                    return_value={
+                        "targetInfos": [
+                            {"type": "page", "url": "https://fixture.test/old", "targetId": "old"},
+                            {"type": "page", "url": "https://fixture.test/new", "targetId": "new"},
+                        ]
+                    }
+                ),
+                attachToTarget=AsyncMock(side_effect=lambda params: {"sessionId": params["targetId"]}),
+            ),
+            Runtime=SimpleNamespace(evaluate=AsyncMock(side_effect=evaluate)),
+        ),
+    )
+
+    @asynccontextmanager
+    async def connect(*, cdp_url: str, target_match: str, config: object):
+        assert target_match == "https://fixture.test/new"
+        controls = [SimpleNamespace(label="Backpack", value=None)]
+        yield SimpleNamespace(observe=AsyncMock(return_value=SimpleNamespace(url=target_match, controls=controls)))
+
+    monkeypatch.setattr(final_page, "CDPClient", lambda _: client)
+    monkeypatch.setattr(final_page, "connect_cdp", connect)
+    result = await final_page.observe_browser("ws://fixture.test")
+    assert (result.url == "https://fixture.test/new") is focused
+    if focused:
+        assert result.controls == (("Backpack", None),) and result.evidence and result.evidence.inner_width == 1120
+    else:
+        assert result.error and result.controls is None
+    client.stop.assert_awaited_once()
+
+
+async def test_final_observer_reads_local_chrome_at_the_held_viewport() -> None:
+    """The harness's own session holds the viewport through the run and the reading, and the observer reads the tab
+    another client drove, after that client has gone."""
+    from cdp_use.client import CDPClient
+    from fastbrowse.evals.harness import find_chrome
+    from fastbrowse.evals.local import fixture_server
+
+    from fastbrowse_evals.browsers import local_browser
+
+    if (binary := find_chrome(None)) is None:
+        pytest.skip("Chrome is not installed")
+    with fixture_server() as (base, _):
+        async with local_browser(Path(binary)) as browser, final_page.prepared_tab(browser.cdp_url, viewport=True):
+            client = CDPClient(browser.cdp_url)
+            await client.start()
+            try:
+                (page,) = [t for t in (await client.send.Target.getTargets())["targetInfos"] if t["type"] == "page"]
+                attached = await client.send.Target.attachToTarget(
+                    params={"targetId": page["targetId"], "flatten": True}
+                )
+                session = attached["sessionId"]
+                await client.send.Page.navigate(params={"url": base + "/contact.html"}, session_id=session)
+                await client.send.Runtime.evaluate(
+                    params={
+                        "expression": "new Promise(r => document.readyState === 'complete' ? r() : "
+                        "window.addEventListener('load', r, {once: true}))",
+                        "awaitPromise": True,
+                    },
+                    session_id=session,
+                )
+            finally:
+                await client.stop()
+            final = await final_page.observe_browser(browser.cdp_url)
+    assert final.error is None and final.url == base + "/contact.html"
+    assert final.evidence and final.evidence.inner_width == final_page.VIEWPORT["width"]
+    assert final.controls and any("name" in label.lower() for label, _ in final.controls)
+
+
+def test_oss_done_requires_success_and_step_exhaustion_is_budget() -> None:
+    runner = runpy.run_path(str(live.OSS_RUNNER))
+    for done, success, steps, status in [
+        (True, True, 1, "done"),
+        (True, False, 1, "stopped"),
+        (False, None, 50, "budget_exceeded"),
+    ]:
+        history = SimpleNamespace(
+            is_done=lambda done=done: done, is_successful=lambda success=success: success, history=[None] * steps
+        )
+        assert runner["ending"](history, 50) == status
+    schema = runner["output_model"]({"title": "Answer", "properties": {"package": {"type": "string"}}})
+    assert schema.model_validate_json('{"package":"test"}').package == "test"
+
+
+@pytest.mark.parametrize("arm", ["jev-ultrafast", "browser-use-oss"])
+@pytest.mark.parametrize("unknown_browser_cost", [False, True])
+async def test_subprocess_uses_shared_prompt_and_harness_evidence(
+    arm: str, unknown_browser_cost: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entered = False
+
+    @asynccontextmanager
+    async def cloud(*_: object, **__: object):
+        nonlocal entered
+        entered = True
+        browser = Browser("ws://fixture")
+        try:
+            yield browser
+        finally:
+            browser.cost = (
+                (CostLine(component=CostComponent.BROWSER, basis=CostBasis.UNKNOWN),) if unknown_browser_cost else ()
+            )
+            entered = False
+
+    task = next(t for t in live_tasks.TASKS if t.id == "pypi-open")
+
+    async def invoke(command: tuple, script: Path, request: dict, env: dict, runtime: str) -> bytes:
+        assert entered
+        assert request["start"] == task.start and request["goal"] == live.prompt(task)
+        assert request["max_steps"] is None and request.get("max_seconds") is None  # uncapped: no arm has a limit
+        assert "GH_TOKEN" not in env
+        return json.dumps(
+            {
+                "status": "done",
+                "error": None,
+                "seconds": 1.0,
+                "dollars": 0.03,
+                "final_url": "https://stale.test/",
+                "controls": [["stale", None]],
+                "final_page": {
+                    "url": "https://pypi.org/project/runner",
+                    "evidence": {"device_pixel_ratio": 1, "inner_width": 1120},
+                },
+                "steps": 2,
+                "actions": 1,
+                "trace": [],
+                "jev_dollars": 0.01,
+                "text_dollars": 0.02,
+                "unmetered_requests": 0,
+                "text_model": "test",
+            }
+        ).encode()
+
+    async def observed(_: str, *, url: str | None = None, evidence: object = None) -> FinalPage:
+        assert entered, "the final page is read while the browser is still open"
+        if arm == "jev-ultrafast":
+            # The runner's own address and evidence, read before its daemon reset the tab, are kept.
+            assert url == "https://pypi.org/project/runner" and evidence is not None
+            return FinalPage(url=url, controls=(("runner", "kept"),), evidence=evidence)  # ty: ignore[invalid-argument-type]
+        return FinalPage(url="https://pypi.org/project/httpx", controls=(("observed", None),))
+
+    monkeypatch.setattr(live, "cloud_browser", cloud)
+    monkeypatch.setattr(backend, "environment", lambda: {"BROWSER_USE_API_KEY": "cloud", "OPENROUTER_API_KEY": "text"})
+    monkeypatch.setattr(live, "_invoke", invoke)
+    monkeypatch.setattr(live, "observe_browser", observed)
+    monkeypatch.setenv("GH_TOKEN", "unrelated")
+    async with httpx.AsyncClient() as http:
+        runner = live.ultrafast_arm if arm == "jev-ultrafast" else live.oss_arm
+        outcome, report = await runner(task, http, record=None)
+    assert not entered
+    assert report.dollars == (None if unknown_browser_cost else 0.03)
+    assert report.unknown_cost is unknown_browser_cost
+    if arm == "jev-ultrafast":
+        assert outcome.final_url == "https://pypi.org/project/runner" and outcome.controls == (("runner", "kept"),)
+        assert outcome.evidence and outcome.evidence.device_pixel_ratio == 1
+    else:
+        assert outcome.final_url == "https://pypi.org/project/httpx" and outcome.controls == (("observed", None),)
+
+
+def _ultrafast_runner() -> dict:
+    return runpy.run_path(str(live.ULTRAFAST_RUNNER))
+
+
+class _Tab:
+    """A tab that answers `Runtime.evaluate` from a table and logs each script it was asked to run. A list answers
+    successive calls in turn, its last entry repeating."""
+
+    def __init__(self, answers: dict[str, object], fail: str | None = None) -> None:
+        self.log: list[str] = []
+        self._by_script = {EVIDENCE: "evidence", LOCATION: "location"}
+        self._answers, self._fail = answers, fail
+
+    def call(self, method: str, **params: object) -> dict:
+        assert method == "Runtime.evaluate"
+        name = self._by_script[str(params["expression"])]
+        self.log.append(name)
+        if name == self._fail:
+            raise RuntimeError("boom")
+        answer = self._answers.get(name)
+        if isinstance(answer, list):
+            answer = answer.pop(0) if len(answer) > 1 else answer[0]
+        return {"result": {"value": answer}}
+
+
+_READ = ["evidence", "location"]
+
+
+def test_final_observation_reads_evidence_then_the_address() -> None:
+    tab = _Tab({"evidence": {"device_pixel_ratio": 1}, "location": "https://x.test/"})
+    final = _ultrafast_runner()["observe_final"](tab, EVIDENCE)
+    assert tab.log == _READ
+    assert final == {"url": "https://x.test/", "evidence": {"device_pixel_ratio": 1}, "error": None}
+
+
+def test_final_observation_says_it_failed_rather_than_grading_a_page_it_did_not_read() -> None:
+    tab = _Tab({"evidence": {"device_pixel_ratio": 1}}, fail="location")
+    final = _ultrafast_runner()["observe_final"](tab, EVIDENCE)
+    assert final == {"url": None, "evidence": None, "error": "final observation failed (RuntimeError)"}
+
+
+def test_runner_observes_the_final_page_before_restarting_the_daemon(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    events: list[str] = []
+
+    class Browser(_Tab):
+        session = "own-tab"
+
+        def call(self, method: str, **params: object) -> dict:
+            if method == "Page.bringToFront":
+                return {}
+            events.append(f"observe:{self._by_script[str(params['expression'])]}")
+            return super().call(method, **params)
+
+    class Agent:
+        def __init__(self, start: str, goal: str) -> None:
+            self.browser = Browser({"evidence": {"device_pixel_ratio": 1}, "location": start})
+            self.state = {"status": "done", "history": [], "decisions": [], "page": {"url": start}}
+            self.command = lambda *_: None
+
+        def run(self):
+            events.append("run")
+            yield self.state
+
+        def snapshot(self) -> dict:
+            return self.state
+
+    def restart() -> None:
+        events.append("restart")
+
+    modules = {
+        "jev_ultrafast": SimpleNamespace(Agent=Agent, model=SimpleNamespace(post_json=None)),
+        "browser_harness": SimpleNamespace(),
+        "browser_harness.admin": SimpleNamespace(restart_daemon=restart),
+    }
+    for name, module in modules.items():
+        monkeypatch.setitem(__import__("sys").modules, name, module)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "k")
+    monkeypatch.setattr(
+        "sys.stdin",
+        __import__("io").StringIO(
+            json.dumps(
+                {
+                    "start": "https://x.test/",
+                    "goal": "g",
+                    "max_steps": 3,
+                    "record": None,
+                    "evidence_script": EVIDENCE,
+                }
+            )
+        ),
+    )
+    _ultrafast_runner()["main"]()
+    printed = json.loads(capsys.readouterr().out)
+    assert events == ["run", *(f"observe:{name}" for name in _READ), "restart"]
+    assert printed["final_page"]["url"] == "https://x.test/" and printed["final_page"]["error"] is None
+
+
+@pytest.mark.parametrize(("max_steps", "status", "cap"), [(None, "done", None), (3, "budget_exceeded", 3)])
+def test_runner_stops_on_counts_only_when_given_a_limit(
+    max_steps: int | None, status: str, cap: int | None, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """The live harness sends max_steps null: then 200 actions and 400 decisions run on to the agent's own DONE, well
+    inside the decision ceiling and with an action every time, so no bail fires and `max_steps` alone decides."""
+
+    class Browser(_Tab):
+        session = "own-tab"
+
+        def call(self, method: str, **params: object) -> dict:
+            return {} if method == "Page.bringToFront" else super().call(method, **params)
+
+    class Agent:
+        def __init__(self, start: str, goal: str) -> None:
+            self.browser = Browser({"evidence": {"device_pixel_ratio": 1}, "location": start})
+            self.state = {"status": "running", "history": [], "decisions": [], "page": {"url": start, "actions": []}}
+            self.command = lambda *_: None
+
+        def run(self):
+            for n in range(200):
+                self.state["history"].append({"kind": "click", "action": str(n), "page_changed": False})
+                for _ in range(2):  # two choices per action: past the old 2 x max_steps decision cap too
+                    self.command("predict")
+                    self.state["decisions"].append({})
+                yield self.state
+            self.state["status"] = "done"
+            yield self.state
+
+        def snapshot(self) -> dict:
+            return self.state
+
+    modules = {
+        "jev_ultrafast": SimpleNamespace(Agent=Agent, model=SimpleNamespace(post_json=None)),
+        "browser_harness": SimpleNamespace(),
+        "browser_harness.admin": SimpleNamespace(restart_daemon=lambda: None),
+    }
+    for name, module in modules.items():
+        monkeypatch.setitem(__import__("sys").modules, name, module)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "k")
+    request = {"start": "https://x.test/", "goal": "g", "max_steps": max_steps, "max_dollars": None, "record": None}
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(json.dumps(request | {"evidence_script": EVIDENCE})))
+    _ultrafast_runner()["main"]()
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["status"] == status, printed["error"]
+    # A run with no `max_steps` is still bounded and says so: the decision ceiling stands in for the absent cap.
+    assert printed["step_cap"] == cap
+    assert printed["decision_cap"] == (_ultrafast_runner()["DECISION_CEILING"] if cap is None else 2 * cap)
+    assert printed["actions"] == (200 if max_steps is None else 3)
+
+
+@pytest.mark.parametrize(("decided", "status"), [(0, "unavailable"), (3, "error")])
+def test_a_model_outage_after_the_agent_decided_is_its_own_ending(
+    decided: int, status: str, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """A connection lost before any decision is an outage the harness retries; one that cuts off a run the agent was
+    already making (in campaign 41133404129, after ~10,000 stale picks over 90 minutes) is the agent's result."""
+    runner = _ultrafast_runner()
+
+    class Browser(_Tab):
+        session = "own-tab"
+
+        def call(self, method: str, **params: object) -> dict:
+            return {} if method == "Page.bringToFront" else super().call(method, **params)
+
+    class Agent:
+        def __init__(self, start: str, goal: str) -> None:
+            self.browser = Browser({"evidence": {"device_pixel_ratio": 1}, "location": start})
+            self.state = {"status": "running", "history": [], "decisions": [], "page": {"url": start, "actions": []}}
+            self.command = lambda *_: None
+
+        def run(self):
+            for _ in range(decided):
+                self.command("predict")
+                self.state["decisions"].append({})
+                yield self.state
+            raise runner["Unavailable"]("Model connection failed (RemoteProtocolError); no action executed.")
+
+        def snapshot(self) -> dict:
+            return self.state
+
+    modules = {
+        "jev_ultrafast": SimpleNamespace(Agent=Agent, model=SimpleNamespace(post_json=None)),
+        "browser_harness": SimpleNamespace(),
+        "browser_harness.admin": SimpleNamespace(restart_daemon=lambda: None),
+    }
+    for name, module in modules.items():
+        monkeypatch.setitem(__import__("sys").modules, name, module)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "k")
+    request = {"start": "https://x.test/", "goal": "g", "max_steps": None, "max_dollars": None, "record": None}
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(json.dumps(request | {"evidence_script": EVIDENCE})))
+    runner["main"]()
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["status"] == status
+    assert "Model connection failed" in printed["error"]
+
+
+@pytest.mark.parametrize(("acts", "decisions", "status"), [(False, 32, "stalled"), (True, 512, "stalled")])
+def test_a_decision_loop_is_stopped_by_the_arm_itself(
+    acts: bool, decisions: int, status: str, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """Nothing capped an uncapped arm: `max_steps` is null and the demo budget is lifted, so in campaign 41133404129
+    arxiv-open took ~10,000 decisions until the provider dropped the connection. The loop now ends on its own: at the
+    stall ceiling when no decision becomes an action, and at the decision ceiling when they all do."""
+    runner = _ultrafast_runner()
+
+    class Browser(_Tab):
+        session = "own-tab"
+
+        def call(self, method: str, **params: object) -> dict:
+            return {} if method == "Page.bringToFront" else super().call(method, **params)
+
+    class Agent:
+        def __init__(self, start: str, goal: str) -> None:
+            self.browser = Browser({"evidence": {"device_pixel_ratio": 1}, "location": start})
+            self.state = {"status": "running", "history": [], "decisions": [], "page": {"url": start, "actions": []}}
+            self.command = lambda *_: None
+
+        def run(self):
+            # Well past either ceiling, so a run that is not stopped here proves the bail is missing.
+            for n in range(2_000):
+                if acts:
+                    self.state["history"].append({"kind": "click", "action": str(n), "page_changed": False})
+                self.command("predict")
+                self.state["decisions"].append({})
+                yield self.state
+
+        def snapshot(self) -> dict:
+            return self.state
+
+    modules = {
+        "jev_ultrafast": SimpleNamespace(Agent=Agent, model=SimpleNamespace(post_json=None)),
+        "browser_harness": SimpleNamespace(),
+        "browser_harness.admin": SimpleNamespace(restart_daemon=lambda: None),
+    }
+    for name, module in modules.items():
+        monkeypatch.setitem(__import__("sys").modules, name, module)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "k")
+    request = {"start": "https://x.test/", "goal": "g", "max_steps": None, "max_dollars": None, "record": None}
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(json.dumps(request | {"evidence_script": EVIDENCE})))
+    runner["main"]()
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["status"] == status, printed["error"]
+    # The bail is the arm's own reported ending, named for what happened rather than left as an outage.
+    assert printed["decisions"] == decisions
+    assert "ceiling" in printed["error"]
+    # A capped attempt says so, so it is never read as an uncapped one.
+    assert printed["decision_cap"] == runner["DECISION_CEILING"]
+    assert printed["actions"] == (0 if not acts else decisions)
+
+
+async def test_fast_arm_grades_the_page_the_harness_read_not_the_reported_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    task = live_tasks.TASKS[0]
+    held: list[bool] = []
+
+    async def run(prompt: str, **kwargs: object) -> SimpleNamespace:
+        assert prompt == live.prompt(task) and kwargs["start"] == task.start
+        assert await cast(Any, kwargs["open_browser"])() == "ws://pool"
+        assert held == [False], "fastbrowse runs inside the harness's prepared tab"
+        return SimpleNamespace(answer="v1", data=None, final_url="https://unobserved.test", evidence=[])
+
+    @asynccontextmanager
+    async def tab(cdp_url: str, *, viewport: bool):
+        held.append(viewport)
+        yield
+
+    async def observed(cdp_url: str, *, url: str | None = None) -> FinalPage:
+        assert url == "https://unobserved.test"
+        return FinalPage(error="expected one final tab, found 2")
+
+    monkeypatch.setattr(live, "run_task", run)
+    monkeypatch.setattr(live, "prepared_tab", tab)
+    monkeypatch.setattr(live, "observe_browser", observed)
+    monkeypatch.setattr(backend, "environment", lambda: {"OPENROUTER_API_KEY": "k"})
+    async with httpx.AsyncClient() as http:
+        outcome, _, seen = await live.fast_arm(task, http, Path(), record=None, cdp_url="ws://pool")
+    assert outcome.final_url is None and outcome.controls is None
+    assert seen.final.error == "expected one final tab, found 2"
+
+
+async def test_unsupported_recording_fails_before_any_preparation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(backend, "environment", Mock(side_effect=AssertionError("must not load credentials")))
+    with pytest.raises(SystemExit):
+        await live.main(["--arms", "browser-use-oss", "--record", "/tmp/unused"])
+
+
+async def test_unavailable_retries_are_bounded_and_recorded(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(live, "_truth", AsyncMock(return_value="v1"))
+    monkeypatch.setattr(
+        live,
+        "hosted_arm",
+        AsyncMock(
+            return_value=(Outcome(None, None, None), live.ArmReport(status="unavailable", seconds=1, dollars=None))
+        ),
+    )
+    sleep = AsyncMock()
+    monkeypatch.setattr(live.asyncio, "sleep", sleep)
+    target = tmp_path / "rows.jsonl"
+    await live.main(["--arms", "browser-use", "--only", "pypi-version", "--out", str(target)])
+    row = live.EvalRow.model_validate_json(target.read_text())
+    assert row.retries == live.OUTAGE_RETRIES and row.normalized_status == Ending.UNAVAILABLE and not row.passed
+    outage_waits = [c.args[0] for c in sleep.await_args_list if c.args and c.args[0] >= 60]
+    assert outage_waits == [60, 120, 240, 480, 600]
+
+
+def test_a_hosted_run_is_done_on_its_own_answer_not_browser_uses_later_verdict() -> None:
+    """0.5.7: `is_task_successful` failed six correct answers whose sessions showed no sign of failing; fastbrowse
+    is held only to its own completion, so the hosted agent is held to its own `done`."""
+    assert normalize("stopped", hosted=True, answered=True) == Ending.DONE
+    assert normalize("stopped", hosted=True, answered=False) == Ending.STOPPED
+
+
+async def test_a_run_failed_on_a_site_serving_errors_is_an_outage() -> None:
+    """the-internet.herokuapp.com served Heroku's Application Error (a 503) and every arm failed its tasks."""
+    task = live_tasks.TASKS[0]
+    responses = iter([httpx.Response(503), httpx.Response(403)])
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: next(responses))) as http:
+        assert "answered HTTP 503" in (await live._down(task, http) or "")
+        # A site that answers, even to refuse a bot, is up: the run's failure stands.
+        assert await live._down(task, http) is None
+
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(unreachable)) as http:
+        assert "unreachable" in (await live._down(task, http) or "")
+
+
+def test_new_window_needs_the_heading_not_the_prompt_echoed() -> None:
+    (task,) = [t for t in more_tasks.DEV if t.id == "new-window"]
+    assert task.check(Outcome("It opens a new window", None, None), None)
+    heading = 'The heading is "Example of a new window page for Automation Testing Practice"'
+    assert task.check(Outcome(heading, None, None), None) is None

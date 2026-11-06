@@ -66,6 +66,8 @@ pub async fn upload(
         max_download_bytes: shared.max_download_bytes,
         new_document_scripts: vec![],
         on_frame: None,
+        on_stop: None,
+        trace: fastbrowse_core::telemetry::Trace::disabled(),
         viewport: None,
         client: Mutex::new(shared.client.lock().unwrap().clone()),
         state: Mutex::new(state),

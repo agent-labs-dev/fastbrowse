@@ -1,0 +1,270 @@
+//! What the run, the native host and the extension say to each other.
+//!
+//! Between Chrome and the host, messages use native messaging's framing: a 4-byte native-endian length, then JSON.
+//! Between a run and the host, they are JSON lines on a per-user local socket. The host tags each run's messages
+//! with its connection id (`conn`) on the way in and routes by it on the way out, so it reads nothing else.
+
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+use crate::error::BrowserError;
+
+/// The relay contract's version. A host or extension speaking another one fails the run before any spend.
+pub const PROTOCOL: u32 = 1;
+
+/// The native-messaging host name the extension connects to.
+pub const HOST_NAME: &str = "dev.fastbrowse.host";
+
+/// Extension ids allowed to start the host. The first is pinned by the manifest's `key`; its private key is in pass as
+/// `dev/FASTBROWSE_EXTENSION_KEY_PEM`, for the first Web Store upload, which keeps the id.
+pub const EXTENSION_IDS: [&str; 1] = ["ghodfgfhbfaghhfdabopagbfopdjgpop"];
+
+/// Chrome refuses a message from the host to the extension above 1 MB; larger ones go in chunks.
+pub const MAX_TO_EXTENSION: usize = 1024 * 1024;
+
+/// Chrome sends the host messages up to 64 MiB.
+pub const MAX_FROM_EXTENSION: usize = 64 * 1024 * 1024;
+
+/// CDP commands the extension relays. Everything else is refused in the extension, so a run can reach the
+/// user's profile only through the page: no cookies, storage or saved passwords.
+pub const ALLOWED_METHODS: &str = include_str!("../../extension/allowed-methods.json");
+
+/// What a connected browser's host writes next to its socket once it is listening, so a run can find it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostRecord {
+    /// A random id the extension keeps in its storage: one per browser profile.
+    pub browser_id: String,
+    /// The name the user gave this browser in the extension's popup, or the browser's own name.
+    pub label: String,
+    /// The browser's product, from its user agent: `Chrome`, `Edge`, `Brave` or `Chromium`.
+    pub browser: String,
+    pub version: String,
+    pub protocol: u32,
+    pub pid: u32,
+    pub socket: PathBuf,
+}
+
+/// Where hosts put their sockets and records: a private per-user directory.
+pub fn host_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("FASTBROWSE_EXTENSION_DIR") {
+        return PathBuf::from(dir);
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
+        return PathBuf::from(runtime).join("fastbrowse-hosts");
+    }
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
+    let home = home.unwrap_or_else(std::env::temp_dir);
+    if cfg!(target_os = "macos") {
+        home.join("Library/Caches/fastbrowse/hosts")
+    } else if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA")
+            .map_or_else(|| home.join("AppData/Local"), PathBuf::from)
+            .join("fastbrowse/hosts")
+    } else {
+        home.join(".cache/fastbrowse/hosts")
+    }
+}
+
+/// The CDP methods in [`ALLOWED_METHODS`].
+pub fn allowed_methods() -> Vec<String> {
+    serde_json::from_str(ALLOWED_METHODS).expect("the extension's allowed-methods.json is a JSON list of strings")
+}
+
+/// Split one message for the extension into frames Chrome accepts. A message that fits goes as it is; a larger one
+/// becomes `{"chunk": {"id", "index", "count", "data"}}` frames the extension joins before parsing.
+pub fn frames_for_extension(message: &str, chunk_id: u64) -> Vec<String> {
+    if message.len() <= MAX_TO_EXTENSION {
+        return vec![message.to_owned()];
+    }
+    // Room for the envelope and for JSON-escaping the slice, which at worst doubles a quote or backslash.
+    let room = MAX_TO_EXTENSION / 2 - 256;
+    let mut pieces = vec![];
+    let mut rest = message;
+    while !rest.is_empty() {
+        let mut end = rest.len().min(room);
+        while !rest.is_char_boundary(end) {
+            end -= 1;
+        }
+        pieces.push(&rest[..end]);
+        rest = &rest[end..];
+    }
+    let count = pieces.len();
+    pieces
+        .into_iter()
+        .enumerate()
+        .map(|(index, data)| {
+            serde_json::json!({"chunk": {"id": chunk_id, "index": index, "count": count, "data": data}}).to_string()
+        })
+        .collect()
+}
+
+/// Every browser whose extension is connected to a running host, read from the records in `dir`.
+pub fn connected_hosts(dir: &Path) -> Vec<(PathBuf, HostRecord)> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return vec![] };
+    let mut hosts: Vec<(PathBuf, HostRecord)> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        // A record being written is a dot file until it is renamed into place.
+        .filter(|path| {
+            path.extension().is_some_and(|x| x == "json")
+                && !path.file_name().is_some_and(|name| name.to_string_lossy().starts_with('.'))
+        })
+        .filter_map(|path| {
+            let record: HostRecord = serde_json::from_slice(&std::fs::read(&path).ok()?).ok()?;
+            host_alive(&record).then_some((path, record))
+        })
+        .collect();
+    hosts.sort_by(|a, b| a.1.label.cmp(&b.1.label));
+    hosts
+}
+
+/// Whether the host that wrote a record still runs. A host that was killed leaves its record behind.
+#[cfg(unix)]
+fn host_alive(record: &HostRecord) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(record.pid) else { return false };
+    // SAFETY: signal 0 only asks whether the process exists, and a pid under 1 is refused before it names a group.
+    pid > 0
+        && (unsafe { libc::kill(pid, 0) } == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
+}
+
+/// A dead host's pipe is gone with it. Listing the pipes, rather than opening this one, leaves the host's waiting
+/// instance free for the run that dials it.
+#[cfg(windows)]
+fn host_alive(record: &HostRecord) -> bool {
+    let Some(name) = record.socket.file_name() else { return false };
+    std::fs::read_dir(r"\\.\pipe\").is_ok_and(|pipes| pipes.flatten().any(|pipe| pipe.file_name() == name))
+}
+
+/// The connected browser a run uses: the one named `wanted` (its label, browser id or product, any case), or the
+/// only one connected. Nothing connected is an outage, so the run ends `unavailable` before any spend.
+pub fn pick_host(dir: &Path, wanted: Option<&str>) -> Result<(PathBuf, HostRecord), BrowserError> {
+    let mut hosts = connected_hosts(dir);
+    let names = |hosts: &[(PathBuf, HostRecord)]| {
+        hosts.iter().map(|(_, r)| format!("{} ({} {})", r.label, r.browser, r.version)).collect::<Vec<_>>().join(", ")
+    };
+    if hosts.is_empty() {
+        return Err(BrowserError::Unavailable(
+            "no browser has the fastbrowse extension connected. Run `fastbrowse extension install`, add the \
+             extension to Chrome, and keep that Chrome open"
+                .into(),
+        ));
+    }
+    match wanted {
+        Some(wanted) => {
+            let matches = |r: &HostRecord| {
+                [&r.label, &r.browser_id, &r.browser].iter().any(|name| name.eq_ignore_ascii_case(wanted))
+            };
+            let mut found: Vec<_> = hosts.iter().filter(|(_, r)| matches(r)).cloned().collect();
+            match found.len() {
+                1 => Ok(found.remove(0)),
+                0 => Err(BrowserError::Failed(format!(
+                    "no connected browser is named {wanted:?}; connected: {}",
+                    names(&hosts)
+                ))),
+                _ => Err(BrowserError::Failed(format!(
+                    "{wanted:?} names more than one connected browser ({}); give each a label in the extension's \
+                     popup",
+                    names(&found)
+                ))),
+            }
+        }
+        None if hosts.len() == 1 => Ok(hosts.remove(0)),
+        None => Err(BrowserError::Failed(format!(
+            "more than one browser has the fastbrowse extension connected ({}); pick one with --extension-browser",
+            names(&hosts)
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_small_message_goes_whole() {
+        assert_eq!(frames_for_extension("{\"id\":1}", 7), vec!["{\"id\":1}".to_owned()]);
+    }
+
+    #[test]
+    fn a_large_message_goes_in_frames_under_chromes_limit_that_join_back_to_it() {
+        let script = "a\"\\é".repeat(700_000);
+        let message = serde_json::json!({"id": 3, "op": "cdp", "params": {"expression": script}}).to_string();
+        let frames = frames_for_extension(&message, 9);
+        assert!(frames.len() > 1);
+        let mut joined = String::new();
+        for (index, frame) in frames.iter().enumerate() {
+            assert!(frame.len() <= MAX_TO_EXTENSION, "frame {index} is {} bytes", frame.len());
+            let chunk: serde_json::Value = serde_json::from_str(frame).unwrap();
+            assert_eq!(chunk["chunk"]["index"], index);
+            assert_eq!(chunk["chunk"]["count"], frames.len());
+            joined.push_str(chunk["chunk"]["data"].as_str().unwrap());
+        }
+        assert_eq!(joined, message);
+    }
+
+    #[test]
+    fn every_cdp_command_the_browser_layer_sends_is_relayed_or_answered_by_the_shim() {
+        let allowed = allowed_methods();
+        let source_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut sent = std::collections::BTreeSet::new();
+        let mut stack = vec![source_dir];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    for (at, _) in text.match_indices(".send(\"").chain(text.match_indices(".call(\"")) {
+                        let rest = &text[at..];
+                        let start = rest.find('"').unwrap() + 1;
+                        let end = start + rest[start..].find('"').unwrap();
+                        sent.insert(rest[start..end].to_owned());
+                    }
+                }
+            }
+        }
+        let domains = super::super::shim::ENABLED_DOMAINS.iter().map(|domain| format!("{domain}.enable"));
+        sent.extend(domains);
+        let missing: Vec<_> = sent
+            .iter()
+            .filter(|method| method.contains('.'))
+            .filter(|method| !allowed.contains(method) && !super::super::shim::ANSWERED.contains(&method.as_str()))
+            .collect();
+        assert!(missing.is_empty(), "add to extension/allowed-methods.json or answer in the shim: {missing:?}");
+    }
+    fn write_record(dir: &Path, label: &str, pid: u32) {
+        let record = HostRecord {
+            browser_id: format!("id{label}"),
+            label: label.into(),
+            browser: "Chrome".into(),
+            version: "150".into(),
+            protocol: PROTOCOL,
+            pid,
+            socket: dir.join(format!("id{label}.sock")),
+        };
+        std::fs::write(dir.join(format!("id{label}.json")), serde_json::to_vec(&record).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_run_picks_the_only_browser_or_the_one_it_names() {
+        let dir = std::env::temp_dir().join(format!("fbx-pick-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let unavailable = pick_host(&dir, None).unwrap_err();
+        assert!(unavailable.is_unavailable(), "{unavailable}");
+        write_record(&dir, "Work", std::process::id());
+        // A record whose host is gone is not a connected browser.
+        write_record(&dir, "Gone", u32::MAX - 1);
+        std::fs::write(dir.join(".idWork.json.1"), "{").unwrap();
+        assert_eq!(pick_host(&dir, None).unwrap().1.label, "Work");
+        write_record(&dir, "Home", std::process::id());
+        let several = pick_host(&dir, None).unwrap_err().to_string();
+        assert!(several.contains("Home (Chrome 150), Work (Chrome 150)"), "{several}");
+        assert_eq!(pick_host(&dir, Some("home")).unwrap().1.label, "Home");
+        assert!(pick_host(&dir, Some("Gone")).unwrap_err().to_string().contains("no connected browser"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

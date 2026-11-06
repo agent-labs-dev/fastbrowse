@@ -173,6 +173,7 @@ public sealed class FastbrowseClient : IAsyncDisposable
                             Steps = result.Steps,
                             Cost = result.Cost,
                             Recordings = result.Recordings,
+                            Browser = result.Browser,
                         });
                     }
                     return result;
@@ -326,6 +327,8 @@ public sealed class FastbrowseClient : IAsyncDisposable
         Viewport = browser.Viewport is var (width, height) ? new List<long> { width, height } : null,
         CloudExtensions = browser.CloudExtensions,
         CloudTimeoutMinutes = browser.CloudTimeoutMinutes,
+        Extension = browser.Extension ? true : null,
+        ExtensionBrowser = browser.ExtensionBrowser,
     };
 
     /// <summary>
@@ -342,5 +345,6 @@ public sealed class FastbrowseClient : IAsyncDisposable
         Citations = [],
         Error = failure,
         Recordings = spent?.Recordings ?? [],
+        Browser = spent?.Browser,
     };
 }

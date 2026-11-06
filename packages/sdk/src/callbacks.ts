@@ -145,5 +145,6 @@ function endedBy(failure: string, spent?: CancellationReceipt): RunResult {
     final_url: null,
     recordings: spent?.recordings ?? [],
     wall: null,
+    browser: spent?.browser ?? null,
   };
 }

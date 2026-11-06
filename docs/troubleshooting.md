@@ -16,6 +16,7 @@ what to do next. The full table is in [Results](cli.md#results).
 | [stuck](#stuck-exit-9) | 9 | Jev found no way forward |
 | [unverified](#unverified-exit-10) | 10 | the requested data could not be filled from the page |
 | [observation_limit](#observation_limit-exit-11) | 11 | the page does not fit the prompt budget |
+| [cancelled](#cancelled-exit-12) | 12 | you stopped an `--extension` run in your browser |
 
 ## Reading a stopped run
 
@@ -100,6 +101,8 @@ caller can route it without parsing the error; see [Results](cli.md#results).
 - `--secret NAME=ENV_VAR@https://host`, with the value in that environment variable. Without `@ORIGIN` the
   secret is scoped to the `--start` origin. Check that origin against the address the form is on.
 - `--bitwarden ITEM`, when the vault item's saved URIs match `--start`.
+- `--extension`, to run in your own Chrome where you are already signed in. See
+  [Your own Chrome](cli.md#your-own-chrome).
 - `--profile DIR` for local Chrome you signed into once by hand, or `--cloud-profile ID` for a Browser Use
   Cloud profile. See [Signed-in sites](cli.md#signed-in-sites).
 - Over MCP, the server's operator adds the secret with `--secret` or `--bitwarden`, or signs in once in the
@@ -217,6 +220,10 @@ be fine, and the same run later may pass.
   answering an action is reopened once at the address the tab shows; a second hang, or one outside an action, ends
   the run, and the error says the page did not answer or the browser stopped answering.
 - The run's tab closed and no tab it owns remains.
+- With `--extension`, Chrome took the run's tab away because the page loaded another extension's frame; see
+  [Another extension's frame takes the tab away](#another-extensions-frame-takes-the-tab-away).
+- With `--extension`, no browser has the fastbrowse extension connected. The error is `no browser has the
+  fastbrowse extension connected`.
 
 **Next step.**
 
@@ -238,7 +245,30 @@ the browser window and the address, then retry.
 ```
 
 **Next step.** Look at the Chrome window for a prompt to allow remote debugging and accept it, check that the
-address is the browser's current one, and run again.
+address is the browser's current one, and run again. Chrome asks again on every connection, so for your
+everyday Chrome use `--extension` instead, which needs no approval; see [Your own Chrome](cli.md#your-own-chrome).
+
+### The extension is not connected
+
+`--extension` reaches Chrome through the fastbrowse extension, which Chrome connects to fastbrowse when the
+browser starts. When the run ends `unavailable` with `no browser has the fastbrowse extension connected`:
+
+- Check that `fastbrowse extension install` ran for this user, and run it again after moving or reinstalling
+  fastbrowse, since it records where fastbrowse is.
+- Check that the extension is on at `chrome://extensions`, and that Chrome is open.
+- After installing, restart Chrome or turn the extension off and on, so it connects.
+
+### Another extension's frame takes the tab away
+
+Chrome lets no extension debug a tab while the page holds a frame from another extension, and takes the tab
+away from fastbrowse as soon as one appears. Screen recorders, password managers and writing assistants add
+such frames to every page. The run ends `unavailable` with `Chrome detached fastbrowse from the run's tab when
+the page loaded a frame from another extension (chrome-extension://<id>)`.
+
+**Next step.** Open `chrome://extensions/?id=<id>` from the error, set **Site access** to **On click**, and run
+again. The extension then adds its frame only on pages where you click it. With `--trace FILE`, every message
+between the run and the extension is in the trace as an `extension` event, with screenshots and screencast
+frames replaced by their length, and an `extension_tab_lost` event names the frame that took the tab.
 
 ### DevToolsActivePort and finding the DevTools address
 
@@ -311,3 +341,20 @@ result as unconfirmed.
 
 - Try a `--start` URL closer to the goal, or a narrower task that needs fewer facts in one answer.
 - To raise the budgets, set `observation` and `tokens` in `Config` in the embedding API.
+
+## cancelled (exit 12)
+
+**What it means.** You stopped an `--extension` run in your browser before it finished.
+
+**Common causes.**
+
+- **Stop** in the fastbrowse extension's popup.
+- **Cancel** on Chrome's bar saying an extension started debugging the browser. That bar belongs to the whole
+  browser, so it stops every run the extension is driving.
+- Closing every tab in the run's tab group.
+
+The result keeps the steps the run took and what it spent.
+
+**Next step.** Run it again if you still want it done. To watch a run without stopping it, leave the bar and the
+run's tabs alone; the run closes its own tabs when it ends.
+

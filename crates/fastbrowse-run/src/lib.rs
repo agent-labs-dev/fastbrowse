@@ -19,6 +19,8 @@ use fastbrowse_browser::adapters::browser_use_cloud::{BrowserUseCloudBrowser, Br
 use fastbrowse_browser::adapters::local_chrome::LocalChromeProcess;
 use fastbrowse_browser::cursor::{CursorFeedback, cursor_feedback};
 use fastbrowse_browser::error::BrowserError;
+use fastbrowse_browser::extension::SCHEME;
+use fastbrowse_browser::extension::protocol::{HostRecord, host_dir, pick_host};
 use fastbrowse_browser::page::CdpPage;
 use fastbrowse_browser::recording::{CardCitation, Recording, ResultCard};
 use fastbrowse_browser::session::{BrowserSession, CheckAccess, SessionOptions, check_browser_access};
@@ -29,9 +31,9 @@ use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::DecisionClient;
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{
-    ArtifactSink, Attachment, BrowserConnection, BrowserEvent, BudgetResource, BudgetStop, Bytes, CostBasis,
-    CostBreakdown, CostComponent, CostLine, Event, EventHandler, FrameHandler, Limits, LocalChrome, RunResult,
-    SecretResolver, Status, StepResult, UntilCheck, WallKind,
+    ArtifactSink, Attachment, BrowserConnection, BrowserEvent, BrowserUsed, BrowserVia, BudgetResource, BudgetStop,
+    Bytes, CostBasis, CostBreakdown, CostComponent, CostLine, Event, EventHandler, FrameHandler, Limits, LocalChrome,
+    RunResult, SecretResolver, Status, StepResult, UntilCheck, WallKind,
 };
 use fastbrowse_core::origins::parse_origins;
 use fastbrowse_core::output_schema::output_model;
@@ -98,7 +100,7 @@ impl RunError {
         }
         Self::AfterSpending {
             error: Box::new(self),
-            receipt: CancellationReceipt { steps, cost: CostBreakdown { lines }, recordings },
+            receipt: CancellationReceipt { steps, cost: CostBreakdown { lines }, recordings, browser: None },
         }
     }
 }
@@ -230,6 +232,7 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
         return refuse("viewport width and height must be greater than zero".into());
     }
     let handed = task.cdp_url.is_some() || task.cdp_port.is_some();
+    let extension = task.wants_extension();
     if task.fetch && task.browser {
         return refuse("fetch never starts a browser and browser always does, so pass one of them".into());
     }
@@ -254,6 +257,7 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
             ("save_recipe", task.save_recipe.is_some()),
             ("cursor", task.cursor == Some(true)),
             ("downloads", task.downloads.is_some()),
+            ("extension", extension),
         ]);
         if !browser.is_empty() {
             return refuse(format!("fetch starts no browser, so it cannot be combined with {}", browser.join(", ")));
@@ -262,7 +266,24 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
     if task.cdp_url.is_some() && task.cdp_port.is_some() {
         return refuse("cdp_url and cdp_port both name a browser to attach to; pass one".into());
     }
-    if handed {
+    if extension {
+        // The user's own browser is already running, signed in as they are: nothing here can start or shape it.
+        let other = given(&[
+            ("local", task.local),
+            ("chrome.headed", chrome.headed),
+            ("chrome.profile", chrome.profile.is_some()),
+            ("cdp_url", task.cdp_url.is_some()),
+            ("cdp_port", task.cdp_port.is_some()),
+            ("cloud_profile", task.cloud_profile.is_some()),
+            ("proxy_country", task.proxy_country.is_some()),
+            ("cloud_extensions", !task.cloud_extensions.is_empty()),
+            ("cloud_timeout_minutes", task.cloud_timeout_minutes.is_some()),
+            ("viewport", task.viewport.is_some()),
+        ]);
+        if !other.is_empty() {
+            return refuse(format!("extension drives the browser it is connected in; drop {}", other.join(", ")));
+        }
+    } else if handed {
         // Attaching replaces every option that shapes a started browser.
         let shaping = given(&[
             ("local", task.local),
@@ -290,7 +311,7 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
         }
     } else {
         if task.attach || task.target_match.is_some() {
-            return refuse("attach and target_match need cdp_url or cdp_port".into());
+            return refuse("attach and target_match need cdp_url, cdp_port or extension".into());
         }
         // A cloud profile or a country asked of local Chrome would start signed out, or browse from this machine's
         // address, and report neither.
@@ -317,6 +338,15 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
         None => None,
         Some(origins) => Some(parse_origins(origins.clone()).map_err(|error| RunError::Invalid(error.to_string()))?),
     };
+    if origins.is_some() && extension {
+        // A popup's first request can leave before the extension attaches to it, so the grant could not refuse it
+        // before it was sent, as a scoped run promises.
+        return refuse(
+            "allowed_origins cannot be combined with extension: a popup's first request can leave before the \
+             extension reaches it, so it could not be refused first"
+                .into(),
+        );
+    }
     if origins.is_some() && task.record.is_some() {
         return refuse("record shows whatever the tab shows, so it cannot be combined with allowed_origins".into());
     }
@@ -518,9 +548,14 @@ fn noting(on_event: Option<EventHandler>, told: &Told) -> EventHandler {
 
 /// What a run stopped by [`Host::cancel`] did: the steps it told and every cost line its phases left. Read once the
 /// run's work is dropped, so a request it had in flight has recorded what it is owed.
-fn cancelled(told: &Told, lines: Vec<CostLine>, recordings: Vec<PathBuf>) -> RunError {
+fn cancelled(told: &Told, lines: Vec<CostLine>, recordings: Vec<PathBuf>, browser: Option<BrowserUsed>) -> RunError {
     let steps = told.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
-    RunError::Cancelled(CancellationReceipt { steps, cost: CostBreakdown { lines }, recordings })
+    RunError::Cancelled(CancellationReceipt {
+        steps,
+        cost: CostBreakdown { lines },
+        recordings,
+        browser: browser.map(Box::new),
+    })
 }
 
 /// Pass each step to the recording as well, which captions it.
@@ -567,6 +602,8 @@ fn card(result: &RunResult) -> ResultCard {
 enum Owned {
     /// One the caller handed over: nothing to start and nothing to stop.
     Handed,
+    /// The user's own browser, reached through the fastbrowse extension: its tabs close when the run disconnects.
+    Extension(Box<HostRecord>),
     Local(Box<LocalChromeProcess>),
     Cloud(Box<BrowserUseCloudBrowser>),
 }
@@ -593,6 +630,7 @@ fn refused(message: &str) -> Refused {
 fn reads_first(task: &RunTask, chrome: &LocalChrome) -> bool {
     task.fetch
         || !(task.browser
+            || task.wants_extension()
             || task.record.is_some()
             || task.recipe.is_some()
             || task.save_recipe.is_some()
@@ -612,7 +650,7 @@ fn reads_first(task: &RunTask, chrome: &LocalChrome) -> bool {
 /// local Chrome by `local`, a headed window or a kept profile, which only local Chrome has.
 pub fn on_cloud(task: &RunTask, chrome: &LocalChrome) -> bool {
     let handed = task.cdp_url.is_some() || task.cdp_port.is_some();
-    !(task.fetch || handed || task.local || chrome.headed || chrome.profile.is_some())
+    !(task.fetch || handed || task.wants_extension() || task.local || chrome.headed || chrome.profile.is_some())
 }
 
 /// The browser a run drives: one it is handed, a cloud browser, or local Chrome.
@@ -626,6 +664,17 @@ async fn browser(
     let key = host.browser_api_key.as_deref();
     let lazily = host.open_browser.is_some();
     let foreground = lazily || task.foreground || task.cursor == Some(true);
+    if task.wants_extension() {
+        let (record, connected) = pick_host(&host_dir(), task.extension_browser.as_deref())?;
+        // The task after `#` names the run's tab group.
+        let connection = BrowserConnection {
+            attach: task.attach || task.target_match.is_some(),
+            target_match: task.target_match.clone(),
+            foreground: task.foreground,
+            ..BrowserConnection::new(format!("{SCHEME}{}#{}", record.display(), task.task), true)
+        };
+        return Ok((connection, Owned::Extension(Box::new(connected))));
+    }
     let handed = match (&host.open_browser, &task.cdp_url, task.cdp_port) {
         (Some(open), ..) => Some(open().await.map_err(|error| refused(&error))?),
         (None, Some(url), _) => Some(url.clone()),
@@ -705,10 +754,25 @@ fn read_too_early(line: CostLine) -> CostLine {
     CostLine { basis, ..line }
 }
 
+/// The browser a run drove, for its result.
+fn browser_used(owned: &Owned, task: &RunTask, chrome: &LocalChrome) -> BrowserUsed {
+    let (via, profile, browser) = match owned {
+        Owned::Handed => (BrowserVia::Attached, None, None),
+        Owned::Local(_) => (BrowserVia::Launched, chrome.profile.as_ref().map(|p| p.display().to_string()), None),
+        Owned::Cloud(_) => (BrowserVia::Cloud, task.cloud_profile.clone(), None),
+        Owned::Extension(host) => (
+            BrowserVia::Extension,
+            Some(host.label.clone()),
+            Some(format!("{} {}", host.browser, host.version).trim().to_owned()),
+        ),
+    };
+    BrowserUsed { via, profile, browser }
+}
+
 /// Stop what the run started, keeping the cloud browser's last reported cost.
 async fn stop(owned: Owned, cost: &mut Vec<CostLine>) {
     match owned {
-        Owned::Handed => {}
+        Owned::Handed | Owned::Extension(_) => {}
         Owned::Local(mut process) => process.close().await,
         Owned::Cloud(mut remote) => {
             if remote.stop().await.is_err() {
@@ -831,7 +895,13 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
             config.refuse_cookie_banners
                 && fastbrowse_agent::start::answers_consent_itself(&*jev, &task.task, &ledger).await.unwrap_or(false)
         };
-        let (started, answers_consent) = tokio::join!(browser(&task, &host, &chrome, &http, &mut starting), consent);
+        let (started, answers_consent) = if task.wants_extension() {
+            // The connected browser is found first, so with none the run ends before the consent check spends.
+            let started = browser(&task, &host, &chrome, &http, &mut starting).await?;
+            (Ok::<_, Refused>(started), consent.await)
+        } else {
+            tokio::join!(browser(&task, &host, &chrome, &http, &mut starting), consent)
+        };
         let (connection, started) = started?;
         owned = Some(started);
         let connection = BrowserConnection { allowed_origins: origins.clone(), ..connection };
@@ -854,6 +924,12 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
                 on_frame: host.on_frame.clone(),
                 check_access: host.check_access.clone(),
                 viewport: matches!(owned.as_ref(), Some(Owned::Local(_))).then_some(task.viewport).flatten(),
+                // The user stopping the run in their browser cancels it, as the caller cancelling it would.
+                on_stop: {
+                    let cancel = host.cancel.clone();
+                    Some(Arc::new(move || cancel.trip()))
+                },
+                trace: http.trace.clone(),
             },
         );
         session = Some(opened.clone());
@@ -928,6 +1004,7 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
     if let Some(session) = &session {
         let _ = session.close().await;
     }
+    let browser_used = owned.as_ref().map(|owned| browser_used(owned, &task, &chrome));
     if let Some(owned) = owned.take() {
         stop(owned, &mut browser_cost).await;
     }
@@ -937,12 +1014,13 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
             let mut lines = fetch_spent;
             lines.extend(ledger.breakdown().lines);
             lines.extend(browser_cost);
-            return Err(cancelled(&told, lines, recordings));
+            return Err(cancelled(&told, lines, recordings, browser_used));
         }
         Some(Ok(result)) => result,
         Some(Err(refusal)) => {
             // A cloud browser that cannot be started is an outage, not a failed run.
             RunResult {
+                browser: None,
                 status: if refusal.unavailable { Status::Unavailable } else { Status::Error },
                 budget: None,
                 answer: None,
@@ -961,7 +1039,8 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
             }
         }
     };
-    let result = finish(result, recording_failed, &told, fetch_spent, browser_cost, recordings)?;
+    let mut result = finish(result, recording_failed, &told, fetch_spent, browser_cost, recordings)?;
+    result.browser = browser_used;
     if result.status == Status::Complete
         && let (Some(path), Some(sink)) = (&task.save_recipe, &recipe_sink)
     {
@@ -1076,6 +1155,7 @@ async fn fetched(
         // The caller's own gate refused the run, which is an error result, not an error to the embedder. Python reports
         // the exception's class name.
         let result = RunResult {
+            browser: None,
             status: Status::Error,
             budget: None,
             answer: None,
@@ -1122,7 +1202,7 @@ async fn fetched(
         recipe_sink: None,
     };
     let Ok(outcome) = host.cancel.guard(agent.run(&task.task, run)).await else {
-        return Err(cancelled(told, ledger.breakdown().lines, Vec::new()));
+        return Err(cancelled(told, ledger.breakdown().lines, Vec::new(), None));
     };
     let result = outcome.map_err(|error| RunError::Invalid(error.to_string()))?;
     // Read from the page rather than the message: a refusal the page itself raised means the task needs a browser. It

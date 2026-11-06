@@ -23,6 +23,8 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 | `--cloud-profile ID` | run on a signed-in Browser Use Cloud profile |
 | `--fetch` | read pages over HTTP with no browser, for a task that only reads |
 | `--browser` | start a browser from the first step, rather than reading over HTTP until the task needs one |
+| `--extension` | run in your own Chrome, signed in as you are, through the fastbrowse extension; see [Your own Chrome](#your-own-chrome) |
+| `--extension-browser LABEL` | with the extension connected in more than one browser, use the one its popup labels `LABEL` (implies `--extension`) |
 | `--cdp-url URL`, `--cdp-port PORT` | drive a browser already running, at a `ws://` URL or on `127.0.0.1:PORT` |
 | `--viewport WIDTHxHEIGHT` | set the CSS viewport for owned local Chrome, or the screen size requested from cloud Chrome; does not emulate mobile, touch, device scale or user agent |
 | `--attach` | with `--cdp-url` or `--cdp-port`, drive a window already open instead of opening a tab |
@@ -35,7 +37,7 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 | `--max-steps N`, `--max-dollars N` | bound steps and model spend; unlimited by default |
 | `--downloads DIR` | keep downloaded files |
 | `--json` | print the full result |
-| `--trace FILE` | append each model call with its full request and reply, read and check to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP. The requests carry page text, so treat a trace as you would the pages |
+| `--trace FILE` | append each model call with its full request and reply, read and check, and with `--extension` every message to and from the extension (image data left out), to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP. The requests carry page text, so treat a trace as you would the pages |
 | `--record FILE` | save a captioned MP4 of the run (needs `ffmpeg`); it shows what the pages showed, so watch it before sharing |
 | `--recipe FILE` | replay a [recipe](design.md#recipes): reuse saved values when Jev selects a matching action on the same page |
 | `--save-recipe FILE` | write the run's steps as a recipe when it ends `complete`; naming the `--recipe` file repairs it after steps the agent had to decide |
@@ -49,6 +51,47 @@ fastbrowse "Log in as standard_user with the saved password and add the backpack
 ```
 
 ## Signed-in sites
+
+### Your own Chrome
+
+`--extension` runs the task in the Chrome you already use, signed in to everything you are signed in to, with no
+approval prompt. Set it up once:
+
+1. Run `fastbrowse extension install`. It registers fastbrowse with Chrome, Chromium, Edge and Brave, and prints
+   how to add the extension.
+2. Add the fastbrowse extension to Chrome. Until it is in the Chrome Web Store, open `chrome://extensions`, turn on
+   Developer mode, choose **Load unpacked** and pick the folder `fastbrowse extension path` prints.
+
+Then pass `--extension` to any run:
+
+```sh
+fastbrowse "Find my last order's delivery date." --start https://www.amazon.com/ --extension
+```
+
+Each run works in a tab group of its own, named after the task, and closes its tabs when it ends. While a run is
+attached, Chrome shows a bar saying an extension started debugging the browser. Each run has three ways to stop
+it, and each ends the run `cancelled`: **Stop** in the extension's popup, **Cancel** on that bar (which stops
+every run), or closing all of the run's tabs.
+
+The extension relays only page-level commands. It cannot read cookies, saved passwords or other sites' storage,
+and fastbrowse accepts connections only from the extension's own ID, over a socket only your user can open. The
+run's [authorization](#flags) rules still apply: a purchase or a message waits for `--authorize`.
+
+With no browser connected, the run ends `unavailable` before it spends anything; it never falls back to another
+browser. With the extension in more than one browser, label each one in its popup and pick one with
+`--extension-browser LABEL`. `fastbrowse extension install --policy` (Linux) prints a Chrome policy for you to write
+as root, which installs the extension for every profile with no debugging bar and marks Chrome as managed by your
+organization;
+`fastbrowse extension uninstall` removes what `install` wrote.
+
+**Other extensions can take the run's tab away.** Chrome lets no extension debug a tab while the page holds a frame
+from another extension, and some extensions add one to every page: screen recorders, password managers and writing
+assistants are common ones. When that happens the run ends `unavailable` and names the extension. Open
+`chrome://extensions`, choose **Details** on that extension, and set **Site access** to **On click**: it then adds
+its frame only where you click it, and runs work again. See
+[Another extension's frame takes the tab away](troubleshooting.md#another-extensions-frame-takes-the-tab-away).
+
+### A profile of its own
 
 Sign in once by hand in a profile of its own, then point runs at it. `--headed` is only needed for the first run:
 
@@ -153,12 +196,15 @@ The exit code is the status. Only `complete` exits 0; configuration refusals exi
 | `budget_exceeded` | 7 | a resource limit was reached, or a missing cost prevents enforcing the dollar cap |
 | `observation_limit` | 11 | the page or required evidence cannot fit the configured prompt budget |
 | `unavailable` | 8 | a model or browser provider stayed unavailable through every retry; the same run later may pass |
+| `cancelled` | 12 | you stopped an `--extension` run in your browser: from its popup, the debugging bar or by closing its tabs |
 | `error` | 1 | a model or browser failure |
 
 The JSON result says why a run stopped where a caller can act on it:
 
 - `budget` names the limit a `budget_exceeded` run hit (`steps`, `seconds`, `dollars`, `jev_calls` or
   `llm_calls`) and its value.
+- `browser` says which browser the run drove: `via` is `cloud`, `launched`, `attached` or `extension`, with the
+  `profile` and the `browser` product and version where known. A run that read every page over HTTP has none.
 - `wall` describes a `needs_login` or `blocked` page: its `kind` (`password`, `one_time_code`, `sign_in` or
   `bot_check`), `origin`, the `fields` it asked for and `seen_at_ms`. A caller that can read the user's email or
   texts can answer a `one_time_code` wall with a secret scoped to that origin and run again.

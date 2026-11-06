@@ -1,6 +1,7 @@
 usage: fastbrowse-mcp [-h] [--transport {stdio,http}] [--host HOST]
                       [--port PORT] [--local] [--headed] [--profile PROFILE]
-                      [--foreground] [--cloud-profile ID] [--allow-authorize]
+                      [--foreground] [--cloud-profile ID] [--extension]
+                      [--extension-browser LABEL] [--allow-authorize]
                       [--secret NAME=ENV_VAR@ORIGIN] [--bitwarden ITEM]
                       [--max-steps MAX_STEPS] [--max-dollars MAX_DOLLARS]
                       [--max-seconds MAX_SECONDS]
@@ -22,6 +23,11 @@ options:
                         front, to watch it; otherwise a visible window stays
                         in the background
   --cloud-profile ID    a Browser Use Cloud profile to run signed in as
+  --extension           run every call in your own Chrome through the
+                        fastbrowse extension
+  --extension-browser LABEL
+                        which browser, when the extension is connected in more
+                        than one (implies --extension)
   --allow-authorize     let a call pass authorize
   --secret NAME=ENV_VAR@ORIGIN
                         repeatable

@@ -21,6 +21,8 @@ import java.util.List;
  * @param cloudExtensions up to three IDs of ready extensions on the Browser Use Cloud account, loaded into a cloud
  *     browser
  * @param cloudTimeoutMinutes how long a cloud browser may live: 15 when null, and the service allows up to 240
+ * @param extension drive the user's own Chrome through the fastbrowse extension, in a tab group of the run's own
+ * @param extensionBrowser the label of the connected browser to use when more than one has the extension
  */
 public record BrowserOptions(
         boolean local,
@@ -35,7 +37,9 @@ public record BrowserOptions(
         Integer viewportWidth,
         Integer viewportHeight,
         List<String> cloudExtensions,
-        Integer cloudTimeoutMinutes) {
+        Integer cloudTimeoutMinutes,
+        boolean extension,
+        String extensionBrowser) {
 
     /** The default: a Browser Use Cloud browser. */
     public static final BrowserOptions CLOUD = builder().build();
@@ -58,6 +62,8 @@ public record BrowserOptions(
         private Integer viewportHeight;
         private List<String> cloudExtensions;
         private Integer cloudTimeoutMinutes;
+        private boolean extension;
+        private String extensionBrowser;
 
         private Builder() {}
 
@@ -122,9 +128,20 @@ public record BrowserOptions(
             return this;
         }
 
+        public Builder extension(boolean extension) {
+            this.extension = extension;
+            return this;
+        }
+
+        public Builder extensionBrowser(String extensionBrowser) {
+            this.extensionBrowser = extensionBrowser;
+            return this;
+        }
+
         public BrowserOptions build() {
             return new BrowserOptions(local, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground,
-                    proxyCountry, viewportWidth, viewportHeight, cloudExtensions, cloudTimeoutMinutes);
+                    proxyCountry, viewportWidth, viewportHeight, cloudExtensions, cloudTimeoutMinutes, extension,
+                    extensionBrowser);
         }
     }
 }

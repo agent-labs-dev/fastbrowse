@@ -74,6 +74,44 @@ public sealed record BrowserEvent
     public string? BrowserId { get; init; }
 }
 
+/// <summary>
+/// The browser a run drove.
+/// </summary>
+public sealed record BrowserUsed
+{
+    [JsonPropertyName("via")]
+    public required BrowserVia Via { get; init; }
+
+    /// <summary>
+    /// The profile it ran in, when one was named: a local profile directory, a cloud profile, or the label of a
+    /// browser connected through the extension.
+    /// </summary>
+    [JsonPropertyName("profile")]
+    public string? Profile { get; init; }
+
+    /// <summary>
+    /// The browser's product and version, when known, such as <c>Chrome 150.0.7400.2</c>.
+    /// </summary>
+    [JsonPropertyName("browser")]
+    public string? Browser { get; init; }
+}
+
+/// <summary>
+/// How a run reached the browser it drove.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter<BrowserVia>))]
+public enum BrowserVia
+{
+    [JsonStringEnumMemberName("cloud")]
+    Cloud,
+    [JsonStringEnumMemberName("launched")]
+    Launched,
+    [JsonStringEnumMemberName("attached")]
+    Attached,
+    [JsonStringEnumMemberName("extension")]
+    Extension,
+}
+
 public sealed record BudgetStop
 {
     [JsonPropertyName("resource")]
@@ -101,6 +139,9 @@ public sealed record CancellationReceipt
 
     [JsonPropertyName("recordings")]
     public required IReadOnlyList<string> Recordings { get; init; }
+
+    [JsonPropertyName("browser")]
+    public BrowserUsed? Browser { get; init; }
 }
 
 public sealed record Citation
@@ -571,6 +612,12 @@ public sealed record RunParams
 
     [JsonPropertyName("browser")]
     public bool? Browser { get; init; }
+
+    [JsonPropertyName("extension")]
+    public bool? Extension { get; init; }
+
+    [JsonPropertyName("extension_browser")]
+    public string? ExtensionBrowser { get; init; }
 }
 
 public sealed record RunResult
@@ -622,6 +669,12 @@ public sealed record RunResult
     /// </summary>
     [JsonPropertyName("wall")]
     public Wall? Wall { get; init; }
+
+    /// <summary>
+    /// The browser the run drove, and how it reached it; none when it read every page over HTTP.
+    /// </summary>
+    [JsonPropertyName("browser")]
+    public BrowserUsed? Browser { get; init; }
 }
 
 /// <summary>
@@ -699,6 +752,8 @@ public enum Status
     ObservationLimit,
     [JsonStringEnumMemberName("unavailable")]
     Unavailable,
+    [JsonStringEnumMemberName("cancelled")]
+    Cancelled,
     [JsonStringEnumMemberName("error")]
     Error,
 }
