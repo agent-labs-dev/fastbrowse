@@ -67,8 +67,6 @@ FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" mvn -B -f java/pom.xml ver
 python3 scripts/dotnet_types.py && git diff --exit-code -- dotnet
 cd dotnet && FASTBROWSE_TEST_BINARY="$PWD/../target/debug/fastbrowse" dotnet test --solution Fastbrowse.slnx; cd ..
 uv run actionlint
-uv run python .sloppatrol/agents.py check
-uv run python .sloppatrol/gate.py --base origin/main
 just rust                                           # the Rust workspace (docs/adr/0001, 0004); needs cargo and just
 ```
 
@@ -88,8 +86,6 @@ A change to `crates/fastbrowse-browser/js/snapshot.js` is checked against `bench
 in `crates/fastbrowse-browser/tests/capture.rs`; `FASTBROWSE_UPDATE_GOLDEN=1` rewrites them, and the diff is the
 behaviour change) and timed by CodSpeed
 (`.github/workflows/codspeed.yml`, locally `uv run --group bench pytest benchmarks --codspeed`).
-
-The [Sloppatrol project skill](.agents/skills/sloppatrol-project/SKILL.md) records audit commands, live roots and generated files.
 
 ## Pull requests and branches
 
@@ -201,8 +197,8 @@ is stale there too. A doc found trailing the code is fixed on its own, not left 
 not whether a sentence is true. When you write or review prose, check each claim against the code, put the
 useful point first, and keep prerequisites, limits and recovery steps.
 
-**Agent instructions stay short.** `.sloppatrol/agents.py check` holds this file to 300 lines. Detail only some tasks
-need goes in `docs/agents/` behind a line here that says when to read it.
+**Agent instructions stay short.** Keep this file under 300 lines. Detail only some tasks need goes in
+`docs/agents/` behind a line here that says when to read it.
 
 ## Agent skills
 

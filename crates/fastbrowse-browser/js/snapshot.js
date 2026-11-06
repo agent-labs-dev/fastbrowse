@@ -297,7 +297,7 @@
       e.hasAttribute('onclick') ||
       (view.getComputedStyle(e).cursor === 'pointer' &&
         (!e.parentElement || view.getComputedStyle(e.parentElement).cursor !== 'pointer'));
-    return starts && !e.parentElement?.closest(SELECTOR) && !e.querySelector(SELECTOR);
+    return starts && !e.parentElement?.closest(SELECTOR) && ![...e.querySelectorAll(SELECTOR)].some(visible);
   });
   // A script can make a focusable label its menu trigger without a role, href or pointer cursor. Its label may
   // be wrapped in a child, and hidden menu links must not hide the trigger that reveals them. A container holding
@@ -521,12 +521,14 @@
     };
     if (rname === 'link' && e.href) {
       const u = new URL(e.href, location.href);
-      base.href = u.origin === location.origin ? u.pathname + u.search : u.host + u.pathname;
+      // Another origin's link keeps its whole address, as capture.js writes it: a recipe or a follow joins the href
+      // to this page, which would turn host and path into a path on this site and drop the query (#830).
+      base.href = u.origin === location.origin ? u.pathname + u.search : u.href;
       // The page's own word for "the next page of this list", which survives an icon label or another language:
       // `rel="next"`, or the pager markup most sites use instead, a `next` class on the link or its list item inside a
       // pagination container (#750), one named by `pagin` or `pager`, as "page" alone is a layout class. A `next`
       // class alone also marks carousels, wizards and next-article links. Only a same-origin link is a pager: its href
-      // is a path the run can open, where another origin's is host and path.
+      // is a path on this site, where another origin's is an absolute address.
       const pager = el => el && el.classList && el.classList.contains('next');
       const paging = el =>
         el.tagName === 'NAV' ||

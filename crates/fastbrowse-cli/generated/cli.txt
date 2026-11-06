@@ -4,11 +4,12 @@ usage: fastbrowse [-h] [--version] [--start START] [--context CONTEXT]
                   [--attach] [--target-match PATTERN] [--foreground]
                   [--proxy-country CC] [--viewport WIDTHxHEIGHT] [--authorize]
                   [--secret NAME=ENV_VAR[@ORIGIN]] [--bitwarden ITEM]
-                  [--max-steps MAX_STEPS] [--max-dollars MAX_DOLLARS]
-                  [--downloads DOWNLOADS] [--json] [--record FILE]
-                  [--recipe FILE] [--save-recipe FILE] [--fetch]
-                  [--browser] [--extension] [--extension-browser LABEL]
-                  [--trace FILE] [--cursor | --no-cursor]
+                  [--input NAME=VALUE] [--max-steps MAX_STEPS]
+                  [--max-dollars MAX_DOLLARS] [--downloads DOWNLOADS]
+                  [--json] [--record FILE] [--recipe FILE]
+                  [--save-recipe FILE] [--fetch] [--browser] [--extension]
+                  [--extension-browser LABEL] [--trace FILE]
+                  [--cursor | --no-cursor]
                   task
 
 Run one browser task.
@@ -55,6 +56,9 @@ options:
                         or the --start origin (repeatable)
   --bitwarden ITEM      type this vault login's username, password and
                         authenticator code (unlocked bw CLI)
+  --input NAME=VALUE    a named value the task can refer to, typed into a field
+                        by name, so a recipe types the next run's value
+                        (repeatable)
   --max-steps MAX_STEPS
                         optional step limit (default: no step limit)
   --max-dollars MAX_DOLLARS
@@ -63,7 +67,8 @@ options:
   --downloads DOWNLOADS
                         directory for downloaded files
   --json                print the full result as JSON
-  --recipe FILE         reuse saved values for matching actions confirmed by Jev
+  --recipe FILE         replay a saved run: Jev is offered each saved action
+                        alone where its page and control match
   --save-recipe FILE    save the steps of a completed run as recipe JSON
   --record FILE         save a video of the run, ending on its answer (needs
                         ffmpeg)

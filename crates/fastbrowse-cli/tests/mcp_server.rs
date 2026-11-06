@@ -318,7 +318,7 @@ async fn test_a_cancelled_run_keeps_its_receipt_beside_the_tool_error() {
         steps: vec![step(0)],
         cost: answered(Status::Complete).cost,
         recordings: vec![PathBuf::from("run.mp4")],
-        browser: None,
+        ..Default::default()
     };
     let spent = receipt.clone();
     let stopped = runner(move |_| {
@@ -714,7 +714,7 @@ async fn an_assembly_error_keeps_its_receipt_beside_the_tool_error() {
         steps: vec![step(0)],
         cost: answered(Status::Complete).cost,
         recordings: vec![PathBuf::from("run.mp4")],
-        browser: None,
+        ..Default::default()
     };
     let spent = receipt.clone();
     let failed = runner(move |_| {
@@ -740,7 +740,7 @@ async fn a_deadline_keeps_an_assembly_error_receipt_returned_during_cleanup() {
         steps: vec![step(0)],
         cost: answered(Status::Complete).cost,
         recordings: vec![PathBuf::from("run.mp4")],
-        browser: None,
+        ..Default::default()
     };
     let spent = receipt.clone();
     let failed = runner(move |args: Call| {

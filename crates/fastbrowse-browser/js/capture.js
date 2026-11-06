@@ -455,6 +455,7 @@
         href: imageSource(link.href),
         near: row ? textOf(row).replace(/\s+/g, ' ') || null : null,
       };
+      // choices.rs (LINK_METADATA) keeps this out of a read's answer candidates by its opening words.
       push('observation', `Link element DOM metadata: ${JSON.stringify(metadata)}. The link has no text.`);
     }
     if (root === document.body) {

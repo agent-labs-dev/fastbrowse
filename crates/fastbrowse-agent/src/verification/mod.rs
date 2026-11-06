@@ -96,6 +96,13 @@ pub fn page_state(
         state["page"]["text"] = "".into();
         state["page"]["text"] = cut_text(&observation.viewport_text, room(&state) as usize, true).into();
     }
+    // A long article's links alone can outgrow the budget once its text is gone: they say nothing a verdict needs,
+    // where inputs and selections do.
+    if size(&state) > budget && !state.contains_key("controls_omitted") {
+        let kept = stateful(&observation.controls);
+        state.insert("controls_omitted".into(), (observation.controls.len() - kept.len()).into());
+        state.insert("controls".into(), Value::Array(controls(kept)));
+    }
     if size(&state) > budget {
         return Err(AgentError::ObservationTooLarge(format!(
             "the state on {} exceeds Jev's input limits with no page text",
@@ -221,6 +228,20 @@ mod tests {
         ];
         let state = page_state(&page, &Notes::default(), &TokenBudget::default(), &[], None).unwrap();
         assert_eq!(state["page"]["media"][0]["ended"], true);
+    }
+
+    #[test]
+    fn a_long_articles_links_give_way_before_its_verdict_is_refused() {
+        let mut page = page();
+        page.controls = (0..400)
+            .map(|n| {
+                fastbrowse_core::page::Control::new(&format!("a:{n}"), "link", &format!("Article link number {n}"), [])
+            })
+            .collect();
+        let tokens =
+            TokenBudget { state_plus_largest_question: 2000, state_plus_all_questions: 4000, ..TokenBudget::default() };
+        let state = page_state(&page, &Notes::default(), &tokens, &["q".to_string()], None).unwrap();
+        assert_eq!(state["controls_omitted"], 400);
     }
 
     #[test]

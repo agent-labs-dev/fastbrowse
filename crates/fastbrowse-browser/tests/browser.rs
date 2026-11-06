@@ -900,6 +900,17 @@ async fn test_capture_offsets_slice_exactly_to_each_block() {
     h.close().await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_link_to_another_site_keeps_its_whole_address() {
+    // A recipe and a followed click join the href to the page, so host and path alone became a path on this site (#830).
+    let _turn = turn().await;
+    let Some(h) = loaded().await else { return };
+    let observation = h.observe().await;
+    let hrefs: Vec<_> = observation.controls.iter().filter_map(|control| control.href.as_deref()).collect();
+    assert!(hrefs.contains(&"https://example.com/docs"), "{hrefs:?}");
+    h.close().await;
+}
+
 /// Wikipedia's search box swaps itself for a hydrated copy mid-insertion; the text still landed.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_fill_succeeds_when_the_field_is_replaced_while_typing() {

@@ -20,7 +20,7 @@ use serde_json::{Map, Value as JsonValue, json};
 
 use super::Agent;
 use super::driving::require;
-use super::helpers::{caller_link, describe, dialog_question, navigation_question};
+use super::helpers::{caller_link, describe, dialog_question, empty_fields_fact, navigation_question, unsent_fact};
 use super::state::{Flow, OutputIntent, RunState, Step, Stop, Unsure};
 use crate::memory::Notes;
 use crate::policy::{Ahead, Decision, HistoryEntry};
@@ -243,6 +243,17 @@ impl Agent {
                     return Err(self.page.needs_browser(reason).into());
                 }
                 let text = self.text(state, observation, decision, target).await?;
+                // The task shows each input's value beside its name, so Jev copies or writes it like any value the
+                // task gives; typed as it was given, it is the input, and a recipe types the next run's value.
+                // Text the caller's own task also states, or that two inputs share, may not be the input's, and stays as
+                // it was: "fill country with US" beside `username=US` is the task's US.
+                let mut given = state.inputs.iter().filter(|(_, value)| **value == text).map(|(name, _)| name);
+                if matches!(state.text_source, Some(RecipeText::Literal(_) | RecipeText::Live))
+                    && !state.given_task.contains(text.as_str())
+                    && let (Some(name), None) = (given.next(), given.next())
+                {
+                    state.text_source = Some(RecipeText::Input(name.clone()));
+                }
                 Ok(Action {
                     target_id: Some(target.id.clone()),
                     secret: self.reveals_text(&text),
@@ -559,7 +570,14 @@ impl Agent {
             .await?;
             state.ledger.record([written.cost])?;
             return match written.data.value.filter(|value| !value.trim().is_empty()) {
-                Some(value) => Ok(value),
+                Some(value) => {
+                    // Words the task gives as they were typed are the task's value, however Jev got to them, so a
+                    // recipe can type them again. Anything composed stays live.
+                    if state.task.contains(value.as_str()) {
+                        state.text_source = Some(RecipeText::Literal(value.clone()));
+                    }
+                    Ok(value)
+                }
                 None => Err(self.missing(state, observation, target)),
             };
         }
@@ -1019,7 +1037,16 @@ impl Agent {
         // Finding, reading and reporting are judged by the answer's own checks, from the notes this question leaves out.
         let question = "Judged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out?";
         let history = state.history.iter().map(Dump::dump_exclude_none).collect();
-        let context = Map::from_iter([("recent_actions".to_string(), JsonValue::Array(history))]);
+        let mut context = Map::from_iter([("recent_actions".to_string(), JsonValue::Array(history))]);
+        // What code already knows was left undone, as the step decision is told it: values typed and never sent, and
+        // fields left empty once the run stalled on a task to carry out (#812).
+        let facts: Vec<String> = unsent_fact(&state.history, observation)
+            .into_iter()
+            .chain(state.to_carry_out.then(|| empty_fields_fact(&state.missing, observation)).flatten())
+            .collect();
+        if !facts.is_empty() {
+            context.insert("page_facts".into(), facts.into());
+        }
         let asked = vec![("pick", question.to_string(), criteria)];
         // The whole page, not only what is in view: a feed loaded to its end showed its count at the top and "End of
         // list" below the fold, and judged from the top alone the loading looked unfinished.

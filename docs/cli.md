@@ -39,7 +39,8 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 | `--json` | print the full result |
 | `--trace FILE` | append each model call with its full request and reply, read and check, and with `--extension` every message to and from the extension (image data left out), to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP. The requests carry page text, so treat a trace as you would the pages |
 | `--record FILE` | save a captioned MP4 of the run (needs `ffmpeg`); it shows what the pages showed, so watch it before sharing |
-| `--recipe FILE` | replay a [recipe](design.md#recipes): reuse saved values when Jev selects a matching action on the same page |
+| `--recipe FILE` | replay a [recipe](design.md#recipes): offer Jev each saved action alone where its page and control match, and reuse saved values |
+| `--input NAME=VALUE` | a named value the task refers to ("the person named in input person"), typed into a field by name; a recipe saved with it types the next run's value (repeatable) |
 | `--save-recipe FILE` | write the run's steps as a recipe when it ends `complete`; naming the `--recipe` file repairs it after steps the agent had to decide |
 | `--no-cursor` | don't draw the agent's cursor. By default it is drawn with [Cua Driver](https://github.com/trycua/cua) over a Chrome window that shows the run (`--foreground`, or an attached front tab; needs `cua-driver`, and X11 on Linux), and skipped anywhere else |
 | `--cursor` | also bring the window to the front, so the cursor is always drawn |
@@ -70,8 +71,8 @@ fastbrowse "Find my last order's delivery date." --start https://www.amazon.com/
 
 Each run works in a tab group of its own, named after the task, and closes its tabs when it ends. While a run is
 attached, Chrome shows a bar saying an extension started debugging the browser. Each run has three ways to stop
-it, and each ends the run `cancelled`: **Stop** in the extension's popup, **Cancel** on that bar (which stops
-every run), or closing all of the run's tabs.
+it, and each ends the run `cancelled` with an error that says which one stopped it: **Stop** in the extension's
+popup, **Cancel** on that bar (which stops every run in that browser), or closing all of the run's tabs.
 
 The extension relays only page-level commands. It cannot read cookies, saved passwords or other sites' storage,
 and fastbrowse accepts connections only from the extension's own ID, over a socket only your user can open. The
@@ -90,6 +91,11 @@ assistants are common ones. When that happens the run ends `unavailable` and nam
 `chrome://extensions`, choose **Details** on that extension, and set **Site access** to **On click**: it then adds
 its frame only where you click it, and runs work again. See
 [Another extension's frame takes the tab away](troubleshooting.md#another-extensions-frame-takes-the-tab-away).
+
+**Other extensions also see the run's pages.** A run's tabs are ordinary tabs, so every extension with site access
+reads and can change them as it does any other tab, signed-in pages included: a coupon finder is sent the address,
+an ad blocker or a translation overlay changes what the run reads. For sensitive work, or runs you want to
+reproduce, use a separate Chrome profile with only fastbrowse installed.
 
 ### A profile of its own
 

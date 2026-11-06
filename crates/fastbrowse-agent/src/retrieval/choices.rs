@@ -36,12 +36,19 @@ fn focus_rules() -> String {
     )
 }
 
+/// How capture.js begins the observation it writes for a link with no text.
+const LINK_METADATA: &str = "Link element DOM metadata:";
+
 fn iter_read_candidates(page: &Page<'_>, blocks: &[&Block], limit: Option<usize>) -> Vec<Candidate> {
     let mut candidates = Vec::new();
     for block in blocks {
         let value = page.slice(block.start, block.end);
         // A downloaded CSV's row is a table block with no cells to split.
         let found = match cells(value) {
+            // A textless link's metadata quotes the row it sits in, to say which link it is. That quote is the row's
+            // own text again, and offered as a value it won over the row: a top story was answered with a JSON scrap
+            // of the upvote link's `near` (#823). Its label and destination are the link's own, and stay candidates.
+            _ if block.kind == BlockKind::Observation && value.starts_with(LINK_METADATA) => link_fields(value),
             cells if block.kind == BlockKind::Table && !cells.is_empty() => cells,
             _ => {
                 let mut found = spans(value, SpanKind::Str);
@@ -75,6 +82,24 @@ fn iter_read_candidates(page: &Page<'_>, blocks: &[&Block], limit: Option<usize>
         }
     }
     candidates
+}
+
+/// The `label` and `href` string values of a textless link's metadata, by code point, as `spans` gives them.
+fn link_fields(value: &str) -> Vec<(usize, usize, String)> {
+    ["\"label\":\"", "\"href\":\""]
+        .into_iter()
+        .filter_map(|key| {
+            let start = value.find(key)? + key.len();
+            let mut escaped = false;
+            let length = value[start..].find(|c: char| {
+                let close = c == '"' && !escaped;
+                escaped = c == '\\' && !escaped;
+                close
+            })?;
+            let chars = |byte: usize| value[..byte].chars().count();
+            Some((chars(start), chars(start + length), value[start..start + length].to_string()))
+        })
+        .collect()
 }
 
 /// Every candidate, or none where more than a choice of `max_options` beside its two escapes could offer.
@@ -588,5 +613,25 @@ mod tests {
             })
             .collect();
         assert_eq!(question.criteria["c0"]["sources"], Value::Array(expected));
+    }
+
+    #[test]
+    fn link_metadata_offers_the_link_but_not_its_row_text() {
+        let captured = capture(&[
+            (BlockKind::Paragraph, "A story title"),
+            (
+                BlockKind::Observation,
+                r#"Link element DOM metadata: {"label":"upvote","href":"https://example.test/vote","near":"A story title"}. The link has no text."#,
+            ),
+        ]);
+
+        let values: Vec<String> =
+            read_candidates(&captured, None).into_iter().map(|candidate| candidate.value.to_str()).collect();
+
+        // The link's own label and destination answer a question about the link; its row's text is already offered.
+        assert_eq!(values, ["A story title", "upvote", "https://example.test/vote"]);
+        // What an image or a field shows is still an answer.
+        let captured = capture(&[(BlockKind::Observation, r#"Image element DOM metadata: {"alt":"A red bicycle"}"#)]);
+        assert_eq!(read_candidates(&captured, None).len(), 1);
     }
 }

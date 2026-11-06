@@ -288,6 +288,15 @@ async fn test_cdp_port_hands_run_task_the_port_and_no_cloud_key() {
 }
 
 #[tokio::test]
+async fn named_inputs_reach_the_run_with_any_equals_sign_in_their_value() {
+    let ran = cli(&["t", "--local", "--input", "person=Ada Lovelace", "--input", "query=a=b"]).await;
+    assert_eq!(ran.code, 0);
+    let inputs = ran.call.unwrap().task.inputs.unwrap();
+    assert_eq!(inputs.get("person").map(String::as_str), Some("Ada Lovelace"));
+    assert_eq!(inputs.get("query").map(String::as_str), Some("a=b"));
+}
+
+#[tokio::test]
 async fn test_cannot_combine_cdp_url_and_cdp_port() {
     let argv = [
         "t",
@@ -362,6 +371,7 @@ async fn test_usage_errors_match_argparse() {
             "argument --proxy-country: Browser Use's code for the United Kingdom is uk, not gb",
         ),
         (&["t", "--secret", "abc"], "argument --secret: expected NAME=ENV_VAR, got 'abc'"),
+        (&["t", "--input", "abc"], "argument --input: expected NAME=VALUE, got 'abc'"),
         (&["t", "--bogus"], "unrecognized arguments: --bogus"),
         (&["t", "--max"], "ambiguous option: --max could match --max-steps, --max-dollars"),
         (&["t", "--start"], "argument --start: expected one argument"),

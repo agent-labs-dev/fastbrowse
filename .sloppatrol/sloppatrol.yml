@@ -1,0 +1,29 @@
+# Sloppatrol: https://github.com/agent-labs-dev/sloppatrol
+# Patrols the Python package. The Rust core (crates/) and its cargo suites are
+# left out: a cargo run costs minutes, and the patrol stays light.
+version: 1
+project: { name: fastbrowse }
+# Compiles the Rust core into target/ so the Python tests can import it.
+prepare:
+  - uv sync --locked --all-extras
+# The checks the gate job in ci.yml runs on the Python package, as it runs them.
+checks:
+  - { name: lint, run: uv run ruff check . }
+  - { name: format, run: uv run ruff format --check . }
+  - { name: typecheck, run: uv run ty check }
+  - { name: no-slop, run: uv run python scripts/no_slop.py }
+  - { name: docs-sync, run: uv run python scripts/docs_sync.py }
+  - { name: test, run: uv run pytest -q, tests: true, timeoutMinutes: 30 }
+focus: [src/**]
+ignore:
+  - target/**
+  - docs/results/**
+  - uv.lock
+  - package-lock.json
+  - Cargo.lock
+# Tests no check above runs.
+uncheckedTests:
+  - evals/**
+  - crates/**
+# Ready-for-review pull requests against this repo, opened with the patrol's gh login.
+github: { enabled: true, repo: agent-labs-dev/fastbrowse, labels: [sloppatrol] }

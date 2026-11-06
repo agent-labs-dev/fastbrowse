@@ -1100,6 +1100,30 @@ async fn test_a_done_with_a_step_of_the_task_undone_is_not_complete() {
     assert_eq!(asked[0]["recent_actions"][0]["target"], "Phone", "the steps taken are what Jev judges");
 }
 
+/// A form filled and never sent is not a task carried out: the done check is told so, as the step decision is (#812).
+#[tokio::test]
+async fn test_the_done_check_is_told_what_was_typed_and_never_sent() {
+    let page = observation(&[holding("Reference", "REF-1")]);
+    let mut state = run_state();
+    state.task = "Enter the reference REF-1 and submit the form.".into();
+    state.history.push(typed_into("Reference"));
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "undone"));
+    let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev.clone(), Arc::new(ScriptedLLM));
+    assert!(!agent.actions_done(&mut state, &page).await.unwrap());
+    let facts = jev.3.lock().unwrap()[0]["page_facts"].to_string();
+    assert!(facts.contains("No action has sent what was typed"), "{facts}");
+    // A field left empty is named only once the run stalled on a task to carry out, as the step decision names it:
+    // a run that did act is not told an unrelated empty search box is unfinished work.
+    let page = observation(&[holding("Reference", "REF-1"), holding("Note", "")]);
+    state.output_intent = super::state::OutputIntent::CarriedOut;
+    assert!(!agent.actions_done(&mut state, &page).await.unwrap());
+    state.to_carry_out = true;
+    assert!(!agent.actions_done(&mut state, &page).await.unwrap());
+    let asked = jev.3.lock().unwrap();
+    assert!(!asked[1]["page_facts"].to_string().contains("'Note'"), "{}", asked[1]);
+    assert!(asked[2]["page_facts"].to_string().contains("'Note'"), "{}", asked[2]);
+}
+
 /// `DoneCheckJev`, judging that no answer gives every requested fact.
 struct RefusesCoverage(DoneCheckJev);
 
@@ -2102,6 +2126,44 @@ async fn a_relative_date_written_by_the_llm_is_decided_live_when_a_recipe_is_reu
         super::replay::step_of("https://book.test/", &decision, &action, state.text_source.take(), |_| false).unwrap();
     assert!(!saved.replayable());
     assert!(!serde_json::to_string(&saved).unwrap().contains("2026-11-04"));
+}
+
+#[tokio::test]
+async fn a_value_written_as_the_task_gives_it_is_saved_for_a_recipe_to_type_again() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("write"))), Arc::new(DateWriter));
+    let mut state = run_state();
+    state.task = "Book a table for 2026-11-04".into();
+    let target = field("Date");
+    let decision = code_decision(Operation::Fill, Some(target.clone()));
+    let value = agent.text(&mut state, &observation(&[]), &decision, &target).await.unwrap();
+    let action = Action { text: Some(value), ..Action::new(Operation::Fill) };
+    let saved =
+        super::replay::step_of("https://book.test/", &decision, &action, state.text_source.take(), |_| false).unwrap();
+    assert!(saved.replayable());
+    assert_eq!(saved.text, Some(fastbrowse_core::recipe::RecipeText::Literal("2026-11-04".into())));
+}
+
+#[tokio::test]
+async fn a_value_typed_as_an_input_gave_it_is_saved_as_that_input() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("write"))), Arc::new(DateWriter));
+    let inputs = IndexMap::from([("date".to_string(), "2026-11-04".to_string())]);
+    let mut state = RunState::new(
+        "Book a table for input date".into(),
+        inputs,
+        Vec::new(),
+        Authorization::default(),
+        Arc::new(Ledger::new(Limits::default())),
+    );
+    assert_eq!(state.task, "Book a table for input date (2026-11-04)");
+    let target = field("Date");
+    let fill = code_decision(Operation::Fill, Some(target));
+    let action = agent.action(&mut state, &observation(&[]), &fill).await.unwrap();
+    assert_eq!(action.text.as_deref(), Some("2026-11-04"));
+    assert_eq!(state.text_source, Some(fastbrowse_core::recipe::RecipeText::Input("date".into())));
+    // The task's own 2026-11-04 is the task's, whatever an input also holds.
+    state.given_task = "Book a table for input date, from 2026-11-04".into();
+    agent.action(&mut state, &observation(&[]), &fill).await.unwrap();
+    assert_eq!(state.text_source, Some(fastbrowse_core::recipe::RecipeText::Literal("2026-11-04".into())));
 }
 
 /// The scripted Jev, its every choice held at `confidence`, and the states it was shown.
@@ -3914,7 +3976,7 @@ async fn test_refusing_a_long_read_source_does_not_send_an_empty_request() {
 fn a_late_task_secret_clears_a_previous_recipe_outcome() {
     let agent = agent();
     let mut state = run_state();
-    state.task = "Log in as ada@example.test".into();
+    state.given_task = "Log in as ada@example.test".into();
     let sink = Default::default();
     agent.store_recipe(&state, &sink);
     assert!(sink.lock().unwrap().is_some());
@@ -4194,14 +4256,22 @@ async fn test_a_draft_rejected_again_unchanged_ends_the_run() {
 }
 
 #[tokio::test]
-async fn test_uncertain_composition_support_is_terminal_without_repair() {
-    let page = observation(&[]);
-    let agent = Agent::new(Arc::new(FinishPage(page.clone())), repair_jev(vec![(0.5, 1.0)]), Arc::new(WrongRecord));
-    let mut state = composition_repair_state();
-    let result = agent.finish(&mut state, &page, None, None).await.unwrap().unwrap();
-    assert_eq!(result.status, Status::Unverified);
-    assert_eq!(state.recoveries, 0);
-    assert!(state.composition_feedback.is_none());
+async fn test_uncertain_composition_support_or_coverage_is_repaired_like_a_rejection() {
+    // Einstein: a correct count whose support Jev judged at exactly 0.5 ended the run with no answer and no second
+    // draft (#813). A judgment too close to call withholds the claim and asks for a corrected draft.
+    for (support, coverage) in [(0.5, 1.0), (1.0, 0.5)] {
+        let page = observation(&[]);
+        let agent = Agent::new(
+            Arc::new(FinishPage(page.clone())),
+            repair_jev(vec![(support, coverage)]),
+            Arc::new(WrongRecord),
+        );
+        let mut state = composition_repair_state();
+        let result = agent.finish(&mut state, &page, None, None).await.unwrap();
+        assert!(result.is_none(), "support {support}, coverage {coverage} should be repaired");
+        assert_eq!(state.recoveries, 1);
+        assert!(state.composition_feedback.is_some());
+    }
 }
 
 #[tokio::test]
@@ -4352,13 +4422,14 @@ async fn test_rejected_draft_feedback_is_redacted_before_repair_and_trace_output
     let trace = Trace::collecting();
     let agent = Agent::new(Arc::new(FinishPage(page.clone())), repair_jev(vec![(0.0, 1.0), (1.0, 1.0)]), llm.clone())
         .with_trace(trace.clone());
-    agent.redactor().register("credential", "99", None);
+    // Not a bare number, which a note's hex id can contain: redacting the id would leave the repair nothing to cite.
+    agent.redactor().register("credential", "A: 99", None);
     let mut state = composition_repair_state();
     assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
-    assert!(!state.composition_feedback.as_deref().unwrap().contains("99"));
+    assert!(!state.composition_feedback.as_deref().unwrap().contains("A: 99"));
     assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_some());
     let calls = llm.0.lock().unwrap();
-    assert!(calls[1].iter().all(|message| !message.content.contains("99")));
+    assert!(calls[1].iter().all(|message| !message.content.contains("A: 99")));
     assert!(!serde_json::to_string(&trace.events()).unwrap().contains("Record A: 99"));
 }
 
@@ -4818,8 +4889,8 @@ async fn test_a_next_page_that_redirects_is_read_once_its_landing_page_is() {
 
 #[test]
 fn test_a_next_link_to_another_site_is_not_this_lists_next_page() {
-    // The browser marks only same-origin pagers, since it writes another origin's href as host and path; a reader
-    // that hands over an absolute address to another site is refused here too.
+    // The browser marks only same-origin pagers; a reader that hands over an absolute address to another site is
+    // refused here too.
     let mut state = run_state();
     let absolute = paged("https://list.test/", "https://other.test/page/2/");
     state.note_pager_pages(&absolute);

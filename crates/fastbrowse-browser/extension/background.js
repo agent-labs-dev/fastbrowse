@@ -10,7 +10,7 @@ const COLORS = ['blue', 'cyan', 'green', 'purple', 'pink', 'orange', 'yellow', '
 
 let port = null;
 let allowed = null;
-/** conn -> { conn, task, groupId, tabs: Set<tabId>, adopted: Set<tabId>, color, released } */
+/** conn -> { conn, task, started, groupId, tabs: Set<tabId>, adopted: Set<tabId>, color, released, ending } */
 const runs = new Map();
 /** tabId -> conn */
 const owners = new Map();
@@ -20,6 +20,8 @@ const fetchParams = new Map();
 const closing = new Set();
 /** Chunked messages from the host being joined: id -> parts. */
 const chunks = new Map();
+/** How many finished runs the popup lists. */
+const RECENT = 5;
 
 async function identity() {
   const stored = await chrome.storage.local.get(['browserId', 'label']);
@@ -52,7 +54,7 @@ function send(message) {
 function updateBadge() {
   const count = runs.size;
   chrome.action.setBadgeText({ text: count ? String(count) : '' });
-  chrome.action.setBadgeBackgroundColor({ color: '#3b5bdb' });
+  chrome.action.setBadgeBackgroundColor({ color: '#c4451b' });
 }
 
 function runOf(conn) {
@@ -99,6 +101,7 @@ const ops = {
     const run = runs.get(conn) || {
       task: String(message.task || 'run').trim() || 'run',
       conn,
+      started: Date.now(),
       tabs: new Set(),
       adopted: new Set(),
       color: COLORS[runs.size % COLORS.length],
@@ -151,18 +154,49 @@ const ops = {
     return (await chrome.debugger.sendCommand(target, method, params || {})) ?? {};
   },
   async release(conn) {
-    await releaseRun(conn);
+    await releaseRun(conn, 'ended');
+    return null;
+  },
+  // The run lost a tab to another extension's frame (#822), which fastbrowse saw load just before Chrome detached it.
+  async taken(conn, { origin }) {
+    const run = runs.get(conn);
+    if (run) {
+      run.ending ??= 'other_extension';
+      run.taker ??= origin;
+    }
     return null;
   },
 };
 
-async function releaseRun(conn) {
+/** Stop relaying for a run and close its tabs. `ending` is how it ended, for the popup's recent runs. */
+async function releaseRun(conn, ending) {
   const run = runs.get(conn);
   if (!run) return;
   runs.delete(conn);
   run.released = true;
   updateBadge();
+  await remember(run, run.ending || ending);
   for (const tabId of [...run.tabs]) await releaseTab(run, tabId);
+}
+
+// Runs that end together (Stop all, the host going away) each read and write the list, so the writes queue.
+let remembering = Promise.resolve();
+function remember(run, ending) {
+  remembering = remembering
+    .then(async () => {
+      const { recent = [] } = await chrome.storage.session.get('recent');
+      recent.unshift({ task: run.task, ending, taker: run.taker, started: run.started, ended: Date.now() });
+      await chrome.storage.session.set({ recent: recent.slice(0, RECENT) });
+    })
+    .catch(() => {});
+  return remembering;
+}
+
+/** A stop the user asked for in the browser: tell the run why, and note how it ended. */
+function stopRun(conn, by) {
+  const run = runs.get(conn);
+  if (run) run.ending ??= by;
+  send({ conn, event: 'stop', by });
 }
 
 // The tab stays owned until its teardown ends, so no other run can adopt it meanwhile.
@@ -212,7 +246,7 @@ chrome.debugger.onDetach.addListener((source, reason) => {
   if (conn === undefined) return;
   if (reason === 'canceled_by_user') {
     // Cancel on Chrome's "started debugging this browser" bar detaches every session: every run stops.
-    for (const running of [...runs.keys()]) send({ conn: running, event: 'stop' });
+    for (const running of [...runs.keys()]) stopRun(running, 'debugging_bar');
     return;
   }
   send({ conn, event: 'detached', tabId: source.tabId, reason });
@@ -257,15 +291,47 @@ chrome.tabs.onRemoved.addListener(tabId => {
   send({ conn, event: 'tabRemoved', tabId });
   const byRun = closing.delete(tabId);
   // The user closed the last of a run's tabs: that stops the run.
-  if (!byRun && run && run.tabs.size === 0) send({ conn, event: 'stop' });
+  if (!byRun && run && run.tabs.size === 0) stopRun(conn, 'last_tab_closed');
 });
+
+/** What the popup shows: whether the host is connected, each run with the page it is on, and recent runs. */
+async function overview() {
+  const listed = [];
+  for (const [conn, run] of runs) {
+    const tabs = await Promise.all([...run.tabs].map(tabId => chrome.tabs.get(tabId).catch(() => null)));
+    const tab = tabs.find(t => t?.active) || tabs.find(Boolean);
+    let host = '';
+    try {
+      host = new URL(tab?.url || '').host;
+    } catch {}
+    listed.push({ conn, task: run.task, tabs: run.tabs.size, started: run.started, title: tab?.title || '', host });
+  }
+  const { recent = [] } = await chrome.storage.session.get('recent');
+  const { browserId } = await identity();
+  return { connected: port !== null, browserId, runs: listed, recent };
+}
+
+/** Bring a run's tabs to the front: expand its group, select its tab and focus its window. */
+async function focusRun(conn) {
+  const run = runs.get(conn);
+  const tabId = run && [...run.tabs][0];
+  if (tabId === undefined) return;
+  if (run.groupId !== undefined) await chrome.tabGroups.update(run.groupId, { collapsed: false }).catch(() => {});
+  const tab = await chrome.tabs.update(tabId, { active: true });
+  await chrome.windows.update(tab.windowId, { focused: true });
+}
 
 chrome.runtime.onMessage.addListener((message, _sender, reply) => {
   if (message.type === 'runs') {
-    reply([...runs.entries()].map(([conn, run]) => ({ conn, task: run.task, tabs: run.tabs.size })));
+    overview().then(reply);
+    return true;
   } else if (message.type === 'stop') {
-    send({ conn: message.conn, event: 'stop' });
-    releaseRun(message.conn).then(() => reply(true));
+    const conns = message.conn === undefined ? [...runs.keys()] : [message.conn];
+    for (const conn of conns) stopRun(conn, 'popup');
+    Promise.all(conns.map(conn => releaseRun(conn, 'popup'))).then(() => reply(true));
+    return true;
+  } else if (message.type === 'focus') {
+    focusRun(message.conn).then(() => reply(true), () => reply(false));
     return true;
   } else if (message.type === 'label') {
     chrome.storage.local.set({ label: message.label }).then(() => {
@@ -287,7 +353,7 @@ async function connect() {
   port.onMessage.addListener(handle);
   port.onDisconnect.addListener(() => {
     port = null;
-    for (const conn of [...runs.keys()]) releaseRun(conn);
+    for (const conn of [...runs.keys()]) releaseRun(conn, 'host_disconnected');
   });
   send({ type: 'hostHello', protocol: PROTOCOL, ...(await identity()) });
 }

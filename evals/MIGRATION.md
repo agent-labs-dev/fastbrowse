@@ -7,8 +7,9 @@ candidate they publish needs:
   `fastbrowse_evals` now. A catalog that moves only its source hashes is a protocol change to the publication
   gate (`benchmarks._retirement_only`), so the first candidate after the move needs the owner's
   `protocol_change` approval. Task versions and fingerprints are unchanged.
-- Every run checks that the measured build's packaged catalog matches the one the harness renders
-  (`fastbrowse_evals.versions.provenance`). 0.10.0 ships the old hash, so the first build this harness can
-  measure is the first one that contains the regenerated catalog.
+- A run records the catalog hash the harness renders (`fastbrowse_evals.versions.provenance`) and measures any
+  build. Publication refuses a candidate whose measured build ships a different catalog
+  (`fastbrowse_evals.publication.export`). 0.10.0 ships the old hash, so the first build this harness can
+  publish is the first one that contains the regenerated catalog.
 - The candidate's `runner_sha` is now a fastbrowse commit. The publication check that it is in the
   checkout's history (`runner_pinned`) runs inside this repository, so it holds by construction.

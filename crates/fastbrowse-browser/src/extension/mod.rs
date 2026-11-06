@@ -17,6 +17,18 @@ pub const SCHEME: &str = "fastbrowse-extension:";
 /// closing every tab the run opened. Commands fail afterwards; this says why.
 pub const STOPPED_EVENT: &str = "Fastbrowse.stoppedByUser";
 
+/// Why the run stopped, from the `by` the extension sends with its stop event.
+pub fn stop_reason(by: &serde_json::Value) -> &'static str {
+    match by.as_str() {
+        Some("popup") => "the run was stopped from the fastbrowse extension's popup",
+        Some("debugging_bar") => {
+            "the run was stopped by Cancel on Chrome's debugging bar, which stops every run in that browser"
+        }
+        Some("last_tab_closed") => "the run was stopped because its last tab was closed",
+        _ => "the run was stopped in the browser",
+    }
+}
+
 /// The unpacked extension, as `(file name, contents)`: what `fastbrowse extension path` writes for Load unpacked.
 pub const FILES: [(&str, &[u8]); 9] = [
     ("manifest.json", include_bytes!("../../extension/manifest.json")),

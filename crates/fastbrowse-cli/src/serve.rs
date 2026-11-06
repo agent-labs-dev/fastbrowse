@@ -105,7 +105,7 @@ pub struct Refused {
     pub code: ErrorCode,
     pub message: String,
     /// The receipt of a cancelled run, which its `cancelled` error carries as `data`.
-    pub data: Option<CancellationReceipt>,
+    pub data: Option<Box<CancellationReceipt>>,
 }
 
 fn refused(code: ErrorCode, message: impl Into<String>) -> Refused {
@@ -115,7 +115,7 @@ fn refused(code: ErrorCode, message: impl Into<String>) -> Refused {
 impl Refused {
     /// The reply's `error` member.
     pub fn error(self) -> Error {
-        Error { code: self.code, message: self.message, data: self.data }
+        Error { code: self.code, message: self.message, data: self.data.map(|data| *data) }
     }
 }
 
@@ -559,7 +559,7 @@ pub fn reply(
                 Ok(result)
             }
             Err(mut error) => {
-                error.data = Some(receipt);
+                error.data = Some(Box::new(receipt));
                 Err(error)
             }
         },
@@ -568,10 +568,13 @@ pub fn reply(
         // spent before then.
         Err(RunError::Cancelled(receipt)) => match failure {
             Some(failure) => Ok(options::cancelled_result(failure.to_string(), receipt)),
-            None => Err(Refused {
-                data: Some(receipt),
-                ..refused(ErrorCode::Cancelled, format!("run {} was cancelled", repr(run_id)))
-            }),
+            None => {
+                let why = receipt
+                    .reason
+                    .as_deref()
+                    .map_or_else(|| format!("run {} was cancelled", repr(run_id)), str::to_owned);
+                Err(Refused { data: Some(Box::new(receipt)), ..refused(ErrorCode::Cancelled, why) })
+            }
         },
         Err(RunError::UnsupportedSchema(message)) => Err(refused(ErrorCode::UnsupportedSchema, message)),
         Err(RunError::Invalid(message) | RunError::Recording(message)) => {

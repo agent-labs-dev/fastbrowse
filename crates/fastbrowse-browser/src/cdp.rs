@@ -116,13 +116,13 @@ struct Incoming {
 }
 
 impl Incoming {
-    /// An event with no session and no parameters.
-    fn event(method: &str) -> Incoming {
+    /// An event with no session.
+    fn event(method: &str, params: Value) -> Incoming {
         Incoming {
             id: None,
             method: Some(method.to_owned()),
             session_id: None,
-            params: Value::Null,
+            params,
             result: Value::Null,
             error: None,
         }
@@ -350,7 +350,8 @@ impl Cdp {
                     && let Some(why) = closed["closed"].as_str()
                 {
                     if why == crate::extension::shim::CANCELLED {
-                        inner.dispatch(Incoming::event(crate::extension::STOPPED_EVENT));
+                        let by = json!({"by": closed["by"]});
+                        inner.dispatch(Incoming::event(crate::extension::STOPPED_EVENT, by));
                     }
                     break why.into();
                 }

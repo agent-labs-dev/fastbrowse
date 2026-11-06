@@ -230,6 +230,25 @@ async fn test_an_element_the_page_makes_pressable_is_offered_and_pressed() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_visible_clickable_card_is_offered_when_its_hidden_state_is_nested() {
+    let Some(h) = harness().await else { return };
+    h.goto("/todos.html").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = '<div id=card style=cursor:pointer><span>Choice card</span><input type=hidden name=choice value=one></div><div id=other style=cursor:pointer><span>Other card</span><button hidden>Hidden action</button></div>'; window.pressed = 0; document.getElementById('card').addEventListener('click', () => window.pressed++);",
+    )
+    .await;
+    let obs = h.observe().await;
+    let cards: Vec<_> = obs.controls.iter().filter(|control| control.role == "button").collect();
+    assert_eq!(cards.iter().map(|control| control.label.as_str()).collect::<Vec<_>>(), ["Choice card", "Other card"]);
+
+    let result = h.page.act(&action(Operation::Click, cards[0]), &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Executed);
+    assert_eq!(eval_active(&h.page, "window.pressed").await, json!(1));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_suggestion_list_is_left_behind_but_a_cover_that_stays_is_refused() {
     let list = "<div id=list style=\\'display:none;position:absolute;left:0;top:40px;width:400px;height:200px;background:#eee\\'>Suggestions</div>";
     for (stays, picks) in [(false, false), (true, false), (false, true)] {

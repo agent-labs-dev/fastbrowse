@@ -6,10 +6,8 @@ repos:
     rev: v0.17.3
     hooks:
       - id: ruff-check
-        exclude: ^\.sloppatrol/(gate|agents)\.py$
         args: [--fix]
       - id: ruff-format
-        exclude: ^\.sloppatrol/(gate|agents)\.py$
   - repo: https://github.com/astral-sh/ty-pre-commit
     rev: v0.0.96
     hooks:

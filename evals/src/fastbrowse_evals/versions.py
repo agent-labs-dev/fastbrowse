@@ -47,7 +47,7 @@ def provenance(*, benchmark_origin: str = "fastbrowse-internal", **extra: object
     from fastbrowse_evals.catalog import render
 
     # The measured build may predate these tasks' catalog (a gate against main or a release); publication, not the
-    # measurement, refuses a candidate whose catalog differs from the build's (`publication.candidate`).
+    # measurement, refuses a candidate whose catalog differs from the build's (`publication.export`).
     canonical = render().encode()
     return core_provenance(
         **extra,

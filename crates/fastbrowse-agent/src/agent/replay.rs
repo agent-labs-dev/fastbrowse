@@ -1,5 +1,7 @@
-//! Match saved steps to live controls. Jev still chooses every action and judges the current page; an agreed
-//! action may reuse a saved task value. Missing or ambiguous controls leave the run to its ordinary decisions.
+//! Match saved steps to live controls. When the next saved step's page and control are certain (the same address,
+//! exactly one live control it names, no read the original run made first), Jev is offered that control alone and
+//! no screenshot. Any other step is Jev's to choose, and a choice that agrees with a saved step may reuse its value.
+//! Missing or ambiguous controls leave the run to its ordinary decisions.
 
 use fastbrowse_core::models::Operation;
 use fastbrowse_core::page::{Action, Control};
@@ -14,17 +16,74 @@ pub(crate) struct Replay {
     next: usize,
     /// The step handed out for the decision now being carried out.
     pending: Option<usize>,
+    /// Saved steps offered ahead that Jev declined or that failed, so Jev decides them from then on.
+    failed: Vec<usize>,
     pub replayed: usize,
     pub fell_back: usize,
 }
 
 impl Replay {
     pub fn new(recipe: Recipe) -> Replay {
-        Replay { steps: recipe.steps, next: 0, pending: None, replayed: 0, fell_back: 0 }
+        Replay { steps: recipe.steps, next: 0, pending: None, failed: Vec::new(), replayed: 0, fell_back: 0 }
     }
 
     pub fn active(&self) -> bool {
         self.next < self.steps.len()
+    }
+
+    /// The next saved step as the decision to offer Jev alone, when nothing about its target is left to choose: it
+    /// is replayable, it is on the page it was saved on, the original run read nothing first, exactly one live
+    /// control is the one it names, and a fill has a saved value this field may take. Jev still judges the page and
+    /// may take another action; acting still checks authorization, freshness and secrets.
+    pub fn ahead(&mut self, url: &str, offered: &[Control], missing: impl Fn(&Control) -> bool) -> Option<Decision> {
+        self.pending.take();
+        let index = self.next;
+        let step = self.steps.get(index)?;
+        if self.failed.contains(&index) || !step.replayable() || step.read_first {
+            return None;
+        }
+        if !step.page.matches(&RecipePage::of(url)?) {
+            return None;
+        }
+        let target = match &step.target {
+            Some(target) => {
+                let control = recipe::find(target, offered, url)?;
+                if !control.operations.contains(&step.operation) {
+                    return None;
+                }
+                Some(control.clone())
+            }
+            None if step.operation.is_targeted() => return None,
+            None => None,
+        };
+        self.pending = Some(index);
+        if step.operation == Operation::Fill
+            && target.as_ref().and_then(|target| self.text_for(target, missing(target))).is_none()
+        {
+            self.pending.take();
+            return None;
+        }
+        Some(Decision {
+            operation: step.operation,
+            url: None,
+            target_confidence: target.as_ref().map(|_| 1.0),
+            target,
+            tab_id: None,
+            operation_confidence: 1.0,
+            login_required: None,
+            offered_controls: offered.len() as i64,
+            reduction: crate::policy::Reduction::None,
+            cost: Vec::new(),
+            input_tokens: 0,
+            bot_check: None,
+            shows_answer: None,
+            site_failure: None,
+            destination: None,
+            replayed: true,
+            by_code: false,
+            offered: Vec::new(),
+            ahead: Default::default(),
+        })
     }
 
     /// Reads and completion stay live without consuming a saved browser action.
@@ -121,6 +180,15 @@ impl Replay {
         if executed {
             self.advance(index);
             self.replayed += 1;
+        } else {
+            self.failed.push(index);
+        }
+    }
+
+    /// Jev did not take the step offered ahead: it is Jev's to decide among the whole page from then on.
+    pub fn declined(&mut self) {
+        if let Some(index) = self.pending.take() {
+            self.failed.push(index);
         }
     }
 
@@ -272,6 +340,57 @@ mod tests {
 
     fn replay(steps: Vec<RecipeStep>) -> Replay {
         Replay::new(Recipe { version: 1, task: "t".into(), start: None, steps })
+    }
+
+    #[test]
+    fn the_next_saved_step_is_offered_alone_on_its_page() {
+        let mut replay = replay(vec![click("Add to cart", "/p/pico"), click("Cart", "/p/pico")]);
+        let page = [button("n:1", "Cart"), button("n:2", "Add to cart")];
+        let decision = replay.ahead(URL, &page, |_| false).unwrap();
+        assert!(decision.replayed);
+        assert_eq!(decision.target.as_ref().map(|target| target.id.as_str()), Some("n:2"));
+        replay.settled(true);
+        let decision = replay.ahead(URL, &page, |_| false).unwrap();
+        assert_eq!(decision.target.as_ref().map(|target| target.id.as_str()), Some("n:1"));
+    }
+
+    #[test]
+    fn a_step_is_not_offered_ahead_where_its_page_or_control_is_uncertain() {
+        let saved = click("Add to cart", "/p/pico");
+        let twins = [button("n:1", "Add to cart"), button("n:2", "Add to cart")];
+        assert!(replay(vec![saved.clone()]).ahead(URL, &twins, |_| false).is_none());
+        let page = [button("n:1", "Add to cart")];
+        assert!(replay(vec![saved.clone()]).ahead("https://shop.test/p/other", &page, |_| false).is_none());
+        let read_first = RecipeStep { read_first: true, ..saved.clone() };
+        assert!(replay(vec![read_first]).ahead(URL, &page, |_| false).is_none());
+        assert!(replay(vec![saved]).ahead(URL, &page, |_| false).is_some());
+    }
+
+    #[test]
+    fn a_fill_is_offered_ahead_only_with_a_saved_value_the_field_may_take() {
+        let email = Control::new("email", "textbox", "Email", [Operation::Fill]);
+        let (decision, action) = fill(email.clone(), "ada@example.test", false);
+        let saved = step_of(URL, &decision, &action, None, |_| false).unwrap();
+        let mut ahead = replay(vec![saved.clone()]);
+        assert!(ahead.ahead(URL, std::slice::from_ref(&email), |_| false).is_some());
+        assert_eq!(ahead.text(), Some(&RecipeText::Literal("ada@example.test".into())));
+        assert!(replay(vec![saved.clone()]).ahead(URL, std::slice::from_ref(&email), |_| true).is_none());
+        let live = RecipeStep { text: Some(RecipeText::Live), ..saved };
+        assert!(replay(vec![live]).ahead(URL, &[email], |_| false).is_none());
+    }
+
+    #[test]
+    fn a_step_jev_declined_or_that_failed_is_left_to_jev() {
+        let page = [button("n:1", "Add to cart")];
+        let mut declined = replay(vec![click("Add to cart", "/p/pico")]);
+        declined.ahead(URL, &page, |_| false).unwrap();
+        declined.declined();
+        assert!(declined.ahead(URL, &page, |_| false).is_none());
+        let mut failed = replay(vec![click("Add to cart", "/p/pico")]);
+        failed.ahead(URL, &page, |_| false).unwrap();
+        failed.settled(false);
+        assert!(failed.ahead(URL, &page, |_| false).is_none());
+        assert!(failed.active());
     }
 
     #[test]
