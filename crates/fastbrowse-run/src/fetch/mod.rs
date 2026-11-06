@@ -33,7 +33,7 @@ use fastbrowse_core::page::{
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::{sha256_hex, text};
 
-use html::{Frame, FrameDocument, Found, clean, join, read};
+use html::{Found, Frame, FrameDocument, clean, join, read};
 
 /// A page that never finishes arriving would hold a run for its whole deadline, so the read is bounded.
 const TIMEOUT_SECONDS: f64 = 15.0;
