@@ -105,6 +105,9 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with: {shared-key: python-core}
       - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run ty check
       - run: uv run pytest -q
 
   # The fastbrowse-hosted arm against the live public API with a test key: real submit, poll and run body, no
