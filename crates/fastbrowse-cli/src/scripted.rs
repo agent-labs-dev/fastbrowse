@@ -87,8 +87,7 @@ fn stopped() -> CancellationReceipt {
             {"component": "jev", "basis": "metered", "dollars": 0.004},
             {"component": "browser", "basis": "unknown"},
         ]})),
-        recordings: Vec::new(),
-        browser: None,
+        ..Default::default()
     }
 }
 

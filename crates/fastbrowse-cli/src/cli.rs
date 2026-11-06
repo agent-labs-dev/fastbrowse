@@ -464,10 +464,11 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     };
     let mut result = match context.runner.run(task, host).await {
         Ok(result) => result,
-        // Stopped from the browser: the extension's Stop, or the user closing the run's last tab.
+        // Stopped from the browser: the extension's Stop, Cancel on Chrome's debugging bar, or the user closing the
+        // run's last tab. The reason says which.
         Err(RunError::Cancelled(receipt)) => fastbrowse_core::models::RunResult {
             status: Status::Cancelled,
-            ..options::cancelled_result("the run was cancelled", receipt)
+            ..options::cancelled_result(receipt.why().to_owned(), receipt)
         },
         Err(RunError::AfterSpending { error, receipt }) => options::cancelled_result(error.to_string(), receipt),
         Err(error) => return Err(ConfigurationError(error.to_string())),

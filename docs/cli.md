@@ -71,8 +71,8 @@ fastbrowse "Find my last order's delivery date." --start https://www.amazon.com/
 
 Each run works in a tab group of its own, named after the task, and closes its tabs when it ends. While a run is
 attached, Chrome shows a bar saying an extension started debugging the browser. Each run has three ways to stop
-it, and each ends the run `cancelled`: **Stop** in the extension's popup, **Cancel** on that bar (which stops
-every run), or closing all of the run's tabs.
+it, and each ends the run `cancelled` with an error that says which one stopped it: **Stop** in the extension's
+popup, **Cancel** on that bar (which stops every run in that browser), or closing all of the run's tabs.
 
 The extension relays only page-level commands. It cannot read cookies, saved passwords or other sites' storage,
 and fastbrowse accepts connections only from the extension's own ID, over a socket only your user can open. The
@@ -91,6 +91,11 @@ assistants are common ones. When that happens the run ends `unavailable` and nam
 `chrome://extensions`, choose **Details** on that extension, and set **Site access** to **On click**: it then adds
 its frame only where you click it, and runs work again. See
 [Another extension's frame takes the tab away](troubleshooting.md#another-extensions-frame-takes-the-tab-away).
+
+**Other extensions also see the run's pages.** A run's tabs are ordinary tabs, so every extension with site access
+reads and can change them as it does any other tab, signed-in pages included: a coupon finder is sent the address,
+an ad blocker or a translation overlay changes what the run reads. For sensitive work, or runs you want to
+reproduce, use a separate Chrome profile with only fastbrowse installed.
 
 ### A profile of its own
 

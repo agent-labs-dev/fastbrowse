@@ -70,7 +70,7 @@ impl std::fmt::Display for RunError {
             | RunError::UnsupportedSchema(message)
             | RunError::Configuration(message)
             | RunError::Recording(message) => f.write_str(message),
-            RunError::Cancelled(_) => f.write_str("the run was cancelled"),
+            RunError::Cancelled(receipt) => f.write_str(receipt.why()),
             RunError::AfterSpending { error, .. } => error.fmt(f),
         }
     }
@@ -100,7 +100,7 @@ impl RunError {
         }
         Self::AfterSpending {
             error: Box::new(self),
-            receipt: CancellationReceipt { steps, cost: CostBreakdown { lines }, recordings, browser: None },
+            receipt: CancellationReceipt { steps, cost: CostBreakdown { lines }, recordings, ..Default::default() },
         }
     }
 }
@@ -158,9 +158,21 @@ pub struct Cancel(Arc<CancelState>);
 struct CancelState {
     tripped: AtomicBool,
     notify: Notify,
+    reason: std::sync::Mutex<Option<Box<str>>>,
 }
 
 impl Cancel {
+    /// Trip it and say why, for the error the run ends with. The first reason given is kept.
+    pub fn trip_because(&self, reason: &str) {
+        self.0.reason.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_or_insert_with(|| reason.into());
+        self.trip();
+    }
+
+    /// Why it was tripped, when whoever tripped it said.
+    pub fn reason(&self) -> Option<Box<str>> {
+        self.0.reason.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+    }
+
     pub fn trip(&self) {
         self.0.tripped.store(true, Ordering::SeqCst);
         self.0.notify.notify_waiters();
@@ -186,7 +198,7 @@ impl Cancel {
     pub async fn guard<T>(&self, work: impl std::future::Future<Output = T>) -> Result<T, RunError> {
         tokio::select! {
             biased;
-            () = self.tripped() => Err(RunError::Cancelled(CancellationReceipt::default())),
+            () = self.tripped() => Err(RunError::Cancelled(CancellationReceipt { reason: self.reason(), ..Default::default() })),
             done = work => Ok(done),
         }
     }
@@ -548,13 +560,20 @@ fn noting(on_event: Option<EventHandler>, told: &Told) -> EventHandler {
 
 /// What a run stopped by [`Host::cancel`] did: the steps it told and every cost line its phases left. Read once the
 /// run's work is dropped, so a request it had in flight has recorded what it is owed.
-fn cancelled(told: &Told, lines: Vec<CostLine>, recordings: Vec<PathBuf>, browser: Option<BrowserUsed>) -> RunError {
+fn cancelled(
+    told: &Told,
+    lines: Vec<CostLine>,
+    recordings: Vec<PathBuf>,
+    browser: Option<BrowserUsed>,
+    reason: Option<Box<str>>,
+) -> RunError {
     let steps = told.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
     RunError::Cancelled(CancellationReceipt {
         steps,
         cost: CostBreakdown { lines },
         recordings,
         browser: browser.map(Box::new),
+        reason,
     })
 }
 
@@ -927,7 +946,7 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
                 // The user stopping the run in their browser cancels it, as the caller cancelling it would.
                 on_stop: {
                     let cancel = host.cancel.clone();
-                    Some(Arc::new(move || cancel.trip()))
+                    Some(Arc::new(move |reason: &str| cancel.trip_because(reason)))
                 },
                 trace: http.trace.clone(),
             },
@@ -1014,7 +1033,7 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
             let mut lines = fetch_spent;
             lines.extend(ledger.breakdown().lines);
             lines.extend(browser_cost);
-            return Err(cancelled(&told, lines, recordings, browser_used));
+            return Err(cancelled(&told, lines, recordings, browser_used, host.cancel.reason()));
         }
         Some(Ok(result)) => result,
         Some(Err(refusal)) => {
@@ -1202,7 +1221,7 @@ async fn fetched(
         recipe_sink: None,
     };
     let Ok(outcome) = host.cancel.guard(agent.run(&task.task, run)).await else {
-        return Err(cancelled(told, ledger.breakdown().lines, Vec::new(), None));
+        return Err(cancelled(told, ledger.breakdown().lines, Vec::new(), None, host.cancel.reason()));
     };
     let result = outcome.map_err(|error| RunError::Invalid(error.to_string()))?;
     // Read from the page rather than the message: a refusal the page itself raised means the task needs a browser. It
@@ -1223,6 +1242,18 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
+
+    #[tokio::test]
+    async fn a_stop_that_says_why_is_the_errors_text() {
+        let cancel = Cancel::default();
+        cancel.trip_because("the run was stopped from the fastbrowse extension's popup");
+        cancel.trip_because("a later reason");
+        let error = cancel.guard(std::future::pending::<()>()).await.unwrap_err();
+        assert_eq!(error.to_string(), "the run was stopped from the fastbrowse extension's popup");
+        let error = Cancel::default();
+        error.trip();
+        assert_eq!(error.guard(std::future::pending::<()>()).await.unwrap_err().to_string(), "the run was cancelled");
+    }
 
     #[test]
     fn a_recording_start_failure_keeps_fetch_model_and_browser_charges() {
