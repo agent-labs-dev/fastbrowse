@@ -11,9 +11,9 @@ use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::text;
 use fastbrowse_core::recipe::RecipeText;
 use fastbrowse_core::safety::{
-    asks_for_credentials, changes_credentials, control_action, downloads_question, irreversible_question, is_password,
-    lasting_question, may_be_irreversible, origin_of, requested_question, resolve_secret, sets_new_password,
-    starts_download,
+    asks_for_credentials, changes_a_value, changes_credentials, control_action, downloads_question, edits_question,
+    irreversible_question, is_password, lasting_question, may_be_irreversible, origin_of, requested_question,
+    resolve_secret, sets_new_password, starts_download,
 };
 use indexmap::IndexMap;
 use serde_json::{Map, Value as JsonValue, json};
@@ -230,6 +230,9 @@ impl Agent {
                 Ok(Action { url: Some(url), ..Action::new(Operation::Navigate) })
             }
             Operation::Click | Operation::Enter => {
+                if let Some(target) = target {
+                    self.gate_edit(state, observation, decision, target).await?;
+                }
                 self.gate_irreversible(state, observation, decision).await?;
                 Ok(Action { target_id: target.map(|t| t.id.clone()), ..Action::new(decision.operation) })
             }
@@ -246,6 +249,7 @@ impl Agent {
             }
             Operation::Fill => {
                 let target = require(target)?;
+                self.gate_edit(state, observation, decision, target).await?;
                 // A fetched page takes no typing, so its value is worked out, and a secret asked for, in the browser.
                 if self.page.over_http() {
                     let reason = format!("{} can only be filled in a browser", text::repr(&target.label));
@@ -273,6 +277,7 @@ impl Agent {
             }
             Operation::Select => {
                 let target = require(target)?;
+                self.gate_edit(state, observation, decision, target).await?;
                 let raw = self.raw_target(target);
                 if raw.options.is_empty() {
                     // A fetched page does not list a select's options, and a live one can fill it once another field is set.
@@ -371,12 +376,51 @@ impl Agent {
         if !starts_download(control) || !self.downloads_forbidden(state).await? {
             return Ok(());
         }
+        self.refuse_forbidden(
+            state,
+            observation,
+            decision,
+            control,
+            "downloads a file, and the task rules out downloading",
+        )
+        .await
+    }
+
+    /// Refuse an action that changes a value on the page when the task rules out changing anything (#838).
+    ///
+    /// An unsaved toggle is reversible, so the irreversible gate lets it through. Authorization does not lift this
+    /// either, for the reason it does not lift the download rule.
+    pub(super) async fn gate_edit(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        decision: &Decision,
+        control: &Control,
+    ) -> Step {
+        if !changes_a_value(decision.operation, control) || !self.edits_forbidden(state).await? {
+            return Ok(());
+        }
+        self.refuse_forbidden(
+            state,
+            observation,
+            decision,
+            control,
+            "changes a value on the page, and the task rules out changing anything",
+        )
+        .await
+    }
+
+    /// Record `decision` on `control` as refused for what the task forbids, and refuse it once so the run picks again.
+    async fn refuse_forbidden(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        decision: &Decision,
+        control: &Control,
+        why: &str,
+    ) -> Step {
         let label = describe(control);
-        let reason = format!(
-            "{} {} downloads a file, and the task rules out downloading",
-            decision.operation,
-            text::repr(&label)
-        );
+        let reason = format!("{} {} {why}", decision.operation, text::repr(&label));
         let confidence = Some(decision.confidence());
         let redacted = self.redact(&reason);
         self.record_failure(
@@ -398,17 +442,33 @@ impl Agent {
         if let Some(forbidden) = state.downloads_forbidden {
             return Ok(forbidden);
         }
+        let forbidden = self.task_rules_out(state, "downloads", downloads_question(&state.task)).await?;
+        state.downloads_forbidden = forbidden;
+        Ok(forbidden.unwrap_or(true))
+    }
+
+    /// Whether the task rules out changing what the page's fields and settings hold, asked of Jev about the task alone
+    /// and kept for the run.
+    pub(super) async fn edits_forbidden(&self, state: &mut RunState) -> Step<bool> {
+        if let Some(forbidden) = state.edits_forbidden {
+            return Ok(forbidden);
+        }
+        let forbidden = self.task_rules_out(state, "edits", edits_question(&state.task)).await?;
+        state.edits_forbidden = forbidden;
+        Ok(forbidden.unwrap_or(true))
+    }
+
+    /// Jev's word, from the task alone, that it rules out what `question` asks about. No answer is None: the caller
+    /// refuses the action once, as the irreversible gate does, but keeps nothing, since one failed call must not forbid
+    /// it for the rest of a run that asked for it.
+    async fn task_rules_out(&self, state: &mut RunState, key: &str, question: NoulQuestion) -> Step<Option<bool>> {
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
-        let questions = IndexMap::from([("downloads".to_string(), Question::Noul(downloads_question(&state.task)))]);
+        let questions = IndexMap::from([(key.to_string(), Question::Noul(question))]);
         let evaluation =
             jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&json!({"task": state.task}), &questions)).await?;
         state.ledger.record([evaluation.cost.clone()])?;
-        // No answer refuses this once, as the irreversible gate does, but is not kept: one failed call must not forbid
-        // every download for the rest of a run that asked for one.
-        let Some(Answer::Noul(answer)) = evaluation.answers.get("downloads") else { return Ok(true) };
-        let forbidden = answer.probability > self.config.thresholds.irreversible_above;
-        state.downloads_forbidden = Some(forbidden);
-        Ok(forbidden)
+        let Some(Answer::Noul(answer)) = evaluation.answers.get(key) else { return Ok(None) };
+        Ok(Some(answer.probability > self.config.thresholds.irreversible_above))
     }
 
     /// The one rule for an action that may commit: it proceeds when Jev judges it not irreversible, or when the run is

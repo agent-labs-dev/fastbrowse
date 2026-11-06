@@ -275,6 +275,9 @@ pub(crate) struct RunState {
     pub acted_from: Option<Observation>,
     /// Jev's word that the task rules out downloading, asked once a control the page says downloads is in play.
     pub downloads_forbidden: Option<bool>,
+    /// Jev's word that the task rules out changing what the page's fields and settings hold, asked once an edit is in
+    /// play.
+    pub edits_forbidden: Option<bool>,
     /// Pages read, by `read_key`, each with whether an action changed it since it was last read.
     pub read_documents: HashMap<(String, String), bool>,
     /// Screenshots that a successful image read found held no answer for this run's task.
@@ -552,6 +555,7 @@ impl RunState {
             idle: Vec::new(),
             acted_from: None,
             downloads_forbidden: None,
+            edits_forbidden: None,
             read_documents: HashMap::new(),
             unanswered_images: HashSet::new(),
             changed_page: None,

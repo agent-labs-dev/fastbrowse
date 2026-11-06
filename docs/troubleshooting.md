@@ -290,6 +290,8 @@ Both messages end with Chrome's complete diagnostic output, which names the caus
 **Common causes.**
 
 - Jev, told each time what failed, found no way forward before `max_recoveries` ran out.
+- The task says to change nothing, so the run cannot type into fields, pick options or tick boxes. A run
+  that needs a value entered must not forbid edits. Typing a search is still allowed.
 - The run chose to open an address that neither the task nor `--start` supplied:
   `navigation address was not supplied by the caller`.
 - The site answered an HTTP error that maps to no other status:
