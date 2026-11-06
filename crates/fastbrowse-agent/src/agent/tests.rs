@@ -1380,6 +1380,35 @@ async fn test_a_done_with_a_step_of_the_task_undone_is_not_complete() {
     assert_eq!(asked[0]["recent_actions"][0]["target"], "Phone", "the steps taken are what Jev judges");
 }
 
+/// Asked to start a demo and report the text it loads, a run's click on Start was covered, and it read the page's
+/// tagline and ended `complete`: the done check was asked only once some step had been carried out. A step tried and
+/// not carried out is asked about too.
+#[tokio::test]
+async fn test_a_done_after_a_step_that_was_not_carried_out_checks_the_task_steps() {
+    let page = capture(&[(BlockKind::Paragraph, "Practice site tagline")]);
+    let fact = Fact::read("Practice site tagline", block_evidence(&page, "s0"), FactReader::JevChoice);
+    let mut state = run_state();
+    state.output_intent = super::state::OutputIntent::Text;
+    state.task = "Start the example and tell me the text that appears when loading finishes.".into();
+    state.notes = Notes::new([fact.answering()]);
+    state.history.push(crate::policy::HistoryEntry::new(
+        Some(Operation::Click),
+        Some("Start"),
+        StepOutcome::Covered,
+        false,
+    ));
+    state.history.push(crate::policy::HistoryEntry::new(Some(Operation::Scroll), None, StepOutcome::Executed, true));
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "undone"));
+    let agent = Agent::new(Arc::new(FinishPage(observation(&[]))), jev.clone(), Arc::new(ScriptedLLM));
+    state.recoveries = agent.config.stall.max_recoveries;
+
+    let result = agent.finish(&mut state, &observation(&[]), None, None).await;
+    assert!(
+        matches!(&result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("has not been done"))),
+        "{result:?}"
+    );
+}
+
 /// Asked to add a variant the page showed out of stock, the done check rightly found the step undone, and every DONE
 /// was turned back until recovery ran out, so a correct answer ended `stuck` (#779). A step the site refuses ends the
 /// run with its answer, unverified.

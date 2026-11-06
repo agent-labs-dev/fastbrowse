@@ -161,24 +161,34 @@ impl HistoryEntry {
         }
     }
 
-    /// The step was carried out and could have made or changed something on the site. Reading, scrolling, hovering,
-    /// waiting, closing an overlay and moving between pages or tabs only change what is shown.
+    /// The step was carried out and acts on the page: a read, scroll, hover or wait only shows what is there, and DONE
+    /// ends the run.
     pub fn acted(&self) -> bool {
-        self.outcome == StepOutcome::Executed
+        self.outcome == StepOutcome::Executed && self.acts()
+    }
+
+    /// The step would act on the page, whether or not it was carried out.
+    pub fn acts(&self) -> bool {
+        !matches!(
+            self.operation,
+            None | Some(
+                Operation::Read
+                    | Operation::Scroll
+                    | Operation::ScrollUp
+                    | Operation::Hover
+                    | Operation::Wait
+                    | Operation::Done
+            )
+        )
+    }
+
+    /// The step was carried out and could have made or changed something on the site: closing an overlay and moving
+    /// between pages or tabs act on the page but only change what is shown.
+    pub fn changed_site(&self) -> bool {
+        self.acted()
             && !matches!(
                 self.operation,
-                None | Some(
-                    Operation::Read
-                        | Operation::Scroll
-                        | Operation::ScrollUp
-                        | Operation::Hover
-                        | Operation::Wait
-                        | Operation::Escape
-                        | Operation::Back
-                        | Operation::SwitchTab
-                        | Operation::Navigate
-                        | Operation::Done
-                )
+                Some(Operation::Escape | Operation::Back | Operation::SwitchTab | Operation::Navigate)
             )
     }
 }
