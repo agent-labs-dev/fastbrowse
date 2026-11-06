@@ -22,6 +22,7 @@ use indexmap::IndexMap;
 use serde_json::json;
 
 use super::Agent;
+use super::acting::Carried;
 use super::driving::edit_progress;
 use super::helpers::{read_sources, unsent_fact};
 use super::state::Written;
@@ -995,17 +996,18 @@ impl Page for FinishPage {
 }
 
 /// Answers each yes/no question at the given probability and each choice with the given pick where it is offered, else
-/// the first option, recording every request's state.
+/// the first option, recording every request's state and each choice's options.
 struct DoneCheckJev(
     std::sync::Arc<std::sync::atomic::AtomicUsize>,
     f64,
     &'static str,
     std::sync::Mutex<Vec<serde_json::Value>>,
+    std::sync::Mutex<Vec<Vec<String>>>,
 );
 
 impl DoneCheckJev {
     fn new(requests: std::sync::Arc<std::sync::atomic::AtomicUsize>, probability: f64, pick: &'static str) -> Self {
-        Self(requests, probability, pick, Default::default())
+        Self(requests, probability, pick, Default::default(), Default::default())
     }
 }
 
@@ -1020,6 +1022,9 @@ impl DecisionClient for DoneCheckJev {
         let answers = questions
             .iter()
             .map(|(key, question)| {
+                if let Question::Choice(choice) = question {
+                    self.4.lock().unwrap().push(choice.criteria.keys().cloned().collect());
+                }
                 let answer = match question {
                     Question::Choice(choice) => Answer::Choice(ChoiceAnswer {
                         kind: fastbrowse_core::decision::ChoiceTag,
@@ -1100,6 +1105,43 @@ async fn test_a_done_with_a_step_of_the_task_undone_is_not_complete() {
     assert_eq!(asked[0]["recent_actions"][0]["target"], "Phone", "the steps taken are what Jev judges");
 }
 
+/// Asked to add a variant the page showed out of stock, the done check rightly found the step undone, and every DONE
+/// was turned back until recovery ran out, so a correct answer ended `stuck` (#779). A step the site refuses ends the
+/// run with its answer, unverified.
+#[tokio::test]
+async fn test_a_done_whose_remaining_step_the_site_refuses_ends_unverified_with_the_answer() {
+    let page = capture(&[(BlockKind::Paragraph, "Size M: out of stock")]);
+    let fact = Fact::read("Size M: out of stock", block_evidence(&page, "s0"), FactReader::JevChoice).answering();
+    let mut state = run_state();
+    state.output_intent = super::state::OutputIntent::Text;
+    state.task = "Add the size M shirt to the cart and tell me its price.".into();
+    state.notes = Notes::new([fact]);
+    state.history.push(crate::policy::HistoryEntry::new(Some(Operation::Click), None, StepOutcome::Executed, true));
+    let agent = Agent::new(
+        Arc::new(FinishPage(observation(&[]))),
+        Arc::new(DoneCheckJev::new(Default::default(), 1.0, "refused")),
+        Arc::new(ScriptedLLM),
+    );
+
+    let result = agent.finish(&mut state, &observation(&[]), None, None).await.expect("finish").expect("a result");
+    assert_eq!(result.status, Status::Unverified);
+    assert!(result.answer.is_some());
+    assert!(result.error.as_deref().is_some_and(|error| error.contains("does not allow")), "{:?}", result.error);
+    assert_eq!(state.recoveries, 0);
+}
+
+/// Jev leans toward the first option (#808), so the answer that ends a run short of a step is offered last.
+#[tokio::test]
+async fn test_the_refused_choice_is_offered_last() {
+    let page = observation(&[]);
+    let mut state = run_state();
+    state.task = "Add the item to the cart.".into();
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+    let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev.clone(), Arc::new(ScriptedLLM));
+    agent.actions_done(&mut state, &page).await.unwrap();
+    assert_eq!(jev.4.lock().unwrap()[0], ["done", "undone", "refused"]);
+}
+
 /// A form filled and never sent is not a task carried out: the done check is told so, as the step decision is (#812).
 #[tokio::test]
 async fn test_the_done_check_is_told_what_was_typed_and_never_sent() {
@@ -1109,16 +1151,16 @@ async fn test_the_done_check_is_told_what_was_typed_and_never_sent() {
     state.history.push(typed_into("Reference"));
     let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "undone"));
     let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev.clone(), Arc::new(ScriptedLLM));
-    assert!(!agent.actions_done(&mut state, &page).await.unwrap());
+    assert!(matches!(agent.actions_done(&mut state, &page).await.unwrap(), Carried::Undone));
     let facts = jev.3.lock().unwrap()[0]["page_facts"].to_string();
     assert!(facts.contains("No action has sent what was typed"), "{facts}");
     // A field left empty is named only once the run stalled on a task to carry out, as the step decision names it:
     // a run that did act is not told an unrelated empty search box is unfinished work.
     let page = observation(&[holding("Reference", "REF-1"), holding("Note", "")]);
     state.output_intent = super::state::OutputIntent::CarriedOut;
-    assert!(!agent.actions_done(&mut state, &page).await.unwrap());
+    assert!(matches!(agent.actions_done(&mut state, &page).await.unwrap(), Carried::Undone));
     state.to_carry_out = true;
-    assert!(!agent.actions_done(&mut state, &page).await.unwrap());
+    assert!(matches!(agent.actions_done(&mut state, &page).await.unwrap(), Carried::Undone));
     let asked = jev.3.lock().unwrap();
     assert!(!asked[1]["page_facts"].to_string().contains("'Note'"), "{}", asked[1]);
     assert!(asked[2]["page_facts"].to_string().contains("'Note'"), "{}", asked[2]);
@@ -4102,7 +4144,7 @@ impl LLMClient for RepairComposer {
                 message.content.split_once("Every claim and the complete answer will be checked again.\n").and_then(
                     |(_, feedback)| {
                         serde_json::from_str::<serde_json::Value>(
-                            feedback.split_once("\n\n# Notes\n").map_or(feedback, |(value, _)| value),
+                            feedback.split_once("\n\n# ").map_or(feedback, |(value, _)| value),
                         )
                         .ok()
                     },
@@ -4334,6 +4376,52 @@ async fn a_composition_that_passes_every_check_after_recovery_ran_out_completes_
     assert_eq!(result.error, None);
     let answer = result.answer.unwrap();
     assert!(answer.contains("Record B: 34") && !answer.starts_with("Partial evidence only"), "{answer}");
+}
+
+/// A run whose finish check found a step the site refuses, with drafts rejected until recovery ran out, stays unverified
+/// when the answer written as it stops passes its checks: the step was still not carried out (#779).
+#[tokio::test]
+async fn test_a_refused_step_keeps_a_passing_composition_after_recovery_unverified() {
+    /// The repair checks, with the done check answering that the site refuses a step.
+    struct RefusingJev(Arc<RepairComposeJev>);
+    impl DecisionClient for RefusingJev {
+        fn evaluate<'a>(
+            &'a self,
+            state: &'a serde_json::Value,
+            questions: &'a IndexMap<String, Question>,
+        ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+            if matches!(questions.get("pick"), Some(Question::Choice(choice)) if choice.criteria.contains_key("refused"))
+            {
+                let answer = Answer::Choice(ChoiceAnswer {
+                    kind: fastbrowse_core::decision::ChoiceTag,
+                    choice: "refused".into(),
+                    probabilities: IndexMap::new(),
+                    confidence: 1.0,
+                });
+                let answers = IndexMap::from([("pick".to_string(), answer)]);
+                return Box::pin(async move {
+                    Ok(Evaluation { model: "test".into(), answers, input_tokens: 0, cost: free(), requests: 1 })
+                });
+            }
+            self.0.evaluate(state, questions)
+        }
+        fn profile(&self) -> DecisionProfile {
+            self.0.profile()
+        }
+    }
+    let page = observation(&[]);
+    let llm = Arc::new(RepairComposer(Default::default()));
+    let jev = RefusingJev(repair_jev(vec![(0.0, 1.0), (0.0, 1.0), (1.0, 1.0)]));
+    let agent = Agent::new(Arc::new(FinishPage(page.clone())), Arc::new(jev), llm);
+    let mut state = composition_repair_state();
+    state.history.push(crate::policy::HistoryEntry::new(Some(Operation::Click), None, StepOutcome::Executed, true));
+    assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
+    let flow = agent.finish(&mut state, &page, None, None).await.expect_err("a second rejection exhausts recovery");
+    assert!(state.refused, "the done check found the step refused");
+    let ledger = state.ledger.clone();
+    let result = agent.stopped(flow, Some(&mut state), &ledger).await;
+    assert_eq!(result.status, Status::Unverified);
+    assert!(result.answer.unwrap().contains("Record B: 34"));
 }
 
 #[tokio::test]

@@ -193,7 +193,7 @@ The exit code is the status. Only `complete` exits 0; configuration refusals exi
 | Status | Exit | Meaning |
 |:--|--:|:--|
 | `complete` | 0 | Jev judged the task done |
-| `unverified` | 10 | Jev finished, but the requested data could not be filled from the page |
+| `unverified` | 10 | Jev finished, but the requested data could not be filled from the page or the site refused a requested step |
 | `needs_confirmation` | 3 | stopped before an irreversible action; re-run with `--authorize` |
 | `needs_login` | 4 | a sign-in wall that no `--secret` covers |
 | `blocked` | 6 | a bot check (a CAPTCHA) that did not clear; not a sign-in, so no secret passes it |

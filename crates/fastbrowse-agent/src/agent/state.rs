@@ -295,6 +295,8 @@ pub(crate) struct RunState {
     pub read_whole: Vec<Capture>,
     /// A DONE was refused because the task is something to carry out, not to be told.
     pub to_carry_out: bool,
+    /// The latest finish check found a step the task asks for that the site does not allow.
+    pub refused: bool,
     pub output_intent: OutputIntent,
     /// Jev's judgement, asked with `output_intent`, that the task asks how the page looks, which only its pixels show.
     pub appearance: bool,
@@ -560,6 +562,7 @@ impl RunState {
             composition_partial: None,
             read_whole: Vec::new(),
             to_carry_out: false,
+            refused: false,
             output_intent: OutputIntent::Unknown,
             appearance: false,
             every_page: false,

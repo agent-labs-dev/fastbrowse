@@ -6,6 +6,7 @@ use fastbrowse_core::py::text;
 use indexmap::IndexMap;
 use serde_json::Value;
 
+use super::acting::Carried;
 use super::helpers::unsent_fact;
 use super::recovery::{DONE, Idle};
 use super::state::{OutputIntent, RunState, Step, Stop};
@@ -61,10 +62,15 @@ impl Agent {
             return Ok(None);
         }
         // Acting is not having done everything asked: a read that answers can come before the steps the task put first.
-        if acted && !self.actions_done(state, observation).await? {
-            let reason = "A step the task asks to be carried out has not been done, so it is not done.";
-            self.recover(state, observation, reason, Status::Stuck, Some((Operation::Done, None))).await?;
-            return Ok(None);
+        // A step the site refuses is no step left to take: the run reads and answers, and ends unverified (#779).
+        if acted {
+            let carried = self.actions_done(state, observation).await?;
+            state.refused = carried == Carried::Refused;
+            if carried == Carried::Undone {
+                let reason = "A step the task asks to be carried out has not been done, so it is not done.";
+                self.recover(state, observation, reason, Status::Stuck, Some((Operation::Done, None))).await?;
+                return Ok(None);
+            }
         }
         // Jev can say DONE on what it never read, or on a page its last action changed, and an answer comes only from
         // what it read.
@@ -351,6 +357,10 @@ impl Agent {
                 ))
             });
         }
+        if state.refused {
+            status = Status::Unverified;
+            error.get_or_insert_with(|| self.redact(REFUSED));
+        }
         if let Some(extraction) = extraction {
             data = extraction.data.unwrap_or(Value::Null);
             evidence.extend(extraction.evidence);
@@ -381,6 +391,9 @@ impl Agent {
         Ok(Some(self.ending_frame(result, matches!(intent, OutputIntent::Image | OutputIntent::TextAndImage)).await))
     }
 }
+
+/// The error of a run whose finish check found a step the site does not allow; the answer names the step.
+pub(super) const REFUSED: &str = "A step the task asks for was not carried out because the site does not allow it, as the page or the recent actions show. The answer reports what was and was not done.";
 
 /// What the navigator is told about a rejected draft, and what the run's error says if recovery runs out: which
 /// claim failed which check, so it can look for the evidence that is missing rather than propose done again (#810).
