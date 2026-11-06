@@ -216,6 +216,42 @@
       .filter(Boolean)
       .join(' ');
   };
+  // An icon-only control with no name and no glyph often still says what it does in its own class: a `.delete-button`
+  // beside an `.edit-button` on a card's hover-revealed controls. Only a class that calls itself a button counts, so
+  // layout and framework classes never name a control.
+  const CONTROL_WORD = /^(?:button|btn|icon)$/;
+  // Style, size and structure words that name no action.
+  const CLASS_STYLE = new Set([
+    'icon', 'ico', 'base', 'root', 'primary', 'secondary', 'tertiary', 'default', 'small', 'large', 'medium', 'sm',
+    'md', 'lg', 'xl', 'xs', 'outline', 'outlined', 'contained', 'ghost', 'flat', 'text', 'link', 'plain', 'round',
+    'rounded', 'circle', 'square', 'pill', 'block', 'group', 'wrapper', 'container', 'inner', 'outer', 'main',
+    'action', 'actions', 'ui', 'has', 'with', 'no', 'is', 'js', 'el', 'component', 'toggle', 'floating', 'fab',
+  ]);
+  const classLabel = e => {
+    const names = new Set();
+    for (const token of e.classList) {
+      // A BEM modifier is dropped and a CSS-modules hash is split off: `Gallery_deleteButton__x7Y2a`.
+      for (const piece of token.split(/--.*$|_+/)) {
+        if (!/^[A-Za-z][A-Za-z-]{0,39}$/.test(piece)) continue;
+        const words = piece
+          .replace(/([a-z])([A-Z])/g, '$1-$2')
+          .toLowerCase()
+          .split('-')
+          .filter(Boolean);
+        if (words.length < 2) continue;
+        let stem;
+        if (CONTROL_WORD.test(words.at(-1))) stem = words.slice(0, -1);
+        else if (/^(?:button|btn)$/.test(words[0])) stem = words.slice(1);
+        else continue;
+        stem = stem.filter(word => word.length > 1 && !CLASS_STYLE.has(word));
+        if (stem.length && stem.length <= 3) names.add(stem.join(' '));
+      }
+    }
+    return names.size === 1 ? [...names][0] : '';
+  };
+  // The label a control is offered under when it has no name, short of its bare role. The guard reads it too, so a
+  // `.delete-button` turned into an `.edit-button` between observing and acting is stale.
+  const fallbackLabel = e => iconLabel(e) || describedBy(e) || classLabel(e);
   // A name taken from content reads only what is shown: a card's hidden "Report fraud item" button named the card.
   // A hidden element named through aria-labelledby is read whole, since it is hidden only to serve as the label.
   // An svg's <title> never renders, yet it is the graphic's name.
@@ -429,7 +465,7 @@
     return [
       identity(e),
       roleOf(e),
-      labelOf(e),
+      labelOf(e) || fallbackLabel(e),
       reveal(source),
       source.checked ?? null,
       e.selectedIndex ?? null,
@@ -503,7 +539,7 @@
     const base = {
       id,
       role: rname,
-      label: named || iconLabel(e) || describedBy(e) || rname,
+      label: named || fallbackLabel(e) || rname,
       offscreen: y < 0 || y >= innerHeight,
       distance: y < 0 || y >= innerHeight ? 1 + Math.abs(y - innerHeight / 2) : 0,
       sensitive: secret(source),
