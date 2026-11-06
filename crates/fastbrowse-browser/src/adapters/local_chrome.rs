@@ -912,10 +912,12 @@ mod tests {
         let dir = scratch();
         let listing = dir.join("fds");
         let (_server, binary) = stand_in(&dir, &format!("ls /proc/$$/fd > '{}'", listing.display())).await;
-        // dup(2) never sets close-on-exec, as a descriptor handed down by a parent process would arrive.
+        // F_DUPFD never sets close-on-exec, as a descriptor handed down by a parent process would arrive. It is placed
+        // above the low descriptors the stand-in's shell opens for itself (dash reads its script on 10), which would
+        // otherwise share its number.
         let open = File::open(&binary).unwrap();
-        let leaked = unsafe { libc::dup(std::os::fd::AsRawFd::as_raw_fd(&open)) };
-        assert!(leaked > 2);
+        let leaked = unsafe { libc::fcntl(std::os::fd::AsRawFd::as_raw_fd(&open), libc::F_DUPFD, 100) };
+        assert!(leaked >= 100);
         let options = LocalChrome { binary: Some(binary.to_string_lossy().into_owned()), ..Default::default() };
         let launched = LocalChromeProcess::launch(&options).await;
         unsafe { libc::close(leaked) };
