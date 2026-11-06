@@ -5006,3 +5006,95 @@ fn test_a_note_read_where_a_next_page_landed_keeps_the_list_open() {
     read_one(&mut state, &second, true);
     assert_eq!(state.unread_pager_page().map(String::as_str), Some("https://list.test/page/3/"));
 }
+
+#[test]
+fn test_executed_steps_lists_only_acting_steps() {
+    let mut state = composition_repair_state();
+    for operation in [Operation::Read, Operation::Scroll, Operation::ScrollUp, Operation::Hover, Operation::Wait] {
+        state.history.push(executed(Some(operation), None, true));
+    }
+    state.history.push(HistoryEntry::new(Some(Operation::Click), Some("Delete"), StepOutcome::Failed, false));
+    let effect = "The address changed to /projects/new-addon.";
+    state.history.push(HistoryEntry {
+        effect: Some(effect.into()),
+        ..executed(Some(Operation::Click), Some("Create project"), true)
+    });
+    let steps = state.executed_steps();
+    assert_eq!(steps.len(), 1, "{steps:?}");
+    assert_eq!(steps[0]["target"], "Create project");
+    assert_eq!(steps[0]["effect"], effect);
+    // A draft written before a later step is not the answer after it.
+    let notes = state.notes_to_compose();
+    let id = crate::memory::fact_id(notes.facts()[0]);
+    let draft = crate::retrieval::assemble_answer(&[crate::retrieval::Claim::new("Record B: 34", vec![id])], &notes);
+    state.composition_partial = Some((draft, RunState::composition_sources(&notes), steps.len()));
+    assert!(state.checked_composition(&notes).is_some());
+    state.history.push(executed(Some(Operation::Click), Some("Publish"), true));
+    assert!(state.checked_composition(&notes).is_none());
+}
+
+/// Rejects only the check of the answer against the run's own steps.
+struct DeniesSteps;
+
+impl DecisionClient for DeniesSteps {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        let support = ComposeSupport(true).evaluate(state, questions);
+        Box::pin(async move {
+            let mut evaluation = support.await?;
+            if let Some(Answer::Noul(answer)) = evaluation.answers.get_mut("actions") {
+                answer.probability = 0.0;
+            }
+            Ok(evaluation)
+        })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile::jev()
+    }
+}
+
+struct AlreadyExists;
+
+impl LLMClient for AlreadyExists {
+    fn generate_value<'a>(
+        &'a self,
+        _: LLMPurpose,
+        _: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        Box::pin(async move {
+            let claims =
+                json!([{"text": "The project already exists, so no new project was created.", "evidence_ids": ["e0"]}]);
+            let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+        })
+    }
+}
+
+/// A run clicked to create a project, stopped stuck, and its answer said the project already existed (#837).
+#[tokio::test]
+async fn test_a_stopped_run_never_answers_against_its_own_step() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(DeniesSteps), Arc::new(AlreadyExists));
+    let mut state = run_state();
+    state.task = "Create a project named New Addon".into();
+    state.compose = true;
+    let page = capture(&[(BlockKind::Paragraph, "New Addon: 0 downloads, updated today")]);
+    state.notes.add(
+        Fact::read("New Addon: 0 downloads, updated today", block_evidence(&page, "s0"), FactReader::JevChoice)
+            .answering(),
+    );
+    state.history.push(HistoryEntry {
+        effect: Some("The address changed to /projects/new-addon.".into()),
+        ..executed(Some(Operation::Click), Some("Create project"), true)
+    });
+    let ledger = state.ledger.clone();
+    let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "no_progress (3)"));
+    let stopped = agent.stopped(stop, Some(&mut state), &ledger).await;
+    assert_eq!(stopped.status, Status::Stuck);
+    assert!(!stopped.answer.unwrap_or_default().contains("already exists"));
+}
