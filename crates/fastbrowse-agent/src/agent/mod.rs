@@ -446,8 +446,10 @@ impl Agent {
                 let notes = if state.compose { state.notes_to_compose() } else { state.notes.clone() };
                 // Records listed one after another answer no count: a list read to its end came back as a dump of it.
                 let reporting = ledger.for_answer();
+                let steps = state.executed_steps();
                 if state.compose
-                    && let Ok(composed) = compose(&*self.jev, &*self.llm, &state.task, &notes, Some(&reporting)).await
+                    && let Ok(composed) =
+                        compose(&*self.jev, &*self.llm, &state.task, &notes, Some(&reporting), &steps).await
                     && !composed.claims.is_empty()
                 {
                     // Only a rejected composition stops a run unverified, so one that passes every claim and coverage

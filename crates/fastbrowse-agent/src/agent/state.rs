@@ -7,6 +7,7 @@ use fastbrowse_core::decision::DecisionError;
 use fastbrowse_core::llm::LLMError;
 use fastbrowse_core::models::{Attachment, Authorization, Evidence, Status, StepChoice, StepResult, WallKind};
 use fastbrowse_core::page::{BrowserError, Capture, Control, Observation};
+use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::telemetry::{BudgetExceeded, Ledger};
 use indexmap::IndexMap;
 
@@ -288,7 +289,7 @@ pub(crate) struct RunState {
     pub extraction_pending: bool,
     /// A rejected draft is feedback, never a new page fact or evidence of progress.
     pub composition_feedback: Option<String>,
-    pub composition_partial: Option<(ComposedAnswer, Vec<(Fact, bool)>)>,
+    pub composition_partial: Option<PartialComposition>,
     /// Pages read for one fact, whole: Jev can pick one fact from a list's first page and only see on the next that
     /// the answer is composed. They join the notes for the composer alone, since steps deciding on them stopped early.
     pub read_whole: Vec<Capture>,
@@ -330,6 +331,9 @@ pub(crate) struct RunState {
     pub missing: HashSet<(String, String, Option<String>)>,
 }
 
+/// A rejected draft's claims that held, the notes it was written from, and how many steps the run had taken then.
+pub type PartialComposition = (ComposedAnswer, Vec<(Fact, bool)>, usize);
+
 impl RunState {
     /// The address of the page at `url` when a site failure that can clear stands on it: opening it again reloads it.
     pub fn reload_target(&self, url: &str) -> Option<String> {
@@ -350,9 +354,15 @@ impl RunState {
         notes.facts().iter().map(|fact| ((*fact).clone(), notes.superseded(&fact_id(fact)))).collect()
     }
 
+    /// The steps this run carried out that act on a page, as the models deciding steps are shown them.
+    pub fn executed_steps(&self) -> Vec<serde_json::Value> {
+        self.history.iter().filter(|entry| entry.acted()).map(Dump::dump_exclude_none).collect()
+    }
+
     pub fn checked_composition(&self, notes: &Notes) -> Option<&ComposedAnswer> {
-        let (partial, sources) = self.composition_partial.as_ref()?;
-        (!partial.claims.is_empty() && *sources == Self::composition_sources(notes)).then_some(partial)
+        let (partial, sources, steps) = self.composition_partial.as_ref()?;
+        let current = *sources == Self::composition_sources(notes) && *steps == self.executed_steps().len();
+        (!partial.claims.is_empty() && current).then_some(partial)
     }
 
     /// What one read leaves in the notes: its facts, the page kept whole when one fact was picked from it, and the

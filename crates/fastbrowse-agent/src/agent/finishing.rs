@@ -48,15 +48,7 @@ impl Agent {
         // out, and what scripts build on the page was never there to see. A hover only shows what is under the pointer,
         // as a scroll shows what is below: a run that hovered an image whose delete button it never reached had deleted
         // nothing.
-        let acted = state.history.iter().any(|entry| {
-            entry.outcome == StepOutcome::Executed
-                && !matches!(
-                    entry.operation,
-                    None | Some(
-                        Operation::Read | Operation::Scroll | Operation::ScrollUp | Operation::Hover | Operation::Wait
-                    )
-                )
-        });
+        let acted = state.history.iter().any(crate::policy::HistoryEntry::acted);
         if !acted && output_schema.is_none() && matches!(intent, OutputIntent::CarriedOut) {
             // What was read did not do it, so it answers nothing yet.
             state.notes = Notes::default();
@@ -258,6 +250,7 @@ impl Agent {
             None
         } else if state.compose {
             let (notes, task, ledger) = (state.notes_to_compose(), state.task.clone(), state.ledger.clone());
+            let steps = state.executed_steps();
             let chosen = if state.composition_feedback.is_none() {
                 self.trace.phase("verdict", verdict(&*self.jev, &task, &notes, Some(&ledger))).await?
             } else {
@@ -278,6 +271,7 @@ impl Agent {
                                 Some(&ledger),
                                 state.composition_feedback.as_deref(),
                                 intent != OutputIntent::CarriedOut,
+                                &steps,
                             ),
                         )
                         .await?;
@@ -317,8 +311,11 @@ impl Agent {
             if let Some(answer) = &answered
                 && !answer.claims.is_empty()
             {
-                state.composition_partial =
-                    Some((answer.clone(), RunState::composition_sources(&state.notes_to_compose())));
+                state.composition_partial = Some((
+                    answer.clone(),
+                    RunState::composition_sources(&state.notes_to_compose()),
+                    state.executed_steps().len(),
+                ));
             }
             self.recover(state, observation, &reason, Status::Unverified, None).await?;
             return Ok(None);
@@ -399,6 +396,11 @@ fn rejection_reason(rejection: &str) -> String {
         let Some(index) = index.strip_prefix("claim").and_then(|index| index.parse::<u64>().ok()) else {
             if check == "coverage" {
                 failed.push("the answer leaves out a fact or value the task asks for".into());
+            } else if check == "actions" {
+                failed.push(
+                    "the answer says something was not done or already existed that a step this run took may have done"
+                        .into(),
+                );
             }
             continue;
         };
@@ -462,7 +464,7 @@ mod tests {
                 {"text": "Y costs £12.", "evidence_ids": ["E3"]},
             ],
             "columns": ["Name", "Shape"],
-            "rejected_checks": ["claim1", "claim0/count", "claim2/citations", "coverage", "claim2/cell1"],
+            "rejected_checks": ["claim1", "claim0/count", "claim2/citations", "coverage", "claim2/cell1", "actions"],
             "miscounted_claims": [{"claim": 0, "states": 9, "records_in_cited_quotes": 10}],
         });
         let reason = rejection_reason(&feedback.to_string());
@@ -472,6 +474,7 @@ mod tests {
             "'Y costs £12.' cites no note it can be checked against",
             "the answer leaves out a fact or value the task asks for",
             "'Y costs £12.': its 'Shape' cell does not follow from the notes it cites",
+            "the answer says something was not done or already existed that a step this run took may have done",
         ] {
             assert!(reason.contains(part), "{reason}");
         }

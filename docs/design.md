@@ -139,12 +139,15 @@ support judgment is withheld and ends `unverified`. When every check is answered
 more evidence. Rejected prose is feedback, never a source fact. Repair feedback retains claim text and citation
 identifiers, so the composer can preserve supported values while correcting rejected claims. A corrected draft
 must pass citation checks and cover every requested fact or value. If the combined answer exceeds Jev's input limit for the coverage check, individually supported claims remain available as an unverified partial answer; the result identifies the coverage limit. The coverage check judges the written
-facts and values; citation support and browser actions have separate checks. Runs with a caller-supplied output schema
+facts and values; citation support and browser actions have separate checks. The composer also receives the steps
+the run carried out on the page, as the run's own record and never as citations, and a whole-answer check beside
+coverage judges the claims against them: an answer that says something was not done, or already existed, when one of
+those steps may have done it has every claim withheld, and a run still finishing spends a recovery to write it again. Runs with a caller-supplied output schema
 retain their extracted data and end `unverified` when the composed prose fails its checks, without retrying prose composition. Recovery is not
 attempted when a claim lacks a retained source quote or packed composition cannot reduce to one request.
 Exhausted composition recovery retains supported claims and ends `unverified`, unless a missing field value or
 site failure establishes another status. Those claims can be reused without another composition call only while
-their source evidence remains unchanged. A later nonempty checked repair replaces the retained draft; an empty
+their source evidence remains unchanged and the run has taken no further step. A later nonempty checked repair replaces the retained draft; an empty
 repair preserves the earlier draft. Other stops also retain checked partial claims alongside their status,
 wall or budget details.
 A run that already stopped keeps its stop status. Otherwise the answer is drafted from the facts Jev picked.

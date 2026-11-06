@@ -160,6 +160,17 @@ impl HistoryEntry {
             added: false,
         }
     }
+
+    /// The step was carried out and acts on the page: a read, scroll, hover or wait only shows what is there.
+    pub fn acted(&self) -> bool {
+        self.outcome == StepOutcome::Executed
+            && !matches!(
+                self.operation,
+                None | Some(
+                    Operation::Read | Operation::Scroll | Operation::ScrollUp | Operation::Hover | Operation::Wait
+                )
+            )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
