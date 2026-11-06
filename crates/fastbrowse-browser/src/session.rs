@@ -7,6 +7,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
+use std::pin::pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use data_encoding::BASE64;
@@ -15,6 +17,7 @@ use fastbrowse_core::models::{Artifact, ArtifactKind, ArtifactSink, BrowserConne
 use fastbrowse_core::origins::OriginGrant;
 use fastbrowse_core::page::{Dialog, Tab};
 use fastbrowse_core::telemetry::Trace;
+use futures_util::FutureExt;
 use futures_util::future::{BoxFuture as FBoxFuture, try_join_all};
 use serde_json::{Value, json};
 use tokio::sync::watch;
@@ -1112,6 +1115,16 @@ impl BrowserSession {
     }
 
     pub(crate) async fn prepare_session(&self, session_id: &str, top_level: bool) -> Result<(), BrowserError> {
+        self.prepare_and_resume(session_id, top_level, &AtomicBool::new(false)).await
+    }
+
+    /// `prepare_session`, setting `resumed` once a page Chrome opened paused has been told to run.
+    async fn prepare_and_resume(
+        &self,
+        session_id: &str,
+        top_level: bool,
+        resumed: &AtomicBool,
+    ) -> Result<(), BrowserError> {
         self.check_access().await?;
         let scoped = self.0.grant.is_some();
         let mut patterns = vec![download_pattern()];
@@ -1127,6 +1140,7 @@ impl BrowserSession {
             self.bypass_service_workers(session_id, true).await?;
         }
         self.send("Runtime.runIfWaitingForDebugger", json!({}), s).await?;
+        resumed.store(true, Ordering::SeqCst);
         let mut commands: Vec<FBoxFuture<'_, Result<(), BrowserError>>> = vec![];
         for domain in ENABLE_DOMAINS {
             commands
@@ -1688,49 +1702,103 @@ impl Shared {
 }
 
 pub(crate) async fn adopt_popup(shared: &Arc<Shared>, target_id: &str, opener_id: &str, session: Option<String>) {
-    let session_handle = shared.session();
-    let adopt = async {
-        let session_id = match session {
-            Some(session_id) => session_id,
-            None => {
-                let attach = session_handle
-                    .send("Target.attachToTarget", json!({"targetId": target_id, "flatten": true}), None)
-                    .await?;
-                str_of(&attach["sessionId"])
-            }
-        };
-        together(vec![
-            Box::pin(session_handle.show(target_id)),
-            Box::pin(session_handle.prepare_session(&session_id, true)),
-        ])
-        .await?;
-        if shared.connection.attach {
-            session_handle.run_document_scripts(&session_id).await;
-        }
-        shared.state.lock().unwrap().insert_tab(TabState {
-            target_id: target_id.to_owned(),
-            session_id,
-            url: "about:blank".into(),
-            title: String::new(),
-            opener_id: Some(opener_id.to_owned()),
-        });
-        // The popup may already have navigated to its final URL before this task got scheduled (targetCreated ->
-        // targetInfoChanged can both fire while attachToTarget above is awaited), so a targetInfoChanged event carrying
-        // it can arrive and be dropped because the tab was not in the tabs yet. Fetch current info now rather than
-        // relying on a future event.
-        let info = session_handle.send("Target.getTargetInfo", json!({"targetId": target_id}), None).await?;
-        let info = &info["targetInfo"];
-        session_handle.set_tab_info(
-            target_id,
-            info["url"].as_str().unwrap_or_default(),
-            info["title"].as_str().unwrap_or_default(),
-        );
-        Ok::<(), BrowserError>(())
-    };
+    let mut session_id = session;
+    let resumed = AtomicBool::new(false);
     // Settled however this ends: a session closing mid-adoption drops this future, and a
     // `follow_popup` waiting on the popup must still learn it never joined.
-    let _settle = AdoptionSettled { shared, target_id };
-    let _ = adopt.await;
+    let settle = AdoptionSettled { shared, target_id };
+    let adopted = adopt(shared, target_id, opener_id, &mut session_id, &resumed).await;
+    drop(settle);
+    if let Err(error) = adopted
+        && !resumed.load(Ordering::SeqCst)
+    {
+        release_popup(shared, target_id, session_id.as_deref(), &error).await;
+    }
+}
+
+async fn adopt(
+    shared: &Arc<Shared>,
+    target_id: &str,
+    opener_id: &str,
+    session: &mut Option<String>,
+    resumed: &AtomicBool,
+) -> Result<(), BrowserError> {
+    let session_handle = shared.session();
+    let session_id = match session {
+        Some(session_id) => session_id.clone(),
+        None => {
+            let attach = session_handle
+                .send("Target.attachToTarget", json!({"targetId": target_id, "flatten": true}), None)
+                .await?;
+            session.insert(str_of(&attach["sessionId"])).clone()
+        }
+    };
+    // Both run to the end, even when one fails: a paint keeper attached while setup failed would otherwise be left
+    // attached without ever reaching `state.keepers`, where a failed adoption finds it.
+    let (shown, prepared) =
+        tokio::join!(session_handle.show(target_id), session_handle.prepare_and_resume(&session_id, true, resumed));
+    shown?;
+    prepared?;
+    if shared.connection.attach {
+        session_handle.run_document_scripts(&session_id).await;
+    }
+    shared.state.lock().unwrap().insert_tab(TabState {
+        target_id: target_id.to_owned(),
+        session_id,
+        url: "about:blank".into(),
+        title: String::new(),
+        opener_id: Some(opener_id.to_owned()),
+    });
+    // The popup may already have navigated to its final URL before this task got scheduled (targetCreated ->
+    // targetInfoChanged can both fire while attachToTarget above is awaited), so a targetInfoChanged event carrying
+    // it can arrive and be dropped because the tab was not in the tabs yet. Fetch current info now rather than
+    // relying on a future event.
+    let info = session_handle.send("Target.getTargetInfo", json!({"targetId": target_id}), None).await?;
+    let info = &info["targetInfo"];
+    session_handle.set_tab_info(
+        target_id,
+        info["url"].as_str().unwrap_or_default(),
+        info["title"].as_str().unwrap_or_default(),
+    );
+    Ok(())
+}
+
+/// Let go of a popup whose setup failed before it was resumed. Chrome holds a new window paused until the run resumes
+/// it, and the opener's script waits in `window.open` until then, so a popup left paused froze the page that opened
+/// it. One the run owns is closed, since its scope gate and capture may not be on; any other is resumed and detached,
+/// as a page that is not the run's is. Its paint keeper goes too, so no cast outlives it.
+async fn release_popup(shared: &Arc<Shared>, target_id: &str, session_id: Option<&str>, error: &BrowserError) {
+    let session = shared.session();
+    let (owned, keeper) = {
+        let mut state = shared.state.lock().unwrap();
+        (state.owned.contains(target_id), state.keepers.remove(target_id))
+    };
+    // Over the extension the keeper is the tab's own session, which is not the run's to detach.
+    if let Some(keeper) = keeper.filter(|_| !session.over_extension()) {
+        let _ = session.send("Target.detachFromTarget", json!({"sessionId": keeper}), None).await;
+    }
+    // The error's message may carry page text, so only its kind is named.
+    if owned {
+        warn(&format!("A new tab could not be set up and was closed ({})", error.kind()));
+        // A closed popup that was never resumed still holds its opener in `window.open`, and one resumed before it
+        // closes sends its first request ungated. The resume is queued behind the close, so it frees the opener
+        // without the popup loading, and its reply is not waited for: the session ends with the target. On a loaded
+        // machine Chrome can end the session before the resume reaches it, and the opener then stays held.
+        let mut close = pin!(session.send("Target.closeTarget", json!({"targetId": target_id}), None));
+        let queued = (&mut close).now_or_never();
+        if let Some(session_id) = session_id
+            && let Some(client) = shared.client.lock().unwrap().clone()
+        {
+            let _ = client.call("Runtime.runIfWaitingForDebugger", json!({}), Some(session_id)).now_or_never();
+        }
+        if queued.is_none() {
+            let _ = close.await;
+        }
+    } else if let Some(session_id) = session_id {
+        warn(&format!("A new tab could not be set up and was let go ({})", error.kind()));
+        let _ = session.send("Runtime.runIfWaitingForDebugger", json!({}), Some(session_id)).await;
+        let _ = session.send("Target.detachFromTarget", json!({"sessionId": session_id}), None).await;
+    }
 }
 
 struct AdoptionSettled<'a> {

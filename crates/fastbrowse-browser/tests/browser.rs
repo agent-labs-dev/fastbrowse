@@ -6,6 +6,7 @@ mod common;
 // `send_raw`, `_before_action`), these put a websocket proxy between the session and Chrome that holds back,
 // rewrites, drops or records the CDP messages that code would have seen, so the library runs unchanged.
 
+use std::collections::HashSet;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -18,7 +19,7 @@ use data_encoding::HEXLOWER;
 use fastbrowse_browser::adapters::local_chrome::{LocalChromeProcess, find_chrome};
 use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::page::CdpPage;
-use fastbrowse_browser::session::{BrowserSession, SessionOptions};
+use fastbrowse_browser::session::{BrowserSession, SessionOptions, str_of};
 use fastbrowse_browser::testing;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{Attachment, BrowserConnection, Bytes, LocalChrome, Operation, StepOutcome};
@@ -156,11 +157,14 @@ mod proxy {
             let Ok(value) = serde_json::from_str::<Value>(&text) else { continue };
             match hook(toward, value) {
                 None => {}
-                Some((value, delay)) if delay.is_zero() => {
-                    let _ = to.send(Message::text(value.to_string()));
-                }
                 Some((value, delay)) => {
-                    let to = to.clone();
+                    // A hook that turns a command into a reply answers it itself, and Chrome never hears of it.
+                    let answered = toward == Toward::Browser && value.get("method").is_none();
+                    let to = if answered { back.clone() } else { to.clone() };
+                    if delay.is_zero() {
+                        let _ = to.send(Message::text(value.to_string()));
+                        continue;
+                    }
                     tokio::spawn(async move {
                         tokio::time::sleep(delay).await;
                         let _ = to.send(Message::text(value.to_string()));
@@ -1932,6 +1936,129 @@ async fn test_a_background_run_sets_up_tabs_behind_an_open_confirm_once_it_is_an
     h.session.switch_tab(&popup).await.expect("switch");
     assert!(truthy(&eval_active(&h, "document.hasFocus()").await));
     h.close().await;
+}
+
+/// Answer `Fetch.enable` on a new window's session with an error Chrome never hears of, so the window stays paused
+/// as Chrome opened it, waiting for the run to resume it.
+fn refusing_popup_fetch() -> Hook {
+    let popups: Arc<Mutex<HashSet<String>>> = Arc::default();
+    Arc::new(move |toward, value| {
+        let params = &value["params"];
+        match toward {
+            Toward::Client
+                if method(&value) == "Target.attachedToTarget"
+                    && params["waitingForDebugger"] == true
+                    && params["targetInfo"]["openerId"].as_str().is_some_and(|o| !o.is_empty()) =>
+            {
+                popups.lock().unwrap().insert(params["sessionId"].as_str().unwrap_or_default().to_owned());
+            }
+            Toward::Browser
+                if method(&value) == "Fetch.enable"
+                    && value["sessionId"].as_str().is_some_and(|s| popups.lock().unwrap().contains(s)) =>
+            {
+                let error = json!({"code": -31999, "message": "refused"});
+                return Some((
+                    json!({"id": value["id"], "sessionId": value["sessionId"], "error": error}),
+                    Duration::ZERO,
+                ));
+            }
+            _ => {}
+        }
+        Some((value, Duration::ZERO))
+    })
+}
+
+/// Open a popup on `url` from the active tab and confirm straight after, which Chrome holds until the popup runs.
+async fn open_popup_and_confirm(h: &Harness, url: &str) {
+    let expression = format!("setTimeout(() => {{ window.open({url:?}); confirm('Remove?') }}, 0)");
+    h.session.send("Runtime.evaluate", json!({"expression": expression}), Some(&active(h))).await.expect("evaluate");
+}
+
+async fn target_info(h: &Harness, target_id: &str) -> Option<Value> {
+    let targets = h.session.send("Target.getTargets", json!({}), None).await.expect("targets");
+    targets["targetInfos"].as_array().expect("targets").iter().find(|t| t["targetId"] == target_id).cloned()
+}
+
+/// A popup whose setup fails must not stay paused, since its opener's script waits in `window.open` until it runs.
+/// The run owns this one, and its scope gate and capture may not be on, so it is closed.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_owned_popup_whose_setup_fails_is_closed_and_frees_its_opener() {
+    let _turn = turn().await;
+    let Some(connection) = chrome().cloned() else { return };
+    // Behind the window's current tab, so the popup gets a paint keeper that must go with it.
+    let background = BrowserConnection { foreground: false, ..connection };
+    let Some(h) = proxied(background, refusing_popup_fetch()).await else { return };
+    h.goto("/").await;
+    // The popup's address counts the connections made to it, since a popup resumed ungated would load it.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = format!("http://{}/popup.html", listener.local_addr().expect("addr"));
+    let requests = Arc::new(AtomicUsize::new(0));
+    let counted = requests.clone();
+    tokio::spawn(async move {
+        while listener.accept().await.is_ok() {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+    open_popup_and_confirm(&h, &address).await;
+    let s = &h.session;
+    wait_until(move || async move { s.pending_dialog().is_some() && !s.popups().is_empty() }).await;
+    let popup = h.session.popups().last().cloned().expect("popup");
+    assert!(!testing::browser::popup_adopted(&h.session, &popup).await);
+    wait_until(|| async { target_info(&h, &popup).await.is_none() }).await;
+    assert!(!testing::keepers(&h.session).iter().any(|(target, _)| *target == popup));
+    assert_eq!(requests.load(Ordering::SeqCst), 0, "the closed popup loaded nothing");
+    h.session.handle_dialog(true, None).await.expect("dialog answered");
+    h.close().await;
+}
+
+/// A popup of an attached window is not the run's to close: it is resumed and let go, and the window stays open.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_attached_windows_popup_whose_setup_fails_is_let_go_and_left_running() {
+    let _turn = turn().await;
+    let Some(connection) = chrome().cloned() else { return };
+    // The person's window, open before the run attaches and with no other session on it.
+    let window = {
+        let Some(owner) = harness().await else { return };
+        let url = format!("{}/?person-658", sites().main);
+        let created = owner.session.send("Target.createTarget", json!({"url": url}), None).await.expect("create");
+        owner.close().await;
+        str_of(&created["targetId"])
+    };
+    let url = proxy::start(connection.cdp_url.clone(), refusing_popup_fetch()).await;
+    let attached = BrowserConnection {
+        cdp_url: url,
+        attach: true,
+        target_match: Some("person-658".into()),
+        foreground: false,
+        ..connection
+    };
+    let Some(h) = harness_on(attached, Config::default(), SessionOptions::default()).await else { return };
+    assert_eq!(h.session.active_target_id(), window);
+    open_popup_and_confirm(&h, "/popup.html").await;
+    let s = &h.session;
+    wait_until(move || async move { s.pending_dialog().is_some() && !s.popups().is_empty() }).await;
+    let popup = h.session.popups().last().cloned().expect("popup");
+    assert!(!testing::browser::popup_adopted(&h.session, &popup).await);
+    assert!(!testing::keepers(&h.session).iter().any(|(target, _)| *target == popup));
+    // The popup shares its opener's renderer, so it loads once the confirm is answered.
+    h.session.handle_dialog(true, None).await.expect("dialog answered");
+    wait_until(|| async {
+        target_info(&h, &popup)
+            .await
+            .is_some_and(|t| t["attached"] == false && str_of(&t["url"]).contains("popup.html"))
+    })
+    .await;
+    h.close().await;
+    let Some(cleanup) = harness().await else { return };
+    let ids: Vec<String> = {
+        let targets = cleanup.session.send("Target.getTargets", json!({}), None).await.expect("targets");
+        targets["targetInfos"].as_array().expect("targets").iter().map(|t| str_of(&t["targetId"])).collect()
+    };
+    assert!(ids.contains(&window), "the person's window stays open");
+    for target in [&window, &popup] {
+        let _ = cleanup.session.send("Target.closeTarget", json!({"targetId": target}), None).await;
+    }
+    cleanup.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
