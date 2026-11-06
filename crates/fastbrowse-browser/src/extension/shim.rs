@@ -428,6 +428,11 @@ impl Relay {
                 // Chrome reports a tab it took away for another extension's frame as `target_closed`, though the tab
                 // is still open: the run is told why rather than that its tab closed.
                 if closed && let Some(origin) = foreign {
+                    // So the popup can name the extension that took it. No reply comes, and an extension without
+                    // the op answers with an error that has no id, which is dropped.
+                    let taken = json!({"op": "taken", "tabId": tab, "origin": origin});
+                    trace_message(&self.trace, "to_extension", &taken);
+                    let _ = self.out.send(taken.to_string());
                     return Some(foreign_frame_detach(&origin));
                 }
                 let known = {
@@ -528,12 +533,14 @@ pub async fn connect(record: &HostRecord, task: &str, trace: Trace) -> Result<En
     });
     let reader = Arc::clone(&relay);
     tokio::spawn(async move {
+        let mut by = Value::Null;
         let why = loop {
             match lines.next_line().await {
                 Ok(Some(line)) => {
                     let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
                     trace_message(&reader.trace, "from_extension", &message);
                     if message["event"] == "stop" {
+                        by = message["by"].clone();
                         break CANCELLED.to_owned();
                     }
                     if message["event"].is_string() {
@@ -555,7 +562,7 @@ pub async fn connect(record: &HostRecord, task: &str, trace: Trace) -> Result<En
             }
         };
         reader.pending.lock().unwrap().clear();
-        let _ = reader.to_cdp.send(json!({"closed": why}).to_string());
+        let _ = reader.to_cdp.send(json!({"closed": why, "by": by}).to_string());
     });
     tokio::spawn(async move {
         // Each command on its own task: a hung one must not hold back a liveness probe or a resume.
@@ -594,7 +601,10 @@ mod tests {
     use super::*;
 
     fn relay() -> Relay {
-        let (out, _) = mpsc::unbounded_channel();
+        relay_to(mpsc::unbounded_channel().0)
+    }
+
+    fn relay_to(out: mpsc::UnboundedSender<String>) -> Relay {
         let (to_cdp, _) = mpsc::unbounded_channel();
         Relay {
             out,
@@ -615,7 +625,8 @@ mod tests {
 
     #[test]
     fn a_tab_chrome_takes_away_for_another_extensions_frame_ends_the_run_naming_it() {
-        let relay = relay();
+        let (out, mut to_extension) = mpsc::unbounded_channel();
+        let relay = relay_to(out);
         assert_eq!(relay.event(&frame("chrome-extension://abcdefgh/audio-devices.html")), None);
         let why = relay.event(&serde_json::from_str(DETACHED).unwrap()).expect("the run ends");
         assert!(
@@ -625,6 +636,9 @@ mod tests {
         let lost: Vec<Value> =
             relay.trace.events().into_iter().filter(|event| event["event"] == "extension_tab_lost").collect();
         assert_eq!(lost[0]["foreign_frame"], "chrome-extension://abcdefgh");
+        // The popup names it too.
+        let taken: Value = serde_json::from_str(&to_extension.try_recv().unwrap()).unwrap();
+        assert_eq!(taken, json!({"op": "taken", "tabId": 7, "origin": "chrome-extension://abcdefgh"}));
     }
 
     #[test]

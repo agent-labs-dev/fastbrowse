@@ -840,7 +840,7 @@ impl McpServer {
                                 ToolFailure::Tool(message) => (format!("Error executing tool browse: {message}"), None),
                                 ToolFailure::Unknown(name) => (format!("Unknown tool: {name}"), None),
                                 ToolFailure::Cancelled(receipt) => (
-                                    "Error executing tool browse: the run was cancelled".to_string(),
+                                    format!("Error executing tool browse: {}", receipt.why()),
                                     Some((RECEIPT_META, receipt)),
                                 ),
                                 ToolFailure::Failed { message, receipt } => (

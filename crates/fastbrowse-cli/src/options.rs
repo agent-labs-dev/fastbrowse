@@ -181,7 +181,7 @@ pub fn error_result(error: impl Into<String>) -> RunResult {
 /// The `error` result of a cancelled run that is reported as a failure, with the steps, cost and videos its receipt
 /// holds: a run a failing callback stopped had spent and done all of that.
 pub fn cancelled_result(error: impl Into<String>, receipt: CancellationReceipt) -> RunResult {
-    let CancellationReceipt { steps, cost, recordings, browser } = receipt;
+    let CancellationReceipt { steps, cost, recordings, browser, .. } = receipt;
     RunResult { steps, cost, recordings, browser: browser.map(|browser| *browser), ..error_result(error) }
 }
 

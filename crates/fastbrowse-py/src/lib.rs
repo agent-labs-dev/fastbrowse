@@ -313,7 +313,7 @@ fn run_task(
                                 result.call_method1("set_result", ((answered.dump_json(), frame),))?;
                                 None
                             }
-                            Err(RunError::Cancelled(_)) => Some(refused("cancelled", "the run was cancelled".into())),
+                            Err(RunError::Cancelled(receipt)) => Some(refused("cancelled", receipt.why().to_owned())),
                             Err(RunError::Invalid(message) | RunError::UnsupportedSchema(message)) => {
                                 Some(refused("invalid", message.clone()))
                             }
@@ -342,6 +342,7 @@ fn run_task(
                             cost: answered.cost.clone(),
                             recordings: answered.recordings.clone(),
                             browser: answered.browser.clone().map(Box::new),
+                            reason: None,
                         }
                         .dump_json()
                         .into_pyobject(py)?

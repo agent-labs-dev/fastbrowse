@@ -570,7 +570,7 @@ async fn an_assembly_error_keeps_its_code_and_receipt_after_spending() {
         steps: vec![common::step(0)],
         cost: CostBreakdown { lines: vec![CostLine::new(CostComponent::Jev, CostBasis::Metered, Some(0.01))] },
         recordings: vec![PathBuf::from("run.mp4")],
-        browser: None,
+        ..Default::default()
     };
     for recording in [false, true] {
         let kept = receipt.clone();
