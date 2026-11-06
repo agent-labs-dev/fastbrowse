@@ -14,7 +14,7 @@ use fastbrowse_core::models::{
     LLMPurpose, Limits, Operation, Status, StepOutcome, StepResult,
 };
 use fastbrowse_core::page::{
-    ActResult, Action, BlockKind, BrowserError, Capture, Control, Observation, Page, PageResult,
+    ActResult, Action, BlockKind, BrowserError, Capture, Control, Media, Observation, Page, PageResult,
 };
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::telemetry::{Ledger, Trace};
@@ -259,6 +259,37 @@ async fn test_what_the_browser_saw_an_action_do_stays_beside_the_page_change() {
         state.history.last().unwrap().effect.as_deref(),
         Some("downloaded the file the link points at; nothing visible changed")
     );
+}
+
+#[tokio::test]
+async fn test_a_wait_is_told_how_far_a_playing_clock_moved() {
+    let playing = |elapsed_seconds| Observation {
+        media: vec![Media {
+            kind: "audio".into(),
+            label: Some("Theme".into()),
+            heading: None,
+            paused: false,
+            ended: false,
+            muted: true,
+            elapsed_seconds,
+            duration_seconds: Some(60.0),
+        }],
+        ..observation(&[])
+    };
+    for (operation, told) in [(Operation::Wait, true), (Operation::Click, false)] {
+        let mut state = run_state();
+        state.acted_from = Some(playing(12.0));
+        state.idle.push(super::recovery::Idle {
+            action: Some((Operation::Click, Some("Next".into()))),
+            outcome: StepOutcome::Covered,
+        });
+        state.history.push(executed(Some(operation), Some("Theme"), false));
+        agent().note_effect(&mut state, &playing(17.0));
+        let effect = state.history.last().unwrap().effect.clone().unwrap();
+        assert_eq!(effect.contains("elapsed: 12 s -> 17 s"), told, "{operation:?}: {effect}");
+        // The clock moved by itself: whatever covered a control still covers it.
+        assert_eq!(state.idle.len(), 1, "{operation:?}");
+    }
 }
 
 #[tokio::test]

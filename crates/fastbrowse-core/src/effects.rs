@@ -102,8 +102,9 @@ fn shows(control: &Control, choice: &str) -> bool {
 }
 
 /// What changed from `before` to `after`. With `chosen`, the option clicked in between, a field showing it counts as
-/// a value set: an autocomplete choice can leave the text that was typed exactly as it was.
-pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control>) -> Effect {
+/// a value set: an autocomplete choice can leave the text that was typed exactly as it was. `waited` is a step that only
+/// let time pass, a Wait.
+pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control>, waited: bool) -> Effect {
     let replaced = before.document_key != after.document_key;
     // Each document starts its control ids again. Matching those ids after navigation invents edits to controls
     // that belonged to the page left behind, even when a reload kept the same address and field labels.
@@ -170,8 +171,9 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
     }
     // A player's clock and paused state live outside its controls, and the policy sees only the current reading, so
     // a step can confirm playback started, stopped or was moved only from what each earlier step is told it changed.
-    // A playing clock moves by itself, like a page's own clock, so its elapsed time is told only for a player paused on
-    // both readings. Players pair up by position within one document; a new document's players are new.
+    // A playing clock moves by itself, like a page's own clock, so its movement is told only for a step that started or
+    // stopped the player, or for a Wait, which is the step that lets time pass. Players pair up by position within one
+    // document; a new document's players are new.
     if !replaced && before.media.len() == after.media.len() {
         for (was, now) in before.media.iter().zip(&after.media) {
             let name = match now.label.as_ref().or(now.heading.as_ref()) {
@@ -185,7 +187,7 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
                     changes.push(format!("{name} {attribute}: {} -> {}", Shown::Flag(a).str(), Shown::Flag(b).str()));
                 }
             }
-            if was.paused && now.paused && was.elapsed_seconds != now.elapsed_seconds {
+            if was.elapsed_seconds != now.elapsed_seconds && (waited || was.paused || now.paused) {
                 changes.push(format!("{name} elapsed: {} s -> {} s", was.elapsed_seconds, now.elapsed_seconds));
             }
         }
@@ -290,7 +292,7 @@ mod tests {
     fn test_a_menu_closing_without_a_new_value_set_nothing() {
         let before = observation([vec![trigger()], options()].concat());
         let after = observation(vec![with(&trigger(), |c| c.expanded = Some(false))]);
-        let done = effect(&before, &after, None);
+        let done = effect(&before, &after, None, false);
         assert!(!done.set_something);
         assert!(done.summary.contains("Ticket type expanded: True -> False"));
         assert!(done.summary.contains("removed 2 controls: One way, Round trip"));
@@ -303,7 +305,7 @@ mod tests {
             c.value = Some("One way".into());
             c.expanded = Some(false);
         })]);
-        let done = effect(&before, &after, None);
+        let done = effect(&before, &after, None, false);
         assert!(done.set_something);
         assert!(done.summary.contains("Ticket type value: Round trip -> One way"));
     }
@@ -314,14 +316,14 @@ mod tests {
         before.document_key = "first".into();
         let mut after = observation(vec![with(&trigger(), |c| c.value = Some("One way".into()))]);
         after.document_key = "second".into();
-        let done = effect(&before, &after, None);
+        let done = effect(&before, &after, None, false);
         assert!(!done.set_something, "a different document did not edit the old field");
         assert!(!done.added);
         assert!(done.changed);
         assert!(!done.summary.contains("changed Ticket type"), "{}", done.summary);
         assert!(done.summary.contains("showed 1 control: Ticket type"));
         assert!(done.summary.contains("removed 1 control: Ticket type"));
-        assert!(!effect(&before, &after, Some(&options()[0])).set_something);
+        assert!(!effect(&before, &after, Some(&options()[0]), false).set_something);
     }
 
     #[test]
@@ -333,7 +335,7 @@ mod tests {
             c.value = Some("One way".into());
         })]);
         after.document_key = "second".into();
-        let done = effect(&before, &after, None);
+        let done = effect(&before, &after, None, false);
         assert!(!done.set_something);
         assert!(!done.summary.contains("changed Ticket type"), "{}", done.summary);
     }
@@ -343,10 +345,10 @@ mod tests {
         let before = observation(vec![trigger()]);
         let mut after = observation([vec![trigger()], options()].concat());
         after.url = "https://example.test/b".into();
-        let done = effect(&before, &after, None);
+        let done = effect(&before, &after, None, false);
         assert!(done.set_something);
         assert!(done.summary.starts_with("went to https://example.test/b; showed 2 controls: One way, Round trip"));
-        assert_eq!(effect(&before, &before, None).summary, "nothing visible changed");
+        assert_eq!(effect(&before, &before, None, false).summary, "nothing visible changed");
     }
 
     #[test]
@@ -366,7 +368,7 @@ mod tests {
         let editor = with(&control("editor", "Where from? ", "combobox"), |c| c.value = Some("Lond".into()));
         let choice = control("london", "London, United Kingdom", "option");
         let field = with(&control("field", "Where from?", "combobox"), |c| c.value = Some("London".into()));
-        let done = effect(&observation(vec![editor, choice]), &observation(vec![field]), None);
+        let done = effect(&observation(vec![editor, choice]), &observation(vec![field]), None, false);
         assert!(done.set_something);
         // The label differs only in spacing, which is not a change.
         assert!(done.summary.starts_with("changed Where from? value: Lond -> London;"), "{}", done.summary);
@@ -377,7 +379,7 @@ mod tests {
         let editor = with(&control("editor", "Where from?", "combobox"), |c| c.value = Some("London".into()));
         let choice = control("london", "London, United Kingdom", "option");
         let field = with(&control("field", "Where from?", "combobox"), |c| c.value = Some("London".into()));
-        let done = effect(&observation(vec![editor, choice.clone()]), &observation(vec![field]), Some(&choice));
+        let done = effect(&observation(vec![editor, choice.clone()]), &observation(vec![field]), Some(&choice), false);
         assert!(done.set_something);
     }
 
@@ -387,14 +389,14 @@ mod tests {
             c.label = "Ticket type. Round trip".into();
             c.expanded = Some(false);
         })]);
-        assert!(!effect(&observation(options()), &after, Some(&options()[0])).set_something);
+        assert!(!effect(&observation(options()), &after, Some(&options()[0]), false).set_something);
     }
 
     #[test]
     fn test_an_action_that_changed_only_the_text_says_so() {
         let form = observation(vec![Control::new("s", "button", "Continue", [Operation::Click])]);
         let refused = Observation { viewport_text: "Error: First Name is required".into(), ..form.clone() };
-        let done = effect(&form, &refused, None);
+        let done = effect(&form, &refused, None, false);
         assert_eq!(done.summary, "only the page text changed");
         assert!(!done.set_something);
         assert!(done.added, "text-only changes remain observable without claiming added records");
@@ -407,7 +409,7 @@ mod tests {
             ..observation(vec![Control::new("m", "button", "More", [Operation::Click])])
         };
         let after = Observation { viewport_text: "Record A\nRecord B".into(), ..before.clone() };
-        let done = effect(&before, &after, before.controls.first());
+        let done = effect(&before, &after, before.controls.first(), false);
         assert!(done.changed);
         assert!(done.added);
         assert_eq!(done.summary, "only the page text changed");
@@ -424,11 +426,11 @@ mod tests {
     fn test_leaving_a_field_is_told_and_is_a_new_state_but_sets_nothing() {
         let typing = observation(vec![field(Some(true))]);
         let left = observation(vec![field(Some(false))]);
-        let done = effect(&typing, &left, None);
+        let done = effect(&typing, &left, None, false);
         assert_eq!(done.summary, "changed Reference focused: True -> False");
         assert!(done.changed && !done.set_something);
         assert!(!done.added, "leaving a field adds no controls or records");
-        let entered = effect(&left, &typing, None);
+        let entered = effect(&left, &typing, None, false);
         assert_eq!(entered.summary, "changed Reference focused: False -> True");
         assert!(!entered.set_something);
         assert_ne!(state_key(&typing), state_key(&left));
@@ -439,14 +441,14 @@ mod tests {
         let unknown = observation(vec![field(None)]);
         for known in [Some(false), Some(true)] {
             let known = observation(vec![field(known)]);
-            assert_eq!(effect(&unknown, &known, None).summary, "nothing visible changed");
-            assert_eq!(effect(&known, &unknown, None).summary, "nothing visible changed");
+            assert_eq!(effect(&unknown, &known, None, false).summary, "nothing visible changed");
+            assert_eq!(effect(&known, &unknown, None, false).summary, "nothing visible changed");
         }
         // An unfocused field offers nothing an unknown one does not, so the page state is the same one.
         assert_eq!(state_key(&unknown), state_key(&observation(vec![field(Some(false))])));
         // A button's focus offers no way to leave it, and is not told.
         let button = |focused| Control { focused, ..control("go", "Go", "button") };
-        let done = effect(&observation(vec![button(Some(false))]), &observation(vec![button(Some(true))]), None);
+        let done = effect(&observation(vec![button(Some(false))]), &observation(vec![button(Some(true))]), None, false);
         assert_eq!(done.summary, "nothing visible changed");
     }
 
@@ -456,7 +458,7 @@ mod tests {
         assert_eq!(short(&Shown::Text(long.clone())), long);
         assert_eq!(short(&Shown::Missing), "empty");
         let many: Vec<Control> = (0..6).map(|i| control(&format!("c{i}"), &format!("Item {i}"), "link")).collect();
-        let done = effect(&observation(vec![]), &observation(many), None);
+        let done = effect(&observation(vec![]), &observation(many), None, false);
         assert_eq!(done.summary, "showed 6 controls: Item 0, Item 1, Item 2, Item 3, Item 4, Item 5");
     }
 
@@ -480,15 +482,35 @@ mod tests {
         let later = Observation { media: vec![player(false, 15.5)], ..page.clone() };
         let paused = Observation { media: vec![player(true, 15.6)], ..page.clone() };
         let sought = Observation { media: vec![player(true, 90.0)], ..page.clone() };
+        let resumed = Observation { media: vec![player(false, 16.0)], ..page.clone() };
         // A playing clock moves by itself: a step that left it playing changed nothing about it.
-        assert_eq!(effect(&playing, &later, None).summary, "nothing visible changed");
-        assert_eq!(effect(&later, &paused, None).summary, "changed audio Gymnopedie No. 1 paused: False -> True");
-        assert_eq!(effect(&paused, &sought, None).summary, "changed audio Gymnopedie No. 1 elapsed: 15.6 s -> 90 s");
-        assert_eq!(effect(&paused, &paused, None).summary, "nothing visible changed");
+        assert_eq!(effect(&playing, &later, None, false).summary, "nothing visible changed");
+        // A Wait is the step that lets time pass, so how far a playing clock moved is what it did.
+        assert_eq!(
+            effect(&playing, &later, None, true).summary,
+            "changed audio Gymnopedie No. 1 elapsed: 12 s -> 15.5 s"
+        );
+        assert_eq!(effect(&paused, &paused, None, true).summary, "nothing visible changed");
+        assert_eq!(
+            effect(&later, &paused, None, false).summary,
+            "changed audio Gymnopedie No. 1 paused: False -> True; audio Gymnopedie No. 1 elapsed: 15.5 s -> 15.6 s"
+        );
+        assert_eq!(
+            effect(&paused, &resumed, None, false).summary,
+            "changed audio Gymnopedie No. 1 paused: True -> False; audio Gymnopedie No. 1 elapsed: 15.6 s -> 16 s"
+        );
+        assert_eq!(
+            effect(&paused, &sought, None, false).summary,
+            "changed audio Gymnopedie No. 1 elapsed: 15.6 s -> 90 s"
+        );
+        assert_eq!(effect(&paused, &paused, None, false).summary, "nothing visible changed");
         let unnamed = |media: &Observation| Observation {
             media: media.media.iter().map(|m| Media { heading: None, ..m.clone() }).collect(),
             ..media.clone()
         };
-        assert_eq!(effect(&unnamed(&later), &unnamed(&paused), None).summary, "changed audio paused: False -> True");
+        assert_eq!(
+            effect(&unnamed(&later), &unnamed(&paused), None, false).summary,
+            "changed audio paused: False -> True; audio elapsed: 15.5 s -> 15.6 s"
+        );
     }
 }

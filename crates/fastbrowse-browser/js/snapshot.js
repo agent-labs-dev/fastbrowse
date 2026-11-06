@@ -77,6 +77,9 @@
     const hashText = text => {
       for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
     };
+    // Players' clocks stay out of the hash: one that plays moves by itself, which must not make a control stale.
+    // They are kept beside it, rounded as readMedia rounds them, for a Wait to tell a moving clock.
+    const clocks = [];
     const include = root => {
       hashText(root.body?.innerText ?? root.textContent ?? '');
       // innerText omits shadow trees and child documents even when their content is visible.
@@ -98,6 +101,9 @@
               e.getAttribute('aria-selected'),
             ]),
           );
+        // readMedia lists the players of documents only, not of shadow roots.
+        if (root.nodeType === Node.DOCUMENT_NODE && (e.tagName === 'AUDIO' || e.tagName === 'VIDEO'))
+          clocks.push(Math.round(e.currentTime * 10) / 10);
         if (e.shadowRoot) include(e.shadowRoot);
         if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
           const inner = childDocument(e);
@@ -109,6 +115,7 @@
     return {
       ...clock(),
       fingerprint: location.href + '|' + document.title + '|' + (hash >>> 0) + '|' + scrollY,
+      media: clocks.join(','),
     };
   }
   if (!document.body) return null;

@@ -209,7 +209,7 @@ fn the_effect_summary_matches_python() {
     checked.checked = Some(true);
     let long = Control::new("n1", "button", &"x".repeat(70), []);
     after.controls = vec![filled, checked, long];
-    assert_eq!(effect(&before, &after, Some(&field)).summary, text_of(&functions, "effect"));
+    assert_eq!(effect(&before, &after, Some(&field), false).summary, text_of(&functions, "effect"));
 }
 
 #[test]
