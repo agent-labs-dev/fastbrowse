@@ -426,30 +426,34 @@ fn die_with_owner(command: &mut Command) {
 /// Fork on a thread that lives as long as the process. Linux sends the death signal when the thread that forked the
 /// child exits, not the process, and a runtime worker can retire mid-run: `block_in_place` hands it to the blocking
 /// pool, which ends idle threads. A browser forked there would be closed while still in use.
+///
+/// The thread is keyed by process id: a process forked from this one (an embedder starting worker processes) inherits
+/// the channel but not the thread behind it, so it starts its own rather than waiting on one that is not there.
 #[cfg(target_os = "linux")]
 async fn on_owner_thread(command: Command) -> std::io::Result<Child> {
     type Request = (Command, tokio::runtime::Handle, tokio::sync::oneshot::Sender<std::io::Result<Child>>);
-    static OWNER: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Sender<Request>>> = std::sync::OnceLock::new();
-    let owner = OWNER.get_or_init(|| {
-        let (sender, requests) = std::sync::mpsc::channel::<Request>();
-        std::thread::Builder::new()
-            .name("fastbrowse-chrome-owner".into())
-            .spawn(move || {
-                for (mut command, runtime, answer) in requests {
-                    let _entered = runtime.enter();
-                    let _ = answer.send(command.spawn());
-                }
-            })
-            .expect("the Chrome owner thread starts");
-        std::sync::Mutex::new(sender)
-    });
+    static OWNER: std::sync::Mutex<Option<(u32, std::sync::mpsc::Sender<Request>)>> = std::sync::Mutex::new(None);
     let (answer, spawned) = tokio::sync::oneshot::channel();
     let request = (command, tokio::runtime::Handle::current(), answer);
-    owner
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .send(request)
-        .map_err(|_| std::io::Error::other("the Chrome owner thread has stopped"))?;
+    {
+        let mut owner = OWNER.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let pid = std::process::id();
+        let sender = match owner.as_ref() {
+            Some((started_in, sender)) if *started_in == pid => sender.clone(),
+            _ => {
+                let (sender, requests) = std::sync::mpsc::channel::<Request>();
+                std::thread::Builder::new().name("fastbrowse-chrome-owner".into()).spawn(move || {
+                    for (mut command, runtime, answer) in requests {
+                        let _entered = runtime.enter();
+                        let _ = answer.send(command.spawn());
+                    }
+                })?;
+                *owner = Some((pid, sender.clone()));
+                sender
+            }
+        };
+        sender.send(request).map_err(|_| std::io::Error::other("the Chrome owner thread has stopped"))?;
+    }
     spawned.await.map_err(|_| std::io::Error::other("the Chrome owner thread has stopped"))?
 }
 
