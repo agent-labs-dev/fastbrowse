@@ -442,10 +442,7 @@ async fn test_a_frame_of_the_page_origin_is_read_where_it_stands() {
     });
     let capture = fetched(&http, "https://shop.example.com/frames").await.expect("read");
     let texts: Vec<&str> = capture.blocks.iter().map(|b| &capture.text[b.start as usize..b.end as usize]).collect();
-    assert_eq!(
-        texts,
-        ["Internal frame: email", "Send updates to my inbox", "External frame", "Inline note", "Footer"]
-    );
+    assert_eq!(texts, ["Internal frame: email", "Send updates to my inbox", "External frame", "Inline note", "Footer"]);
     // The other origin's frame was not fetched, so the read says one document is missing.
     assert_eq!(capture.inaccessible_frames, 1);
 }
