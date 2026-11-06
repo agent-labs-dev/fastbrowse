@@ -1511,6 +1511,35 @@ async def test_budget_only_stops_starting_runs_once_no_hold_fits(monkeypatch, tm
     assert json.loads(out.read_text())["answer"] == "retained completed answer"
 
 
+async def test_a_budget_below_one_run_is_refused_at_startup_and_its_out_reused(monkeypatch, tmp_path, capsys):
+    """A --budget that cannot hold one run's reservation names the numbers and starts nothing; the refused attempt
+    left no physical run, so a retry into the same --out with a sufficient budget runs."""
+    calls = 0
+
+    async def run(arm, task, *_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return _row(arm, task, 0.5)
+
+    _live_fakes(monkeypatch, run)
+    out = tmp_path / "small.jsonl"
+    argv = ["--only", "wiki-open", "--arms", "fastbrowse", "--out", str(out)]
+    with pytest.raises(SystemExit):
+        await live.main([*argv, "--budget", "2"])
+    assert "--budget 2 cannot hold one run: each run reserves $3 (agent 1 + browser 1 + judge 1)" in (
+        capsys.readouterr().err
+    )
+    assert calls == 0 and not out.exists() and not out.with_suffix(".budget.jsonl").exists()
+    # An earlier attempt that opened its files but started no run does not block the retry.
+    out.touch()
+    out.with_suffix(".attempts.jsonl").touch()
+    assert await live.main([*argv, "--budget", "6"]) == 0
+    assert calls == 1
+    with pytest.raises(SystemExit):
+        await live.main([*argv, "--budget", "6"])
+    assert "requires a fresh output" in capsys.readouterr().err
+
+
 async def test_interrupted_judgment_retains_completed_agent_evidence(monkeypatch, tmp_path):
     async def execute(*args, **kwargs):
         return Outcome("completed answer", {"result": 42}, "https://example.test"), live.ArmReport(
