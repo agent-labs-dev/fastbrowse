@@ -125,7 +125,9 @@ actions to those controls.
 A field is named by its label, never by its value. A select or a combobox or listbox widget is not named from the
 options, chips or buttons it shows. A widget wrapping exactly one field borrows that field's label, and its own label
 comes first. A field with no label is offered by its role under its section, such as a fieldset legend, and the text it
-shows never names that section.
+shows never names that section. A control whose own clip or clip-path leaves it no area is not offered, as a tag
+picker keeps the select it replaces on the page that way, and a hidden checkbox, radio or file input is reached through
+its label.
 
 Select on a select that allows several choices toggles the one option Jev picks, as a Ctrl-click does, and leaves the
 others as they were. Jev is asked which option to toggle and told which are selected now. A change handler that puts the
