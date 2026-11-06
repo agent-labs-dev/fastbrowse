@@ -1485,3 +1485,78 @@ async fn test_a_clock_beside_a_control_does_not_make_it_stale() {
     assert_eq!(eval_active(&h.page, "window.paused").await, json!(1));
     h.close().await;
 }
+
+/// A multiple select labelled Topics, with `selected` chosen, observed.
+async fn topics(h: &common::Harness, selected: &str, script: &str) -> fastbrowse_core::page::Observation {
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        &format!(
+            "document.body.innerHTML = '<label>Topics <select id=topics multiple><option>Alpha</option>\
+             <option>Beta</option><option>Gamma</option></select></label>'; \
+             const topics = document.getElementById('topics'); \
+             for (const o of topics.options) o.selected = {selected}.includes(o.label); {script} true"
+        ),
+    )
+    .await;
+    h.observe().await
+}
+
+const SELECTED: &str = "[...document.getElementById('topics').selectedOptions].map(o => o.label)";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_select_on_a_multiple_select_toggles_one_option() {
+    // A list that allows several choices keeps the others: Select adds the named option, as a Ctrl-click does.
+    let Some(h) = harness().await else { return };
+    let obs = topics(&h, "['Alpha']", "").await;
+    let select = Action { text: Some("Beta".into()), ..action(Operation::Select, find(&obs, "Topics")) };
+    let result = h.page.act(&select, &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{:?}", result.detail);
+    assert_eq!(eval_active(&h.page, SELECTED).await, json!(["Alpha", "Beta"]));
+    // And a selected option named again is taken out, leaving the rest.
+    let obs = h.observe().await;
+    let select = Action { text: Some("Alpha".into()), ..action(Operation::Select, find(&obs, "Topics")) };
+    let result = h.page.act(&select, &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{:?}", result.detail);
+    assert!(result.page_changed, "a deselection changes the page");
+    assert_eq!(eval_active(&h.page, SELECTED).await, json!(["Beta"]));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_multiple_select_the_page_restores_is_not_executed() {
+    let Some(h) = harness().await else { return };
+    // The kept selection is reported whole, not only its first option.
+    let restore = "topics.onchange = () => { for (const o of topics.options) o.selected = o.label !== 'Beta'; };";
+    let obs = topics(&h, "['Alpha', 'Gamma']", restore).await;
+    let select = Action { text: Some("Beta".into()), ..action(Operation::Select, find(&obs, "Topics")) };
+    let result = h.page.act(&select, &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Failed);
+    assert!(result.detail.as_deref().is_some_and(|d| d.contains("'Alpha, Gamma'")), "{:?}", result.detail);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_multiple_select_changed_after_observing_is_stale() {
+    // Choosing a later option leaves selectedIndex on the first selected one, so the guard reads every selection.
+    let Some(h) = harness().await else { return };
+    let obs = topics(&h, "['Alpha']", "").await;
+    eval_active(&h.page, "document.getElementById('topics').options[2].selected = true; true").await;
+    let select = Action { text: Some("Beta".into()), ..action(Operation::Select, find(&obs, "Topics")) };
+    let result = h.page.act(&select, &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Stale, "{:?}", result.detail);
+    assert_eq!(eval_active(&h.page, SELECTED).await, json!(["Alpha", "Gamma"]));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_select_naming_no_option_of_a_multiple_select_fails_and_changes_nothing() {
+    let Some(h) = harness().await else { return };
+    let obs = topics(&h, "['Alpha']", "").await;
+    let select = Action { text: Some("Delta".into()), ..action(Operation::Select, find(&obs, "Topics")) };
+    let result = h.page.act(&select, &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Failed);
+    assert_eq!(result.detail.as_deref(), Some("no option labelled 'Delta'"));
+    assert_eq!(eval_active(&h.page, SELECTED).await, json!(["Alpha"]));
+    h.close().await;
+}

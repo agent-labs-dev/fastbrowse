@@ -150,6 +150,10 @@
   // Password and agent-typed secret values never leave the page: only their length is observed.
   const secret = e => e.type === 'password' || e.dataset?.fastbrowseSecret === '1';
   const reveal = e => (typeof e.value !== 'string' ? null : secret(e) ? '•'.repeat(e.value.length) : e.value);
+  // What a select has chosen. selectedIndex names only the first chosen option, so a list that allows several gives
+  // every chosen index: a later option chosen or taken out changes it.
+  const chosen = e =>
+    e.multiple && e.tagName === 'SELECT' ? [...e.selectedOptions].map(o => o.index) : (e.selectedIndex ?? null);
   // Asked of each control by the walk and again by its guard, and of each text node's parent.
   const visible = memo(e => {
     // Todo lists paint the checkmark beside a transparent native input without associating a label.
@@ -488,7 +492,7 @@
       labelOf(e) || fallbackLabel(e),
       reveal(source),
       source.checked ?? null,
-      e.selectedIndex ?? null,
+      chosen(e),
       e.readOnly ?? null,
       e.matches(':disabled'),
       e.getAttribute('aria-disabled') === 'true',
@@ -1194,7 +1198,7 @@
   if (mode !== 'glance') registry.observed = new Map(controls.map(c => [c.id, guards[c.id]]));
   const field_state = [...document.querySelectorAll('input,textarea,select')]
     .filter(safe)
-    .map(e => [identity(e), reveal(e), e.checked, e.selectedIndex, e.disabled, e.readOnly]);
+    .map(e => [identity(e), reveal(e), e.checked, chosen(e), e.disabled, e.readOnly]);
   // Compare meaning and identity for the page_key fingerprint; geometry is re-resolved just before input.
   const semantics = controls.map(({ distance, ...c }) => c);
   const page_key = digest(JSON.stringify([

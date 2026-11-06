@@ -287,7 +287,15 @@ impl Agent {
                     }
                     return Err(Unsure { reason, gives_up_as: Status::Stuck }.into());
                 }
-                let question = format!("Which option should {} be set to?", text::repr(&describe(target)));
+                let named = text::repr(&describe(target));
+                // A list that allows several choices toggles the option picked, so Jev is told which are chosen.
+                let question = match (target.input_type.as_deref(), target.value.as_deref()) {
+                    (Some("select-multiple"), chosen) => {
+                        let chosen = chosen.filter(|chosen| !chosen.is_empty()).map_or("none".into(), text::repr);
+                        format!("Which option of {named} should be toggled? Selected now: {chosen}.")
+                    }
+                    _ => format!("Which option should {named} be set to?"),
+                };
                 let option = self.choose(state, observation, &question, &raw.options).await?;
                 Ok(Action { target_id: Some(raw.id.clone()), text: Some(option), ..Action::new(Operation::Select) })
             }

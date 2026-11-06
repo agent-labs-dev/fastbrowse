@@ -1162,6 +1162,11 @@ pub(super) fn edit_progress(decision: &Decision, action: &Action, written: &Writ
         return None;
     }
     let target = decision.target.as_ref()?;
+    // A list that allows several choices toggles the option named, so naming a chosen one again takes it out: the
+    // page the step lands on, which reads every chosen option, judges it.
+    if target.input_type.as_deref() == Some("select-multiple") {
+        return None;
+    }
     let held = held_value(action)?;
     if target.value.as_deref() == Some(held.as_str()) {
         return Some(false);

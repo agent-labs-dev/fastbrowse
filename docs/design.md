@@ -126,6 +126,11 @@ options, chips or buttons it shows. A widget wrapping exactly one field borrows 
 comes first. A field with no label is offered by its role under its section, such as a fieldset legend, and the text it
 shows never names that section.
 
+Select on a select that allows several choices toggles the one option Jev picks, as a Ctrl-click does, and leaves the
+others as they were. Jev is asked which option to toggle and told which are selected now. A change handler that puts the
+selection back fails the step, as on a single select, and the action guard and page fingerprint read every selected
+option, so choosing or removing any one of them is a change.
+
 A read offers Jev one bounded choice over the page's quoted spans, with two more answers: the page does not hold the
 answer, or the answer must be composed from more than one fact. On a page with more spans than one choice can offer, a
 relevance pass narrows them first. If no value choice fits, a page that fits Jev's input limit can still supply
