@@ -1522,6 +1522,99 @@ async fn test_a_value_whose_beginning_takes_in_the_request_asks_for_the_beginnin
     assert_eq!(text, "Ada Lovelace");
 }
 
+#[tokio::test]
+async fn test_a_value_copied_from_the_task_keeps_the_punctuation_jev_picks() {
+    // The words: Post 0, x 1, y 2, now 3. The task quotes "@x y." and words keep only their letters and digits.
+    const SPAN: [(&str, &str); 5] = [("source", "task"), ("first", "1"), ("last", "2"), ("pick", "2"), ("start", "1")];
+    const WHOLE: [(&str, &str); 7] = [SPAN[0], SPAN[1], SPAN[2], SPAN[3], SPAN[4], ("lead", "1"), ("trail", "1")];
+    const TRIMMED: [(&str, &str); 7] = [SPAN[0], SPAN[1], SPAN[2], SPAN[3], SPAN[4], ("lead", "0"), ("trail", "0")];
+    for (picks, expected) in [(Picks(&WHOLE), "@x y."), (Picks(&TRIMMED), "x y")] {
+        let agent = Agent::new(Arc::new(NoPage), Arc::new(picks), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.task = "Post @x y. now".into();
+        let text = agent
+            .text(&mut state, &observation(&[]), &code_decision(Operation::Fill, None), &field("Message"))
+            .await
+            .expect("a value");
+        assert_eq!(text, expected);
+        assert_eq!(state.text_source, Some(fastbrowse_core::recipe::RecipeText::Literal(expected.into())));
+    }
+}
+
+#[tokio::test]
+async fn test_a_value_copied_from_what_was_read_keeps_the_punctuation_jev_picks() {
+    // The words read: Code 0, x 1, y 2.
+    let picks = Picks(&[
+        ("source", "read"),
+        ("first", "1"),
+        ("last", "2"),
+        ("pick", "2"),
+        ("start", "1"),
+        ("lead", "1"),
+        ("trail", "1"),
+    ]);
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(picks), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Fill the reference".into();
+    let page = capture(&[(BlockKind::Paragraph, "Code @x y.")]);
+    state
+        .notes
+        .add(Fact { answers: true, ..Fact::read("Code @x y.", block_evidence(&page, "s0"), FactReader::JevChoice) });
+    let text = agent
+        .text(&mut state, &observation(&[]), &code_decision(Operation::Fill, None), &field("Reference"))
+        .await
+        .expect("a value");
+    assert_eq!(text, "@x y.");
+}
+
+/// Jev answering in rounds: each request takes the first round that answers all it asks, and the end's options are
+/// kept.
+struct Rounds(Mutex<Vec<Picks>>, Mutex<Vec<Vec<serde_json::Value>>>);
+
+impl DecisionClient for Rounds {
+    fn evaluate<'a>(
+        &'a self,
+        page: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        if let Some(Question::Choice(trail)) = questions.get("trail") {
+            self.1.lock().unwrap().push(trail.criteria.values().cloned().collect());
+        }
+        let mut rounds = self.0.lock().unwrap();
+        let covers = |round: &Picks| questions.keys().all(|key| round.0.iter().any(|(asked, _)| asked == key));
+        let at = rounds.iter().position(covers).expect("a round that answers the request");
+        let round = rounds.remove(at);
+        Box::pin(async move { round.evaluate(page, questions).await })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        ScriptedJev::new(Vec::new()).profile()
+    }
+}
+
+#[tokio::test]
+async fn test_edges_that_do_not_fit_a_field_together_ask_the_end_again() {
+    // The words: Use 0, x 1, now 2. Each cut fits four characters alone, but two of each do not fit together.
+    let rounds = vec![
+        Picks(&[("source", "task"), ("first", "1"), ("last", "1")]),
+        Picks(&[("lead", "2"), ("trail", "2")]),
+        Picks(&[("trail", "0")]),
+    ];
+    let jev = Arc::new(Rounds(Mutex::new(rounds), Mutex::default()));
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Use @@x.. now".into();
+    let mut target = field("Code");
+    target.max_length = Some(4);
+    let text = agent
+        .text(&mut state, &observation(&[]), &code_decision(Operation::Fill, None), &target)
+        .await
+        .expect("a value");
+    assert_eq!(text, "@@x");
+    let asked = jev.1.lock().unwrap().clone();
+    assert_eq!(asked, [vec![json!("x"), json!("x."), json!("x..")], vec![json!("@@x"), json!("@@x.")]]);
+}
+
 struct TypingAttempts;
 
 impl DecisionClient for TypingAttempts {
