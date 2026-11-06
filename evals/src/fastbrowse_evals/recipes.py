@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -121,6 +122,10 @@ def measure(task: str, arm: str, out: Path, expect: str) -> Measured:
     )
 
 
+def _terminated(signum: int, frame: object) -> None:
+    raise SystemExit(128 + signum)
+
+
 def run(binary: str, browser: list[str], task: RecipeTask, out: Path, timeout: float) -> list[Measured]:
     recipe = out / "recipe.json"
     arms = (
@@ -135,27 +140,36 @@ def run(binary: str, browser: list[str], task: RecipeTask, out: Path, timeout: f
     ]:
         stale.unlink(missing_ok=True)
     measured = []
-    for arm, inputs, recipe_flags, expect in arms:
-        if arm != "fresh" and not recipe.exists():
-            break
-        flags = [flag for name, value in inputs.items() for flag in ("--input", f"{name}={value}")]
-        argv = [binary, *browser, "--json", "--trace", str(out / f"{arm}.jsonl"), *flags, *recipe_flags, task.task]
-        began = time.monotonic()
-        with (out / f"{arm}.json").open("w") as stdout, (out / f"{arm}.err").open("w") as stderr:
-            child = subprocess.Popen(argv, stdout=stdout, stderr=stderr, stdin=subprocess.DEVNULL)
-            try:
-                child.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                # SIGTERM lets the CLI stop the browser it owns (a cloud one bills until stopped).
-                child.terminate()
+    # SIGTERM would end the benchmark without unwinding, leaving a running CLI behind: raise instead, as SIGINT does.
+    previous = signal.signal(signal.SIGTERM, _terminated)
+    try:
+        for arm, inputs, recipe_flags, expect in arms:
+            if arm != "fresh" and not recipe.exists():
+                break
+            flags = [flag for name, value in inputs.items() for flag in ("--input", f"{name}={value}")]
+            argv = [binary, *browser, "--json", "--trace", str(out / f"{arm}.jsonl"), *flags, *recipe_flags, task.task]
+            began = time.monotonic()
+            with (out / f"{arm}.json").open("w") as stdout, (out / f"{arm}.err").open("w") as stderr:
+                child = subprocess.Popen(argv, stdout=stdout, stderr=stderr, stdin=subprocess.DEVNULL)
                 try:
-                    child.wait(timeout=CLEANUP_GRACE)
+                    child.wait(timeout=timeout)
                 except subprocess.TimeoutExpired:
-                    child.kill()
-                    child.wait()
-        (out / f"{arm}.wall").write_text(f"{time.monotonic() - began:.1f}")
-        (out / f"{arm}.jsonl").touch()
-        measured.append(measure(task.id, arm, out, expect))
+                    pass
+                finally:
+                    # On a timeout or an interrupted benchmark, SIGTERM lets the CLI stop the browser it owns (a cloud
+                    # one bills until stopped).
+                    if child.poll() is None:
+                        child.terminate()
+                        try:
+                            child.wait(timeout=CLEANUP_GRACE)
+                        except subprocess.TimeoutExpired:
+                            child.kill()
+                            child.wait()
+            (out / f"{arm}.wall").write_text(f"{time.monotonic() - began:.1f}")
+            (out / f"{arm}.jsonl").touch()
+            measured.append(measure(task.id, arm, out, expect))
+    finally:
+        signal.signal(signal.SIGTERM, previous)
     return measured
 
 
