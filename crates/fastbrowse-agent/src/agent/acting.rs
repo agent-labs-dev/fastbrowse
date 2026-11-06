@@ -24,7 +24,7 @@ use super::helpers::{caller_link, describe, dialog_question, empty_fields_fact, 
 use super::state::{Extent, Flow, OutputIntent, RunState, Step, Stop, Unsure};
 use crate::memory::Notes;
 use crate::policy::{Ahead, Decision, HistoryEntry};
-use crate::retrieval::text::{Word, words};
+use crate::retrieval::text::{Word, edge_options, words};
 use crate::verification::page_state;
 use crate::writing::write_value;
 
@@ -734,7 +734,22 @@ impl Agent {
                         .find(|word| word.index <= last.index && Some(&word.index.to_string()) == picks.get("start"))
                         .unwrap_or(first)
                 };
-                let value: String = task.chars().skip(first.start).take(last.end - first.start).collect();
+                // Words keep only their letters and digits, so punctuation the value starts or ends with, such as
+                // a handle's sign or a sentence's stop, is offered as part of it for Jev to keep or leave.
+                let max = self.jev.profile().max_choice_options;
+                let question = format!(
+                    "Which exact text belongs in {label}? Each choice is the complete value copied from {holder}; choose whether the punctuation next to it is part of the value."
+                );
+                let edges = edge_options(&chars, (first, last), (0, 0), target.max_length, max);
+                let (lead, mut trail) = self.edges(state, observation, &question, edges).await?;
+                // Each edge was offered as it fits the field alone; when the two together do not, the end is asked
+                // again with what fits after the beginning Jev kept.
+                if target.max_length.is_some_and(|limit| last.end - first.start + lead + trail > limit) {
+                    let edges = edge_options(&chars, (first, last), (lead, 0), target.max_length, max);
+                    let edges: Vec<_> = edges.into_iter().filter(|(edge, _)| *edge == "trail").collect();
+                    trail = self.edges(state, observation, &question, edges).await?.1;
+                }
+                let value: String = chars[first.start - lead..last.end + trail].iter().collect();
                 if source == IN_TASK {
                     state.text_source = Some(RecipeText::Literal(value.clone()));
                 }
@@ -742,6 +757,29 @@ impl Agent {
             }
             _ => Err(self.missing(state, observation, target)),
         }
+    }
+
+    /// How many punctuation characters the beginning and the end of a value keep, as Jev picks among `edges`.
+    async fn edges(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        question: &str,
+        edges: Vec<(&'static str, Vec<(usize, String)>)>,
+    ) -> Step<(usize, usize)> {
+        if edges.is_empty() {
+            return Ok((0, 0));
+        }
+        let asked = edges
+            .into_iter()
+            .map(|(edge, options)| {
+                let options = options.into_iter().map(|(kept, value)| (kept.to_string(), value.into()));
+                (edge, question.to_string(), options.collect())
+            })
+            .collect();
+        let picks = self.ask_choices(state, Some(observation), asked).await?;
+        let kept = |edge: &str| picks.get(edge).and_then(|kept| kept.parse::<usize>().ok()).unwrap_or(0);
+        Ok((kept("lead"), kept("trail")))
     }
 
     /// `group` cut down to what one choice can offer.
