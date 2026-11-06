@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use fastbrowse_clients::validation::jev_purpose;
-use fastbrowse_core::decision::{Answer, ChoiceQuestion, NoulQuestion, Question};
+use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionError, NoulQuestion, Question};
 use fastbrowse_core::models::{CostComponent, Decider, JevPurpose, Operation, Status, StepOutcome, UNTRUSTED};
 use fastbrowse_core::navigation::task_urls;
 use fastbrowse_core::page::{Action, Control, Observation};
@@ -11,9 +11,9 @@ use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::text;
 use fastbrowse_core::recipe::RecipeText;
 use fastbrowse_core::safety::{
-    asks_for_credentials, changes_a_value, changes_credentials, control_action, downloads_question, edits_question,
-    irreversible_question, is_password, lasting_question, may_be_irreversible, origin_of, requested_question,
-    resolve_secret, sets_new_password, starts_download,
+    asks_for_credentials, changes_a_value, changes_credentials, conditional_question, control_action,
+    downloads_question, edits_question, irreversible_question, is_password, lasting_question, may_be_irreversible,
+    origin_of, requested_question, resolve_secret, sets_new_password, starts_download, unmet_question,
 };
 use indexmap::IndexMap;
 use serde_json::{Map, Value as JsonValue, json};
@@ -150,7 +150,7 @@ fn gate_questions(
     target: &Control,
     destination: Option<&Control>,
     controls: &[Control],
-) -> (Option<NoulQuestion>, NoulQuestion, NoulQuestion) {
+) -> (Option<NoulQuestion>, String, NoulQuestion) {
     let lasting = lasting_question(operation, target, destination, controls);
     let irreversible = (!changes_credentials(controls, target, operation))
         .then(|| irreversible_question(operation, target, destination, controls));
@@ -167,7 +167,7 @@ fn gate_questions(
         let times = if done == 1 { "once".to_string() } else { format!("{done} times") };
         action += &format!("This run has already done this {times}.\n");
     }
-    (irreversible, requested_question(&action), lasting)
+    (irreversible, action, lasting)
 }
 
 /// The finish check's answer about the steps the task asks to be carried out.
@@ -225,8 +225,8 @@ impl Agent {
                 }
                 self.gate_download(state, observation, decision, &caller_link(&url)).await?;
                 let irreversible = navigation_question(&url);
-                let requested = requested_question(&format!("open the address {url}.\n"));
-                self.gate_question(state, observation, decision, &url, Some(irreversible), requested, None).await?;
+                let action = format!("open the address {url}.\n");
+                self.gate_question(state, observation, decision, &url, Some(irreversible), &action, None).await?;
                 Ok(Action { url: Some(url), ..Action::new(Operation::Navigate) })
             }
             Operation::Click | Operation::Enter => {
@@ -310,14 +310,13 @@ impl Agent {
                     && let Some(irreversible) = dialog_question(&state.task, Some(dialog))
                 {
                     let action = format!("accept this {} dialog: {}.\n", dialog.kind, text::repr(&dialog.message));
-                    let requested = requested_question(&action);
                     self.gate_question(
                         state,
                         observation,
                         decision,
                         &dialog.message,
                         Some(irreversible),
-                        requested,
+                        &action,
                         None,
                     )
                     .await?;
@@ -352,14 +351,14 @@ impl Agent {
         if let Some(destination) = &decision.destination {
             label += &format!(" onto {}", describe(destination));
         }
-        let (irreversible, requested, lasting) = gate_questions(
+        let (irreversible, action, lasting) = gate_questions(
             &state.history,
             decision.operation,
             target,
             decision.destination.as_ref(),
             &observation.controls,
         );
-        self.gate_question(state, observation, decision, &label, irreversible, requested, Some(lasting)).await
+        self.gate_question(state, observation, decision, &label, irreversible, &action, Some(lasting)).await
     }
 
     /// Refuse a control the page says downloads a file when the task rules downloading out.
@@ -376,14 +375,8 @@ impl Agent {
         if !starts_download(control) || !self.downloads_forbidden(state).await? {
             return Ok(());
         }
-        self.refuse_forbidden(
-            state,
-            observation,
-            decision,
-            control,
-            "downloads a file, and the task rules out downloading",
-        )
-        .await
+        let why = "downloads a file, and the task rules out downloading";
+        self.refuse_once(state, observation, decision, &describe(control), why).await
     }
 
     /// Refuse an action that changes a value on the page when the task rules out changing anything (#838).
@@ -400,41 +393,8 @@ impl Agent {
         if !changes_a_value(decision.operation, control) || !self.edits_forbidden(state).await? {
             return Ok(());
         }
-        self.refuse_forbidden(
-            state,
-            observation,
-            decision,
-            control,
-            "changes a value on the page, and the task rules out changing anything",
-        )
-        .await
-    }
-
-    /// Record `decision` on `control` as refused for what the task forbids, and refuse it once so the run picks again.
-    async fn refuse_forbidden(
-        &self,
-        state: &mut RunState,
-        observation: &Observation,
-        decision: &Decision,
-        control: &Control,
-        why: &str,
-    ) -> Step {
-        let label = describe(control);
-        let reason = format!("{} {} {why}", decision.operation, text::repr(&label));
-        let confidence = Some(decision.confidence());
-        let redacted = self.redact(&reason);
-        self.record_failure(
-            state,
-            observation,
-            decision.operation,
-            &redacted,
-            Some(self.redact(&label)),
-            confidence,
-            Some(false),
-            if decision.replayed { Decider::Recipe } else { Decider::Jev },
-        )
-        .await?;
-        Err(Unsure::new(redacted).into())
+        let why = "changes a value on the page, and the task rules out changing anything";
+        self.refuse_once(state, observation, decision, &describe(control), why).await
     }
 
     /// Whether the task rules out downloading, asked of Jev about the task alone and kept for the run.
@@ -475,8 +435,10 @@ impl Agent {
     /// authorized and Jev judges the task asked for it. Otherwise the run stops for confirmation.
     ///
     /// `irreversible` is None for an action the page's structure shows commits, which only the task's request lifts.
-    /// `lasting` asks, in an authorized run, whether a reversible action still leaves something the site keeps: one the
-    /// task did not ask for is refused once, so the run can pick again rather than stop (#743).
+    /// `action` is what the agent is about to do, as [`control_action`] writes it for a control. `lasting` asks, in an
+    /// authorized run, whether a reversible action still leaves something the site keeps: one the task did not ask for
+    /// is refused once, so the run can pick again rather than stop (#743). A commit the task asks for only in some state
+    /// of the page goes ahead only once the page is judged not to show the state the task rules it out in (#848).
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn gate_question(
         &self,
@@ -485,7 +447,7 @@ impl Agent {
         decision: &Decision,
         label: &str,
         irreversible: Option<NoulQuestion>,
-        requested: NoulQuestion,
+        action: &str,
         lasting: Option<NoulQuestion>,
     ) -> Step {
         let thresholds = &self.config.thresholds;
@@ -495,7 +457,8 @@ impl Agent {
             questions.insert("irreversible".to_string(), Question::Noul(irreversible));
         }
         if authorized {
-            questions.insert("requested".to_string(), Question::Noul(requested));
+            questions.insert("requested".to_string(), Question::Noul(requested_question(action)));
+            questions.insert("conditional".to_string(), Question::Noul(conditional_question(action)));
             if let Some(lasting) = lasting {
                 questions.insert("lasting".to_string(), Question::Noul(lasting));
             }
@@ -514,6 +477,7 @@ impl Agent {
                 _ => None,
             };
             let (probability, requested, lasting) = (noul("irreversible"), noul("requested"), noul("lasting"));
+            let conditional = noul("conditional");
             self.event("irreversible", || {
                 Map::from_iter([
                     ("target".into(), label.into()),
@@ -521,6 +485,7 @@ impl Agent {
                     ("probability".into(), json!(probability)),
                     ("requested".into(), json!(requested)),
                     ("lasting".into(), json!(lasting)),
+                    ("conditional".into(), json!(conditional)),
                 ])
             });
             let reversible = probability.is_some_and(|p| p <= thresholds.irreversible_above);
@@ -529,24 +494,20 @@ impl Agent {
             let keeps =
                 questions.contains_key("lasting") && !lasting.is_some_and(|p| p <= thresholds.irreversible_above);
             if reversible && keeps && !wanted {
-                let reason = format!(
-                    "{} {} would change what the site keeps, and the task does not ask for it",
-                    decision.operation,
-                    text::repr(label)
-                );
-                let redacted = self.redact(&reason);
-                self.record_failure(
-                    state,
-                    observation,
-                    decision.operation,
-                    &redacted,
-                    Some(self.redact(label)),
-                    Some(decision.confidence()),
-                    Some(false),
-                    if decision.replayed { Decider::Recipe } else { Decider::Jev },
-                )
-                .await?;
-                return Err(Unsure::new(redacted).into());
+                let why = "would change what the site keeps, and the task does not ask for it";
+                return self.refuse_once(state, observation, decision, label, why).await;
+            }
+            // Asked unanswered, the condition is checked as if the task set one: the check costs a call, a missed
+            // condition an irreversible commit.
+            let conditional = conditional.is_none_or(|p| p > thresholds.irreversible_above);
+            if wanted
+                && (!reversible || keeps)
+                && conditional
+                && !self.condition_met(state, observation, action).await?
+            {
+                let why = "depends on a condition the task sets, and the page does not show it allows this: read the \
+                           page to check it, or finish";
+                return self.refuse_once(state, observation, decision, label, why).await;
             }
             if reversible || wanted {
                 state.committing = !reversible;
@@ -572,6 +533,85 @@ impl Agent {
         )
         .await?;
         Err(Stop::new(Status::NeedsConfirmation, reason).into())
+    }
+
+    /// Whether the page shows a conditional commit allowed: Jev's clear no to whether it shows the state the task rules
+    /// the commit out in, or has not been checked for it. Any other answer, or none, is not allowed.
+    ///
+    /// The one authorization question asked with the page's content, in a request of its own, so a page's text can
+    /// only veto a commit and never argue `requested` up. It is shown the masked observation the step decision reads,
+    /// with the notes and recent actions that say what the run has already read.
+    async fn condition_met(&self, state: &mut RunState, observation: &Observation, action: &str) -> Step<bool> {
+        state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+        let elements: Vec<_> =
+            observation.controls.iter().map(|c| JsonValue::Object(crate::policy::element(c))).collect();
+        let mut page = json!({
+            "page": {
+                "url": observation.url,
+                "title": observation.title,
+                "text": observation.viewport_text,
+                "offscreen_text": observation.offscreen_text,
+                "response_status": observation.response_status,
+                "media": observation.media,
+            },
+            "elements": elements,
+            "dialog": observation.dialog.as_ref().map(Dump::dump_exclude_none),
+            "tabs": observation.tabs.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
+            "notes": self.decision_notes(state),
+            "recent_actions": state.history.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
+        });
+        self.mask_strings(&mut page);
+        page["task"] = state.task.clone().into();
+        page["date"] = observation.today().into();
+        let questions = IndexMap::from([("unmet".to_string(), Question::Noul(unmet_question(action)))]);
+        let evaluation = match jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&page, &questions)).await {
+            Ok(evaluation) => evaluation,
+            // A page too large to ask about cannot show the condition met.
+            Err(DecisionError::InputTooLarge(_)) => return Ok(false),
+            Err(error) => return Err(error.into()),
+        };
+        state.ledger.record([evaluation.cost.clone()])?;
+        let unmet = match evaluation.answers.get("unmet") {
+            Some(Answer::Noul(answer)) => Some(answer.probability),
+            _ => None,
+        };
+        self.event("condition", || Map::from_iter([("unmet".into(), json!(unmet))]));
+        Ok(unmet.is_some_and(|p| p <= self.config.thresholds.irreversible_above))
+    }
+
+    /// Mask every string in `value`, however deeply it is nested.
+    fn mask_strings(&self, value: &mut JsonValue) {
+        match value {
+            JsonValue::String(text) => *text = self.mask(text),
+            JsonValue::Array(items) => items.iter_mut().for_each(|item| self.mask_strings(item)),
+            JsonValue::Object(fields) => fields.values_mut().for_each(|field| self.mask_strings(field)),
+            _ => {}
+        }
+    }
+
+    /// Record `decision` on `label` as refused because it `why`, and refuse it once so the run picks again.
+    async fn refuse_once(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        decision: &Decision,
+        label: &str,
+        why: &str,
+    ) -> Step {
+        let reason = format!("{} {} {why}", decision.operation, text::repr(label));
+        let redacted = self.redact(&reason);
+        self.record_failure(
+            state,
+            observation,
+            decision.operation,
+            &redacted,
+            Some(self.redact(label)),
+            Some(decision.confidence()),
+            Some(false),
+            if decision.replayed { Decider::Recipe } else { Decider::Jev },
+        )
+        .await?;
+        Err(Unsure::new(redacted).into())
     }
 
     /// The text a field gets: an input, a stored secret, or words Jev marks in the task, copied as the task has them.
