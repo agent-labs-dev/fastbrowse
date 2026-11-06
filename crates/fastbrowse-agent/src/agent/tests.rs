@@ -1100,6 +1100,26 @@ async fn test_a_done_with_a_step_of_the_task_undone_is_not_complete() {
     assert_eq!(asked[0]["recent_actions"][0]["target"], "Phone", "the steps taken are what Jev judges");
 }
 
+/// A form filled and never sent is not a task carried out: the done check is told so, as the step decision is (#812).
+#[tokio::test]
+async fn test_the_done_check_is_told_what_was_typed_and_never_sent() {
+    let page = observation(&[holding("Reference", "REF-1")]);
+    let mut state = run_state();
+    state.task = "Enter the reference REF-1 and submit the form.".into();
+    state.history.push(typed_into("Reference"));
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "undone"));
+    let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev.clone(), Arc::new(ScriptedLLM));
+    assert!(!agent.actions_done(&mut state, &page).await.unwrap());
+    let facts = jev.3.lock().unwrap()[0]["page_facts"].to_string();
+    assert!(facts.contains("No action has sent what was typed"), "{facts}");
+    // On a task to carry out, a field left empty is named too, whether or not the run once stalled.
+    let page = observation(&[holding("Reference", "REF-1"), holding("Note", "")]);
+    state.output_intent = super::state::OutputIntent::CarriedOut;
+    assert!(!agent.actions_done(&mut state, &page).await.unwrap());
+    let asked = jev.3.lock().unwrap();
+    assert!(asked[1]["page_facts"].to_string().contains("'Note'"), "{}", asked[1]);
+}
+
 /// `DoneCheckJev`, judging that no answer gives every requested fact.
 struct RefusesCoverage(DoneCheckJev);
 
@@ -4232,14 +4252,22 @@ async fn test_a_draft_rejected_again_unchanged_ends_the_run() {
 }
 
 #[tokio::test]
-async fn test_uncertain_composition_support_is_terminal_without_repair() {
-    let page = observation(&[]);
-    let agent = Agent::new(Arc::new(FinishPage(page.clone())), repair_jev(vec![(0.5, 1.0)]), Arc::new(WrongRecord));
-    let mut state = composition_repair_state();
-    let result = agent.finish(&mut state, &page, None, None).await.unwrap().unwrap();
-    assert_eq!(result.status, Status::Unverified);
-    assert_eq!(state.recoveries, 0);
-    assert!(state.composition_feedback.is_none());
+async fn test_uncertain_composition_support_or_coverage_is_repaired_like_a_rejection() {
+    // Einstein: a correct count whose support Jev judged at exactly 0.5 ended the run with no answer and no second
+    // draft (#813). A judgment too close to call withholds the claim and asks for a corrected draft.
+    for (support, coverage) in [(0.5, 1.0), (1.0, 0.5)] {
+        let page = observation(&[]);
+        let agent = Agent::new(
+            Arc::new(FinishPage(page.clone())),
+            repair_jev(vec![(support, coverage)]),
+            Arc::new(WrongRecord),
+        );
+        let mut state = composition_repair_state();
+        let result = agent.finish(&mut state, &page, None, None).await.unwrap();
+        assert!(result.is_none(), "support {support}, coverage {coverage} should be repaired");
+        assert_eq!(state.recoveries, 1);
+        assert!(state.composition_feedback.is_some());
+    }
 }
 
 #[tokio::test]
@@ -4390,13 +4418,14 @@ async fn test_rejected_draft_feedback_is_redacted_before_repair_and_trace_output
     let trace = Trace::collecting();
     let agent = Agent::new(Arc::new(FinishPage(page.clone())), repair_jev(vec![(0.0, 1.0), (1.0, 1.0)]), llm.clone())
         .with_trace(trace.clone());
-    agent.redactor().register("credential", "99", None);
+    // Not a bare number, which a note's hex id can contain: redacting the id would leave the repair nothing to cite.
+    agent.redactor().register("credential", "A: 99", None);
     let mut state = composition_repair_state();
     assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
-    assert!(!state.composition_feedback.as_deref().unwrap().contains("99"));
+    assert!(!state.composition_feedback.as_deref().unwrap().contains("A: 99"));
     assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_some());
     let calls = llm.0.lock().unwrap();
-    assert!(calls[1].iter().all(|message| !message.content.contains("99")));
+    assert!(calls[1].iter().all(|message| !message.content.contains("A: 99")));
     assert!(!serde_json::to_string(&trace.events()).unwrap().contains("Record A: 99"));
 }
 

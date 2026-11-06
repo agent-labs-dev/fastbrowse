@@ -36,9 +36,18 @@ fn focus_rules() -> String {
     )
 }
 
+/// How capture.js begins the observation it writes for a link with no text.
+const LINK_METADATA: &str = "Link element DOM metadata:";
+
 fn iter_read_candidates(page: &Page<'_>, blocks: &[&Block], limit: Option<usize>) -> Vec<Candidate> {
     let mut candidates = Vec::new();
     for block in blocks {
+        // A textless link's metadata quotes the row it sits in, to say which link it is. That quote is the row's
+        // own text again, and offered as a value it won over the row: a top story was answered with a JSON scrap of
+        // the upvote link's `near` (#823). Other observations (alt text, empty or disabled fields) stay candidates.
+        if block.kind == BlockKind::Observation && page.slice(block.start, block.end).starts_with(LINK_METADATA) {
+            continue;
+        }
         let value = page.slice(block.start, block.end);
         // A downloaded CSV's row is a table block with no cells to split.
         let found = match cells(value) {
@@ -588,5 +597,24 @@ mod tests {
             })
             .collect();
         assert_eq!(question.criteria["c0"]["sources"], Value::Array(expected));
+    }
+
+    #[test]
+    fn link_metadata_near_text_is_not_a_value_candidate() {
+        let captured = capture(&[
+            (BlockKind::Paragraph, "A story title"),
+            (
+                BlockKind::Observation,
+                r#"Link element DOM metadata: {"label":"upvote","href":"https://example.test/vote","near":"A story title"}. The link has no text."#,
+            ),
+        ]);
+
+        let values: Vec<String> =
+            read_candidates(&captured, None).into_iter().map(|candidate| candidate.value.to_str()).collect();
+
+        assert_eq!(values, ["A story title"]);
+        // What an image or a field shows is still an answer.
+        let captured = capture(&[(BlockKind::Observation, r#"Image element DOM metadata: {"alt":"A red bicycle"}"#)]);
+        assert_eq!(read_candidates(&captured, None).len(), 1);
     }
 }

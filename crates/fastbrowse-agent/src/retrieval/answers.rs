@@ -297,14 +297,10 @@ async fn compose_part(
             let cited: Vec<String> = claim
                 .evidence_ids
                 .iter()
-                .flat_map(|id| {
-                    if let Some(item) = items.iter().find(|item| item.label == *id) {
-                        item.sources.clone()
-                    } else if items.iter().any(|item| item.sources.contains(id)) {
-                        vec![id.clone()]
-                    } else {
-                        Vec::new()
-                    }
+                // An id that names no note is kept, so the claim's check fails on it and the feedback names it (#811).
+                .flat_map(|id| match items.iter().find(|item| item.label == *id) {
+                    Some(item) => item.sources.clone(),
+                    None => vec![id.clone()],
                 })
                 .collect();
             Claim::new(&claim.text, cited)
@@ -449,12 +445,12 @@ struct CheckedClaims {
     rejection: Option<String>,
 }
 
-/// Jev's yes or no to a question, or None when it gave no probability that decides either way.
+/// Whether a check holds, or None when Jev gave it no probability. Even odds does not hold: the claim is withheld
+/// and the composer asked for a corrected draft, as for a check judged false, rather than the run ending on the
+/// least informative judgment with no second draft (#813).
 fn judged(answer: Option<&Answer>) -> Option<bool> {
     match answer {
-        Some(Answer::Noul(answer)) if (0.0..=1.0).contains(&answer.probability) && answer.probability != 0.5 => {
-            Some(answer.probability > 0.5)
-        }
+        Some(Answer::Noul(answer)) if (0.0..=1.0).contains(&answer.probability) => Some(answer.probability > 0.5),
         _ => None,
     }
 }
@@ -492,9 +488,15 @@ async fn review_claims(
     let mut required = vec![Vec::new(); claims.len()];
     let mut counts = IndexMap::new();
     let mut breakdowns = IndexMap::new();
+    // Claims that cite no note there is a quote for, with the ids that named none: each fails its citations check.
+    let mut uncited = Vec::new();
     for (index, claim) in claims.iter().enumerate() {
         let sources = cited_quotes(claim, notes);
         if sources.is_empty() {
+            let unknown: Vec<_> =
+                claim.evidence_ids.iter().filter(|id| !notes.facts_by_id().contains_key(*id)).collect();
+            required[index].push(format!("claim{index}/citations"));
+            uncited.push(json!({"claim": index, "unknown_evidence_ids": unknown}));
             continue;
         }
         let cited = json!({"columns": columns, "claim": claim.text, "quotes": sources});
@@ -558,29 +560,13 @@ async fn review_claims(
         };
     let count = claims.len();
     let missing = questions.keys().any(|key| answered.as_ref().is_none_or(|pass| !pass.answers.contains_key(key)));
-    let fully_judged =
-        questions.keys().all(|key| answered.as_ref().is_some_and(|pass| judged(pass.answers.get(key)).is_some()));
-    let mut rejected_checks: Vec<_> = questions
-        .keys()
-        .filter(|key| {
-            answered.as_ref().is_some_and(
-                |pass| matches!(pass.answers.get(*key), Some(Answer::Noul(answer)) if answer.probability < 0.5),
-            )
-        })
-        .cloned()
-        .collect();
-    let coverage = !require_coverage
-        || answered.as_ref().is_some_and(
-            |pass| matches!(pass.answers.get("coverage"), Some(Answer::Noul(answer)) if answer.probability > 0.5),
-        );
+    let holds = |key: &str| answered.as_ref().and_then(|pass| judged(pass.answers.get(key)));
+    let mut rejected_checks: Vec<_> = questions.keys().filter(|key| holds(key) == Some(false)).cloned().collect();
+    rejected_checks.extend(uncited.iter().map(|claim| format!("claim{}/citations", claim["claim"])));
+    let coverage = !require_coverage || holds("coverage") == Some(true);
     let supports = |index: usize| {
-        answered.as_ref().is_some_and(|pass| {
-            let keys = &required[index];
-            !keys.is_empty()
-                && keys
-                    .iter()
-                    .all(|key| matches!(pass.answers.get(key), Some(Answer::Noul(answer)) if answer.probability > 0.5))
-        })
+        let keys = &required[index];
+        !keys.is_empty() && keys.iter().all(|key| holds(key) == Some(true))
     };
     let mut miscounts = Vec::new();
     for (index, claim) in claims.iter().enumerate() {
@@ -612,6 +598,9 @@ async fn review_claims(
     if !miscounts.is_empty() {
         feedback["miscounted_claims"] = json!(miscounts);
     }
+    if !uncited.is_empty() {
+        feedback["uncited_claims"] = json!(uncited);
+    }
     let supported = claims
         .into_iter()
         .enumerate()
@@ -623,7 +612,7 @@ async fn review_claims(
             Some("A composed claim's quotes exceed the decision model's input limits.".into())
         } else if oversized_coverage {
             Some("The written answer exceeds the decision model's input limits for checking task coverage.".into())
-        } else if required.iter().any(Vec::is_empty) {
+        } else if !uncited.is_empty() {
             Some("A composed claim has no retained source quote.".into())
         } else if missing {
             Some("Jev left a composed claim's support unanswered.".into())
@@ -640,8 +629,7 @@ async fn review_claims(
     let rejection = (!rejected_checks.is_empty()
         && failure.is_none()
         && !oversized
-        && fully_judged
-        && required.iter().all(|keys| !keys.is_empty()))
+        && questions.keys().all(|key| holds(key).is_some()))
     .then(|| dumps(&feedback));
     Ok(CheckedClaims { claims: supported, problem, rejection })
 }
@@ -1758,7 +1746,7 @@ mod tests {
     async fn mixed_rejected_and_unanswered_support_does_not_authorize_repair() {
         let notes = Notes::new([fact(0, "Record B: 34".into())]);
         let id = notes.facts_by_id().keys().next().unwrap().clone();
-        for unknown in [None, Some(0.5), Some(f64::NAN)] {
+        for unknown in [None, Some(f64::NAN)] {
             let claims =
                 vec![Claim::new("Record A: 99", vec![id.clone()]), Claim::new("Record B: 34", vec![id.clone()])];
             let checked =
@@ -1853,10 +1841,15 @@ mod tests {
             ..RecordingLlm::new(None)
         };
         let jev = Support::new(true);
-        let answer = compose(&jev, &llm, "Report each record's value", &notes, None).await.unwrap();
-        assert!(answer.claims.is_empty());
-        assert!(answer.problem.is_some());
+        let reviewed =
+            compose_reviewed(&jev, &llm, "Report each record's value", &notes, None, None, true).await.unwrap();
+        assert!(reviewed.answer.claims.is_empty());
+        assert!(reviewed.answer.problem.is_some());
         assert!(jev.asked.lock().unwrap().is_empty());
+        // The composer is asked again, told which id named no note (#811).
+        let feedback: Value = serde_json::from_str(reviewed.rejection.as_deref().expect("a repair")).unwrap();
+        assert_eq!(feedback["rejected_checks"], json!(["claim0/citations"]));
+        assert_eq!(feedback["uncited_claims"], json!([{"claim": 0, "unknown_evidence_ids": ["unknown"]}]));
     }
 
     #[tokio::test]
