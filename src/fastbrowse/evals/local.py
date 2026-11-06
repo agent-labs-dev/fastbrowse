@@ -71,3 +71,4 @@ def fixture_server(port: int = 0, roots: tuple[Path, ...] = (FIXTURES,)) -> Gene
         yield f"http://127.0.0.1:{server.server_port}", recorder
     finally:
         server.shutdown()
+        server.server_close()

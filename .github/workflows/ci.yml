@@ -265,6 +265,30 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: FASTBROWSE_TEST_ADDON="$PWD/crates/fastbrowse-node/fastbrowse.node" npm run check:sdk
 
+  # Every bench cassette replayed at zero latency, failing on any model request a cassette did not record. The proxy
+  # has no upstream and the job no secrets, so a miss is an error, never a paid call. A change to model requests
+  # refreshes the cassettes this reports with `bench fill`, a paid run a maintainer starts.
+  replay:
+    if: ${{ !inputs.task }}
+    permissions: {contents: read}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with: {python-version: "3.13"}
+      - run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with: {shared-key: python-core}
+      - run: uv sync --locked
+      # FASTBROWSE_CHROME makes the module use this Chrome, so it cannot skip for want of one.
+      - name: Install Chrome for Testing
+        run: |
+          installed=$(npx -y @puppeteer/browsers@3.2.6 install chrome@stable --path "$RUNNER_TEMP/cft" --format '{{path}}')
+          echo "FASTBROWSE_CHROME=$installed" >> "$GITHUB_ENV"
+      - run: uv run pytest -q -m cassette_replay tests/browser/test_native_replay.py
+
   # The builds on their own runners cost more than the rest of CI together, so a pull request pays for them only
   # when it changes how they are built or packed (the toolchain, the profiles, the lockfile, the packaging and smoke
   # scripts, the SDK manifest the install smoke packs) or a file the binary compiles in (the page scripts, the
@@ -324,7 +348,7 @@ jobs:
   # Arch package each either passed or were left unbuilt by a change that could not alter them.
   check:
     runs-on: blacksmith-2vcpu-ubuntu-2404
-    needs: [gate, evals, project-rules, sdk, rust, secrets, changes, binaries, aur]
+    needs: [gate, evals, project-rules, sdk, rust, secrets, changes, replay, binaries, aur]
     if: ${{ always() && !inputs.task }}
     steps:
       - env:
@@ -335,6 +359,7 @@ jobs:
           RUST_RESULT: ${{ needs.rust.result }}
           SECRETS_RESULT: ${{ needs.secrets.result }}
           CHANGES_RESULT: ${{ needs.changes.result }}
+          REPLAY_RESULT: ${{ needs.replay.result }}
           BINARIES_RESULT: ${{ needs.binaries.result }}
           AUR_RESULT: ${{ needs.aur.result }}
         run: |
@@ -345,6 +370,7 @@ jobs:
           test "$RUST_RESULT" = success
           test "$SECRETS_RESULT" = success
           test "$CHANGES_RESULT" = success
+          test "$REPLAY_RESULT" = success
           test "$BINARIES_RESULT" = success || test "$BINARIES_RESULT" = skipped
           test "$AUR_RESULT" = success || test "$AUR_RESULT" = skipped
 
