@@ -1302,7 +1302,7 @@ async fn test_controls_a_script_adds_under_the_pointer_are_reached_by_hovering_t
     let Some(h) = harness().await else { return };
     h.goto("/hover-gallery.html").await;
     let obs = h.observe().await;
-    assert!(!obs.controls.iter().any(|c| c.label == "Delete"));
+    assert!(!obs.controls.iter().any(|c| c.label == "delete" || c.label == "edit"));
     let card = obs
         .controls
         .iter()
@@ -1310,7 +1310,22 @@ async fn test_controls_a_script_adds_under_the_pointer_are_reached_by_hovering_t
         .unwrap_or_else(|| panic!("no hover target for the second card in {:?}", obs.controls));
     assert_eq!(act(&h.page, hover(card), &obs).await.outcome, StepOutcome::Executed);
     let revealed = h.observe().await;
-    let delete = find(&revealed, "Delete");
+    // Neither revealed control has a name or an icon class, so each is named from its own class.
+    for label in ["edit", "delete"] {
+        let control = revealed
+            .controls
+            .iter()
+            .find(|c| c.label == label)
+            .unwrap_or_else(|| panic!("no control labelled {label:?} in {:?}", revealed.controls));
+        assert_eq!(control.role, "button");
+        assert_eq!(control.context.as_deref(), Some("The quest log grouped by zone"), "{label}");
+    }
+    let delete = find(&revealed, "delete");
+    // A control whose class changes what it says it does is no longer the one observed.
+    eval_active(&h, "document.querySelector('.delete-button').className = 'share-button'").await;
+    assert_eq!(act(&h.page, click(delete), &revealed).await.outcome, StepOutcome::Stale);
+    eval_active(&h, "document.querySelector('.share-button').className = 'delete-button'").await;
+    assert_eq!(eval_active(&h, "document.getElementById('status').textContent").await, json!(""));
     assert_eq!(act(&h.page, click(delete), &revealed).await.outcome, StepOutcome::Executed);
     assert_eq!(eval_active(&h, "document.getElementById('status').textContent").await, json!("Deleted m2"));
     h.close().await;
