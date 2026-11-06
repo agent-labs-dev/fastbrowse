@@ -8,7 +8,8 @@ use common::{harness, sites};
 async fn observes_and_captures_the_fixture_page_with_its_cross_origin_frame() {
     let Some(h) = harness().await else { return };
     h.goto("/index.html").await;
-    let observation = h.observe().await;
+    // The frame session attaches before its document loads, so observe until the frame's control is there.
+    let observation = common::observe_until(&h.page, "Frame button").await;
     assert!(observation.url.starts_with(&sites().main));
     // The iframe is served from another site, so its controls come from a session of its own.
     assert!(observation.controls.iter().any(|c| c.label == "Frame button" && c.frame_id.is_some()));
