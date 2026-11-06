@@ -161,6 +161,20 @@ pub struct Found {
     pub href: Option<String>,
 }
 
+/// A rendered frame: the document it shows, and the number of blocks read before it, which is where its own go.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Frame {
+    pub at: usize,
+    pub document: FrameDocument,
+}
+
+/// What a frame shows: the address of its document, or the markup its `srcdoc` holds, which wins over a `src`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FrameDocument {
+    Address(String),
+    Markup(String),
+}
+
 /// The served markup as blocks. `capture.js` reads the DOM a browser built, so it sees what CSS hid and what scripts
 /// added; this sees the served markup only. It keeps the shapes the reader relies on anyway: headings with the path that names
 /// what a value under them belongs to, one block per table row under its header, and an inline value left in the block
@@ -168,8 +182,8 @@ pub struct Found {
 struct Reader<'a> {
     url: &'a str,
     blocks: Vec<Found>,
-    /// Rendered frames whose documents this read does not fetch, so the read is not the whole page.
-    frames: usize,
+    /// Rendered frames, whose documents hold text this markup does not.
+    frames: Vec<Frame>,
     title: String,
     skip: usize,
     buffer: String,
@@ -207,7 +221,7 @@ impl<'a> Reader<'a> {
         Reader {
             url,
             blocks: Vec::new(),
-            frames: 0,
+            frames: Vec::new(),
             title: String::new(),
             skip: 0,
             buffer: String::new(),
@@ -282,8 +296,15 @@ impl<'a> Reader<'a> {
             *nested += 1;
         }
         let shown = self.skip == 0 && get("hidden").is_none() && !hides(get("style").unwrap_or_default());
-        if shown && matches!(tag, "iframe" | "frame") && (get("src").is_some() || get("srcdoc").is_some()) {
-            self.frames += 1;
+        if shown && matches!(tag, "iframe" | "frame") {
+            let document = match (get("srcdoc"), get("src")) {
+                (Some(markup), _) => Some(FrameDocument::Markup(markup.to_string())),
+                (None, Some(src)) => Some(FrameDocument::Address(join(self.url, src))),
+                (None, None) => None,
+            };
+            if let Some(document) = document {
+                self.frames.push(Frame { at: self.blocks.len(), document });
+            }
         }
         if SKIPPED.contains(&tag) {
             self.skip += 1;
@@ -601,9 +622,9 @@ pub fn blocks(html: &str, url: &str) -> (String, Vec<Found>) {
     (title, found)
 }
 
-/// The document's title, its blocks in reading order, the controls its markup offers, and how many rendered frames
-/// hold documents of their own that it leaves unread.
-pub fn read(html: &str, url: &str) -> (String, Vec<Found>, Vec<Control>, usize) {
+/// The document's title, its blocks in reading order, the controls its markup offers, and the rendered frames that
+/// hold documents of their own.
+pub fn read(html: &str, url: &str) -> (String, Vec<Found>, Vec<Control>, Vec<Frame>) {
     let mut reader = tokenize(html, Sink(RefCell::new(Reader::new(url)))).0.into_inner();
     reader.flush(None, None, false);
     (clean(&reader.title), reader.blocks, reader.controls, reader.frames)
@@ -663,7 +684,7 @@ mod tests {
     }
 
     #[test]
-    fn a_rendered_frame_is_counted_as_a_document_the_read_leaves_out() {
+    fn a_rendered_frame_is_kept_with_its_document_and_place() {
         let (_, found, _, frames) = read(
             "<h2>Internal frame</h2><iframe src=/inner></iframe><iframe srcdoc='<p>x'></iframe>\
              <iframe></iframe><iframe hidden src=/a></iframe><div style='display:none'><iframe src=/b></iframe></div>\
@@ -671,7 +692,13 @@ mod tests {
             "https://a.example/",
         );
         assert_eq!(found.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["Internal frame"]);
-        assert_eq!(frames, 2);
+        assert_eq!(
+            frames,
+            [
+                Frame { at: 1, document: FrameDocument::Address("https://a.example/inner".into()) },
+                Frame { at: 1, document: FrameDocument::Markup("<p>x".into()) },
+            ]
+        );
     }
 
     #[test]
