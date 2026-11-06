@@ -346,6 +346,20 @@ class Cassette:
         ):
             out.write(("\n".join(lines) + "\n").encode())
 
+    def fixture_port(self) -> int | None:
+        """The port to serve the fixture on so a replay sends the requests this cassette recorded.
+
+        A note id digests its page address, port included, which the key's port placeholder cannot reach. Each fill
+        pass appends its whole note-citing tail at its own port, so the newest exchange's port reproduces the current
+        pass. A cassette with no per-exchange origin falls back to the port its head records.
+        """
+        for exchange in reversed(self.exchanges):
+            if exchange.fixture_origin:
+                with contextlib.suppress(ValueError):
+                    return int(exchange.fixture_origin.rsplit(":", 1)[1])
+        port = self.meta.get("recorded_port", self.meta.get("port"))
+        return port if isinstance(port, int) and 0 < port <= 65535 else None
+
     @classmethod
     def load(cls, path: Path) -> Self:
         with gzip.open(path, "rt", encoding="utf-8") as lines:
@@ -439,6 +453,11 @@ class Proxy:
         self._fixture_origin: tuple[str, str] | None = None
         self._requested_origin: str | None = None
         self._recording = forward is not None and not replay
+
+    @property
+    def replays(self) -> bool:
+        """Whether recorded responses are served: a replay or a fill, not a record."""
+        return self._replay
 
     def set_fixture_origin(self, requested_origin: str) -> None:
         """Set the live fixture origin used when translating URLs in recorded model responses."""
