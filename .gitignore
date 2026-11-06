@@ -14,8 +14,7 @@ dist/
 recordings/
 *.mp4
 
-# Local audit output and JavaScript development tools.
-.sloppatrol/runs/
+# JavaScript development tools.
 node_modules/
 
 # Cargo output and the locally built Node addon.

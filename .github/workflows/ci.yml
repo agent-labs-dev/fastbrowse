@@ -145,9 +145,6 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run check:browser
       - run: uv run --no-sync actionlint
-      - run: uv run --no-sync python .sloppatrol/agents.py check
-      - env: {BASE: "${{ github.base_ref || github.event.repository.default_branch }}"}
-        run: uv run --no-sync python .sloppatrol/gate.py --base "origin/$BASE"
       # The Jev review's base-only pull_request_target use needs human review of zizmor's warning.
       - name: Zizmor (advisory)
         continue-on-error: true

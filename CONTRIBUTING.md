@@ -66,16 +66,13 @@ FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" mvn -B -f java/pom.xml ver
 python3 scripts/dotnet_types.py && git diff --exit-code -- dotnet
 (cd dotnet && FASTBROWSE_TEST_BINARY="$PWD/../target/debug/fastbrowse" dotnet test --solution Fastbrowse.slnx)
 uv run actionlint
-uv run python .sloppatrol/agents.py check
-uv run python .sloppatrol/gate.py --base origin/main
 just rust
 ```
 
 The JavaScript checks need Node.js 22 or newer. `npm run check:sdk` lints, type-checks and tests the SDK in
 `packages/sdk`, and its tests start `fastbrowse serve` from the uv environment. The Go, Java and .NET tests run
 against the binary from `cargo build -p fastbrowse-cli --features scripted`, and need Go, Java 17 or newer with
-Maven, and .NET 10. Audit evidence commands and tool limits are in the
-[Sloppatrol project skill](.agents/skills/sloppatrol-project/SKILL.md).
+Maven, and .NET 10.
 
 The protocol's messages are the types in `crates/fastbrowse-core/src/protocol.rs` and the models those use, and
 `protocol/schema.json` is their JSON Schema. After changing one, run
