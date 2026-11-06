@@ -297,7 +297,7 @@
       e.hasAttribute('onclick') ||
       (view.getComputedStyle(e).cursor === 'pointer' &&
         (!e.parentElement || view.getComputedStyle(e.parentElement).cursor !== 'pointer'));
-    return starts && !e.parentElement?.closest(SELECTOR) && !e.querySelector(SELECTOR);
+    return starts && !e.parentElement?.closest(SELECTOR) && ![...e.querySelectorAll(SELECTOR)].some(visible);
   });
   // A script can make a focusable label its menu trigger without a role, href or pointer cursor. Its label may
   // be wrapped in a child, and hidden menu links must not hide the trigger that reveals them. A container holding

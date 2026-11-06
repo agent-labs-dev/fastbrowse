@@ -2,6 +2,7 @@
 
 use fastbrowse_core::models::{Decider, Evidence, Operation, RunResult, Status, StepOutcome, UntilCheck};
 use fastbrowse_core::page::Observation;
+use fastbrowse_core::py::text;
 use indexmap::IndexMap;
 use serde_json::Value;
 
@@ -311,7 +312,7 @@ impl Agent {
             && !repeated
             && let Some(rejection) = rejection
         {
-            let reason = "The composed answer was rejected against its source quotes or requested coverage. Correct the answer or gather the evidence it needs.";
+            let reason = rejection_reason(&rejection);
             state.composition_feedback = Some(rejection);
             if let Some(answer) = &answered
                 && !answer.claims.is_empty()
@@ -319,7 +320,7 @@ impl Agent {
                 state.composition_partial =
                     Some((answer.clone(), RunState::composition_sources(&state.notes_to_compose())));
             }
-            self.recover(state, observation, reason, Status::Unverified, None).await?;
+            self.recover(state, observation, &reason, Status::Unverified, None).await?;
             return Ok(None);
         }
         if answered.as_ref().is_some_and(|answer| answer.problem.is_none()) {
@@ -384,9 +385,95 @@ impl Agent {
     }
 }
 
+/// What the navigator is told about a rejected draft, and what the run's error says if recovery runs out: which
+/// claim failed which check, so it can look for the evidence that is missing rather than propose done again (#810).
+fn rejection_reason(rejection: &str) -> String {
+    let feedback: Value = serde_json::from_str(rejection).unwrap_or_default();
+    let claim = |index: &Value| {
+        let text = index.as_u64().and_then(|index| feedback["draft_claims"].get(index as usize)?["text"].as_str());
+        text.map_or_else(|| "A claim".to_string(), text::repr)
+    };
+    let mut failed: Vec<String> = Vec::new();
+    for check in feedback["rejected_checks"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+        let (index, part) = check.split_once('/').unwrap_or((check, ""));
+        let Some(index) = index.strip_prefix("claim").and_then(|index| index.parse::<u64>().ok()) else {
+            if check == "coverage" {
+                failed.push("the answer leaves out a fact or value the task asks for".into());
+            }
+            continue;
+        };
+        let claim = claim(&index.into());
+        match part {
+            "count" => {
+                let miscount =
+                    feedback["miscounted_claims"].as_array().into_iter().flatten().find(|m| m["claim"] == index);
+                let held =
+                    miscount.and_then(|m| m.get("records_in_cited_quotes").or_else(|| m.get("breakdown_sums_to")));
+                match (miscount.map(|m| &m["states"]), held) {
+                    (Some(states), Some(held)) => {
+                        failed.push(format!("{claim} states {states}, but its cited notes hold {held}"))
+                    }
+                    _ => failed.push(format!("{claim} states a count its cited notes do not hold")),
+                }
+            }
+            "citations" => failed.push(format!("{claim} cites no note it can be checked against")),
+            cell if cell.starts_with("cell") => {
+                let column = cell[4..].parse::<usize>().ok().and_then(|cell| feedback["columns"].get(cell)?.as_str());
+                match column {
+                    Some(column) => failed.push(format!(
+                        "{claim}: its {} cell does not follow from the notes it cites",
+                        text::repr(column)
+                    )),
+                    None => failed.push(format!("{claim} does not follow from the notes it cites")),
+                }
+            }
+            _ => failed.push(format!("{claim} does not follow from the notes it cites")),
+        }
+    }
+    failed.dedup();
+    if failed.is_empty() {
+        return "The composed answer was rejected against its source quotes or requested coverage. Correct the answer or gather the evidence it needs.".into();
+    }
+    format!(
+        "The composed answer was rejected: {}. Correct the answer or gather the evidence it needs.",
+        failed.join("; ")
+    )
+}
+
 /// The claims of a rejected draft, as its feedback records them.
 fn drafted(feedback: &str) -> Option<Vec<String>> {
     let feedback: Value = serde_json::from_str(feedback).ok()?;
     let claims = feedback.get("draft_claims")?.as_array()?;
     Some(claims.iter().filter_map(|claim| claim.get("text")?.as_str().map(str::to_string)).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::rejection_reason;
+
+    #[test]
+    fn a_rejected_draft_tells_the_navigator_which_claim_failed_which_check() {
+        let feedback = json!({
+            "draft_claims": [
+                {"text": "There are 9 quotes by Albert Einstein.", "evidence_ids": ["e1"]},
+                {"text": "The cheapest is X at £10.69.", "evidence_ids": ["e2"]},
+                {"text": "Y costs £12.", "evidence_ids": ["E3"]},
+            ],
+            "columns": ["Name", "Shape"],
+            "rejected_checks": ["claim1", "claim0/count", "claim2/citations", "coverage", "claim2/cell1"],
+            "miscounted_claims": [{"claim": 0, "states": 9, "records_in_cited_quotes": 10}],
+        });
+        let reason = rejection_reason(&feedback.to_string());
+        for part in [
+            "'The cheapest is X at £10.69.' does not follow from the notes it cites",
+            "'There are 9 quotes by Albert Einstein.' states 9, but its cited notes hold 10",
+            "'Y costs £12.' cites no note it can be checked against",
+            "the answer leaves out a fact or value the task asks for",
+            "'Y costs £12.': its 'Shape' cell does not follow from the notes it cites",
+        ] {
+            assert!(reason.contains(part), "{reason}");
+        }
+    }
 }
