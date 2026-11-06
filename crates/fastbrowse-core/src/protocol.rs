@@ -183,6 +183,17 @@ pub struct CancellationReceipt {
     /// The browser the run drove when it stopped, and how it reached it; none when it had not reached one.
     #[serde(default)]
     pub browser: Option<Box<BrowserUsed>>,
+    /// Why the run was stopped, when whoever stopped it said: the extension names the button or tab. The error's text
+    /// carries it, so it stays off the wire.
+    #[serde(skip)]
+    pub reason: Option<Box<str>>,
+}
+
+impl CancellationReceipt {
+    /// The text a stopped run's error reads.
+    pub fn why(&self) -> &str {
+        self.reason.as_deref().unwrap_or("the run was cancelled")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -7,7 +7,6 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use fastbrowse_browser::extension::SCHEME;
@@ -249,10 +248,10 @@ async fn a_run_drives_a_tab_through_the_extension() {
     assert!(left.iter().all(|(_, page)| !page.starts_with(&url)), "tabs left open: {left:?}");
 
     // Closing the run's last tab, as the user would, stops the run.
-    let stopped = Arc::new(AtomicBool::new(false));
-    let flag = stopped.clone();
+    let stopped = Arc::new(std::sync::Mutex::new(None::<String>));
+    let told = stopped.clone();
     let options = SessionOptions {
-        on_stop: Some(Arc::new(move || flag.store(true, Ordering::SeqCst))),
+        on_stop: Some(Arc::new(move |reason: &str| *told.lock().unwrap() = Some(reason.to_owned()))),
         ..SessionOptions::default()
     };
     let (session, page) = open_with(&record, "stopped run", &root.join("c1"), options).await;
@@ -260,10 +259,11 @@ async fn a_run_drives_a_tab_through_the_extension() {
     let (tab, _) = browser.pages().into_iter().find(|(_, page)| page.ends_with("?stop")).expect("the run's tab");
     browser.devtools(&format!("/json/close/{tab}"));
     let deadline = Instant::now() + Duration::from_secs(10);
-    while !stopped.load(Ordering::SeqCst) {
+    while stopped.lock().unwrap().is_none() {
         assert!(Instant::now() < deadline, "closing the run's tab did not stop it");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    assert_eq!(stopped.lock().unwrap().as_deref(), Some("the run was stopped because its last tab was closed"));
     assert!(page.observe().await.is_err(), "a stopped run's browser still answers");
     let _ = session.close().await;
     drop(browser);

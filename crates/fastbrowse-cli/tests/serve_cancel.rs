@@ -99,7 +99,7 @@ fn receipt() -> CancellationReceipt {
             ],
         },
         recordings: vec!["run.mp4".into()],
-        browser: None,
+        ..Default::default()
     }
 }
 

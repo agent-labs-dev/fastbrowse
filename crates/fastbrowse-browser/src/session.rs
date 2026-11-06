@@ -169,14 +169,17 @@ pub async fn check_browser_access(check: Option<&CheckAccess>) -> Result<(), Bro
     })
 }
 
+/// Told why the user stopped the run in their browser.
+pub type OnStop = Arc<dyn Fn(&str) + Send + Sync>;
+
 pub struct SessionOptions {
     pub max_download_bytes: usize,
     pub refuse_cookie_banners: bool,
     pub on_frame: Option<FrameHandler>,
     pub check_access: Option<CheckAccess>,
     pub viewport: Option<(u32, u32)>,
-    /// Called when the user stops the run in their browser, over the extension backend.
-    pub on_stop: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Called when the user stops the run in their browser, over the extension backend, with what stopped it.
+    pub on_stop: Option<OnStop>,
     /// The run's trace. Over the extension backend it records every message to and from the extension.
     pub trace: Trace,
 }
@@ -337,7 +340,7 @@ pub(crate) struct Shared {
     pub(crate) max_download_bytes: usize,
     pub(crate) new_document_scripts: Vec<String>,
     pub(crate) on_frame: Option<FrameHandler>,
-    pub(crate) on_stop: Option<Arc<dyn Fn() + Send + Sync>>,
+    pub(crate) on_stop: Option<OnStop>,
     pub(crate) trace: Trace,
     pub(crate) viewport: Option<(u32, u32)>,
     pub(crate) client: Mutex<Option<Cdp>>,
@@ -446,7 +449,7 @@ impl BrowserSession {
         client.on_event(Box::new(move |event| {
             if event.method == crate::extension::STOPPED_EVENT {
                 if let Some(on_stop) = &on_stop {
-                    on_stop();
+                    on_stop(crate::extension::stop_reason(&event.params["by"]));
                 }
                 return;
             }
