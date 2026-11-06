@@ -813,7 +813,10 @@ struct Gatekeeper {
     irreversible: f64,
     requested: f64,
     lasting: f64,
+    edits: f64,
     calls: std::sync::atomic::AtomicUsize,
+    /// How many times the edits question was asked.
+    edits_asked: std::sync::atomic::AtomicUsize,
 }
 
 impl fastbrowse_core::decision::DecisionClient for Gatekeeper {
@@ -830,6 +833,10 @@ impl fastbrowse_core::decision::DecisionClient for Gatekeeper {
                 let probability = match key.as_str() {
                     "requested" => self.requested,
                     "lasting" => self.lasting,
+                    "edits" => {
+                        self.edits_asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        self.edits
+                    }
                     _ => self.irreversible,
                 };
                 (key.clone(), Answer::Noul(NoulAnswer { kind: Default::default(), probability }))
@@ -867,7 +874,14 @@ async fn test_a_commit_proceeds_when_jev_calls_it_reversible_or_the_authorized_t
         (true, true, 0.10, 0.97, true, 1),
         (true, true, 0.10, 0.40, false, 1),
     ] {
-        let jev = Arc::new(Gatekeeper { irreversible, requested, lasting: 0.0, calls: Default::default() });
+        let jev = Arc::new(Gatekeeper {
+            irreversible,
+            requested,
+            lasting: 0.0,
+            edits: 0.0,
+            calls: Default::default(),
+            edits_asked: Default::default(),
+        });
         let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
         let mut state = run_state();
         state.task = "Check out and finish the order.".into();
@@ -903,7 +917,14 @@ async fn test_an_authorized_run_does_not_keep_a_change_the_task_did_not_ask_for(
         // Navigation the task never names.
         (0.02, 0.13, 0.03, true),
     ] {
-        let jev = Arc::new(Gatekeeper { irreversible, requested, lasting, calls: Default::default() });
+        let jev = Arc::new(Gatekeeper {
+            irreversible,
+            requested,
+            lasting,
+            edits: 0.0,
+            calls: Default::default(),
+            edits_asked: Default::default(),
+        });
         let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
         let mut state = run_state();
         state.task = "Add Men's Wool Runners in size 10 to the cart.".into();
@@ -918,6 +939,89 @@ async fn test_an_authorized_run_does_not_keep_a_change_the_task_did_not_ask_for(
         if let Err(flow) = gated {
             assert!(matches!(flow, Flow::Unsure(_)), "{case}: refused for another step, not stopped");
         }
+    }
+}
+
+/// A read-only settings task ticked fourteen checkboxes before Save stopped it (#838): an unsaved toggle is
+/// reversible, so the irreversible gate let each through. A task that rules out changing anything now refuses every
+/// edit, authorized or not, and Jev is asked about the task once.
+#[tokio::test]
+async fn test_a_task_that_rules_out_changes_refuses_edits_and_asks_once() {
+    use std::sync::atomic::Ordering;
+    let checkbox = Control::new("c", "checkbox", "Email me", [Operation::Click]);
+    let name = Control::new("n", "textbox", "Name", [Operation::Fill]);
+    let size =
+        Control { options: vec!["S".into(), "M".into()], ..Control::new("s", "combobox", "Size", [Operation::Select]) };
+    let search = Control::new("q", "searchbox", "Search", [Operation::Fill]);
+    let page = observation(&[checkbox.clone(), name.clone(), size.clone(), search.clone()]);
+    for authorized in [false, true] {
+        let jev = Arc::new(Gatekeeper {
+            irreversible: 0.1,
+            requested: 0.0,
+            lasting: 0.0,
+            edits: 0.95,
+            calls: Default::default(),
+            edits_asked: Default::default(),
+        });
+        let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.task = "Read-only, change nothing. Describe the control and list its options.".into();
+        state.authorization = Authorization { irreversible_actions: authorized };
+        for (operation, control) in
+            [(Operation::Click, &checkbox), (Operation::Fill, &name), (Operation::Select, &size)]
+        {
+            let decision = code_decision(operation, Some(control.clone()));
+            let acted = agent.action(&mut state, &page, &decision).await;
+            assert!(
+                matches!(acted, Err(Flow::Unsure(_))),
+                "authorized {authorized}: {operation} {} was not refused",
+                control.role
+            );
+        }
+        assert_eq!(jev.edits_asked.load(Ordering::SeqCst), 1, "authorized {authorized}");
+        let _ = agent.action(&mut state, &page, &code_decision(Operation::Fill, Some(search.clone()))).await;
+        assert_eq!(jev.edits_asked.load(Ordering::SeqCst), 1, "a search box is not an edit");
+    }
+
+    let jev = Arc::new(Gatekeeper {
+        irreversible: 0.1,
+        requested: 0.0,
+        lasting: 0.0,
+        edits: 0.05,
+        calls: Default::default(),
+        edits_asked: Default::default(),
+    });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Turn on email notifications.".into();
+    let acted = agent.action(&mut state, &page, &code_decision(Operation::Click, Some(checkbox.clone()))).await;
+    assert!(acted.is_ok(), "a task that allows edits ticks the box");
+    assert_eq!(jev.edits_asked.load(Ordering::SeqCst), 1);
+    assert_eq!(jev.calls.load(Ordering::SeqCst), 2, "the irreversible question is still asked");
+}
+
+/// Once the task rules edits out, the step and recovery stop offering them: each refusal spends a recovery, so a page
+/// of checkboxes would otherwise end the run stuck.
+#[test]
+fn test_forbidden_edits_are_not_offered() {
+    let page = observation(&[
+        Control::new("c", "checkbox", "Email me", [Operation::Click]),
+        Control::new("n", "textbox", "Name", [Operation::Fill]),
+        Control::new("q", "searchbox", "Search", [Operation::Fill]),
+        button("Next"),
+    ]);
+    for (forbidden, kept, told) in
+        [(Some(true), vec!["Search", "Next"], true), (None, vec!["Email me", "Name", "Search", "Next"], false)]
+    {
+        let mut state = run_state();
+        state.edits_forbidden = forbidden;
+        let mut offered = page.clone();
+        let mut context = crate::policy::StepContext::new(&state.task);
+        super::recovery::leave_out_idle(&state, &mut offered, &mut context);
+        let labels: Vec<&str> = offered.controls.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(labels, kept, "{forbidden:?}");
+        let says = context.problem.as_deref().is_some_and(|p| p.contains("rules out changing values on the page"));
+        assert_eq!(says, told, "{forbidden:?}");
     }
 }
 
@@ -4786,7 +4890,14 @@ impl Page for HungPage {
 
 /// An authorized run's Jev, which calls the step a requested commit so it is carried out.
 fn authorized_jev() -> Arc<Gatekeeper> {
-    Arc::new(Gatekeeper { irreversible: 0.95, requested: 0.97, lasting: 0.0, calls: Default::default() })
+    Arc::new(Gatekeeper {
+        irreversible: 0.95,
+        requested: 0.97,
+        lasting: 0.0,
+        edits: 0.0,
+        calls: Default::default(),
+        edits_asked: Default::default(),
+    })
 }
 
 #[tokio::test]
@@ -4933,7 +5044,14 @@ fn read_one(state: &mut RunState, page: &Observation, every_page: bool) {
 }
 
 fn pager_agent(page: Arc<HungPage>) -> Agent {
-    let jev = Arc::new(Gatekeeper { irreversible: 0.0, requested: 0.0, lasting: 0.0, calls: Default::default() });
+    let jev = Arc::new(Gatekeeper {
+        irreversible: 0.0,
+        requested: 0.0,
+        lasting: 0.0,
+        edits: 0.0,
+        calls: Default::default(),
+        edits_asked: Default::default(),
+    });
     Agent::new(page, jev, Arc::new(ScriptedLLM))
 }
 

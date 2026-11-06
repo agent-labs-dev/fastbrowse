@@ -28,6 +28,14 @@ the page calls it, so Jev is not asked whether it is irreversible: an unauthoriz
 is recorded as a failed step with a reason. The classifier can be wrong, so this gate is not a guarantee
 that every externally visible change is detected.
 
+Two rules come from the task itself, judged once per run by Jev from the task text and kept for the run.
+When the task rules out downloading, a control the page says downloads a file is refused. When the task
+rules out changing anything, a fill, a select or a click on a setting control (a checkbox, radio, switch,
+option, or any control that reports a checked state) is refused, and from then on those operations are no
+longer offered. Typing into a search box is exempt, since searching is how a read-only task finds things.
+Authorization does not lift either rule: it lets a run commit what the task asks for, never what the task
+forbids.
+
 Unmarked password fields leave the current-or-replacement role to Jev using the task and page context.
 Field count and order do not establish that role. An explicit `current-password` marker identifies an
 existing credential. A `new-password` marker identifies a replacement within a multi-password form;

@@ -12,6 +12,7 @@ use url::Url;
 
 use crate::BoxFuture;
 use crate::decision::NoulQuestion;
+use crate::effects::SETTING_ROLES;
 use crate::models::{Operation, SecretRef, SecretResolver, SecretValue, UNTRUSTED, WallKind};
 use crate::page::Control;
 use crate::py::json::write_string;
@@ -222,6 +223,37 @@ pub fn downloads_question(task: &str) -> NoulQuestion {
         Some("The task says not to download files, or calls the work read-only."),
         Some("The task says nothing against downloading, even if it only asks for information."),
     )
+}
+
+/// Whether the task rules out changing what the page's fields and settings hold: asked of the task alone, once an
+/// action would change one.
+pub fn edits_question(task: &str) -> NoulQuestion {
+    NoulQuestion::new(
+        format!(
+            "The agent is doing this task: {task}\nDoes the task rule out changing what the page's fields and settings \
+             hold, by telling the agent to change nothing, to leave the form or settings as they are, or not to tick, \
+             select or type anything?"
+        ),
+        Some("The task says to change nothing on the page, or to leave its fields and settings as they are."),
+        Some(
+            "The task allows changing fields, or rules out only committing something such as saving, buying or \
+             sending. A task that has to search or filter to find its answer does not rule out typing that search.",
+        ),
+    )
+}
+
+/// Whether `operation` on `control` changes a value the page holds: typing into or choosing in a field, or clicking a
+/// setting. A search box is how a read-only task finds things, so typing into one changes nothing it keeps.
+///
+/// Drag is asked about as a commit, Enter is left to the irreversible gate, and an upload needs the caller's files.
+pub fn changes_a_value(operation: Operation, control: &Control) -> bool {
+    match operation {
+        Operation::Fill | Operation::Select => {
+            control.role != "searchbox" && control.input_type.as_deref() != Some("search")
+        }
+        Operation::Click => SETTING_ROLES.contains(&control.role.as_str()) || control.checked.is_some(),
+        _ => false,
+    }
 }
 
 /// Whether the task has the agent answer a cookie or consent banner itself: asked of the task alone, before the
@@ -848,6 +880,38 @@ mod tests {
             link.download = download;
             assert_eq!(starts_download(&link), expected, "{href:?}");
         }
+    }
+
+    #[test]
+    fn test_changes_a_value_covers_fields_and_settings_but_not_search_boxes() {
+        let pressed = Control { checked: Some(true), ..Control::new("b", "button", "Bold", [Operation::Click]) };
+        let typed_search =
+            Control { input_type: Some("search".into()), ..Control::new("q", "textbox", "Find", [Operation::Fill]) };
+        for (operation, control, expected) in [
+            (Operation::Click, Control::new("c", "checkbox", "Email me", [Operation::Click]), true),
+            (Operation::Click, Control::new("r", "radio", "Weekly", [Operation::Click]), true),
+            (Operation::Click, Control::new("s", "switch", "Dark mode", [Operation::Click]), true),
+            (Operation::Click, Control::new("o", "option", "Red", [Operation::Click]), true),
+            (Operation::Click, Control::new("m", "menuitemcheckbox", "Wrap", [Operation::Click]), true),
+            (Operation::Click, pressed, true),
+            (Operation::Click, button("Next"), false),
+            (Operation::Fill, Control::new("t", "textbox", "Name", [Operation::Fill]), true),
+            (Operation::Select, Control::new("x", "combobox", "Size", [Operation::Select]), true),
+            (Operation::Fill, Control::new("q", "searchbox", "Search", [Operation::Fill]), false),
+            (Operation::Fill, typed_search, false),
+            (Operation::Hover, Control::new("c", "checkbox", "Email me", [Operation::Hover]), false),
+        ] {
+            assert_eq!(changes_a_value(operation, &control), expected, "{operation} {}", control.role);
+        }
+    }
+
+    #[test]
+    fn test_the_edits_question_is_about_the_task_and_states_both_sides() {
+        let question = edits_question("Change nothing; list the options.");
+        assert!(question.instructions.contains("Change nothing; list the options."));
+        assert!(question.instructions.contains("rule out changing what the page's fields and settings hold"));
+        assert!(question.r#true.as_deref().is_some_and(|yes| yes.contains("change nothing")));
+        assert!(question.r#false.as_deref().is_some_and(|no| no.contains("search or filter")));
     }
 
     #[test]
