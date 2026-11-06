@@ -7,7 +7,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::pin::pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
@@ -17,14 +16,13 @@ use fastbrowse_core::models::{Artifact, ArtifactKind, ArtifactSink, BrowserConne
 use fastbrowse_core::origins::OriginGrant;
 use fastbrowse_core::page::{Dialog, Tab};
 use fastbrowse_core::telemetry::Trace;
-use futures_util::FutureExt;
 use futures_util::future::{BoxFuture as FBoxFuture, try_join_all};
 use serde_json::{Value, json};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, timeout};
 
-use crate::cdp::{Cdp, Event, secs};
+use crate::cdp::{CDP_PAGE_SECONDS, Cdp, Event, secs};
 use crate::error::BrowserError;
 use crate::urlsplit::urlsplit;
 use crate::warn;
@@ -353,7 +351,8 @@ pub(crate) struct Shared {
     /// settle waits on the page rather than a fixed interval.
     pub(crate) lifecycle: watch::Sender<u64>,
     pub(crate) snapshot: SnapshotScript,
-    /// Bumped each time a popup is begun, so a wait for one wakes as it is announced.
+    /// Bumped each time a popup is begun or a target is destroyed, so a wait for one to be announced, or to be gone,
+    /// wakes as Chrome reports it.
     pub(crate) popup_signal: watch::Sender<u64>,
     pub(crate) screencast_lock: tokio::sync::Mutex<()>,
 }
@@ -903,8 +902,10 @@ impl BrowserSession {
             }
             return Ok(());
         }
-        let attach = self.send("Target.attachToTarget", json!({"targetId": target_id, "flatten": true}), None);
-        let keeper = match timeout(secs(SCREENCAST_COMMAND_SECONDS), attach).await {
+        let session = self.clone();
+        let params = json!({"targetId": target_id, "flatten": true});
+        let mut attach = Box::pin(async move { session.send("Target.attachToTarget", params, None).await });
+        let keeper = match timeout(secs(SCREENCAST_COMMAND_SECONDS), &mut attach).await {
             Ok(Ok(keeper)) => str_of(&keeper["sessionId"]),
             Ok(Err(error)) => {
                 warn(&format!("Target.attachToTarget for the paint keeper failed ({})", error.kind()));
@@ -912,6 +913,16 @@ impl BrowserSession {
             }
             Err(_) => {
                 warn("Target.attachToTarget for the paint keeper failed (TimeoutError)");
+                // Chrome may still attach it, and a session nobody records would stay on the tab, so it is let go
+                // when it lands.
+                let session = self.clone();
+                let mut state = self.0.state.lock().unwrap();
+                self.0.spawn(&mut state, async move {
+                    if let Ok(late) = attach.await {
+                        let params = json!({"sessionId": str_of(&late["sessionId"])});
+                        let _ = session.send("Target.detachFromTarget", params, None).await;
+                    }
+                });
                 return Ok(());
             }
         };
@@ -1118,7 +1129,9 @@ impl BrowserSession {
         self.prepare_and_resume(session_id, top_level, &AtomicBool::new(false)).await
     }
 
-    /// `prepare_session`, setting `resumed` once a page Chrome opened paused has been told to run.
+    /// `prepare_session`, setting `resumed` once a page Chrome opened paused has been told to run. A resume whose reply
+    /// never came counts as unsent: the page's scope gate is on by then, so letting it go again is safe, and a resume
+    /// that never arrived counted as sent would leave it paused.
     async fn prepare_and_resume(
         &self,
         session_id: &str,
@@ -1484,6 +1497,7 @@ impl Shared {
                     state.activated.retain(|t| *t != target_id);
                     (target_id == state.active_target_id).then(|| state.successor(closed.as_ref()))
                 };
+                self.popup_signal.send_modify(|n| *n += 1);
                 if let Some(next) = next {
                     self.set_active_target(&next);
                 }
@@ -1712,7 +1726,7 @@ pub(crate) async fn adopt_popup(shared: &Arc<Shared>, target_id: &str, opener_id
     if let Err(error) = adopted
         && !resumed.load(Ordering::SeqCst)
     {
-        release_popup(shared, target_id, session_id.as_deref(), &error).await;
+        release_popup(shared, target_id, opener_id, session_id.as_deref(), &error).await;
     }
 }
 
@@ -1767,7 +1781,13 @@ async fn adopt(
 /// it, and the opener's script waits in `window.open` until then, so a popup left paused froze the page that opened
 /// it. One the run owns is closed, since its scope gate and capture may not be on; any other is resumed and detached,
 /// as a page that is not the run's is. Its paint keeper goes too, so no cast outlives it.
-async fn release_popup(shared: &Arc<Shared>, target_id: &str, session_id: Option<&str>, error: &BrowserError) {
+async fn release_popup(
+    shared: &Arc<Shared>,
+    target_id: &str,
+    opener_id: &str,
+    session_id: Option<&str>,
+    error: &BrowserError,
+) {
     let session = shared.session();
     let (owned, keeper) = {
         let mut state = shared.state.lock().unwrap();
@@ -1780,19 +1800,34 @@ async fn release_popup(shared: &Arc<Shared>, target_id: &str, session_id: Option
     // The error's message may carry page text, so only its kind is named.
     if owned {
         warn(&format!("A new tab could not be set up and was closed ({})", error.kind()));
-        // A closed popup that was never resumed still holds its opener in `window.open`, and one resumed before it
-        // closes sends its first request ungated. The resume is queued behind the close, so it frees the opener
-        // without the popup loading, and its reply is not waited for: the session ends with the target. On a loaded
-        // machine Chrome can end the session before the resume reaches it, and the opener then stays held.
-        let mut close = pin!(session.send("Target.closeTarget", json!({"targetId": target_id}), None));
-        let queued = (&mut close).now_or_never();
-        if let Some(session_id) = session_id
-            && let Some(client) = shared.client.lock().unwrap().clone()
-        {
-            let _ = client.call("Runtime.runIfWaitingForDebugger", json!({}), Some(session_id)).now_or_never();
+        // A popup that shares its opener's renderer is paused on that renderer's thread, and closing the popup does
+        // not end the pause: only a resume does, and Chrome takes one from any page on that thread. The popup's own
+        // sessions end with it, so the opener's carries the resume, and only once the popup is gone: resumed any
+        // earlier, `window.open` goes on to load its address outside the scope gate. One still open stays paused.
+        let mut destroyed = shared.popup_signal.subscribe();
+        let closed = session.send("Target.closeTarget", json!({"targetId": target_id}), None).await;
+        if closed.is_err() {
+            return;
         }
-        if queued.is_none() {
-            let _ = close.await;
+        // Not `wait_for`: its check runs under the signal's lock, and `begin_popup` bumps the signal under the state's.
+        // Bounded, so a destruction Chrome never reports leaves the opener held, never the popup loading.
+        let gone = timeout(secs(CDP_PAGE_SECONDS), async {
+            while shared.state.lock().unwrap().owned.contains(target_id) {
+                if destroyed.changed().await.is_err() {
+                    return false;
+                }
+            }
+            true
+        });
+        if !matches!(gone.await, Ok(true)) {
+            return;
+        }
+        let opener = {
+            let state = shared.state.lock().unwrap();
+            state.tabs.iter().find(|t| t.target_id == opener_id).map(|t| t.session_id.clone())
+        };
+        if let Some(opener) = opener {
+            let _ = session.send("Runtime.runIfWaitingForDebugger", json!({}), Some(&opener)).await;
         }
     } else if let Some(session_id) = session_id {
         warn(&format!("A new tab could not be set up and was let go ({})", error.kind()));
