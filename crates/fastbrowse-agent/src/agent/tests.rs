@@ -3096,15 +3096,36 @@ async fn navigation_context_keeps_the_observed_source_without_claiming_a_back_de
     state.acted_from = Some(source);
     state.history.push(executed(Some(Operation::Click), Some("Account query"), true));
     agent.note_effect(&mut state, &destination);
-    for check_login in [true, false] {
-        let facts = agent.context(&state, &destination, Vec::new(), check_login, false).unwrap().page_facts;
-        assert_eq!(facts[0], "No stored secrets are available for this page's origin.");
-        let context =
-            facts.iter().find(|fact| fact.starts_with("The latest navigation")).expect("navigation source missing");
+    let navigation = |state: &RunState, page: &Observation, check_login: bool| {
+        let facts = agent.context(state, page, Vec::new(), check_login, false).unwrap().page_facts;
+        assert!(facts.iter().any(|fact| fact == "No stored secrets are available for this page's origin."));
+        facts.into_iter().find(|fact| fact.starts_with("The latest navigation")).expect("navigation source missing")
+    };
+    let full = |context: &str| {
         assert!(context.contains("Public inventory") && context.contains("The public inventory needs no account."));
         assert!(context.contains("\"login_required_probability\":0.12"));
         assert!(context.contains("their current state is unknown"));
-    }
+    };
+    // The sign-in question is asked on this step.
+    full(&navigation(&state, &destination, true));
+    // The destination was read as a wall on an earlier step.
+    state.login_readings.insert(super::state::read_key(&destination), 0.6);
+    full(&navigation(&state, &destination, false));
+    // The destination was read as an ordinary page: only where the run came from.
+    state.login_readings.insert(super::state::read_key(&destination), 0.1);
+    let context = navigation(&state, &destination, false);
+    assert!(context.contains("https://shop.test/"));
+    assert!(!context.contains("Public inventory") && !context.contains("The public inventory needs no account."));
+    // A reading at even odds does not suspect a wall.
+    state.login_readings.insert(super::state::read_key(&destination), fastbrowse_core::decision::EVEN_ODDS);
+    assert!(!navigation(&state, &destination, false).contains("Public inventory"));
+    // The destination refused the request.
+    state.login_readings.remove(&super::state::read_key(&destination));
+    let refused = Observation { response_status: Some(403), ..destination.clone() };
+    full(&navigation(&state, &refused, false));
+    // A server failure is not a wall.
+    let failed = Observation { response_status: Some(503), ..destination.clone() };
+    assert!(!navigation(&state, &failed, false).contains("Public inventory"));
     assert!(
         !agent
             .context(&state, &at("https://shop.test/other", &[]), Vec::new(), true, false)
@@ -3113,6 +3134,33 @@ async fn navigation_context_keeps_the_observed_source_without_claiming_a_back_de
             .iter()
             .any(|fact| fact.starts_with("The latest navigation"))
     );
+}
+
+#[tokio::test]
+async fn navigation_context_names_only_the_source_on_an_ordinary_page() {
+    let agent = agent();
+    let source = Observation {
+        document_key: "page-2".into(),
+        title: "Records, page 2".into(),
+        viewport_text: "Record twenty-one: Juniper Lane".into(),
+        offscreen_text: "Record forty: Maple Court".into(),
+        ..at("https://shop.test/records?page=2", &[button("Next")])
+    };
+    let destination = Observation {
+        document_key: "page-3".into(),
+        viewport_text: "Record forty-one: Cedar Row".into(),
+        ..at("https://shop.test/records?page=3", &[button("Previous")])
+    };
+    let mut state = run_state();
+    state.acted_from = Some(source);
+    state.history.push(executed(Some(Operation::Click), Some("Next"), true));
+    agent.note_effect(&mut state, &destination);
+    let facts = agent.context(&state, &destination, Vec::new(), false, false).unwrap().page_facts;
+    let context =
+        facts.iter().find(|fact| fact.starts_with("The latest navigation")).expect("navigation source missing");
+    assert!(context.contains("https://shop.test/records?page=2") && context.contains("Records, page 2"));
+    assert!(!context.contains("Juniper Lane") && !context.contains("Maple Court"));
+    assert!(!context.contains("Next"));
 }
 
 #[test]
@@ -3203,7 +3251,7 @@ async fn a_tab_switch_is_not_reported_as_navigation_from_the_other_tab() {
     let destination = at("https://shop.test/login", &[field("Password")]);
     agent.note_effect(&mut state, &destination);
     assert!(state.navigation_from.is_none());
-    assert!(agent.navigation_fact(&state, &destination).is_none());
+    assert!(agent.navigation_fact(&state, &destination, true).is_none());
 }
 
 #[test]
