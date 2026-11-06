@@ -722,19 +722,20 @@ async fn test_a_draw_wait_timeout_does_not_queue_a_second_page_evaluation() {
 async fn test_a_tab_opened_from_a_cross_site_frame_is_followed() {
     let _turn = turn().await;
     let Some(h) = loaded().await else { return };
-    let s = &h.session;
-    wait_until(move || async move { !s.frame_sessions().is_empty() }).await;
+    // A frame session attaches before its document loads, so wait for the frame's own control first.
+    observe_until(&h.page, "Frame button").await;
     let frame_session = h.session.frame_sessions()[0].1.clone();
     let main = &sites().main;
-    eval_value(
+    let inserted = eval_value(
         &h.session,
         &frame_session,
         &format!(
             "document.body.insertAdjacentHTML('beforeend', '<a href=\"{main}/popup.html\" target=\"_blank\">Frame \
-             window link</a>')"
+             window link</a>'); true"
         ),
     )
     .await;
+    assert_eq!(inserted, json!(true), "the link was not inserted into the frame");
     let obs = observe_until(&h.page, "Frame window link").await;
     let result = act(&h.page, click(find(&obs, "Frame window link")), &obs).await;
     assert!(
