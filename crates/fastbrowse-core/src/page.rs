@@ -241,8 +241,10 @@ pub struct Observation {
     #[serde(default)]
     pub document_key: String,
     pub controls: Vec<Control>,
+    /// The visible text in the viewport of every frame the observation read; a cross-origin frame's text follows
+    /// the page's own under a `[Frame: origin]` line.
     pub viewport_text: String,
-    /// The page's visible text outside the viewport.
+    /// The visible text outside the viewport, from every frame the observation read in the same order and form.
     #[serde(default)]
     pub offscreen_text: String,
     /// Whether the page's visible state is carried by pixels: a chart, picture, drawing or video with no control

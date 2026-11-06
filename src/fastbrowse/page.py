@@ -106,8 +106,11 @@ class Observation(Frozen):
     """Document identity, independent of field edits and scrolling, for access-wall checks."""
     controls: tuple[Control, ...]
     viewport_text: str
+    """The visible text in the viewport of every frame the observation read; a cross-origin frame's text follows the
+    page's own under a `[Frame: origin]` line."""
     offscreen_text: str = ""
-    """The page's visible text outside the viewport: what a read takes in that `viewport_text` leaves out."""
+    """The visible text outside the viewport, from every frame the observation read in the same order and form: what
+    a read takes in that `viewport_text` leaves out."""
     visual_content: bool = False
     """A visible image, canvas, drawing or video carries state the text and the controls do not, so the verifier
     needs the screenshot even on a text-rich page whose state is the picture itself."""
