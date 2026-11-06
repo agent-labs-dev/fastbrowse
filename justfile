@@ -12,6 +12,10 @@ bench-baseline out="artifacts/bench/baseline" agent=".venv/bin/fastbrowse serve 
     uv run python -m fastbrowse.evals.bench replay --agent {{quote(agent)}} --latency recorded --out {{out}}/recorded.json
     uv run python -m fastbrowse.evals.bench report {{out}}/zero-*.json {{out}}/recorded.json --footprint --markdown {{out}}/report.md --json {{out}}/summary.json
 
+# Report how Jev's recorded choices depend on option order; --yes-spend --max-dollars N asks them again reversed.
+jev-order-probe *args:
+    uv run python -m fastbrowse.evals.order_probe {{args}}
+
 # Validate and publish rows under their recorded release, then regenerate all outputs.
 evals-publish rows:
     uv run python -m fastbrowse.evals.versions --publish auto {{quote(rows)}}
