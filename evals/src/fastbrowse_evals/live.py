@@ -2362,7 +2362,7 @@ ARMS: dict[str, ArmSpec] = {
     ),
     "fastbrowse-hosted": ArmSpec(
         runner=_run_product,
-        pin="api.fastbrowse.ai at its deployed build; customer charge, not metered cost",
+        pin="api.fastbrowse.ai at its deployed build; list price, not metered cost",
         env_allowlist=(),
         tier="hosted",
         default=False,
