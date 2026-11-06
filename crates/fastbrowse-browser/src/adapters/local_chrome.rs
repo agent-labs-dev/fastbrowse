@@ -332,14 +332,15 @@ impl LocalChromeProcess {
             _ => {}
         }
         quiet_password_manager(&profile)?;
-        let child = Command::new(binary)
+        let mut command = Command::new(binary);
+        command
             .args(launch_args(options, &profile))
             // Chrome never reads stdin, and under `fastbrowse serve --stdio` stdin is the caller's protocol stream.
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(log.try_clone()?)
-            .kill_on_drop(true)
-            .spawn()?;
+            .kill_on_drop(true);
+        let child = spawn_owned(command).await?;
         let child = self.child.insert(child);
         wait_for_ws(&active, child, &mut log, DEVTOOLS_TIMEOUT).await
     }
@@ -383,6 +384,97 @@ impl Drop for LocalChromeProcess {
             let _ = std::fs::remove_file(log);
         }
     }
+}
+
+/// Start Chrome so that it dies with this process, however the process ends. `kill_on_drop` covers only a clean drop:
+/// a SIGKILL, `process::exit` or a crash left Chrome running under init, still holding every inheritable descriptor
+/// its launcher had, such as a `flock` that other commands were queued behind (fastbrowse#783).
+async fn spawn_owned(mut command: Command) -> std::io::Result<Child> {
+    #[cfg(target_os = "linux")]
+    {
+        die_with_owner(&mut command);
+        on_owner_thread(command).await
+    }
+    #[cfg(not(target_os = "linux"))]
+    command.spawn()
+}
+
+/// Ask the kernel to send Chrome SIGTERM when its parent goes, and keep the launcher's stray descriptors out of it.
+#[cfg(target_os = "linux")]
+fn die_with_owner(command: &mut Command) {
+    let owner = std::process::id() as libc::pid_t;
+    // SAFETY: the closure runs in the forked child before exec and makes only async-signal-safe system calls; it
+    // allocates nothing and touches no lock.
+    unsafe {
+        command.pre_exec(move || {
+            // SIGTERM rather than SIGKILL, so a kept profile still flushes its cookies, as `terminate` does.
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // An owner that died between the fork and the prctl has already handed the child to init.
+            if libc::getppid() != owner {
+                return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
+            }
+            // Close on exec everything past stdio. std's own exec-error pipe is close-on-exec already, so it is
+            // unaffected. Kernels before 5.11 lack the call, and Chrome then inherits as before.
+            libc::syscall(libc::SYS_close_range, 3 as libc::c_uint, libc::c_uint::MAX, libc::CLOSE_RANGE_CLOEXEC);
+            Ok(())
+        });
+    }
+}
+
+/// Fork on a thread that lives as long as the process. Linux sends the death signal when the thread that forked the
+/// child exits, not the process, and a runtime worker can retire mid-run: `block_in_place` hands it to the blocking
+/// pool, which ends idle threads. A browser forked there would be closed while still in use.
+///
+/// The thread is keyed by process id: a process forked from this one (an embedder starting worker processes) inherits
+/// the channel but not the thread behind it, so it starts its own rather than waiting on one that is not there.
+#[cfg(target_os = "linux")]
+async fn on_owner_thread(command: Command) -> std::io::Result<Child> {
+    type Request = (Command, tokio::runtime::Handle, tokio::sync::oneshot::Sender<std::io::Result<Child>>);
+    type Owner = (u32, std::sync::mpsc::Sender<Request>);
+    // A pointer swapped atomically rather than a mutex: a process forked while another thread held a lock would
+    // inherit it locked, with nothing left to unlock it. Each owner is leaked, one per process that launches Chrome.
+    static OWNER: std::sync::atomic::AtomicPtr<Owner> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    let pid = std::process::id();
+    let current = OWNER.load(std::sync::atomic::Ordering::Acquire);
+    // SAFETY: a non-null pointer is a leaked `Owner` that is never freed, and a forked child keeps a copy of it.
+    let owner: &'static Owner = match unsafe { current.as_ref() } {
+        Some(owner) if owner.0 == pid => owner,
+        _ => {
+            let (sender, requests) = std::sync::mpsc::channel::<Request>();
+            std::thread::Builder::new().name("fastbrowse-chrome-owner".into()).spawn(move || {
+                for (mut command, runtime, answer) in requests {
+                    let _entered = runtime.enter();
+                    let _ = answer.send(command.spawn());
+                }
+            })?;
+            let started = Box::into_raw(Box::new((pid, sender)));
+            match OWNER.compare_exchange(
+                current,
+                started,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            ) {
+                // SAFETY: `started` was just leaked from a box.
+                Ok(_) => unsafe { &*started },
+                Err(winner) => {
+                    // Another launch started an owner first. Ours is dropped, which ends its thread.
+                    // SAFETY: `started` was never published, so this is its only owner.
+                    drop(unsafe { Box::from_raw(started) });
+                    // SAFETY: as above, the winner is a leaked `Owner`.
+                    match unsafe { winner.as_ref() } {
+                        Some(owner) if owner.0 == pid => owner,
+                        _ => return Err(std::io::Error::other("the Chrome owner changed while starting")),
+                    }
+                }
+            }
+        }
+    };
+    let (answer, spawned) = tokio::sync::oneshot::channel();
+    let request = (command, tokio::runtime::Handle::current(), answer);
+    owner.1.send(request).map_err(|_| std::io::Error::other("the Chrome owner thread has stopped"))?;
+    spawned.await.map_err(|_| std::io::Error::other("the Chrome owner thread has stopped"))?
 }
 
 /// `Popen.terminate`: SIGTERM, so Chrome flushes a kept profile's cookies before it exits. std and tokio only send
@@ -817,6 +909,20 @@ mod tests {
         chrome.close().await;
         assert!(kept.join("Default").join("Preferences").exists());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn chrome_inherits_no_descriptor_past_stdio() {
+        // SAFETY: dup takes no pointers, and the copy it returns is inheritable, as a launcher's `flock` is.
+        let inherited = unsafe { libc::dup(2) };
+        assert!(inherited > 2);
+        let mut command = Command::new("sh");
+        command.args(["-c", &format!("[ ! -e /proc/$$/fd/{inherited} ]")]);
+        let status = spawn_owned(command).await.unwrap().wait().await.unwrap();
+        // SAFETY: the descriptor was opened above and is closed once.
+        unsafe { libc::close(inherited) };
+        assert!(status.success(), "Chrome kept descriptor {inherited}");
     }
 
     #[cfg(unix)]
