@@ -684,10 +684,11 @@ async fn review_claims(
             Some("Jev left a composed claim's support unanswered.".into())
         } else if !miscounts.is_empty() {
             Some("A composed claim states a count that differs from the records its cited quotes hold.".into())
+        } else if (0..count).any(|index| !supports(index)) {
+            // A claim its own quotes do not hold is the answer's first fault, whatever the run's steps did.
+            Some("A composed claim is unsupported by its cited quotes.".into())
         } else if denies_steps {
             Some("The written answer contradicts a step this run took: it says something was not done or already existed that the run's own step may have done.".into())
-        } else if supported.len() != count {
-            Some("A composed claim is unsupported by its cited quotes.".into())
         } else if !coverage {
             Some("The answer does not establish every requested fact or value.".into())
         } else {
@@ -1870,6 +1871,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A run quoted a heading with two words swapped after a click, and was told its answer contradicted the click:
+    /// the quote not holding the claim is the fault to report.
+    #[tokio::test]
+    async fn an_unsupported_claim_is_reported_before_a_contradicted_step() {
+        let notes = Notes::new([fact(0, "Example of a new window page for Automation Testing Practice".into())]);
+        let mut llm = RecordingLlm::new(None);
+        llm.claims = Some(vec![Claim::new(
+            "The heading is Example of a new window page for Practice Automation Testing.",
+            vec!["e0".into()],
+        )]);
+        let reviewed = compose_reviewed(
+            &Support::new(false),
+            &llm,
+            "Tell me the heading",
+            &notes,
+            None,
+            None,
+            true,
+            &create_click(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(reviewed.answer.problem.as_deref(), Some("A composed claim is unsupported by its cited quotes."));
     }
 
     #[tokio::test]
