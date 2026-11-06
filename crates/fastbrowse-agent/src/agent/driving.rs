@@ -120,10 +120,34 @@ impl Agent {
                 Some(picked) => picked,
                 None => {
                     let mut context = self.context(state, &observation, secrets, check_login, fresh)?;
-                    context.screenshot = self.drawn_viewport(&observation).await?;
                     let mut offered = observation.clone();
                     leave_out_idle(state, &mut offered, &mut context);
                     state.mark_read_links(&mut offered);
+                    // The next saved step, when its page and control are certain, is the one control Jev is offered:
+                    // Jev still judges the page, and may read or stop instead, but has no target to choose and no
+                    // screenshot to look at, so no shortlist or picture is paid for.
+                    let missing = &state.missing;
+                    let saved = state.replay.as_mut().and_then(|replay| {
+                        replay.ahead(&offered.url, &offered.controls, |target| {
+                            missing.contains(&(offered.url.clone(), target.label.clone(), target.context.clone()))
+                        })
+                    });
+                    match &saved {
+                        Some(saved) => {
+                            let id = saved.target.as_ref().map(|target| target.id.clone());
+                            offered.controls.retain(|control| Some(&control.id) == id.as_ref());
+                            self.event("recipe_step", || {
+                                serde_json::Map::from_iter([
+                                    ("operation".into(), saved.operation.to_string().into()),
+                                    (
+                                        "target".into(),
+                                        saved.target.as_ref().map(|target| self.redact(&target.label)).into(),
+                                    ),
+                                ])
+                            });
+                        }
+                        None => context.screenshot = self.drawn_viewport(&observation).await?,
+                    }
                     let redecided = state.redecided;
                     let deciding = self.trace.phase("decide", async {
                         let (ledger, cache) = (Some(&*state.ledger), Some(&state.relevance_cache));
@@ -138,7 +162,22 @@ impl Agent {
                         self.redecide(state, &observation);
                         continue;
                     };
-                    if let Some(replay) = state.replay.as_mut() {
+                    if let Some(saved) = saved {
+                        let agreed = decision.operation == saved.operation
+                            && decision.target.as_ref().map(|target| &target.id)
+                                == saved.target.as_ref().map(|target| &target.id);
+                        let replay = state.replay.as_mut().expect("a saved step comes from the replay");
+                        if agreed {
+                            decision.replayed = true;
+                        } else {
+                            replay.declined();
+                            // Another action on the one control Jev was shown is decided again with the whole page
+                            // in view; a read, a wait or done needs no control Jev was not shown.
+                            if decision.target.is_some() {
+                                continue;
+                            }
+                        }
+                    } else if let Some(replay) = state.replay.as_mut() {
                         let missing = decision.target.as_ref().is_some_and(|target| {
                             state.missing.contains(&(offered.url.clone(), target.label.clone(), target.context.clone()))
                         });

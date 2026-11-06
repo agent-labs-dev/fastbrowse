@@ -20,6 +20,7 @@ FORWARDED = {
     "track-ledger": "track_ledger",
     "track-official": "official_tracking",
     "official-rows": "official_rows",
+    "recipes": "recipes",
 }
 """Commands whose module parses its own arguments, by the module that runs them."""
 ASYNC = frozenset({"internal", "official"})

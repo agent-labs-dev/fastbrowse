@@ -2104,6 +2104,44 @@ async fn a_relative_date_written_by_the_llm_is_decided_live_when_a_recipe_is_reu
     assert!(!serde_json::to_string(&saved).unwrap().contains("2026-11-04"));
 }
 
+#[tokio::test]
+async fn a_value_written_as_the_task_gives_it_is_saved_for_a_recipe_to_type_again() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("write"))), Arc::new(DateWriter));
+    let mut state = run_state();
+    state.task = "Book a table for 2026-11-04".into();
+    let target = field("Date");
+    let decision = code_decision(Operation::Fill, Some(target.clone()));
+    let value = agent.text(&mut state, &observation(&[]), &decision, &target).await.unwrap();
+    let action = Action { text: Some(value), ..Action::new(Operation::Fill) };
+    let saved =
+        super::replay::step_of("https://book.test/", &decision, &action, state.text_source.take(), |_| false).unwrap();
+    assert!(saved.replayable());
+    assert_eq!(saved.text, Some(fastbrowse_core::recipe::RecipeText::Literal("2026-11-04".into())));
+}
+
+#[tokio::test]
+async fn a_value_typed_as_an_input_gave_it_is_saved_as_that_input() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("write"))), Arc::new(DateWriter));
+    let inputs = IndexMap::from([("date".to_string(), "2026-11-04".to_string())]);
+    let mut state = RunState::new(
+        "Book a table for input date".into(),
+        inputs,
+        Vec::new(),
+        Authorization::default(),
+        Arc::new(Ledger::new(Limits::default())),
+    );
+    assert_eq!(state.task, "Book a table for input date (2026-11-04)");
+    let target = field("Date");
+    let fill = code_decision(Operation::Fill, Some(target));
+    let action = agent.action(&mut state, &observation(&[]), &fill).await.unwrap();
+    assert_eq!(action.text.as_deref(), Some("2026-11-04"));
+    assert_eq!(state.text_source, Some(fastbrowse_core::recipe::RecipeText::Input("date".into())));
+    // The task's own 2026-11-04 is the task's, whatever an input also holds.
+    state.given_task = "Book a table for input date, from 2026-11-04".into();
+    agent.action(&mut state, &observation(&[]), &fill).await.unwrap();
+    assert_eq!(state.text_source, Some(fastbrowse_core::recipe::RecipeText::Literal("2026-11-04".into())));
+}
+
 /// The scripted Jev, its every choice held at `confidence`, and the states it was shown.
 struct Unsure(ScriptedJev, f64, std::sync::Mutex<Vec<serde_json::Value>>);
 
@@ -3914,7 +3952,7 @@ async fn test_refusing_a_long_read_source_does_not_send_an_empty_request() {
 fn a_late_task_secret_clears_a_previous_recipe_outcome() {
     let agent = agent();
     let mut state = run_state();
-    state.task = "Log in as ada@example.test".into();
+    state.given_task = "Log in as ada@example.test".into();
     let sink = Default::default();
     agent.store_recipe(&state, &sink);
     assert!(sink.lock().unwrap().is_some());

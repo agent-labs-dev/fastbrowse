@@ -235,12 +235,22 @@ A step identifies its full page address and a control's role, label, context, li
 and selectors are not stored. Query strings, fragments and generated path segments must match too: two orders can
 have identical controls without being the same order. A missing or ambiguous control is left to Jev.
 
-Jev decides each action and judges the current page for answers, errors and sign-in walls. When its action agrees
-with a matching remaining recipe step, even if an earlier action is still offered, the fill can reuse the saved value and the step reports
-`decided_by: "recipe"`. Freshness checks, hit testing, authorization and secret handling still apply. Password
+Jev judges every page for answers, errors and sign-in walls, and chooses every action. When the next saved step is
+on the page it was saved on, the original run read nothing before it, exactly one live control is the one it names,
+and a fill has a saved value the field may take, that control is the only one Jev is offered. Jev can take it, read,
+or stop, and it is not sent a screenshot or asked to shortlist the page's controls. A step Jev declines, or one that
+fails, is decided with the whole page in view from then on. Any other step is decided as in a fresh run, and when
+Jev's action agrees with a matching remaining recipe step, even if an earlier action is still offered, the fill can
+reuse the saved value. A step carried out from the recipe reports `decided_by: "recipe"`. Freshness checks, hit testing, authorization and secret handling still apply. Password
 fields always use the live credential checks. A stored secret is kept only by name, caller inputs by name, and
-ordinary task text as a literal. Values taken from page evidence, values written by the LLM and select options are decided live on every run. Recipes can
+text copied word for word from the task as a literal. Values taken from page evidence, values the LLM composed and select options are decided live on every run. Recipes can
 contain personal information from ordinary fields, so keep them private like the task that produced them. A step whose page address or control metadata reveals a resolved secret is omitted and decided live on replay.
+A recipe serves any run of the same task, so a value that changes between runs belongs in a named input rather than
+in the task: `fastbrowse "Search Wikipedia for the person named in input person" --input person="Ada Lovelace"
+--save-recipe r.json`, then the same task with `--input person="Grace Hopper" --recipe r.json`. Jev reads the task
+with each value it names shown beside the name ("input person (Ada Lovelace)"), and a fill that types an input's
+value is saved as the input's name, so the replay types the new value. The recipe keeps the task as written. Pages after it, such as the article, have a different address
+and are decided live.
 If the task or start URL contains a resolved secret, no recipe is saved: a redacted task would fail the exact task match required for replay, and a redacted start URL would not open the original page.
 
 Reading, answering and the check for `complete` always run live. Replay searches the remaining saved steps without

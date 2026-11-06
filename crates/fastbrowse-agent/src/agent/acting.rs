@@ -243,6 +243,17 @@ impl Agent {
                     return Err(self.page.needs_browser(reason).into());
                 }
                 let text = self.text(state, observation, decision, target).await?;
+                // The task shows each input's value beside its name, so Jev copies or writes it like any value the
+                // task gives; typed as it was given, it is the input, and a recipe types the next run's value.
+                // Text the caller's own task also states, or that two inputs share, may not be the input's, and stays as
+                // it was: "fill country with US" beside `username=US` is the task's US.
+                let mut given = state.inputs.iter().filter(|(_, value)| **value == text).map(|(name, _)| name);
+                if matches!(state.text_source, Some(RecipeText::Literal(_) | RecipeText::Live))
+                    && !state.given_task.contains(text.as_str())
+                    && let (Some(name), None) = (given.next(), given.next())
+                {
+                    state.text_source = Some(RecipeText::Input(name.clone()));
+                }
                 Ok(Action {
                     target_id: Some(target.id.clone()),
                     secret: self.reveals_text(&text),
@@ -559,7 +570,14 @@ impl Agent {
             .await?;
             state.ledger.record([written.cost])?;
             return match written.data.value.filter(|value| !value.trim().is_empty()) {
-                Some(value) => Ok(value),
+                Some(value) => {
+                    // Words the task gives as they were typed are the task's value, however Jev got to them, so a
+                    // recipe can type them again. Anything composed stays live.
+                    if state.task.contains(value.as_str()) {
+                        state.text_source = Some(RecipeText::Literal(value.clone()));
+                    }
+                    Ok(value)
+                }
                 None => Err(self.missing(state, observation, target)),
             };
         }

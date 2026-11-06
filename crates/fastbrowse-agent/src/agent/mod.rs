@@ -196,9 +196,9 @@ impl Agent {
 
     fn store_recipe(&self, state: &RunState, sink: &RecipeSink) {
         let mut sink = sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let task = self.redact(&state.task);
+        let task = self.redact(&state.given_task);
         let start = state.started_url.as_deref().map(|url| self.redact(url));
-        if task != state.task || start.as_deref() != state.started_url.as_deref() {
+        if task != state.given_task || start.as_deref() != state.started_url.as_deref() {
             *sink = None;
             // Redaction changes exact replay identity; retaining the original would persist a resolved secret.
             eprintln!(
