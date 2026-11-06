@@ -454,13 +454,15 @@ impl Agent {
                 {
                     // Only a rejected composition stops a run unverified, so one that passes every claim and coverage
                     // check answers what that stop was about, as it would have at done.
-                    if stop.status == Status::Unverified && composed.problem.is_none() {
+                    // A step the site refused is still not carried out, however well the answer holds (#779).
+                    if stop.status == Status::Unverified && composed.problem.is_none() && !state.refused {
                         let result =
                             self.answered(&composed, &notes, Some(state), ledger, Status::Complete, None, None);
                         let requested = state.output_intent == state::OutputIntent::TextAndImage;
                         return self.ending_frame(result, requested).await;
                     }
                     let partial = marked_partial(composed);
+                    let error = error.or_else(|| state.refused.then(|| self.redact(finishing::REFUSED)));
                     return self.answered(&partial, &notes, Some(state), ledger, stop.status, error, budget);
                 }
                 return self.partial_result(&notes, Some(state), ledger, stop.status, error, budget);

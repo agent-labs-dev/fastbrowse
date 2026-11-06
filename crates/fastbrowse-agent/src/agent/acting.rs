@@ -170,6 +170,15 @@ fn gate_questions(
     (irreversible, requested_question(&action), lasting)
 }
 
+/// The finish check's answer about the steps the task asks to be carried out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Carried {
+    Done,
+    Undone,
+    /// Not carried out, and the page or the recent actions show the site does not allow it.
+    Refused,
+}
+
 impl Agent {
     /// The follow-ups each action on this page would need, to ask beside the decision. A password is never picked
     /// from words, and a task too long for one choice is narrowed first, so those stay follow-ups.
@@ -1016,10 +1025,12 @@ impl Agent {
         Ok(self.ask_choice(state, observation, question, criteria).await? == "confirm")
     }
 
-    /// Whether what the task asks to be done in the browser has been done, judged from the steps taken and this page.
-    /// A read that answers the question can come before the actions the task puts first: a run asked to sign in and
-    /// then report its account's email read the email off another page and stopped at the sign-in code.
-    pub(super) async fn actions_done(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
+    /// Whether what the task asks to be done in the browser has been done, judged from the steps taken and this page,
+    /// or cannot be because the site does not allow it. A read that answers the question can come before the actions
+    /// the task puts first: a run asked to sign in and then report its account's email read the email off another page
+    /// and stopped at the sign-in code. A step the site refuses, such as an option it marks unavailable, is no step
+    /// left to take, and the run ends with its answer rather than recovering until it runs out (#779).
+    pub(super) async fn actions_done(&self, state: &mut RunState, observation: &Observation) -> Step<Carried> {
         let criteria = IndexMap::from([
             (
                 "done".to_string(),
@@ -1031,6 +1042,13 @@ impl Agent {
                 "undone".to_string(),
                 JsonValue::from(
                     "A step the task asks for, other than finding, reading or reporting, has not been carried out yet.",
+                ),
+            ),
+            // Last, so Jev's lean toward the first option cannot favour ending short of a step (#808).
+            (
+                "refused".to_string(),
+                JsonValue::from(
+                    "A step the task asks for has not been carried out, and the current page or the recent actions show the site does not allow it, such as an option the page marks unavailable or a control it shows disabled; nothing left to try on the site would carry it out.",
                 ),
             ),
         ]);
@@ -1058,7 +1076,12 @@ impl Agent {
                 .join("\n"),
             ..observation.clone()
         };
-        Ok(self.ask_choices_in(state, Some(&page), asked, Some(&context)).await?["pick"] == "done")
+        Ok(match self.ask_choices_in(state, Some(&page), asked, Some(&context)).await?["pick"].as_str() {
+            "done" => Carried::Done,
+            "undone" => Carried::Undone,
+            "refused" => Carried::Refused,
+            _ => unreachable!(),
+        })
     }
 
     /// Several choices in one request, each answer one its question offered.
