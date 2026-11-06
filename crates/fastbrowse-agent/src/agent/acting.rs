@@ -245,9 +245,11 @@ impl Agent {
                 let text = self.text(state, observation, decision, target).await?;
                 // The task shows each input's value beside its name, so Jev copies or writes it like any value the
                 // task gives; typed as it was given, it is the input, and a recipe types the next run's value.
-                // Two inputs with the same value leave which one it was unknown, and the text stays as it was.
+                // Text the caller's own task also states, or that two inputs share, may not be the input's, and stays as
+                // it was: "fill country with US" beside `username=US` is the task's US.
                 let mut given = state.inputs.iter().filter(|(_, value)| **value == text).map(|(name, _)| name);
                 if matches!(state.text_source, Some(RecipeText::Literal(_) | RecipeText::Live))
+                    && !state.given_task.contains(text.as_str())
                     && let (Some(name), None) = (given.next(), given.next())
                 {
                     state.text_source = Some(RecipeText::Input(name.clone()));

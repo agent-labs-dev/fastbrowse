@@ -2132,10 +2132,14 @@ async fn a_value_typed_as_an_input_gave_it_is_saved_as_that_input() {
     );
     assert_eq!(state.task, "Book a table for input date (2026-11-04)");
     let target = field("Date");
-    let action =
-        agent.action(&mut state, &observation(&[]), &code_decision(Operation::Fill, Some(target))).await.unwrap();
+    let fill = code_decision(Operation::Fill, Some(target));
+    let action = agent.action(&mut state, &observation(&[]), &fill).await.unwrap();
     assert_eq!(action.text.as_deref(), Some("2026-11-04"));
     assert_eq!(state.text_source, Some(fastbrowse_core::recipe::RecipeText::Input("date".into())));
+    // The task's own 2026-11-04 is the task's, whatever an input also holds.
+    state.given_task = "Book a table for input date, from 2026-11-04".into();
+    agent.action(&mut state, &observation(&[]), &fill).await.unwrap();
+    assert_eq!(state.text_source, Some(fastbrowse_core::recipe::RecipeText::Literal("2026-11-04".into())));
 }
 
 /// The scripted Jev, its every choice held at `confidence`, and the states it was shown.
