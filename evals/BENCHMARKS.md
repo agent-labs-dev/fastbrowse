@@ -148,7 +148,7 @@ agent answers with its fetch tool alone and no browser ever starts.
 
 The approved `--budget` only decides whether a new physical run may start (`start-gate-v1`). Every retry is a
 physical run, so a slot waiting out an interruption holds nothing and frees its worker. Before each run starts,
-the ledger holds `--reserve-dollars` plus `--browser-reserve-dollars` (official runs add the judge reserve); the run starts only while committed spend plus that hold fits the approved total, otherwise it waits for
+the ledger holds `--reserve-dollars` plus `--browser-reserve-dollars` plus `--judge-reserve-dollars`; the run starts only while committed spend plus that hold fits the approved total, otherwise it waits for
 runs in flight or stops the campaign when nothing is running. The hold is accounting, never a limit given to the agent.
 At settlement the actual charge replaces the hold. A charge above its hold is recorded and stops nothing. Unknown or
 interrupted charges keep their full hold, including after resume. A run whose provider refused the request that starts
@@ -318,7 +318,7 @@ The hosted group is the 52 tasks both `fastbrowse` and `browser-use` run. It mea
 `browser-use`, `jev-ultrafast` and `browser-harness` its one invocation ran, each on the tasks of the 52 it supports
 (`jev-ultrafast` skips tasks that need an answer, `browser-harness` those that need credentials or a safe stop); an arm that did not run, or none of whose runs started (its
 provider refused every start, as with a bad key), is not measured rather than blocking the group. The backend group requires the 53 tasks on
-both fastbrowse arms, and the Ultrafast group the 6 navigation tasks `fastbrowse-pool` and `jev-ultrafast` both run,
+both fastbrowse arms, and the Ultrafast group the 47 tasks `fastbrowse-pool` and `jev-ultrafast` both run,
 each with three repeats. The Fastbrowse-only group requires all 53 supported tasks; it needs no competitor reruns.
 A candidate with the Ultrafast group is schema 5, the first in which that group pairs `fastbrowse-pool` (not
 `fastbrowse`) with `jev-ultrafast`; with the backend group and no Ultrafast group it is schema 4.
