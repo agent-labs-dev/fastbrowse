@@ -432,28 +432,48 @@ fn die_with_owner(command: &mut Command) {
 #[cfg(target_os = "linux")]
 async fn on_owner_thread(command: Command) -> std::io::Result<Child> {
     type Request = (Command, tokio::runtime::Handle, tokio::sync::oneshot::Sender<std::io::Result<Child>>);
-    static OWNER: std::sync::Mutex<Option<(u32, std::sync::mpsc::Sender<Request>)>> = std::sync::Mutex::new(None);
+    type Owner = (u32, std::sync::mpsc::Sender<Request>);
+    // A pointer swapped atomically rather than a mutex: a process forked while another thread held a lock would
+    // inherit it locked, with nothing left to unlock it. Each owner is leaked, one per process that launches Chrome.
+    static OWNER: std::sync::atomic::AtomicPtr<Owner> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    let pid = std::process::id();
+    let current = OWNER.load(std::sync::atomic::Ordering::Acquire);
+    // SAFETY: a non-null pointer is a leaked `Owner` that is never freed, and a forked child keeps a copy of it.
+    let owner: &'static Owner = match unsafe { current.as_ref() } {
+        Some(owner) if owner.0 == pid => owner,
+        _ => {
+            let (sender, requests) = std::sync::mpsc::channel::<Request>();
+            std::thread::Builder::new().name("fastbrowse-chrome-owner".into()).spawn(move || {
+                for (mut command, runtime, answer) in requests {
+                    let _entered = runtime.enter();
+                    let _ = answer.send(command.spawn());
+                }
+            })?;
+            let started = Box::into_raw(Box::new((pid, sender)));
+            match OWNER.compare_exchange(
+                current,
+                started,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            ) {
+                // SAFETY: `started` was just leaked from a box.
+                Ok(_) => unsafe { &*started },
+                Err(winner) => {
+                    // Another launch started an owner first. Ours is dropped, which ends its thread.
+                    // SAFETY: `started` was never published, so this is its only owner.
+                    drop(unsafe { Box::from_raw(started) });
+                    // SAFETY: as above, the winner is a leaked `Owner`.
+                    match unsafe { winner.as_ref() } {
+                        Some(owner) if owner.0 == pid => owner,
+                        _ => return Err(std::io::Error::other("the Chrome owner changed while starting")),
+                    }
+                }
+            }
+        }
+    };
     let (answer, spawned) = tokio::sync::oneshot::channel();
     let request = (command, tokio::runtime::Handle::current(), answer);
-    {
-        let mut owner = OWNER.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let pid = std::process::id();
-        let sender = match owner.as_ref() {
-            Some((started_in, sender)) if *started_in == pid => sender.clone(),
-            _ => {
-                let (sender, requests) = std::sync::mpsc::channel::<Request>();
-                std::thread::Builder::new().name("fastbrowse-chrome-owner".into()).spawn(move || {
-                    for (mut command, runtime, answer) in requests {
-                        let _entered = runtime.enter();
-                        let _ = answer.send(command.spawn());
-                    }
-                })?;
-                *owner = Some((pid, sender.clone()));
-                sender
-            }
-        };
-        sender.send(request).map_err(|_| std::io::Error::other("the Chrome owner thread has stopped"))?;
-    }
+    owner.1.send(request).map_err(|_| std::io::Error::other("the Chrome owner thread has stopped"))?;
     spawned.await.map_err(|_| std::io::Error::other("the Chrome owner thread has stopped"))?
 }
 
