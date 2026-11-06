@@ -287,7 +287,7 @@ impl Agent {
                     }
                     return Err(Unsure { reason, gives_up_as: Status::Stuck }.into());
                 }
-                let question = format!("Which option should {} be set to?", text::repr(&target.label));
+                let question = format!("Which option should {} be set to?", text::repr(&describe(target)));
                 let option = self.choose(state, observation, &question, &raw.options).await?;
                 Ok(Action { target_id: Some(raw.id.clone()), text: Some(option), ..Action::new(Operation::Select) })
             }

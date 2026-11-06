@@ -263,6 +263,7 @@
   // A hidden element named through aria-labelledby is read whole, since it is hidden only to serve as the label.
   // An svg's <title> never renders, yet it is the graphic's name.
   const shown = e => e.localName === 'title' || e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+  const FIELD_CONTAINERS = new Set(['combobox', 'listbox']);
   const labelFrom = (e, seen) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
@@ -282,7 +283,9 @@
         .join(' ') ||
       (['button', 'submit', 'reset'].includes(e.type) ? e.value : '') ||
       e.getAttribute('alt') ||
-      (e.tagName === 'INPUT'
+      // A field's text is its value, not its name: a list-style select shows every option, and a combobox widget its
+      // chosen chips, remove buttons and open options. Accname never names these from content either.
+      (e.tagName === 'INPUT' || e.tagName === 'SELECT' || FIELD_CONTAINERS.has(e.getAttribute('role'))
         ? ''
         : [...e.childNodes]
             .map(n =>
@@ -303,10 +306,20 @@
     );
   };
 
+  // An ARIA 1.1 combobox wraps the field it fronts, and the page labels that field rather than the wrapper. A wrapper
+  // holding two fields, such as a hidden select beside a search input, says nothing about which one names it.
+  const wrappedField = e => {
+    if (!e || e.matches('input,select,textarea') || !FIELD_CONTAINERS.has(e.getAttribute('role'))) return null;
+    const fields = [...e.querySelectorAll('input:not([type=hidden]),select,textarea')].filter(
+      f => !f.parentElement.closest('[hidden]'),
+    );
+    return fields.length === 1 ? fields[0] : null;
+  };
   const labelOf = memo(
     e =>
       (e && !e.getAttribute('aria-label') && !e.getAttribute('aria-labelledby') && focusableText(e)) ||
-      labelFrom(e, new Set()),
+      labelFrom(e, new Set()) ||
+      labelFrom(wrappedField(e), new Set()),
   );
 
   const ARIA_ROLES = [
@@ -685,7 +698,7 @@
   };
   // Labels more than one control shares, filled in once every control is listed.
   const repeated = new Set();
-  const nameOf = (scope, element, label, nearest) => {
+  const nameOf = (scope, element, label, nearest, own = null) => {
     const aria = (scope.getAttribute('aria-label') || '').trim();
     if (aria && aria !== label) return aria;
     const section = sectionOf(scope, element, label, nearest);
@@ -706,7 +719,7 @@
     const lines = (innerTextOf(scope) || '')
       .split('\n')
       .map(line => line.replace(/\s+/g, ' ').trim())
-      .filter(line => line && !repeated.has(line) && !peers.has(line) && !onlyPeers(line));
+      .filter(line => line && !repeated.has(line) && !peers.has(line) && !onlyPeers(line) && !own?.has(line));
     return firstLine(lines.map(line => (label ? ` ${line} `.split(` ${label} `).join(' ') : line)).join('\n'));
   };
   const contextOf = (element, holding, label, nearest = true) => {
@@ -924,10 +937,15 @@
   // card shows the same icon: one left alone, or drawn by another icon set, would name no card and leave the choice
   // guessing which image it removes. It is named by the card that holds it, or failing one by the nearest ancestor
   // that says anything besides it.
+  // An unnamed select or combobox shows its value, and its chips name no section it sits in.
   const nearestName = (element, label) => {
+    const own =
+      element.tagName === 'SELECT' || FIELD_CONTAINERS.has(element.getAttribute('role'))
+        ? new Set((innerTextOf(element) || '').split('\n').map(line => line.replace(/\s+/g, ' ').trim()))
+        : null;
     let first = '';
     for (let e = element.parentElement, path = element; e && e !== e.ownerDocument.body; path = e, e = e.parentElement) {
-      first ||= nameOf(e, element, label, true);
+      first ||= nameOf(e, element, label, true, own);
       if (!isCard(e)) continue;
       // An action row's own caption ("Actions") is the first text the climb meets and names no item, so the card
       // is named by what it holds outside the row that holds the control.

@@ -349,3 +349,93 @@ async fn test_a_blur_leaves_alone_a_field_that_lost_focus_or_was_replaced() {
     assert_eq!(eval_active(&h.page, "document.activeElement === window.twin").await, json!(true));
     h.close().await;
 }
+
+// A field role is named by its label, never by what it holds (#838).
+
+/// Replaces the page with `html` and returns the one control offered as a combobox.
+async fn combobox(h: &Harness, html: &str) -> fastbrowse_core::page::Control {
+    h.goto("/dispatch.html").await;
+    eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(html).unwrap())).await;
+    let observation = h.observe().await;
+    let found: Vec<_> = observation.controls.iter().filter(|c| c.role == "combobox").collect();
+    assert_eq!(found.len(), 1, "{:?}", observation.controls);
+    found[0].clone()
+}
+
+const VISIBILITY: &str = "<fieldset><legend>Visibility</legend><label><input type=checkbox>Unlisted</label>\
+                          <label><input type=checkbox>Hidden</label></fieldset>";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_unlabelled_list_select_is_named_by_its_section_not_its_options() {
+    let Some(h) = harness().await else { return };
+    let html = format!(
+        "<form><fieldset><legend>Categories</legend><select multiple size=5><option>Achievements</option>\
+         <option>Bags</option><option selected>Chat</option><option>Combat</option></select></fieldset>{VISIBILITY}</form>"
+    );
+    let control = combobox(&h, &html).await;
+    assert_eq!(control.label, "combobox");
+    assert_eq!(control.context.as_deref(), Some("Categories"));
+    // Without a title to name the section, the options are the first text the climb meets, and they name nothing.
+    let html = "<div><div><select multiple size=3><option>Achievements</option><option>Bags</option></select></div>\
+                <span>Categories</span></div><label><input type=checkbox>Unlisted</label>";
+    let control = combobox(&h, html).await;
+    h.close().await;
+    assert_eq!(control.context.as_deref(), Some("Categories"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_combobox_widget_is_not_named_by_its_chips_or_options() {
+    let Some(h) = harness().await else { return };
+    let html = format!(
+        "<form><fieldset><legend>Categories</legend><div role=combobox tabindex=-1 aria-expanded=false>\
+         <span>Chat &amp; Communication</span><input style=\"width:0;padding:0;border:0\"></div></fieldset>{VISIBILITY}</form>"
+    );
+    let control = combobox(&h, &html).await;
+    assert_eq!(control.label, "combobox");
+    assert_eq!(control.context.as_deref(), Some("Categories"));
+    // The widget opening appends its options inside itself: neither the label nor the label the guard reads moves.
+    let unchanged = eval_active(
+        &h.page,
+        "(() => { const r = window.__fastbrowse; const e = document.querySelector('[role=combobox]'); \
+         const before = r.guard(e)[2]; \
+         for (const text of ['Achievements', 'Bags']) { const o = document.createElement('div'); \
+         o.setAttribute('role', 'option'); o.textContent = text; e.append(o); } \
+         return r.guard(e)[2] === before; })()",
+    )
+    .await;
+    let reopened = h.observe().await;
+    h.close().await;
+    assert_eq!(unchanged, json!(true));
+    let control = reopened.controls.iter().find(|c| c.role == "combobox").unwrap();
+    assert_eq!(control.label, "combobox");
+    assert_eq!(control.context.as_deref(), Some("Categories"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_combobox_borrows_the_label_of_the_field_it_wraps() {
+    let Some(h) = harness().await else { return };
+    let html = "<div role=combobox><label for=x>Pick categories</label><span>Chat &amp; Communication</span>\
+                <button type=button aria-label=Close>x</button><input id=x></div>";
+    let control = combobox(&h, html).await;
+    h.close().await;
+    assert_eq!(control.label, "Pick categories");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_combobox_wrapping_two_fields_borrows_no_name() {
+    let Some(h) = harness().await else { return };
+    let html = "<div role=combobox tabindex=0><select hidden><option>Chat</option></select>\
+                <span>Chat</span><input aria-label=Search></div>";
+    let control = combobox(&h, html).await;
+    h.close().await;
+    assert_eq!(control.label, "combobox");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_combobox_named_by_the_page_keeps_its_name() {
+    let Some(h) = harness().await else { return };
+    let html = "<div role=combobox aria-label=Categories><span>Chat</span><input aria-label=Pick></div>";
+    let control = combobox(&h, html).await;
+    h.close().await;
+    assert_eq!(control.label, "Categories");
+}

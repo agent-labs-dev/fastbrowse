@@ -121,6 +121,11 @@ when it is focusable and has visible text, including a label wrapped in child el
 exclude the trigger that reveals them. An element already inside a control, or holding visible controls, leaves
 actions to those controls.
 
+A field is named by its label, never by its value. A select or a combobox or listbox widget is not named from the
+options, chips or buttons it shows. A widget wrapping exactly one field borrows that field's label, and its own label
+comes first. A field with no label is offered by its role under its section, such as a fieldset legend, and the text it
+shows never names that section.
+
 A read offers Jev one bounded choice over the page's quoted spans, with two more answers: the page does not hold the
 answer, or the answer must be composed from more than one fact. On a page with more spans than one choice can offer, a
 relevance pass narrows them first. If no value choice fits, a page that fits Jev's input limit can still supply
