@@ -902,10 +902,8 @@ impl BrowserSession {
             }
             return Ok(());
         }
-        let session = self.clone();
-        let params = json!({"targetId": target_id, "flatten": true});
-        let mut attach = Box::pin(async move { session.send("Target.attachToTarget", params, None).await });
-        let keeper = match timeout(secs(SCREENCAST_COMMAND_SECONDS), &mut attach).await {
+        let attach = self.send("Target.attachToTarget", json!({"targetId": target_id, "flatten": true}), None);
+        let keeper = match timeout(secs(SCREENCAST_COMMAND_SECONDS), attach).await {
             Ok(Ok(keeper)) => str_of(&keeper["sessionId"]),
             Ok(Err(error)) => {
                 warn(&format!("Target.attachToTarget for the paint keeper failed ({})", error.kind()));
@@ -913,16 +911,6 @@ impl BrowserSession {
             }
             Err(_) => {
                 warn("Target.attachToTarget for the paint keeper failed (TimeoutError)");
-                // Chrome may still attach it, and a session nobody records would stay on the tab, so it is let go
-                // when it lands.
-                let session = self.clone();
-                let mut state = self.0.state.lock().unwrap();
-                self.0.spawn(&mut state, async move {
-                    if let Ok(late) = attach.await {
-                        let params = json!({"sessionId": str_of(&late["sessionId"])});
-                        let _ = session.send("Target.detachFromTarget", params, None).await;
-                    }
-                });
                 return Ok(());
             }
         };
