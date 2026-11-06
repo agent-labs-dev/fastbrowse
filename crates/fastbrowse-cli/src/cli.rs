@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use fastbrowse_clients::environment::ConfigurationError;
-use fastbrowse_core::models::{Authorization, Event, Limits, LocalChrome, SecretValue, Status};
+use fastbrowse_core::models::{Authorization, Event, Limits, LocalChrome, SecretValue, Status, WallKind};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{self, Style};
 use fastbrowse_core::safety::{ScopedSecrets, origin_of};
@@ -404,7 +404,8 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
             return Ok(1);
         }
     };
-    if result.status == Status::NeedsLogin {
+    // A bot or access check has no credential field, so a secret cannot pass it.
+    if result.status == Status::NeedsLogin && result.wall.as_ref().is_none_or(|wall| wall.kind != WallKind::BotCheck) {
         result.error = Some(format!(
             "{}. Pass --secret NAME=ENV_VAR@https://host with the password in that environment variable; credentials \
              in task text are not used.",
