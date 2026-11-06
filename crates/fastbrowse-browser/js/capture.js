@@ -2,6 +2,8 @@
 // Unlike snapshot.js (the viewport, for Jev's action choice) this reads the whole rendered document, on screen or not,
 // so the reading path and answer-evidence quotes see everything a user could scroll to.
 // Adjacent inline content (text, <strong>, <a>, <span>...) is one block, so a value inside markup stays with its label.
+// A dated element (a `time`, or a custom element such as `relative-time`) reads as its shown text followed by its
+// `datetime` in brackets, because the exact date a relative time such as "3 weeks ago" stands for is otherwise lost.
 // biome-ignore format: CdpPage embeds this function inside an expression, where a semicolon is invalid.
 ((allowedOrigins = null) => {
   if (!document.body) return null;
@@ -44,8 +46,39 @@
       .replace(/ *\n */g, '\n')
       .replace(/\n{3,}/g, '\n\n')
       .trim();
-  const textOf = e => clean(e.innerText ?? e.textContent ?? '');
   const hidden = e => e.hidden || getComputedStyle(e).display === 'none';
+  const visible = e => (e.checkVisibility ? e.checkVisibility({ visibilityProperty: true }) : !hidden(e));
+  // The `datetime` of `ins` and `del` dates an edit, not the text, so only a `time` or a custom element is dated.
+  const datable = e => e.localName === 'time' || e.localName.includes('-');
+  const stampOf = e => (datable(e) && visible(e) ? (e.getAttribute('datetime') ?? '').trim() : '');
+  // A host that draws its text in its own shadow root, as GitHub's relative-time does, has an empty innerText.
+  const shownOf = e => {
+    const own = clean(e.innerText ?? '');
+    if (own || !e.shadowRoot) return own;
+    const parts = [...e.shadowRoot.childNodes].map(n =>
+      n.nodeType === 3 ? n.textContent : n.nodeType === 1 && !SKIP.has(n.tagName) ? (n.innerText ?? '') : '',
+    );
+    return clean(parts.join(''));
+  };
+  // `text` as `e` reads it, with each dated element's stamp written after the text it shows, in document order.
+  const dated = (e, text) => {
+    if (!datable(e) && !e.querySelector('[datetime]')) return text;
+    let cursor = 0;
+    for (const d of [...(datable(e) ? [e] : []), ...e.querySelectorAll('[datetime]')]) {
+      const stamp = stampOf(d);
+      const shown = stamp ? shownOf(d) : '';
+      if (!shown) continue;
+      if (d === e && !clean(text)) return shown.includes(stamp) ? shown : `${shown} (${stamp})`;
+      const at = text.indexOf(shown, cursor);
+      if (at < 0) continue;
+      cursor = at + shown.length;
+      if (shown.includes(stamp)) continue;
+      text = `${text.slice(0, cursor)} (${stamp})${text.slice(cursor)}`;
+      cursor += stamp.length + 3;
+    }
+    return text;
+  };
+  const textOf = e => clean(dated(e, e.innerText ?? e.textContent ?? ''));
   const isBlock = e => {
     const display = getComputedStyle(e).display;
     return !(display.startsWith('inline') || display === 'contents') || e.tagName === 'BR';
@@ -190,7 +223,7 @@
   };
   const fields = el =>
     (CONTROLS.has(el.tagName) ? [el] : [...el.querySelectorAll('input,select,textarea')])
-      .filter(e => (e.checkVisibility ? e.checkVisibility({ visibilityProperty: true }) : !hidden(e)))
+      .filter(visible)
       .map(e => [nameOf(e), fieldValue(e)])
       .filter(([, value]) => value)
       .map(([name, value]) => (name ? `${name}: ${value}` : value));
@@ -222,12 +255,14 @@
   function flush(run) {
     if (!run.length) return;
     const elements = run.filter(n => n.nodeType === 1);
-    let text = clean(run.map(n => (n.nodeType === 3 ? n.textContent : (n.innerText ?? ''))).join(''));
+    let text = clean(run.map(n => (n.nodeType === 3 ? n.textContent : dated(n, n.innerText ?? ''))).join(''));
+    // A host's own text read in its shadow root is a block apart from its row, which may have read it without it.
+    // A frame's nodes come from another realm, so the root is told by its node type rather than `instanceof`.
+    const host = run[0].parentNode?.nodeType === 11 ? run[0].parentNode.host : null;
+    const stamp = host ? stampOf(host) : '';
+    if (text && stamp && !text.includes(stamp)) text = `${text} (${stamp})`;
     const onlyLink =
-      elements.length === 1 &&
-      elements[0].tagName === 'A' &&
-      elements[0].href &&
-      clean(elements[0].innerText ?? '') === text;
+      elements.length === 1 && elements[0].tagName === 'A' && elements[0].href && textOf(elements[0]) === text;
     if (onlyLink) push('link', text, { href: hrefOf(elements[0]) }, run);
     else push('paragraph', text, {}, run);
     for (const e of elements) for (const field of fields(e)) push('paragraph', field);
@@ -387,7 +422,6 @@
     sourcePath = source;
     walk(root);
     path = [...headings];
-    const visible = e => e.checkVisibility ? e.checkVisibility({ visibilityProperty: true }) : !hidden(e);
     for (const e of [...root.querySelectorAll('input,select,textarea,button,[role="button"]')].filter(visible)) {
       // Placeholders suggest input; they do not label a value or prove an empty named field.
       if (CONTROLS.has(e.tagName) && !e.labels?.length && !e.hasAttribute('aria-label') && !e.hasAttribute('aria-labelledby')) continue;

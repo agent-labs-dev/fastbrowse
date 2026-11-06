@@ -319,6 +319,47 @@ async fn test_capture_reports_icon_link_destination_with_its_row() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_capture_keeps_a_time_elements_datetime_with_its_text() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = '<div><a href="/u">rustbot</a> released this ' +
+          '<relative-time id=rt datetime="2026-10-16T04:47:44Z">16 Oct 04:47</relative-time></div>' +
+          '<p>Posted <time datetime="2026-10-16">3 weeks ago</time></p>' +
+          '<ol><li>Opened <time datetime="2026-02-02">Feb 2</time>, closed <time datetime="2026-02-02">today</time></li></ol>' +
+          '<p><time datetime="2026-01-02">2026-01-02</time></p>' +
+          '<p>Edited <del datetime="2020-01-01">old text</del></p>' +
+          '<p><time datetime="1999-01-01" style="display:none">x</time>Kept</p>' +
+          '<a href="/c"><time datetime="2026-11-01">5 days ago</time></a>' +
+          '<ul><li>Shipped <relative-time id=lt datetime="2026-09-01">Sep 1</relative-time></li></ul>' +
+          '<table><tr><th>When</th></tr><tr><td><time datetime="2026-03-04">March</time></td></tr></table>';
+        document.getElementById('rt').attachShadow({ mode: 'open' }).textContent = '3 weeks ago';
+        document.getElementById('lt').attachShadow({ mode: 'open' }).textContent = 'last month';
+        "#,
+    )
+    .await;
+    let capture = h.page.capture().await.expect("capture");
+    // A shadow-drawn relative time reads in its row, followed by the exact date the element holds.
+    assert!(capture.text.contains("rustbot released this 3 weeks ago (2026-10-16T04:47:44Z)"), "{}", capture.text);
+    assert!(capture.text.contains("Posted 3 weeks ago (2026-10-16)"), "{}", capture.text);
+    // Each time in a list item is stamped, even when an earlier one holds the same date.
+    assert!(capture.text.contains("Opened Feb 2 (2026-02-02), closed today (2026-02-02)"), "{}", capture.text);
+    // Shown text that already states the date, an edit's date and a hidden time add nothing.
+    assert!(!capture.text.contains("2026-01-02 (2026-01-02)"));
+    assert!(!capture.text.contains("2020-01-01"));
+    assert!(!capture.text.contains("1999-01-01"));
+    let link = capture.blocks.iter().find(|b| b.kind == BlockKind::Link && b.href.as_deref() == Some("/c")).unwrap();
+    assert_eq!(text_of(&capture, link), "5 days ago (2026-11-01)");
+    // The detached shadow block of a host its list item read without that text still carries the date.
+    assert!(capture.text.contains("last month (2026-09-01)"), "{}", capture.text);
+    let table = capture.blocks.iter().find(|b| b.kind == BlockKind::Table).unwrap();
+    assert!(text_of(&capture, table).contains("March (2026-03-04)"));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_an_image_link_does_not_borrow_its_articles_text() {
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");

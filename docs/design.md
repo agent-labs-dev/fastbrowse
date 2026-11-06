@@ -94,6 +94,10 @@ Fetched documents have no pixels, so optional screenshots and step frames are sk
 Browser captures record an icon-only link's destination with nearby container text, passing through empty layout
 wrappers. The search stops at a paragraph even when it is empty, and never uses the page root as nearby text.
 
+Browser and fetch captures write a `time` or custom element's `datetime` in brackets after the text it shows, so a
+relative date such as "3 weeks ago" keeps the exact date the page holds. `ins` and `del` are excluded, and nothing is
+added when the shown text already states the value.
+
 Jev moves through a list. A `rel="next"` link is a stated fact on its element, and every other link keeps its href,
 so choosing the next page is an ordinary step. A page number drawn as text rather than a link or a button is offered
 when it is focusable and has visible text, including a label wrapped in child elements. Hidden menu links do not

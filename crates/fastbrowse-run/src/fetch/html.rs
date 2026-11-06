@@ -195,6 +195,9 @@ struct Reader<'a> {
     /// outside one marks a carousel, a wizard or a next article as often as a list's next page. Each counts the
     /// elements of its own tag open inside it, so an inner `</div>` closes the inner div, not the container.
     paging: Vec<(String, usize)>,
+    /// Open dated elements, as tag, `datetime` and the text read inside so far. A relative date such as "3 weeks ago"
+    /// holds the exact date only in this attribute, so the reader writes it after the text, as `capture.js` does.
+    stamps: Vec<(String, String, String)>,
 }
 
 impl<'a> Reader<'a> {
@@ -223,6 +226,7 @@ impl<'a> Reader<'a> {
             labelling: None,
             pager_item: false,
             paging: Vec::new(),
+            stamps: Vec::new(),
         }
     }
 
@@ -290,6 +294,12 @@ impl<'a> Reader<'a> {
             self.hidden.push(tag.to_string());
             self.skip += 1;
             return;
+        }
+        // A `time` or a custom element dates the text it shows; the `datetime` of `ins` and `del` dates an edit.
+        if (tag == "time" || tag.contains('-'))
+            && let Some(datetime) = get("datetime").map(text::strip).filter(|datetime| !datetime.is_empty())
+        {
+            self.stamps.push((tag.to_string(), datetime.to_string(), String::new()));
         }
         self.control(tag, attrs);
         // Pagination's own words, not "pag" alone: a `<body class="page">` layout class held every carousel open.
@@ -406,6 +416,14 @@ impl<'a> Reader<'a> {
             self.in_title = false;
             return;
         }
+        if let Some((_, datetime, text)) = self.stamps.pop_if(|(open, _, _)| open == tag) {
+            let shown = clean(&text);
+            if shown.is_empty() {
+                self.add(&datetime);
+            } else if !shown.contains(&datetime) {
+                self.add(&format!(" ({datetime})"));
+            }
+        }
         if heading_level(tag).is_some() {
             self.flush(None, None, true);
             self.heading = None;
@@ -463,6 +481,9 @@ impl<'a> Reader<'a> {
             return;
         }
         if let Some((_, _, text)) = &mut self.labelling {
+            text.push_str(data);
+        }
+        for (_, _, text) in &mut self.stamps {
             text.push_str(data);
         }
         self.add(data);
@@ -713,6 +734,33 @@ mod tests {
         );
         assert_eq!(controls.len(), 1);
         assert_eq!(controls[0].next_page, None, "a page layout class is not a pagination container");
+    }
+
+    #[test]
+    fn a_time_keeps_its_machine_date() {
+        let text = |html: &str| {
+            let (_, found) = blocks(html, "https://a.example/");
+            found.into_iter().map(|b| b.text).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            text(
+                "<p>rustbot released this <relative-time datetime=\"2026-10-16T04:47:44Z\"> 16 Oct 04:47 </relative-time></p>"
+            ),
+            ["rustbot released this 16 Oct 04:47 (2026-10-16T04:47:44Z)"]
+        );
+        assert_eq!(text("<p><time datetime=\"2026-01-02\">2026-01-02</time></p>"), ["2026-01-02"]);
+        assert_eq!(text("<p><del datetime=\"2020-01-01\">x</del></p>"), ["x"]);
+        assert_eq!(text("<p><local-time datetime=\"2026-05-05\"></local-time></p>"), ["2026-05-05"]);
+        assert_eq!(
+            text("<table><tr><td><time datetime=\"2026-03-04\">March</time></td></tr></table>"),
+            ["| March (2026-03-04) |"]
+        );
+        let (_, found, controls) =
+            read("<p><a href=\"/c\"><time datetime=\"2026-11-01\">5 days ago</time></a></p>", "https://a.example/");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].kind, BlockKind::Link);
+        assert_eq!(found[0].text, "5 days ago (2026-11-01)");
+        assert_eq!(controls[0].label, "5 days ago");
     }
 
     #[test]
