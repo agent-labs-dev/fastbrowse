@@ -1335,6 +1335,74 @@ async fn test_controls_a_script_adds_under_the_pointer_are_reached_by_hovering_t
     h.close().await;
 }
 
+/// A gallery's buttons faded in on hover from opacity 0, so the observation taken right after the hover saw only the
+/// transition's starting value and offered none of them.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_controls_fading_in_under_the_pointer_are_offered_at_once() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/hover-fade.html").await;
+    let obs = h.observe().await;
+    assert!(!obs.controls.iter().any(|c| c.label == "delete" || c.label == "edit"));
+    let card = |obs: &Observation, caption: &str| -> Control {
+        obs.controls
+            .iter()
+            .find(|c| c.operations.contains(&Operation::Hover) && c.label == caption)
+            .unwrap_or_else(|| panic!("no hover target for {caption:?} in {:?}", obs.controls))
+            .clone()
+    };
+    let offered = |obs: &Observation, caption: &str| -> Vec<String> {
+        obs.controls.iter().filter(|c| c.context.as_deref() == Some(caption)).map(|c| c.label.clone()).collect()
+    };
+    let second = "The quest log grouped by zone";
+    assert_eq!(act(&h.page, hover(&card(&obs, second)), &obs).await.outcome, StepOutcome::Executed);
+    let revealed = h.observe().await;
+    let labels = offered(&revealed, second);
+    assert!(labels.contains(&"delete".to_owned()) && labels.contains(&"edit".to_owned()), "{:?}", revealed.controls);
+    let delete = revealed
+        .controls
+        .iter()
+        .find(|c| c.label == "delete" && c.context.as_deref() == Some(second))
+        .expect("delete for the second card");
+    assert_eq!(act(&h.page, click(delete), &revealed).await.outcome, StepOutcome::Executed);
+    assert_eq!(eval_active(&h, "document.getElementById('status').textContent").await, json!("Deleted m2"));
+
+    // Moving to the third card fades its controls in and the second card's out.
+    let third = "The settings panel";
+    let before = h.observe().await;
+    assert_eq!(act(&h.page, hover(&card(&before, third)), &before).await.outcome, StepOutcome::Executed);
+    let moved = h.observe().await;
+    let labels = offered(&moved, third);
+    assert!(labels.contains(&"delete".to_owned()) && labels.contains(&"edit".to_owned()), "{:?}", moved.controls);
+    let left = offered(&moved, second);
+    assert!(!left.contains(&"delete".to_owned()) && !left.contains(&"edit".to_owned()), "{:?}", moved.controls);
+    h.close().await;
+}
+
+/// A control that fades in but stays unclickable until the fade ends is not offered while it fades.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_fading_control_that_ignores_the_pointer_is_not_offered() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/hover-fade.html").await;
+    eval_active(&h, "document.body.classList.add('late')").await;
+    let obs = h.observe().await;
+    let second = "The quest log grouped by zone";
+    let card = obs
+        .controls
+        .iter()
+        .find(|c| c.operations.contains(&Operation::Hover) && c.label == second)
+        .unwrap_or_else(|| panic!("no hover target for the second card in {:?}", obs.controls));
+    assert_eq!(act(&h.page, hover(card), &obs).await.outcome, StepOutcome::Executed);
+    let revealed = h.observe().await;
+    assert!(
+        !revealed.controls.iter().any(|c| c.context.as_deref() == Some(second) && c.label == "delete"),
+        "{:?}",
+        revealed.controls
+    );
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_visible_option_is_clicked_without_scrolling_its_menu_shut() {
     let _turn = turn().await;

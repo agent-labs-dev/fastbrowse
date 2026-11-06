@@ -81,8 +81,9 @@ optional image reading.
 Content shown only under the pointer is reached by a hover target, which moves the real pointer there. An
 element is offered as one when a stylesheet hover rule reveals hidden content inside it, or when it is a card
 of a list that shows a picture and holds no control of its own, because a script may render such a card's
-controls only while a pointer is over it. The next observation offers what appeared. A hover only shows
-content, so a task to carry out is not done by hovering alone.
+controls only while a pointer is over it. The next observation offers what appeared. A control fading in under the
+pointer counts as shown from the start of its fade, unless it ignores the pointer until the fade ends, and one fading
+out counts as gone. A hover only shows content, so a task to carry out is not done by hovering alone.
 
 A browser observation reports each control's `focused` state. A custom page may leave it unknown.
 The optional `invalid` flag reports `aria-invalid` or a failed native constraint on a field that participates

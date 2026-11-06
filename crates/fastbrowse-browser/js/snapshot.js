@@ -154,6 +154,42 @@
   // every chosen index: a later option chosen or taken out changes it.
   const chosen = e =>
     e.multiple && e.tagName === 'SELECT' ? [...e.selectedOptions].map(o => o.index) : (e.selectedIndex ?? null);
+  // A control that fades in under the pointer starts its opacity transition at zero, and the observation taken right
+  // after the hover would otherwise see only that start. A CSS transition's last keyframe is where it is going, also
+  // after a reversal, which restarts it as a new transition. A keyframe animation's last keyframe gives no direction
+  // when it alternates or repeats, so only transitions count: anything else is NaN.
+  const fadingTo = t =>
+    t instanceof t.effect.target.ownerDocument.defaultView.CSSTransition &&
+    !t.effect.pseudoElement &&
+    t.transitionProperty === 'opacity' &&
+    t.playState === 'running' &&
+    t.playbackRate > 0 &&
+    Number.isFinite(t.effect.getComputedTiming().endTime)
+      ? parseFloat(t.effect.getKeyframes().at(-1)?.opacity)
+      : NaN;
+  // Whether `e` or an ancestor, across shadow roots, passes `test`.
+  const onChain = (e, test) => {
+    for (let a = e; a; a = a.parentElement ?? a.getRootNode().host) if (test(a)) return true;
+    return false;
+  };
+  // Asked only of an element whose opacity check failed. One that ignores the pointer while it fades is not offered,
+  // as what it covers would take the click.
+  const fadingIn = e =>
+    e.checkVisibility({ checkVisibilityCSS: true }) &&
+    e.ownerDocument.defaultView.getComputedStyle(e).pointerEvents !== 'none' &&
+    !onChain(
+      e,
+      a =>
+        a.ownerDocument.defaultView.getComputedStyle(a).opacity === '0' &&
+        !a.getAnimations().some(t => fadingTo(t) > 0),
+    );
+  // What is fading out has gone for a person though its opacity is still above zero, as the controls of a card the
+  // pointer has just left are.
+  const fadingOut = memo(doc => new Set(doc.getAnimations().flatMap(t => (fadingTo(t) === 0 ? [t.effect.target] : []))));
+  const leaving = e => {
+    const out = fadingOut(e.ownerDocument);
+    return out.size > 0 && onChain(e, a => out.has(a));
+  };
   // Asked of each control by the walk and again by its guard, and of each text node's parent.
   const visible = memo(e => {
     // Todo lists paint the checkmark beside a transparent native input without associating a label.
@@ -166,7 +202,8 @@
       ![...(e.labels || [])].some(l => l.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }));
     if (
       e.closest('[aria-hidden="true"],[inert]') ||
-      !e.checkVisibility({ checkOpacity: !choice, checkVisibilityCSS: true }) ||
+      (!e.checkVisibility({ checkOpacity: !choice, checkVisibilityCSS: true }) && (choice || !fadingIn(e))) ||
+      leaving(e) ||
       (choice && !shownThrough(e))
     )
       return false;
