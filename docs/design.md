@@ -28,6 +28,15 @@ the page calls it, so Jev is not asked whether it is irreversible: an unauthoriz
 is recorded as a failed step with a reason. The classifier can be wrong, so this gate is not a guarantee
 that every externally visible change is detected.
 
+These questions are asked with the task and the page's origin only, never the page's content, so a page
+cannot argue an action through. An authorized run also asks, in the same request, whether the task asks for
+the action only in some state of the page or site ("reply if nobody has answered yet"). When it does, and the
+action commits or leaves something the site keeps, a second Jev request asks whether the page shows the
+state in which the task says not to do it, or has not been checked for it. That request gets the masked page
+text, controls, media, dialog and tabs, with the notes and recent actions, and can only refuse: the action
+proceeds only on a clear no, and any other answer refuses it once so the run can read the page or finish.
+Repeated refusals spend recoveries and end the run `stuck`, never by committing.
+
 Two rules come from the task itself, judged once per run by Jev from the task text and kept for the run.
 When the task rules out downloading, a control the page says downloads a file is refused. When the task
 rules out changing anything, a fill, a select or a click on a setting control (a checkbox, radio, switch,
