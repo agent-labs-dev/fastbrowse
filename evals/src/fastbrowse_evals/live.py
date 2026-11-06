@@ -2516,6 +2516,13 @@ def browser_identity(arm: str, local_browser: Path | None) -> dict[str, Any]:
     raise ValueError(f"unknown arm {arm}")
 
 
+def _started_physical_runs(out: Path) -> bool:
+    """Whether an earlier attempt into `out` started a physical run: a row in its ledger, attempts or budget journal.
+    An attempt refused before any run leaves at most empty files, so it may reuse its `--out`."""
+    files = (out, out.with_suffix(".attempts.jsonl"), out.with_suffix(".budget.jsonl"))
+    return any(f.exists() and f.stat().st_size > 0 for f in files)
+
+
 async def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="fastbrowse-evals browser internal", description=__doc__)
     parser.add_argument("--only", nargs="*", default=[], help="task ids to run; an id the selection lacks is an error")
@@ -2619,7 +2626,14 @@ async def main(argv: list[str]) -> int:
         unbilled = {"fastbrowse-pool"} | ({"fastbrowse"} if args.local_browser is not None else set())
         if args.browser_reserve_dollars == 0 and set(args.arms) - unbilled:
             parser.error("zero browser reserve requires every arm to run on a local or pool browser")
-        if args.out.exists():
+        hold = args.reserve_dollars + args.browser_reserve_dollars + args.judge_reserve_dollars
+        if request_spec is None and args.budget + 1e-9 < hold:
+            parser.error(
+                f"--budget {args.budget:g} cannot hold one run: each run reserves ${hold:g} (agent "
+                f"{args.reserve_dollars:g} + browser {args.browser_reserve_dollars:g} + judge "
+                f"{args.judge_reserve_dollars:g})"
+            )
+        if _started_physical_runs(args.out):
             parser.error("a budgeted comparison requires a fresh output; retain and reconcile prior physical runs")
     for flag, count in (("--concurrency", args.concurrency), ("--repeat", args.repeat)):
         if count <= 0:

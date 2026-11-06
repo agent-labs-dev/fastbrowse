@@ -29,7 +29,7 @@ async def fetch(
 ) -> bytes:
     if source.sha256 is None:
         raise ValueError(
-            f"{source.id}: a verified sha256 is required for revision {source.revision}; see docs/data-sources.md"
+            f"{source.id}: a verified sha256 is required for revision {source.revision}; see evals/THIRD_PARTY_DATA.md"
         )
     folder = cache_dir() if cache is None else cache
     target = folder / f"{source.id}-{source.revision}-{source.sha256}"

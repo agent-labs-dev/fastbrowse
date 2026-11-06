@@ -40,8 +40,8 @@ A claim about the agent rests on a run made for it, on the build it names:
 A transient site problem the agent did not cause (an error page, a 5xx, a 429, maintenance, a page that never
 finishes loading, a network error) is an environment interruption. The agent may retry it in general ways, and
 the harness judges it as not an agent failure. Headless local Chrome meets bot checks on sites such as search
-engines and package indexes; a run a bot check stopped is ungraded, not an agent failure. Parallax's
-`docs/browser-benchmarks.md` has how each is recorded.
+engines and package indexes; a run a bot check stopped is ungraded, not an agent failure.
+[`evals/BENCHMARKS.md`](../../evals/BENCHMARKS.md) has how each is recorded.
 
 ## Before spending
 
