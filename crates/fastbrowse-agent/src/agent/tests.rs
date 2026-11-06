@@ -5842,3 +5842,60 @@ async fn test_a_stopped_run_never_answers_against_its_own_step() {
     assert_eq!(stopped.status, Status::Stuck);
     assert!(!stopped.answer.unwrap_or_default().contains("already exists"));
 }
+
+/// A Jev that picks each choice's first option and keeps every choice it is asked.
+#[derive(Default)]
+struct FirstChoice {
+    asked: Mutex<Vec<String>>,
+}
+
+impl DecisionClient for FirstChoice {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        let answers = questions
+            .iter()
+            .filter_map(|(key, question)| {
+                let Question::Choice(choice) = question else { return None };
+                self.asked.lock().unwrap().push(choice.instructions.clone());
+                let first = choice.criteria.keys().next()?.clone();
+                let answer = ChoiceAnswer {
+                    kind: Default::default(),
+                    choice: first.clone(),
+                    probabilities: IndexMap::from([(first, 1.0)]),
+                    confidence: 1.0,
+                };
+                Some((key.clone(), Answer::Choice(answer)))
+            })
+            .collect();
+        Box::pin(
+            async move { Ok(Evaluation { model: "jev".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile::jev()
+    }
+}
+
+/// An unlabelled select is offered as a bare combobox under its section (#838), so the option question names the
+/// section too: "combobox" alone says nothing about which field is being set.
+#[tokio::test]
+async fn test_the_select_question_names_the_section_of_an_unlabelled_select() {
+    let mut select = Control {
+        options: vec!["Achievements".into(), "Bags".into()],
+        ..Control::new("s", "combobox", "combobox", [Operation::Select])
+    };
+    select.context = Some("Categories".into());
+    let page = observation(std::slice::from_ref(&select));
+    let jev = Arc::new(FirstChoice::default());
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.edits_forbidden = Some(false);
+    let acted = agent.action(&mut state, &page, &code_decision(Operation::Select, Some(select))).await;
+    assert!(acted.is_ok(), "{acted:?}");
+    let asked = jev.asked.lock().unwrap();
+    assert!(asked.iter().any(|q| q.contains("combobox (Categories)")), "{asked:?}");
+}
