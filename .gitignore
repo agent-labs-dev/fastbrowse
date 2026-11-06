@@ -29,3 +29,6 @@ crates/fastbrowse-node/*.node
 src/fastbrowse/_native*.so
 src/fastbrowse/_native*.pyd
 wheels/
+
+# Sloppatrol patrol runs, checkouts and score cache
+.sloppatrol/runs/
