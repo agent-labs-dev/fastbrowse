@@ -391,7 +391,7 @@ impl RunState {
 
     /// The steps this run carried out that act on a page, as the models deciding steps are shown them.
     pub fn executed_steps(&self) -> Vec<serde_json::Value> {
-        self.history.iter().filter(|entry| entry.acted()).map(Dump::dump_exclude_none).collect()
+        self.history.iter().filter(|entry| entry.changed_site()).map(Dump::dump_exclude_none).collect()
     }
 
     pub fn checked_composition(&self, notes: &Notes) -> Option<&ComposedAnswer> {
