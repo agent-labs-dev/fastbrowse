@@ -129,6 +129,7 @@ pub fn parser(build: &Build) -> Parser {
             Opt::flag("--authorize"),
             Opt::append("--secret"),
             Opt::value("--bitwarden"),
+            Opt::append("--input"),
             Opt::value("--max-steps"),
             Opt::value("--max-dollars"),
             Opt::value("--downloads"),
@@ -169,6 +170,8 @@ pub struct Args {
     pub authorize: bool,
     pub secret: Vec<(String, String, Option<String>)>,
     pub bitwarden: Option<String>,
+    /// Named values a fill may type, which a saved recipe types again by name: `--input NAME=VALUE`.
+    pub input: Vec<(String, String)>,
     pub max_steps: Option<i64>,
     pub max_dollars: Option<f64>,
     pub downloads: Option<PathBuf>,
@@ -212,6 +215,7 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
         "--proxy-country" => fastbrowse_run::country_code(value).map(drop),
         "--viewport" => viewport_value(value),
         "--secret" => options::scoped_secret(value).map(drop),
+        "--input" => named_input(value).map(drop),
         _ => Ok(()),
     })?;
     let text = |flag: &str| parsed.value(flag).map(str::to_string);
@@ -235,6 +239,7 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
         authorize: parsed.flag("--authorize"),
         secret: parsed.all("--secret").iter().filter_map(|value| options::scoped_secret(value).ok()).collect(),
         bitwarden: text("--bitwarden"),
+        input: parsed.all("--input").iter().filter_map(|value| named_input(value).ok()).collect(),
         max_steps: parsed.value("--max-steps").and_then(py_int),
         max_dollars: parsed.value("--max-dollars").and_then(py_float),
         downloads: path("--downloads"),
@@ -249,6 +254,14 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
         trace: text("--trace"),
         cursor: cursor_choice(parsed.flag("--cursor"), parsed.flag("--no-cursor")),
     })
+}
+
+/// `NAME=VALUE`, the value taken as given, `=` and all.
+fn named_input(value: &str) -> Result<(String, String), String> {
+    match value.split_once('=') {
+        Some((name, input)) if !name.trim().is_empty() => Ok((name.trim().to_string(), input.to_string())),
+        _ => Err(format!("expected NAME=VALUE, got {}", fastbrowse_core::py::text::repr(value))),
+    }
 }
 
 fn viewport_value(value: &str) -> Result<(), String> {
@@ -421,6 +434,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         record: args.record.clone(),
         recipe: args.recipe.clone(),
         save_recipe: args.save_recipe.clone(),
+        inputs: (!args.input.is_empty()).then(|| args.input.iter().cloned().collect()),
         cursor: args.cursor,
         local: args.local,
         chrome,
