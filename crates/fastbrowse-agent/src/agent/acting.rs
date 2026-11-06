@@ -1039,14 +1039,10 @@ impl Agent {
         let history = state.history.iter().map(Dump::dump_exclude_none).collect();
         let mut context = Map::from_iter([("recent_actions".to_string(), JsonValue::Array(history))]);
         // What code already knows was left undone, as the step decision is told it: values typed and never sent, and
-        // fields left empty on a task to carry out (#812).
+        // fields left empty once the run stalled on a task to carry out (#812).
         let facts: Vec<String> = unsent_fact(&state.history, observation)
             .into_iter()
-            .chain(
-                (state.to_carry_out || state.output_intent == OutputIntent::CarriedOut)
-                    .then(|| empty_fields_fact(&state.missing, observation))
-                    .flatten(),
-            )
+            .chain(state.to_carry_out.then(|| empty_fields_fact(&state.missing, observation)).flatten())
             .collect();
         if !facts.is_empty() {
             context.insert("page_facts".into(), facts.into());

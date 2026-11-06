@@ -1112,12 +1112,16 @@ async fn test_the_done_check_is_told_what_was_typed_and_never_sent() {
     assert!(!agent.actions_done(&mut state, &page).await.unwrap());
     let facts = jev.3.lock().unwrap()[0]["page_facts"].to_string();
     assert!(facts.contains("No action has sent what was typed"), "{facts}");
-    // On a task to carry out, a field left empty is named too, whether or not the run once stalled.
+    // A field left empty is named only once the run stalled on a task to carry out, as the step decision names it:
+    // a run that did act is not told an unrelated empty search box is unfinished work.
     let page = observation(&[holding("Reference", "REF-1"), holding("Note", "")]);
     state.output_intent = super::state::OutputIntent::CarriedOut;
     assert!(!agent.actions_done(&mut state, &page).await.unwrap());
+    state.to_carry_out = true;
+    assert!(!agent.actions_done(&mut state, &page).await.unwrap());
     let asked = jev.3.lock().unwrap();
-    assert!(asked[1]["page_facts"].to_string().contains("'Note'"), "{}", asked[1]);
+    assert!(!asked[1]["page_facts"].to_string().contains("'Note'"), "{}", asked[1]);
+    assert!(asked[2]["page_facts"].to_string().contains("'Note'"), "{}", asked[2]);
 }
 
 /// `DoneCheckJev`, judging that no answer gives every requested fact.
