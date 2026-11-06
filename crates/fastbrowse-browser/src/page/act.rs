@@ -970,14 +970,18 @@ impl CdpPage {
             }
             Point::At(..) => {}
         }
+        // A list that allows several choices toggles the named option, as a Ctrl-click does: setting `value` kept only
+        // that one, and nothing could take one out. Playwright's selectOption sets a whole list instead.
         let script = format!(
             "((id, label) => {{ const e = window.__fastbrowse?.nodes.get(id); \
              if (!e?.isConnected || e.tagName !== 'SELECT') return null; \
              const opt = [...e.options].find(o => o.label === label && !o.disabled); \
-             if (!opt) return false; e.value = opt.value; \
+             if (!opt) return false; const wanted = !e.multiple || !opt.selected; \
+             if (e.multiple) opt.selected = wanted; else e.value = opt.value; \
              e.dispatchEvent(new Event('input', {{bubbles: true}})); \
              e.dispatchEvent(new Event('change', {{bubbles: true}})); \
-             return e.value === opt.value || (e.selectedOptions[0]?.label ?? ''); }})({local_id}, {})",
+             return (e.multiple ? opt.selected === wanted : e.value === opt.value) \
+               || [...e.selectedOptions].map(o => o.label).join(', '); }})({local_id}, {})",
             py_json(&json!(option))
         );
         // The events are code's own, not trusted, so the window that counts a move as the run's is opened for them.

@@ -5899,3 +5899,73 @@ async fn test_the_select_question_names_the_section_of_an_unlabelled_select() {
     let asked = jev.asked.lock().unwrap();
     assert!(asked.iter().any(|q| q.contains("combobox (Categories)")), "{asked:?}");
 }
+
+/// A select that allows several choices, labelled Topics, with `selected` chosen.
+fn topics(selected: &str) -> Control {
+    Control {
+        options: vec!["Achievements".into(), "Chat & Communication".into()],
+        input_type: Some("select-multiple".into()),
+        value: Some(selected.into()),
+        ..Control::new("t", "listbox", "Topics", [Operation::Select])
+    }
+}
+
+/// Select on a list that allows several choices toggles one option (#838), so Jev is asked which to toggle and told
+/// which are chosen, as page data inside the untrusted frame.
+#[tokio::test]
+async fn test_the_select_question_on_a_multiple_select_asks_which_option_to_toggle() {
+    use fastbrowse_core::models::UNTRUSTED;
+    for (selected, shown) in [
+        ("Chat & Communication", "'Chat & Communication'"),
+        ("Achievements, Chat & Communication", "'Achievements, Chat & Communication'"),
+        ("", "none"),
+    ] {
+        let select = topics(selected);
+        let page = observation(std::slice::from_ref(&select));
+        let jev = Arc::new(FirstChoice::default());
+        let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.edits_forbidden = Some(false);
+        let acted = agent.action(&mut state, &page, &code_decision(Operation::Select, Some(select))).await;
+        assert!(acted.is_ok(), "{acted:?}");
+        let asked = jev.asked.lock().unwrap();
+        let question = format!("Which option of 'Topics' should be toggled? Selected now: {shown}.");
+        assert!(asked.iter().any(|q| q.starts_with(UNTRUSTED) && q.ends_with(&question)), "{asked:?}");
+    }
+}
+
+#[tokio::test]
+async fn test_a_task_that_rules_out_changes_refuses_a_toggle_on_a_multiple_select() {
+    let select = topics("Chat & Communication");
+    let page = observation(std::slice::from_ref(&select));
+    let jev = Arc::new(Gatekeeper {
+        irreversible: 0.1,
+        requested: 0.0,
+        lasting: 0.0,
+        edits: 0.95,
+        calls: Default::default(),
+        edits_asked: Default::default(),
+    });
+    let agent = Agent::new(Arc::new(NoPage), jev, Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Read-only, change nothing. List the chosen topics.".into();
+    let acted = agent.action(&mut state, &page, &code_decision(Operation::Select, Some(select))).await;
+    assert!(matches!(acted, Err(Flow::Unsure(_))), "{acted:?}");
+}
+
+/// Naming a chosen option again takes it out of a list that allows several, so it is not the "already holds that
+/// value" no-op a single select's repeat is: the page it lands on judges it.
+#[test]
+fn test_naming_a_chosen_option_of_a_multiple_select_again_is_not_a_repeat() {
+    let mut seen = Written::default();
+    let select = topics("Achievements");
+    seen.record(&select, "Achievements");
+    let action = Action {
+        target_id: Some(select.id.clone()),
+        text: Some("Achievements".into()),
+        ..Action::new(Operation::Select)
+    };
+    let decision = code_decision(Operation::Select, Some(select));
+    assert_eq!(edit_progress(&decision, &action, &seen), None);
+    assert_eq!(edit_progress(&decision, &action, &Written::default()), None);
+}
