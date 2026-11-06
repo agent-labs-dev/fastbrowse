@@ -129,7 +129,7 @@ shows never names that section. A control whose own clip or clip-path leaves it 
 picker keeps the select it replaces on the page that way, and a hidden checkbox, radio or file input is reached through
 its label.
 
-Select on a select that allows several choices toggles the one option Jev picks, as a Ctrl-click does, and leaves the
+Select on a select that allows more than one choice toggles the one option Jev picks, as a Ctrl-click does, and leaves the
 others as they were. Jev is asked which option to toggle and told which are selected now. A change handler that puts the
 selection back fails the step, as on a single select, and the action guard and page fingerprint read every selected
 option, so choosing or removing any one of them is a change.
