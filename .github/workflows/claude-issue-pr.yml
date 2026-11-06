@@ -1,6 +1,7 @@
 # When @cjber reacts 👀 to an open issue, Claude implements it on claude/issue-<n> and opens a PR whose body
-# closes the issue. GitHub has no reaction event, so a five-minute poll finds the reactions; a webhook or App
-# can skip the wait with a repository_dispatch of type eyes-reaction and {"issue_number": <n>}.
+# closes the issue. GitHub has no reaction event, so an hourly poll finds the reactions; a webhook or App
+# can skip the wait with a repository_dispatch of type eyes-reaction and {"issue_number": <n>}, though none
+# sends one yet. workflow_dispatch starts one issue at once.
 #
 # The claude-auto-pr label marks an issue as taken, so the poll starts it once. Remove the label to run it again.
 # A PR opened with the workflow's own token starts no CI; set CLAUDE_PR_TOKEN to a token that may push and
@@ -8,7 +9,7 @@
 name: Claude issue PR
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "17 * * * *"
   repository_dispatch:
     types: [eyes-reaction]
   workflow_dispatch:
