@@ -588,8 +588,10 @@ impl Agent {
                 _ if !executed => Some(false),
                 Some(edited) => Some(edited),
                 // The fingerprint reads neither field values nor focus, so a field left reported no change even when
-                // its change handler rewrote it. The page state it lands on judges it, as for a page change.
-                None if decision.operation == Operation::Blur => None,
+                // its change handler rewrote it. Nor does it read a control without text, so a hover that showed a
+                // card's icon-only buttons also reported no change. The page state each lands on judges it, as for a
+                // page change.
+                None if matches!(decision.operation, Operation::Blur | Operation::Hover) => None,
                 None => (!changed).then_some(false),
             };
             if edit == Some(false) && executed {
