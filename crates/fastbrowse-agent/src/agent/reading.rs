@@ -1,5 +1,6 @@
 //! Reading a page into the notes: Jev picks what on it answers the task, and that stands.
 
+use fastbrowse_core::effects::state_key;
 use fastbrowse_core::page::{Capture, Observation};
 use fastbrowse_core::py::text;
 use serde_json::Map;
@@ -83,6 +84,9 @@ impl Agent {
         });
         if progressed {
             state.evidence_reads += 1;
+            // The page read is on screen as the evidence comes in, so an action that leaves it as it was has nothing
+            // read since: a hover after a read was judged a return after new evidence, and so progress.
+            state.reached.insert(state_key(observation), state.evidence_reads);
             state.unchanged = 0;
             state.recoveries = 0;
         }

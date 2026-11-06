@@ -3498,6 +3498,51 @@ fn test_blur_withholding_keeps_the_focus_fact_and_other_targets() {
     assert!(context.problem.as_deref().unwrap().contains("not offered this time"));
 }
 
+fn card(revealed: bool) -> Observation {
+    let mut controls = vec![Control::new("card", "article", "Card", [Operation::Hover, Operation::Click])];
+    if revealed {
+        controls.push(Control::new("delete", "button", "delete", [Operation::Click]));
+    }
+    observation(&controls)
+}
+
+/// Hover the card on a page whose fingerprint reports no change, landing on `landed`, then build the next ask.
+async fn hover(seen: &[Observation], landed: Observation) -> (RunState, Observation) {
+    let page = LeavingPage { expected: Operation::Hover, now: std::sync::Mutex::new(card(false)), left: landed };
+    let agent = Agent::new(Arc::new(page), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    for earlier in seen {
+        agent.settle(&mut state, earlier).await.expect("settled");
+    }
+    let observation = agent.observe().await.expect("observed");
+    agent.settle(&mut state, &observation).await.expect("settled");
+    let target = observation.controls[0].clone();
+    agent.step(&mut state, &observation, &code_decision(Operation::Hover, Some(target))).await.expect("stepped");
+    let mut landed = agent.observe().await.expect("observed");
+    agent.note_effect(&mut state, &landed);
+    agent.settle(&mut state, &landed).await.expect("settled");
+    let mut context = crate::policy::StepContext::new("delete the card");
+    super::recovery::leave_out_idle(&state, &mut landed, &mut context);
+    (state, landed)
+}
+
+#[tokio::test]
+async fn test_a_hover_that_reveals_icon_only_controls_is_progress() {
+    let (state, offered) = hover(&[], card(true)).await;
+    assert_eq!(state.unchanged, 0);
+    assert!(state.idle.is_empty());
+    assert!(offered.controls[0].operations.contains(&Operation::Hover));
+    let delete = offered.controls.iter().find(|control| control.id == "delete").expect("delete offered");
+    assert!(delete.operations.contains(&Operation::Click));
+}
+
+#[tokio::test]
+async fn test_a_hover_that_lands_on_a_state_already_reached_is_no_progress() {
+    let (state, offered) = hover(&[card(true)], card(true)).await;
+    assert_eq!(state.unchanged, 1);
+    assert!(!offered.controls[0].operations.contains(&Operation::Hover));
+}
+
 #[tokio::test]
 async fn test_focus_changes_do_not_block_an_ordinary_twin_retry() {
     let mut before = reference("Alpha-17", true);
