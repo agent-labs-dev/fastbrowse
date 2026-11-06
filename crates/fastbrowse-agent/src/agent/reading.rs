@@ -23,23 +23,27 @@ impl Agent {
         if state.page_failed {
             return Ok(false);
         }
-        // This content is read now, so the notes hold what the page shows.
-        state.mark_read(observation);
+        // A page counts as read once a read of it finished, so the notes hold what it shows, or after a second try that
+        // did not. The try is counted before anything is awaited, so one that errors has still used it up.
+        let tries = state.begin_read(observation);
         let mut capture = capture;
         if text::strip(&capture.text).is_empty() {
             // An empty page may still be rendering; only new content warrants a read.
             if !self.outwait(observation).await? {
+                state.end_read(observation, false, tries);
                 return Ok(false);
             }
             capture = self.capture().await?;
             if text::strip(&capture.text).is_empty() {
+                state.end_read(observation, false, tries);
                 return Ok(false);
             }
         }
         let known = read_sources(&state.notes);
         let (tokens, ledger) = (&self.config.tokens, state.ledger.clone());
-        let PageRead { facts, compose } =
+        let PageRead { facts, compose, finished } =
             read_page(&*self.jev, &capture, &state.task, tokens, Some(&ledger), &self.trace, shows).await?;
+        state.end_read(observation, finished, tries);
         let added = facts.len();
         // Jev's latest word on a read stands: one fact that alone answers the task needs nothing written around it.
         if added > 0 {

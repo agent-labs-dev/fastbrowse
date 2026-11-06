@@ -1649,6 +1649,74 @@ async fn a_pick_on_one_page_leaves_another_pages_material_to_be_composed() {
     assert!(state.compose, "the list page's quotes still need writing up beside the author page's pick");
 }
 
+fn read_document() -> Observation {
+    Observation { document_key: "document".into(), ..observation(&[]) }
+}
+
+#[tokio::test]
+async fn a_read_jev_left_unanswered_is_retried_once() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(None)), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let (page, seen) = (capture(&[(BlockKind::Paragraph, "Trains run hourly.")]), read_document());
+    agent.read(&mut state, page.clone(), &seen, false).await.unwrap();
+    assert!(!Agent::page_read(&state, &seen), "a read Jev gave no answer to took nothing from the page");
+    agent.read(&mut state, page, &seen, false).await.unwrap();
+    assert!(Agent::page_read(&state, &seen), "a second unfinished read counts the page read");
+}
+
+#[tokio::test]
+async fn an_empty_page_is_retried_once_then_counts_read() {
+    let seen = read_document();
+    let agent = Agent::new(Arc::new(FinishPage(seen.clone())), Arc::new(Answers(None)), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let empty = capture(&[]);
+    agent.read(&mut state, empty.clone(), &seen, false).await.unwrap();
+    assert!(!Agent::page_read(&state, &seen), "an empty capture is not a read of the page");
+    agent.read(&mut state, empty, &seen, false).await.unwrap();
+    assert!(Agent::page_read(&state, &seen));
+}
+
+#[tokio::test]
+async fn an_absent_read_marks_the_page_at_once() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(FieldReader(None, 0.1)), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let seen = read_document();
+    state.first_url = Some(seen.url.clone());
+    agent.read(&mut state, capture(&[(BlockKind::Paragraph, "Trains run hourly.")]), &seen, false).await.unwrap();
+    assert!(Agent::page_read(&state, &seen), "a read that found nothing for the task finished");
+    assert_eq!(Agent::reads_before_leaving(&state, &seen, &code_decision(Operation::Click, None)), None);
+}
+
+#[tokio::test]
+async fn a_finished_read_resets_the_retry() {
+    let mut agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(None)), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let (page, seen) = (capture(&[(BlockKind::Paragraph, "Trains run hourly.")]), read_document());
+    agent.read(&mut state, page.clone(), &seen, false).await.unwrap();
+    agent.jev = Arc::new(FieldReader(None, 0.1));
+    agent.read(&mut state, page.clone(), &seen, false).await.unwrap();
+    assert!(Agent::page_read(&state, &seen));
+    // An action changed the page, as a click does.
+    state.read_documents.insert(super::state::read_key(&seen), true);
+    agent.jev = Arc::new(Answers(None));
+    agent.read(&mut state, page.clone(), &seen, false).await.unwrap();
+    assert!(!Agent::page_read(&state, &seen), "the changed page gets its own retry");
+    agent.read(&mut state, page, &seen, false).await.unwrap();
+    assert!(Agent::page_read(&state, &seen));
+}
+
+#[tokio::test]
+async fn a_change_to_the_page_restarts_its_tries() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(None)), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let (page, seen) = (capture(&[(BlockKind::Paragraph, "Trains run hourly.")]), read_document());
+    agent.read(&mut state, page.clone(), &seen, false).await.unwrap();
+    // An action changed the page in place, as a click on a single-page app does.
+    state.page_changed(super::state::read_key(&seen));
+    agent.read(&mut state, page, &seen, false).await.unwrap();
+    assert!(!Agent::page_read(&state, &seen), "the changed page's first unfinished read is retried");
+}
+
 #[tokio::test]
 async fn test_jev_reads_a_field_value_on_a_task_that_also_acts() {
     let field = "Date Picker 2: 27/12/2026";
@@ -2332,6 +2400,8 @@ async fn a_value_typed_as_an_input_gave_it_is_saved_as_that_input() {
         Arc::new(Ledger::new(Limits::default())),
     );
     assert_eq!(state.task, "Book a table for input date (2026-11-04)");
+    // Booking a table allows typing into its fields.
+    state.edits_forbidden = Some(false);
     let target = field("Date");
     let fill = code_decision(Operation::Fill, Some(target));
     let action = agent.action(&mut state, &observation(&[]), &fill).await.unwrap();

@@ -18,6 +18,9 @@ use crate::policy::{Decision, HistoryEntry, RelevanceCache};
 use crate::retrieval::ComposedAnswer;
 use crate::retrieval::whole_page_facts;
 
+/// Reads a page gets between finished reads: one that did not finish is tried once more, then the page counts as read.
+const READ_TRIES: u8 = 2;
+
 /// How much of a list the task covers, by Jev's reading of the task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum Extent {
@@ -300,6 +303,9 @@ pub(crate) struct RunState {
     pub edits_forbidden: Option<bool>,
     /// Pages read, by `read_key`, each with whether an action changed it since it was last read.
     pub read_documents: HashMap<(String, String), bool>,
+    /// Reads begun on each page, by `read_key`, since its last finished read, so a read that did not finish is retried
+    /// once and never loops.
+    pub read_tries: HashMap<(String, String), u8>,
     /// Screenshots that a successful image read found held no answer for this run's task.
     pub unanswered_images: HashSet<String>,
     /// The page the last action changed, until the next observation shows it is still the page in view.
@@ -463,13 +469,38 @@ impl RunState {
     pub fn settle_change(&mut self, landed: &Observation) {
         if let Some(page) = self.changed_page.take()
             && page == read_key(landed)
-            && let Some(read) = self.read_documents.get_mut(&page)
         {
-            *read = true;
+            self.page_changed(page);
         }
     }
 
-    /// The page is read now, so the notes hold what it shows, and every link known to lead to it leads to a read page.
+    /// An action changed this page, so what was read of it is out of date and a read of it starts its tries again.
+    pub fn page_changed(&mut self, page: (String, String)) {
+        if let Some(read) = self.read_documents.get_mut(&page) {
+            *read = true;
+        }
+        self.read_tries.remove(&page);
+    }
+
+    /// Count a read begun on this page, returning how many have begun since its last finished read.
+    pub fn begin_read(&mut self, observation: &Observation) -> u8 {
+        let tries = self.read_tries.entry(read_key(observation)).or_default();
+        *tries = tries.saturating_add(1);
+        *tries
+    }
+
+    /// A read of this page ended. It counts the page read once it finished, or once the last try did not.
+    pub fn end_read(&mut self, observation: &Observation, finished: bool, tries: u8) {
+        if finished {
+            self.read_tries.remove(&read_key(observation));
+        }
+        if finished || tries >= READ_TRIES {
+            self.mark_read(observation);
+        }
+    }
+
+    /// The page is read now: the notes hold what it shows, or a read of it failed to finish twice. Every link known to
+    /// lead to it leads to a read page.
     pub fn mark_read(&mut self, observation: &Observation) {
         let page = read_key(observation);
         if let Some((landed, href)) = &self.arrived_by
@@ -630,6 +661,7 @@ impl RunState {
             downloads_forbidden: None,
             edits_forbidden: None,
             read_documents: HashMap::new(),
+            read_tries: HashMap::new(),
             unanswered_images: HashSet::new(),
             changed_page: None,
             page_failed: false,

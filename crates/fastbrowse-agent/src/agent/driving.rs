@@ -923,9 +923,12 @@ impl Agent {
                 let clicked = Some((Operation::Click, last.target.clone()));
                 state.idle.retain(|idle| idle.action != clicked);
             }
-            if let Some(read) = state.read_documents.get_mut(&read_key(observation)) {
+            // Field by field, since `last` borrows the run's steps: this is `RunState::page_changed`.
+            let page = read_key(observation);
+            if let Some(read) = state.read_documents.get_mut(&page) {
                 *read = true;
             }
+            state.read_tries.remove(&page);
         }
         last.effect = Some(match last.effect.take() {
             Some(detail) => format!("{detail}; {}", done.summary),
