@@ -439,3 +439,100 @@ async fn test_a_combobox_named_by_the_page_keeps_its_name() {
     h.close().await;
     assert_eq!(control.label, "Categories");
 }
+
+// A control clipped to nothing is not on the page for a person, and a widget that mirrors it is (#838).
+
+/// How Tom Select and select2 hide the original field they keep in place.
+const CLIPPED: &str = "position:absolute;width:1px;height:1px;clip:rect(0 0 0 0);clip-path:inset(50%);overflow:hidden";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_clipped_select_beside_its_widget_is_not_offered() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    let html = format!(
+        "<form><fieldset><legend>Categories</legend><select multiple style=\"{CLIPPED}\">\
+         <option selected>Chat &amp; Communication</option><option>Achievements</option></select>\
+         <div><span>Chat &amp; Communication</span><input role=combobox aria-label=\"Pick categories\"></div>\
+         </fieldset></form>"
+    );
+    eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(&html).unwrap())).await;
+    let observation = h.observe().await;
+    h.close().await;
+    let selects: Vec<_> = observation.controls.iter().filter(|c| c.operations.contains(&Operation::Select)).collect();
+    assert!(selects.is_empty(), "{selects:?}");
+    find(&observation, "Pick categories");
+}
+
+/// The clip check covers a control a script made pressable without a role, and reads an `auto` side as the box's edge.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_scripted_control_clipped_to_nothing_is_not_offered() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    let html = "<div onclick=\"\" style=\"position:absolute;clip:rect(auto, 0px, auto, 0px)\">Remove hidden</div>\
+                <div onclick=\"\">Remove shown</div>";
+    eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(html).unwrap())).await;
+    let observation = h.observe().await;
+    h.close().await;
+    let labels: Vec<_> = observation.controls.iter().map(|c| c.label.as_str()).collect();
+    assert!(labels.contains(&"Remove shown"), "{labels:?}");
+    assert!(!labels.contains(&"Remove hidden"), "{labels:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_clipped_checkbox_is_offered_through_its_label() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    let html = format!("<form><label><input type=checkbox style=\"{CLIPPED}\">Notify me</label></form>");
+    eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(&html).unwrap())).await;
+    let observation = h.observe().await;
+    let offered: Vec<_> = observation.controls.iter().filter(|c| c.label == "Notify me").collect();
+    assert_eq!(offered.len(), 1, "{:?}", observation.controls);
+    assert_eq!(offered[0].role, "checkbox");
+    let result = h.page.act(&action(Operation::Click, offered[0]), &observation).await.expect("act");
+    let checked = eval_active(&h.page, "document.querySelector('input').checked").await;
+    h.close().await;
+    assert_eq!(result.outcome, StepOutcome::Executed, "{:?}", result.detail);
+    assert_eq!(checked, json!(true));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_clipped_file_input_uploads_through_its_label() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    let html = format!("<input id=file type=file style=\"{CLIPPED}\"><label for=file>Attach a photo</label>");
+    eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(&html).unwrap())).await;
+    let observation = h.observe().await;
+    let offered: Vec<_> = observation.controls.iter().filter(|c| c.operations.contains(&Operation::Upload)).collect();
+    assert_eq!(offered.len(), 1, "{:?}", observation.controls);
+    assert_eq!(offered[0].label, "Attach a photo");
+    let upload = Action {
+        files: vec![Attachment { name: "a.txt".into(), mime_type: "text/plain".into(), content: Bytes(b"x".to_vec()) }],
+        ..action(Operation::Upload, offered[0])
+    };
+    let result = h.page.act(&upload, &observation).await.expect("act");
+    let count = eval_active(&h.page, "document.getElementById('file').files.length").await;
+    h.close().await;
+    assert_eq!(result.outcome, StepOutcome::Executed, "{:?}", result.detail);
+    assert_eq!(count, json!(1));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_select_clipped_after_it_was_observed_is_stale() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    let html = "<form><label>Plan<select><option>Free</option><option>Pro</option></select></label></form>";
+    eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(html).unwrap())).await;
+    let observation = h.observe().await;
+    let plan = find(&observation, "Plan");
+    eval_active(
+        &h.page,
+        &format!("document.querySelector('select').style.cssText = {}", serde_json::to_string(CLIPPED).unwrap()),
+    )
+    .await;
+    let select = Action { text: Some("Pro".into()), ..action(Operation::Select, plan) };
+    let result = h.page.act(&select, &observation).await.expect("act");
+    let value = eval_active(&h.page, "document.querySelector('select').value").await;
+    h.close().await;
+    assert_eq!(result.outcome, StepOutcome::Stale, "{:?}", result.detail);
+    assert_eq!(value, json!("Free"));
+}

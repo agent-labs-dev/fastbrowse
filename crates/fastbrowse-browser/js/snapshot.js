@@ -154,6 +154,35 @@
   // every chosen index: a later option chosen or taken out changes it.
   const chosen = e =>
     e.multiple && e.tagName === 'SELECT' ? [...e.selectedOptions].map(o => o.index) : (e.selectedIndex ?? null);
+  // Tag pickers keep the field they replace on the page, clipped to nothing, and checkVisibility() ignores clip: a
+  // control whose own clip or clip-path leaves no area is not there for a person. A hidden checkbox, radio or file
+  // input is still reached through its label. Text is still read, as a page states facts in visually hidden text.
+  const clippedAway = e => {
+    const style = e.ownerDocument.defaultView.getComputedStyle(e);
+    const rect = /^rect\((.+)\)$/.exec(style.clip);
+    const { width, height } = e.getBoundingClientRect();
+    if (rect && ['absolute', 'fixed'].includes(style.position)) {
+      // An `auto` side is the border box's own edge.
+      const edges = [0, width, height, 0];
+      const [top, right, bottom, left] = rect[1]
+        .split(/[\s,]+/)
+        .map((value, side) => (value === 'auto' ? edges[side] : parseFloat(value)));
+      if (![top, right, bottom, left].some(Number.isNaN) && (bottom <= top || right <= left)) return true;
+    }
+    const inset = /^inset\(([^)]*?)(?:\s+round\s.*)?\)$/.exec(style.clipPath);
+    if (!inset) return false;
+    const sides = inset[1].trim().split(/\s+/);
+    const [top, right = top, bottom = top, left = right] = sides;
+    const length = (value, size) =>
+      value.endsWith('%')
+        ? (parseFloat(value) / 100) * size
+        : value.endsWith('px') || value === '0'
+          ? parseFloat(value)
+          : NaN;
+    const across = length(left, width) + length(right, width),
+      down = length(top, height) + length(bottom, height);
+    return (across > 0 && across >= width) || (down > 0 && down >= height);
+  };
   // A control that fades in under the pointer starts its opacity transition at zero, and the observation taken right
   // after the hover would otherwise see only that start. A CSS transition's last keyframe is where it is going, also
   // after a reversal, which restarts it as a new transition. A keyframe animation's last keyframe gives no direction
@@ -204,7 +233,8 @@
       e.closest('[aria-hidden="true"],[inert]') ||
       (!e.checkVisibility({ checkOpacity: !choice, checkVisibilityCSS: true }) && (choice || !fadingIn(e))) ||
       leaving(e) ||
-      (choice && !shownThrough(e))
+      (choice && !shownThrough(e)) ||
+      (clippedAway(e) && (e.matches(SELECTOR) || pressable(e) || focusableText(e)))
     )
       return false;
     if (!choice) return true;
