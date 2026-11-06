@@ -9,7 +9,6 @@ and still answer as it did.
 from __future__ import annotations
 
 import argparse
-import contextlib
 import json
 import os
 import subprocess
@@ -33,6 +32,9 @@ class RecipeTask(BaseModel):
     expect: str
     other_expect: str
 
+
+# How long a timed-out run gets to stop its browser after SIGTERM before it is killed.
+CLEANUP_GRACE = 30.0
 
 TASKS = (
     RecipeTask(
@@ -139,12 +141,18 @@ def run(binary: str, browser: list[str], task: RecipeTask, out: Path, timeout: f
         flags = [flag for name, value in inputs.items() for flag in ("--input", f"{name}={value}")]
         argv = [binary, *browser, "--json", "--trace", str(out / f"{arm}.jsonl"), *flags, *recipe_flags, task.task]
         began = time.monotonic()
-        with (
-            (out / f"{arm}.json").open("w") as stdout,
-            (out / f"{arm}.err").open("w") as stderr,
-            contextlib.suppress(subprocess.TimeoutExpired),
-        ):
-            subprocess.run(argv, stdout=stdout, stderr=stderr, stdin=subprocess.DEVNULL, timeout=timeout)
+        with (out / f"{arm}.json").open("w") as stdout, (out / f"{arm}.err").open("w") as stderr:
+            child = subprocess.Popen(argv, stdout=stdout, stderr=stderr, stdin=subprocess.DEVNULL)
+            try:
+                child.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                # SIGTERM lets the CLI stop the browser it owns (a cloud one bills until stopped).
+                child.terminate()
+                try:
+                    child.wait(timeout=CLEANUP_GRACE)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait()
         (out / f"{arm}.wall").write_text(f"{time.monotonic() - began:.1f}")
         (out / f"{arm}.jsonl").touch()
         measured.append(measure(task.id, arm, out, expect))
