@@ -21,7 +21,7 @@ use serde_json::{Map, Value as JsonValue, json};
 use super::Agent;
 use super::driving::require;
 use super::helpers::{caller_link, describe, dialog_question, empty_fields_fact, navigation_question, unsent_fact};
-use super::state::{Flow, OutputIntent, RunState, Step, Stop, Unsure};
+use super::state::{Extent, Flow, OutputIntent, RunState, Step, Stop, Unsure};
 use crate::memory::Notes;
 use crate::policy::{Ahead, Decision, HistoryEntry};
 use crate::retrieval::text::{Word, words};
@@ -1037,7 +1037,8 @@ impl Agent {
             ),
         ]);
         // Also asked of the task alone: a count over a whole site read only the pages it reached and called that the
-        // whole list, from page 1 or from one record's own page (#750, #798).
+        // whole list, from page 1 or from one record's own page (#750, #798). A task over some pages of a list had no
+        // choice but the whole list, and paged on past the pages it named (#824).
         let extent = IndexMap::from([
             (
                 "shown".to_string(),
@@ -1049,6 +1050,12 @@ impl Agent {
                 "every_page".to_string(),
                 JsonValue::from(
                     "The task covers everything a list holds across all of its pages, such as a count or total over a whole site or list.",
+                ),
+            ),
+            (
+                "pages".to_string(),
+                JsonValue::from(
+                    "The task names how many or which pages of a list to cover, such as its first few pages, rather than the whole list.",
                 ),
             ),
         ]);
@@ -1064,7 +1071,11 @@ impl Agent {
             )
             .await?;
         state.appearance = picks["evidence"] == "appearance";
-        state.every_page = picks["extent"] == "every_page";
+        state.extent = match picks["extent"].as_str() {
+            "every_page" => Extent::EveryPage,
+            "pages" => Extent::Pages(self.page_range(state).await?),
+            _ => Extent::Shown,
+        };
         let intent = match picks["pick"].as_str() {
             "text" => OutputIntent::Text,
             "image" => OutputIntent::Image,
@@ -1074,6 +1085,21 @@ impl Agent {
         };
         state.output_intent = intent;
         Ok(intent)
+    }
+
+    /// The first and last page of the list the task names, read from the task. `None` when it names no last page, or
+    /// the reading failed, so the run neither walks the list nor leaves any page of it out.
+    async fn page_range(&self, state: &RunState) -> Step<Option<(usize, usize)>> {
+        let Ok(range) = crate::start::page_range(&*self.llm, &state.task, Some(&state.ledger)).await else {
+            return Ok(None);
+        };
+        state.ledger.record([range.cost])?;
+        let bounds = |range: crate::start::PageRange| {
+            let first = usize::try_from(range.first.unwrap_or(1)).ok()?;
+            let last = usize::try_from(range.last?).ok()?;
+            (first >= 1 && last >= first).then_some((first, last))
+        };
+        Ok(bounds(range.data))
     }
 
     pub(super) async fn stops_to_confirm(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {

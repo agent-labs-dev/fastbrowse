@@ -18,6 +18,26 @@ use crate::policy::{Decision, HistoryEntry, RelevanceCache};
 use crate::retrieval::ComposedAnswer;
 use crate::retrieval::whole_page_facts;
 
+/// How much of a list the task covers, by Jev's reading of the task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum Extent {
+    /// The records one page shows, or a single item.
+    #[default]
+    Shown,
+    /// Everything the list holds across all of its pages.
+    EveryPage,
+    /// The pages of the list the task names, first and last, numbered from the list's first page. `None` when the
+    /// task names pages but no numbers could be read from it, so no page is walked or left out.
+    Pages(Option<(usize, usize)>),
+}
+
+impl Extent {
+    /// Whether the run reads the list's next pages itself before it finishes.
+    pub fn walks(&self) -> bool {
+        matches!(self, Self::EveryPage | Self::Pages(Some(_)))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OutputIntent {
     Unknown,
@@ -303,12 +323,16 @@ pub(crate) struct RunState {
     pub output_intent: OutputIntent,
     /// Jev's judgement, asked with `output_intent`, that the task asks how the page looks, which only its pixels show.
     pub appearance: bool,
-    /// Jev's reading that the task covers a whole list across its pages, such as a count over a site.
-    pub every_page: bool,
+    /// Jev's reading of how much of a list the task covers: a whole list across its pages, such as a count over a
+    /// site, or only the pages the task names.
+    pub extent: Extent,
     /// Each next page a list named, by absolute address, in the order the run saw them.
     pub pager_pages: Vec<String>,
     /// The page that began the list `pager_pages` continues.
     pub pager_start: Option<String>,
+    /// Each page of the list's number, by `crate::memory::address`, counted along its next links from `pager_start`
+    /// as page 1. A list the run entered part way through is numbered from where it entered.
+    pub pager_ordinals: HashMap<String, usize>,
     /// Next pages the run opened itself because a whole-list task tried to finish before reading them.
     pub pager_followed: HashSet<String>,
     /// Addresses read before the run moved from fetching to a browser, and not read in the browser yet.
@@ -391,13 +415,47 @@ impl RunState {
         }
     }
 
-    /// The notes with the pages read for one fact whole.
+    /// The notes with the pages read for one fact whole. A task over some pages of a list leaves out what was read on
+    /// its other pages; a page that is not one of the list's, such as a record's own, keeps its notes.
     pub fn notes_to_compose(&self) -> Notes {
         let mut notes = self.notes.clone();
         for fact in self.read_whole.iter().flat_map(whole_page_facts) {
             notes.add(fact);
         }
+        if let Extent::Pages(Some(_)) = self.extent {
+            notes.retain(|fact| {
+                fact.evidence.as_ref().is_none_or(|evidence| {
+                    !self.pager_ordinals.contains_key(&crate::memory::address(&evidence.url))
+                        || self.in_range(&evidence.url)
+                })
+            });
+        }
         notes
+    }
+
+    /// Whether this page of the list is one the task covers: every page for a whole list, and for a task over some
+    /// pages, a page whose number is among them.
+    pub fn in_range(&self, url: &str) -> bool {
+        match self.extent {
+            Extent::EveryPage => true,
+            Extent::Pages(Some((first, last))) => self
+                .pager_ordinals
+                .get(&crate::memory::address(url))
+                .is_some_and(|ordinal| (first..=last).contains(ordinal)),
+            _ => false,
+        }
+    }
+
+    /// Whether the run reads this page of the list to cover the task: every page for a whole list, and for a task over
+    /// some pages, a page up to the last of them, since the pages before the first are the way to it.
+    fn on_the_way(&self, url: &str) -> bool {
+        match self.extent {
+            Extent::EveryPage => true,
+            Extent::Pages(Some((_, last))) => {
+                self.pager_ordinals.get(&crate::memory::address(url)).is_some_and(|ordinal| *ordinal <= last)
+            }
+            _ => false,
+        }
     }
 
     /// An action changed the page it was taken on. Leaving that page leaves what was read of it as it was: going back
@@ -453,11 +511,24 @@ impl RunState {
         if !named.is_empty() && !continues {
             self.pager_pages.clear();
             self.pager_start = Some(here.to_string());
-        } else if continues && requested.is_some() && !self.pager_pages.contains(&here.to_string()) {
-            // Where a next page landed is a page of the list too, so a note read there counts as the list's.
+            self.pager_ordinals.clear();
+            self.pager_ordinals.insert(crate::memory::address(here.as_str()), 1);
+        } else if continues
+            && let Some(requested) = requested
+            && !self.pager_pages.contains(&here.to_string())
+        {
+            // Where a next page landed is a page of the list too, so a note read there counts as the list's, and it is
+            // the page of the list that was asked for.
             self.pager_pages.push(here.to_string());
+            if let Some(&ordinal) = self.pager_ordinals.get(&crate::memory::address(requested)) {
+                self.pager_ordinals.entry(crate::memory::address(here.as_str())).or_insert(ordinal);
+            }
         }
+        let ordinal = self.pager_ordinals.get(&crate::memory::address(here.as_str())).copied();
         for page in named {
+            if let Some(ordinal) = ordinal {
+                self.pager_ordinals.entry(crate::memory::address(&page)).or_insert(ordinal + 1);
+            }
             if !self.pager_pages.contains(&page) {
                 self.pager_pages.push(page);
             }
@@ -473,7 +544,9 @@ impl RunState {
         let noted = self.notes.facts().iter().any(|fact| {
             fact.evidence.as_ref().is_some_and(|evidence| list.contains(&crate::memory::address(&evidence.url)))
         });
-        self.pager_pages.iter().filter(move |page| noted && !self.read_urls.contains(page.as_str()))
+        self.pager_pages
+            .iter()
+            .filter(move |page| noted && !self.read_urls.contains(page.as_str()) && self.on_the_way(page))
     }
 
     /// The first unread next page of the list this run reads that it has not opened for that reason before.
@@ -569,9 +642,10 @@ impl RunState {
             refused: false,
             output_intent: OutputIntent::Unknown,
             appearance: false,
-            every_page: false,
+            extent: Extent::Shown,
             pager_pages: Vec::new(),
             pager_start: None,
+            pager_ordinals: HashMap::new(),
             pager_followed: HashSet::new(),
             fetched: HashSet::new(),
             committing: false,

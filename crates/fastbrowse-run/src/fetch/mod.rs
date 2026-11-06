@@ -82,9 +82,6 @@ fn capture(url: &str, title: String, found: Vec<Found>) -> Capture {
             heading_path: block.heading_path,
             control_context: None,
             href: block.href,
-            list_id: None,
-            list_count: None,
-            list_frameless: false,
         });
         offset += 2;
     }

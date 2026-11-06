@@ -12,5 +12,7 @@ public enum LLMPurpose {
     @JsonProperty("image_read")
     IMAGE_READ,
     @JsonProperty("fill")
-    FILL
+    FILL,
+    @JsonProperty("pages")
+    PAGES
 }
