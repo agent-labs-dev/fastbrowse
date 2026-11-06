@@ -39,7 +39,8 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 | `--json` | print the full result |
 | `--trace FILE` | append each model call with its full request and reply, read and check, and with `--extension` every message to and from the extension (image data left out), to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP. The requests carry page text, so treat a trace as you would the pages |
 | `--record FILE` | save a captioned MP4 of the run (needs `ffmpeg`); it shows what the pages showed, so watch it before sharing |
-| `--recipe FILE` | replay a [recipe](design.md#recipes): reuse saved values when Jev selects a matching action on the same page |
+| `--recipe FILE` | replay a [recipe](design.md#recipes): offer Jev each saved action alone where its page and control match, and reuse saved values |
+| `--input NAME=VALUE` | a named value the task refers to ("the person named in input person"), typed into a field by name; a recipe saved with it types the next run's value (repeatable) |
 | `--save-recipe FILE` | write the run's steps as a recipe when it ends `complete`; naming the `--recipe` file repairs it after steps the agent had to decide |
 | `--no-cursor` | don't draw the agent's cursor. By default it is drawn with [Cua Driver](https://github.com/trycua/cua) over a Chrome window that shows the run (`--foreground`, or an attached front tab; needs `cua-driver`, and X11 on Linux), and skipped anywhere else |
 | `--cursor` | also bring the window to the front, so the cursor is always drawn |

@@ -221,6 +221,8 @@ pub(crate) struct RunState {
     pub recipe_log: Vec<fastbrowse_core::recipe::RecipeStep>,
     /// Where the text of the fill being built came from, when a caller input or a stored secret gave it.
     pub text_source: Option<fastbrowse_core::recipe::RecipeText>,
+    /// The task as the caller wrote it, before `with_inputs`, which is what a recipe keeps.
+    pub given_task: String,
     /// The caller's background: shown beside the task, never read as what it asks for.
     pub context: Option<String>,
     pub inputs: IndexMap<String, String>,
@@ -503,7 +505,8 @@ impl RunState {
         ledger: Arc<Ledger>,
     ) -> RunState {
         RunState {
-            task,
+            task: with_inputs(&task, &inputs),
+            given_task: task,
             replay: None,
             recipe_log: Vec::new(),
             text_source: None,
@@ -573,4 +576,59 @@ impl RunState {
 /// in one document, and each address shows its own page.
 pub(crate) fn read_key(observation: &Observation) -> (String, String) {
     (observation.document_key.clone(), observation.url.clone())
+}
+
+/// The task with each input it names by `input <name>` followed by the input's value. Jev, offered an input as a
+/// separate source for a field, judged that nothing gave the field a value whatever the input was called; a value
+/// in the task is one it copies.
+pub(crate) fn with_inputs(task: &str, inputs: &IndexMap<String, String>) -> String {
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut shown = String::with_capacity(task.len());
+    let mut at = 0;
+    // One pass over the task as written, so a value is never read as naming another input, and the longest name
+    // wins where one name begins another.
+    while let Some(found) = task[at..].find("input ").map(|found| at + found) {
+        let name_at = found + "input ".len();
+        let named = (!task[..found].ends_with(word))
+            .then(|| {
+                inputs
+                    .iter()
+                    .filter(|(name, _)| {
+                        task[name_at..].starts_with(name.as_str()) && !task[name_at + name.len()..].starts_with(word)
+                    })
+                    .max_by_key(|(name, _)| name.len())
+            })
+            .flatten();
+        match named {
+            Some((name, value)) => {
+                let end = name_at + name.len();
+                shown.push_str(&task[at..end]);
+                shown.push_str(&format!(" ({value})"));
+                at = end;
+            }
+            None => {
+                shown.push_str(&task[at..name_at]);
+                at = name_at;
+            }
+        }
+    }
+    shown.push_str(&task[at..]);
+    shown
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_task_shows_each_input_it_names_beside_the_name() {
+        let inputs = IndexMap::from([("term".to_string(), "asyncio".to_string())]);
+        assert_eq!(
+            with_inputs("Search for input term, not input terms or reinput term", &inputs),
+            "Search for input term (asyncio), not input terms or reinput term"
+        );
+        let inputs =
+            IndexMap::from([("a".to_string(), "see input b".to_string()), ("b".to_string(), "two".to_string())]);
+        assert_eq!(with_inputs("Use input a", &inputs), "Use input a (see input b)");
+    }
 }
