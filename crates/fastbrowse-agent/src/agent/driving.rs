@@ -638,7 +638,7 @@ impl Agent {
                     }
                     Err(error) => return Err(error),
                 };
-                let done = effect(observation, &landed, Some(target));
+                let done = effect(observation, &landed, Some(target), false);
                 if done.changed {
                     uncover(&mut state.idle);
                 }
@@ -892,6 +892,7 @@ impl Agent {
             state.arrived_by = Some((landed, href));
         }
         let Some(last) = state.history.last_mut() else { return };
+        let waited = last.operation == Some(Operation::Wait);
         let done = if last.operation == Some(Operation::SwitchTab) {
             // Another tab's controls were there all along: compared with the tab left, every one read as added.
             Effect {
@@ -901,10 +902,12 @@ impl Agent {
                 changed: false,
             }
         } else {
-            effect(&before, observation, None)
+            effect(&before, observation, None, waited)
         };
         last.added = done.added;
-        if done.changed && last.outcome == StepOutcome::Executed {
+        // A Wait is told how far a playing clock moved, but a clock that moves by itself removes no cover.
+        let moved = done.changed && (!waited || effect(&before, observation, None, false).changed);
+        if moved && last.outcome == StepOutcome::Executed {
             uncover(&mut state.idle);
         }
         // A page can change while an attempted action goes stale. Reconsider it on the new page, including Back,

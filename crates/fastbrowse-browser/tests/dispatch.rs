@@ -1376,6 +1376,56 @@ async fn test_a_wait_lasts_until_the_page_changes_by_itself() {
     h.close().await;
 }
 
+// A Wait while audio played was told the page did not change, so a run pressed Play and Pause to its step limit
+// without seeing the clock it had to confirm move.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_while_a_player_plays_is_a_change() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    let script = r#"{
+        const rate = 8000, n = rate * 30, wav = new DataView(new ArrayBuffer(44 + n));
+        const tag = (at, s) => [...s].forEach((c, i) => wav.setUint8(at + i, c.charCodeAt(0)));
+        tag(0, 'RIFF'); wav.setUint32(4, 36 + n, true); tag(8, 'WAVEfmt '); wav.setUint32(16, 16, true);
+        wav.setUint16(20, 1, true); wav.setUint16(22, 1, true); wav.setUint32(24, rate, true);
+        wav.setUint32(28, rate, true); wav.setUint16(32, 1, true); wav.setUint16(34, 8, true);
+        tag(36, 'data'); wav.setUint32(40, n, true); new Uint8Array(wav.buffer, 44).fill(128);
+        const player = document.createElement('audio');
+        player.controls = true; player.muted = true; player.setAttribute('aria-label', 'Lesson audio');
+        player.src = URL.createObjectURL(new Blob([wav.buffer], { type: 'audio/wav' }));
+        const play = document.createElement('button');
+        play.textContent = 'Play lesson';
+        play.onclick = () => player.play();
+        document.body.append(play, player);
+    } true"#;
+    assert_eq!(eval_active(&h.page, script).await, json!(true));
+    // Chrome plays only after a user gesture, so the player starts from a click the way a run would start it.
+    let page = h.observe().await;
+    let play = find(&page, "Play lesson").clone();
+    h.page.act(&Action { target_id: Some(play.id), ..Action::new(Operation::Click) }, &page).await.expect("play");
+    let mut before = h.observe().await;
+    for _ in 0..50 {
+        if before.media.first().is_some_and(|m| !m.paused && m.elapsed_seconds > 0.0) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        before = h.observe().await;
+    }
+    assert!(before.media.first().is_some_and(|m| !m.paused), "{:?}", before.media);
+    let result = h.page.act(&Action::new(Operation::Wait), &before).await.expect("wait");
+    assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{result:?}");
+    // The clock is no content: it marks no read out of date and counts as no progress.
+    assert!(!result.page_changed, "{result:?}");
+    assert_eq!(eval_active(&h.page, "document.querySelector('audio').pause(); true").await, json!(true));
+    let paused = h.observe().await;
+    let result = h.page.act(&Action::new(Operation::Wait), &paused).await.expect("wait");
+    assert_eq!(
+        (result.outcome, result.detail.as_deref()),
+        (StepOutcome::Executed, Some("the page did not change")),
+        "{result:?}"
+    );
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_an_input_event_to_a_hung_page_fails_soon_while_the_browser_answers() {
     let Some(h) = harness().await else { return };
