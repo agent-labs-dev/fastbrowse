@@ -755,7 +755,7 @@ impl Agent {
             }
         }
         // Historical text is fitted from the end, before the current credential availability fact.
-        if let Some(source) = self.navigation_fact(state, observation) {
+        if let Some(source) = self.navigation_fact(state, observation, check_login) {
             page_facts.push(source);
         }
         Ok(StepContext {
@@ -796,10 +796,23 @@ impl Agent {
     }
 
     /// A wall on the route just opened does not describe the alternatives observed before it.
-    fn navigation_fact(&self, state: &RunState, observation: &Observation) -> Option<String> {
+    ///
+    /// The source page's text and controls are given only while a wall is suspected on the destination: the sign-in
+    /// question is asked on this step, the destination's sign-in reading is above even odds, or it answered with a
+    /// 4xx. The sign-in judgment is what uses them. Otherwise the fact names where the run came from.
+    fn navigation_fact(&self, state: &RunState, observation: &Observation, check_login: bool) -> Option<String> {
         let (destination, source) = state.navigation_from.as_ref()?;
         if *destination != state::read_key(observation) {
             return None;
+        }
+        let wall = check_login
+            || state.login_readings.get(destination).is_some_and(|p| *p > fastbrowse_core::decision::EVEN_ODDS)
+            || observation.response_status.is_some_and(|status| (400..500).contains(&status));
+        if !wall {
+            let previous = json!({"page": {"url": self.mask(&source.url), "title": self.mask(&source.title)}});
+            return Some(format!(
+                "The latest navigation began on this observed page. This source is historical context, not content of the current page: {previous}"
+            ));
         }
         let controls: Vec<Value> = source
             .controls
