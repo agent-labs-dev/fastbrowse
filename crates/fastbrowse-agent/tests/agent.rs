@@ -298,6 +298,7 @@ fn nth(script: &Value, n: usize) -> Option<&Value> {
 
 /// Jev's answer from a case's `jev` script: `pick` names a choice per question key (a list is taken in turn), `pick`
 /// under `pick` any other choice, `nouls` a probability per noul (a list is taken in turn) and `noul` the rest, `confidence` the pick's.
+/// `recover` gives the picks of a call asked again while recovering.
 /// The wall questions default to no.
 fn scripted_jev(script: &Value, state: &Value, questions: &Value, log: &[Value]) -> Value {
     let asked_again = state.get("problem").is_some();
@@ -328,7 +329,11 @@ fn scripted_jev(script: &Value, state: &Value, questions: &Value, log: &[Value])
         let options: Vec<&String> = question["criteria"].as_object().unwrap().keys().collect();
         let general = (key != "operation" && !key.ends_with("_target") && !key.ends_with("_group"))
             .then(|| &script["pick"]["pick"]);
-        let picked = nth(&script["pick"][key], answered(key))
+        // A call asked again while recovering takes `recover`'s pick when the case scripts one.
+        let recovering = asked_again.then(|| script["recover"][key].as_str()).flatten().map(Value::from);
+        let picked = recovering
+            .as_ref()
+            .or_else(|| nth(&script["pick"][key], answered(key)))
             .or_else(|| general.and_then(|pick| nth(pick, 0)))
             .and_then(Value::as_str)
             .map(String::from)
@@ -668,20 +673,24 @@ async fn step_choices_list_what_jev_was_offered_and_change_nothing_else() {
 
 #[tokio::test(start_paused = true)]
 async fn sign_in_judgments_get_the_navigation_source_and_still_decide_whether_it_blocks() {
-    for (name, login, opening_wall, expected) in [
-        ("public alternative", 0.2, false, "budget_exceeded"),
-        ("authenticated destination", 0.95, false, "needs_login"),
-        ("opening sign-in wall", 0.95, true, "needs_login"),
+    // The page question says only that a wall is there; whether it stops the run is the task's account question.
+    for (name, account, opening_wall, expected) in [
+        ("public alternative", 0.1, false, "budget_exceeded"),
+        ("authenticated destination", 0.9, false, "needs_login"),
+        ("opening sign-in wall", 0.9, true, "needs_login"),
     ] {
         let mut case = cases().into_iter().find(|case| case["name"] == "a step limit ends budget_exceeded").unwrap();
         case["name"] = name.into();
         case["calls"] = serde_json::json!([]);
         case["limits"]["max_steps"] = 3.into();
+        // The wall's own pick is set aside for the recovery's, which goes back.
         case["jev"]["pick"] = serde_json::json!({
-            "operation": ["click", "back", "click"], "click_target": ["query", "public"]
+            "operation": ["click", "fill", "click"], "click_target": ["query", "public"]
         });
+        case["jev"]["recover"] = serde_json::json!({"operation": "back"});
         case["jev"]["nouls"]["login_required"] =
-            if opening_wall { serde_json::json!([login]) } else { serde_json::json!([0.12, login, 0.12]) };
+            if opening_wall { serde_json::json!([0.95]) } else { serde_json::json!([0.12, 0.95, 0.12]) };
+        case["jev"]["nouls"]["account"] = account.into();
         let mut home = case["site"]["screens"]["home"].clone();
         home["observation"]["document_key"] = "public-document".into();
         home["observation"]["viewport_text"] = "Browse public inventory or query your account".into();
@@ -721,13 +730,17 @@ async fn sign_in_judgments_get_the_navigation_source_and_still_decide_whether_it
         if !opening_wall {
             assert!(facts.contains("login_required_probability") && facts.contains("0.12"));
             let questions: Value = serde_json::from_str(wall_call.0["jev"]["questions"].as_str().unwrap()).unwrap();
-            assert!(
-                questions["login_required"]["instructions"]
-                    .as_str()
-                    .unwrap()
-                    .contains("A restricted route does not make the whole task require sign-in")
-            );
+            let wall = questions["login_required"]["instructions"].as_str().unwrap();
+            assert!(wall.contains("take the place of this page's content") && !wall.contains("task"), "{wall}");
         }
+        // What the task needs is asked of the task alone, once.
+        let asked: Vec<Value> = log
+            .iter()
+            .filter(|call| call["jev"]["questions"].as_str().is_some_and(|q| q.contains("\"account\":")))
+            .map(|call| serde_json::from_str(call["jev"]["state"].as_str().unwrap()).unwrap())
+            .collect();
+        assert_eq!(asked.len(), 1, "{name}");
+        assert_eq!(asked[0].as_object().unwrap().keys().collect::<Vec<_>>(), ["task"], "{name}");
         if expected == "budget_exceeded" {
             assert_eq!(outcome["steps"][1]["operation"], "back");
             assert_eq!(outcome["steps"][2]["target"], "Public inventory");

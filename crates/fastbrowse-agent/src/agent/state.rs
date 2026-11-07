@@ -327,6 +327,9 @@ pub(crate) struct RunState {
     /// The latest finish check found a step the task asks for that the site does not allow.
     pub refused: bool,
     pub output_intent: OutputIntent,
+    /// What the task says about signing in, asked of the task alone at the first sign-in wall. None until then, and
+    /// when Jev gave no answer.
+    pub sign_in: Option<SignInNeeds>,
     /// Jev's judgement, asked with `output_intent`, that the task asks how the page looks, which only its pixels show.
     pub appearance: bool,
     /// Jev's reading of how much of a list the task covers: a whole list across its pages, such as a count over a
@@ -673,6 +676,7 @@ impl RunState {
             to_carry_out: false,
             refused: false,
             output_intent: OutputIntent::Unknown,
+            sign_in: None,
             appearance: false,
             extent: Extent::Shown,
             pager_pages: Vec::new(),
@@ -754,4 +758,15 @@ mod tests {
             IndexMap::from([("a".to_string(), "see input b".to_string()), ("b".to_string(), "two".to_string())]);
         assert_eq!(with_inputs("Use input a", &inputs), "Use input a (see input b)");
     }
+}
+
+/// Jev's reading of the task at a sign-in wall, each a question of its own, so code decides what the wall means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SignInNeeds {
+    /// The task needs a signed-in account: its own orders, messages, settings or other private pages.
+    pub account: bool,
+    /// The task itself gives the credentials to sign in with.
+    pub credentials: bool,
+    /// The task asks about the access restriction itself, which the wall shows.
+    pub inspects: bool,
 }

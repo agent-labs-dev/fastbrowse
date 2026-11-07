@@ -21,7 +21,7 @@ use serde_json::{Map, Value as JsonValue, json};
 use super::Agent;
 use super::driving::require;
 use super::helpers::{caller_link, describe, dialog_question, empty_fields_fact, navigation_question, unsent_fact};
-use super::state::{Extent, Flow, OutputIntent, RunState, Step, Stop, Unsure};
+use super::state::{Extent, Flow, OutputIntent, RunState, SignInNeeds, Step, Stop, Unsure};
 use crate::memory::Notes;
 use crate::policy::{Ahead, Decision, HistoryEntry};
 use crate::retrieval::text::{Word, edge_options, words};
@@ -437,6 +437,65 @@ impl Agent {
         state.ledger.record([evaluation.cost.clone()])?;
         let Some(Answer::Noul(answer)) = evaluation.answers.get(key) else { return Ok(None) };
         Ok(Some(answer.probability > EVEN_ODDS))
+    }
+
+    /// What the task says about signing in, asked once, of the task alone, at the first sign-in wall: three questions
+    /// apart, each one literal hop, which code combines into whether the wall stops the run. No answer to any of them
+    /// is None, and the wall stops the run as it did before they were asked.
+    pub(super) async fn sign_in_needs(&self, state: &mut RunState) -> Step<Option<SignInNeeds>> {
+        if let Some(needs) = state.sign_in {
+            return Ok(Some(needs));
+        }
+        state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+        let noul =
+            |question: &str, yes: &str, no: &str| Question::Noul(NoulQuestion::new(question, Some(yes), Some(no)));
+        let questions = IndexMap::from([
+            (
+                "account".to_string(),
+                noul(
+                    "Does `task` need the agent to act as a signed-in user of the site, such as to see or change an account's own orders, messages, settings or other private pages?",
+                    "The task needs a signed-in account.",
+                    "The task can be done by a visitor who is not signed in.",
+                ),
+            ),
+            (
+                "credentials".to_string(),
+                noul(
+                    "Does `task` give the username, email, password or code to sign in with?",
+                    "The task gives credentials to sign in with.",
+                    "The task gives no credentials.",
+                ),
+            ),
+            (
+                "inspects".to_string(),
+                noul(
+                    "Does `task` ask about the site's access restrictions themselves, such as whether a page needs signing in?",
+                    "The task asks about access restrictions.",
+                    "The task asks about something else.",
+                ),
+            ),
+        ]);
+        let evaluation =
+            jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&json!({"task": state.task}), &questions)).await?;
+        state.ledger.record([evaluation.cost.clone()])?;
+        let yes = |key: &str| match evaluation.answers.get(key) {
+            Some(Answer::Noul(answer)) => Some(answer.probability > EVEN_ODDS),
+            _ => None,
+        };
+        let (Some(account), Some(credentials), Some(inspects)) = (yes("account"), yes("credentials"), yes("inspects"))
+        else {
+            return Ok(None);
+        };
+        let needs = SignInNeeds { account, credentials, inspects };
+        self.event("sign_in", || {
+            Map::from_iter([
+                ("account".into(), account.into()),
+                ("credentials".into(), credentials.into()),
+                ("inspects".into(), inspects.into()),
+            ])
+        });
+        state.sign_in = Some(needs);
+        Ok(Some(needs))
     }
 
     /// The one rule for an action that may commit: it proceeds when Jev judges it not irreversible, or when the run is
