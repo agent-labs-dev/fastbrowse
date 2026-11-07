@@ -157,8 +157,10 @@ sources cover the request; the generated result is checked before delivery.
 Answer claims use numbered Markdown links built from those notes. `RunResult.citations` exposes the cited facts and
 text-fragment deep links; unused facts have no citation. The LLM writes a composed answer from the notes. Jev judges
 each final claim against its original cited quotes, including record identity and values, after any packing rounds.
-Jev also sees the other notes the run read, on every page or, when those do not fit its input, on the pages a claim cites, to judge the set a
-comparison, count, total or superlative ranges over. Values still need a cited quote, and these notes are never citations.
+A count, total, minimum or maximum is never written or judged as a number. The composer marks it as a tally with
+the kind of record and the field, and Jev answers one question per note read: whether it is one such record, and which
+number in it is the field. Code counts, adds or compares, writes the value into the claim and cites every record it
+rests on; the support check sees `[computed]` in its place.
 Packing continues only when fewer requests are needed or the rewritten claim text shrinks. Removing source-state
 metadata alone does not count as progress.
 For a table, each cell is judged with the whole row and its quotes as context; every cell must be supported.

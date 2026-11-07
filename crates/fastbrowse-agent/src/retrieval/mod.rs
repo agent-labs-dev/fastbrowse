@@ -10,6 +10,7 @@ mod choices;
 mod chunks;
 mod fields;
 mod screenshot;
+mod tally;
 pub(crate) mod text;
 
 pub(crate) use answers::cited_quote;
