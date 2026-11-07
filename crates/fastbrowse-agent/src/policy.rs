@@ -1380,9 +1380,9 @@ fn target_element(control: &Control, operation: Operation) -> Map<String, Value>
 /// Whether a sign-in wall blocks the task, asked of a fresh page and of the page a run gave up on as signed out.
 pub(crate) fn login_question() -> Question {
     noul(
-        "Does a sign-in or verification wall block the task in state, with no credentials given in the task to pass it? Unrelated sign-in links and login-to-post boxes do not block reading public or empty lists. A prompt to sign in before replying, commenting or posting gates only writing: when page.text shows what the task asks to find, the page is readable and the prompt does not block it. If the task asks to inspect access restrictions, observing the wall advances that task without signing in. A page that refuses access outright and offers no way to sign in is not a sign-in wall. A restricted route does not make the whole task require sign-in when an observed alternative can advance it. Use the observed navigation context and available operations to judge whether the task can continue elsewhere. Going back is useful only when that earlier page offers another way to advance the task. A task that requires this account or authenticated destination still requires sign-in.",
-        "A sign-in or account verification wall blocks the task and the task gives no way through it.",
-        "The task can progress without signing in, or the task supplies the credentials to sign in.",
+        "Does a sign-in or account verification form or prompt take the place of this page's content, so the page cannot be read or used without signing in?",
+        "A sign-in or account verification wall takes the place of the page's content.",
+        "The page shows its content, with or without a sign-in link or box beside it, or refuses access with no way to sign in.",
     )
 }
 

@@ -239,7 +239,27 @@ impl Agent {
                     }
                     .into());
                 }
-                return Err(self.meet_wall(&observation, &raw));
+                // What the wall means is the task's to say, asked of the task alone and combined here: credentials it
+                // gives are a sign-in to carry out, and a question about the restriction is answered by the wall.
+                match self.sign_in_needs(state).await? {
+                    Some(needs) if needs.credentials || needs.inspects => {}
+                    // A route the task does not need an account for is walled, not the task: the run goes another way,
+                    // and ends needing a sign-in only once its recoveries are spent.
+                    Some(needs) if !needs.account => {
+                        let reason =
+                            "this page is a sign-in wall, and the task does not need an account: take another way";
+                        let recovering = Box::pin(self.recover(
+                            state,
+                            &observation,
+                            reason,
+                            Status::NeedsLogin,
+                            withheld(&decision),
+                        ));
+                        self.trace.phase("recover", recovering).await?;
+                        continue;
+                    }
+                    _ => return Err(self.meet_wall(&observation, &raw)),
+                }
             }
             if let Some(shows) = Self::reads_before_leaving(state, &observation, &decision) {
                 let capture = self.capture().await?;
