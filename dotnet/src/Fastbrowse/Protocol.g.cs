@@ -363,6 +363,8 @@ public enum LLMPurpose
     Fill,
     [JsonStringEnumMemberName("pages")]
     Pages,
+    [JsonStringEnumMemberName("dates")]
+    Dates,
 }
 
 public sealed record Limits

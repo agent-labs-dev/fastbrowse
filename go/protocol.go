@@ -228,6 +228,7 @@ const (
 	LLMPurposeImageRead LLMPurpose = "image_read"
 	LLMPurposeFill      LLMPurpose = "fill"
 	LLMPurposePages     LLMPurpose = "pages"
+	LLMPurposeDates     LLMPurpose = "dates"
 )
 
 type Limits struct {

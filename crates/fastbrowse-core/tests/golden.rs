@@ -12,7 +12,6 @@ use fastbrowse_core::navigation::{navigation_urls, task_urls};
 use fastbrowse_core::output_schema::output_model;
 use fastbrowse_core::page::{ActResult, Action, Block, Capture, Control, Dialog, Observation, Tab, cut_text};
 use fastbrowse_core::protocol::*;
-use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{Floats, Style, dumps, float, write};
 use fastbrowse_core::py::text;
@@ -173,20 +172,10 @@ fn floats_and_strings_are_spelled_as_python_spells_them() {
 }
 
 #[test]
-fn page_keys_and_dates_match_python() {
+fn page_keys_and_cut_text_match_python() {
     let functions = golden("functions.json");
     let (observation, _) = fixtures();
     assert_eq!(state_key(&observation), text_of(&functions, "state_key"));
-    let dates = [
-        observation.captured_at,
-        DateTime::new(2026, 1, 31, 0, 0, 0),
-        DateTime::new(2024, 2, 29, 23, 59, 0),
-        DateTime::new(2026, 12, 15, 0, 0, 0).utc(),
-    ];
-    for (when, today) in dates.into_iter().zip(functions["today"].as_array().unwrap()) {
-        let dated = Observation { captured_at: when, ..observation.clone() };
-        assert_eq!(dated.today(), today.as_str().unwrap());
-    }
     for case in functions["cut_text"].as_array().unwrap() {
         let cut = cut_text(text_of(case, "text"), case["max"].as_u64().unwrap() as usize, case["json"] == true);
         assert_eq!(cut, text_of(case, "cut"));

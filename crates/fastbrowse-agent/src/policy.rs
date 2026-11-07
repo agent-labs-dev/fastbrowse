@@ -199,6 +199,9 @@ pub struct StepContext {
     pub task: String,
     #[serde(deserialize_with = "lax::nullable")]
     pub subgoal: Option<String>,
+    /// The dates the task names, worked out against each page's capture date.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dates: Vec<crate::dates::DateReference>,
     pub notes: String,
     /// The notes hold a fact standing as the task's answer. Told nothing but the notes, Jev judged a page whose answer
     /// it had read still worth reading and scrolled instead of finishing.
@@ -264,6 +267,7 @@ impl StepContext {
         StepContext {
             task: task.into(),
             subgoal: None,
+            dates: Vec::new(),
             notes: String::new(),
             history: Vec::new(),
             check_login: false,
@@ -1199,9 +1203,10 @@ fn group_index(choice: &str, count: usize) -> Result<usize> {
 fn state(observation: &Observation, controls: &[Control], context: &StepContext) -> Value {
     let mut state = Map::new();
     state.insert("task".into(), context.task.clone().into());
-    // "Next month" and "the next Monday" are relative to today, which only the done check was told: shown which month
-    // a date picker was on, Jev clicked Next through two years of months looking for next month.
-    state.insert("date".into(), observation.today().into());
+    // "Next month" and "the next Monday" are relative to today: shown only which month a date picker was on, Jev
+    // clicked Next through two years of months looking for next month. Code works each date out, since Jev does not
+    // count days.
+    state.insert("date".into(), crate::dates::dated(observation.captured_at, &context.dates).into());
     state.insert("subgoal".into(), json!(context.subgoal));
     state.insert(
         "page".into(),
@@ -1826,9 +1831,22 @@ mod tests {
     fn test_the_choice_is_told_today_for_a_task_relative_to_it() {
         let mut page = observation(vec![]);
         page.captured_at = DateTime::new(2026, 9, 26, 20, 0, 0).utc();
-        let context = StepContext::new("Select next month's first Friday");
+        let friday = crate::dates::DateReference {
+            text: "next month's first Friday".into(),
+            year: None,
+            month: None,
+            day: None,
+            weekday: Some("friday".into()),
+            nth: Some(1),
+            days_from_today: None,
+            months_from_now: Some(1),
+        };
+        let context = StepContext { dates: vec![friday], ..StepContext::new("Select next month's first Friday") };
         let state = build_request(&page, &[], &context, &Config::default(), MAX_CHOICE_OPTIONS).state;
-        assert_eq!(state["date"], page.today());
+        assert_eq!(
+            state["date"],
+            "2026-09-26 (Saturday)\nThe dates the task names, worked out from today:\nnext month's first Friday: 2026-10-02 (Friday)"
+        );
     }
 
     #[test]

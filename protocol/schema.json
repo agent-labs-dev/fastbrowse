@@ -650,7 +650,8 @@
         "compose",
         "image_read",
         "fill",
-        "pages"
+        "pages",
+        "dates"
       ],
       "title": "LLMPurpose",
       "type": "string"

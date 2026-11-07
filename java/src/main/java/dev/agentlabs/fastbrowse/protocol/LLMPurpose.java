@@ -14,5 +14,7 @@ public enum LLMPurpose {
     @JsonProperty("fill")
     FILL,
     @JsonProperty("pages")
-    PAGES
+    PAGES,
+    @JsonProperty("dates")
+    DATES
 }

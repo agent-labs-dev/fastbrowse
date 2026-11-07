@@ -180,6 +180,7 @@ impl ScriptedLLM {
             LLMPurpose::ImageRead => Some(json!({"text": null})),
             LLMPurpose::Fill => Some(json!({"value": null})),
             LLMPurpose::Pages => Some(json!({"first": null, "last": null})),
+            LLMPurpose::Dates => Some(json!({"dates": []})),
         }
     }
 }

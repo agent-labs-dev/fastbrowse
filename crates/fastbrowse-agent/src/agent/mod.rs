@@ -370,18 +370,24 @@ impl Agent {
         // `start=None` leaves the browser where it is, which is what a caller stepping a run on from a page it opened
         // itself wants. `choose_start` is the other case: a caller with a goal and no page at all, who wants the first
         // address worked out from the task.
-        let opening = match start {
-            Some(start) => Some(start.to_string()),
-            None if options.choose_start => Some(self.first_page(task, ledger).await?),
-            None => None,
+        let open = async {
+            let opening = match start {
+                Some(start) => Some(start.to_string()),
+                None if options.choose_start => Some(self.first_page(task, ledger).await?),
+                None => None,
+            };
+            if let Some(opening) = &opening {
+                self.trace.phase("open", self.page.navigate(opening, None)).await?;
+            }
+            if let (None, Some(opening)) = (start, &opening) {
+                // The caller gave a goal and no page, so this address was worked out from the task.
+                self.front_page_if_blank(opening).await?;
+            }
+            Ok::<_, Flow>(opening)
         };
-        if let Some(opening) = &opening {
-            self.trace.phase("open", self.page.navigate(opening, None)).await?;
-        }
-        if let (None, Some(opening)) = (start, &opening) {
-            // The caller gave a goal and no page, so this address was worked out from the task.
-            self.front_page_if_blank(opening).await?;
-        }
+        let given = state::with_inputs(task, &options.inputs);
+        let (opening, dates) = tokio::join!(open, self.task_dates(&given, ledger));
+        let (opening, dates) = (opening?, dates?);
         self.tell_page_ready().await;
         let mut state = RunState::new(
             task.to_string(),
@@ -390,6 +396,7 @@ impl Agent {
             options.authorization.clone().unwrap_or_default(),
             ledger.clone(),
         );
+        state.dates = dates;
         state.replay = options.recipe.clone().map(replay::Replay::new);
         state.context = options.context.clone();
         state.started_url = opening.clone();
@@ -761,6 +768,7 @@ impl Agent {
         Ok(StepContext {
             task: state.task.clone(),
             subgoal: state.hint.clone(),
+            dates: state.dates.clone(),
             notes: self.decision_notes(state),
             answered_in_notes: state.notes.answered(),
             history: state.history.clone(),

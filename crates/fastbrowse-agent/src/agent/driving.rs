@@ -378,6 +378,47 @@ impl Agent {
         Ok(opening)
     }
 
+    /// The dates the task names, as the parts it states. Jev first judges from the task alone whether it names any, so
+    /// a task without one costs no extraction; the run asks this while its first page opens.
+    pub(super) async fn task_dates(
+        &self,
+        task: &str,
+        ledger: &fastbrowse_core::telemetry::Ledger,
+    ) -> Step<Vec<crate::dates::DateReference>> {
+        use fastbrowse_core::decision::{Answer, DecisionError, Question};
+        ledger.reserve(fastbrowse_core::models::CostComponent::Jev, 0.0, 1)?;
+        let questions =
+            indexmap::IndexMap::from([("dates".to_string(), Question::Noul(crate::dates::dates_question(task)))]);
+        let state = json!({"task": task});
+        let asked = self.jev.evaluate(&state, &questions);
+        // As with the consent question, a task whose dates could not be asked about runs on with today's date alone:
+        // the step that needs Jev next meets the same failure and handles it. Only the budget stops the run here.
+        let failed = |error: String| {
+            self.event("task_dates_failed", || Map::from_iter([("error".into(), error.into())]));
+            Ok(Vec::new())
+        };
+        let evaluation =
+            match fastbrowse_clients::validation::jev_purpose(fastbrowse_core::models::JevPurpose::Action, asked).await
+            {
+                Ok(evaluation) => evaluation,
+                Err(DecisionError::Budget(budget)) => return Err(budget.into()),
+                Err(error) => return failed(error.to_string()),
+            };
+        ledger.record([evaluation.cost.clone()])?;
+        if !matches!(evaluation.answers.get("dates"), Some(Answer::Noul(answer)) if answer.probability > EVEN_ODDS) {
+            return Ok(Vec::new());
+        }
+        let extracted = match crate::dates::task_dates(&*self.llm, task, Some(ledger)).await {
+            Ok(extracted) => extracted,
+            Err(crate::error::AgentError::Budget(budget)) => return Err(budget.into()),
+            Err(error) => return failed(error.to_string()),
+        };
+        ledger.record([extracted.cost])?;
+        let references = extracted.data.dates;
+        self.event("task_dates", || Map::from_iter([("dates".into(), json!(references))]));
+        Ok(references)
+    }
+
     /// Go to the site's front page when the address this run chose for itself opened nothing.
     ///
     /// A start page worked out from the task is a guess at an address, and a guess can name a path the site does not
