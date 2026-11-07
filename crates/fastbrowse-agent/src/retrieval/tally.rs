@@ -1,9 +1,10 @@
 //! Counts, totals and extremes in a composed answer, worked out by code.
 //!
 //! Jev cannot count, is not a calculator and does poorly with numbers written as text (docs/jev.md, "Where Jev is not
-//! used"), and a composer that writes a count in prose miscounts. So the composer only declares what a claim tallies,
-//! and writes [`SLOT`] where the value goes. Jev answers one question per note read, whether it is one record of that
-//! kind, and for a total or an extreme which number in it is the field; code counts, adds and compares those answers.
+//! used"), and a composer that writes a count in prose miscounts. So the composer declares what a claim tallies and the
+//! value as its text writes it, and code writes the value it works out in that value's place. Jev answers one question
+//! per note read, whether it is one record of that kind, and for a total or an extreme which number in it is the
+//! field; code counts, adds and compares those answers.
 
 use std::collections::HashSet;
 
@@ -23,9 +24,6 @@ use crate::batches::evaluate_batches;
 use crate::error::{AgentError, Result};
 use crate::memory::{Notes, fact_id};
 
-/// Where a claim's text takes the value code works out.
-pub const SLOT: &str = "{tally}";
-
 /// What the support check is shown in place of the value, which it is not asked to judge.
 pub const COMPUTED: &str = "[computed]";
 
@@ -38,14 +36,15 @@ pub enum Op {
     Max,
 }
 
-/// A value a claim works out across records: what it does, the kind of record it ranges over, and for a total or an
-/// extreme the field it adds or compares.
+/// A value a claim works out across records: what it does, the kind of record it ranges over, for a total or an
+/// extreme the field it adds or compares, and the value as the claim's text writes it, which code replaces.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Tally {
     pub op: Op,
     pub of: String,
     pub field: Option<String>,
+    pub written: String,
 }
 
 impl Schema for Tally {
@@ -56,6 +55,7 @@ impl Schema for Tally {
                 Field::required("op", Ty::literals(&["count", "sum", "min", "max"])),
                 Field::required("of", Ty::Str),
                 Field::default("field", Ty::optional(Ty::Str), serde_json::Value::Null),
+                Field::required("written", Ty::Str),
             ],
         )
         .ty()
@@ -86,7 +86,9 @@ struct Candidate {
 }
 
 /// Every note read, once each: a superseded read is a past state, and a note whose whole text a note before it
-/// already gave is the same record read again, from a later visit or another listing of it.
+/// already gave is the same record read again, from a later visit or another listing of it. A note from a table says
+/// which of its page's tables it is in, counted by code, since a task names a table by its place on the page and a
+/// note alone does not show it.
 fn candidates(notes: &Notes) -> Vec<Candidate> {
     let mut seen = HashSet::new();
     notes
@@ -95,10 +97,15 @@ fn candidates(notes: &Notes) -> Vec<Candidate> {
         .filter_map(|fact| fact.evidence.as_ref().map(|evidence| (fact_id(fact), evidence)))
         .filter(|(id, _)| !notes.superseded(id))
         .filter(|(_, evidence)| seen.insert(text::squash(&evidence.quote)))
-        .map(|(id, evidence)| Candidate {
-            id,
-            quote: evidence.quote.clone(),
-            note: json!({"quote": evidence.quote, "page": evidence.url, "headings": evidence.heading_path}),
+        .map(|(id, evidence)| {
+            let mut note = json!({"quote": evidence.quote, "page": evidence.url, "headings": evidence.heading_path});
+            let blocks = notes.table_blocks(evidence);
+            if let Some(block) = blocks.iter().find(|block| block.start <= evidence.start && evidence.start < block.end)
+            {
+                let count = blocks.last().map_or(0, |last| last.table + 1);
+                note["table"] = format!("table {} of the {count} on its page", block.table + 1).into();
+            }
+            Candidate { id, quote: evidence.quote.clone(), note }
         })
         .collect()
 }
@@ -173,8 +180,11 @@ pub async fn work(
     let state = json!({"task": task});
     let mut members = IndexMap::new();
     for (index, tally, text) in claims {
-        if !text.contains(SLOT) {
-            let reason = format!("The claim sets tally but its text has no {SLOT} where the value goes.");
+        if tally.written.trim().is_empty() || text.matches(tally.written.as_str()).count() != 1 {
+            let reason = format!(
+                "The claim's tally.written {} is not written once, word for word, in its text.",
+                text::repr(&tally.written)
+            );
             worked.insert(*index, Err(Unworked::Draft(reason)));
             continue;
         }
