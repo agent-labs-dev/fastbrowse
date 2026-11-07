@@ -382,3 +382,30 @@ jobs:
           name: realsite-${{ github.run_id }}
           path: realsite.*
           if-no-files-found: warn
+
+  # The posts in blog/ describe how the product reports, spends and clicks, so each one is bound in drift.lock to
+  # the source that carries its claims. A change to a bound file that nobody re-verified turns this red, which is
+  # the point: a post that reads as current while describing last release's behaviour is worse than no post.
+  blog:
+    permissions: {contents: read}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      # Pinned by version and verified by checksum: the binary decides whether a pull request may merge.
+      - name: Install drift
+        env:
+          DRIFT_VERSION: 0.10.1
+          DRIFT_SHA256: f4a027ca1f1f67cef1182d10c16ef183f8460c5f0cd5d5348d188c7fb2442a4e
+        run: |
+          archive="$RUNNER_TEMP/drift.tar.gz"
+          curl -sSfL -o "$archive" \
+            "https://github.com/fiberplane/drift/releases/download/v${DRIFT_VERSION}/drift-x86_64-linux.tar.gz"
+          echo "$DRIFT_SHA256  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" drift
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      # Every doc bound in drift.lock, and every inline anchor outside it, against the tree as it stands. To clear
+      # a failure: read the post against the change, fix it, then re-stamp it and bump its verifiedAgainst and
+      # updated dates in the same commit.
+      - run: drift check
