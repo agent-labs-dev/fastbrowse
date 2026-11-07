@@ -5924,6 +5924,8 @@ async fn test_a_stopped_run_never_answers_against_its_own_step() {
 #[derive(Default)]
 struct FirstChoice {
     asked: Mutex<Vec<String>>,
+    /// Picks the first option whose criterion holds this text, in place of the first option.
+    wants: Option<&'static str>,
 }
 
 impl DecisionClient for FirstChoice {
@@ -5937,7 +5939,10 @@ impl DecisionClient for FirstChoice {
             .filter_map(|(key, question)| {
                 let Question::Choice(choice) = question else { return None };
                 self.asked.lock().unwrap().push(choice.instructions.clone());
-                let first = choice.criteria.keys().next()?.clone();
+                let wanted = self.wants.and_then(|wants| {
+                    choice.criteria.iter().find(|(_, criterion)| criterion.to_string().contains(wants)).map(|(k, _)| k)
+                });
+                let first = wanted.or_else(|| choice.criteria.keys().next())?.clone();
                 let answer = ChoiceAnswer {
                     kind: Default::default(),
                     choice: first.clone(),
@@ -5975,6 +5980,23 @@ async fn test_the_select_question_names_the_section_of_an_unlabelled_select() {
     assert!(acted.is_ok(), "{acted:?}");
     let asked = jev.asked.lock().unwrap();
     assert!(asked.iter().any(|q| q.contains("combobox (Categories)")), "{asked:?}");
+}
+
+/// A select longer than one Choice holds, such as a list of years or airports, offers every option: the run picks a
+/// group of options first and the option inside it, so an answer past the first 255 is still reachable.
+#[tokio::test]
+async fn test_a_select_longer_than_one_choice_still_offers_its_last_options() {
+    let options: Vec<String> = (0..600).map(|i| format!("Airport {i:03}")).collect();
+    let select = Control { options, ..Control::new("s", "combobox", "Airport", [Operation::Select]) };
+    let page = observation(std::slice::from_ref(&select));
+    let jev = Arc::new(FirstChoice { wants: Some("Airport 597"), ..Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.edits_forbidden = Some(false);
+    let acted = agent.action(&mut state, &page, &code_decision(Operation::Select, Some(select))).await;
+    let action = acted.expect("an action");
+    assert_eq!(jev.asked.lock().unwrap().len(), 2, "a group, then an option inside it");
+    assert_eq!(action.text.as_deref(), Some("Airport 597"));
 }
 
 /// A select that allows several choices, labelled Topics, with `selected` chosen.
