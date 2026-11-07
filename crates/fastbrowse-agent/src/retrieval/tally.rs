@@ -83,6 +83,21 @@ struct Candidate {
     id: String,
     quote: String,
     note: serde_json::Value,
+    /// The capture the quote was cut from, and its span there.
+    span: (String, i64, i64),
+}
+
+impl Candidate {
+    /// Whether this note's span lies inside `other`'s, on the same capture: a line of a card, not the card.
+    fn within(&self, other: &Candidate) -> bool {
+        let ((capture, start, end), (outer, from, to)) = (&self.span, &other.span);
+        capture == outer && from <= start && end <= to && (from, to) != (start, end)
+    }
+}
+
+/// The records Jev judged members, less any inside another member: part of a record is not one of its own.
+fn whole(records: Vec<usize>, found: &[Candidate]) -> Vec<usize> {
+    records.iter().copied().filter(|&note| !records.iter().any(|&other| found[note].within(&found[other]))).collect()
 }
 
 /// Every note read, once each: a superseded read is a past state, and a note whose whole text a note before it
@@ -105,7 +120,8 @@ fn candidates(notes: &Notes) -> Vec<Candidate> {
                 let count = blocks.last().map_or(0, |last| last.table + 1);
                 note["table"] = format!("table {} of the {count} on its page", block.table + 1).into();
             }
-            Candidate { id, quote: evidence.quote.clone(), note }
+            let span = (evidence.capture_sha256.clone(), evidence.start, evidence.end);
+            Candidate { id, quote: evidence.quote.clone(), note, span }
         })
         .collect()
 }
@@ -212,7 +228,7 @@ pub async fn work(
             .map(|note| member(*index, note).map(|is| is.then_some(note)))
             .collect::<Option<Vec<_>>>()
             .map(|notes| notes.into_iter().flatten().collect());
-        let Some(records) = judged else {
+        let Some(records) = judged.map(|records| whole(records, &found)) else {
             worked.insert(*index, Err(Unworked::Unjudged));
             continue;
         };
@@ -320,5 +336,18 @@ mod tests {
         let (a, b) = (amount("£1.5").unwrap(), amount("£2.25").unwrap());
         assert_eq!(total(&[&a, &b]), "£3.75");
         assert_eq!(total(&[&a, &amount("2").unwrap()]), "3.5");
+    }
+
+    #[test]
+    fn a_line_inside_a_counted_card_is_not_counted_again() {
+        let note = |capture: &str, start, end| Candidate {
+            id: String::new(),
+            quote: String::new(),
+            note: json!({}),
+            span: (capture.into(), start, end),
+        };
+        let found = [note("a", 0, 50), note("a", 0, 20), note("b", 0, 20), note("a", 60, 90)];
+        assert_eq!(whole(vec![0, 1, 2, 3], &found), [0, 2, 3], "only the line inside card 0 on its capture goes");
+        assert_eq!(whole(vec![1, 3], &found), [1, 3], "a line whose card is not a member still counts");
     }
 }
