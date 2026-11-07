@@ -48,7 +48,8 @@ pub fn text_fragment(url: &str, text: &str) -> Result<String, EmptyQuote> {
 /// `start..row` is that repeated prefix, and `divider` is the divider's span when the block has one. A table with
 /// no data rows is one block of header rows and divider, with `row` at its end, and so is a fetched table's header,
 /// as a fetched page writes every row as a block of its own. `repeats` is set when the prefix
-/// repeats the block before, so on the page it sits above an earlier row, not above this one.
+/// repeats the block before, so on the page it sits above an earlier row, not above this one. `table` numbers the
+/// capture's tables from 0: a block starts one when another block sits before it or it has a header of its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableBlock {
     pub start: i64,
@@ -56,6 +57,7 @@ pub struct TableBlock {
     pub row: i64,
     pub divider: Option<(i64, i64)>,
     pub repeats: bool,
+    pub table: usize,
 }
 
 /// The table blocks of `capture`, in order. A downloaded CSV is not one, so its quote stays as cut.
@@ -81,7 +83,8 @@ pub fn table_blocks(capture: &Capture) -> Vec<TableBlock> {
         let last = rows.last().copied().unwrap_or(block.start);
         // The block before, when it is the same table's: a prefix repeating its prefix, or a headerless table's
         // first row, is not this row's own header.
-        let before = tables.last().filter(|_| previous == Some(index.wrapping_sub(1)));
+        let joined = previous == Some(index.wrapping_sub(1));
+        let before = tables.last().filter(|_| joined);
         let repeats = |prefix: &str| {
             !prefix.is_empty()
                 && before.is_some_and(|table| {
@@ -99,13 +102,13 @@ pub fn table_blocks(capture: &Capture) -> Vec<TableBlock> {
         } else {
             (last, None)
         };
-        tables.push(TableBlock {
-            start: block.start,
-            end: block.end,
-            row,
-            divider,
-            repeats: repeats(&text(block.start, row)),
-        });
+        let repeats = repeats(&text(block.start, row));
+        // A header of its own starts a table, as does a block with another block before it.
+        let table = match before {
+            Some(last) if divider.is_none() || repeats => last.table,
+            _ => tables.last().map_or(0, |last| last.table + 1),
+        };
+        tables.push(TableBlock { start: block.start, end: block.end, row, divider, repeats, table });
         previous = Some(index);
     }
     tables
@@ -305,6 +308,10 @@ mod tests {
             captured(&[(true, "| Name |\n| --- |"), (true, "| Ada |"), (true, "| Score |\n| --- |"), (true, "| 10 |")]);
         assert_eq!(shown(&adjacent, 0, 3), "Name\nAda\nScore\n10");
         assert_eq!(shown(&adjacent, 2, 2), "Score");
+        let numbered = |capture: &Capture| table_blocks(capture).iter().map(|block| block.table).collect::<Vec<_>>();
+        assert_eq!(numbered(&adjacent), [0, 0, 1, 1], "a header of its own starts a table");
+        let apart = captured(&[(true, "| Ada |"), (false, "prose"), (true, "| Bo |")]);
+        assert_eq!(numbered(&apart), [0, 1], "a block between two tables parts them");
     }
 
     #[test]
