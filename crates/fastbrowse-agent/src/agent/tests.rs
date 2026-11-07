@@ -1311,6 +1311,12 @@ impl DecisionClient for DoneCheckJev {
                         probabilities: IndexMap::new(),
                         confidence: 1.0,
                     }),
+                    // The done check's two questions answer as the pick names: carried out, refused, or neither.
+                    _ if key == "carried" || key == "refused" => {
+                        let probability =
+                            if self.2 == ["done", "refused"][usize::from(key == "refused")] { 1.0 } else { 0.0 };
+                        Answer::Noul(NoulAnswer { kind: Default::default(), probability })
+                    }
                     _ => Answer::Noul(NoulAnswer { kind: Default::default(), probability: self.1 }),
                 };
                 (key.clone(), answer)
@@ -1434,19 +1440,22 @@ async fn test_a_done_whose_remaining_step_the_site_refuses_ends_unverified_with_
     assert_eq!(state.recoveries, 0);
 }
 
-/// Jev leans toward the first option (#808), so the answer that ends a run short of a step is offered last.
+/// Jev leans toward a Choice's first option (#808), so whether a step was carried out and whether the site refuses it
+/// are asked as two questions of their own, which no option order can lean.
 #[tokio::test]
-async fn test_the_refused_choice_is_offered_last() {
+async fn test_the_done_check_asks_no_choice() {
     let page = observation(&[]);
     let mut state = run_state();
     state.task = "Add the item to the cart.".into();
-    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
-    let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev.clone(), Arc::new(ScriptedLLM));
-    agent.actions_done(&mut state, &page).await.unwrap();
-    assert_eq!(jev.4.lock().unwrap()[0], ["done", "undone", "refused"]);
+    for (pick, carried) in [("done", "Done"), ("undone", "Undone"), ("refused", "Refused")] {
+        let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, pick));
+        let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev.clone(), Arc::new(ScriptedLLM));
+        let answer = agent.actions_done(&mut state, &page).await.unwrap();
+        assert_eq!(format!("{answer:?}"), carried);
+        assert!(jev.4.lock().unwrap().is_empty());
+    }
 }
 
-/// A form filled and never sent is not a task carried out: the done check is told so, as the step decision is (#812).
 #[tokio::test]
 async fn test_the_done_check_is_told_what_was_typed_and_never_sent() {
     let page = observation(&[holding("Reference", "REF-1")]);
@@ -4951,15 +4960,9 @@ async fn test_a_refused_step_keeps_a_passing_composition_after_recovery_unverifi
             state: &'a serde_json::Value,
             questions: &'a IndexMap<String, Question>,
         ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
-            if matches!(questions.get("pick"), Some(Question::Choice(choice)) if choice.criteria.contains_key("refused"))
-            {
-                let answer = Answer::Choice(ChoiceAnswer {
-                    kind: fastbrowse_core::decision::ChoiceTag,
-                    choice: "refused".into(),
-                    probabilities: IndexMap::new(),
-                    confidence: 1.0,
-                });
-                let answers = IndexMap::from([("pick".to_string(), answer)]);
+            if questions.contains_key("refused") {
+                let noul = |probability| Answer::Noul(NoulAnswer { kind: Default::default(), probability });
+                let answers = IndexMap::from([("carried".to_string(), noul(0.0)), ("refused".to_string(), noul(1.0))]);
                 return Box::pin(async move {
                     Ok(Evaluation { model: "test".into(), answers, input_tokens: 0, cost: free(), requests: 1 })
                 });

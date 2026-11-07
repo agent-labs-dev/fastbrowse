@@ -1203,29 +1203,27 @@ impl Agent {
     /// and stopped at the sign-in code. A step the site refuses, such as an option it marks unavailable, is no step
     /// left to take, and the run ends with its answer rather than recovering until it runs out (#779).
     pub(super) async fn actions_done(&self, state: &mut RunState, observation: &Observation) -> Step<Carried> {
-        let criteria = IndexMap::from([
-            (
-                "done".to_string(),
-                JsonValue::from(
-                    "Every such step has been carried out, or the task asks only to find, read or report something.",
-                ),
+        // Two questions asked apart, each true or false on its own, so no option's place in a list can lean the run
+        // toward ending short of a step (#808). Finding, reading and reporting are judged by the answer's own checks,
+        // from the notes these questions leave out.
+        let carried = NoulQuestion::new(
+            format!(
+                "{UNTRUSTED}\n\n# Task\n{}\n\nJudged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out?",
+                state.task
             ),
-            (
-                "undone".to_string(),
-                JsonValue::from(
-                    "A step the task asks for, other than finding, reading or reporting, has not been carried out yet.",
-                ),
+            Some("Every such step has been carried out, or the task asks only to find, read or report something."),
+            Some("A step the task asks for, other than finding, reading or reporting, has not been carried out yet."),
+        );
+        let refused = NoulQuestion::new(
+            format!(
+                "{UNTRUSTED}\n\n# Task\n{}\n\nDo the current page or the recent actions show that the site does not allow a step the task asks to be carried out, such as an option the page marks unavailable or a control it shows disabled?",
+                state.task
             ),
-            // Last, so Jev's lean toward the first option cannot favour ending short of a step (#808).
-            (
-                "refused".to_string(),
-                JsonValue::from(
-                    "A step the task asks for has not been carried out, and the current page or the recent actions show the site does not allow it, such as an option the page marks unavailable or a control it shows disabled; nothing left to try on the site would carry it out.",
-                ),
+            Some(
+                "The page or the recent actions show the site does not allow a step the task asks for, and nothing left to try on the site would carry it out.",
             ),
-        ]);
-        // Finding, reading and reporting are judged by the answer's own checks, from the notes this question leaves out.
-        let question = "Judged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out?";
+            Some("Nothing shown says the site refuses a step the task asks for."),
+        );
         let history = state.history.iter().map(Dump::dump_exclude_none).collect();
         let mut context = Map::from_iter([("recent_actions".to_string(), JsonValue::Array(history))]);
         // What code already knows was left undone, as the step decision is told it: values typed and never sent, and
@@ -1237,7 +1235,6 @@ impl Agent {
         if !facts.is_empty() {
             context.insert("page_facts".into(), facts.into());
         }
-        let asked = vec![("pick", question.to_string(), criteria)];
         // The whole page, not only what is in view: a feed loaded to its end showed its count at the top and "End of
         // list" below the fold, and judged from the top alone the loading looked unfinished.
         let page = Observation {
@@ -1248,11 +1245,30 @@ impl Agent {
                 .join("\n"),
             ..observation.clone()
         };
-        Ok(match self.ask_choices_in(state, Some(&page), asked, Some(&context)).await?["pick"].as_str() {
-            "done" => Carried::Done,
-            "undone" => Carried::Undone,
-            "refused" => Carried::Refused,
-            _ => unreachable!(),
+        let questions = IndexMap::from([
+            ("carried".to_string(), Question::Noul(carried)),
+            ("refused".to_string(), Question::Noul(refused)),
+        ]);
+        let state_json = page_state(
+            &page,
+            &Notes::default(),
+            &self.config.tokens,
+            &questions.values().map(Dump::dump_json).collect::<Vec<_>>(),
+            Some(&context),
+        )?;
+        state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+        let evaluation = jev_purpose(JevPurpose::Action, self.jev.evaluate(&state_json, &questions)).await?;
+        state.ledger.record([evaluation.cost.clone()])?;
+        let holds = |key: &str| match evaluation.answers.get(key) {
+            Some(Answer::Noul(answer)) => Ok(answer.probability > 0.5),
+            _ => Err(DecisionError::Failed(format!("expected a yes-or-no answer to {key}"))),
+        };
+        Ok(if holds("carried")? {
+            Carried::Done
+        } else if holds("refused")? {
+            Carried::Refused
+        } else {
+            Carried::Undone
         })
     }
 
