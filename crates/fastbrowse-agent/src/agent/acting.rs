@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use fastbrowse_clients::validation::jev_purpose;
-use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionError, NoulQuestion, Question};
+use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionError, EVEN_ODDS, NoulQuestion, Question};
 use fastbrowse_core::models::{CostComponent, Decider, JevPurpose, Operation, Status, StepOutcome, UNTRUSTED};
 use fastbrowse_core::navigation::task_urls;
 use fastbrowse_core::page::{Action, Control, Observation};
@@ -13,7 +13,7 @@ use fastbrowse_core::recipe::RecipeText;
 use fastbrowse_core::safety::{
     asks_for_credentials, changes_a_value, changes_credentials, conditional_question, control_action,
     downloads_question, edits_question, irreversible_question, is_password, lasting_question, may_be_irreversible,
-    origin_of, requested_question, resolve_secret, sets_new_password, starts_download, unmet_question,
+    met_question, origin_of, requested_question, resolve_secret, sets_new_password, starts_download,
 };
 use indexmap::IndexMap;
 use serde_json::{Map, Value as JsonValue, json};
@@ -436,7 +436,7 @@ impl Agent {
             jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&json!({"task": state.task}), &questions)).await?;
         state.ledger.record([evaluation.cost.clone()])?;
         let Some(Answer::Noul(answer)) = evaluation.answers.get(key) else { return Ok(None) };
-        Ok(Some(answer.probability > self.config.thresholds.irreversible_above))
+        Ok(Some(answer.probability > EVEN_ODDS))
     }
 
     /// The one rule for an action that may commit: it proceeds when Jev judges it not irreversible, or when the run is
@@ -499,15 +499,14 @@ impl Agent {
             let reversible = probability.is_some_and(|p| p <= thresholds.irreversible_above);
             let wanted = requested.is_some_and(|p| p > thresholds.requested_above);
             // An unanswered question refuses once, as an unanswered irreversible one does.
-            let keeps =
-                questions.contains_key("lasting") && !lasting.is_some_and(|p| p <= thresholds.irreversible_above);
+            let keeps = questions.contains_key("lasting") && !lasting.is_some_and(|p| p <= EVEN_ODDS);
             if reversible && keeps && !wanted {
                 let why = "would change what the site keeps, and the task does not ask for it";
                 return self.refuse_once(state, observation, decision, label, why).await;
             }
             // Asked unanswered, the condition is checked as if the task set one: the check costs a call, a missed
             // condition an irreversible commit.
-            let conditional = conditional.is_none_or(|p| p > thresholds.irreversible_above);
+            let conditional = conditional.is_none_or(|p| p > EVEN_ODDS);
             if wanted
                 && (!reversible || keeps)
                 && conditional
@@ -543,8 +542,8 @@ impl Agent {
         Err(Stop::new(Status::NeedsConfirmation, reason).into())
     }
 
-    /// Whether the page shows a conditional commit allowed: Jev's clear no to whether it shows the state the task rules
-    /// the commit out in, or has not been checked for it. Any other answer, or none, is not allowed.
+    /// Whether the page shows a conditional commit allowed: Jev's yes that it shows the state in which the task says to
+    /// commit. Any other answer, or none, is not allowed.
     ///
     /// The one authorization question asked with the page's content, in a request of its own, so a page's text can
     /// only veto a commit and never argue `requested` up. It is shown the masked observation the step decision reads,
@@ -571,7 +570,7 @@ impl Agent {
         self.mask_strings(&mut page);
         page["task"] = state.task.clone().into();
         page["date"] = observation.today().into();
-        let questions = IndexMap::from([("unmet".to_string(), Question::Noul(unmet_question(action)))]);
+        let questions = IndexMap::from([("met".to_string(), Question::Noul(met_question(action)))]);
         let evaluation = match jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&page, &questions)).await {
             Ok(evaluation) => evaluation,
             // A page too large to ask about cannot show the condition met.
@@ -579,12 +578,12 @@ impl Agent {
             Err(error) => return Err(error.into()),
         };
         state.ledger.record([evaluation.cost.clone()])?;
-        let unmet = match evaluation.answers.get("unmet") {
+        let met = match evaluation.answers.get("met") {
             Some(Answer::Noul(answer)) => Some(answer.probability),
             _ => None,
         };
-        self.event("condition", || Map::from_iter([("unmet".into(), json!(unmet))]));
-        Ok(unmet.is_some_and(|p| p <= self.config.thresholds.irreversible_above))
+        self.event("condition", || Map::from_iter([("met".into(), json!(met))]));
+        Ok(met.is_some_and(|p| p > EVEN_ODDS))
     }
 
     /// Mask every string in `value`, however deeply it is nested.
