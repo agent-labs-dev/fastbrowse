@@ -628,7 +628,7 @@ impl Agent {
         });
         self.mask_strings(&mut page);
         page["task"] = state.task.clone().into();
-        page["date"] = observation.today().into();
+        page["date"] = crate::dates::dated(observation.captured_at, &state.dates).into();
         let questions = IndexMap::from([("met".to_string(), Question::Noul(met_question(action)))]);
         let evaluation = match jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&page, &questions)).await {
             Ok(evaluation) => evaluation,
@@ -738,7 +738,7 @@ impl Agent {
                 &state.task,
                 &label,
                 &typed_into(state, target),
-                &observation.today(),
+                &crate::dates::dated(observation.captured_at, &state.dates),
                 &state.history.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
                 Some(&state.ledger),
             )
@@ -1331,6 +1331,7 @@ impl Agent {
             &self.config.tokens,
             &questions.values().map(Dump::dump_json).collect::<Vec<_>>(),
             Some(&context),
+            &state.dates,
         )?;
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
         let evaluation = jev_purpose(JevPurpose::Action, self.jev.evaluate(&state_json, &questions)).await?;
@@ -1378,7 +1379,7 @@ impl Agent {
         let page = match observation {
             Some(observation) => {
                 let notes = if context.is_some() { &Notes::default() } else { &state.notes };
-                page_state(observation, notes, &self.config.tokens, &dumped, context)?
+                page_state(observation, notes, &self.config.tokens, &dumped, context, &state.dates)?
             }
             // Output format is a requirement of the task, independent of what the page or notes say.
             None => JsonValue::Object(Map::new()),

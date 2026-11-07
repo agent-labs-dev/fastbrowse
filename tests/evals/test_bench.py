@@ -95,22 +95,19 @@ def test_fixture_ports_are_placeholders() -> None:
 
 
 def test_capture_dates_are_placeholders() -> None:
-    def state(day: str, weekday: str, *months: str) -> dict[str, object]:
-        date = "\n".join([f"{day} ({weekday})", *months])
+    def state(day: str, weekday: str, named: str) -> dict[str, object]:
+        date = f"{day} ({weekday})\nThe dates the task names, worked out from today:\n4 December: {named}"
         return {"date": date, "note": f"today: {json.dumps(date)}", "captured_at": f"{day}T10:11:12.345678+00:00"}
 
-    october = (
-        "October 2026: Mon 5 12 19 26; Tue 6 13 20 27; Wed 7 14 21 28; Thu 1 8 15 22 29; "
-        "Fri 2 9 16 23 30; Sat 3 10 17 24 31; Sun 4 11 18 25"
-    )
-    february = (
-        "February 2027: Mon 1 8 15 22; Tue 2 9 16 23; Wed 3 10 17 24; Thu 4 11 18 25; "
-        "Fri 5 12 19 26; Sat 6 13 20 27; Sun 7 14 21 28"
-    )
-    friday = state("2026-10-23", "Friday", october)
-    monday = state("2027-02-01", "Monday", february, october)
+    friday = state("2026-10-23", "Friday", "2026-12-04 (Friday)")
+    monday = state("2027-02-01", "Monday", "2027-12-04 (Saturday)")
     assert request_key(LLM, friday) == request_key(LLM, monday)
-    assert canonical_value(friday) == {"date": "<today>", "note": 'today: "<today>"', "captured_at": "<timestamp>"}
+    named = "<today>\nThe dates the task names, worked out from today:\n4 December: <today>"
+    assert canonical_value(friday) == {
+        "date": named,
+        "note": f"today: {json.dumps(named)}",
+        "captured_at": "<timestamp>",
+    }
 
 
 def test_screenshots_are_placeholders() -> None:

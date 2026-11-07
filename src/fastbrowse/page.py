@@ -4,7 +4,7 @@ An `Observation` is bounded, for Jev's action choice; a `Capture` is complete, f
 page is asked to do.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import StrEnum
 
 from pydantic import Field, field_serializer
@@ -126,31 +126,6 @@ class Observation(Frozen):
     history_entry: str | None = None
     """The tab's browser history entry this page is: Back, Forward and a reload return to the same one, and a
     navigation, a new tab or `pushState` makes another. None when the browser would not say."""
-
-    @property
-    def today(self) -> str:
-        """The capture date with its weekday, then a calendar of this month and the twelve after it, a month to a line
-        and each weekday's dates together. A relative day is looked up in it rather than counted. It runs to this month
-        next year because a month or weekday named without a year means its next occurrence, which always falls in
-        that span."""
-        today = self.captured_at
-        lines = [f"{today:%Y-%m-%d (%A)}"]
-        month = today.replace(day=1)
-        for _ in range(13):
-            lines.append(_month_calendar(month))
-            month = (month + timedelta(days=32)).replace(day=1)
-        return "\n".join(lines)
-
-
-def _month_calendar(first: datetime) -> str:
-    """One month as a line, Monday first: `November 2026: Mon 2 9 16 23 30; Tue 3 10 17 24; ...`."""
-    days = [first + timedelta(days=offset) for offset in range(31)]
-    in_month = [day for day in days if day.month == first.month]
-    columns = (
-        f"{name} {' '.join(str(day.day) for day in in_month if day.weekday() == weekday)}"
-        for weekday, name in enumerate(("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"))
-    )
-    return f"{first:%B %Y}: {'; '.join(columns)}"
 
 
 class BlockKind(StrEnum):

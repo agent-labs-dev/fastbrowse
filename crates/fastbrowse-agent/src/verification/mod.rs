@@ -49,10 +49,11 @@ pub fn page_state(
     tokens: &TokenBudget,
     questions: &[String],
     context: Option<&Map<String, Value>>,
+    dates: &[crate::dates::DateReference],
 ) -> Result<Value> {
     let mut state: Map<String, Value> = context.cloned().unwrap_or_default();
     // The dropdown choice runs apart from the action choice; it also needs today's date for relative months.
-    state.insert("date".into(), observation.today().into());
+    state.insert("date".into(), crate::dates::dated(observation.captured_at, dates).into());
     state.insert(
         "page".into(),
         json!({"url": observation.url, "title": observation.title, "text": observation.viewport_text}),
@@ -226,7 +227,7 @@ mod tests {
             "muted": false, "elapsed_seconds": 30.0, "duration_seconds": 30.0}))
             .unwrap(),
         ];
-        let state = page_state(&page, &Notes::default(), &TokenBudget::default(), &[], None).unwrap();
+        let state = page_state(&page, &Notes::default(), &TokenBudget::default(), &[], None, &[]).unwrap();
         assert_eq!(state["page"]["media"][0]["ended"], true);
     }
 
@@ -240,7 +241,7 @@ mod tests {
             .collect();
         let tokens =
             TokenBudget { state_plus_largest_question: 2000, state_plus_all_questions: 4000, ..TokenBudget::default() };
-        let state = page_state(&page, &Notes::default(), &tokens, &["q".to_string()], None).unwrap();
+        let state = page_state(&page, &Notes::default(), &tokens, &["q".to_string()], None, &[]).unwrap();
         assert_eq!(state["controls_omitted"], 400);
     }
 
@@ -249,7 +250,7 @@ mod tests {
         let context = Map::from_iter([("task".to_string(), Value::from("word ".repeat(2000)))]);
         let tokens =
             TokenBudget { state_plus_largest_question: 2000, state_plus_all_questions: 4000, ..TokenBudget::default() };
-        let error = page_state(&page(), &Notes::default(), &tokens, &["q".to_string()], Some(&context));
+        let error = page_state(&page(), &Notes::default(), &tokens, &["q".to_string()], Some(&context), &[]);
         assert!(matches!(error, Err(AgentError::ObservationTooLarge(_))), "{error:?}");
     }
 }

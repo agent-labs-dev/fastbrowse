@@ -69,6 +69,7 @@ fn replay(case: &Value, update: bool) -> Result<Option<Value>, String> {
                 &tokens,
                 &questions,
                 context.as_ref(),
+                &[],
             ))
         }
         "extract" => {

@@ -315,7 +315,7 @@ fn scripted_jev(script: &Value, state: &Value, questions: &Value, log: &[Value])
     for (key, question) in questions.as_object().unwrap() {
         if question["type"] == "noul" {
             // A case's answer is the one it expects to stand, so the checks of that answer pass unless it scripts them.
-            let default = if matches!(key.as_str(), "login_required" | "bot_check" | "site_failure") {
+            let default = if matches!(key.as_str(), "login_required" | "bot_check" | "site_failure" | "dates") {
                 0.0
             } else if key == "coverage" || key == "carried" || key.starts_with("claim") {
                 1.0
@@ -587,6 +587,33 @@ async fn a_blank_navigation_waits_for_its_content_before_asking_jev() {
         }
     }
     assert_eq!(outcome["steps"][1]["target"], "Next");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_date_the_task_names_reaches_each_step_worked_out() {
+    let mut case = cases().into_iter().find(|case| case["name"] == "a step limit ends budget_exceeded").unwrap();
+    case["name"] = "a date the task names".into();
+    case["task"] = "Book the first Friday of December".into();
+    case["calls"] = serde_json::json!([]);
+    case["jev"]["nouls"]["dates"] = 0.9.into();
+    case["llm"]["TaskDates"] = serde_json::json!({"dates": [{
+        "text": "the first Friday of December", "year": null, "month": 12, "day": null, "weekday": "friday",
+        "nth": 1, "days_from_today": null, "months_from_now": null
+    }]});
+    let log: Arc<Mutex<Vec<Value>>> = Arc::default();
+    play(&case, Some(log.clone())).await;
+    let log = log.lock().unwrap();
+    let steps: Vec<Value> = log
+        .iter()
+        .filter(|call| call["jev"]["questions"].as_str().is_some_and(|q| q.contains("\"operation\":")))
+        .map(|call| serde_json::from_str(call["jev"]["state"].as_str().unwrap()).unwrap())
+        .collect();
+    assert!(!steps.is_empty());
+    for state in steps {
+        let date = state["date"].as_str().unwrap();
+        assert!(date.ends_with("\nthe first Friday of December: 2026-12-04 (Friday)"), "{date}");
+        assert!(!date.contains("Mon "), "no calendar: {date}");
+    }
 }
 
 /// Transient site failures, each a scripted site run from its script alone and checked against what it must do: the

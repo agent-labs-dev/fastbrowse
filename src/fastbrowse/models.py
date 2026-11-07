@@ -219,6 +219,7 @@ class LLMPurpose(StrEnum):
     IMAGE_READ = "image_read"
     FILL = "fill"
     PAGES = "pages"
+    DATES = "dates"
 
 
 class JevPurpose(StrEnum):

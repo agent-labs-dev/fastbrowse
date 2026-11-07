@@ -330,6 +330,9 @@ pub(crate) struct RunState {
     /// What the task says about signing in, asked of the task alone at the first sign-in wall. None until then, and
     /// when Jev gave no answer.
     pub sign_in: Option<SignInNeeds>,
+    /// The dates the task names, as the parts it states, read once before the first page. Code works out the date
+    /// each means against the page's capture date.
+    pub dates: Vec<crate::dates::DateReference>,
     /// Jev's judgement, asked with `output_intent`, that the task asks how the page looks, which only its pixels show.
     pub appearance: bool,
     /// Jev's reading of how much of a list the task covers: a whole list across its pages, such as a count over a
@@ -677,6 +680,7 @@ impl RunState {
             refused: false,
             output_intent: OutputIntent::Unknown,
             sign_in: None,
+            dates: Vec::new(),
             appearance: false,
             extent: Extent::Shown,
             pager_pages: Vec::new(),
