@@ -4,6 +4,7 @@
 //! reader turns them into the blocks `capture.js` makes of the same page.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 use encoding_rs::{Encoding, UTF_8};
 use fastbrowse_core::models::Operation;
@@ -12,7 +13,7 @@ use fastbrowse_core::py::text;
 use html5ever::Attribute;
 use html5ever::tendril::StrTendril;
 use html5ever::tokenizer::states::RawKind;
-use html5ever::tokenizer::{BufferQueue, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts};
+use html5ever::tokenizer::{BufferQueue, Tag, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts};
 
 /// Scripts, and the elements whose only content is a script or a picture, state nothing a reader can quote.
 /// `embed` is void, so it has no content to skip and no end tag that would end the skip.
@@ -110,20 +111,43 @@ pub fn clean(raw: &str) -> String {
     text::strip(&collapsed).to_string()
 }
 
-/// The tokenizer's tokens, handed to a [`Reader`]. A start tag also sets the tokenizer's state, as the tree builder
-/// would, so a script's or a title's text is read as text up to its own end tag.
-struct Sink<'a>(RefCell<Reader<'a>>);
+/// What reads the tokens of a document. Each tag token is numbered in order, so the [`Tree`] read first and the
+/// [`Reader`] read after it name the same element by its start tag.
+trait Tags {
+    fn start(&mut self, tag: &Tag, at: usize);
+    fn end(&mut self, name: &str, at: usize);
+    fn data(&mut self, data: &str);
+}
 
-impl TokenSink for Sink<'_> {
+/// The tokenizer's tokens, handed to a [`Tags`]. A start tag also sets the tokenizer's state, as the tree builder
+/// would, so a script's or a title's text is read as text up to its own end tag.
+struct Sink<T>(RefCell<(T, usize)>);
+
+impl<T> Sink<T> {
+    fn new(tags: T) -> Sink<T> {
+        Sink(RefCell::new((tags, 0)))
+    }
+
+    fn into_inner(self) -> T {
+        self.0.into_inner().0
+    }
+}
+
+impl<T: Tags> TokenSink for Sink<T> {
     type Handle = ();
 
     fn process_token(&self, token: Token, _line: u64) -> TokenSinkResult<()> {
-        let mut reader = self.0.borrow_mut();
+        let mut sink = self.0.borrow_mut();
+        let (tags, count) = &mut *sink;
         match token {
-            // `<svg/>` is foreign content, where a self-closing tag ends the element: it opens nothing to skip.
-            Token::TagToken(tag) if tag.kind == TagKind::StartTag && tag.self_closing && &*tag.name == "svg" => {}
-            Token::TagToken(tag) if tag.kind == TagKind::StartTag => {
-                reader.start(&tag.name, &tag.attrs);
+            Token::TagToken(tag) => {
+                let at = *count;
+                *count += 1;
+                if tag.kind == TagKind::EndTag {
+                    tags.end(&tag.name, at);
+                    return TokenSinkResult::Continue;
+                }
+                tags.start(&tag, at);
                 return match &*tag.name {
                     "title" | "textarea" => TokenSinkResult::RawData(RawKind::Rcdata),
                     "style" | "xmp" | "iframe" | "noembed" | "noframes" | "noscript" => {
@@ -134,8 +158,7 @@ impl TokenSink for Sink<'_> {
                     _ => TokenSinkResult::Continue,
                 };
             }
-            Token::TagToken(tag) => reader.end(&tag.name),
-            Token::CharacterTokens(data) => reader.data(&data),
+            Token::CharacterTokens(data) => tags.data(&data),
             _ => {}
         }
         TokenSinkResult::Continue
@@ -150,6 +173,389 @@ fn tokenize<S: TokenSink>(html: &str, sink: S) -> S {
     let _ = tokenizer.feed(&input);
     tokenizer.end();
     tokenizer.sink
+}
+
+/// Elements whose default style is not inline, as `capture.js` tells a block by its computed display.
+fn displays_block(tag: &str) -> bool {
+    BLOCKS.contains(&tag)
+        || heading_level(tag).is_some()
+        || matches!(tag, "br" | "caption" | "center" | "details" | "dialog" | "hgroup" | "legend" | "menu" | "summary")
+        || matches!(tag, "td" | "th" | "tr")
+}
+
+/// Elements with no content and no end tag.
+const VOID: [&str; 13] =
+    ["area", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"];
+/// Elements that end the search for an open element an end tag closes, as the tree builder's scopes do.
+const SCOPES: [&str; 6] = ["caption", "html", "table", "td", "template", "th"];
+/// The elements `capture.js` lets a record's facts stand on without naming them.
+const LEAVES_OF_THEIR_OWN: [&str; 7] = ["a", "button", "img", "input", "select", "textarea", "svg"];
+
+/// One element of the served markup, in the tree a browser builds of it.
+struct Element {
+    tag: String,
+    parent: usize,
+    children: Vec<usize>,
+    /// The class tokens, in order and without repeats.
+    classes: Vec<String>,
+    href: Option<String>,
+    /// The `aria-label`, else the `title`, which names a fact the element only draws.
+    label: Option<String>,
+    navigation: bool,
+    /// Never rendered: hidden itself, skipped, or inside such an element.
+    hidden: bool,
+    /// Inside `svg` or `math`, where a self-closing tag ends its element.
+    foreign: bool,
+    /// Whether it shows any text.
+    text: bool,
+    /// The tag tokens that opened and closed it.
+    start: usize,
+    close: usize,
+    /// Its last descendant: elements are numbered in document order, so its descendants are the ones up to this.
+    last: usize,
+}
+
+/// The served markup's elements, built by a first read so the reader knows a card's siblings and descendants before
+/// it reads the card's text. The rules are the tree builder's for the cases cards use: void elements, and the end tags
+/// a `p`, a list item, an option or a table part implies.
+struct Tree {
+    url: String,
+    /// The document itself is element 0.
+    elements: Vec<Element>,
+    open: Vec<usize>,
+}
+
+impl Tree {
+    fn new(url: &str) -> Tree {
+        let document = Element {
+            tag: String::new(),
+            parent: 0,
+            children: Vec::new(),
+            classes: Vec::new(),
+            href: None,
+            label: None,
+            navigation: false,
+            hidden: false,
+            foreign: false,
+            text: false,
+            start: usize::MAX,
+            close: usize::MAX,
+            last: 0,
+        };
+        Tree { url: url.to_string(), elements: vec![document], open: vec![0] }
+    }
+
+    fn top(&self) -> &Element {
+        &self.elements[*self.open.last().unwrap_or(&0)]
+    }
+
+    /// Closes the innermost open `targets` element and every element inside it, unless one of `stops` is nearer.
+    fn close_through(&mut self, targets: &[&str], stops: impl Fn(&str) -> bool, at: usize) {
+        let Some(found) = self.open.iter().skip(1).rposition(|&i| {
+            let tag = self.elements[i].tag.as_str();
+            targets.contains(&tag) || stops(tag)
+        }) else {
+            return;
+        };
+        let found = found + 1;
+        if targets.contains(&self.elements[self.open[found]].tag.as_str()) {
+            self.close_from(found, at);
+        }
+    }
+
+    /// Closes the open elements from `found` in, at the tag token `at`; nothing after this is inside them.
+    fn close_from(&mut self, found: usize, at: usize) {
+        let last = self.elements.len() - 1;
+        for i in self.open.drain(found..) {
+            self.elements[i].close = at;
+            self.elements[i].last = last;
+        }
+    }
+
+    /// Closes what is open inside the innermost `within` element, when a table part starts.
+    fn close_back_to(&mut self, within: &[&str], at: usize) {
+        let Some(found) = self.open.iter().rposition(|&i| within.contains(&self.elements[i].tag.as_str())) else {
+            return;
+        };
+        self.close_from(found + 1, at);
+    }
+
+    /// The end tags a start tag implies.
+    fn imply_ends(&mut self, tag: &str, at: usize) {
+        let closes_p = displays_block(tag) && !matches!(tag, "br" | "td" | "th" | "tr" | "caption");
+        if closes_p {
+            self.close_through(&["p"], |open| SCOPES.contains(&open) || open == "button", at);
+        }
+        // A list item, or a term or its description, ends the one open in the same list.
+        let list_stop = |open: &str| displays_block(open) && !matches!(open, "address" | "div" | "p");
+        match tag {
+            "li" => self.close_through(&["li"], list_stop, at),
+            "dt" | "dd" => self.close_through(&["dt", "dd"], list_stop, at),
+            "option" | "optgroup" if self.top().tag == "option" => self.close_through(&["option"], |_| true, at),
+            "tr" => self.close_back_to(&["table", "tbody", "thead", "tfoot"], at),
+            "td" | "th" => self.close_back_to(&["tr", "table"], at),
+            "tbody" | "thead" | "tfoot" => self.close_back_to(&["table"], at),
+            "a" => self.close_through(&["a"], |open| SCOPES.contains(&open), at),
+            _ if heading_level(tag).is_some() && heading_level(&self.top().tag).is_some() => {
+                let open = self.top().tag.clone();
+                self.close_through(&[open.as_str()], |_| true, at);
+            }
+            _ => {}
+        }
+        if tag == "optgroup" && self.top().tag == "optgroup" {
+            self.close_through(&["optgroup"], |_| true, at);
+        }
+    }
+
+    /// Marks an element and the elements around it as showing text.
+    fn shows_text(&mut self, mut i: usize) {
+        while i != 0 && !self.elements[i].text {
+            self.elements[i].text = true;
+            i = self.elements[i].parent;
+        }
+    }
+}
+
+impl Tags for Tree {
+    fn start(&mut self, tag: &Tag, at: usize) {
+        let name = &*tag.name;
+        let get = |name: &str| tag.attrs.iter().find(|a| &*a.name.local == name).map(|a| a.value.to_string());
+        if !self.top().foreign {
+            self.imply_ends(name, at);
+        }
+        let parent = *self.open.last().unwrap_or(&0);
+        let (hidden, foreign) = (self.elements[parent].hidden, self.elements[parent].foreign);
+        let mut classes: Vec<String> = Vec::new();
+        for class in get("class").unwrap_or_default().split_ascii_whitespace() {
+            if !classes.iter().any(|seen| seen == class) {
+                classes.push(class.to_string());
+            }
+        }
+        let nonempty = |value: Option<String>| value.filter(|value| !value.is_empty());
+        let i = self.elements.len();
+        let foreign = foreign || matches!(name, "svg" | "math");
+        self.elements.push(Element {
+            tag: name.to_string(),
+            parent,
+            children: Vec::new(),
+            classes,
+            href: get("href"),
+            label: nonempty(get("aria-label")).or_else(|| nonempty(get("title"))),
+            navigation: get("role").is_some_and(|role| role == "navigation"),
+            hidden: hidden
+                || SKIPPED.contains(&name)
+                || get("hidden").is_some()
+                || hides(&get("style").unwrap_or_default()),
+            foreign,
+            text: false,
+            start: at,
+            close: usize::MAX,
+            last: i,
+        });
+        self.elements[parent].children.push(i);
+        // A dated element shows its date, as the reader writes it.
+        let dated =
+            (name == "time" || name.contains('-')) && get("datetime").is_some_and(|d| !text::strip(&d).is_empty());
+        if dated && !self.elements[i].hidden {
+            self.shows_text(i);
+        }
+        if VOID.contains(&name) || (foreign && tag.self_closing) {
+            self.elements[i].close = at;
+        } else {
+            self.open.push(i);
+        }
+    }
+
+    fn end(&mut self, name: &str, at: usize) {
+        // The document's own elements stay open to its end, as a browser keeps them.
+        if !matches!(name, "html" | "body" | "head") {
+            self.close_through(&[name], |open| SCOPES.contains(&open), at);
+        }
+    }
+
+    fn data(&mut self, data: &str) {
+        let top = *self.open.last().unwrap_or(&0);
+        if !self.elements[top].hidden && !text::strip(data).is_empty() {
+            self.shows_text(top);
+        }
+    }
+}
+
+/// A repeated card, read as one block: what `capture.js` calls a record.
+struct Record {
+    /// The tag token that closes the card.
+    close: usize,
+    kind: BlockKind,
+    /// The card's one link, when it has only one.
+    href: Option<String>,
+    /// What the card only draws, each fact named as the page names it.
+    facts: String,
+}
+
+/// What an element's descendants hold, for the rules that look inside a card.
+#[derive(Clone, Copy, Default)]
+struct Holds {
+    framed: bool,
+    block: bool,
+    /// A record, or a list item read as one block.
+    item: bool,
+    links: usize,
+    first_link: Option<usize>,
+    leaf_of_its_own: bool,
+}
+
+impl Holds {
+    fn add(&mut self, other: Holds) {
+        self.framed |= other.framed;
+        self.block |= other.block;
+        self.item |= other.item;
+        self.links += other.links;
+        self.first_link = self.first_link.or(other.first_link);
+        self.leaf_of_its_own |= other.leaf_of_its_own;
+    }
+}
+
+impl Tree {
+    fn link(&self, i: usize) -> bool {
+        self.elements[i].tag == "a" && self.elements[i].href.is_some()
+    }
+
+    /// A list item with no block of its own inside, which `capture.js` reads as one block.
+    fn leaf(&self, i: usize) -> bool {
+        !self.elements[i].children.iter().any(|&c| !self.elements[c].hidden && displays_block(&self.elements[c].tag))
+    }
+
+    /// Whether an element is one of a run of cards, given the siblings of its tag and class set and the headings each
+    /// element holds, itself included.
+    fn repeated(&self, i: usize, siblings: &[usize], headings: &[usize]) -> bool {
+        let element = &self.elements[i];
+        // A classless div repeated three times is usually page layout; a record is a styled unit or a semantic item.
+        if element.classes.is_empty() && !matches!(element.tag.as_str(), "article" | "li") {
+            return false;
+        }
+        if siblings.len() >= 3 {
+            return true;
+        }
+        if siblings.len() != 2 {
+            return false;
+        }
+        // Linked cards can sit inside an unlabelled list wrapper, so distinct destinations establish the pair.
+        if element.tag == "a" && siblings.iter().all(|&s| self.elements[s].href.is_some()) {
+            let href = |s: usize| join(&self.url, self.elements[s].href.as_deref().unwrap_or_default());
+            return href(siblings[0]) != href(siblings[1]);
+        }
+        // A styled pair can be a two-column layout, so require a heading outside both items to name their group.
+        let parent = element.parent;
+        let around = headings[parent] - usize::from(heading_level(&self.elements[parent].tag).is_some());
+        parent != 0 && around > siblings.iter().map(|&s| headings[s]).sum::<usize>()
+    }
+
+    /// The facts a card states only by drawing them, as a row of identical icons a class colours: each element with
+    /// no text that its label or class names, written as the page names it.
+    fn drawn_facts(&self, i: usize, holds: &[Holds]) -> String {
+        let mut facts = String::new();
+        let descendants = i + 1..=self.elements[i].last;
+        for (element, inside) in self.elements[descendants.clone()].iter().zip(&holds[descendants]) {
+            let own_leaf = LEAVES_OF_THEIR_OWN.contains(&element.tag.as_str());
+            if element.children.is_empty() || element.hidden || element.text || own_leaf || inside.leaf_of_its_own {
+                continue;
+            }
+            if element.parent != i && !self.elements[element.parent].text {
+                continue;
+            }
+            let name = clean(&element.label.clone().unwrap_or_else(|| element.classes.join(" ")));
+            if !name.is_empty() {
+                facts.push_str(&format!(" [{name}]"));
+            }
+        }
+        facts
+    }
+
+    /// The cards of the document, by the tag token that opens each, under the rules `capture.js` applies.
+    fn records(mut self) -> HashMap<usize, Record> {
+        self.close_from(1, usize::MAX);
+        let elements = &self.elements;
+        let count = elements.len();
+        // Siblings of the same tag and class set, by element.
+        let mut runs: Vec<usize> = vec![0; count];
+        let mut groups: Vec<Vec<usize>> = Vec::new();
+        for element in elements {
+            let mut keyed: HashMap<(&str, Vec<&str>), usize> = HashMap::new();
+            for &child in &element.children {
+                let mut classes: Vec<&str> = elements[child].classes.iter().map(String::as_str).collect();
+                classes.sort_unstable();
+                let group = *keyed.entry((&elements[child].tag, classes)).or_insert_with(|| {
+                    groups.push(Vec::new());
+                    groups.len() - 1
+                });
+                groups[group].push(child);
+                runs[child] = group;
+            }
+        }
+        // Descendants come after their element, so a reverse pass sees all of an element's descendants first.
+        let mut headings = vec![0; count];
+        for i in (1..count).rev() {
+            headings[i] += usize::from(heading_level(&elements[i].tag).is_some());
+            headings[elements[i].parent] += headings[i];
+        }
+        let mut holds = vec![Holds::default(); count];
+        let mut candidates: Vec<Option<Record>> = (0..count).map(|_| None).collect();
+        for i in (1..count).rev() {
+            let element = &elements[i];
+            let tag = element.tag.as_str();
+            let inside = holds[i];
+            let own_heading = usize::from(heading_level(tag).is_some());
+            let record = self.repeated(i, &groups[runs[i]], &headings)
+                && !inside.framed
+                && headings[i] - own_heading <= 1
+                && inside.block
+                && !inside.item;
+            let facts = if record { self.drawn_facts(i, &holds) } else { String::new() };
+            if record && (element.text || !facts.is_empty()) {
+                let link = if self.link(i) { Some(i) } else { inside.first_link.filter(|_| inside.links == 1) };
+                let href = link.and_then(|link| elements[link].href.as_deref()).map(|href| join(&self.url, href));
+                let kind = if tag == "li" { BlockKind::ListItem } else { BlockKind::Record };
+                candidates[i] = Some(Record { close: element.close, kind, href, facts });
+            }
+            let own = Holds {
+                framed: matches!(tag, "table" | "iframe" | "frame"),
+                block: !element.hidden && displays_block(tag),
+                // A repeated wrapper around another list is a group, so its inner records stay separately citable.
+                item: candidates[i].is_some() || (tag == "li" && self.leaf(i)),
+                links: usize::from(self.link(i)),
+                first_link: self.link(i).then_some(i),
+                leaf_of_its_own: LEAVES_OF_THEIR_OWN.contains(&tag),
+            };
+            let mut around = inside;
+            around.add(own);
+            holds[element.parent].add(around);
+        }
+        // A card is read only where the capture's walk reaches it: not inside a block it reads whole, and not as a
+        // heading, a table, a code block or a navigation menu, which it reads in their own ways.
+        let mut reached = vec![true; count];
+        let mut found = HashMap::new();
+        for i in 1..count {
+            let parent = elements[i].parent;
+            let (tag, element) = (elements[parent].tag.as_str(), &elements[parent]);
+            let whole = parent != 0
+                && (element.hidden
+                    || found.contains_key(&element.start)
+                    || heading_level(tag).is_some()
+                    || matches!(tag, "table" | "pre")
+                    || (tag == "li" && self.leaf(parent)));
+            reached[i] = reached[parent] && !whole;
+            let element = &elements[i];
+            let walked_into = element.tag == "nav" || element.navigation;
+            if reached[i]
+                && !walked_into
+                && !element.hidden
+                && let Some(record) = candidates[i].take()
+            {
+                found.insert(element.start, record);
+            }
+        }
+        found
+    }
 }
 
 /// One block of a fetched document, before its offsets are known.
@@ -214,10 +620,51 @@ struct Reader<'a> {
     /// Open dated elements, as tag, `datetime` and the text read inside so far. A relative date such as "3 weeks ago"
     /// holds the exact date only in this attribute, so the reader writes it after the text, as `capture.js` does.
     stamps: Vec<(String, String, String)>,
+    /// The cards the first read found, by the tag token that opens each.
+    records: HashMap<usize, Record>,
+    /// The open card, whose whole text is one block.
+    record: Option<Record>,
+}
+
+impl Tags for Reader<'_> {
+    fn start(&mut self, tag: &Tag, at: usize) {
+        // An end tag a start tag implies can close the open card.
+        if self.record.as_ref().is_some_and(|record| record.close == at) {
+            self.close_record();
+        }
+        // `<svg/>` is foreign content, where a self-closing tag ends the element: it opens nothing to skip.
+        if !(tag.self_closing && &*tag.name == "svg") {
+            self.open(&tag.name, &tag.attrs, at);
+        }
+    }
+
+    fn end(&mut self, name: &str, at: usize) {
+        self.close(name);
+        if self.record.as_ref().is_some_and(|record| record.close == at) {
+            self.close_record();
+        }
+    }
+
+    fn data(&mut self, data: &str) {
+        if self.in_title {
+            self.title.push_str(data);
+            return;
+        }
+        if self.skip > 0 {
+            return;
+        }
+        if let Some((_, _, text)) = &mut self.labelling {
+            text.push_str(data);
+        }
+        for (_, _, text) in &mut self.stamps {
+            text.push_str(data);
+        }
+        self.add(data);
+    }
 }
 
 impl<'a> Reader<'a> {
-    fn new(url: &'a str) -> Reader<'a> {
+    fn new(url: &'a str, records: HashMap<usize, Record>) -> Reader<'a> {
         Reader {
             url,
             blocks: Vec::new(),
@@ -244,6 +691,8 @@ impl<'a> Reader<'a> {
             pager_item: false,
             paging: Vec::new(),
             stamps: Vec::new(),
+            records,
+            record: None,
         }
     }
 
@@ -287,7 +736,7 @@ impl<'a> Reader<'a> {
         self.controls.push(control);
     }
 
-    fn start(&mut self, tag: &str, attrs: &[Attribute]) {
+    fn open(&mut self, tag: &str, attrs: &[Attribute], at: usize) {
         let get = |name: &str| attrs.iter().find(|a| &*a.name.local == name).map(|a| &*a.value);
         // Counted before any early return, as `end` sees the closing tag of every element, hidden or not.
         if let Some((open, nested)) = self.paging.last_mut()
@@ -345,6 +794,17 @@ impl<'a> Reader<'a> {
         }
         if tag == "li" {
             self.pager_item = get("class").is_some_and(|class| class.split_whitespace().any(|class| class == "next"));
+        }
+        if self.record.is_some() {
+            self.record_break(tag, true);
+            return;
+        }
+        if self.tables == 0
+            && let Some(record) = self.records.remove(&at)
+        {
+            self.flush(None, None, false);
+            self.record = Some(record);
+            return;
         }
         if tag == "br" {
             self.add("\n");
@@ -408,7 +868,7 @@ impl<'a> Reader<'a> {
         }
     }
 
-    fn end(&mut self, tag: &str) {
+    fn close(&mut self, tag: &str) {
         if tag == "li" {
             self.pager_item = false;
         }
@@ -451,6 +911,10 @@ impl<'a> Reader<'a> {
             } else if !shown.contains(&datetime) {
                 self.add(&format!(" ({datetime})"));
             }
+        }
+        if self.record.is_some() {
+            self.record_break(tag, false);
+            return;
         }
         if heading_level(tag).is_some() {
             self.flush(None, None, true);
@@ -500,28 +964,43 @@ impl<'a> Reader<'a> {
         }
     }
 
-    fn data(&mut self, data: &str) {
-        if self.in_title {
-            self.title.push_str(data);
-            return;
-        }
-        if self.skip > 0 {
-            return;
-        }
-        if let Some((_, _, text)) = &mut self.labelling {
-            text.push_str(data);
-        }
-        for (_, _, text) in &mut self.stamps {
-            text.push_str(data);
-        }
-        self.add(data);
-    }
-
     fn add(&mut self, data: &str) {
         match &mut self.cell {
             Some(cell) => cell.push_str(data),
+            // A card's lines are its blocks, as `innerText` writes them, so the markup's own newlines are spaces.
+            None if self.record.is_some() => {
+                self.buffer.extend(data.chars().map(|c| if c.is_ascii_whitespace() { ' ' } else { c }));
+            }
             None => self.buffer.push_str(data),
         }
+    }
+
+    /// The line breaks `innerText` writes at a tag inside a card: a `br` its own, and around a block as many as it
+    /// requires, two for a paragraph, which the breaks already written count towards.
+    fn record_break(&mut self, tag: &str, start: bool) {
+        let wanted = match tag {
+            "br" if start => {
+                self.buffer.truncate(self.buffer.trim_end_matches(' ').len());
+                self.buffer.push('\n');
+                return;
+            }
+            "p" => 2,
+            tag if tag != "br" && displays_block(tag) => 1,
+            _ => return,
+        };
+        self.buffer.truncate(self.buffer.trim_end_matches(' ').len());
+        let written = self.buffer.len() - self.buffer.trim_end_matches('\n').len();
+        for _ in written..wanted {
+            self.buffer.push('\n');
+        }
+    }
+
+    /// The open card as one block, with what it only draws after its text.
+    fn close_record(&mut self) {
+        let Some(record) = self.record.take() else { return };
+        self.buffer.truncate(self.buffer.trim_end_matches(|c: char| c.is_ascii_whitespace()).len());
+        self.buffer.push_str(&record.facts);
+        self.flush(Some(record.kind), record.href, false);
     }
 
     fn table_start(&mut self, tag: &str, alt: &str) {
@@ -625,7 +1104,10 @@ pub fn blocks(html: &str, url: &str) -> (String, Vec<Found>) {
 /// The document's title, its blocks in reading order, the controls its markup offers, and the rendered frames that
 /// hold documents of their own.
 pub fn read(html: &str, url: &str) -> (String, Vec<Found>, Vec<Control>, Vec<Frame>) {
-    let mut reader = tokenize(html, Sink(RefCell::new(Reader::new(url)))).0.into_inner();
+    // A card is told by its siblings, which come after it, so the tree is read before the text.
+    let records = tokenize(html, Sink::new(Tree::new(url))).into_inner().records();
+    let mut reader = tokenize(html, Sink::new(Reader::new(url, records))).into_inner();
+    reader.close_record();
     reader.flush(None, None, false);
     (clean(&reader.title), reader.blocks, reader.controls, reader.frames)
 }
@@ -808,6 +1290,110 @@ mod tests {
         assert_eq!(found[0].kind, BlockKind::Link);
         assert_eq!(found[0].text, "5 days ago (2026-11-01)");
         assert_eq!(controls[0].label, "5 days ago");
+    }
+
+    fn kinds_and_texts(html: &str) -> Vec<(BlockKind, String)> {
+        blocks(html, "https://a.example/").1.into_iter().map(|b| (b.kind, b.text)).collect()
+    }
+
+    #[test]
+    fn a_repeated_quote_card_is_one_record() {
+        let card = |n: usize| {
+            format!(
+                "<div class=\"quote\">\n  <span class=\"text\">Quote {n}.</span>\n  <span>by <small class=\"author\">\
+                 Author {n}</small>\n  <a href=\"/author/{n}\">(about)</a></span>\n  <div class=\"tags\">\n    Tags:\n    \
+                 <meta class=\"keywords\" content=\"a\">\n    <a class=\"tag\" href=\"/tag/a\">a</a>\n    \
+                 <a class=\"tag\" href=\"/tag/b\">b</a>\n  </div>\n</div>\n"
+            )
+        };
+        let html = format!("<h1>Quotes</h1><div class=\"col\">{}{}{}</div>", card(1), card(2), card(3));
+        let (_, found) = blocks(&html, "https://a.example/");
+        let records: Vec<_> = found.iter().filter(|b| b.kind == BlockKind::Record).collect();
+        let texts: Vec<&str> = records.iter().map(|b| b.text.as_str()).collect();
+        assert_eq!(texts, (1..=3).map(|n| format!("Quote {n}. by Author {n} (about)\nTags: a b")).collect::<Vec<_>>(),);
+        assert_eq!(found.len(), 4, "{found:?}");
+        assert!(records.iter().all(|b| b.heading_path == ["Quotes"] && b.href.is_none()));
+    }
+
+    #[test]
+    fn a_repeated_product_card_is_one_block() {
+        let card = |n: usize| {
+            format!(
+                "<li class=\"col\"><article class=\"product_pod\"><p class=\"star-rating Three\"><i class=\"star\"></i>\
+                 <i class=\"star\"></i></p><h3><a href=\"/book/{n}\">Title {n}</a></h3>\
+                 <p class=\"price_color\">\u{a3}51.7{n}</p><p class=\"availability\">In stock</p></article></li>"
+            )
+        };
+        let html = format!("<h2>Books</h2><ol class=\"row\">{}{}{}</ol><p>After</p>", card(1), card(2), card(3));
+        let (_, found) = blocks(&html, "https://a.example/");
+        // As `capture.js` writes a list item that is a card: one list item holding the whole card.
+        let cards: Vec<_> = found.iter().filter(|b| b.kind == BlockKind::ListItem).collect();
+        assert_eq!(
+            cards.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(),
+            (1..=3).map(|n| format!("Title {n}\n\n\u{a3}51.7{n}\n\nIn stock [star-rating Three]")).collect::<Vec<_>>(),
+        );
+        assert_eq!(cards[0].href.as_deref(), Some("https://a.example/book/1"));
+        assert_eq!(cards[0].heading_path, ["Books"], "the card's own heading names nothing after it");
+        assert_eq!(
+            found.last().map(|b| (b.text.as_str(), b.heading_path.clone())),
+            Some(("After", vec!["Books".into()]))
+        );
+    }
+
+    #[test]
+    fn two_cards_without_a_heading_around_them_are_not_records() {
+        let found = kinds_and_texts(&"<div class='card'><p>First</p><p>Second</p></div>".repeat(2));
+        assert!(found.iter().all(|(kind, _)| *kind == BlockKind::Paragraph), "{found:?}");
+        assert_eq!(found.len(), 4);
+        // A pair is a record when a heading outside both names their group, or when each links somewhere else.
+        let headed = kinds_and_texts(&format!(
+            "<section><h2>Pair</h2>{}</section>",
+            "<div class='card'><p>A</p></div>".repeat(2)
+        ));
+        assert_eq!(headed.iter().filter(|(kind, _)| *kind == BlockKind::Record).count(), 2, "{headed:?}");
+        let linked = kinds_and_texts(
+            "<div><a class='card' href='/one'><div><p>First item</p><span>Type</span></div></a>\
+             <a class='card' href='/two'><div><p>Second item</p><span>Type</span></div></a></div>",
+        );
+        assert_eq!(
+            linked,
+            [(BlockKind::Record, "First item\n\nType".into()), (BlockKind::Record, "Second item\n\nType".into())]
+        );
+    }
+
+    #[test]
+    fn a_repeated_wrapper_around_a_list_is_a_group_of_its_items() {
+        let group = "<div class='group'><p>Collection</p><ul><li>One</li><li>Two</li><li>Three</li></ul></div>";
+        let found = kinds_and_texts(&group.repeat(3));
+        assert!(found.iter().all(|(kind, _)| *kind != BlockKind::Record), "{found:?}");
+        assert_eq!(found.iter().filter(|(kind, _)| *kind == BlockKind::ListItem).count(), 9);
+        let cards = "<article><p>Quotation</p><p>by Author</p></article>".repeat(3);
+        let nested =
+            kinds_and_texts(&format!("<div class='g'><p>Collection</p><section>{cards}</section></div>").repeat(3));
+        let records: Vec<_> = nested.iter().filter(|(kind, _)| *kind == BlockKind::Record).collect();
+        assert_eq!(records.len(), 9);
+        assert!(records.iter().all(|(_, text)| text == "Quotation\n\nby Author"));
+    }
+
+    #[test]
+    fn a_card_is_not_a_record_where_capture_reads_it_otherwise() {
+        for (id, html) in [
+            ("inline-only", "<div class='card'><span>Inline only</span></div>".repeat(3)),
+            ("two-headings", "<div class='card'><h2>First</h2><h3>Second</h3><p>Body</p></div>".repeat(3)),
+            ("table", "<div class='card'><p>Out</p><table><tr><td>In</td></tr></table></div>".repeat(3)),
+            ("classless", "<div><p>Layout</p><p>column</p></div>".repeat(3)),
+            ("in-a-table", format!("<table><tr><td>{}</td></tr></table>", "<div class='c'><p>x</p></div>".repeat(3))),
+            ("hidden", "<div class='card' hidden><p>Secret</p></div>".repeat(3)),
+        ] {
+            let found = kinds_and_texts(&html);
+            assert!(found.iter().all(|(kind, _)| *kind != BlockKind::Record), "{id}: {found:?}");
+        }
+        // An item's end tag a browser implies still ends the card.
+        let implied = kinds_and_texts("<ul><li class=c><p>A<p>a<li class=c><p>B<p>b<li class=c><p>C<p>c</ul><p>After");
+        assert_eq!(
+            implied.iter().map(|(_, text)| text.as_str()).collect::<Vec<_>>(),
+            ["A\n\na", "B\n\nb", "C\n\nc", "After"]
+        );
     }
 
     #[test]

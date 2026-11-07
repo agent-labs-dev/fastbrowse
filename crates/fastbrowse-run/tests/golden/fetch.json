@@ -603,23 +603,23 @@
     "href": null
    },
    {
-    "kind": "paragraph",
+    "kind": "record",
     "text": "old-banner.png",
     "heading_path": [
      "Gallery"
     ],
-    "href": null
+    "href": "https://shop.example.com/gallery/101/edit"
    },
    {
-    "kind": "paragraph",
+    "kind": "record",
     "text": "new-banner.png",
     "heading_path": [
      "Gallery"
     ],
-    "href": null
+    "href": "https://shop.example.com/gallery/102/edit"
    },
    {
-    "kind": "paragraph",
+    "kind": "record",
     "text": "old-logo.png",
     "heading_path": [
      "Gallery"
@@ -627,52 +627,36 @@
     "href": null
    },
    {
-    "kind": "paragraph",
+    "kind": "record",
     "text": "new-logo.png",
     "heading_path": [
      "Gallery"
     ],
-    "href": null
+    "href": "https://shop.example.com/gallery/104/edit"
    },
    {
-    "kind": "paragraph",
-    "text": "old-icon.png",
+    "kind": "record",
+    "text": "old-icon.png\n\ndelete",
     "heading_path": [
      "Gallery"
     ],
-    "href": null
+    "href": "https://shop.example.com/gallery/105/edit"
    },
    {
-    "kind": "paragraph",
-    "text": "delete",
-    "heading_path": [
-     "Gallery"
-    ],
-    "href": null
-   },
-   {
-    "kind": "paragraph",
+    "kind": "record",
     "text": "new-icon.png",
     "heading_path": [
      "Gallery"
     ],
-    "href": null
+    "href": "https://shop.example.com/gallery/106/edit"
    },
    {
-    "kind": "paragraph",
-    "text": "Actions",
+    "kind": "record",
+    "text": "Actions\n\nAlpha",
     "heading_path": [
      "Gallery"
     ],
-    "href": null
-   },
-   {
-    "kind": "paragraph",
-    "text": "Alpha",
-    "heading_path": [
-     "Gallery"
-    ],
-    "href": null
+    "href": "https://shop.example.com/gallery/107/edit"
    }
   ]
  },
@@ -689,54 +673,18 @@
     "href": null
    },
    {
-    "kind": "paragraph",
-    "text": "[User Avatar]",
+    "kind": "record",
+    "text": "name: ada\nView profile",
     "heading_path": [
      "Team"
-    ],
-    "href": null
-   },
-   {
-    "kind": "heading",
-    "text": "name: ada",
-    "heading_path": [
-     "Team"
-    ],
-    "href": null
-   },
-   {
-    "kind": "link",
-    "text": "View profile",
-    "heading_path": [
-     "Team",
-     "name: ada"
     ],
     "href": "https://shop.example.com/users/1"
    },
    {
-    "kind": "paragraph",
-    "text": "[User Avatar]",
+    "kind": "record",
+    "text": "name: grace\nView profile",
     "heading_path": [
-     "Team",
-     "name: ada"
-    ],
-    "href": null
-   },
-   {
-    "kind": "heading",
-    "text": "name: grace",
-    "heading_path": [
-     "Team",
-     "name: ada"
-    ],
-    "href": null
-   },
-   {
-    "kind": "link",
-    "text": "View profile",
-    "heading_path": [
-     "Team",
-     "name: grace"
+     "Team"
     ],
     "href": "https://shop.example.com/users/2"
    },
@@ -744,8 +692,7 @@
     "kind": "list_item",
     "text": "Products",
     "heading_path": [
-     "Team",
-     "name: grace"
+     "Team"
     ],
     "href": null
    },
@@ -753,8 +700,7 @@
     "kind": "link",
     "text": "Pricing",
     "heading_path": [
-     "Team",
-     "name: grace"
+     "Team"
     ],
     "href": "https://shop.example.com/pricing"
    },
@@ -762,8 +708,7 @@
     "kind": "link",
     "text": "About",
     "heading_path": [
-     "Team",
-     "name: grace"
+     "Team"
     ],
     "href": "https://shop.example.com/about"
    }
@@ -1139,8 +1084,8 @@
     "href": null
    },
    {
-    "kind": "paragraph",
-    "text": "Measure twice, cut once.",
+    "kind": "record",
+    "text": "Measure twice, cut once.\nby Ada (about)\nTags: craft care",
     "heading_path": [
      "Fastbrowse fixture",
      "Quotations"
@@ -1148,8 +1093,8 @@
     "href": null
    },
    {
-    "kind": "paragraph",
-    "text": "by Ada (about)",
+    "kind": "record",
+    "text": "Leave room for a second idea.\nby Grace (about)\nTags: ideas work",
     "heading_path": [
      "Fastbrowse fixture",
      "Quotations"
@@ -1157,77 +1102,11 @@
     "href": null
    },
    {
-    "kind": "paragraph",
-    "text": "Tags: craft care",
+    "kind": "record",
+    "text": "A thought for today\nAsk what the evidence says.\nby Katherine (about)\nTags: science care",
     "heading_path": [
      "Fastbrowse fixture",
      "Quotations"
-    ],
-    "href": null
-   },
-   {
-    "kind": "paragraph",
-    "text": "Leave room for a second idea.",
-    "heading_path": [
-     "Fastbrowse fixture",
-     "Quotations"
-    ],
-    "href": null
-   },
-   {
-    "kind": "paragraph",
-    "text": "by Grace (about)",
-    "heading_path": [
-     "Fastbrowse fixture",
-     "Quotations"
-    ],
-    "href": null
-   },
-   {
-    "kind": "paragraph",
-    "text": "Tags: ideas work",
-    "heading_path": [
-     "Fastbrowse fixture",
-     "Quotations"
-    ],
-    "href": null
-   },
-   {
-    "kind": "heading",
-    "text": "A thought for today",
-    "heading_path": [
-     "Fastbrowse fixture",
-     "Quotations"
-    ],
-    "href": null
-   },
-   {
-    "kind": "paragraph",
-    "text": "Ask what the evidence says.",
-    "heading_path": [
-     "Fastbrowse fixture",
-     "Quotations",
-     "A thought for today"
-    ],
-    "href": null
-   },
-   {
-    "kind": "paragraph",
-    "text": "by Katherine (about)",
-    "heading_path": [
-     "Fastbrowse fixture",
-     "Quotations",
-     "A thought for today"
-    ],
-    "href": null
-   },
-   {
-    "kind": "paragraph",
-    "text": "Tags: science care",
-    "heading_path": [
-     "Fastbrowse fixture",
-     "Quotations",
-     "A thought for today"
     ],
     "href": null
    },
@@ -1236,8 +1115,7 @@
     "text": "After the quotations.",
     "heading_path": [
      "Fastbrowse fixture",
-     "Quotations",
-     "A thought for today"
+     "Quotations"
     ],
     "href": null
    },
@@ -1246,8 +1124,7 @@
     "text": "A standalone first paragraph.",
     "heading_path": [
      "Fastbrowse fixture",
-     "Quotations",
-     "A thought for today"
+     "Quotations"
     ],
     "href": null
    },
@@ -1256,8 +1133,7 @@
     "text": "A standalone second paragraph.",
     "heading_path": [
      "Fastbrowse fixture",
-     "Quotations",
-     "A thought for today"
+     "Quotations"
     ],
     "href": null
    },
@@ -1266,8 +1142,7 @@
     "text": "Rankings",
     "heading_path": [
      "Fastbrowse fixture",
-     "Quotations",
-     "A thought for today"
+     "Quotations"
     ],
     "href": null
    },
