@@ -194,11 +194,7 @@ impl Agent {
             if let Some(probability) = decision.login_required {
                 state.login_readings.insert(read_key(&observation), probability);
             }
-            // A page can say it failed and still show the answer, as one with a stale Loading line does: the likelier
-            // of Jev's two readings stands.
-            state.page_failed = decision
-                .site_failure
-                .is_some_and(|failed| failed >= EVEN_ODDS && failed > decision.shows_answer.unwrap_or_default());
+            state.page_failed = decision.site_failure.is_some_and(|failed| failed >= EVEN_ODDS);
             // A fetched page has not run its scripts: one stuck on "Loading..." has failed only if a browser says so.
             if state.page_failed
                 && self.page.over_http()
