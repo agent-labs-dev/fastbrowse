@@ -332,14 +332,18 @@ impl LocalChromeProcess {
             _ => {}
         }
         quiet_password_manager(&profile)?;
-        let child = Command::new(binary)
+        let mut command = Command::new(binary);
+        command
             .args(launch_args(options, &profile))
             // Chrome never reads stdin, and under `fastbrowse serve --stdio` stdin is the caller's protocol stream.
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(log.try_clone()?)
-            .kill_on_drop(true)
-            .spawn()?;
+            .kill_on_drop(true);
+        #[cfg(target_os = "linux")]
+        let child = spawn_bound_to_owner(command).await?;
+        #[cfg(not(target_os = "linux"))]
+        let child = command.spawn()?;
         let child = self.child.insert(child);
         wait_for_ws(&active, child, &mut log, DEVTOOLS_TIMEOUT).await
     }
@@ -383,6 +387,72 @@ impl Drop for LocalChromeProcess {
             let _ = std::fs::remove_file(log);
         }
     }
+}
+
+/// Spawn Chrome tied to this process on Linux, where `kill_on_drop` alone leaves it running once its owner is killed
+/// outright and never runs Drop, and where every descriptor this process holds without close-on-exec (a caller's pipe,
+/// a socket a library opened) would otherwise stay open in Chrome for its whole life. macOS has no equivalent of the
+/// death signal and keeps Drop alone.
+///
+/// The death signal fires when the thread that forked ends, not the process, and a runtime worker can end while its
+/// runtime runs on (one handed to `block_in_place` does). So one thread that lasts as long as the process forks every
+/// Chrome, inside the caller's runtime so the child is reaped there.
+#[cfg(target_os = "linux")]
+async fn spawn_bound_to_owner(mut command: Command) -> std::io::Result<Child> {
+    use std::sync::Mutex;
+    use std::sync::mpsc::{Sender, channel};
+    type Job = Box<dyn FnOnce() + Send>;
+    // Started on first use, and again if it could not start or has stopped, so a failure is never kept.
+    static SPAWNER: Mutex<Option<Sender<Job>>> = Mutex::new(None);
+
+    let owner = std::process::id() as libc::pid_t;
+    // SAFETY: the closure runs between fork and exec, and makes only async-signal-safe calls: prctl, getppid, _exit,
+    // getrlimit, fcntl and a raw syscall. It never fails the spawn.
+    unsafe {
+        command.pre_exec(move || {
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+            // An owner that died before the signal was armed has already passed the child to another parent.
+            if libc::getppid() != owner {
+                libc::_exit(0);
+            }
+            let marked =
+                libc::syscall(libc::SYS_close_range, 3 as libc::c_uint, libc::c_uint::MAX, libc::CLOSE_RANGE_CLOEXEC);
+            // A kernel older than close_range (5.11): mark each descriptor the open-files limit allows instead.
+            let mut limit = std::mem::MaybeUninit::<libc::rlimit>::uninit();
+            if marked != 0 && libc::getrlimit(libc::RLIMIT_NOFILE, limit.as_mut_ptr()) == 0 {
+                let open_max = libc::c_int::try_from(limit.assume_init().rlim_cur).unwrap_or(libc::c_int::MAX);
+                for fd in 3..open_max {
+                    libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+                }
+            }
+            Ok(())
+        });
+    }
+    let runtime = tokio::runtime::Handle::current();
+    let (reply, spawned) = tokio::sync::oneshot::channel();
+    let job: Job = Box::new(move || {
+        let _entered = runtime.enter();
+        let _ = reply.send(command.spawn());
+    });
+    {
+        let mut spawner = SPAWNER.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A thread that has stopped hands the job back, and a new one takes it.
+        let unsent = match spawner.as_ref() {
+            Some(jobs) => jobs.send(job).err().map(|returned| returned.0),
+            None => Some(job),
+        };
+        if let Some(job) = unsent {
+            let (jobs, queue) = channel::<Job>();
+            std::thread::Builder::new().name("fastbrowse-chrome".into()).spawn(move || {
+                for job in queue {
+                    job();
+                }
+            })?;
+            jobs.send(job).map_err(|_| std::io::Error::other("the Chrome spawner stopped"))?;
+            *spawner = Some(jobs);
+        }
+    }
+    spawned.await.unwrap_or_else(|_| Err(std::io::Error::other("the Chrome spawner stopped")))
 }
 
 /// `Popen.terminate`: SIGTERM, so Chrome flushes a kept profile's cookies before it exits. std and tokio only send
@@ -816,6 +886,133 @@ mod tests {
         let (mut chrome, _) = LocalChromeProcess::launch(&options).await.unwrap();
         chrome.close().await;
         assert!(kept.join("Default").join("Preferences").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A stand-in Chrome answering a fake `/json/version`, which first runs `before` in its own shell.
+    #[cfg(target_os = "linux")]
+    async fn stand_in(dir: &Path, before: &str) -> (http::fake::FakeServer, PathBuf) {
+        use crate::adapters::http::fake::{FakeServer, json};
+        let server = FakeServer::start(|_, _| {
+            json(200, serde_json::json!({"webSocketDebuggerUrl": "ws://127.0.0.1:1/devtools/browser/x"}))
+        })
+        .await;
+        let port = server.base.rsplit(':').next().unwrap().to_owned();
+        let body = format!(
+            "{before}\nfor arg; do case \"$arg\" in --user-data-dir=*) dir=\"${{arg#--user-data-dir=}}\";; esac; done\n\
+             printf '{port}\\n/devtools/browser/x\\n' > \"$dir/DevToolsActivePort\"\nexec sleep 30\n"
+        );
+        (server, script(dir, "chrome", &body))
+    }
+
+    /// A descriptor this process left open across exec, such as a caller's pipe, never reaches Chrome.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn chrome_inherits_no_descriptor_beyond_its_standard_streams() {
+        let dir = scratch();
+        let listing = dir.join("fds");
+        let (_server, binary) = stand_in(&dir, &format!("ls /proc/$$/fd > '{}'", listing.display())).await;
+        // F_DUPFD never sets close-on-exec, as a descriptor handed down by a parent process would arrive. It is placed
+        // above the low descriptors the stand-in's shell opens for itself (dash reads its script on 10), which would
+        // otherwise share its number.
+        let open = File::open(&binary).unwrap();
+        let leaked = unsafe { libc::fcntl(std::os::fd::AsRawFd::as_raw_fd(&open), libc::F_DUPFD, 100) };
+        assert!(leaked >= 100);
+        let options = LocalChrome { binary: Some(binary.to_string_lossy().into_owned()), ..Default::default() };
+        let launched = LocalChromeProcess::launch(&options).await;
+        unsafe { libc::close(leaked) };
+        let (mut chrome, _) = launched.unwrap();
+        chrome.close().await;
+        let fds = std::fs::read_to_string(&listing).unwrap();
+        assert!(!fds.lines().any(|fd| fd == leaked.to_string()), "fd {leaked} reached Chrome: {fds:?}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Chrome belongs to the process, not to the thread that launched it: a runtime worker that ends, as one handed to
+    /// `block_in_place` can, leaves the browser running.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn chrome_outlives_the_thread_that_launched_it() {
+        let dir = scratch();
+        let launcher_dir = dir.clone();
+        let pid = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            runtime.block_on(async {
+                let (server, binary) = stand_in(&launcher_dir, "").await;
+                std::mem::forget(server);
+                let options = LocalChrome { binary: Some(binary.to_string_lossy().into_owned()), ..Default::default() };
+                let (mut chrome, _) = LocalChromeProcess::launch(&options).await.unwrap();
+                let pid = chrome.pid().unwrap() as libc::pid_t;
+                // The handle outlives this thread and runtime, as a long-lived session's does.
+                std::mem::forget(chrome.child.take());
+                pid
+            })
+        })
+        .join()
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        let alive = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .is_ok_and(|stat| stat.rsplit(')').next().is_some_and(|rest| !rest.trim_start().starts_with('Z')));
+        // SAFETY: the stand-in is this process's child, and nothing else waits for it once its handle is forgotten.
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+            libc::waitpid(pid, std::ptr::null_mut(), 0);
+        }
+        assert!(alive, "Chrome {pid} ended with the thread that launched it");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// An owner killed outright, with no chance to run Drop, still takes its Chrome down with it.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn chrome_exits_when_its_owner_is_killed() {
+        const OWNER: &str = "FASTBROWSE_TEST_CHROME_OWNER";
+        if let Some(dir) = std::env::var_os(OWNER).map(PathBuf::from) {
+            // The owner: launch the stand-in, say its pid, and wait to be killed.
+            let (_server, binary) = stand_in(&dir, "").await;
+            let options = LocalChrome { binary: Some(binary.to_string_lossy().into_owned()), ..Default::default() };
+            let (chrome, _) = LocalChromeProcess::launch(&options).await.unwrap();
+            std::fs::write(dir.join("pid.tmp"), chrome.pid().unwrap().to_string()).unwrap();
+            std::fs::rename(dir.join("pid.tmp"), dir.join("pid")).unwrap();
+            std::thread::sleep(Duration::from_secs(60));
+            return;
+        }
+        let dir = scratch();
+        let mut owner = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "adapters::local_chrome::tests::chrome_exits_when_its_owner_is_killed", "--nocapture"])
+            .env(OWNER, &dir)
+            .stdin(Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let pid: libc::pid_t = loop {
+            if let Ok(text) = std::fs::read_to_string(dir.join("pid")) {
+                break text.trim().parse().unwrap();
+            }
+            if Instant::now() >= deadline {
+                // Killing the owner takes down any Chrome it did launch.
+                let _ = owner.kill();
+                let _ = owner.wait();
+                panic!("the owner never launched its Chrome");
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        owner.kill().unwrap();
+        owner.wait().unwrap();
+        // Gone, or a zombie its new parent has yet to reap.
+        let alive = || {
+            std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .is_ok_and(|stat| stat.rsplit(')').next().is_some_and(|rest| !rest.trim_start().starts_with('Z')))
+        };
+        let killed = Instant::now();
+        while alive() && killed.elapsed() < Duration::from_secs(2) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let survived = alive();
+        if survived {
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        assert!(!survived, "Chrome {pid} outlived its killed owner");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

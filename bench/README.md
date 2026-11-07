@@ -56,6 +56,37 @@ requirements. Replayed at zero latency, the plan is back first and the same call
 second path too. Because of the same race, a zero-latency run and a recorded-latency run take different paths on a
 few tasks; compare runs made at the same latency.
 
+## Option-order probe
+
+The probe checks whether Jev leans toward the option a choice offers first. It changes no agent behaviour.
+
+```sh
+# Free: every cassette, plus any trace, read for each choice's option order and recorded probabilities.
+just jev-order-probe --out artifacts/order-probe --trace run.jsonl
+
+# Paid: ask each recorded Jev request again, once as recorded and once with every choice's options reversed.
+OPENROUTER_API_KEY=... just jev-order-probe --out artifacts/order-probe --yes-spend --max-dollars 0.20 --only fixed
+```
+
+With no spend flag the probe makes no network call and needs no key. In a gate whose options always come in the
+same order, the recorded numbers mix an option's place with what it means, so they cannot show a lean on their
+own. `--yes-spend` runs the swap test: it needs `OPENROUTER_API_KEY` and a `--max-dollars` cap, and stops before
+the next request pair would take the total past the cap. Every cassette costs about $0.40 in Jev calls. With
+`--only fixed` the probe resends only requests that hold an option set of 4 or fewer and reports only those sets,
+for about $0.18. A request whose images the recording blanked is left out of the paid arm, and so is one
+with no recorded cost before any pair has been sent, since its cost cannot be estimated.
+
+`report.md` and `report.json` in `--out` give, per option set, `n` and three numbers:
+
+- `shift`: the mean probability of an option offered first minus the same option offered last. Near 0 means
+  place does not matter; a positive shift is a lean toward the first option.
+- `reversal_flips`: how often the pick changes when the options are reversed.
+- `noise_flips`: how often the pick changes when the same request is sent again in its recorded order. A
+  reversal flip rate no higher than this is noise.
+
+Lists of more than 4 options, such as click targets and read candidates, are one group. Treat any set with a small
+`n` as a hint, not a result.
+
 ## What is compared
 
 `compare` diffs, per task: status, answer, structured data, error, final URL, citations (URL, quote, text), each

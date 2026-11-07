@@ -4,7 +4,7 @@ An `Observation` is bounded, for Jev's action choice; a `Capture` is complete, f
 page is asked to do.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import StrEnum
 
 from pydantic import Field, field_serializer
@@ -106,8 +106,11 @@ class Observation(Frozen):
     """Document identity, independent of field edits and scrolling, for access-wall checks."""
     controls: tuple[Control, ...]
     viewport_text: str
+    """The visible text in the viewport of every frame the observation read; a cross-origin frame's text follows the
+    page's own under a `[Frame: origin]` line."""
     offscreen_text: str = ""
-    """The page's visible text outside the viewport: what a read takes in that `viewport_text` leaves out."""
+    """The visible text outside the viewport, from every frame the observation read in the same order and form: what
+    a read takes in that `viewport_text` leaves out."""
     visual_content: bool = False
     """A visible image, canvas, drawing or video carries state the text and the controls do not, so the verifier
     needs the screenshot even on a text-rich page whose state is the picture itself."""
@@ -123,31 +126,6 @@ class Observation(Frozen):
     history_entry: str | None = None
     """The tab's browser history entry this page is: Back, Forward and a reload return to the same one, and a
     navigation, a new tab or `pushState` makes another. None when the browser would not say."""
-
-    @property
-    def today(self) -> str:
-        """The capture date with its weekday, then a calendar of this month and the twelve after it, a month to a line
-        and each weekday's dates together. A relative day is looked up in it rather than counted. It runs to this month
-        next year because a month or weekday named without a year means its next occurrence, which always falls in
-        that span."""
-        today = self.captured_at
-        lines = [f"{today:%Y-%m-%d (%A)}"]
-        month = today.replace(day=1)
-        for _ in range(13):
-            lines.append(_month_calendar(month))
-            month = (month + timedelta(days=32)).replace(day=1)
-        return "\n".join(lines)
-
-
-def _month_calendar(first: datetime) -> str:
-    """One month as a line, Monday first: `November 2026: Mon 2 9 16 23 30; Tue 3 10 17 24; ...`."""
-    days = [first + timedelta(days=offset) for offset in range(31)]
-    in_month = [day for day in days if day.month == first.month]
-    columns = (
-        f"{name} {' '.join(str(day.day) for day in in_month if day.weekday() == weekday)}"
-        for weekday, name in enumerate(("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"))
-    )
-    return f"{first:%B %Y}: {'; '.join(columns)}"
 
 
 class BlockKind(StrEnum):
@@ -174,11 +152,6 @@ class Block(Frozen):
     heading_path: tuple[str, ...] = ()
     control_context: SourceControl | None = None
     href: str | None = None
-    list_id: str | None = None
-    list_count: int | None = Field(default=None, ge=0)
-    list_frameless: bool = False
-    """The capture saw no frame inside this block's list element, so a frame it could not open elsewhere on the page
-    cannot hold one of the list's members."""
 
 
 class Capture(Frozen):

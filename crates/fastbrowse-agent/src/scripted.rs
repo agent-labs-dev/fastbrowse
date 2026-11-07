@@ -135,7 +135,15 @@ impl DecisionClient for ScriptedJev {
                     );
                 }
                 Question::Noul(_) => {
-                    let probability = f64::from(u8::from(key == "coverage"));
+                    // The done check holds unless the step scripts what it finds instead.
+                    let pick = script.step.as_ref().and_then(|step| step.pick.as_deref());
+                    let holds = match key.as_str() {
+                        "coverage" => true,
+                        "carried" => !matches!(pick, Some("undone" | "refused")),
+                        "refused" => pick == Some("refused"),
+                        _ => false,
+                    };
+                    let probability = f64::from(u8::from(holds));
                     answers.insert(key.clone(), Answer::Noul(NoulAnswer { kind: NoulTag, probability }));
                 }
                 Question::Score(_) | Question::Box(_) => {
@@ -171,6 +179,8 @@ impl ScriptedLLM {
             LLMPurpose::Compose => Some(json!({"claims": []})),
             LLMPurpose::ImageRead => Some(json!({"text": null})),
             LLMPurpose::Fill => Some(json!({"value": null})),
+            LLMPurpose::Pages => Some(json!({"first": null, "last": null})),
+            LLMPurpose::Dates => Some(json!({"dates": []})),
         }
     }
 }

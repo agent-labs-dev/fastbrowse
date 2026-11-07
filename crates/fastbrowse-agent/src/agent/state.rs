@@ -7,6 +7,7 @@ use fastbrowse_core::decision::DecisionError;
 use fastbrowse_core::llm::LLMError;
 use fastbrowse_core::models::{Attachment, Authorization, Evidence, Status, StepChoice, StepResult, WallKind};
 use fastbrowse_core::page::{BrowserError, Capture, Control, Observation};
+use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::telemetry::{BudgetExceeded, Ledger};
 use indexmap::IndexMap;
 
@@ -16,6 +17,29 @@ use crate::memory::{Fact, Notes, address, fact_id};
 use crate::policy::{Decision, HistoryEntry, RelevanceCache};
 use crate::retrieval::ComposedAnswer;
 use crate::retrieval::whole_page_facts;
+
+/// Reads a page gets between finished reads: one that did not finish is tried once more, then the page counts as read.
+const READ_TRIES: u8 = 2;
+
+/// How much of a list the task covers, by Jev's reading of the task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum Extent {
+    /// The records one page shows, or a single item.
+    #[default]
+    Shown,
+    /// Everything the list holds across all of its pages.
+    EveryPage,
+    /// The pages of the list the task names, first and last, numbered from the list's first page. `None` when the
+    /// task names pages but no numbers could be read from it, so no page is walked or left out.
+    Pages(Option<(usize, usize)>),
+}
+
+impl Extent {
+    /// Whether the run reads the list's next pages itself before it finishes.
+    pub fn walks(&self) -> bool {
+        matches!(self, Self::EveryPage | Self::Pages(Some(_)))
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OutputIntent {
@@ -274,8 +298,14 @@ pub(crate) struct RunState {
     pub acted_from: Option<Observation>,
     /// Jev's word that the task rules out downloading, asked once a control the page says downloads is in play.
     pub downloads_forbidden: Option<bool>,
+    /// Jev's word that the task rules out changing what the page's fields and settings hold, asked once an edit is in
+    /// play.
+    pub edits_forbidden: Option<bool>,
     /// Pages read, by `read_key`, each with whether an action changed it since it was last read.
     pub read_documents: HashMap<(String, String), bool>,
+    /// Reads begun on each page, by `read_key`, since its last finished read, so a read that did not finish is retried
+    /// once and never loops.
+    pub read_tries: HashMap<(String, String), u8>,
     /// Screenshots that a successful image read found held no answer for this run's task.
     pub unanswered_images: HashSet<String>,
     /// The page the last action changed, until the next observation shows it is still the page in view.
@@ -288,21 +318,33 @@ pub(crate) struct RunState {
     pub extraction_pending: bool,
     /// A rejected draft is feedback, never a new page fact or evidence of progress.
     pub composition_feedback: Option<String>,
-    pub composition_partial: Option<(ComposedAnswer, Vec<(Fact, bool)>)>,
+    pub composition_partial: Option<PartialComposition>,
     /// Pages read for one fact, whole: Jev can pick one fact from a list's first page and only see on the next that
     /// the answer is composed. They join the notes for the composer alone, since steps deciding on them stopped early.
     pub read_whole: Vec<Capture>,
     /// A DONE was refused because the task is something to carry out, not to be told.
     pub to_carry_out: bool,
+    /// The latest finish check found a step the task asks for that the site does not allow.
+    pub refused: bool,
     pub output_intent: OutputIntent,
+    /// What the task says about signing in, asked of the task alone at the first sign-in wall. None until then, and
+    /// when Jev gave no answer.
+    pub sign_in: Option<SignInNeeds>,
+    /// The dates the task names, as the parts it states, read once before the first page. Code works out the date
+    /// each means against the page's capture date.
+    pub dates: Vec<crate::dates::DateReference>,
     /// Jev's judgement, asked with `output_intent`, that the task asks how the page looks, which only its pixels show.
     pub appearance: bool,
-    /// Jev's reading that the task covers a whole list across its pages, such as a count over a site.
-    pub every_page: bool,
+    /// Jev's reading of how much of a list the task covers: a whole list across its pages, such as a count over a
+    /// site, or only the pages the task names.
+    pub extent: Extent,
     /// Each next page a list named, by absolute address, in the order the run saw them.
     pub pager_pages: Vec<String>,
     /// The page that began the list `pager_pages` continues.
     pub pager_start: Option<String>,
+    /// Each page of the list's number, by `crate::memory::address`, counted along its next links from `pager_start`
+    /// as page 1. A list the run entered part way through is numbered from where it entered.
+    pub pager_ordinals: HashMap<String, usize>,
     /// Next pages the run opened itself because a whole-list task tried to finish before reading them.
     pub pager_followed: HashSet<String>,
     /// Addresses read before the run moved from fetching to a browser, and not read in the browser yet.
@@ -330,6 +372,9 @@ pub(crate) struct RunState {
     pub missing: HashSet<(String, String, Option<String>)>,
 }
 
+/// A rejected draft's claims that held, the notes it was written from, and how many steps the run had taken then.
+pub type PartialComposition = (ComposedAnswer, Vec<(Fact, bool)>, usize);
+
 impl RunState {
     /// The address of the page at `url` when a site failure that can clear stands on it: opening it again reloads it.
     pub fn reload_target(&self, url: &str) -> Option<String> {
@@ -350,9 +395,15 @@ impl RunState {
         notes.facts().iter().map(|fact| ((*fact).clone(), notes.superseded(&fact_id(fact)))).collect()
     }
 
+    /// The steps this run carried out that act on a page, as the models deciding steps are shown them.
+    pub fn executed_steps(&self) -> Vec<serde_json::Value> {
+        self.history.iter().filter(|entry| entry.changed_site()).map(Dump::dump_exclude_none).collect()
+    }
+
     pub fn checked_composition(&self, notes: &Notes) -> Option<&ComposedAnswer> {
-        let (partial, sources) = self.composition_partial.as_ref()?;
-        (!partial.claims.is_empty() && *sources == Self::composition_sources(notes)).then_some(partial)
+        let (partial, sources, steps) = self.composition_partial.as_ref()?;
+        let current = *sources == Self::composition_sources(notes) && *steps == self.executed_steps().len();
+        (!partial.claims.is_empty() && current).then_some(partial)
     }
 
     /// What one read leaves in the notes: its facts, the page kept whole when one fact was picked from it, and the
@@ -376,13 +427,47 @@ impl RunState {
         }
     }
 
-    /// The notes with the pages read for one fact whole.
+    /// The notes with the pages read for one fact whole. A task over some pages of a list leaves out what was read on
+    /// its other pages; a page that is not one of the list's, such as a record's own, keeps its notes.
     pub fn notes_to_compose(&self) -> Notes {
         let mut notes = self.notes.clone();
         for fact in self.read_whole.iter().flat_map(whole_page_facts) {
             notes.add(fact);
         }
+        if let Extent::Pages(Some(_)) = self.extent {
+            notes.retain(|fact| {
+                fact.evidence.as_ref().is_none_or(|evidence| {
+                    !self.pager_ordinals.contains_key(&crate::memory::address(&evidence.url))
+                        || self.in_range(&evidence.url)
+                })
+            });
+        }
         notes
+    }
+
+    /// Whether this page of the list is one the task covers: every page for a whole list, and for a task over some
+    /// pages, a page whose number is among them.
+    pub fn in_range(&self, url: &str) -> bool {
+        match self.extent {
+            Extent::EveryPage => true,
+            Extent::Pages(Some((first, last))) => self
+                .pager_ordinals
+                .get(&crate::memory::address(url))
+                .is_some_and(|ordinal| (first..=last).contains(ordinal)),
+            _ => false,
+        }
+    }
+
+    /// Whether the run reads this page of the list to cover the task: every page for a whole list, and for a task over
+    /// some pages, a page up to the last of them, since the pages before the first are the way to it.
+    fn on_the_way(&self, url: &str) -> bool {
+        match self.extent {
+            Extent::EveryPage => true,
+            Extent::Pages(Some((_, last))) => {
+                self.pager_ordinals.get(&crate::memory::address(url)).is_some_and(|ordinal| *ordinal <= last)
+            }
+            _ => false,
+        }
     }
 
     /// An action changed the page it was taken on. Leaving that page leaves what was read of it as it was: going back
@@ -390,13 +475,38 @@ impl RunState {
     pub fn settle_change(&mut self, landed: &Observation) {
         if let Some(page) = self.changed_page.take()
             && page == read_key(landed)
-            && let Some(read) = self.read_documents.get_mut(&page)
         {
-            *read = true;
+            self.page_changed(page);
         }
     }
 
-    /// The page is read now, so the notes hold what it shows, and every link known to lead to it leads to a read page.
+    /// An action changed this page, so what was read of it is out of date and a read of it starts its tries again.
+    pub fn page_changed(&mut self, page: (String, String)) {
+        if let Some(read) = self.read_documents.get_mut(&page) {
+            *read = true;
+        }
+        self.read_tries.remove(&page);
+    }
+
+    /// Count a read begun on this page, returning how many have begun since its last finished read.
+    pub fn begin_read(&mut self, observation: &Observation) -> u8 {
+        let tries = self.read_tries.entry(read_key(observation)).or_default();
+        *tries = tries.saturating_add(1);
+        *tries
+    }
+
+    /// A read of this page ended. It counts the page read once it finished, or once the last try did not.
+    pub fn end_read(&mut self, observation: &Observation, finished: bool, tries: u8) {
+        if finished {
+            self.read_tries.remove(&read_key(observation));
+        }
+        if finished || tries >= READ_TRIES {
+            self.mark_read(observation);
+        }
+    }
+
+    /// The page is read now: the notes hold what it shows, or a read of it failed to finish twice. Every link known to
+    /// lead to it leads to a read page.
     pub fn mark_read(&mut self, observation: &Observation) {
         let page = read_key(observation);
         if let Some((landed, href)) = &self.arrived_by
@@ -438,11 +548,24 @@ impl RunState {
         if !named.is_empty() && !continues {
             self.pager_pages.clear();
             self.pager_start = Some(here.to_string());
-        } else if continues && requested.is_some() && !self.pager_pages.contains(&here.to_string()) {
-            // Where a next page landed is a page of the list too, so a note read there counts as the list's.
+            self.pager_ordinals.clear();
+            self.pager_ordinals.insert(crate::memory::address(here.as_str()), 1);
+        } else if continues
+            && let Some(requested) = requested
+            && !self.pager_pages.contains(&here.to_string())
+        {
+            // Where a next page landed is a page of the list too, so a note read there counts as the list's, and it is
+            // the page of the list that was asked for.
             self.pager_pages.push(here.to_string());
+            if let Some(&ordinal) = self.pager_ordinals.get(&crate::memory::address(requested)) {
+                self.pager_ordinals.entry(crate::memory::address(here.as_str())).or_insert(ordinal);
+            }
         }
+        let ordinal = self.pager_ordinals.get(&crate::memory::address(here.as_str())).copied();
         for page in named {
+            if let Some(ordinal) = ordinal {
+                self.pager_ordinals.entry(crate::memory::address(&page)).or_insert(ordinal + 1);
+            }
             if !self.pager_pages.contains(&page) {
                 self.pager_pages.push(page);
             }
@@ -458,7 +581,9 @@ impl RunState {
         let noted = self.notes.facts().iter().any(|fact| {
             fact.evidence.as_ref().is_some_and(|evidence| list.contains(&crate::memory::address(&evidence.url)))
         });
-        self.pager_pages.iter().filter(move |page| noted && !self.read_urls.contains(page.as_str()))
+        self.pager_pages
+            .iter()
+            .filter(move |page| noted && !self.read_urls.contains(page.as_str()) && self.on_the_way(page))
     }
 
     /// The first unread next page of the list this run reads that it has not opened for that reason before.
@@ -540,7 +665,9 @@ impl RunState {
             idle: Vec::new(),
             acted_from: None,
             downloads_forbidden: None,
+            edits_forbidden: None,
             read_documents: HashMap::new(),
+            read_tries: HashMap::new(),
             unanswered_images: HashSet::new(),
             changed_page: None,
             page_failed: false,
@@ -550,11 +677,15 @@ impl RunState {
             composition_partial: None,
             read_whole: Vec::new(),
             to_carry_out: false,
+            refused: false,
             output_intent: OutputIntent::Unknown,
+            sign_in: None,
+            dates: Vec::new(),
             appearance: false,
-            every_page: false,
+            extent: Extent::Shown,
             pager_pages: Vec::new(),
             pager_start: None,
+            pager_ordinals: HashMap::new(),
             pager_followed: HashSet::new(),
             fetched: HashSet::new(),
             committing: false,
@@ -631,4 +762,15 @@ mod tests {
             IndexMap::from([("a".to_string(), "see input b".to_string()), ("b".to_string(), "two".to_string())]);
         assert_eq!(with_inputs("Use input a", &inputs), "Use input a (see input b)");
     }
+}
+
+/// Jev's reading of the task at a sign-in wall, each a question of its own, so code decides what the wall means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SignInNeeds {
+    /// The task needs a signed-in account: its own orders, messages, settings or other private pages.
+    pub account: bool,
+    /// The task itself gives the credentials to sign in with.
+    pub credentials: bool,
+    /// The task asks about the access restriction itself, which the wall shows.
+    pub inspects: bool,
 }

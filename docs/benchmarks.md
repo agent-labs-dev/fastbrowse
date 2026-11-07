@@ -148,3 +148,5 @@ ours. Until that exists the comparison stays unmeasured, and its vendor figures 
 - Browser Use Cloud rates are published and may change.
 - fastbrowse's `dollars` are metered provider cost. The hosted product's customer price is separate
   (`fastbrowse-hosted/docs/billing.md`).
+- The fastbrowse-hosted arm's `dollars` are the hosted list price (`usage.list_price_micros`), not metered
+  provider cost and not the internal plan's zero charge.

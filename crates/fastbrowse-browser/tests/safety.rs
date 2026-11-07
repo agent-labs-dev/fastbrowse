@@ -478,7 +478,9 @@ async fn test_navigation_and_redirects_never_reach_a_foreign_origin() {
             not_allowed(s.page.observe().await);
         } else {
             assert!(!s.page.capture().await.expect("capture").text.contains(SECRET_TEXT), "{route}");
-            assert!(!s.page.observe().await.expect("observe").viewport_text.contains(SECRET_TEXT), "{route}");
+            let observation = s.page.observe().await.expect("observe");
+            assert!(!observation.viewport_text.contains(SECRET_TEXT), "{route}");
+            assert!(!observation.offscreen_text.contains(SECRET_TEXT), "{route}");
         }
         assert!(!tab_text(&s.session).contains(SECRET_QUERY), "{route}");
         s.close().await;
@@ -549,7 +551,9 @@ async fn test_an_attached_window_keeps_its_foreign_frames_and_other_windows_out(
     let before = eval_active(&h.session, "location.href").await;
     let s = scoped(connection, &sites.granted, true, Some("Granted frame")).await.expect("attached");
     assert!(!s.page.capture().await.expect("capture").text.contains(SECRET_TEXT));
-    assert!(!s.page.observe().await.expect("observe").viewport_text.contains(SECRET_TEXT));
+    let observation = s.page.observe().await.expect("observe");
+    assert!(!observation.viewport_text.contains(SECRET_TEXT));
+    assert!(!observation.offscreen_text.contains(SECRET_TEXT));
     assert!(matches!(refused(s.page.screenshot().await), BrowserError::ScreenshotsUnavailable(_)));
     s.close().await;
     // A window that is not the grant's is neither matched nor named, and nothing navigates the person's window.

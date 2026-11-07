@@ -19,6 +19,7 @@ use fastbrowse_core::addresses::search_address;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::JEV_IMAGE_SIDE;
 use fastbrowse_core::models::{Artifact, ArtifactKind, Operation, SourceControl};
+use fastbrowse_core::origins::origin_of;
 use fastbrowse_core::page::{
     ActResult, Action, Block, BlockKind, Capture, Control, Dialog, Media, Observation, Page, PageResult,
 };
@@ -201,10 +202,6 @@ struct SnapshotBlock {
     #[serde(default)]
     source_path: String,
     href: Option<String>,
-    list_id: Option<String>,
-    list_count: Option<i64>,
-    #[serde(default)]
-    list_frameless: bool,
 }
 
 /// capture.js output for one frame.
@@ -233,6 +230,24 @@ struct FrameObservation<T> {
     frame_id: Option<String>,
     session_id: String,
     raw: T,
+}
+
+/// The page's own text, then each cross-origin frame's in `frames` order under a `[Frame: origin]` line. Only the
+/// origin is named: a frame's address often carries tokens. A frame with no text adds no line.
+fn frame_text(frames: &[(String, FrameObservation<Snapshot>)], part: fn(&Snapshot) -> &str) -> String {
+    let mut text = frames.iter().find(|(key, _)| key == MAIN).map(|(_, f)| part(&f.raw).to_owned()).unwrap_or_default();
+    for (_, frame) in frames.iter().filter(|(key, _)| key != MAIN) {
+        let own = part(&frame.raw);
+        if own.trim().is_empty() {
+            continue;
+        }
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        let origin = origin_of(&frame.raw.url).unwrap_or_else(|| "embedded page".into());
+        text.push_str(&format!("[Frame: {origin}]\n{own}"));
+    }
+    text
 }
 
 /// The tab's history read: whether BACK is offered, which entry of which tab the page is, and its address.
@@ -265,6 +280,8 @@ pub struct CdpPage {
     pub(crate) page_js: String,
     capture_js: String,
     pub(crate) fingerprint_js: String,
+    /// The players' clocks, which `fingerprint_js` leaves out.
+    pub(crate) media_js: String,
     pub(crate) state: Mutex<PageState>,
     pub(crate) pointer_marks: Option<Arc<Mutex<Vec<crate::pointer::PointerMark>>>>,
     #[cfg(feature = "cursor")]
@@ -428,12 +445,14 @@ impl CdpPage {
         let page_js = session.snapshot().function.clone();
         let capture_js = format!("({CAPTURE_JS})({origins})");
         let fingerprint_js = format!("{page_js}('fingerprint').fingerprint");
+        let media_js = format!("{page_js}('fingerprint').media");
         Self {
             session,
             config,
             page_js,
             capture_js,
             fingerprint_js,
+            media_js,
             state: Mutex::default(),
             pointer_marks: None,
             #[cfg(feature = "cursor")]
@@ -589,7 +608,9 @@ impl CdpPage {
                 Some(main) => main.raw.url.clone(),
                 None => self.origin_once().await?,
             };
-            let mut viewport_text = main.map(|m| m.raw.viewport_text.clone()).unwrap_or_default();
+            // Each frame splits its text in its own viewport's terms, like its controls' `offscreen` flag;
+            // same-process frames are already inlined by snapshot.js.
+            let mut viewport_text = frame_text(&frames, |s| &s.viewport_text);
             let mut notices = String::new();
             if bind {
                 for download in self.session.pending_download_texts() {
@@ -646,7 +667,7 @@ impl CdpPage {
                 document_key: main.map(|m| m.raw.document_key.clone()).unwrap_or_default(),
                 controls: kept,
                 viewport_text,
-                offscreen_text: main.map(|m| m.raw.offscreen_text.clone()).unwrap_or_default(),
+                offscreen_text: frame_text(&frames, |s| &s.offscreen_text),
                 // Any frame's picture counts: a screenshot spans every frame the observation read.
                 visual_content: frames.iter().any(|(_, f)| f.raw.visual_content != 0),
                 media: frames.iter().flat_map(|(_, f)| f.raw.media.iter().cloned()).collect(),
@@ -898,9 +919,6 @@ impl CdpPage {
                     heading_path: block.heading_path.clone(),
                     control_context: block.control_context.clone(),
                     href: block.href.clone(),
-                    list_id: block.list_id.as_ref().map(|id| format!("{frame_key}/{}:{id}", block.source_path)),
-                    list_count: block.list_count,
-                    list_frameless: block.list_frameless,
                 });
             }
         }
@@ -939,9 +957,6 @@ impl CdpPage {
                     heading_path: vec![heading.clone()],
                     control_context: None,
                     href: None,
-                    list_id: None,
-                    list_count: None,
-                    list_frameless: false,
                 });
                 text.push_str("\n\n");
                 offset += 2;
@@ -1653,6 +1668,33 @@ mod tests {
         // A mistyped address, and every error that says nothing about the site, stay a plain failure.
         assert!(!site_unreachable("NAME_NOT_RESOLVED"));
         assert!(!site_unreachable("ABORTED"));
+    }
+
+    fn frame(key: &str, url: &str, viewport: &str, offscreen: &str) -> (String, FrameObservation<Snapshot>) {
+        let raw: Snapshot = serde_json::from_value(json!({
+            "url": url, "title": "", "viewport_text": viewport, "offscreen_text": offscreen,
+            "document_key": "", "controls": [], "page_key": "", "guards": {}, "retarget_keys": {},
+        }))
+        .expect("snapshot");
+        (key.to_owned(), FrameObservation { frame_id: None, session_id: String::new(), raw })
+    }
+
+    #[test]
+    fn frame_text_puts_the_page_first_and_labels_each_frame_by_origin() {
+        let frames = vec![
+            frame("f1", "https://pay.test:8443/card?token=SECRET#x", "Card declined", "Help"),
+            frame(MAIN, "https://shop.test/", "Checkout", ""),
+            frame("f2", "https://ads.test/", "  \n ", ""),
+            frame("f3", "about:srcdoc", "Embedded words", ""),
+        ];
+        let viewport = frame_text(&frames, |s| &s.viewport_text);
+        assert_eq!(
+            viewport,
+            "Checkout\n\n[Frame: https://pay.test:8443]\nCard declined\n\n[Frame: embedded page]\nEmbedded words"
+        );
+        assert!(!viewport.contains("token") && !viewport.contains("/card"));
+        // A page with no text of its own starts with the first frame's label.
+        assert_eq!(frame_text(&frames, |s| &s.offscreen_text), "[Frame: https://pay.test:8443]\nHelp");
     }
 
     #[test]

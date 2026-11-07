@@ -1,20 +1,29 @@
 import dataclasses
+import errno
+import gc
 import hashlib
 import json
+import socket
+import warnings
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 import httpx
 import pytest
 
 from fastbrowse.evals.bench import (
+    BenchTask,
+    _serve,
     agent_environment,
     compare_runs,
     corpus,
+    fixture_site,
     load_run,
     priced,
     run_dollars,
     run_params,
 )
+from fastbrowse.evals.local import fixture_server
 from fastbrowse.evals.replay import (
     EMBEDDED_JSON,
     MISS_STATUS,
@@ -86,22 +95,19 @@ def test_fixture_ports_are_placeholders() -> None:
 
 
 def test_capture_dates_are_placeholders() -> None:
-    def state(day: str, weekday: str, *months: str) -> dict[str, object]:
-        date = "\n".join([f"{day} ({weekday})", *months])
+    def state(day: str, weekday: str, named: str) -> dict[str, object]:
+        date = f"{day} ({weekday})\nThe dates the task names, worked out from today:\n4 December: {named}"
         return {"date": date, "note": f"today: {json.dumps(date)}", "captured_at": f"{day}T10:11:12.345678+00:00"}
 
-    october = (
-        "October 2026: Mon 5 12 19 26; Tue 6 13 20 27; Wed 7 14 21 28; Thu 1 8 15 22 29; "
-        "Fri 2 9 16 23 30; Sat 3 10 17 24 31; Sun 4 11 18 25"
-    )
-    february = (
-        "February 2027: Mon 1 8 15 22; Tue 2 9 16 23; Wed 3 10 17 24; Thu 4 11 18 25; "
-        "Fri 5 12 19 26; Sat 6 13 20 27; Sun 7 14 21 28"
-    )
-    friday = state("2026-10-23", "Friday", october)
-    monday = state("2027-02-01", "Monday", february, october)
+    friday = state("2026-10-23", "Friday", "2026-12-04 (Friday)")
+    monday = state("2027-02-01", "Monday", "2027-12-04 (Saturday)")
     assert request_key(LLM, friday) == request_key(LLM, monday)
-    assert canonical_value(friday) == {"date": "<today>", "note": 'today: "<today>"', "captured_at": "<timestamp>"}
+    named = "<today>\nThe dates the task names, worked out from today:\n4 December: <today>"
+    assert canonical_value(friday) == {
+        "date": named,
+        "note": f"today: {json.dumps(named)}",
+        "captured_at": "<timestamp>",
+    }
 
 
 def test_screenshots_are_placeholders() -> None:
@@ -472,3 +478,97 @@ def test_an_unpriced_exchange_is_counted_and_a_partial_run_cost_is_not_a_cost() 
     unknown = metered.model_copy(update={"dollars": None, "basis": CostBasis.UNKNOWN})
     assert run_dollars(CostBreakdown(lines=(metered, unknown))) is None
     assert run_dollars(CostBreakdown(lines=(metered,))) == 0.25
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def _port(origin: str) -> int:
+    return int(origin.rsplit(":", 1)[1])
+
+
+def _suite_task(suite: str) -> BenchTask:
+    return next(task for task in corpus() if task.suite == suite)
+
+
+def test_fixture_port_is_the_newest_exchange_origin() -> None:
+    a, b = 40001, 40002
+    exchanges = [
+        _exchange(JEV, {"q": 1}, "{}"),
+        dataclasses.replace(_exchange(JEV, {"q": 2}, "{}"), fixture_origin=f"http://127.0.0.1:{a}"),
+        dataclasses.replace(_exchange(JEV, {"q": 3}, "{}"), fixture_origin=f"http://127.0.0.1:{b}"),
+        _exchange(JEV, {"q": 4}, "{}"),
+    ]
+    assert Cassette(task="t", exchanges=exchanges, meta={"port": 47312}).fixture_port() == b
+    assert Cassette(task="t", exchanges=exchanges[:1], meta={"port": 47312}).fixture_port() == 47312
+    assert Cassette(task="t", meta={"recorded_port": 47313, "port": 47312}).fixture_port() == 47313
+    assert Cassette(task="t", exchanges=exchanges[:1]).fixture_port() is None
+
+
+@pytest.mark.parametrize("suite", ["local", "mock"])
+def test_fixture_site_binds_the_given_port(suite: str) -> None:
+    port = _free_port()
+    with fixture_site(_suite_task(suite), "http://127.0.0.1:9", port=port) as (base_url, _):
+        assert _port(base_url) == port
+
+
+@pytest.mark.parametrize("suite", ["local", "mock"])
+def test_fixture_site_falls_back_and_warns_when_the_port_is_taken(
+    suite: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with socket.socket() as held:
+        held.bind(("127.0.0.1", 0))
+        held.listen()
+        port = held.getsockname()[1]
+        with fixture_site(_suite_task(suite), "http://127.0.0.1:9", port=port) as (base_url, _):
+            assert _port(base_url) != port
+    assert str(port) in capsys.readouterr().err
+
+
+def test_a_bind_error_other_than_a_taken_port_is_raised() -> None:
+    @contextmanager
+    def refused(port: int):
+        if port:
+            raise OSError(errno.EACCES, "permission denied")
+        yield "http://127.0.0.1:1", None
+
+    with ExitStack() as stack, pytest.raises(PermissionError):
+        _serve(_suite_task("local"), refused, _free_port(), stack)
+
+
+def test_fixture_server_releases_its_port() -> None:
+    """The next fill pass rebinds the same port at once, so the socket is closed on exit, not left to finalizers."""
+    port = _free_port()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", ResourceWarning)
+        for _ in range(2):
+            with fixture_server(port) as (base_url, _):
+                assert _port(base_url) == port
+        gc.collect()
+    assert not [w for w in caught if issubclass(w.category, ResourceWarning)]
+
+
+def test_a_note_citing_request_hits_when_the_bench_binds_the_cassette_port() -> None:
+    """A note id digests its page address, port included, which the key's port placeholder cannot reach."""
+
+    def note(origin: str) -> dict[str, str]:
+        address = hashlib.sha256(f"{origin}/shop.html".encode()).hexdigest()[:16]
+        return {"note": f"[9c20:0:12:{address}] quote=Your account"}
+
+    stale, recorded = _free_port(), _free_port()
+    cassette = Cassette(task="t", meta={"port": stale})
+    for origin in (f"http://127.0.0.1:{stale}", f"http://127.0.0.1:{recorded}"):
+        exchange = _exchange(JEV, note(origin), '{"ok": true}')
+        cassette.exchanges.append(dataclasses.replace(exchange, fixture_origin=origin))
+    cassette.exchanges.pop(0)
+    assert request_key(JEV, note(f"http://127.0.0.1:{_free_port()}")) != cassette.exchanges[0].key
+
+    with fixture_site(_suite_task("local"), "http://127.0.0.1:9", port=cassette.fixture_port() or 0) as (base, _):
+        proxy = Proxy(cassette)
+        proxy.set_fixture_origin(base)
+        with proxy as proxy_url:
+            response = _post(proxy_url, JEV, note(base))
+    assert response.status_code == 200 and proxy.misses == []

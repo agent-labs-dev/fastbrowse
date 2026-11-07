@@ -428,3 +428,21 @@ fn test_blocks_match_the_recorded_blocks_of_every_fixture_page() {
     }
     assert!(differing.is_empty(), "{} of {} differ:\n{}", differing.len(), cases.len(), differing.join("\n"));
 }
+
+#[tokio::test]
+async fn test_a_frame_of_the_page_origin_is_read_where_it_stands() {
+    let http = serving(|request| {
+        let body = if request.url.ends_with("/subscribe") {
+            "<h1>Send updates to my inbox</h1><form><input name=email></form>"
+        } else {
+            "<h2>Internal frame: email</h2><iframe src=/subscribe></iframe><h2>External frame</h2>\
+             <iframe src=https://ads.example.net/></iframe><iframe srcdoc='<p>Inline note'></iframe><p>Footer</p>"
+        };
+        Response::new(200, body.to_string()).with_header("content-type", "text/html")
+    });
+    let capture = fetched(&http, "https://shop.example.com/frames").await.expect("read");
+    let texts: Vec<&str> = capture.blocks.iter().map(|b| &capture.text[b.start as usize..b.end as usize]).collect();
+    assert_eq!(texts, ["Internal frame: email", "Send updates to my inbox", "External frame", "Inline note", "Footer"]);
+    // The other origin's frame was not fetched, so the read says one document is missing.
+    assert_eq!(capture.inaccessible_frames, 1);
+}

@@ -6,6 +6,7 @@ mod common;
 // `send_raw`, `_before_action`), these put a websocket proxy between the session and Chrome that holds back,
 // rewrites, drops or records the CDP messages that code would have seen, so the library runs unchanged.
 
+use std::collections::HashSet;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -18,7 +19,7 @@ use data_encoding::HEXLOWER;
 use fastbrowse_browser::adapters::local_chrome::{LocalChromeProcess, find_chrome};
 use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::page::CdpPage;
-use fastbrowse_browser::session::{BrowserSession, SessionOptions};
+use fastbrowse_browser::session::{BrowserSession, SessionOptions, str_of};
 use fastbrowse_browser::testing;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{Attachment, BrowserConnection, Bytes, LocalChrome, Operation, StepOutcome};
@@ -156,11 +157,14 @@ mod proxy {
             let Ok(value) = serde_json::from_str::<Value>(&text) else { continue };
             match hook(toward, value) {
                 None => {}
-                Some((value, delay)) if delay.is_zero() => {
-                    let _ = to.send(Message::text(value.to_string()));
-                }
                 Some((value, delay)) => {
-                    let to = to.clone();
+                    // A hook that turns a command into a reply answers it itself, and Chrome never hears of it.
+                    let answered = toward == Toward::Browser && value.get("method").is_none();
+                    let to = if answered { back.clone() } else { to.clone() };
+                    if delay.is_zero() {
+                        let _ = to.send(Message::text(value.to_string()));
+                        continue;
+                    }
                     tokio::spawn(async move {
                         tokio::time::sleep(delay).await;
                         let _ = to.send(Message::text(value.to_string()));
@@ -722,19 +726,20 @@ async fn test_a_draw_wait_timeout_does_not_queue_a_second_page_evaluation() {
 async fn test_a_tab_opened_from_a_cross_site_frame_is_followed() {
     let _turn = turn().await;
     let Some(h) = loaded().await else { return };
-    let s = &h.session;
-    wait_until(move || async move { !s.frame_sessions().is_empty() }).await;
+    // A frame session attaches before its document loads, so wait for the frame's own control first.
+    observe_until(&h.page, "Frame button").await;
     let frame_session = h.session.frame_sessions()[0].1.clone();
     let main = &sites().main;
-    eval_value(
+    let inserted = eval_value(
         &h.session,
         &frame_session,
         &format!(
             "document.body.insertAdjacentHTML('beforeend', '<a href=\"{main}/popup.html\" target=\"_blank\">Frame \
-             window link</a>')"
+             window link</a>'); true"
         ),
     )
     .await;
+    assert_eq!(inserted, json!(true), "the link was not inserted into the frame");
     let obs = observe_until(&h.page, "Frame window link").await;
     let result = act(&h.page, click(find(&obs, "Frame window link")), &obs).await;
     assert!(
@@ -1301,7 +1306,7 @@ async fn test_controls_a_script_adds_under_the_pointer_are_reached_by_hovering_t
     let Some(h) = harness().await else { return };
     h.goto("/hover-gallery.html").await;
     let obs = h.observe().await;
-    assert!(!obs.controls.iter().any(|c| c.label == "Delete"));
+    assert!(!obs.controls.iter().any(|c| c.label == "delete" || c.label == "edit"));
     let card = obs
         .controls
         .iter()
@@ -1309,9 +1314,92 @@ async fn test_controls_a_script_adds_under_the_pointer_are_reached_by_hovering_t
         .unwrap_or_else(|| panic!("no hover target for the second card in {:?}", obs.controls));
     assert_eq!(act(&h.page, hover(card), &obs).await.outcome, StepOutcome::Executed);
     let revealed = h.observe().await;
-    let delete = find(&revealed, "Delete");
+    // Neither revealed control has a name or an icon class, so each is named from its own class.
+    for label in ["edit", "delete"] {
+        let control = revealed
+            .controls
+            .iter()
+            .find(|c| c.label == label)
+            .unwrap_or_else(|| panic!("no control labelled {label:?} in {:?}", revealed.controls));
+        assert_eq!(control.role, "button");
+        assert_eq!(control.context.as_deref(), Some("The quest log grouped by zone"), "{label}");
+    }
+    let delete = find(&revealed, "delete");
+    // A control whose class changes what it says it does is no longer the one observed.
+    eval_active(&h, "document.querySelector('.delete-button').className = 'share-button'").await;
+    assert_eq!(act(&h.page, click(delete), &revealed).await.outcome, StepOutcome::Stale);
+    eval_active(&h, "document.querySelector('.share-button').className = 'delete-button'").await;
+    assert_eq!(eval_active(&h, "document.getElementById('status').textContent").await, json!(""));
     assert_eq!(act(&h.page, click(delete), &revealed).await.outcome, StepOutcome::Executed);
     assert_eq!(eval_active(&h, "document.getElementById('status').textContent").await, json!("Deleted m2"));
+    h.close().await;
+}
+
+/// A gallery's buttons faded in on hover from opacity 0, so the observation taken right after the hover saw only the
+/// transition's starting value and offered none of them.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_controls_fading_in_under_the_pointer_are_offered_at_once() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/hover-fade.html").await;
+    let obs = h.observe().await;
+    assert!(!obs.controls.iter().any(|c| c.label == "delete" || c.label == "edit"));
+    let card = |obs: &Observation, caption: &str| -> Control {
+        obs.controls
+            .iter()
+            .find(|c| c.operations.contains(&Operation::Hover) && c.label == caption)
+            .unwrap_or_else(|| panic!("no hover target for {caption:?} in {:?}", obs.controls))
+            .clone()
+    };
+    let offered = |obs: &Observation, caption: &str| -> Vec<String> {
+        obs.controls.iter().filter(|c| c.context.as_deref() == Some(caption)).map(|c| c.label.clone()).collect()
+    };
+    let second = "The quest log grouped by zone";
+    assert_eq!(act(&h.page, hover(&card(&obs, second)), &obs).await.outcome, StepOutcome::Executed);
+    let revealed = h.observe().await;
+    let labels = offered(&revealed, second);
+    assert!(labels.contains(&"delete".to_owned()) && labels.contains(&"edit".to_owned()), "{:?}", revealed.controls);
+    let delete = revealed
+        .controls
+        .iter()
+        .find(|c| c.label == "delete" && c.context.as_deref() == Some(second))
+        .expect("delete for the second card");
+    assert_eq!(act(&h.page, click(delete), &revealed).await.outcome, StepOutcome::Executed);
+    assert_eq!(eval_active(&h, "document.getElementById('status').textContent").await, json!("Deleted m2"));
+
+    // Moving to the third card fades its controls in and the second card's out.
+    let third = "The settings panel";
+    let before = h.observe().await;
+    assert_eq!(act(&h.page, hover(&card(&before, third)), &before).await.outcome, StepOutcome::Executed);
+    let moved = h.observe().await;
+    let labels = offered(&moved, third);
+    assert!(labels.contains(&"delete".to_owned()) && labels.contains(&"edit".to_owned()), "{:?}", moved.controls);
+    let left = offered(&moved, second);
+    assert!(!left.contains(&"delete".to_owned()) && !left.contains(&"edit".to_owned()), "{:?}", moved.controls);
+    h.close().await;
+}
+
+/// A control that fades in but stays unclickable until the fade ends is not offered while it fades.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_fading_control_that_ignores_the_pointer_is_not_offered() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/hover-fade.html").await;
+    eval_active(&h, "document.body.classList.add('late')").await;
+    let obs = h.observe().await;
+    let second = "The quest log grouped by zone";
+    let card = obs
+        .controls
+        .iter()
+        .find(|c| c.operations.contains(&Operation::Hover) && c.label == second)
+        .unwrap_or_else(|| panic!("no hover target for the second card in {:?}", obs.controls));
+    assert_eq!(act(&h.page, hover(card), &obs).await.outcome, StepOutcome::Executed);
+    let revealed = h.observe().await;
+    assert!(
+        !revealed.controls.iter().any(|c| c.context.as_deref() == Some(second) && c.label == "delete"),
+        "{:?}",
+        revealed.controls
+    );
     h.close().await;
 }
 
@@ -1916,6 +2004,129 @@ async fn test_a_background_run_sets_up_tabs_behind_an_open_confirm_once_it_is_an
     h.session.switch_tab(&popup).await.expect("switch");
     assert!(truthy(&eval_active(&h, "document.hasFocus()").await));
     h.close().await;
+}
+
+/// Answer `Fetch.enable` on a new window's session with an error Chrome never hears of, so the window stays paused
+/// as Chrome opened it, waiting for the run to resume it.
+fn refusing_popup_fetch() -> Hook {
+    let popups: Arc<Mutex<HashSet<String>>> = Arc::default();
+    Arc::new(move |toward, value| {
+        let params = &value["params"];
+        match toward {
+            Toward::Client
+                if method(&value) == "Target.attachedToTarget"
+                    && params["waitingForDebugger"] == true
+                    && params["targetInfo"]["openerId"].as_str().is_some_and(|o| !o.is_empty()) =>
+            {
+                popups.lock().unwrap().insert(params["sessionId"].as_str().unwrap_or_default().to_owned());
+            }
+            Toward::Browser
+                if method(&value) == "Fetch.enable"
+                    && value["sessionId"].as_str().is_some_and(|s| popups.lock().unwrap().contains(s)) =>
+            {
+                let error = json!({"code": -31999, "message": "refused"});
+                return Some((
+                    json!({"id": value["id"], "sessionId": value["sessionId"], "error": error}),
+                    Duration::ZERO,
+                ));
+            }
+            _ => {}
+        }
+        Some((value, Duration::ZERO))
+    })
+}
+
+/// Open a popup on `url` from the active tab and confirm straight after, which Chrome holds until the popup runs.
+async fn open_popup_and_confirm(h: &Harness, url: &str) {
+    let expression = format!("setTimeout(() => {{ window.open({url:?}); confirm('Remove?') }}, 0)");
+    h.session.send("Runtime.evaluate", json!({"expression": expression}), Some(&active(h))).await.expect("evaluate");
+}
+
+async fn target_info(h: &Harness, target_id: &str) -> Option<Value> {
+    let targets = h.session.send("Target.getTargets", json!({}), None).await.expect("targets");
+    targets["targetInfos"].as_array().expect("targets").iter().find(|t| t["targetId"] == target_id).cloned()
+}
+
+/// A popup whose setup fails must not stay paused, since its opener's script waits in `window.open` until it runs.
+/// The run owns this one, and its scope gate and capture may not be on, so it is closed.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_owned_popup_whose_setup_fails_is_closed_and_frees_its_opener() {
+    let _turn = turn().await;
+    let Some(connection) = chrome().cloned() else { return };
+    // Behind the window's current tab, so the popup gets a paint keeper that must go with it.
+    let background = BrowserConnection { foreground: false, ..connection };
+    let Some(h) = proxied(background, refusing_popup_fetch()).await else { return };
+    h.goto("/").await;
+    // The popup's address counts the connections made to it, since a popup resumed ungated would load it.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = format!("http://{}/popup.html", listener.local_addr().expect("addr"));
+    let requests = Arc::new(AtomicUsize::new(0));
+    let counted = requests.clone();
+    tokio::spawn(async move {
+        while listener.accept().await.is_ok() {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+    open_popup_and_confirm(&h, &address).await;
+    let s = &h.session;
+    wait_until(move || async move { s.pending_dialog().is_some() && !s.popups().is_empty() }).await;
+    let popup = h.session.popups().last().cloned().expect("popup");
+    assert!(!testing::browser::popup_adopted(&h.session, &popup).await);
+    wait_until(|| async { target_info(&h, &popup).await.is_none() }).await;
+    assert!(!testing::keepers(&h.session).iter().any(|(target, _)| *target == popup));
+    assert_eq!(requests.load(Ordering::SeqCst), 0, "the closed popup loaded nothing");
+    h.session.handle_dialog(true, None).await.expect("dialog answered");
+    h.close().await;
+}
+
+/// A popup of an attached window is not the run's to close: it is resumed and let go, and the window stays open.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_attached_windows_popup_whose_setup_fails_is_let_go_and_left_running() {
+    let _turn = turn().await;
+    let Some(connection) = chrome().cloned() else { return };
+    // The person's window, open before the run attaches and with no other session on it.
+    let window = {
+        let Some(owner) = harness().await else { return };
+        let url = format!("{}/?person-658", sites().main);
+        let created = owner.session.send("Target.createTarget", json!({"url": url}), None).await.expect("create");
+        owner.close().await;
+        str_of(&created["targetId"])
+    };
+    let url = proxy::start(connection.cdp_url.clone(), refusing_popup_fetch()).await;
+    let attached = BrowserConnection {
+        cdp_url: url,
+        attach: true,
+        target_match: Some("person-658".into()),
+        foreground: false,
+        ..connection
+    };
+    let Some(h) = harness_on(attached, Config::default(), SessionOptions::default()).await else { return };
+    assert_eq!(h.session.active_target_id(), window);
+    open_popup_and_confirm(&h, "/popup.html").await;
+    let s = &h.session;
+    wait_until(move || async move { s.pending_dialog().is_some() && !s.popups().is_empty() }).await;
+    let popup = h.session.popups().last().cloned().expect("popup");
+    assert!(!testing::browser::popup_adopted(&h.session, &popup).await);
+    assert!(!testing::keepers(&h.session).iter().any(|(target, _)| *target == popup));
+    // The popup shares its opener's renderer, so it loads once the confirm is answered.
+    h.session.handle_dialog(true, None).await.expect("dialog answered");
+    wait_until(|| async {
+        target_info(&h, &popup)
+            .await
+            .is_some_and(|t| t["attached"] == false && str_of(&t["url"]).contains("popup.html"))
+    })
+    .await;
+    h.close().await;
+    let Some(cleanup) = harness().await else { return };
+    let ids: Vec<String> = {
+        let targets = cleanup.session.send("Target.getTargets", json!({}), None).await.expect("targets");
+        targets["targetInfos"].as_array().expect("targets").iter().map(|t| str_of(&t["targetId"])).collect()
+    };
+    assert!(ids.contains(&window), "the person's window stays open");
+    for target in [&window, &popup] {
+        let _ = cleanup.session.send("Target.closeTarget", json!({"targetId": target}), None).await;
+    }
+    cleanup.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

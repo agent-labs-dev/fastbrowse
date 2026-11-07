@@ -131,6 +131,10 @@ behaviour or to the fixtures:
 just evals-local --suite local mock --repeat 3
 ```
 
+The `replay` check replays every cassette in `bench/cassettes` with no model key and fails on any request a
+cassette did not record. A PR that changes what the agent sends to Jev or the LLM refreshes the cassettes it reports
+with `uv run python -m fastbrowse.evals.bench fill --only TASK ...`, a paid run that a maintainer starts.
+
 A published comparison figure has its own rule: it may only come from committed rows (`--publish`) at the task
 versions they ran, with every physical attempt and its spend retained. See [docs/evals.md](docs/evals.md).
 

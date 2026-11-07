@@ -194,11 +194,7 @@ impl Agent {
             if let Some(probability) = decision.login_required {
                 state.login_readings.insert(read_key(&observation), probability);
             }
-            // A page can say it failed and still show the answer, as one with a stale Loading line does: the likelier
-            // of Jev's two readings stands.
-            state.page_failed = decision
-                .site_failure
-                .is_some_and(|failed| failed >= EVEN_ODDS && failed > decision.shows_answer.unwrap_or_default());
+            state.page_failed = decision.site_failure.is_some_and(|failed| failed >= EVEN_ODDS);
             // A fetched page has not run its scripts: one stuck on "Loading..." has failed only if a browser says so.
             if state.page_failed
                 && self.page.over_http()
@@ -243,7 +239,27 @@ impl Agent {
                     }
                     .into());
                 }
-                return Err(self.meet_wall(&observation, &raw));
+                // What the wall means is the task's to say, asked of the task alone and combined here: credentials it
+                // gives are a sign-in to carry out, and a question about the restriction is answered by the wall.
+                match self.sign_in_needs(state).await? {
+                    Some(needs) if needs.credentials || needs.inspects => {}
+                    // A route the task does not need an account for is walled, not the task: the run goes another way,
+                    // and ends needing a sign-in only once its recoveries are spent.
+                    Some(needs) if !needs.account => {
+                        let reason =
+                            "this page is a sign-in wall, and the task does not need an account: take another way";
+                        let recovering = Box::pin(self.recover(
+                            state,
+                            &observation,
+                            reason,
+                            Status::NeedsLogin,
+                            withheld(&decision),
+                        ));
+                        self.trace.phase("recover", recovering).await?;
+                        continue;
+                    }
+                    _ => return Err(self.meet_wall(&observation, &raw)),
+                }
             }
             if let Some(shows) = Self::reads_before_leaving(state, &observation, &decision) {
                 let capture = self.capture().await?;
@@ -360,6 +376,47 @@ impl Agent {
         };
         self.event("start_page", || Map::from_iter([("url".into(), opening.clone().into())]));
         Ok(opening)
+    }
+
+    /// The dates the task names, as the parts it states. Jev first judges from the task alone whether it names any, so
+    /// a task without one costs no extraction; the run asks this while its first page opens.
+    pub(super) async fn task_dates(
+        &self,
+        task: &str,
+        ledger: &fastbrowse_core::telemetry::Ledger,
+    ) -> Step<Vec<crate::dates::DateReference>> {
+        use fastbrowse_core::decision::{Answer, DecisionError, Question};
+        ledger.reserve(fastbrowse_core::models::CostComponent::Jev, 0.0, 1)?;
+        let questions =
+            indexmap::IndexMap::from([("dates".to_string(), Question::Noul(crate::dates::dates_question(task)))]);
+        let state = json!({"task": task});
+        let asked = self.jev.evaluate(&state, &questions);
+        // As with the consent question, a task whose dates could not be asked about runs on with today's date alone:
+        // the step that needs Jev next meets the same failure and handles it. Only the budget stops the run here.
+        let failed = |error: String| {
+            self.event("task_dates_failed", || Map::from_iter([("error".into(), error.into())]));
+            Ok(Vec::new())
+        };
+        let evaluation =
+            match fastbrowse_clients::validation::jev_purpose(fastbrowse_core::models::JevPurpose::Action, asked).await
+            {
+                Ok(evaluation) => evaluation,
+                Err(DecisionError::Budget(budget)) => return Err(budget.into()),
+                Err(error) => return failed(error.to_string()),
+            };
+        ledger.record([evaluation.cost.clone()])?;
+        if !matches!(evaluation.answers.get("dates"), Some(Answer::Noul(answer)) if answer.probability > EVEN_ODDS) {
+            return Ok(Vec::new());
+        }
+        let extracted = match crate::dates::task_dates(&*self.llm, task, Some(ledger)).await {
+            Ok(extracted) => extracted,
+            Err(crate::error::AgentError::Budget(budget)) => return Err(budget.into()),
+            Err(error) => return failed(error.to_string()),
+        };
+        ledger.record([extracted.cost])?;
+        let references = extracted.data.dates;
+        self.event("task_dates", || Map::from_iter([("dates".into(), json!(references))]));
+        Ok(references)
     }
 
     /// Go to the site's front page when the address this run chose for itself opened nothing.
@@ -588,8 +645,10 @@ impl Agent {
                 _ if !executed => Some(false),
                 Some(edited) => Some(edited),
                 // The fingerprint reads neither field values nor focus, so a field left reported no change even when
-                // its change handler rewrote it. The page state it lands on judges it, as for a page change.
-                None if decision.operation == Operation::Blur => None,
+                // its change handler rewrote it. Nor does it read a control without text, so a hover that showed a
+                // card's icon-only buttons also reported no change. The page state each lands on judges it, as for a
+                // page change.
+                None if matches!(decision.operation, Operation::Blur | Operation::Hover) => None,
                 None => (!changed).then_some(false),
             };
             if edit == Some(false) && executed {
@@ -638,7 +697,7 @@ impl Agent {
                     }
                     Err(error) => return Err(error),
                 };
-                let done = effect(observation, &landed, Some(target));
+                let done = effect(observation, &landed, Some(target), false);
                 if done.changed {
                     uncover(&mut state.idle);
                 }
@@ -892,6 +951,7 @@ impl Agent {
             state.arrived_by = Some((landed, href));
         }
         let Some(last) = state.history.last_mut() else { return };
+        let waited = last.operation == Some(Operation::Wait);
         let done = if last.operation == Some(Operation::SwitchTab) {
             // Another tab's controls were there all along: compared with the tab left, every one read as added.
             Effect {
@@ -901,10 +961,12 @@ impl Agent {
                 changed: false,
             }
         } else {
-            effect(&before, observation, None)
+            effect(&before, observation, None, waited)
         };
         last.added = done.added;
-        if done.changed && last.outcome == StepOutcome::Executed {
+        // A Wait is told how far a playing clock moved, but a clock that moves by itself removes no cover.
+        let moved = done.changed && (!waited || effect(&before, observation, None, false).changed);
+        if moved && last.outcome == StepOutcome::Executed {
             uncover(&mut state.idle);
         }
         // A page can change while an attempted action goes stale. Reconsider it on the new page, including Back,
@@ -920,9 +982,12 @@ impl Agent {
                 let clicked = Some((Operation::Click, last.target.clone()));
                 state.idle.retain(|idle| idle.action != clicked);
             }
-            if let Some(read) = state.read_documents.get_mut(&read_key(observation)) {
+            // Field by field, since `last` borrows the run's steps: this is `RunState::page_changed`.
+            let page = read_key(observation);
+            if let Some(read) = state.read_documents.get_mut(&page) {
                 *read = true;
             }
+            state.read_tries.remove(&page);
         }
         last.effect = Some(match last.effect.take() {
             Some(detail) => format!("{detail}; {}", done.summary),
@@ -1156,6 +1221,11 @@ pub(super) fn edit_progress(decision: &Decision, action: &Action, written: &Writ
         return None;
     }
     let target = decision.target.as_ref()?;
+    // A list that allows several choices toggles the option named, so naming a chosen one again takes it out: the
+    // page the step lands on, which reads every chosen option, judges it.
+    if target.input_type.as_deref() == Some("select-multiple") {
+        return None;
+    }
     let held = held_value(action)?;
     if target.value.as_deref() == Some(held.as_str()) {
         return Some(false);

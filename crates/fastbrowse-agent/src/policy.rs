@@ -160,6 +160,37 @@ impl HistoryEntry {
             added: false,
         }
     }
+
+    /// The step was carried out and acts on the page: a read, scroll, hover or wait only shows what is there, and DONE
+    /// ends the run.
+    pub fn acted(&self) -> bool {
+        self.outcome == StepOutcome::Executed && self.acts()
+    }
+
+    /// The step would act on the page, whether or not it was carried out.
+    pub fn acts(&self) -> bool {
+        !matches!(
+            self.operation,
+            None | Some(
+                Operation::Read
+                    | Operation::Scroll
+                    | Operation::ScrollUp
+                    | Operation::Hover
+                    | Operation::Wait
+                    | Operation::Done
+            )
+        )
+    }
+
+    /// The step was carried out and could have made or changed something on the site: closing an overlay and moving
+    /// between pages or tabs act on the page but only change what is shown.
+    pub fn changed_site(&self) -> bool {
+        self.acted()
+            && !matches!(
+                self.operation,
+                Some(Operation::Escape | Operation::Back | Operation::SwitchTab | Operation::Navigate)
+            )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -168,6 +199,9 @@ pub struct StepContext {
     pub task: String,
     #[serde(deserialize_with = "lax::nullable")]
     pub subgoal: Option<String>,
+    /// The dates the task names, worked out against each page's capture date.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dates: Vec<crate::dates::DateReference>,
     pub notes: String,
     /// The notes hold a fact standing as the task's answer. Told nothing but the notes, Jev judged a page whose answer
     /// it had read still worth reading and scrolled instead of finishing.
@@ -233,6 +267,7 @@ impl StepContext {
         StepContext {
             task: task.into(),
             subgoal: None,
+            dates: Vec::new(),
             notes: String::new(),
             history: Vec::new(),
             check_login: false,
@@ -955,7 +990,7 @@ pub fn build_request(
         questions.insert(
             keys::SHOWS_ANSWER.into(),
             noul(
-                "Does this page show a fact the task needs, to report or to finish its work, which the notes do not hold yet? A part of a larger answer counts: records of a list the task covers, even when the notes hold others like them.",
+                "Does this page show a fact the task needs, to report or to finish its work? A part of a larger answer counts, such as some records of a list the task covers.",
                 "The page states such a fact.",
                 "The page states none.",
             ),
@@ -964,7 +999,7 @@ pub fn build_request(
     questions.insert(
         "site_failure".into(),
         noul(
-            "Does this page report that the site failed to deliver what was asked, instead of showing it? An error message in place of results, a request the site says went wrong, a temporary outage, rate limit or maintenance notice, a browser error page, or a load that has not finished across steps are failures, even when the page also shows an empty result such as no matches. A placeholder served in place of the site, with none of the content the task is about and nothing to follow, is a failure too. An ordinary empty result the site reports as an answer, a form, a form rejecting a value entered in it, or a page still showing its content is not.",
+            "Does this page report that the site failed to deliver what was asked, instead of showing it? An error message in place of results, a request the site says went wrong, a temporary outage, rate limit or maintenance notice, a browser error page, or a load that has not finished across steps are failures, even when the page also shows an empty result such as no matches. A placeholder served in place of the site, with none of the content the task is about and nothing to follow, is a failure too. An ordinary empty result the site reports as an answer, a form, a form rejecting a value entered in it, or a page showing the content the task is about, even beside a leftover loading or error line, is not.",
             "The page reports that the site failed or has not finished delivering the content.",
             "The page shows the site's content or its ordinary answer, empty or not.",
         ),
@@ -1168,9 +1203,10 @@ fn group_index(choice: &str, count: usize) -> Result<usize> {
 fn state(observation: &Observation, controls: &[Control], context: &StepContext) -> Value {
     let mut state = Map::new();
     state.insert("task".into(), context.task.clone().into());
-    // "Next month" and "the next Monday" are relative to today, which only the done check was told: shown which month
-    // a date picker was on, Jev clicked Next through two years of months looking for next month.
-    state.insert("date".into(), observation.today().into());
+    // "Next month" and "the next Monday" are relative to today: shown only which month a date picker was on, Jev
+    // clicked Next through two years of months looking for next month. Code works each date out, since Jev does not
+    // count days.
+    state.insert("date".into(), crate::dates::dated(observation.captured_at, &context.dates).into());
     state.insert("subgoal".into(), json!(context.subgoal));
     state.insert(
         "page".into(),
@@ -1349,9 +1385,9 @@ fn target_element(control: &Control, operation: Operation) -> Map<String, Value>
 /// Whether a sign-in wall blocks the task, asked of a fresh page and of the page a run gave up on as signed out.
 pub(crate) fn login_question() -> Question {
     noul(
-        "Does a sign-in or verification wall block the task in state, with no credentials given in the task to pass it? Unrelated sign-in links and login-to-post boxes do not block reading public or empty lists. A prompt to sign in before replying, commenting or posting gates only writing: when page.text shows what the task asks to find, the page is readable and the prompt does not block it. If the task asks to inspect access restrictions, observing the wall advances that task without signing in. A page that refuses access outright and offers no way to sign in is not a sign-in wall. A restricted route does not make the whole task require sign-in when an observed alternative can advance it. Use the observed navigation context and available operations to judge whether the task can continue elsewhere. Going back is useful only when that earlier page offers another way to advance the task. A task that requires this account or authenticated destination still requires sign-in.",
-        "A sign-in or account verification wall blocks the task and the task gives no way through it.",
-        "The task can progress without signing in, or the task supplies the credentials to sign in.",
+        "Does a sign-in or account verification form or prompt take the place of this page's content, so the page cannot be read or used without signing in?",
+        "A sign-in or account verification wall takes the place of the page's content.",
+        "The page shows its content, with or without a sign-in link or box beside it, or refuses access with no way to sign in.",
     )
 }
 
@@ -1795,9 +1831,22 @@ mod tests {
     fn test_the_choice_is_told_today_for_a_task_relative_to_it() {
         let mut page = observation(vec![]);
         page.captured_at = DateTime::new(2026, 9, 26, 20, 0, 0).utc();
-        let context = StepContext::new("Select next month's first Friday");
+        let friday = crate::dates::DateReference {
+            text: "next month's first Friday".into(),
+            year: None,
+            month: None,
+            day: None,
+            weekday: Some("friday".into()),
+            nth: Some(1),
+            days_from_today: None,
+            months_from_now: Some(1),
+        };
+        let context = StepContext { dates: vec![friday], ..StepContext::new("Select next month's first Friday") };
         let state = build_request(&page, &[], &context, &Config::default(), MAX_CHOICE_OPTIONS).state;
-        assert_eq!(state["date"], page.today());
+        assert_eq!(
+            state["date"],
+            "2026-09-26 (Saturday)\nThe dates the task names, worked out from today:\nnext month's first Friday: 2026-10-02 (Friday)"
+        );
     }
 
     #[test]

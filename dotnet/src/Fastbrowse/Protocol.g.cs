@@ -361,6 +361,10 @@ public enum LLMPurpose
     ImageRead,
     [JsonStringEnumMemberName("fill")]
     Fill,
+    [JsonStringEnumMemberName("pages")]
+    Pages,
+    [JsonStringEnumMemberName("dates")]
+    Dates,
 }
 
 public sealed record Limits

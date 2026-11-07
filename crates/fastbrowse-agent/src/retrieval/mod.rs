@@ -10,6 +10,7 @@ mod choices;
 mod chunks;
 mod fields;
 mod screenshot;
+mod tally;
 pub(crate) mod text;
 
 pub(crate) use answers::cited_quote;
@@ -49,9 +50,6 @@ pub(crate) mod testing {
                 heading_path: Vec::new(),
                 control_context: None,
                 href: None,
-                list_id: None,
-                list_count: None,
-                list_frameless: false,
             });
             start += length + 2;
         }

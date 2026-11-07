@@ -4,7 +4,7 @@ fastbrowse splits a browser agent into three owners:
 
 - **Jev decides, reads and finishes.** A batched request chooses an operation and its possible targets from indexed controls. On a page denser than the step's control budget, a batched relevance check keeps the controls the task can use rather than the first ones in document order. A page too dense even on screen offers the controls that fit and scrolls for the rest rather than ending the run. Large target sets use a second choice within the selected group. Jev also checks sign-in and bot walls on fresh pages, picks what a page says from its quoted spans, and ends the run by choosing DONE.
 - **An LLM helps where nothing can be copied.** With no start page given, it proposes the first address from the task. When Jev says a field takes a value the task asks for without stating it word for word, such as a search query, it writes that value from the task and the field's label, never from the page. When Jev says an answer has to be put together from more than one fact, it writes that answer from the notes. A run given a start page whose values and answers Jev can quote calls no LLM.
-- **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, and budgets. Code does not second-guess a DONE: the run ends `complete` with what Jev read, and a requested record that cannot be filled or a composed claim still unsupported after recovery ends `unverified`.
+- **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, and budgets. Code does not second-guess a DONE: the run ends `complete` with what Jev read, and a requested record that cannot be filled, a composed claim still unsupported after recovery, or a requested step the page shows the site does not allow ends `unverified`. Once the run has acted, Jev's finish check answers whether every step the task asks for was carried out: `done`, `undone` (the run recovers), or `refused` (the run reads, answers and ends `unverified`).
 
 When a field value is copied, Jev selects its source and first word. If its end needs a separate choice,
 each choice shows the complete text that would be typed from that first word to the candidate end.
@@ -27,6 +27,23 @@ the page calls it, so Jev is not asked whether it is irreversible: an unauthoriz
 `needs_confirmation`, and an authorized one proceeds only when Jev judges the task asked for it. A refusal
 is recorded as a failed step with a reason. The classifier can be wrong, so this gate is not a guarantee
 that every externally visible change is detected.
+
+These questions are asked with the task and the page's origin only, never the page's content, so a page
+cannot argue an action through. An authorized run also asks, in the same request, whether the task asks for
+the action only in some state of the page or site ("reply if nobody has answered yet"). When it does, and the
+action commits or leaves something the site keeps, a second Jev request asks whether the page shows the
+state in which the task says not to do it, or has not been checked for it. That request gets the masked page
+text, controls, media, dialog and tabs, with the notes and recent actions, and can only refuse: the action
+proceeds only on a clear no, and any other answer refuses it once so the run can read the page or finish.
+Repeated refusals spend recoveries and end the run `stuck`, never by committing.
+
+Two rules come from the task itself, judged once per run by Jev from the task text and kept for the run.
+When the task rules out downloading, a control the page says downloads a file is refused. When the task
+rules out changing anything, a fill, a select or a click on a setting control (a checkbox, radio, switch,
+option, or any control that reports a checked state) is refused, and from then on those operations are no
+longer offered. Typing into a search box is exempt, since searching is how a read-only task finds things.
+Authorization does not lift either rule: it lets a run commit what the task asks for, never what the task
+forbids.
 
 Unmarked password fields leave the current-or-replacement role to Jev using the task and page context.
 Field count and order do not establish that role. An explicit `current-password` marker identifies an
@@ -64,8 +81,9 @@ optional image reading.
 Content shown only under the pointer is reached by a hover target, which moves the real pointer there. An
 element is offered as one when a stylesheet hover rule reveals hidden content inside it, or when it is a card
 of a list that shows a picture and holds no control of its own, because a script may render such a card's
-controls only while a pointer is over it. The next observation offers what appeared. A hover only shows
-content, so a task to carry out is not done by hovering alone.
+controls only while a pointer is over it. The next observation offers what appeared. A control fading in under the
+pointer counts as shown from the start of its fade, unless it ignores the pointer until the fade ends, and one fading
+out counts as gone. A hover only shows content, so a task to carry out is not done by hovering alone.
 
 A browser observation reports each control's `focused` state. A custom page may leave it unknown.
 The optional `invalid` flag reports `aria-invalid` or a failed native constraint on a field that participates
@@ -94,11 +112,27 @@ Fetched documents have no pixels, so optional screenshots and step frames are sk
 Browser captures record an icon-only link's destination with nearby container text, passing through empty layout
 wrappers. The search stops at a paragraph even when it is empty, and never uses the page root as nearby text.
 
+Browser and fetch captures write a `time` or custom element's `datetime` in brackets after the text it shows, so a
+relative date such as "3 weeks ago" keeps the exact date the page holds. `ins` and `del` are excluded, and nothing is
+added when the shown text already states the value.
+
 Jev moves through a list. A `rel="next"` link is a stated fact on its element, and every other link keeps its href,
 so choosing the next page is an ordinary step. A page number drawn as text rather than a link or a button is offered
 when it is focusable and has visible text, including a label wrapped in child elements. Hidden menu links do not
 exclude the trigger that reveals them. An element already inside a control, or holding visible controls, leaves
 actions to those controls.
+
+A field is named by its label, never by its value. A select or a combobox or listbox widget is not named from the
+options, chips or buttons it shows. A widget wrapping exactly one field borrows that field's label, and its own label
+comes first. A field with no label is offered by its role under its section, such as a fieldset legend, and the text it
+shows never names that section. A control whose own clip or clip-path leaves it no area is not offered, as a tag
+picker keeps the select it replaces on the page that way, and a hidden checkbox, radio or file input is reached through
+its label.
+
+Select on a select that allows more than one choice toggles the one option Jev picks, as a Ctrl-click does, and leaves the
+others as they were. Jev is asked which option to toggle and told which are selected now. A change handler that puts the
+selection back fails the step, as on a single select, and the action guard and page fingerprint read every selected
+option, so choosing or removing any one of them is a change.
 
 A read offers Jev one bounded choice over the page's quoted spans, with two more answers: the page does not hold the
 answer, or the answer must be composed from more than one fact. On a page with more spans than one choice can offer, a
@@ -123,6 +157,10 @@ sources cover the request; the generated result is checked before delivery.
 Answer claims use numbered Markdown links built from those notes. `RunResult.citations` exposes the cited facts and
 text-fragment deep links; unused facts have no citation. The LLM writes a composed answer from the notes. Jev judges
 each final claim against its original cited quotes, including record identity and values, after any packing rounds.
+A count, total, minimum or maximum is never written or judged as a number. The composer marks it as a tally with
+the kind of record and the field, and Jev answers one question per note read: whether it is one such record, and which
+number in it is the field. Code counts, adds or compares, writes the value into the claim and cites every record it
+rests on; the support check sees `[computed]` in its place.
 Packing continues only when fewer requests are needed or the rewritten claim text shrinks. Removing source-state
 metadata alone does not count as progress.
 For a table, each cell is judged with the whole row and its quotes as context; every cell must be supported.
@@ -137,12 +175,16 @@ support judgment is withheld and ends `unverified`. When every check is answered
 more evidence. Rejected prose is feedback, never a source fact. Repair feedback retains claim text and citation
 identifiers, so the composer can preserve supported values while correcting rejected claims. A corrected draft
 must pass citation checks and cover every requested fact or value. If the combined answer exceeds Jev's input limit for the coverage check, individually supported claims remain available as an unverified partial answer; the result identifies the coverage limit. The coverage check judges the written
-facts and values; citation support and browser actions have separate checks. Runs with a caller-supplied output schema
+facts and values; citation support and browser actions have separate checks. A whole-answer check beside coverage
+judges the claims against the steps the run carried out on the page: an answer that says something was not done, or
+already existed, when one of those steps may have done it has every claim withheld, and a run still finishing spends a
+recovery to write it again. Only that rewrite gives the composer the steps, as the run's own record and never as
+citations; on every other draft a long run's clicks would crowd out the notes it writes from. Runs with a caller-supplied output schema
 retain their extracted data and end `unverified` when the composed prose fails its checks, without retrying prose composition. Recovery is not
 attempted when a claim lacks a retained source quote or packed composition cannot reduce to one request.
 Exhausted composition recovery retains supported claims and ends `unverified`, unless a missing field value or
 site failure establishes another status. Those claims can be reused without another composition call only while
-their source evidence remains unchanged. A later nonempty checked repair replaces the retained draft; an empty
+their source evidence remains unchanged and the run has taken no further step. A later nonempty checked repair replaces the retained draft; an empty
 repair preserves the earlier draft. Other stops also retain checked partial claims alongside their status,
 wall or budget details.
 A run that already stopped keeps its stop status. Otherwise the answer is drafted from the facts Jev picked.
@@ -187,7 +229,7 @@ cleanup before the grace expires is abandoned without a receipt.
 Only visible effects or added evidence count as progress. Rewriting the value already in the observed
 field cannot count, even when it opens an autocomplete popup. Control changes are compared within one document;
 a new document reports its controls instead of treating reused IDs as edits to the page left behind.
-A navigation retains its observed source page, its controls and Jev's sign-in reading for decisions on the destination, including recovery and decisions after a redraw. The source is reported as a past observation whose current state is unknown. Credential availability uses each field's frame origin, as secret resolution does. When that origin has no stored secrets, the decision receives that fact before the historical source. The sign-in question distinguishes a restricted route from a task that requires an account; Jev still decides whether the wall blocks the task. Retained context is masked again before a model reads it. If the request exceeds Jev's documented input limit, retained page facts are shortened with an omission marker before the current page's text is shortened.
+A navigation retains its observed source page for decisions on the destination, including recovery and decisions after a redraw. The source's text, controls and Jev's sign-in reading are given only while a wall is suspected on the destination: the sign-in question is asked on that step, the destination's sign-in reading is above even odds, or it answered with a 4xx status. Otherwise the decision gets only the source's URL and title. The source is reported as a past observation whose current state is unknown. Credential availability uses each field's frame origin, as secret resolution does. When that origin has no stored secrets, the decision receives that fact before the historical source. The sign-in question distinguishes a restricted route from a task that requires an account; Jev still decides whether the wall blocks the task. Retained context is masked again before a model reads it. If the request exceeds Jev's documented input limit, retained page facts are shortened with an omission marker before the current page's text is shortened.
 
 An empty observation waits on loading events before action history and progress are recorded.
 The same blank state is waited out once until a readable page appears, so a later navigation gets its own wait.

@@ -31,7 +31,7 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 | `--target-match TEXT` | attach to the first window whose title or URL contains `TEXT` (implies `--attach`) |
 | `--foreground` | bring the run's tab to the front instead of working behind the current one |
 | `--proxy-country CC` | browse from that country (`uk`, `de`, ...; default `us`); starts the cloud browser before reading |
-| `--authorize` | allow submit, pay, delete and send; otherwise the run stops at `needs_confirmation` |
+| `--authorize` | allow submit, pay, delete and send; otherwise the run stops at `needs_confirmation`. It does not override a task that says to change nothing or not to download |
 | `--secret NAME=ENV_VAR[@ORIGIN]` | let the agent type `$ENV_VAR` on `ORIGIN` (`https://*.site.com` covers its hosts), or on the `--start` origin; models see `NAME` only |
 | `--bitwarden ITEM` | use a vault login on the origin its saved URIs match, including its one-time code |
 | `--max-steps N`, `--max-dollars N` | bound steps and model spend; unlimited by default |
@@ -193,7 +193,7 @@ The exit code is the status. Only `complete` exits 0; configuration refusals exi
 | Status | Exit | Meaning |
 |:--|--:|:--|
 | `complete` | 0 | Jev judged the task done |
-| `unverified` | 10 | Jev finished, but the requested data could not be filled from the page |
+| `unverified` | 10 | Jev finished, but the requested data could not be filled from the page or the site refused a requested step |
 | `needs_confirmation` | 3 | stopped before an irreversible action; re-run with `--authorize` |
 | `needs_login` | 4 | a sign-in wall that no `--secret` covers |
 | `blocked` | 6 | a bot check (a CAPTCHA) that did not clear; not a sign-in, so no secret passes it |
