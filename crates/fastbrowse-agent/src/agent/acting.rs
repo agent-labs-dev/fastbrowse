@@ -1065,14 +1065,32 @@ impl Agent {
             [] => return Err(Stop::new(Status::Stuck, format!("no options to answer: {question}")).into()),
             _ => {}
         }
-        // One Choice offers at most the options the decision model documents.
-        let shown = self.jev.profile().max_choice_options;
-        let keys: IndexMap<String, String> =
-            options.iter().take(shown).enumerate().map(|(i, option)| (i.to_string(), option.clone())).collect();
+        // One Choice offers at most the options the decision model documents, so a longer list, such as a select of
+        // years or airports, is offered as runs of options first and the option is picked inside the run chosen, as
+        // the step decision groups controls.
+        let shown = self.jev.profile().max_choice_options.max(2);
+        let mut options = options;
+        if options.len() > shown {
+            let runs: Vec<&[String]> = options.chunks(options.len().div_ceil(shown)).collect();
+            let criteria = runs
+                .iter()
+                .enumerate()
+                .map(|(i, run)| {
+                    let masked: Vec<String> = run.iter().map(|option| self.mask(option)).collect();
+                    (i.to_string(), JsonValue::from(masked.join(" | ")))
+                })
+                .collect();
+            let grouped = format!("{question} Choose the group of options holding the answer.");
+            let picked = self.ask_choice(state, observation, &grouped, criteria).await?;
+            options = runs[picked.parse::<usize>().expect("a key offered")];
+            if let [only] = options {
+                return Ok(only.clone());
+            }
+        }
         let criteria: IndexMap<String, JsonValue> =
-            keys.iter().map(|(key, option)| (key.clone(), self.mask(option).into())).collect();
+            options.iter().enumerate().map(|(i, option)| (i.to_string(), self.mask(option).into())).collect();
         let picked = self.ask_choice(state, observation, question, criteria).await?;
-        Ok(keys[&picked].clone())
+        Ok(options[picked.parse::<usize>().expect("a key offered")].clone())
     }
 
     async fn ask_choice(
