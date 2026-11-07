@@ -363,4 +363,12 @@ chrome.alarms.create('fastbrowse-host', { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener(() => {
   if (!port) connect();
 });
+// Chrome starts a worker at launch only for an extension listening for onStartup, and alarms need not survive a
+// restart, so without these the extension stayed unconnected after Chrome restarted until its popup was opened.
+chrome.runtime.onStartup.addListener(() => {
+  if (!port) connect();
+});
+chrome.runtime.onInstalled.addListener(() => {
+  if (!port) connect();
+});
 connect();
