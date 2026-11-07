@@ -62,10 +62,10 @@ impl Schema for Tally {
     }
 }
 
-/// A tally worked out: the claim's text with the value in its slot, and the notes it rests on.
+/// A tally worked out: the value for the claim's slot, as written, and the notes it rests on.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Worked {
-    pub text: String,
+    pub value: String,
     pub evidence_ids: Vec<String>,
 }
 
@@ -194,7 +194,7 @@ pub async fn work(
     };
     let mut pending = Vec::new();
     let mut values = IndexMap::new();
-    for (index, tally, text) in claims {
+    for (index, tally, _) in claims {
         if worked.contains_key(index) {
             continue;
         }
@@ -208,7 +208,7 @@ pub async fn work(
         };
         if tally.op == Op::Count {
             let evidence_ids = records.iter().map(|note| found[*note].id.clone()).collect();
-            worked.insert(*index, Ok(Worked { text: text.replace(SLOT, &records.len().to_string()), evidence_ids }));
+            worked.insert(*index, Ok(Worked { value: records.len().to_string(), evidence_ids }));
             continue;
         }
         if records.is_empty() {
@@ -222,10 +222,10 @@ pub async fn work(
                 values.insert(format!("t{index}/v{note}"), value_question(tally, &found[*note].note, &numbers));
             }
         }
-        pending.push((*index, *tally, *text, records));
+        pending.push((*index, *tally, records));
     }
     let picked = ask(jev, &state, &values, tokens, ledger).await?;
-    for (index, tally, text, records) in pending {
+    for (index, tally, records) in pending {
         let mut amounts = Vec::new();
         for note in records {
             let numbers = spans(&found[note].quote, SpanKind::Number);
@@ -260,7 +260,7 @@ pub async fn work(
             Op::Sum => {
                 let all: Vec<&Amount> = amounts.iter().map(|(_, amount)| amount).collect();
                 let evidence_ids = amounts.iter().map(|(note, _)| found[*note].id.clone()).collect();
-                Worked { text: text.replace(SLOT, &total(&all)), evidence_ids }
+                Worked { value: total(&all), evidence_ids }
             }
             Op::Min | Op::Max => {
                 let better = |a: f64, b: f64| if tally.op == Op::Min { a < b } else { a > b };
@@ -271,7 +271,7 @@ pub async fn work(
                 let winners: Vec<&(usize, Amount)> =
                     amounts.iter().filter(|(_, amount)| amount.value == best).collect();
                 let evidence_ids = winners.iter().map(|(note, _)| found[*note].id.clone()).collect();
-                Worked { text: text.replace(SLOT, &winners[0].1.written), evidence_ids }
+                Worked { value: winners[0].1.written.clone(), evidence_ids }
             }
             Op::Count => unreachable!("a count is worked out above"),
         };
