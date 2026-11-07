@@ -176,7 +176,21 @@ and where fastbrowse follows it:
   against the gateway, a 27k-token step from a Wikipedia article was answered four times in ten, while requests
   under 10k tokens were answered in all but two of 29 (**ours**).
 - **Match state to the question.** Navigation uses the redacted viewport, controls and working notes;
-  short-fact selection sees the full capture. Counts and comparisons go to the LLM reader.
+  short-fact selection sees the full capture. Counts, totals and extremes in a composed answer are worked out in code, never verified by Jev ([below](#where-jev-is-not-used)).
+
+## Where Jev is not used
+
+Typesafe lists the jagged edges of Jev ([Model jaggedness](https://docs.typesafe.ai/model-jaggedness/jev-1.13)). Each
+row is a place fastbrowse keeps Jev out:
+
+| Jev's limit | What fastbrowse does instead |
+|:--|:--|
+| It does not count, and errs more as the list grows | A composed count is one Noul per note read, "is this one record of the kind?", summed in code (`retrieval/tally.rs`). No question asks Jev whether a stated count holds |
+| It is not a calculator, and numeric representations underperform | A composed total or extreme takes the number Jev picks in each record, and code adds or compares them. The support check is shown `[computed]` in place of the value |
+| It does not generate | Prose, answers and table rows are the LLM's |
+
+Asked whether a claim of 10 quotes followed from its 10 cited quotes, Jev answered 0.43 to 0.53, about what it gave
+a claim of 9: a count is not a question for Jev.
 
 ## Unused primitives
 

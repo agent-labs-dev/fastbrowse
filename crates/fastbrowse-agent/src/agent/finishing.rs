@@ -428,16 +428,12 @@ fn rejection_reason(rejection: &str) -> String {
         };
         let claim = claim(&index.into());
         match part {
-            "count" => {
-                let miscount =
-                    feedback["miscounted_claims"].as_array().into_iter().flatten().find(|m| m["claim"] == index);
-                let held =
-                    miscount.and_then(|m| m.get("records_in_cited_quotes").or_else(|| m.get("breakdown_sums_to")));
-                match (miscount.map(|m| &m["states"]), held) {
-                    (Some(states), Some(held)) => {
-                        failed.push(format!("{claim} states {states}, but its cited notes hold {held}"))
-                    }
-                    _ => failed.push(format!("{claim} states a count its cited notes do not hold")),
+            "tally" => {
+                let untallied =
+                    feedback["untallied_claims"].as_array().into_iter().flatten().find(|u| u["claim"] == index);
+                match untallied.and_then(|u| u["reason"].as_str()) {
+                    Some(reason) => failed.push(format!("{claim}: {reason}")),
+                    None => failed.push(format!("{claim}: its count, total or extreme could not be worked out")),
                 }
             }
             "citations" => failed.push(format!("{claim} cites no note it can be checked against")),
@@ -486,13 +482,13 @@ mod tests {
                 {"text": "Y costs £12.", "evidence_ids": ["E3"]},
             ],
             "columns": ["Name", "Shape"],
-            "rejected_checks": ["claim1", "claim0/count", "claim2/citations", "coverage", "claim2/cell1", "actions"],
-            "miscounted_claims": [{"claim": 0, "states": 9, "records_in_cited_quotes": 10}],
+            "rejected_checks": ["claim1", "claim0/tally", "claim2/citations", "coverage", "claim2/cell1", "actions"],
+            "untallied_claims": [{"claim": 0, "reason": "No note read is one 'quote by Albert Einstein'."}],
         });
         let reason = rejection_reason(&feedback.to_string());
         for part in [
             "'The cheapest is X at £10.69.' does not follow from the notes it cites",
-            "'There are 9 quotes by Albert Einstein.' states 9, but its cited notes hold 10",
+            "'There are 9 quotes by Albert Einstein.': No note read is one 'quote by Albert Einstein'.",
             "'Y costs £12.' cites no note it can be checked against",
             "the answer leaves out a fact or value the task asks for",
             "'Y costs £12.': its 'Shape' cell does not follow from the notes it cites",
