@@ -21,16 +21,18 @@ use crate::error::{AgentError, Result};
 use crate::memory::{Fact, Notes, fact_id, unique};
 use crate::support::generate;
 
+/// A claim names its notes before it states anything: a composer writes in field order, and one that wrote "There are
+/// 8 quotes" before listing the notes it counted went on to cite 9 of them.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Claim {
-    pub text: String,
     pub evidence_ids: Vec<String>,
+    pub text: String,
 }
 
 impl Claim {
     pub fn new(text: &str, evidence_ids: Vec<String>) -> Claim {
-        Claim { text: text.into(), evidence_ids }
+        Claim { evidence_ids, text: text.into() }
     }
 }
 
@@ -52,7 +54,7 @@ impl Schema for Claim {
     fn ty() -> Ty {
         ModelTy::frozen(
             "Claim",
-            vec![Field::required("text", Ty::Str), Field::required("evidence_ids", Ty::list(Ty::Str))],
+            vec![Field::required("evidence_ids", Ty::list(Ty::Str)), Field::required("text", Ty::Str)],
         )
         .ty()
     }
