@@ -30,12 +30,26 @@ pub struct Claim {
     /// A count, total or extreme code works out and writes into the text's slot. None once it is written.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tally: Option<Tally>,
+    /// The row's values in column order, when the task asks for a table. Code writes the text from them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cells: Option<Vec<String>>,
     pub text: String,
 }
 
 impl Claim {
     pub fn new(text: &str, evidence_ids: Vec<String>) -> Claim {
-        Claim { evidence_ids, tally: None, text: text.into() }
+        Claim { evidence_ids, tally: None, cells: None, text: text.into() }
+    }
+
+    /// The claim with a worked tally's value written into its slot, in the text and in every cell.
+    fn worked(self, value: &str, evidence_ids: Vec<String>) -> Claim {
+        let fill = |text: &str| text.replace(SLOT, value);
+        Claim {
+            evidence_ids,
+            tally: None,
+            cells: self.cells.map(|cells| cells.iter().map(|cell| fill(cell)).collect()),
+            text: fill(&self.text),
+        }
     }
 }
 
@@ -60,6 +74,7 @@ impl Schema for Claim {
             vec![
                 Field::required("evidence_ids", Ty::list(Ty::Str)),
                 Field::default("tally", Ty::optional(Tally::ty()), serde_json::Value::Null),
+                Field::default("cells", Ty::optional(Ty::list(Ty::Str)), serde_json::Value::Null),
                 Field::required("text", Ty::Str),
             ],
         )
@@ -147,9 +162,10 @@ type Drafted = (Option<Vec<String>>, Vec<Claim>);
 
 const CELL: &str = " | ";
 
-fn table_cells<'a>(text: &'a str, columns: &[String]) -> Option<Vec<&'a str>> {
-    let cells: Vec<_> = text.split(CELL).map(str::trim).collect();
-    (columns.len() > 1 && !text.contains('\n') && cells.len() == columns.len()).then_some(cells)
+/// The claim's cells, when it is one row of a table with these columns.
+fn table_cells<'a>(cells: Option<&'a [String]>, columns: &[String]) -> Option<Vec<&'a str>> {
+    let cells = cells.filter(|cells| columns.len() > 1 && cells.len() == columns.len())?;
+    Some(cells.iter().map(String::as_str).collect())
 }
 
 /// `answer` as the table the task asked for: one row per claim, its citations in a last column. An answer whose claims
@@ -164,7 +180,7 @@ fn tabled(columns: Option<Vec<String>>, answer: ComposedAnswer) -> ComposedAnswe
                 .iter()
                 .zip(&lines)
                 .map(|(claim, line)| {
-                    let cells = table_cells(&claim.text, &columns)?;
+                    let cells = table_cells(claim.cells.as_deref(), &columns)?;
                     let links = line.strip_prefix(claim.text.as_str())?.trim();
                     Some((cells, links))
                 })
@@ -206,7 +222,7 @@ impl ComposeItem {
     }
 }
 
-const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself, and every number in digits. Never write a count, total, minimum or maximum you work out across records: set tally to its op (count, sum, min or max), of (the kind of record it ranges over, with the scope the task gives it, such as \"quote by Albert Einstein\" or \"book in the Mystery category\") and field (the value added or compared, such as \"price\"; null for a count), and write {tally} in the text where the value goes. Code works it out from every note read and cites the records. A value one note states, such as a page's own total of results, is quoted as written, with tally null; so is every claim that works nothing out. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. Say an answer is partial only when a note itself shows part of what the task covers was not reached, never because the notes might lack something. When the task asks for a table, set columns to its column names and write each claim as one row: its cells in column order, separated by \" | \", with no other text. Otherwise set columns to null.\n\n# Trust\n";
+const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself, and every number in digits. Never write a count, total, minimum or maximum you work out across records: set tally to its op (count, sum, min or max), of (the kind of record it ranges over, with the scope the task gives it, such as \"quote by Albert Einstein\" or \"book in the Mystery category\") and field (the value added or compared, such as \"price\"; null for a count), and write {tally} in the text where the value goes. Code works it out from every note read and cites the records. A value one note states, such as a page's own total of results, is quoted as written, with tally null; so is every claim that works nothing out. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. Say an answer is partial only when a note itself shows part of what the task covers was not reached, never because the notes might lack something. When the task asks for a table, set columns to its column names and make each claim one row: set cells to its values in column order, which code writes as the claim's text. Otherwise set columns and cells to null.\n\n# Trust\n";
 
 const DESCRIPTIVE_VALUES: &str = "Interpret the requested field by its meaning, not by literal labels in the source. A value stated in descriptive prose counts even when no heading names that field. A statement that a value is not shown contradicts such a value. Use only a value stated by the description, including equivalent wording; do not infer a value from a merely related detail.";
 
@@ -315,7 +331,12 @@ async fn compose_part(
                     None => vec![id.clone()],
                 })
                 .collect();
-            Claim { evidence_ids: cited, tally: claim.tally, text: claim.text }
+            // A row's text is its cells, written by code.
+            let text = match (&draft.data.columns, &claim.cells) {
+                (Some(_), Some(cells)) => cells.join(CELL),
+                _ => claim.text,
+            };
+            Claim { evidence_ids: cited, text, ..claim }
         })
         .collect();
     Ok((draft.data.columns, claims))
@@ -363,10 +384,11 @@ async fn compose_packed(
             .enumerate()
             .map(|(index, claim)| ComposeItem {
                 label: format!("c{index}"),
-                // A tally is worked out from every note at the end, so a later round declares it again.
-                text: match &claim.tally {
-                    Some(tally) => dumps(&json!({"text": claim.text, "tally": tally})),
-                    None => claim.text.clone(),
+                // A tally is worked out from every note at the end, and a row is written from its cells, so a later
+                // round declares them again.
+                text: match (&claim.tally, &claim.cells) {
+                    (None, None) => claim.text.clone(),
+                    (tally, cells) => dumps(&json!({"text": claim.text, "tally": tally, "cells": cells})),
                 },
                 sources: claim.evidence_ids.clone(),
                 superseded: None,
@@ -540,15 +562,15 @@ async fn review_claims(
     let worked = tally::work(jev, task, &tallied, notes, &tokens, ledger).await?;
     let mut untallied = Vec::new();
     let mut unjudged_tally = false;
-    // What each claim's support is judged on: its text with a worked value shown as computed.
-    let mut judged_texts: Vec<String> = claims.iter().map(|claim| claim.text.clone()).collect();
+    // What each claim's support is judged on: the claim with a worked value shown as computed.
+    let mut shown: Vec<Claim> = claims.clone();
     let claims: Vec<Claim> = claims
         .into_iter()
         .enumerate()
         .map(|(index, claim)| match worked.get(&index) {
             Some(Ok(done)) => {
-                judged_texts[index] = claim.text.replace(SLOT, COMPUTED);
-                Claim { evidence_ids: done.evidence_ids.clone(), tally: None, text: done.text.clone() }
+                shown[index] = claim.clone().worked(COMPUTED, claim.evidence_ids.clone());
+                claim.worked(&done.value, done.evidence_ids.clone())
             }
             Some(Err(Unworked::Draft(reason))) => {
                 untallied.push(json!({"claim": index, "reason": reason}));
@@ -579,9 +601,10 @@ async fn review_claims(
             uncited.push(json!({"claim": index, "unknown_evidence_ids": unknown}));
             continue;
         }
-        let judged_text = &judged_texts[index];
-        let cited = json!({"columns": columns, "claim": judged_text, "quotes": sources});
-        let row = columns.and_then(|columns| table_cells(judged_text, columns).map(|cells| (columns, cells)));
+        let shown = &shown[index];
+        let cited = json!({"columns": columns, "claim": shown.text, "quotes": sources});
+        let row =
+            columns.and_then(|columns| table_cells(shown.cells.as_deref(), columns).map(|cells| (columns, cells)));
         let checks: Vec<_> = match row {
             Some((columns, cells)) => columns.iter().zip(cells).enumerate().map(|(cell, (column, value))| {
                 (format!("claim{index}/cell{cell}"), format!("Judge only the cell for field {} with value {} in this row. Use the whole row to identify which record it belongs to.", text::repr(column), text::repr(value)))
@@ -954,8 +977,13 @@ mod tests {
     use super::*;
     use crate::memory::Fact;
 
-    fn answer(claims: &[&str]) -> ComposedAnswer {
-        let claims: Vec<Claim> = claims.iter().map(|text| Claim::new(text, vec!["f".into()])).collect();
+    /// One row of a table, as the composer writes it.
+    fn row(cells: &[&str], evidence_ids: Vec<String>) -> Claim {
+        let cells: Vec<String> = cells.iter().map(|cell| cell.to_string()).collect();
+        Claim { cells: Some(cells.clone()), ..Claim::new(&cells.join(CELL), evidence_ids) }
+    }
+
+    fn answer(claims: Vec<Claim>) -> ComposedAnswer {
         let linked = claims.iter().map(|claim| format!("{} [1](<https://shop.test/>)", claim.text)).collect::<Vec<_>>();
         ComposedAnswer {
             answer: String::new(),
@@ -969,11 +997,13 @@ mod tests {
     #[test]
     fn a_task_asking_for_a_table_gets_one_row_per_claim() {
         let columns = Some(vec!["Product".into(), "Fabric".into()]);
-        let table = tabled(columns.clone(), answer(&["TEE | 100% cotton", "TOP | not shown"]));
+        let f = || vec!["f".to_string()];
+        let table =
+            tabled(columns.clone(), answer(vec![row(&["TEE", "100% cotton"], f()), row(&["TOP", "not shown"], f())]));
         assert_eq!(table.answer, "| Product | Fabric |\n| --- | --- |\n| TEE | 100% cotton |\n| TOP | not shown |");
         assert!(table.linked_answer.ends_with("| TOP | not shown | [1](<https://shop.test/>) |"));
         // A claim that is not a row leaves the answer as the composer wrote it.
-        let prose = answer(&["TEE | 100% cotton", "The site lists two products."]);
+        let prose = answer(vec![row(&["TEE", "100% cotton"], f()), Claim::new("The site lists two products.", f())]);
         assert_eq!(tabled(columns, prose.clone()), prose);
     }
 
@@ -1412,7 +1442,7 @@ mod tests {
 
     fn tallied(text: &str, op: tally::Op, of: &str, field: Option<&str>, ids: Vec<String>) -> Claim {
         let tally = Tally { op, of: of.into(), field: field.map(str::to_string) };
-        Claim { evidence_ids: ids, tally: Some(tally), text: text.into() }
+        Claim { tally: Some(tally), ..Claim::new(text, ids) }
     }
 
     /// A count is every note read that Jev says is one record of the kind, whatever the composer cited: a record on a
@@ -1711,7 +1741,7 @@ mod tests {
             &jev,
             "Report the record and shape",
             Some(&columns),
-            vec![Claim::new("Record A | not shown", vec![id])],
+            vec![row(&["Record A", "not shown"], vec![id])],
             &notes,
             None,
             false,
@@ -1754,7 +1784,7 @@ mod tests {
         jev.rejected = Some("claim0/cell1".into());
         let columns = vec!["Record".into(), "Shape".into()];
         let source = notes.facts_by_id().keys().next().unwrap().clone();
-        let claims = vec![Claim::new("Record A | not shown", vec![source])];
+        let claims = vec![row(&["Record A", "not shown"], vec![source])];
         let (claims, problem) =
             supported_claims(&jev, "Report each record and shape", Some(&columns), claims, &notes, None).await.unwrap();
         assert!(claims.is_empty());
