@@ -157,7 +157,7 @@ sources cover the request; the generated result is checked before delivery.
 Answer claims use numbered Markdown links built from those notes. `RunResult.citations` exposes the cited facts and
 text-fragment deep links; unused facts have no citation. The LLM writes a composed answer from the notes. Jev judges
 each final claim against its original cited quotes, including record identity and values, after any packing rounds.
-Jev also sees the other notes read on the pages a claim cites, when they fit its input, to judge the set a
+Jev also sees the other notes the run read, on every page or, when those do not fit its input, on the pages a claim cites, to judge the set a
 comparison, count, total or superlative ranges over. Values still need a cited quote, and these notes are never citations.
 Packing continues only when fewer requests are needed or the rewritten claim text shrinks. Removing source-state
 metadata alone does not count as progress.

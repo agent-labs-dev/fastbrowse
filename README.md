@@ -238,7 +238,7 @@ async def main() -> None:
 
 **Citations.** `result.citations` holds a `Citation` per numbered link in `result.answer`: `id`, `text`,
 `url`, `quote` and `deep_link`. Each claim cites the notes it states. A count, total or superlative is
-checked against the other notes read on the pages it cites when they fit the check's input; those notes are not listed as citations. A `quote` is the page's text, a table row as its cells separated by spaces. A `deep_link` is a [text fragment](https://wicg.github.io/scroll-to-text-fragment/#syntax) URL that
+checked against the other notes the run read, on every page or, when those do not fit the check's input, on the pages it cites; those notes are not listed as citations. A `quote` is the page's text, a table row as its cells separated by spaces. A `deep_link` is a [text fragment](https://wicg.github.io/scroll-to-text-fragment/#syntax) URL that
 scrolls to the quote; it may not resolve on a page that changes or needs a session. Each page a quote was read from
 is kept as a `capture` artifact in `result.artifacts`, holding the masked page text, and the quote's `Evidence`
 names it in `capture_artifact`; `start` and `end` index into that text. Captures go where downloads go, so pass

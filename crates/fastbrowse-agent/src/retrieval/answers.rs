@@ -204,7 +204,7 @@ const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contain
 const DESCRIPTIVE_VALUES: &str = "Interpret the requested field by its meaning, not by literal labels in the source. A value stated in descriptive prose counts even when no heading names that field. A statement that a value is not shown contradicts such a value. Use only a value stated by the description, including equivalent wording; do not infer a value from a merely related detail.";
 
 /// What the notes read on a claim's cited pages may and may not establish when Jev judges it (#818).
-const PAGE_NOTES: &str = "When the state lists page_notes, they are every note read on the pages that cited quotes come from. They are not citations: every value this claim states must be in its cited quotes. Notes whose url is the url of one of this claim's cited quotes may show the set that a comparison, count, total or superlative in this claim ranges over, such as that no other record on those pages has a lower value.";
+const PAGE_NOTES: &str = "When the state lists page_notes, they are the notes this run read, on every page it read or on the pages that cited quotes come from. They are not citations: every value this claim states must be in its cited quotes. Page notes may show the set that a comparison, count, total or superlative in this claim ranges over, such as that no other record on the pages read has a lower value, or that a page read holds none of the records counted.";
 
 const SOURCE_STATE: &str = "A quote marked superseded was replaced by a later read of its source. It remains evidence about that earlier state, not the current value. Notes are in reading order and name the page each was read on: a later page reached by changing filters, sorting or inputs shows the state after that change. Judge which state the task requests; historical comparisons can use earlier states.";
 
@@ -598,11 +598,15 @@ async fn review_claims(
         .chain(counts.iter().map(|(key, question)| (format!("{key}/count"), question.clone())))
         .chain(breakdowns.iter().map(|(key, question)| (key.clone(), question.clone())))
         .collect();
-    // The notes on the cited pages are sent only when no check that fits without them is crowded out by them.
-    let page_notes = page_notes(&claims, notes);
-    if !page_notes.is_empty() {
+    // Page notes are sent only when no check that fits without them is crowded out by them. Every page read first: a count across a site ranges over the pages that hold none of its records too, and the
+    // judge refused a correct count of a site's quotes it could not see the rest of. The cited pages alone are the
+    // fallback when every page does not fit.
+    for widening in [page_notes(&claims, notes, true), page_notes(&claims, notes, false)] {
+        if widening.is_empty() {
+            continue;
+        }
         let mut widened = state.clone();
-        widened["page_notes"] = json!(page_notes);
+        widened["page_notes"] = json!(widening);
         let widened_chars = text::len(&dumps(&widened)) as i64;
         let fits = asked.values().all(|question| {
             let room = tokens.input_chars(&[question.dump_json()]);
@@ -610,6 +614,7 @@ async fn review_claims(
         });
         if fits {
             state = widened;
+            break;
         }
     }
     let (answered, failure) =
@@ -719,8 +724,9 @@ fn cited_quotes(claim: &Claim, notes: &Notes) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// Every note read on the pages the claims cite, in reading order, each with whether a later read superseded it.
-fn page_notes(claims: &[Claim], notes: &Notes) -> Vec<serde_json::Value> {
+/// Every note read, or every note read on the pages the claims cite, in reading order, each with whether a later read
+/// superseded it. None when no claim cites a note.
+fn page_notes(claims: &[Claim], notes: &Notes, every_page: bool) -> Vec<serde_json::Value> {
     let facts = notes.facts_by_id();
     let pages: HashSet<&str> = claims
         .iter()
@@ -731,7 +737,7 @@ fn page_notes(claims: &[Claim], notes: &Notes) -> Vec<serde_json::Value> {
         .facts()
         .into_iter()
         .filter_map(|fact| fact.evidence.as_ref().map(|quote| (fact, quote)))
-        .filter(|(_, quote)| pages.contains(quote.url.as_str()))
+        .filter(|(_, quote)| !pages.is_empty() && (every_page || pages.contains(quote.url.as_str())))
         .map(|(fact, quote)| json!(QuoteState { quote, superseded: notes.superseded(&fact_id(fact)) }))
         .collect()
 }
@@ -2345,10 +2351,11 @@ mod tests {
         note
     }
 
-    /// A superlative over a list ranges over every record the list shows, so its judge sees the other notes read on
-    /// the pages it cites, while its citations stay the ones it named (#818).
+    /// A superlative over a list ranges over every record the list shows, so its judge sees the other notes the run
+    /// read, while its citations stay the ones it named (#818). A cheaper record on a page it did not cite is the
+    /// judge's to weigh.
     #[tokio::test]
-    async fn a_superlative_is_judged_with_every_note_on_its_cited_pages() {
+    async fn a_superlative_is_judged_with_every_note_read() {
         let facts = [
             page_fact(0, "https://shop.test/p1", "32 results - showing 1 to 20."),
             page_fact(1, "https://shop.test/p1", "Book X £10.69"),
@@ -2365,7 +2372,7 @@ mod tests {
             supported_claims(&jev, "Find the cheapest book", None, claims, &notes, None).await.unwrap();
         assert_eq!(problem, None);
         let states = jev.states.lock().unwrap();
-        let page_notes = states[0]["page_notes"].as_array().expect("the judge sees the notes on the cited pages");
+        let page_notes = states[0]["page_notes"].as_array().expect("the judge sees the notes read");
         let quotes: Vec<&str> = page_notes.iter().map(|note| note["quote"].as_str().unwrap()).collect();
         assert_eq!(
             quotes,
@@ -2373,14 +2380,42 @@ mod tests {
                 "32 results - showing 1 to 20.",
                 "Book X £10.69",
                 "Book Y £12.00",
+                "Book W £1.00",
                 "32 results - showing 21 to 32.",
                 "Book Z £15.10"
             ]
         );
-        assert!(page_notes.iter().all(|note| note["url"] != "https://shop.test/other"));
         let answer = assemble_answer(&supported, &notes);
         let cited: Vec<&str> = answer.citations.iter().map(|citation| citation.text.as_str()).collect();
         assert_eq!(cited, ["32 results - showing 1 to 20.", "Book X £10.69", "32 results - showing 21 to 32."]);
+    }
+
+    /// A count across a site ranges over the pages that hold none of its records, so its judge sees the notes of
+    /// every page read; when those do not fit, it sees the cited pages' notes.
+    #[tokio::test]
+    async fn a_count_is_judged_with_the_notes_of_every_page_read() {
+        let limit = fastbrowse_core::decision::DecisionProfile::jev().max_largest_tokens as usize * 4;
+        let quote = page_fact(0, "https://quotes.test/page/1", "Quote one by Ada");
+        let id = fact_id(&quote);
+        for (other_page, every) in [("Quote two by Bo".to_string(), true), ("x".repeat(limit), false)] {
+            let notes = Notes::new([quote.clone(), page_fact(1, "https://quotes.test/page/2", &other_page)]);
+            let claims = vec![Claim::new("There is 1 quote by Ada across the site.", vec![id.clone()])];
+            let jev = Support::new(true);
+            supported_claims(&jev, "How many quotes by Ada?", None, claims, &notes, None).await.unwrap();
+            let states = jev.states.lock().unwrap();
+            let urls: Vec<&str> = states[0]["page_notes"]
+                .as_array()
+                .expect("page notes")
+                .iter()
+                .map(|note| note["url"].as_str().unwrap())
+                .collect();
+            let expected: &[&str] = if every {
+                &["https://quotes.test/page/1", "https://quotes.test/page/2"]
+            } else {
+                &["https://quotes.test/page/1"]
+            };
+            assert_eq!(urls, expected);
+        }
     }
 
     #[tokio::test]
