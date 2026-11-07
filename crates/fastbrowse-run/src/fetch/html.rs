@@ -505,7 +505,10 @@ impl Tree {
             let tag = element.tag.as_str();
             let inside = holds[i];
             let own_heading = usize::from(heading_level(tag).is_some());
+            // A table or frame is read in its own way, so neither one nor anything holding one is a card.
+            let framed = matches!(tag, "table" | "iframe" | "frame");
             let record = self.repeated(i, &groups[runs[i]], &headings)
+                && !framed
                 && !inside.framed
                 && headings[i] - own_heading <= 1
                 && inside.block
@@ -518,7 +521,7 @@ impl Tree {
                 candidates[i] = Some(Record { close: element.close, kind, href, facts });
             }
             let own = Holds {
-                framed: matches!(tag, "table" | "iframe" | "frame"),
+                framed,
                 block: !element.hidden && displays_block(tag),
                 // A repeated wrapper around another list is a group, so its inner records stay separately citable.
                 item: candidates[i].is_some() || (tag == "li" && self.leaf(i)),
@@ -1163,6 +1166,16 @@ mod tests {
         let (_, found) = blocks("<table><tr><td>a<td>1<tr><td>b<td>2</table>", "https://a.example/");
         let texts: Vec<&str> = found.iter().map(|b| b.text.as_str()).collect();
         assert_eq!(texts, ["| a | 1 |", "| b | 2 |"]);
+    }
+
+    #[test]
+    fn two_tables_of_one_class_under_their_own_headings_are_tables() {
+        let table = "<table class='sortable'><tr><th>Due</th></tr><tr><td>$50.00</td></tr></table>";
+        let (_, found) =
+            blocks(&format!("<div class='example'><h4>One</h4>{table}<h4>Two</h4>{table}</div>"), "https://a.example/");
+        let kinds: Vec<BlockKind> = found.iter().map(|b| b.kind).collect();
+        assert_eq!(kinds.iter().filter(|kind| **kind == BlockKind::Table).count(), 4, "{found:?}");
+        assert!(!kinds.contains(&BlockKind::Record), "{found:?}");
     }
 
     #[test]

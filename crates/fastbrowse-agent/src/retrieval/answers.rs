@@ -613,11 +613,13 @@ async fn review_claims(
             }).collect(),
             None => vec![(format!("claim{index}"), "Judge every assertion in this claim.".into())],
         };
-        let computed = if shown.text.contains(COMPUTED) { format!(" {COMPUTED_VALUE}") } else { String::new() };
+        // A computed value's scope is every note read, which code counted and the coverage question judges, so a
+        // claim holding one is told so in place of the scope rule rather than beside it.
+        let scope = if shown.text.contains(COMPUTED) { COMPUTED_VALUE } else { SCOPE };
         for (key, focus) in checks {
             let question = NoulQuestion::new(
                 format!(
-                    "{UNTRUSTED}\n{focus} Does it follow from its cited quotes, preserving which record each value belongs to and every stated value?{computed} A cell marked unavailable is supported only when these quotes give no value for that field of the same record. Judge the scope as well as each value. A statement about every member or an absent value across a whole set needs evidence about that whole set; quotes about some members support only those members. A source's population counter supports its population size, not the number extracted or included in this answer.\n{cited} {DESCRIPTIVE_VALUES} {SOURCE_STATE}"
+                    "{UNTRUSTED}\n{focus} Does it follow from its cited quotes, preserving which record each value belongs to and every stated value? A cell marked unavailable is supported only when these quotes give no value for that field of the same record. {scope}\n{cited} {DESCRIPTIVE_VALUES} {SOURCE_STATE}"
                 ),
                 Some("Every assertion being judged is supported by these quotes."),
                 Some(
@@ -726,9 +728,11 @@ async fn review_claims(
     Ok(CheckedClaims { claims: supported, problem, rejection, denies_steps })
 }
 
-/// What the support check is told about a value code worked out.
-const COMPUTED_VALUE: &str =
-    "The value written [computed] was worked out by code from the cited records: judge every other assertion.";
+/// What the support check is told about a value code worked out, from every note read.
+const COMPUTED_VALUE: &str = "Code worked out the value written [computed] from every note read and cited the records it rests on, so the count, total, minimum or maximum the claim states is not judged: judge every other assertion.";
+
+/// The scope rule for a claim whose values the composer wrote.
+const SCOPE: &str = "Judge the scope as well as each value. A statement about every member or an absent value across a whole set needs evidence about that whole set; quotes about some members support only those members. A source's population counter supports its population size, not the number extracted or included in this answer.";
 
 /// The quotes a claim cites, each with whether a later read superseded it.
 fn cited_quotes(claim: &Claim, notes: &Notes) -> Vec<serde_json::Value> {
