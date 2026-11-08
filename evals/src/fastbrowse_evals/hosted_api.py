@@ -5,11 +5,8 @@ own browser pool and its price. The run is submitted with `POST /v1/runs` and po
 leaves `queued` and `running` (fastbrowse-hosted docs/api.md). The API returns the answer, its quotes and where the
 browser ended, but no copy of that page, so the page half of a task is not graded for this arm (`unobservable`).
 
-`dollars` is the run's list price (`usage.list_price_micros`): what the hosted product sells the run for, from the same
-pricing code that charges customers. It equals the charge on every plan that charges and is still a price on the
-internal plan the eval organization runs on, which charges nothing. A body without the field reports None. Either way
-it is a price, not the metered provider cost the other fastbrowse arms report, so this arm stays a diagnostic in no
-publication group.
+`dollars` is the customer charge (`usage.charged_micros`), not the metered provider cost the other fastbrowse arms
+report: the two are different quantities, so this arm is a diagnostic, in no publication group.
 """
 
 import asyncio
@@ -144,14 +141,13 @@ def report_fields(run: dict[str, Any], wall: float) -> dict[str, Any]:
     usage = run.get("usage") or {}
     components = usage.get("components") or {}
     duration = usage.get("duration_ms")
-    # Never the charge: the internal plan charges nothing, so it would read $0 for a run that had a price.
-    listed = usage.get("list_price_micros")
+    charged = usage.get("charged_micros")
     return {
         "status": status_of(run),
         "seconds": round(duration / 1000, 2) if duration is not None else round(wall, 2),
         "timing_basis": None if duration is not None else SESSION_INCLUDED,
         "session_seconds": round(wall, 2),
-        "dollars": None if listed is None else listed / 1_000_000,
+        "dollars": None if charged is None else charged / 1_000_000,
         "error": run.get("error"),
         "steps": usage.get("steps"),
         "citations": run.get("citations") or [],
@@ -160,5 +156,5 @@ def report_fields(run: dict[str, Any], wall: float) -> dict[str, Any]:
         "session_id": run["id"],
         "input_tokens": sum(c.get("input_tokens") or 0 for c in components.values()) or None,
         "output_tokens": sum(c.get("output_tokens") or 0 for c in components.values()) or None,
-        "provenance": {"api": host(), "run_id": run["id"], "simulator": test_key(), "dollars_basis": "list price"},
+        "provenance": {"api": host(), "run_id": run["id"], "simulator": test_key()},
     }

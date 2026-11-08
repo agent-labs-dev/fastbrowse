@@ -13,14 +13,13 @@ from fastbrowse_evals import attempt_clock, hosted_api
 RUN = Path(__file__).parent / "fixtures" / "fastbrowse_hosted_run.json"
 
 
-def test_a_recorded_live_run_reports_the_worker_time_and_the_quotes() -> None:
-    """The recorded body predates `usage.list_price_micros`, so its price is unknown, not its charge."""
+def test_a_recorded_live_run_reports_the_charge_the_worker_time_and_the_quotes() -> None:
     run = json.loads(RUN.read_text())
     report = hosted_api.report_fields(run, wall=108.4)
     outcome = hosted_api.outcome_of(run)
 
     assert report["status"] == "complete"
-    assert report["dollars"] is None
+    assert report["dollars"] == pytest.approx(0.5742)
     assert report["seconds"] == pytest.approx(105.64)
     assert report["timing_basis"] is None
     assert report["input_tokens"] == sum(c["input_tokens"] for c in run["usage"]["components"].values())
@@ -28,16 +27,6 @@ def test_a_recorded_live_run_reports_the_worker_time_and_the_quotes() -> None:
     assert ("https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html", "A Light in the Attic") in (
         outcome.quotes
     )
-
-
-def test_an_internal_plan_run_reports_its_list_price() -> None:
-    """The internal plan charges nothing, so the charge would read $0; the list price is what the run sells for."""
-    run = json.loads(RUN.read_text())
-    run["usage"] = {**run["usage"], "charged_micros": 0, "list_price_micros": 574_200}
-    report = hosted_api.report_fields(run, wall=108.4)
-
-    assert report["dollars"] == pytest.approx(0.5742)
-    assert report["provenance"]["dollars_basis"] == "list price"
 
 
 @pytest.mark.hosted_simulator

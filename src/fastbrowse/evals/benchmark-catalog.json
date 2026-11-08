@@ -917,7 +917,7 @@
       "default": false
     },
     "fastbrowse-hosted": {
-      "pin": "api.fastbrowse.ai at its deployed build; list price, not metered cost",
+      "pin": "api.fastbrowse.ai at its deployed build; customer charge, not metered cost",
       "tier": "hosted",
       "default": false
     },
