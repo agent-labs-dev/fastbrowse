@@ -11,6 +11,8 @@
   const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'CANVAS', 'IFRAME']);
   const blocks = [];
   let path = [];
+  // The headings a frame stands under: its own headings rank among themselves, so its h1 cannot end them.
+  let floor = 0;
   let framePath = null;
   let sourcePath = '';
   let inaccessible = 0;
@@ -324,7 +326,7 @@
     const level = HEADINGS[el.tagName];
     if (level) {
       const text = textOf(el);
-      while (path.length >= level) path.pop();
+      while (path.length > floor && path.length - floor >= level) path.pop();
       if (text) {
         push('heading', text, {}, [el]);
         path.push(text);
@@ -379,8 +381,9 @@
   }
 
   function scope(root, frame, source, headings = []) {
-    const previous = [path, framePath, sourcePath];
+    const previous = [path, floor, framePath, sourcePath];
     path = [...headings];
+    floor = headings.length;
     framePath = frame;
     sourcePath = source;
     walk(root);
@@ -464,7 +467,7 @@
       // A frame the walk never reached (hidden, or inside a record or table read as one block) is still read.
       if (FRAMES.has(e.tagName) && !entered.has(e)) enter(e, []);
     }
-    [path, framePath, sourcePath] = previous;
+    [path, floor, framePath, sourcePath] = previous;
   }
 
   scope(document.body, null, '');

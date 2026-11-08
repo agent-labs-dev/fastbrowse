@@ -443,6 +443,12 @@ async fn test_a_frame_of_the_page_origin_is_read_where_it_stands() {
     let capture = fetched(&http, "https://shop.example.com/frames").await.expect("read");
     let texts: Vec<&str> = capture.blocks.iter().map(|b| &capture.text[b.start as usize..b.end as usize]).collect();
     assert_eq!(texts, ["Internal frame: email", "Send updates to my inbox", "External frame", "Inline note", "Footer"]);
+    // A frame's heading stands under the page heading above the frame, and is marked as the frame's: the judge of
+    // "the form shows the heading" has only this to tell the form's heading from the page's.
+    let form = &capture.blocks[1];
+    assert_eq!(form.heading_path, ["Internal frame: email"]);
+    assert!(form.frame_id.is_some() && capture.blocks[0].frame_id.is_none());
+    assert_eq!(capture.blocks[3].heading_path, ["External frame"]);
     // The other origin's frame was not fetched, so the read says one document is missing.
     assert_eq!(capture.inaccessible_frames, 1);
 }

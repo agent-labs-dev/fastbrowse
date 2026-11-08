@@ -79,7 +79,7 @@ fn capture(url: &str, title: String, found: Vec<Found>, unread_frames: usize) ->
             source_url: None,
             complete_source: false,
             kind: block.kind,
-            frame_id: None,
+            frame_id: block.frame_id,
             start: start as i64,
             end: offset as i64,
             heading_path: block.heading_path,
@@ -190,8 +190,8 @@ pub async fn fetch_document(
     let origin = origin_of(&url);
     let mut unread = 0;
     let mut framed = Vec::new();
-    for (index, frame) in frames.into_iter().enumerate() {
-        let blocks = match frame.document {
+    for (index, Frame { at, document, headings }) in frames.into_iter().enumerate() {
+        let blocks = match document {
             _ if index >= MAX_FRAMES => None,
             FrameDocument::Markup(markup) => Some(read(&markup, &url).1),
             FrameDocument::Address(address) if origin.is_some() && origin_of(&address) == origin => {
@@ -206,7 +206,17 @@ pub async fn fetch_document(
             FrameDocument::Address(_) => None,
         };
         match blocks {
-            Some(blocks) if blocks.iter().any(|block| !block.text.is_empty()) => framed.push((frame.at, blocks)),
+            Some(blocks) if blocks.iter().any(|block| !block.text.is_empty()) => {
+                // A frame's text stands under the page's headings above the frame, as a browser capture reads it:
+                // the heading an embedded form shows is that form's, which its own document alone does not say.
+                let frame_id = format!("root/{index}");
+                let blocks = blocks.into_iter().map(|block| Found {
+                    heading_path: headings.iter().chain(&block.heading_path).cloned().collect(),
+                    frame_id: Some(frame_id.clone()),
+                    ..block
+                });
+                framed.push((at, blocks.collect::<Vec<_>>()));
+            }
             _ => unread += 1,
         }
     }
@@ -275,7 +285,13 @@ async fn serve(http: &Http, url: &str, allowed_origins: Option<&[String]>, secon
         if text::strip(&body).is_empty() {
             return Err(refused("the document is empty"));
         }
-        let found = Found { kind: BlockKind::Paragraph, text: clean(&body), heading_path: Vec::new(), href: None };
+        let found = Found {
+            kind: BlockKind::Paragraph,
+            text: clean(&body),
+            heading_path: Vec::new(),
+            href: None,
+            frame_id: None,
+        };
         return Ok(Served {
             url: final_url,
             title: String::new(),

@@ -568,13 +568,17 @@ pub struct Found {
     pub text: String,
     pub heading_path: Vec<String>,
     pub href: Option<String>,
+    /// The frame a block was read from, when its frame's document is read into the page's.
+    pub frame_id: Option<String>,
 }
 
-/// A rendered frame: the document it shows, and the number of blocks read before it, which is where its own go.
+/// A rendered frame: the document it shows, the number of blocks read before it, which is where its own go, and the
+/// headings it stands under, which its own blocks sit under too.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Frame {
     pub at: usize,
     pub document: FrameDocument,
+    pub headings: Vec<String>,
 }
 
 /// What a frame shows: the address of its document, or the markup its `srcdoc` holds, which wins over a `src`.
@@ -755,7 +759,7 @@ impl<'a> Reader<'a> {
                 (None, None) => None,
             };
             if let Some(document) = document {
-                self.frames.push(Frame { at: self.blocks.len(), document });
+                self.frames.push(Frame { at: self.blocks.len(), document, headings: self.path() });
             }
         }
         if SKIPPED.contains(&tag) {
@@ -1052,7 +1056,13 @@ impl<'a> Reader<'a> {
                 // value. It shares the header's block, as a browser capture writes it, so a block of dashes is a row.
                 text.push_str(&format!("\n| {} |", vec!["---"; cells.len()].join(" | ")));
             }
-            self.blocks.push(Found { kind: BlockKind::Table, text, heading_path: path.clone(), href: None });
+            self.blocks.push(Found {
+                kind: BlockKind::Table,
+                text,
+                heading_path: path.clone(),
+                href: None,
+                frame_id: None,
+            });
         }
         self.row = None;
         self.header_row = None;
@@ -1083,7 +1093,7 @@ impl<'a> Reader<'a> {
             return;
         }
         let kind = kind.unwrap_or(self.kind);
-        self.blocks.push(Found { kind, text: text.clone(), heading_path: self.path(), href });
+        self.blocks.push(Found { kind, text: text.clone(), heading_path: self.path(), href, frame_id: None });
         if closing_heading && let Some(level) = self.heading {
             // A heading names what follows it, never itself, and a lower heading ends every higher one.
             self.headings.retain(|(higher, _)| *higher < level);
@@ -1190,8 +1200,16 @@ mod tests {
         assert_eq!(
             frames,
             [
-                Frame { at: 1, document: FrameDocument::Address("https://a.example/inner".into()) },
-                Frame { at: 1, document: FrameDocument::Markup("<p>x".into()) },
+                Frame {
+                    at: 1,
+                    document: FrameDocument::Address("https://a.example/inner".into()),
+                    headings: vec!["Internal frame".into()],
+                },
+                Frame {
+                    at: 1,
+                    document: FrameDocument::Markup("<p>x".into()),
+                    headings: vec!["Internal frame".into()]
+                },
             ]
         );
     }

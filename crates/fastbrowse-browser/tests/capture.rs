@@ -366,7 +366,8 @@ async fn test_record_candidates_preserve_frame_and_shadow_boundaries() {
 }
 
 /// Read after the whole page, a subscription form's heading followed the footer, and the reader gave the page's
-/// heading above the frame as the heading the form shows.
+/// heading above the frame as the heading the form shows. The form's own h1 stays under the page's headings above the
+/// frame: ranked against them, it ended them, and its note no longer said which form it heads.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_same_origin_frame_is_read_where_it_stands() {
     let Some(h) = harness().await else { return };
@@ -374,7 +375,7 @@ async fn test_a_same_origin_frame_is_read_where_it_stands() {
     eval_active(
         &h.session,
         "document.body.innerHTML = '<h1>Frames</h1><h2>Email Subscription</h2><iframe></iframe><p>Footer</p>';
-        document.querySelector('iframe').srcdoc = '<p>Send updates to my inbox</p>';",
+        document.querySelector('iframe').srcdoc = '<h1>Send updates to my inbox</h1><p>Your email</p>';",
     )
     .await;
     let session = &h.session;
@@ -391,10 +392,12 @@ async fn test_a_same_origin_frame_is_read_where_it_stands() {
     )
     .await;
     let capture = content_capture(&h.page).await;
-    assert_eq!(texts(&capture), ["Frames", "Email Subscription", "Send updates to my inbox", "Footer"]);
+    assert_eq!(texts(&capture), ["Frames", "Email Subscription", "Send updates to my inbox", "Your email", "Footer"]);
     let inside = &capture.blocks[2];
     assert!(inside.frame_id.as_deref().is_some_and(|f| !f.is_empty()));
     assert_eq!(path(inside), ["Frames", "Email Subscription"]);
+    assert_eq!(path(&capture.blocks[3]), ["Frames", "Email Subscription", "Send updates to my inbox"]);
+    assert_eq!(path(&capture.blocks[4]), ["Frames", "Email Subscription"]);
     assert_eq!(capture.inaccessible_frames, 0);
     h.close().await;
 }
