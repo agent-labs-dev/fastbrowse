@@ -28,12 +28,12 @@ sig = "9eebcb7d67544dad"
 [[bindings]]
 doc = "blog/ai-agent-click-not-on-page.md"
 target = "crates/fastbrowse-core/src/models.rs"
-sig = "b8ddecc235204449"
+sig = "5da9b1eadc15e116"
 
 [[bindings]]
 doc = "blog/attach-to-running-chrome.md"
 target = "crates/fastbrowse-browser/src/session.rs"
-sig = "1eb706685dadb753"
+sig = "2dee81063671224d"
 
 [[bindings]]
 doc = "blog/attach-to-running-chrome.md"
@@ -53,7 +53,7 @@ sig = "a0a0f42d7f541e1a"
 [[bindings]]
 doc = "blog/browser-automation-cost-per-run.md"
 target = "crates/fastbrowse-core/src/models.rs"
-sig = "b8ddecc235204449"
+sig = "5da9b1eadc15e116"
 
 [[bindings]]
 doc = "blog/mcp-browser-tool.md"
@@ -68,4 +68,4 @@ sig = "a0a0f42d7f541e1a"
 [[bindings]]
 doc = "blog/verify-browser-agent-results.md"
 target = "crates/fastbrowse-core/src/models.rs"
-sig = "b8ddecc235204449"
+sig = "5da9b1eadc15e116"
