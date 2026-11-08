@@ -3,9 +3,9 @@ title: Connect an agent to a running Chrome over CDP
 description: "Drive a Chrome or Electron app you already have open over its DevTools port: the launch flag, picking a window, and keeping a signed-in browser open."
 topic: Browsers and logins
 published: 2026-11-01
-updated: 2026-11-04
+updated: 2026-11-08
 verifiedAgainst: v0.9.1
-verifiedOn: 2026-11-07
+verifiedOn: 2026-11-08
 ---
 
 fastbrowse can drive a browser you already have open, signed in with your profile. Any Chromium app works, including Electron apps, as long as it exposes its DevTools port.
@@ -26,7 +26,7 @@ fastbrowse "Open the Extensions view and report how many extensions are installe
 ```
 
 - `--target-match` picks a window by title or URL, for apps with more than one window open.
-- `--attach` takes over the first window and skips the DevTools dialog.
+- `--attach` drives the first window already open instead of opening a tab. Chrome can still ask you to allow remote debugging on each connection, and the run waits for that approval.
 - Without `--start`, the run begins on whatever the window shows, and the window stays open afterwards.
 - Popups the window opens join the run.
 

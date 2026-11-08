@@ -320,11 +320,11 @@ jobs:
     uses: ./.github/workflows/aur.yml
 
   # `check` is the required status check, so its name must not move when the matrix gains a version.
-  # It passes only when the Python matrix, secret scan, project rules, SDK and Rust checks pass, and the binaries and the
+  # It passes only when the Python matrix, secret scan, project rules, SDK, Rust and blog checks pass, and the binaries and the
   # Arch package each either passed or were left unbuilt by a change that could not alter them.
   check:
     runs-on: blacksmith-2vcpu-ubuntu-2404
-    needs: [gate, evals, project-rules, sdk, rust, secrets, changes, binaries, aur]
+    needs: [gate, evals, project-rules, sdk, rust, secrets, changes, binaries, aur, blog]
     if: ${{ always() && !inputs.task }}
     steps:
       - env:
@@ -337,6 +337,7 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           BINARIES_RESULT: ${{ needs.binaries.result }}
           AUR_RESULT: ${{ needs.aur.result }}
+          BLOG_RESULT: ${{ needs.blog.result }}
         run: |
           test "$GATE_RESULT" = success
           test "$EVALS_RESULT" = success
@@ -347,6 +348,7 @@ jobs:
           test "$CHANGES_RESULT" = success
           test "$BINARIES_RESULT" = success || test "$BINARIES_RESULT" = skipped
           test "$AUR_RESULT" = success || test "$AUR_RESULT" = skipped
+          test "$BLOG_RESULT" = success
 
   realsite:
     if: ${{ inputs.task }}

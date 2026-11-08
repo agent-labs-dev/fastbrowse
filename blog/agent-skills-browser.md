@@ -3,9 +3,9 @@ title: Add a browser skill to Claude Code and Codex
 description: Install the fastbrowse skill so Claude Code or Codex can browse a site and come back with an answer, its quotes and a run status.
 topic: Coding agents and MCP
 published: 2026-11-01
-updated: 2026-11-04
+updated: 2026-11-08
 verifiedAgainst: v0.9.1
-verifiedOn: 2026-11-07
+verifiedOn: 2026-11-08
 ---
 
 The fastbrowse skill lets a coding agent hand a browser task to fastbrowse and get back an answer, the quotes behind it and a run status it can branch on.
@@ -32,13 +32,13 @@ To install by hand, copy `skills/fastbrowse` to `.claude/skills/fastbrowse` for 
 
 The agent picks fastbrowse up from the skill's description, or you name it. In Claude Code: `/fastbrowse Find the top story on Hacker News and return its title with a citation.`
 
-The skill tries browsers in this order:
+The skill picks a browser in this order:
 
-1. An existing Chrome connection, if one is open.
-2. A local Chrome.
-3. A cloud browser, when you ask for one or local browsing is unavailable.
+1. The browser you name, if you name one.
+2. Otherwise a Browser Use Cloud browser, which passes most bot checks and needs `BROWSER_USE_API_KEY`.
+3. A local headless Chrome when the task needs your localhost or that key is not set.
 
-A local browser needs only the model key, and an already signed-in browser needs no credential.
+It drives a Chrome you already have open only when you give it that browser's DevTools address. A local browser needs only the model key, and an already signed-in browser needs no credential.
 
 Behind the skill, the agent calls the CLI or an MCP server. Either way the run reports a status. `complete` means the task was verified, and the other statuses say what was missing: an input, an authorization, evidence for a claim, or access to the page.
 
