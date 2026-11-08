@@ -624,6 +624,14 @@ def on_main(sha: str) -> bool:
     return result.stdout.strip() in {"ahead", "identical"}
 
 
+def fixture_slots() -> set[tuple[str, int]]:
+    """Every (task, repeat) a fixture receipt covers: each local and mock task, three times."""
+    from fastbrowse.evals.runner import _tasks
+
+    tasks, _ = _tasks([], ["local", "mock"])
+    return {(task.id, repeat) for _, task in tasks for repeat in range(3)}
+
+
 def check_fixture(candidate: Candidate) -> None:
     if candidate.export is not None:
         # A verified export stands in for the live fixture run: the campaign was measured on a build `main` has
@@ -645,10 +653,7 @@ def check_fixture(candidate: Candidate) -> None:
         or (run["head_branch"] != "main" and not on_main(run["head_sha"]))
     ):
         raise ValueError("a successful fixture workflow receipt on the measured build is required")
-    from fastbrowse.evals.runner import _tasks
-
-    tasks, _ = _tasks([], ["local", "mock"])
-    expected = {(task.id, repeat) for _, task in tasks for repeat in range(3)}
+    expected = fixture_slots()
     with tempfile.TemporaryDirectory(prefix="benchmark-fixture-") as directory:
         subprocess.run(
             [

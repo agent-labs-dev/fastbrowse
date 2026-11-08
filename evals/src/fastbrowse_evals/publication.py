@@ -31,6 +31,7 @@ from fastbrowse.evals.benchmarks import (
     Row,
     check_catalog,
     check_fixture,
+    fixture_slots,
 )
 from fastbrowse.models import Limits
 from parallax.track import sink
@@ -1179,6 +1180,8 @@ def export(
             checks.readback(item.tracked)
     for part in official_rows:
         checks.official_readback(part)
+    # The receipt claims every fixture slot passed; `checks.fixture` holds it to the run's own rows.
+    slots = len(fixture_slots())
     candidate = Candidate(
         # 5 is internal-ultrafast pairing fastbrowse-pool (not fastbrowse) with jev-ultrafast; 4 is the uncapped
         # start-gate protocol with the internal-backend group.
@@ -1190,7 +1193,7 @@ def export(
         agent_sha=agent_sha,
         runner_sha=runner_sha,
         catalog_sha256=digest,
-        fixture=Fixture(head_sha=agent_sha, run_id=fixture_run, passed=108, total=108),
+        fixture=Fixture(head_sha=agent_sha, run_id=fixture_run, passed=slots, total=slots),
         groups=[c.group for c in collected],
     )
 
