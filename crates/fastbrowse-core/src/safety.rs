@@ -255,7 +255,10 @@ pub fn values_question(action: &str) -> ChoiceQuestion {
              use only once something happens. Which values does this action use?"
         ),
         IndexMap::from([
-            ("first".to_string(), Value::from("The values the task gives to use at first, or the only values it gives.")),
+            (
+                "first".to_string(),
+                Value::from("The values the task gives to use at first, or the only values it gives."),
+            ),
             (LATER_VALUES.to_string(), Value::from("Values the task gives to use only once something happens.")),
             ("neither".to_string(), Value::from("Values the task does not give.")),
         ]),
@@ -288,7 +291,9 @@ pub fn happened_question(action: &str) -> ChoiceQuestion {
             ),
             (
                 "no".to_string(),
-                Value::from("No: the run has not done what the task asks first, or the site has not responded that way."),
+                Value::from(
+                    "No: the run has not done what the task asks first, or the site has not responded that way.",
+                ),
             ),
             ("unclear".to_string(), Value::from("The page does not show enough to tell.")),
         ]),

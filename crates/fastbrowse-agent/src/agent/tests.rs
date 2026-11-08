@@ -1131,10 +1131,8 @@ async fn test_a_commit_with_values_for_later_proceeds_only_once_the_site_has_res
         (None, Some("yes"), true),
         (None, Some("unclear"), false),
     ] {
-        let chosen: Vec<_> = [("values", values), ("happened", happened)]
-            .into_iter()
-            .filter_map(|(k, v)| Some((k, v?)))
-            .collect();
+        let chosen: Vec<_> =
+            [("values", values), ("happened", happened)].into_iter().filter_map(|(k, v)| Some((k, v?))).collect();
         let (gated, jev, state) = gate_conditional_post_choosing(&[("conditional", 0.9), ("met", 0.9)], &chosen).await;
         let case = format!("values {values:?}, happened {happened:?}");
         assert_eq!(gated.is_ok(), acts, "{case}");

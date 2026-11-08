@@ -11,9 +11,9 @@ use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::text;
 use fastbrowse_core::recipe::RecipeText;
 use fastbrowse_core::safety::{
-    asks_for_credentials, changes_a_value, changes_credentials, conditional_question, control_action,
-    downloads_question, edits_question, irreversible_question, is_password, lasting_question, may_be_irreversible,
-    HAPPENED, LATER_VALUES, MET, happened_question, met_question, origin_of, requested_question, resolve_secret,
+    HAPPENED, LATER_VALUES, MET, asks_for_credentials, changes_a_value, changes_credentials, conditional_question,
+    control_action, downloads_question, edits_question, happened_question, irreversible_question, is_password,
+    lasting_question, may_be_irreversible, met_question, origin_of, requested_question, resolve_secret,
     sets_new_password, starts_download, values_question,
 };
 use indexmap::IndexMap;
