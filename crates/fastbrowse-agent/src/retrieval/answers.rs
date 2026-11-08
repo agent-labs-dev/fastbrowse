@@ -324,6 +324,9 @@ async fn compose_part(
     if let Some(ledger) = ledger {
         ledger.record([draft.cost.clone()])?;
     }
+    // A table with no columns holds no row, so `[]` is no table: read as one, it sent a cheapest claim to the plain
+    // support question instead of its tally's checks, and the answer was withheld.
+    let columns = draft.data.columns.filter(|columns| !columns.is_empty());
     let claims = draft
         .data
         .claims
@@ -339,14 +342,14 @@ async fn compose_part(
                 })
                 .collect();
             // A row's text is its cells, written by code.
-            let text = match (&draft.data.columns, &claim.cells) {
+            let text = match (&columns, &claim.cells) {
                 (Some(_), Some(cells)) => cells.join(CELL),
                 _ => claim.text,
             };
             Claim { evidence_ids: cited, text, ..claim }
         })
         .collect();
-    Ok((draft.data.columns, claims))
+    Ok((columns, claims))
 }
 
 /// How much composing a packing still needs: its requests, then the bytes of the notes they carry. A round may shorten
@@ -1070,11 +1073,12 @@ mod tests {
         context: Option<i64>,
         calls: Mutex<Vec<Vec<Message>>>,
         claims: Option<Vec<Claim>>,
+        columns: Option<Vec<String>>,
     }
 
     impl RecordingLlm {
         fn new(context: Option<i64>) -> RecordingLlm {
-            RecordingLlm { context, calls: Mutex::new(Vec::new()), claims: None }
+            RecordingLlm { context, calls: Mutex::new(Vec::new()), claims: None, columns: None }
         }
 
         fn calls(&self) -> Vec<Vec<Message>> {
@@ -1098,11 +1102,12 @@ mod tests {
                 .filter_map(|line| line.split_once(": ").map(|(id, _)| id.to_string()))
                 .filter(|id| id.starts_with('e') || id.starts_with('c'))
                 .collect();
-            let reply = self.claims.clone();
+            let (reply, columns) = (self.claims.clone(), self.columns.clone());
             Box::pin(async move {
                 let claims =
                     reply.unwrap_or_else(|| ids.into_iter().map(|id| Claim::new(&id, vec![id.clone()])).collect());
-                let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
+                let draft = json!({"claims": claims, "columns": columns});
+                let data = schema.validate_json(&draft.to_string()).map_err(LLMError::Failed)?;
                 Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
             })
         }
@@ -1670,6 +1675,16 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(reviewed.answer.problem.as_deref(), Some("A composed claim is unsupported by its cited quotes."));
+    }
+
+    /// A draft whose columns are `[]` is no table, so a tally's claim still gets its tally's checks.
+    #[tokio::test]
+    async fn an_empty_column_list_is_no_table() {
+        let notes = Notes::new([fact(0, "Record B: 34".into())]);
+        let mut llm = RecordingLlm::new(None);
+        llm.columns = Some(vec![]);
+        let (columns, _) = compose_part(&llm, "Report B", &initial_items(&notes), None).await.unwrap();
+        assert_eq!(columns, None);
     }
 
     /// A claim may state what the run typed, which no page quote holds, so its support is judged with the steps.
