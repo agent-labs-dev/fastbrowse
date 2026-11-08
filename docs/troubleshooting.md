@@ -199,7 +199,9 @@ known charges may still be under the cap. A run without a dollar cap does not st
 ## unavailable (exit 8)
 
 **What it means.** A model or browser provider stayed unavailable through every retry. The task itself may
-be fine, and the same run later may pass.
+be fine, and the same run later may pass. A run that had already taken a step that may have changed the site,
+such as a click on Post, ends `error` instead: its error names those steps, so check the site before running
+the task again.
 
 **Common causes.**
 

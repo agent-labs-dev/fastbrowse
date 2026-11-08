@@ -523,8 +523,25 @@ impl Agent {
         ledger: &Ledger,
     ) -> RunResult {
         self.event("run_failed", || Map::from_iter([("kind".into(), kind.into())]));
-        let message = self.redact(&message);
-        let status = if unavailable { Status::Unavailable } else { Status::Error };
+        let mut message = self.redact(&message);
+        // `unavailable` tells a caller the same run may pass later, which is safe only while the run has changed
+        // nothing: running it again after a post that went through posts twice.
+        let changed: Vec<String> = state
+            .into_iter()
+            .flat_map(|state| &state.history)
+            .filter(|entry| entry.changed_site())
+            .map(|entry| {
+                let operation = entry.operation.map_or("", |operation| operation.as_str());
+                entry.target.as_deref().map_or_else(|| operation.to_string(), |target| format!("{operation} {target}"))
+            })
+            .collect();
+        let status = if unavailable && changed.is_empty() { Status::Unavailable } else { Status::Error };
+        if unavailable && !changed.is_empty() {
+            let steps = changed.join("; ");
+            message = format!(
+                "{message}. This came after steps that may have changed the site ({steps}), so check the site before running the task again."
+            );
+        }
         let notes = state.map(|state| state.notes.clone()).unwrap_or_default();
         self.partial_result(&notes, state, ledger, status, Some(message), None)
     }

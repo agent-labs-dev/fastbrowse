@@ -5351,6 +5351,29 @@ async fn test_a_second_hung_page_ends_unavailable() {
 }
 
 #[tokio::test]
+async fn test_a_browser_lost_after_a_step_that_changed_the_site_is_not_unavailable() {
+    let agent = Agent::new(Arc::new(HungPage::new(0)), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let lost = || Flow::Browser(BrowserError::Unavailable("Page.captureScreenshot failed (ConnectionClosed)".into()));
+    let mut state = run_state();
+    state.history.push(executed(Some(Operation::Scroll), None, true));
+    let ledger = state.ledger.clone();
+    let read_only = agent.stopped(lost(), Some(&mut state), &ledger).await;
+    assert_eq!(read_only.status, Status::Unavailable);
+
+    state.history.push(executed(Some(Operation::Fill), Some("Comment"), true));
+    state.history.push(executed(Some(Operation::Click), Some("Post"), true));
+    let wrote = agent.stopped(lost(), Some(&mut state), &ledger).await;
+    assert_eq!(wrote.status, Status::Error);
+    assert_eq!(
+        wrote.error.as_deref(),
+        Some(
+            "Page.captureScreenshot failed (ConnectionClosed). This came after steps that may have changed the site \
+             (fill Comment; click Post), so check the site before running the task again."
+        )
+    );
+}
+
+#[tokio::test]
 async fn test_an_authorized_submission_that_hangs_is_not_reopened() {
     let page = Arc::new(HungPage::new(1));
     let agent = Agent::new(page.clone(), authorized_jev(), Arc::new(ScriptedLLM));
