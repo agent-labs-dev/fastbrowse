@@ -991,6 +991,7 @@ impl DecisionClient for Conditioned {
             .iter()
             .map(|(key, question)| match question {
                 Question::Noul(noul) => (key.clone(), noul.instructions.clone()),
+                Question::Choice(choice) => (key.clone(), choice.instructions.clone()),
                 _ => (key.clone(), String::new()),
             })
             .collect();
@@ -999,7 +1000,21 @@ impl DecisionClient for Conditioned {
             .keys()
             .filter_map(|key| {
                 let probability = *self.answers.get(key.as_str())?;
-                Some((key.clone(), Answer::Noul(NoulAnswer { kind: Default::default(), probability })))
+                let answer = match questions.get(key) {
+                    // A choice is answered with its first option at odds above even, and its last otherwise.
+                    Some(Question::Choice(choice)) => {
+                        let options: Vec<_> = choice.criteria.keys().cloned().collect();
+                        let picked = if probability > 0.5 { &options[0] } else { &options[options.len() - 1] };
+                        Answer::Choice(ChoiceAnswer {
+                            kind: Default::default(),
+                            choice: picked.clone(),
+                            probabilities: IndexMap::new(),
+                            confidence: probability,
+                        })
+                    }
+                    _ => Answer::Noul(NoulAnswer { kind: Default::default(), probability }),
+                };
+                Some((key.clone(), answer))
             })
             .collect();
         Box::pin(

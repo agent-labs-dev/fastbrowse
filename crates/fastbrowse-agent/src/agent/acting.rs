@@ -13,7 +13,7 @@ use fastbrowse_core::recipe::RecipeText;
 use fastbrowse_core::safety::{
     asks_for_credentials, changes_a_value, changes_credentials, conditional_question, control_action,
     downloads_question, edits_question, irreversible_question, is_password, lasting_question, may_be_irreversible,
-    met_question, origin_of, requested_question, resolve_secret, sets_new_password, starts_download,
+    MET, met_question, origin_of, requested_question, resolve_secret, sets_new_password, starts_download,
 };
 use indexmap::IndexMap;
 use serde_json::{Map, Value as JsonValue, json};
@@ -629,7 +629,7 @@ impl Agent {
         self.mask_strings(&mut page);
         page["task"] = state.task.clone().into();
         page["date"] = crate::dates::dated(observation.captured_at, &state.dates).into();
-        let questions = IndexMap::from([("met".to_string(), Question::Noul(met_question(action)))]);
+        let questions = IndexMap::from([("met".to_string(), Question::Choice(met_question(action)))]);
         let evaluation = match jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&page, &questions)).await {
             Ok(evaluation) => evaluation,
             // A page too large to ask about cannot show the condition met.
@@ -638,11 +638,11 @@ impl Agent {
         };
         state.ledger.record([evaluation.cost.clone()])?;
         let met = match evaluation.answers.get("met") {
-            Some(Answer::Noul(answer)) => Some(answer.probability),
+            Some(Answer::Choice(answer)) => Some(answer.choice.clone()),
             _ => None,
         };
         self.event("condition", || Map::from_iter([("met".into(), json!(met))]));
-        Ok(met.is_some_and(|p| p > EVEN_ODDS))
+        Ok(met.as_deref() == Some(MET))
     }
 
     /// Mask every string in `value`, however deeply it is nested.
