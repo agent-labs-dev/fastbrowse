@@ -136,7 +136,7 @@ from fastbrowse_evals.judging import (
 )
 from fastbrowse_evals.live_tasks import TASKS, Category, LiveTask, Outcome, PageEvidence, prompt
 from fastbrowse_evals.more_tasks import DEV, STRETCH_DEV
-from fastbrowse_evals.process import run_command
+from fastbrowse_evals.process import CommandError, run_command
 from fastbrowse_evals.request_session import (
     RequestJudgeClient,
     RequestSession,
@@ -1985,13 +1985,23 @@ async def harness_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path |
         raise ValueError("browser-harness records its commands and Codex events, not --record videos")
     artifact = Path("artifacts/evals/browser-harness") / f"{task.id}-{uuid.uuid4().hex}"
     _attempt_artifact.set(str(artifact))
+    codex = os.environ.get("BROWSER_HARNESS_CODEX", "codex")
+    # Checked before the browser opens: a wrong pinned tool fails every attempt alike, and found inside one, after its
+    # browser was billed, each attempt kept its whole budget reserve as unknown cost.
+    with tempfile.TemporaryDirectory(prefix="bh-check-") as runtime:
+        try:
+            await _invoke(
+                HARNESS_COMMAND, HARNESS_RUNNER, {"check": codex}, arm_environment("browser-harness", runtime), runtime
+            )
+        except CommandError as error:
+            raise NotStarted(f"browser-harness tools: {error}") from None
     async with cloud_browser(http, screen=_screen(task)) as cloud:
         session_ready()
         _watch("browser-harness", task, cloud.live_url)
         request = {
             "goal": prompt(task),
             "cdp_ws": cloud.cdp_url,
-            "codex": os.environ.get("BROWSER_HARNESS_CODEX", "codex"),
+            "codex": codex,
             "model": HARNESS_MODEL,
             "reasoning_effort": HARNESS_EFFORT,
             "prices": HARNESS_PRICES,

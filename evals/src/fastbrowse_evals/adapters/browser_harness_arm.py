@@ -139,6 +139,16 @@ def stop_daemon(env: dict[str, str]) -> bool:
     return done.stdout.strip().endswith("gone")
 
 
+def check_versions(codex: str) -> None:
+    """The pinned tools, checked by the harness before it opens the attempt's browser (`{"check": codex}`)."""
+    installed = subprocess.check_output(["browser-harness", "--version"], text=True).strip()
+    if installed != HARNESS_VERSION:
+        raise RuntimeError(f"browser-harness must be {HARNESS_VERSION}, got {installed}")
+    codex_version = subprocess.check_output([codex, "--version"], text=True).strip().split()[-1]
+    if codex_version != CODEX_VERSION:
+        raise RuntimeError(f"codex must be {CODEX_VERSION}, got {codex_version}")
+
+
 async def run(request: dict[str, Any]) -> dict[str, Any]:
     started = time.monotonic()
     destination = Path(request["artifact"])
@@ -162,12 +172,6 @@ async def run(request: dict[str, Any]) -> dict[str, Any]:
             "BH_UPDATE_CHECK": "0",
             "BH_TAB_MARKER": "0",
         }
-        installed = subprocess.check_output(["browser-harness", "--version"], env=env, text=True).strip()
-        if installed != HARNESS_VERSION:
-            raise RuntimeError(f"browser-harness must be {HARNESS_VERSION}, got {installed}")
-        codex_version = subprocess.check_output([request["codex"], "--version"], text=True).strip().split()[-1]
-        if codex_version != CODEX_VERSION:
-            raise RuntimeError(f"codex must be {CODEX_VERSION}, got {codex_version}")
         (skill / "SKILL.md").write_bytes(subprocess.check_output(["browser-harness", "skill"], env=env))
         schema = root / "output-schema.json"
         schema.write_text(
@@ -248,5 +252,9 @@ if __name__ == "__main__":
     request = json.load(sys.stdin)
     stdout = sys.stdout
     sys.stdout = sys.stderr
-    result = asyncio.run(run(request))
+    if "check" in request:
+        check_versions(request["check"])
+        result: dict[str, Any] = {}
+    else:
+        result = asyncio.run(run(request))
     print(json.dumps(result), file=stdout)

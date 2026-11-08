@@ -62,6 +62,7 @@ async def run_command(
         await _terminate(process)
         raise
     if process.returncode != 0:
-        detail = stderr.decode("utf-8", errors="replace").strip()[:500]
+        # The tail: a failing command says why last, as a Python traceback ends with its exception.
+        detail = stderr.decode("utf-8", errors="replace").strip()[-500:]
         raise CommandError(f"command exited {process.returncode}: {detail}")
     return stdout
