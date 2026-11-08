@@ -650,6 +650,16 @@ impl CdpPage {
                     ));
                 }
             }
+            // The count alone reached only the reader; said here, the step, the done check and every verdict on the
+            // page know some of it went unread.
+            match inaccessible {
+                0 => {}
+                1 => notices
+                    .push_str("\n\n[1 frame on this page could not be read: its text and controls are not shown]"),
+                n => notices.push_str(&format!(
+                    "\n\n[{n} frames on this page could not be read: their text and controls are not shown]"
+                )),
+            }
             viewport_text.push_str(&notices);
             let response_status = match main {
                 Some(main) if main.raw.url == document.url && main.raw.document_key == document.document_key => {
