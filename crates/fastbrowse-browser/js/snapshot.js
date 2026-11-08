@@ -205,6 +205,9 @@
   const clippedAway = e => {
     const style = e.ownerDocument.defaultView.getComputedStyle(e);
     const rect = /^rect\((.+)\)$/.exec(style.clip);
+    const inset = /^inset\(([^)]*?)(?:\s+round\s.*)?\)$/.exec(style.clipPath);
+    // Almost every element has neither, and its box is not read.
+    if (!rect && !inset) return false;
     const { width, height } = e.getBoundingClientRect();
     if (rect && ['absolute', 'fixed'].includes(style.position)) {
       // An `auto` side is the border box's own edge.
@@ -214,7 +217,6 @@
         .map((value, side) => (value === 'auto' ? edges[side] : parseFloat(value)));
       if (![top, right, bottom, left].some(Number.isNaN) && (bottom <= top || right <= left)) return true;
     }
-    const inset = /^inset\(([^)]*?)(?:\s+round\s.*)?\)$/.exec(style.clipPath);
     if (!inset) return false;
     const sides = inset[1].trim().split(/\s+/);
     const [top, right = top, bottom = top, left = right] = sides;
@@ -279,7 +281,7 @@
       (!e.checkVisibility({ checkOpacity: !choice, checkVisibilityCSS: true }) && (choice || !fadingIn(e))) ||
       leaving(e) ||
       (choice && !shownThrough(e)) ||
-      ((e.matches(SELECTOR) || pressable(e) || focusableText(e)) && clippedAway(e))
+      (clippedAway(e) && (e.matches(SELECTOR) || pressable(e) || focusableText(e)))
     )
       return false;
     if (!choice) return true;
