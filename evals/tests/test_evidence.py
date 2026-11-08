@@ -83,3 +83,16 @@ def test_part_verdicts_combine_any_false_then_any_true(monkeypatch):
     result, _ = asyncio.run(judging.judge_browser_parts({"whole": 1}, [{}, {}, {}], policy="p", questions={"q": "?"}))
     assert result.decisions["q"].passed is False
     assert result.state_sha256 != "x"
+
+
+def test_a_divided_state_records_the_policy_identity_of_an_undivided_one(monkeypatch):
+    monkeypatch.setattr(judging, "judge_questions", _undecided)
+    questions = {"q": "?"}
+    _, whole = asyncio.run(judging.judge_browser({}, policy="p", questions=questions))
+    _, divided = asyncio.run(judging.judge_browser_parts({}, [{}, {}], policy="p", questions=questions))
+    assert divided == whole
+
+
+async def _undecided(state, client, primary, llm, panel, questions, **_):
+    decisions = {key: Decision(passed=None, source="llm", reason="r") for key in questions}
+    return Judgment(policy="p", state_sha256="x", questions=dict(questions), decisions=decisions)
