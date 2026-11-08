@@ -23,7 +23,7 @@ pytestmark = [
 PASSING = ("table-extract", "mock-sign-in", "mock-upload-document")
 # Cassettes the agent's requests have moved past, each waiting on a paid `bench fill --only TASK` a maintainer starts.
 # Strict, so the replay job lists them on every run and fails once the fill lands until the entry is removed.
-STALE = {"mock-iframe-note": "its recorded requests predate the current page state; needs bench fill"}
+STALE: dict[str, str] = {}
 
 
 def recorded_tasks() -> list[Any]:
