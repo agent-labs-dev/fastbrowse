@@ -315,9 +315,15 @@ pub async fn work(
             }
             Op::Count => unreachable!("a count is worked out above"),
         };
-        worked.insert(index, Ok(result));
+        worked.insert(index, Ok(Worked { value: as_written(&result.value, &tally.written), ..result }));
     }
     Ok(worked)
+}
+
+/// A worked amount in the form the claim writes its value: a claim whose `written` leaves the currency sign in the
+/// text beside it ("$" then "251.00") takes the number alone, or the sign would be written twice.
+fn as_written(value: &str, written: &str) -> String {
+    if written.chars().any(currency) { value.to_string() } else { value.chars().filter(|c| !currency(*c)).collect() }
 }
 
 /// Jev's answers to `questions`, or None when there are none to ask or Jev could not answer them.
@@ -350,6 +356,13 @@ mod tests {
         let (a, b) = (amount("£1.5").unwrap(), amount("£2.25").unwrap());
         assert_eq!(total(&[&a, &b]), "£3.75");
         assert_eq!(total(&[&a, &amount("2").unwrap()]), "3.5");
+    }
+
+    #[test]
+    fn a_worked_amount_carries_a_sign_only_when_the_claim_writes_one_in_its_value() {
+        assert_eq!(as_written("$251.00", "251.00"), "251.00", "the claim writes the sign before its value");
+        assert_eq!(as_written("$251.00", "$251"), "$251.00");
+        assert_eq!(as_written("3.5", "3"), "3.5");
     }
 
     #[test]

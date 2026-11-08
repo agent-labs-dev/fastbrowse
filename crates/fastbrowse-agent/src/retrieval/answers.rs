@@ -747,7 +747,8 @@ fn tally_checks(tally: &Tally, text: &str, winners: &[serde_json::Value]) -> Vec
     let (of, field) = (text::repr(&tally.of), text::repr(tally.field.as_deref().unwrap_or("value")));
     let what = match tally.op {
         Op::Count => format!("how many {of} there are"),
-        Op::Sum => format!("the total {field} of the {of}"),
+        // "Of the" record kind reads as one record, so a total over all of them would not be "only" it.
+        Op::Sum => format!("the total {field} of every {of}"),
         Op::Min => format!("which {of} has the lowest {field}, and that {field}"),
         Op::Max => format!("which {of} has the highest {field}, and that {field}"),
     };

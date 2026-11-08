@@ -758,7 +758,10 @@ async fn sign_in_judgments_get_the_navigation_source_and_still_decide_whether_it
             assert!(facts.contains("login_required_probability") && facts.contains("0.12"));
             let questions: Value = serde_json::from_str(wall_call.0["jev"]["questions"].as_str().unwrap()).unwrap();
             let wall = questions["login_required"]["instructions"].as_str().unwrap();
-            assert!(wall.contains("Is signing in what this page asks of its visitor") && !wall.contains("task"), "{wall}");
+            assert!(
+                wall.contains("Is signing in what this page asks of its visitor") && !wall.contains("task"),
+                "{wall}"
+            );
         }
         // What the task needs is asked of the task alone, once.
         let asked: Vec<Value> = log
