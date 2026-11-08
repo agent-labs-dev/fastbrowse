@@ -15,7 +15,10 @@ Versions are patch-by-patch unless the maintainer says otherwise, and every one 
 4. Once the maintainer says to release, `git tag v<x.y.z> <sha> && git push origin v<x.y.z>`. The tag's workflow
    publishes once the sdist, the wheels and the five binaries build and pass their smoke tests and its `gate`
    job finds those evals passing on the tagged tree. Then point `docs/results/release-baseline.json` at the new
-   release's campaign, so the next release is compared with this one.
+   release's campaign, so the next release is compared with this one. Publish the release commit's fixture rows
+   too: download that Evals run's `eval-rows` artifact and run `just evals-publish <dir>/nightly.jsonl`, which
+   reads the attempt ledger beside it. Each later fixture run is compared with those rows at the same task
+   version.
 5. The tag's `aur` job publishes the Arch package and its `aur-sync` job opens the PR that moves
    `packaging/aur` to the release. [aur.md](aur.md) has how the package is built and checked, and what to do
    by hand when either job's secret is missing.

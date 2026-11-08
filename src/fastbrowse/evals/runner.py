@@ -342,6 +342,7 @@ async def main(argv: list[str]) -> int:
         chrome() as cdp_url,
         tempfile.TemporaryDirectory() as downloads,
         args.out.open("a", encoding="utf-8") as out,
+        args.out.with_suffix(".attempts.jsonl").open("a", encoding="utf-8") as attempts,
     ):
         for repeat in range(args.repeat):
             for suite, task in chosen:
@@ -385,6 +386,10 @@ async def main(argv: list[str]) -> int:
                 rows.append(row)
                 out.write(json.dumps(row) + "\n")
                 out.flush()
+                # The fixture runner never retries, so each row is its one physical attempt; the ledger is what
+                # lets `versions --publish` commit a fixture run as the baseline later runs are compared against.
+                attempts.write(json.dumps(row | {"selected": True}) + "\n")
+                attempts.flush()
                 if campaign is not None:
                     campaign.settle(CostBreakdown.model_validate(row["cost"]))
                 mark = "PASS" if row["passed"] else "FAIL"
