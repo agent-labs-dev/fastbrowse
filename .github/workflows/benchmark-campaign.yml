@@ -441,6 +441,7 @@ jobs:
         run: python3 ci/scripts/eval_progress.py "$OUT" "$CAMPAIGN_ID / ${{ matrix.label }}" --final
       - name: Send the ledger to Langfuse
         # A stopped group is tracked too: every arm's experiment lists what ran.
+        id: ledger
         if: always()
         env:
           LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
@@ -457,7 +458,8 @@ jobs:
       # channel. This repository is public, so the report never quotes the judges' reasons (`parallax report --reasons`).
       - name: Report the group
         id: report
-        if: always()
+        # Only once Langfuse reads back every experiment the push printed.
+        if: always() && steps.ledger.outcome == 'success'
         continue-on-error: true
         env:
           LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
