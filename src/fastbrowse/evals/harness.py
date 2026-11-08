@@ -77,6 +77,10 @@ def chrome(binary: str | None = None, *, timeout: float = 90.0) -> Generator[str
             ],
             stdout=subprocess.DEVNULL,
             stderr=log,
+            # Chrome writes its own messages, such as a required field's "Please fill out this field.", in the locale
+            # it starts in, and they reach recorded requests: a cassette filled on an en-GB machine missed on CI.
+            env={name: value for name, value in os.environ.items() if not name.startswith("LC_")}
+            | {"LANG": "en_US.UTF-8", "LANGUAGE": "en_US"},
         )
         try:
             yield _devtools(Path(profile, "DevToolsActivePort"), process, log, timeout)
