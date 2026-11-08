@@ -240,14 +240,25 @@ pub async fn work(
     for (index, tally, text) in claims {
         let times = if tally.written.trim().is_empty() { 0 } else { text.matches(tally.written.as_str()).count() };
         if times != 1 {
-            // Code writes its value over `written`, so the reason names the claim and the rewrite: told only that
-            // the value "is not written once", the composer resent a claim listing each record's value 10 times of 10.
-            let reason = format!(
-                "Claim {index} states {} {times} times, and code writes the worked value in place of its \
-                 tally.written, which must appear once. Rewrite claim {index} to state only the tally's value, once; \
-                 state each other value in a claim of its own with tally null.",
-                text::repr(&tally.written)
-            );
+            // Code writes its value over `written`, so the reason names the claim and the rewrite that places it.
+            // The two drafts need different rewrites, and code knows which it has: a claim missing the value needs
+            // it written with its record (told to split instead, it moved the record to a claim no check could
+            // support), and one repeating it needs the other records' values moved out (told only that it was
+            // "not written once", it resent the claim 10 times of 10).
+            let written = text::repr(&tally.written);
+            let reason = if times == 0 {
+                format!(
+                    "Claim {index} does not write its tally.written {written}, and code writes the worked value in its \
+                     place. Rewrite claim {index} to write {written} once, with the record that has it when the task \
+                     asks which record it is."
+                )
+            } else {
+                format!(
+                    "Claim {index} writes its tally.written {written} {times} times, and code writes the worked value \
+                     in one place. Rewrite claim {index} to write {written} once, keeping in it the record that has \
+                     that value, and state each other record's value in a claim of its own with tally null."
+                )
+            };
             worked.insert(*index, Err(Unworked::Draft(reason)));
             continue;
         }

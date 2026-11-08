@@ -817,7 +817,14 @@ fn tally_checks(tally: &Tally, text: &str, winners: &[serde_json::Value]) -> Vec
                 format!("{UNTRUSTED}\nWhat does this claim state? {named} Claim: {claim}"),
                 stated,
             )),
-            states(kind),
+            // Told only to move each other value out, the composer moved the extreme's value and record out too and
+            // the claim then wrote no tally.written (1 replay of 20 kept them); naming what stays kept them 20 of 20.
+            format!(
+                "it states something besides its {kind}, which is not checked there: this claim keeps its tally and \
+                 must name the record at the {kind} together with its tally.written {}, and nothing else; give each \
+                 other value a claim of its own with tally null, citing the notes it is drawn from",
+                text::repr(&tally.written)
+            ),
         ),
         (
             "record",
