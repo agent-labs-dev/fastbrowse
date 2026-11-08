@@ -6,6 +6,7 @@ were published, so for those this table is the credit. Adapted third-party code 
 
 | Who | What | Notes |
 |---|---|---|
+| [@aakashpawar1999](https://github.com/aakashpawar1999) | Made a bench replay find the answers to requests that cite a note, numbering a note id's digests by first appearance ([#845](https://github.com/agent-labs-dev/fastbrowse/pull/845)) | Code contributor; a maintainer landed the commit rebased onto `main`, kept as authored |
 | [@Dhaiwat10](https://github.com/Dhaiwat10) | Found that page captures read hidden table rows and rows in hidden table sections, and fixed it ([#126](https://github.com/agent-labs-dev/fastbrowse/issues/126), [#127](https://github.com/agent-labs-dev/fastbrowse/pull/127)) | Code contributor |
 | [@jmclark-lab](https://github.com/jmclark-lab) | Let the verifier count the run's own step history as evidence for an action requirement, which stopped a re-click loop ([#105](https://github.com/agent-labs-dev/fastbrowse/pull/105)) | Code contributor |
 | [@imranye](https://github.com/imranye) | Pointing the LLM at a local OpenAI-compatible endpoint such as vLLM ([#354](https://github.com/agent-labs-dev/fastbrowse/pull/354)) | Code contributor; landed in [#359](https://github.com/agent-labs-dev/fastbrowse/pull/359) with the commit kept as authored |
