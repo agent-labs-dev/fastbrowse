@@ -116,7 +116,9 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
     if navigated {
         parts.push(format!("went to {}", short(&Shown::Text(after.url.clone()))));
     }
-    if let Some(status) = after.response_status.filter(|status| *status >= 400) {
+    // The status belongs to the document the page holds, so a step that loaded none, such as a fill on the page an
+    // error left behind, did not meet it.
+    if let Some(status) = after.response_status.filter(|status| *status >= 400 && (navigated || replaced)) {
         parts.push(format!("HTTP {status}: destination did not load successfully"));
     }
     let mut changes = Vec::new();
@@ -286,6 +288,19 @@ mod tests {
         let mut c = c.clone();
         change(&mut c);
         c
+    }
+
+    #[test]
+    fn test_an_error_status_is_reported_only_by_the_step_that_loaded_it() {
+        let mut before = observation(vec![control("p", "Postcode", "textbox")]);
+        before.document_key = "error".into();
+        before.response_status = Some(400);
+        let mut after = observation(vec![with(&before.controls[0], |c| c.value = Some("SW1A 1AA".into()))]);
+        after.document_key = "error".into();
+        after.response_status = Some(400);
+        assert!(!effect(&before, &after, None, false).summary.contains("HTTP 400"));
+        before.document_key = "form".into();
+        assert!(effect(&before, &after, None, false).summary.contains("HTTP 400"));
     }
 
     #[test]
