@@ -319,6 +319,8 @@ pub(crate) struct RunState {
     /// A rejected draft is feedback, never a new page fact or evidence of progress.
     pub composition_feedback: Option<String>,
     pub composition_partial: Option<PartialComposition>,
+    /// The caller's schema result filled when a draft was sent back, so a run that ends on the rewrite still returns it.
+    pub schema_partial: Option<crate::verification::Extraction>,
     /// Pages read for one fact, whole: Jev can pick one fact from a list's first page and only see on the next that
     /// the answer is composed. They join the notes for the composer alone, since steps deciding on them stopped early.
     pub read_whole: Vec<Capture>,
@@ -675,6 +677,7 @@ impl RunState {
             extraction_pending: false,
             composition_feedback: None,
             composition_partial: None,
+            schema_partial: None,
             read_whole: Vec::new(),
             to_carry_out: false,
             refused: false,

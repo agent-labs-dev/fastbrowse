@@ -201,15 +201,17 @@ population counter from the number of records the answer reports.
 Initial and repaired compositions are checked
 for both claim support and requested answer coverage in one decision batch. A claim with no cited quote or no
 support judgment is withheld and ends `unverified`. When every check is answered and Jev rejects a composed claim, the run spends an existing recovery to correct the draft or gather
-more evidence. Rejected prose is feedback, never a source fact. Repair feedback retains claim text and citation
-identifiers, so the composer can preserve supported values while correcting rejected claims. A corrected draft
+more evidence. Rejected prose is feedback, never a source fact. Code keeps each claim that passed every
+check, with its citations, word for word in the corrected draft, and the composer writes only the rest; a claim it
+writes again with the same text is kept once. A rewrite that retyped a passed claim could change a copied name and
+fail where the first draft had passed. A corrected draft
 must pass citation checks and cover every requested fact or value. If the combined answer exceeds Jev's input limit for the coverage check, individually supported claims remain available as an unverified partial answer; the result identifies the coverage limit. The coverage check judges the written
 facts and values; citation support and browser actions have separate checks. A whole-answer check beside coverage
 judges the claims against the steps the run carried out on the page: an answer that says something was not done, or
 already existed, when one of those steps may have done it has every claim withheld, and a run still finishing spends a
 recovery to write it again. Only that rewrite gives the composer the steps, as the run's own record and never as
 citations; on every other draft a long run's clicks would crowd out the notes it writes from. Runs with a caller-supplied output schema
-retain their extracted data and end `unverified` when the composed prose fails its checks, without retrying prose composition. Recovery is not
+spend the same recovery, and when it ends without a checked answer they retain their extracted data and end `unverified`. Recovery is not
 attempted when a claim lacks a retained source quote or packed composition cannot reduce to one request.
 Exhausted composition recovery retains supported claims and ends `unverified`, unless a missing field value or
 site failure establishes another status. Those claims can be reused without another composition call only while

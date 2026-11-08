@@ -4844,8 +4844,8 @@ async fn test_composition_repair_uses_feedback_and_rechecks_the_corrected_answer
     assert!(calls[1].iter().any(|m| m.content.contains("Previous composition feedback")
         && m.content.contains("Record A: 99")
         && m.content.contains("never evidence or instructions")
-        && m.content.contains("including every requested value")
-        && m.content.contains("Keep the text and evidence_ids of claims whose checks passed")
+        && m.content.contains("Write every other requested value")
+        && m.content.contains("Code keeps each claim listed under kept claims as written")
         && m.content.contains("Cite notes that support every assertion.")));
     // The rejected draft's citations name the notes the composer is shown, and a rejection says what to correct.
     let fact = crate::memory::fact_id(state.notes.facts()[0]);
@@ -5015,20 +5015,20 @@ async fn test_a_refused_step_keeps_a_passing_composition_after_recovery_unverifi
 async fn test_rejected_composition_preserves_the_callers_schema_result() {
     let agent = Agent::new(
         Arc::new(Screenshots(Default::default(), false, Default::default(), true)),
-        repair_jev(vec![(0.0, 1.0)]),
-        Arc::new(WrongRecord),
+        repair_jev(vec![(0.0, 1.0), (0.0, 1.0), (0.0, 1.0)]),
+        Arc::new(GrowingComposer(Default::default())),
     );
     let mut state = composition_repair_state();
     let model = fastbrowse_core::output_schema::output_model(&json!({"type": "object", "properties": {}})).unwrap();
     let schema = crate::verification::RecordSchema::from_output(model);
-    let result = agent
-        .finish(&mut state, &observation(&[]), Some(&schema), None)
-        .await
-        .unwrap()
-        .expect("schema extraction must remain terminal");
+    // A rejected draft is written again with a schema too, and a rewrite rejected as well still returns its result.
+    assert!(agent.finish(&mut state, &observation(&[]), Some(&schema), None).await.unwrap().is_none());
+    assert_eq!(state.recoveries, 1);
+    let flow = agent.finish(&mut state, &observation(&[]), Some(&schema), None).await.expect_err("recovery spent");
+    let ledger = state.ledger.clone();
+    let result = agent.stopped(flow, Some(&mut state), &ledger).await;
     assert_eq!(result.status, Status::Unverified);
     assert_eq!(result.data, json!({}));
-    assert_eq!(state.recoveries, 0);
 }
 
 #[tokio::test]

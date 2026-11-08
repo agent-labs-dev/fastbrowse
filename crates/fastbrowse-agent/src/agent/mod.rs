@@ -410,7 +410,20 @@ impl Agent {
     }
 
     /// The result of a run a step stopped: the error the loop raised, as the status it means.
-    async fn stopped(&self, flow: Flow, state: Option<&mut RunState>, ledger: &Ledger) -> RunResult {
+    async fn stopped(&self, flow: Flow, mut state: Option<&mut RunState>, ledger: &Ledger) -> RunResult {
+        let schema = state.as_deref_mut().and_then(|state| state.schema_partial.take());
+        let mut result = self.stopped_result(flow, state, ledger).await;
+        // The schema was filled before the draft was sent back; a rewrite that fails too does not unfill it.
+        if let Some(extraction) = schema
+            && result.data.is_null()
+        {
+            result.data = extraction.data.unwrap_or(Value::Null);
+            result.evidence.extend(extraction.evidence);
+        }
+        result
+    }
+
+    async fn stopped_result(&self, flow: Flow, state: Option<&mut RunState>, ledger: &Ledger) -> RunResult {
         let (flow, exhausted) = match flow {
             Flow::Agent(AgentError::Budget(error)) => {
                 (Flow::Stop(state::Stop::new(Status::BudgetExceeded, error.to_string())), Some(error.budget))

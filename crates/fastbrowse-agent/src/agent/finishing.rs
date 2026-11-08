@@ -301,13 +301,15 @@ impl Agent {
             .as_deref()
             .zip(rejection.as_deref())
             .is_some_and(|(before, now)| drafted(before).is_some_and(|before| drafted(now) == Some(before)));
+        // A run with an output schema composes its answer too, and a rejected one ends it unverified, so it gets the
+        // same rewrite: without one, a single misspelt name ended a cheapest-product run with its extraction correct.
         if recover_rejection
-            && output_schema.is_none()
             && !repeated
             && let Some(rejection) = rejection
         {
             let reason = rejection_reason(&rejection);
             state.composition_feedback = Some(rejection);
+            state.schema_partial = extraction;
             if let Some(answer) = &answered
                 && !answer.claims.is_empty()
             {
