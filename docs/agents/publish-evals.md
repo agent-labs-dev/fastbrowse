@@ -106,7 +106,8 @@ A release runs `benchmark-campaign.yml` as `release-<x.y.z>` on its commit befor
 workflow's `gate` job will not publish without it (see [release.md](release.md)); anyone with write access can
 dispatch a campaign by hand. An integration holding a token with `contents: write` starts one with a `repository_dispatch`
 through `client_payload`, which takes the same values as the manual inputs and is refused before any spend when a
-value is outside them or the build has no Evals dispatch. When every group has run, the campaign builds the candidate and calls `publish-evals.yml`,
+value is outside them. Any campaign that is not a smoke is refused before any spend when its build has no passing or
+running Evals dispatch. When every group has run, the campaign builds the candidate and calls `publish-evals.yml`,
 which opens a pull request on agent-labs-dev/fastbrowse-site. The pull request carries the candidate byte for
 byte as `data/benchmark-<campaign>.json` and the site's group files under `data/benchmarks/`, written by
 

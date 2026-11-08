@@ -244,10 +244,10 @@ jobs:
             echo "harness_sha=$HARNESS_SHA"
             echo "run_on=$(date -u +%F)"
           } >> "$GITHUB_OUTPUT"
-      # The stage job needs a passing Evals dispatch on this build, and an integration that can only send a
-      # repository_dispatch cannot start one, so it is refused here rather than after the budget is spent.
+      # The stage job needs a passing Evals dispatch on this build, so a campaign that will stage is refused here,
+      # however it was started, rather than after the budget is spent. A smoke never stages.
       - name: Require an Evals dispatch on the build
-        if: ${{ github.event_name == 'repository_dispatch' }}
+        if: ${{ !(inputs.smoke || github.event.client_payload.smoke == true) }}
         env:
           GH_TOKEN: ${{ github.token }}
           FIXTURE_SHA: ${{ steps.pins.outputs.fastbrowse_sha }}
