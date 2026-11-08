@@ -3,7 +3,7 @@
 // Adapted to fastbrowse's Control shape (role + operation set, not per-kind actions) and to traverse
 // open shadow roots. Runs once per frame session (main frame or an OOPIF); CdpPage merges frames.
 // biome-ignore format: session.rs appends mode arguments to this parenthesized expression.
-((mode, allowedOrigins = null) => {
+((mode, allowedOrigins = null, own = {}) => {
   // Reading a cross-origin frame's document can throw.
   const childDocument = frame => {
     try {
@@ -64,37 +64,28 @@
     'button,input,textarea,select,summary,label,[contenteditable="true"],[draggable="true"],[ondrop],' +
     ARIA_ROLES.map(role => `[role="${role}"]`).join(',');
   // Elements a script gave a pointer listener, such as a Vue click handler on a bare span: the page's only sign that
-  // it is pressed. Chrome's own `getEventListeners` reads them, which the command line API of the evaluate that asks
-  // for this mode lends it, so the page sees no hook. Rebuilt on every look, as a removed listener takes its control
-  // away. A page that defines a global of that name answers for its own elements, as its cursor and `onclick` do.
-  // The root element and the body hear clicks on the whole page, as the document does, so neither counts.
+  // it is pressed. Chrome's own `getEventListeners` reads them, but it exists only in an evaluate with the command line
+  // API, so that evaluate (this mode, once per document) keeps it in `own`, the installed function's closure, where the
+  // page cannot reach it. A look then asks it only about the elements it weighs (`pressable`), live, so a removed
+  // listener takes its control away. A look before it is kept throws `own.unread`, which page/mod.rs answers with this
+  // mode. A page that defines a global of that name answers for its own elements, as its cursor and `onclick` do.
   if (mode === 'listeners') {
-    const listened = (registry.listened = new WeakSet());
     const read = globalThis.getEventListeners;
-    if (typeof read !== 'function' || !document.body || !granted(document)) return 0;
-    const pointer = ['click', 'mousedown', 'pointerdown', 'mouseup', 'pointerup'];
-    const mark = root => {
-      for (const e of root.querySelectorAll('*')) {
-        // A control, or anything inside one, is never pressable on its own (`pressable` below), so its listeners
-        // decide nothing; reading every element's made each look about an eighth slower on dense pages.
-        if (e !== e.ownerDocument.documentElement && e !== e.ownerDocument.body && !e.closest(SELECTOR)) {
-          let listeners = null;
-          try {
-            listeners = read(e);
-          } catch {}
-          if (listeners && pointer.some(type => Array.isArray(listeners[type]) && listeners[type].length))
-            listened.add(e);
-        }
-        if (e.shadowRoot) mark(e.shadowRoot);
-        if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
-          const inner = childDocument(e);
-          if (inner && inner.body && granted(inner)) mark(inner);
-        }
-      }
-    };
-    mark(document);
+    own.listeners = typeof read === 'function' ? read : null;
     return 0;
   }
+  if ((mode === 'snapshot' || mode === 'glance') && !('listeners' in own))
+    throw new Error(own.unread);
+  const POINTER = ['click', 'mousedown', 'pointerdown', 'mouseup', 'pointerup'];
+  // The root element and the body hear clicks on the whole page, as the document does, so neither counts.
+  const listened = e => {
+    if (!own.listeners || e === e.ownerDocument.documentElement || e === e.ownerDocument.body) return false;
+    let listeners = null;
+    try {
+      listeners = own.listeners(e);
+    } catch {}
+    return Boolean(listeners) && POINTER.some(type => Array.isArray(listeners[type]) && listeners[type].length);
+  };
   // Text the page rewrites by itself, such as a player's clock or a countdown, says nothing about which item a control
   // acts on: a Pause beside a ticking remaining time was refused as stale on every one of 52 clicks. Text that changed
   // between two looks with no input in between is the page's own; text that changes after a run's own click, scroll
@@ -288,7 +279,7 @@
       (!e.checkVisibility({ checkOpacity: !choice, checkVisibilityCSS: true }) && (choice || !fadingIn(e))) ||
       leaving(e) ||
       (choice && !shownThrough(e)) ||
-      (clippedAway(e) && (e.matches(SELECTOR) || pressable(e) || focusableText(e)))
+      ((e.matches(SELECTOR) || pressable(e) || focusableText(e)) && clippedAway(e))
     )
       return false;
     if (!choice) return true;
@@ -456,8 +447,7 @@
       e.hasAttribute('onclick') ||
       (view.getComputedStyle(e).cursor === 'pointer' &&
         (!e.parentElement || view.getComputedStyle(e.parentElement).cursor !== 'pointer'));
-    const listened = registry.listened?.has(e) ?? false;
-    if (!(declared || listened) || e.parentElement?.closest(SELECTOR) || [...e.querySelectorAll(SELECTOR)].some(visible))
+    if (e.parentElement?.closest(SELECTOR) || !(declared || listened(e)) || [...e.querySelectorAll(SELECTOR)].some(visible))
       return false;
     // A listener can sit on a container to hear its children's clicks, as React's does on its root, so one holding a
     // pressable element leaves the click to it.

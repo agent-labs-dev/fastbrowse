@@ -35,7 +35,9 @@ use crate::PdfUnread;
 use crate::cdp::secs;
 use crate::error::BrowserError;
 use crate::pdf::PARSE_SECONDS;
-use crate::session::{BrowserSession, CAPTURE_JS, Refusal, SNAPSHOT_UNINSTALLED, STATUS_WORLD, py_json};
+use crate::session::{
+    BrowserSession, CAPTURE_JS, LISTENERS_UNREAD, Refusal, SNAPSHOT_UNINSTALLED, STATUS_WORLD, py_json,
+};
 use crate::urlsplit::urlsplit;
 use scripts::py_float;
 
@@ -764,19 +766,17 @@ impl CdpPage {
     ) -> Result<(Vec<(String, FrameObservation<Snapshot>)>, usize), BrowserError> {
         let mode = if bind { "snapshot" } else { "glance" };
         let script = format!("{}('{mode}')", self.page_js);
-        let result = self.read_frames::<Snapshot>(&script, true).await?;
+        let result = self.read_frames::<Snapshot>(&script).await?;
         let coverage: Vec<(String, usize)> =
             result.iter().map(|(_, f)| (f.session_id.clone(), f.raw.inaccessible_frames)).collect();
         let inaccessible = self.inaccessible_frames(&coverage)?;
         Ok((result, inaccessible))
     }
 
-    /// Read every frame of the active tab with `expression`, after marking each frame's listened elements first when
-    /// `listeners` is set.
+    /// Read every frame of the active tab with `expression`.
     async fn read_frames<T: FrameText>(
         &self,
         expression: &str,
-        listeners: bool,
     ) -> Result<Vec<(String, FrameObservation<T>)>, BrowserError> {
         let main_session = self.session.active_session_id()?;
         let target_id = self.session.active_target_id();
@@ -784,7 +784,7 @@ impl CdpPage {
         sources.extend(self.session.frame_sessions());
         let mut result: Vec<(String, FrameObservation<T>)> = vec![];
         // Preserve source order regardless of completion order so capture offsets and hashes stay stable.
-        let reads = sources.iter().map(|(key, sid)| self.read_frame::<T>(key, sid, expression, listeners));
+        let reads = sources.iter().map(|(key, sid)| self.read_frame::<T>(key, sid, expression));
         let frames = futures_util::future::try_join_all(reads).await?;
         for ((key, _), frame) in sources.into_iter().zip(frames) {
             if let Some(frame) = frame {
@@ -808,13 +808,12 @@ impl CdpPage {
         frame_key: &str,
         session_id: &str,
         expression: &str,
-        listeners: bool,
     ) -> Result<Option<FrameObservation<T>>, BrowserError> {
         let is_main = frame_key == MAIN;
         let read = if is_main {
-            self.read_evaluate(session_id, expression, listeners).await
+            self.evaluate(session_id, expression).await
         } else {
-            self.frame_evaluate(session_id, expression, listeners).await
+            self.frame_evaluate(session_id, expression).await
         };
         let raw = match read {
             Ok(raw) => raw,
@@ -841,33 +840,12 @@ impl CdpPage {
         }))
     }
 
-    /// `evaluate`, after marking the document's listened elements when `listeners` is set.
-    ///
-    /// `getEventListeners` exists only in an evaluate with the command line API, which also lends the page's globals
-    /// `$` and the rest for as long as it runs, so the mark is an evaluate of its own and the read runs without them.
-    /// Both are sent at once: a session runs its commands in order, so the read sees the marks and waits on no extra
-    /// round trip. A mark that fails leaves the read as it was before listeners counted.
-    async fn read_evaluate(&self, session_id: &str, script: &str, listeners: bool) -> Result<Value, BrowserError> {
-        let mark = async {
-            if listeners {
-                let params = json!({
-                    "expression": format!("{}('listeners')", self.page_js),
-                    "includeCommandLineAPI": true,
-                    "returnByValue": true,
-                });
-                let _ = self.session.send("Runtime.evaluate", params, Some(session_id)).await;
-            }
-        };
-        let ((), read) = tokio::join!(mark, self.evaluate(session_id, script));
-        read
-    }
-
     /// Evaluate in a child frame within its deadline; past it, the frame reads as unreadable (`Null`).
-    async fn frame_evaluate(&self, session_id: &str, script: &str, listeners: bool) -> Result<Value, BrowserError> {
+    async fn frame_evaluate(&self, session_id: &str, script: &str) -> Result<Value, BrowserError> {
         let missed = self.state.lock().unwrap().unanswered.get(session_id).copied();
         let short = missed.is_some_and(|at| at.elapsed() < secs(FRAME_RECHECK_SECONDS));
         let budget = if short { FRAME_RETRY_SECONDS } else { FRAME_READ_SECONDS };
-        match timeout(secs(budget), self.read_evaluate(session_id, script, listeners)).await {
+        match timeout(secs(budget), self.evaluate(session_id, script)).await {
             Err(_) => {
                 if !short {
                     self.state.lock().unwrap().unanswered.insert(session_id.to_owned(), Instant::now());
@@ -904,7 +882,7 @@ impl CdpPage {
     async fn capture_once(&self) -> Result<Capture, BrowserError> {
         self.session.assert_clear().await?;
         // A JavaScript dialog blocks the renderer, so the page reads as nothing until it is answered, as it observes.
-        let Some(frames) = self.until_dialog(self.read_frames::<CaptureSnapshot>(&self.capture_js, false)).await else {
+        let Some(frames) = self.until_dialog(self.read_frames::<CaptureSnapshot>(&self.capture_js)).await else {
             let (url, title) = self.active_tab_page();
             return Ok(Capture {
                 url,
@@ -1468,6 +1446,18 @@ impl CdpPage {
             let mut install = params.clone();
             install["expression"] = format!("void {}", self.session.snapshot().install).into();
             self.session.send("Runtime.evaluate", install, Some(session_id)).await?;
+            out = self.session.send("Runtime.evaluate", params.clone(), Some(session_id)).await?;
+        }
+        if out.get("exceptionDetails").is_some_and(|details| details.to_string().contains(LISTENERS_UNREAD)) {
+            // A look weighs pointer listeners through `getEventListeners`, which only an evaluate with the command
+            // line API has. That API also lends the page `$` and the rest while it runs, so it gets an evaluate of its
+            // own, once per document, which keeps the function for every later look (snapshot.js `listeners`).
+            let mark = json!({
+                "expression": format!("{}('listeners')", self.page_js),
+                "includeCommandLineAPI": true,
+                "returnByValue": true,
+            });
+            self.session.send("Runtime.evaluate", mark, Some(session_id)).await?;
             out = self.session.send("Runtime.evaluate", params, Some(session_id)).await?;
         }
         if out.get("exceptionDetails").is_some() {

@@ -92,9 +92,10 @@ pointer counts as shown from the start of its fade, unless it ignores the pointe
 out counts as gone. A hover only shows content, so a task to carry out is not done by hovering alone.
 
 An element with no role, tabindex or pointer cursor is offered as a button when a script gave it a click, mousedown,
-pointerdown, mouseup or pointerup listener, as a Vue or React handler on a bare icon is. Before each observation the
-page asks Chrome's own `getEventListeners`, which only an evaluate with DevTools' command line API can call, so the
-page sees no hook, and the marks are rebuilt each time, so a removed listener takes its control away. A listened
+pointerdown, mouseup or pointerup listener, as a Vue or React handler on a bare icon is. The listeners are read with
+Chrome's own `getEventListeners`, which only an evaluate with DevTools' command line API has. That evaluate runs once
+per document and keeps the function where the page cannot reach it, so the page sees no hook, and each observation asks
+it afresh about the elements it weighs, so a removed listener takes its control away. A listened
 element follows the rules a pointer cursor does: one inside a control, or holding one, is not offered, and neither is
 a container whose listener hears its children's clicks while one of them is pressable. Listeners on the window, the
 document, the root element and the body hear the whole page, so they mark nothing.

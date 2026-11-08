@@ -39,6 +39,8 @@ pub const SNAPSHOT_JS: &str = include_str!("../js/snapshot.js");
 pub const CAPTURE_JS: &str = include_str!("../js/capture.js");
 /// What a call to the installed snapshot function throws in a document that never installed it.
 pub const SNAPSHOT_UNINSTALLED: &str = "fastbrowse: snapshot.js is not installed in this document";
+/// Thrown by snapshot.js's `snapshot` and `glance` before its `listeners` mode has run in the document.
+pub const LISTENERS_UNREAD: &str = "fastbrowse: listeners are not read in this document";
 
 /// snapshot.js, compiled once in each document and called by name after that.
 ///
@@ -59,10 +61,11 @@ impl SnapshotScript {
     pub fn new(origins: &str) -> Self {
         let digest = crate::page::sha256_hex(&format!("{origins}\n{SNAPSHOT_JS}"));
         let key = py_json(&json!(&digest[..16]));
+        let unread = py_json(&json!(LISTENERS_UNREAD));
         Self {
             install: format!(
                 "((globalThis.__fastbrowseScripts ||= {{}})[{key}] ||= \
-                 (snapshot => mode => snapshot(mode, {origins}))({SNAPSHOT_JS}))"
+                 (snapshot => {{ const own = {{ unread: {unread} }}; return mode => snapshot(mode, {origins}, own); }})({SNAPSHOT_JS}))"
             ),
             function: format!(
                 "(globalThis.__fastbrowseScripts?.[{key}] ?? (() => {{ throw new Error({}); }})())",
