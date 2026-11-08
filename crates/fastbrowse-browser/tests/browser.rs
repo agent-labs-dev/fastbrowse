@@ -29,12 +29,13 @@ use tokio::time::{Instant, sleep, timeout};
 
 // -- helpers ----------------------------------------------------------------------------------------------------
 
-async fn wait_until<F, Fut>(predicate: F)
+#[track_caller]
+fn wait_until<F, Fut>(predicate: F) -> impl Future<Output = ()>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = bool>,
 {
-    common::wait_until(predicate, 5.0).await;
+    common::wait_until(predicate, 5.0)
 }
 
 async fn eval_active(h: &Harness, expression: &str) -> Value {

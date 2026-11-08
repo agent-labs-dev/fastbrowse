@@ -263,31 +263,46 @@ pub fn find<'a>(observation: &'a Observation, label: &str) -> &'a Control {
 }
 
 /// `wait_until`: poll `predicate` every 50ms until it holds, failing after `timeout_seconds`.
-pub async fn wait_until<F, Fut>(mut predicate: F, timeout_seconds: f64)
+///
+/// A failure names the caller's line, since a test that waits more than once must say which wait ran out. The outer
+/// function is not async because `#[track_caller]` does not reach into an async body.
+#[track_caller]
+pub fn wait_until<F, Fut>(mut predicate: F, timeout_seconds: f64) -> impl Future<Output = ()>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = bool>,
 {
-    let deadline = Instant::now() + Duration::from_secs_f64(timeout_seconds);
-    while Instant::now() < deadline {
-        if predicate().await {
-            return;
+    let caller = std::panic::Location::caller();
+    async move {
+        let deadline = Instant::now() + Duration::from_secs_f64(timeout_seconds);
+        while Instant::now() < deadline {
+            if predicate().await {
+                return;
+            }
+            sleep(Duration::from_millis(50)).await;
         }
-        sleep(Duration::from_millis(50)).await;
+        panic!("condition was not met in {timeout_seconds}s, waited for at {caller}");
     }
-    panic!("condition was not met in time");
 }
 
 /// `observe_until`: observe until a control is actually there, since an attached frame session predates its document.
-pub async fn observe_until(page: &CdpPage, label: &str) -> Observation {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let observation = page.observe().await.expect("observe");
-        if observation.controls.iter().any(|c| c.label.contains(label)) {
-            return observation;
+/// A failure names the caller's line and the controls the last observation held.
+#[track_caller]
+pub fn observe_until<'a>(page: &'a CdpPage, label: &'a str) -> impl Future<Output = Observation> + 'a {
+    let caller = std::panic::Location::caller();
+    async move {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let observation = page.observe().await.expect("observe");
+            if observation.controls.iter().any(|c| c.label.contains(label)) {
+                return observation;
+            }
+            if Instant::now() >= deadline {
+                let seen: Vec<&str> = observation.controls.iter().map(|c| c.label.as_str()).collect();
+                panic!("no control labelled {label:?} in 5s, waited for at {caller}; the page showed {seen:?}");
+            }
+            sleep(Duration::from_millis(50)).await;
         }
-        assert!(Instant::now() < deadline, "condition was not met in time");
-        sleep(Duration::from_millis(50)).await;
     }
 }
 
