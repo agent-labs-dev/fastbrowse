@@ -1565,6 +1565,22 @@ mod tests {
         assert!(checked.claims.is_empty(), "a claim naming a book not at the extreme is not shown");
     }
 
+    /// Two tables holding the same row are two records, while the same page read again gives the same records.
+    #[tokio::test]
+    async fn the_same_text_twice_on_a_page_is_two_records_and_a_page_read_again_is_not() {
+        let row = |index: usize, capture: &str, start: i64| {
+            let mut note = page_fact(index, "https://tables.test/", "| Doe | $100.00 |");
+            let evidence = note.evidence.as_mut().unwrap();
+            (evidence.capture_sha256, evidence.start, evidence.end) = (capture.into(), start, start + 17);
+            note
+        };
+        let notes = Notes::new([row(0, "first", 0), row(1, "first", 40), row(2, "again", 0), row(3, "again", 40)]);
+        let claim = tallied("There are 9 rows.", "9", tally::Op::Count, "row", None, vec![]);
+        let jev = Tallying::new("Doe", "");
+        let checked = review_claims(&jev, "How many rows?", None, vec![claim], &notes, None, true, &[]).await.unwrap();
+        assert_eq!(checked.claims[0].text, "There are 2 rows.");
+    }
+
     #[tokio::test]
     async fn a_total_adds_the_field_of_every_record() {
         let facts = [

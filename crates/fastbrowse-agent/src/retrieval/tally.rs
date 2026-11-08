@@ -6,7 +6,7 @@
 //! per note read, whether it is one record of that kind, and for a total or an extreme which number in it is the
 //! field; code counts, adds and compares those answers.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionClient, NoulQuestion, Question};
@@ -101,17 +101,31 @@ fn whole(records: Vec<usize>, found: &[Candidate]) -> Vec<usize> {
 }
 
 /// Every note read, once each: a superseded read is a past state, and a note whose whole text a note before it
-/// already gave is the same record read again, from a later visit or another listing of it. A note from a table says
+/// already gave is the same record read again, from a later visit or another listing of it. Within one capture the
+/// same text twice is two records, such as a row two tables both hold, so a note is keyed by its text and which
+/// occurrence of that text it is on its capture. A note from a table says
 /// which of its page's tables it is in, counted by code, since a task names a table by its place on the page and a
 /// note alone does not show it.
 fn candidates(notes: &Notes) -> Vec<Candidate> {
-    let mut seen = HashSet::new();
-    notes
+    let live: Vec<(String, &fastbrowse_core::models::Evidence)> = notes
         .facts()
         .into_iter()
         .filter_map(|fact| fact.evidence.as_ref().map(|evidence| (fact_id(fact), evidence)))
         .filter(|(id, _)| !notes.superseded(id))
-        .filter(|(_, evidence)| seen.insert(text::squash(&evidence.quote)))
+        .collect();
+    // Where each text was noted on each capture, in page order.
+    let mut starts: HashMap<(&str, String), BTreeSet<i64>> = HashMap::new();
+    for (_, evidence) in &live {
+        let key = (evidence.capture_sha256.as_str(), text::squash(&evidence.quote));
+        starts.entry(key).or_default().insert(evidence.start);
+    }
+    let mut seen = HashSet::new();
+    live.into_iter()
+        .filter(|(_, evidence)| {
+            let quote = text::squash(&evidence.quote);
+            let place = starts[&(evidence.capture_sha256.as_str(), quote.clone())].range(..evidence.start).count();
+            seen.insert((quote, place))
+        })
         .map(|(id, evidence)| {
             let mut note = json!({"quote": evidence.quote, "page": evidence.url, "headings": evidence.heading_path});
             let blocks = notes.table_blocks(evidence);
