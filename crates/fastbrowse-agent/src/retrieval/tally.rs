@@ -154,18 +154,32 @@ fn member_question(tally: &Tally, note: &serde_json::Value) -> Question {
 
 const NO_VALUE: &str = "none";
 
-fn value_question(tally: &Tally, note: &serde_json::Value, numbers: &[(usize, usize, String)]) -> Question {
+fn value_question(tally: &Tally, note: &serde_json::Value, numbers: &[String]) -> Question {
     let field = text::repr(tally.field.as_deref().unwrap_or("value"));
     let mut criteria: IndexMap<String, serde_json::Value> = numbers
         .iter()
         .enumerate()
-        .map(|(index, (_, _, number))| (format!("n{index}"), json!(format!("{} is its {field}.", text::repr(number)))))
+        .map(|(index, number)| (format!("n{index}"), json!(format!("{} is its {field}.", text::repr(number)))))
         .collect();
     criteria.insert(NO_VALUE.into(), json!(format!("None of these numbers is its {field}.")));
     Question::Choice(ChoiceQuestion::new(
         format!("{UNTRUSTED}\nWhich number in this note is the {field} of the record it holds? Note: {}", dumps(note)),
         criteria,
     ))
+}
+
+/// The numbers a note could hold its field as. A comma both groups thousands and separates the cells of a line, as in
+/// a CSV row, and the text alone cannot say which: "INV-01,120.00" reads as 1,120.00 or as 01 and 120.00. Both readings
+/// are offered, and Jev picks the one that is the field.
+fn numbers(quote: &str) -> Vec<String> {
+    let cells = quote.lines().flat_map(|line| line.split(','));
+    let mut found: Vec<String> = spans(quote, SpanKind::Number).into_iter().map(|span| span.2).collect();
+    for number in cells.flat_map(|cell| spans(cell, SpanKind::Number)).map(|span| span.2) {
+        if !found.contains(&number) {
+            found.push(number);
+        }
+    }
+    found
 }
 
 /// A number as written, as code reads it: its value, its decimal places, and the currency sign it carries.
@@ -257,7 +271,7 @@ pub async fn work(
             continue;
         }
         for note in &records {
-            let numbers = spans(&found[*note].quote, SpanKind::Number);
+            let numbers = numbers(&found[*note].quote);
             if numbers.len() > 1 {
                 values.insert(format!("t{index}/v{note}"), value_question(tally, &found[*note].note, &numbers));
             }
@@ -268,16 +282,16 @@ pub async fn work(
     for (index, tally, records) in pending {
         let mut amounts = Vec::new();
         for note in records {
-            let numbers = spans(&found[note].quote, SpanKind::Number);
+            let numbers = numbers(&found[note].quote);
             let chosen = match numbers.len() {
                 0 => None,
-                1 => Some(numbers[0].2.clone()),
+                1 => Some(numbers[0].clone()),
                 _ => match picked.as_ref().and_then(|a| a.get(&format!("t{index}/v{note}"))) {
                     Some(Answer::Choice(answer)) => answer
                         .choice
                         .strip_prefix('n')
                         .and_then(|n| n.parse::<usize>().ok())
-                        .map(|n| numbers[n].2.clone()),
+                        .and_then(|n| numbers.get(n).cloned()),
                     _ => {
                         worked.insert(index, Err(Unworked::Unjudged));
                         break;
@@ -347,6 +361,13 @@ async fn ask(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_comma_separated_line_offers_each_cell_as_well_as_the_grouped_number() {
+        assert_eq!(super::numbers("reference,item,total\nA-1001,Blue Kettle,34.50"), ["1001", "34.50"]);
+        assert_eq!(super::numbers("invoice,amount\nINV-01,120.00"), ["01,120.00", "01", "120.00"]);
+        assert_eq!(super::numbers("Total: $1,234.50"), ["$1,234.50", "$1", "234.50"]);
+    }
 
     #[test]
     fn amounts_keep_their_sign_and_places() {
