@@ -34,7 +34,11 @@ the action only in some state of the page or site ("reply if nobody has answered
 action commits or leaves something the site keeps, a second Jev request asks, as a choice, whether in the
 state the page shows the task says to do it with these values, says not to, or cannot be told. It does not
 say the action is conditional, so a step the task asks for outright before a condition on a later one is
-judged as asked. That request gets the masked page text, controls, media, dialog and tabs, with the notes and
+judged as asked. The same request asks which of the task's values the action uses: those to use at first, or
+those the task gives only once something happens ("if the site rejects anything, use SW1A 1AA"). For the later
+values the action also needs a yes that the run has done what the task asks first and the page or a recorded
+effect shows the site responded the way the task gives those values for, so a step that skips ahead to a
+correction is refused. That request gets the masked page text, controls, media, dialog and tabs, with the notes and
 recent actions, and can only refuse: the action proceeds only on a yes, and any other answer refuses it once
 so the run can read the page or finish.
 Repeated refusals spend recoveries and end the run `stuck`, never by committing.
@@ -107,7 +111,9 @@ and has not changed since, and when it changed after it was last read. Every REA
 that adds no new source quote counts toward the stall rule like any other step that moved nothing.
 
 Fetch reads the same way: by default a run reads pages over HTTP and follows links there, with the page's form controls
-offered as what it has. A step only a browser can take starts one on the same page, and the run carries on with
+offered as what it has. A disabled control (`disabled`, `aria-disabled="true"` or `inert` on the element) is not
+offered, as a browser capture leaves it out, so a disabled next link is no next page. A step only a browser can
+take starts one on the same page, and the run carries on with
 what it knows. `fetch` forbids the browser, and `browser` starts one from the first step.
 Fetched documents have no pixels, so optional screenshots and step frames are skipped.
 
@@ -202,7 +208,8 @@ site failure establishes another status. Those claims can be reused without anot
 their source evidence remains unchanged and the run has taken no further step. A later nonempty checked repair replaces the retained draft; an empty
 repair preserves the earlier draft. Other stops also retain checked partial claims alongside their status,
 wall or budget details.
-A run that already stopped keeps its stop status. Otherwise the answer is drafted from the facts Jev picked.
+A run that already stopped keeps its stop status. Otherwise the answer is drafted from the facts Jev picked, with
+the same words picked on more than one page stated once and citing each.
 
 ## Prompt limits and progress
 

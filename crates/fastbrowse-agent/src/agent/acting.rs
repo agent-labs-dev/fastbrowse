@@ -13,7 +13,8 @@ use fastbrowse_core::recipe::RecipeText;
 use fastbrowse_core::safety::{
     asks_for_credentials, changes_a_value, changes_credentials, conditional_question, control_action,
     downloads_question, edits_question, irreversible_question, is_password, lasting_question, may_be_irreversible,
-    MET, met_question, origin_of, requested_question, resolve_secret, sets_new_password, starts_download,
+    HAPPENED, LATER_VALUES, MET, happened_question, met_question, origin_of, requested_question, resolve_secret,
+    sets_new_password, starts_download, values_question,
 };
 use indexmap::IndexMap;
 use serde_json::{Map, Value as JsonValue, json};
@@ -602,7 +603,8 @@ impl Agent {
     }
 
     /// Whether the page shows a conditional commit allowed: Jev's yes that it shows the state in which the task says to
-    /// commit. Any other answer, or none, is not allowed.
+    /// commit, and, when the commit uses values the task gives only for once something happens, its yes that the run
+    /// did what the task asks first and the site responded that way (#872). Any other answer, or none, is not allowed.
     ///
     /// The one authorization question asked with the page's content, in a request of its own, so a page's text can
     /// only veto a commit and never argue `requested` up. It is shown the masked observation the step decision reads,
@@ -629,7 +631,11 @@ impl Agent {
         self.mask_strings(&mut page);
         page["task"] = state.task.clone().into();
         page["date"] = crate::dates::dated(observation.captured_at, &state.dates).into();
-        let questions = IndexMap::from([("met".to_string(), Question::Choice(met_question(action)))]);
+        let questions = IndexMap::from([
+            ("met".to_string(), Question::Choice(met_question(action))),
+            ("values".to_string(), Question::Choice(values_question(action))),
+            ("happened".to_string(), Question::Choice(happened_question(action))),
+        ]);
         let evaluation = match jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&page, &questions)).await {
             Ok(evaluation) => evaluation,
             // A page too large to ask about cannot show the condition met.
@@ -637,12 +643,21 @@ impl Agent {
             Err(error) => return Err(error.into()),
         };
         state.ledger.record([evaluation.cost.clone()])?;
-        let met = match evaluation.answers.get("met") {
+        let choice = |key: &str| match evaluation.answers.get(key) {
             Some(Answer::Choice(answer)) => Some(answer.choice.clone()),
             _ => None,
         };
-        self.event("condition", || Map::from_iter([("met".into(), json!(met))]));
-        Ok(met.as_deref() == Some(MET))
+        let (met, values, happened) = (choice("met"), choice("values"), choice("happened"));
+        self.event("condition", || {
+            Map::from_iter([
+                ("met".into(), json!(met)),
+                ("values".into(), json!(values)),
+                ("happened".into(), json!(happened)),
+            ])
+        });
+        // Unanswered, the values may be the later ones, so only the site having responded as they wait for lets them go.
+        let waits = values.as_deref().is_none_or(|v| v == LATER_VALUES);
+        Ok(met.as_deref() == Some(MET) && (!waits || happened.as_deref() == Some(HAPPENED)))
     }
 
     /// Mask every string in `value`, however deeply it is nested.

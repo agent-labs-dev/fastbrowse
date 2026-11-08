@@ -48,8 +48,9 @@ use crate::policy::StepContext;
 use crate::retrieval::{ComposedAnswer, cited_quote, compose, draft_answer, marked_partial, partial_answer};
 use crate::verification::RecordSchema;
 
-/// Long enough for a browser-verification page to run its check and hand over, short enough that a page which never
-/// moves still ends as needs_login well inside a run's time budget.
+/// How long a page that has not moved is watched before the run acts on it: a bot check that never clears then ends
+/// `blocked`, and any other page goes to the step decision. Fitted to PyPI's script-only browser check, not derived
+/// from anything the run knows; replacing it with a signal is open in #868.
 const INTERSTITIAL_SECONDS: f64 = 12.0;
 /// A fresh observation can wait three seconds for loading, and a background capture needs time to activate.
 const ENDING_FRAME_SECONDS: f64 = 6.0;
