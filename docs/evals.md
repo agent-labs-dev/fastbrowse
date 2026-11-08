@@ -28,7 +28,7 @@ A model cost receipt records its physical provider request count, including retr
 
 Local and mock suites exercise real browsers, completion rules and authorization gates. They are regression
 checks, not claims about performance across the web. `.github/workflows/evals.yml` runs them nightly and on
-demand; they do not gate a release.
+demand, and a release publishes only after a dispatched run on its tree passed.
 
 The recorded run: `uv run python -m fastbrowse.evals.runner --suite local --repeat 1` exercises real local Chrome and grades
 what the fixture server recorded: **6/6 passed** (recorded 2026-10-15). The fixture receipt a published

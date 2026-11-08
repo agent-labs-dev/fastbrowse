@@ -1,4 +1,6 @@
 name: Benchmark campaign
+# The campaign id ends the run's title, which is how the release gate finds `release-<version>`.
+run-name: Benchmark campaign ${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
 
 # Runs the live browser benchmark campaign (Parallax) for one fastbrowse build and publishes it to the site.
 # Dispatch only, by hand, by the release workflow on a minor release, or by a repository_dispatch from an integration:

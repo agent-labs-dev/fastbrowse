@@ -3,8 +3,11 @@ name: Release
 # the five binaries have all passed, and then in an order that never leaves a package pointing at one that is not there
 # yet: PyPI, then the five platform packages and the SDK, and the crates each after those it depends on.
 #
-# Approval is the decision: a tag publishes once the sdist, the wheels and the binaries are green. The fixture
-# suites run nightly and on demand in evals.yml, and do not gate a release.
+# A tag publishes once the sdist, the wheels and the binaries are green and the evals of the tagged tree pass
+# (`gate`): a dispatched Evals run on that tree, and for a minor release, or a patch whose tag message has the line
+# `Benchmarks: run`, the campaign `release-<version>` measured in full and compared with the last release's.
+# scripts/release_gate.py says what passing means. The evals run before the tag, so the numbers a release is
+# published with are the ones it was gated on.
 #
 # Run by hand, it stops after the binaries and publishes nothing. That is how a change to the build is tried
 # without spending a version number, which no registry gives back. The one exception is `publish_npm`, which
@@ -70,8 +73,22 @@ jobs:
 
   # The first job that publishes. It needs every build job, and each later publish job needs the one before it,
   # so a target that fails to build or to pass its smoke test publishes nothing anywhere.
+  # The evals of exactly this tree: they ran before the tag was pushed, and this only finds and checks them.
+  gate:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - run: python3 scripts/release_gate.py "$GITHUB_REF_NAME"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   github-release:
-    needs: binaries
+    needs: [binaries, gate]
     # A run started by hand is a rehearsal and ends here, and with this job every job after it is skipped.
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -101,52 +118,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-
-  # A minor release (vX.Y.0) measures itself once it is published: the Evals fixture run the campaign binds to, both
-  # official suites for fastbrowse (three repeats), then the live campaign (every group and suite, three repeats), all
-  # on this tag. A patch release runs them only when its annotated tag message has the line `Benchmarks: run`. Each is
-  # a dispatch, so runs that take hours never hold this run open. The official workflow dispatches the campaign itself
-  # once it has passed, naming its own rows, so every group lands in one candidate on one build, and the campaign opens
-  # the site pull request when it finishes.
-  benchmarks:
-    needs: [build, github-release]
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    permissions:
-      contents: read
-      actions: write
-    steps:
-      - name: Decide whether this release measures itself
-        id: decide
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.build.outputs.version }}
-        run: |
-          if test "${VERSION##*.}" = 0; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          ref="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq '.object.type + " " + .object.sha')"
-          message=""
-          if test "${ref%% *}" = tag; then
-            message="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/${ref#* }" --jq .message)"
-          fi
-          if grep -qx 'Benchmarks: run' <<< "$message"; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "$GITHUB_REF_NAME is a patch release without 'Benchmarks: run' in its tag message; no benchmarks run"
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Dispatch the evals and the official suites, which dispatch the campaign
-        if: steps.decide.outputs.run == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.build.outputs.version }}
-        run: |
-          # A benchmark candidate binds to a dispatched fixture run on this tag.
-          gh workflow run evals.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
-          gh workflow run official-benchmarks.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
-            -f fastbrowse_ref="$GITHUB_REF_NAME" -f suites=all \
-            -f campaign_id="release-$VERSION"
 
   pypi:
     needs: github-release
