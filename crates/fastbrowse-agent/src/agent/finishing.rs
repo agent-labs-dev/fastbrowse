@@ -437,7 +437,10 @@ fn rejection_reason(rejection: &str) -> String {
                     None => failed.push(format!("{claim} does not follow from the notes it cites")),
                 }
             }
-            _ => failed.push(format!("{claim} does not follow from the notes it cites")),
+            _ => match feedback["tally_reasons"][check].as_str() {
+                Some(reason) => failed.push(format!("{claim}: {reason}")),
+                None => failed.push(format!("{claim} does not follow from the notes it cites")),
+            },
         }
     }
     failed.dedup();
@@ -470,9 +473,11 @@ mod tests {
                 {"text": "There are 9 quotes by Albert Einstein.", "evidence_ids": ["e1"]},
                 {"text": "The cheapest is X at £10.69.", "evidence_ids": ["e2"]},
                 {"text": "Y costs £12.", "evidence_ids": ["E3"]},
+                {"text": "The total is 175.00 (A 120.00, B 55.00).", "evidence_ids": ["e4"]},
             ],
             "columns": ["Name", "Shape"],
-            "rejected_checks": ["claim1", "claim0/tally", "claim2/citations", "coverage", "claim2/cell1", "actions"],
+            "rejected_checks": ["claim1", "claim0/tally", "claim2/citations", "coverage", "claim2/cell1", "actions", "claim3/states"],
+            "tally_reasons": {"claim3/states": "it states something besides its total"},
             "untallied_claims": [{"claim": 0, "reason": "No note read is one 'quote by Albert Einstein'."}],
         });
         let reason = rejection_reason(&feedback.to_string());
@@ -483,6 +488,7 @@ mod tests {
             "the answer leaves out a fact or value the task asks for",
             "'Y costs £12.': its 'Shape' cell does not follow from the notes it cites",
             "the answer says something was not done or already existed that a step this run took may have done",
+            "'The total is 175.00 (A 120.00, B 55.00).': it states something besides its total",
         ] {
             assert!(reason.contains(part), "{reason}");
         }

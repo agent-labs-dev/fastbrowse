@@ -159,11 +159,15 @@ Answer claims use numbered Markdown links built from those notes. `RunResult.cit
 text-fragment deep links; unused facts have no citation. The LLM writes a composed answer from the notes. Jev judges
 each final claim against its original cited quotes, including record identity and values, after any packing rounds.
 A count, total, minimum or maximum is never written or judged as a number. The composer marks it as a tally with
-the kind of record and the field, and Jev answers one question per note read: whether it is one such record, and which
-number in it is the field. Code counts, adds or compares, writes the value into the claim and cites every record it
-rests on. Such a claim gets no support question over the value: Jev is asked only whether the claim, with `[computed]`
-in the value's place, states nothing besides the tally, and for a minimum or maximum, whether the record it names is one
-of those code found at it.
+the kind of record and the field, and Jev answers one question per note read: for a count, whether it holds exactly one
+such record, and for a total or extreme, whether it holds one with its field, then which number in it is the field. A
+record's name, heading or a link to it holds no value, so it is not counted as a record without one. Code counts, adds
+or compares, writes the value into the claim and cites every record it rests on. Such a claim gets no support question
+over the value: Jev is asked only whether the claim, with `[computed]` in the value's place, states nothing besides the
+tally. For a minimum or maximum both questions are choices: whether the claim states the value, the record holding it,
+both, or something else as well, and which record it names, none, one of those code found at the extreme, or another.
+A failed check tells the composer which it was, such as a claim that also lists each record's value, which then goes in
+a claim of its own.
 Packing continues only when fewer requests are needed or the rewritten claim text shrinks. Removing source-state
 metadata alone does not count as progress.
 For a table, each cell is judged with the whole row and its quotes as context; every cell must be supported.

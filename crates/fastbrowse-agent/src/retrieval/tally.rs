@@ -140,16 +140,30 @@ fn candidates(notes: &Notes) -> Vec<Candidate> {
         .collect()
 }
 
+/// Whether a note is one record. A total or an extreme needs each record's field, so it asks for a record with its
+/// field, or the field of one: a record's name, heading or a link to it holds no value, and counted alone it would be
+/// a record without one.
 fn member_question(tally: &Tally, note: &serde_json::Value) -> Question {
     let of = text::repr(&tally.of);
-    Question::Noul(NoulQuestion::new(
-        format!(
-            "{UNTRUSTED}\nIs this note one whole {of}? Part of a record, such as its tags, a label or a heading, is not one, and nor is a total a page states. Note: {}",
-            dumps(note)
+    let (question, yes, no) = match tally.field.as_deref().filter(|_| tally.op != Op::Count).map(text::repr) {
+        // "Is this note one" leaves a plain record line near even odds, while "hold exactly one" keeps a note
+        // listing several out as well.
+        None => (
+            format!(
+                "Does this note hold exactly one whole {of}? A note holding several is not one, and nor is a record's tags, label or heading alone, or a total a page states."
+            ),
+            format!("The note holds exactly one whole {of}."),
+            format!("The note holds no {of}, several, or only part of one."),
         ),
-        Some(&format!("The note is one {of}.")),
-        Some(&format!("The note is not one {of}, or is only part of one.")),
-    ))
+        Some(field) => (
+            format!(
+                "Is this note one whole {of} with its {field}, or the {field} of one? Part of a record without its {field}, such as its name, a label, a heading or a link to it, is not, and nor is a total a page states."
+            ),
+            format!("The note is one {of} with its {field}, or gives the {field} of one."),
+            format!("The note is not one {of} with its {field}, and does not give the {field} of one."),
+        ),
+    };
+    Question::Noul(NoulQuestion::new(format!("{UNTRUSTED}\n{question} Note: {}", dumps(note)), Some(&yes), Some(&no)))
 }
 
 const NO_VALUE: &str = "none";
