@@ -369,10 +369,14 @@ jobs:
           # (fastbrowse.evals.versions.provenance); a plain directory install records none and publication refuses it.
           uv pip install "fastbrowse @ git+file://$GITHUB_WORKSPACE/fastbrowse@$FASTBROWSE_SHA"
           uv run --no-sync python -c "import fastbrowse, fastbrowse_evals.live"
-      # The browser-harness arm's agent; the arm checks this exact version before each attempt.
+      # The browser-harness arm's agent, at the version the harness checkout pins: the arm checks it before each
+      # attempt, and a version written here as well drifted from it, so every attempt failed before it started.
       - name: Install the Codex CLI Browser Harness drives
         if: ${{ env.REFRESH == 'true' && matrix.key == 'head-to-head' }}
-        run: npm install --global @openai/codex@0.166.0
+        run: |
+          cd harness/evals/src/fastbrowse_evals/adapters
+          version=$(uv run --no-sync --project ../../.. python -c "import browser_harness_arm; print(browser_harness_arm.CODEX_VERSION)")
+          npm install --global "@openai/codex@$version"
       - name: Fetch the progress reporter
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
