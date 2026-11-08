@@ -238,9 +238,14 @@ pub async fn work(
     let state = json!({"task": task});
     let mut members = IndexMap::new();
     for (index, tally, text) in claims {
-        if tally.written.trim().is_empty() || text.matches(tally.written.as_str()).count() != 1 {
+        let times = if tally.written.trim().is_empty() { 0 } else { text.matches(tally.written.as_str()).count() };
+        if times != 1 {
+            // Code writes its value over `written`, so the reason names the claim and the rewrite: told only that
+            // the value "is not written once", the composer resent a claim listing each record's value 10 times of 10.
             let reason = format!(
-                "The claim's tally.written {} is not written once, word for word, in its text.",
+                "Claim {index} states {} {times} times, and code writes the worked value in place of its \
+                 tally.written, which must appear once. Rewrite claim {index} to state only the tally's value, once; \
+                 state each other value in a claim of its own with tally null.",
                 text::repr(&tally.written)
             );
             worked.insert(*index, Err(Unworked::Draft(reason)));
