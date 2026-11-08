@@ -53,6 +53,13 @@ pub struct Tally {
 }
 
 impl Tally {
+    /// Whether the claim writes the record at a minimum or maximum, such as the shop that sells it cheapest, rather than
+    /// the value there: asked which shop is cheaper, the composer set `written` to the shop's name, and code wrote the
+    /// price over it, so the answer read "84.99 sells the Burr Grinder cheaper".
+    pub fn names_record(&self) -> bool {
+        matches!(self.op, Op::Min | Op::Max) && amount(&self.written).is_none()
+    }
+
     /// The extreme's place counted from its end, 1 for the extreme itself.
     pub fn place(&self) -> u64 {
         self.rank.unwrap_or(1)
@@ -163,14 +170,14 @@ fn member_question(tally: &Tally, note: &serde_json::Value) -> Question {
         // listing several out as well.
         None => (
             format!(
-                "Does this note hold exactly one whole {of}? A note holding several is not one, and nor is a record's tags, label or heading alone, or a total a page states."
+                "Does this note hold exactly one whole {of}? A note holding several is not one, and nor is a record's tags, label or heading alone, or a value a page states across several records, such as a total."
             ),
             format!("The note holds exactly one whole {of}."),
             format!("The note holds no {of}, several, or only part of one."),
         ),
         Some(field) => (
             format!(
-                "Is this note one whole {of} with its {field}, or the {field} of one? Part of a record without its {field}, such as its name, a label, a heading or a link to it, is not, and nor is a total a page states."
+                "Is this note one whole {of} with its {field}, or the {field} of one? Part of a record without its {field}, such as its name, a label, a heading or a link to it, is not, and nor is a value a page states across several records, such as a total or a price they start from."
             ),
             format!("The note is one {of} with its {field}, or gives the {field} of one."),
             format!("The note is not one {of} with its {field}, and does not give the {field} of one."),
@@ -345,6 +352,17 @@ pub async fn work(
             worked.insert(*index, Err(Unworked::Draft(reason)));
             continue;
         }
+        // Code writes a count or total over `written`, so words there would be lost.
+        if matches!(tally.op, Op::Count | Op::Sum) && amount(&tally.written).is_none() {
+            let reason = format!(
+                "Claim {index}'s tally.written {} is not a number, and code writes the worked number in its place. Set \
+                 written to the {} as claim {index} writes it, and keep the record's name in the claim's text.",
+                text::repr(&tally.written),
+                tally.field.as_deref().map_or("count".to_string(), text::repr),
+            );
+            worked.insert(*index, Err(Unworked::Draft(reason)));
+            continue;
+        }
         if tally.op != Op::Count && tally.field.is_none() {
             let reason = "The claim's tally adds or compares records but names no field.".to_string();
             worked.insert(*index, Err(Unworked::Draft(reason)));
@@ -469,6 +487,11 @@ pub async fn work(
                 // Every record at that place is cited, so a tie is not settled by reading order.
                 let winners: Vec<&(usize, Amount)> = amounts.iter().filter(|(_, amount)| amount.value == at).collect();
                 let evidence_ids = winners.iter().map(|(note, _)| found[*note].id.clone()).collect();
+                if tally.names_record() {
+                    // The claim's answer is the record, which the record check judges, so its words stay.
+                    worked.insert(index, Ok(Worked { value: tally.written.clone(), evidence_ids }));
+                    continue;
+                }
                 Worked { value: winners[0].1.written.clone(), evidence_ids }
             }
             Op::Count => unreachable!("a count is worked out above"),
@@ -478,10 +501,23 @@ pub async fn work(
     Ok(worked)
 }
 
-/// A worked amount in the form the claim writes its value: a claim whose `written` leaves the currency sign in the
-/// text beside it ("$" then "251.00") takes the number alone, or the sign would be written twice.
+/// A worked amount in the form the claim writes its value: code puts its number where the claim's number is and keeps
+/// the words around it, so "GBP 84.99" keeps its code where the note gave the number alone, and a claim whose
+/// `written` leaves the currency sign in the text beside it ("$" then "251.00") is not given a second sign.
 fn as_written(value: &str, written: &str) -> String {
-    if written.chars().any(currency) { value.to_string() } else { value.chars().filter(|c| !currency(*c)).collect() }
+    let number: String = value.chars().filter(|c| !currency(*c)).collect();
+    let digit = |c: char| c.is_ascii_digit();
+    match (written.find(digit), written.rfind(digit)) {
+        (Some(start), Some(end)) => {
+            // A sign written just before the number belongs to it, so the worked value's own sign takes its place.
+            let start =
+                written[..start].char_indices().rev().find(|(_, c)| !currency(*c)).map_or(0, |(i, c)| i + c.len_utf8());
+            let sign: String = value.chars().filter(|c| currency(*c)).collect();
+            let sign = if written[start..].chars().next().is_some_and(currency) { sign } else { String::new() };
+            format!("{}{sign}{number}{}", &written[..start], &written[end + 1..])
+        }
+        _ => value.to_string(),
+    }
 }
 
 /// Jev's answers to `questions`, or None when there are none to ask or Jev could not answer them.
@@ -528,6 +564,8 @@ mod tests {
         assert_eq!(as_written("$251.00", "251.00"), "251.00", "the claim writes the sign before its value");
         assert_eq!(as_written("$251.00", "$251"), "$251.00");
         assert_eq!(as_written("3.5", "3"), "3.5");
+        assert_eq!(as_written("84.99", "GBP 84.99"), "GBP 84.99", "the claim's currency code stays");
+        assert_eq!(as_written("£12.00", "£12"), "£12.00");
     }
 
     #[test]

@@ -215,11 +215,14 @@ struct ComposeItem {
     /// The page a read note was quoted from: a filter or input can change the query, so two pages of results are both
     /// current, and only reading order says which state came later.
     page: Option<String>,
+    /// The headings a read note sits under: a form's heading inside a frame reads as any other line without the frame's
+    /// title above it, and a rewrite then cited the title as the form's heading.
+    headings: Vec<String>,
 }
 
 impl ComposeItem {
     fn line(&self, text: &str) -> String {
-        format!("{}: {}", self.label, note_text(text, self.superseded, self.page.as_deref()))
+        format!("{}: {}", self.label, note_text(text, self.superseded, self.page.as_deref(), &self.headings))
     }
 
     fn written(&self) -> String {
@@ -227,7 +230,7 @@ impl ComposeItem {
     }
 }
 
-const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself, and every number in digits. For a count, total, minimum or maximum across records, whether found by comparing values or by the order a list is sorted in, set tally to its op (count, sum, min or max), of (the kind of record it ranges over, with the scope the task gives it, such as \"quote by Albert Einstein\" or \"book in the Mystery category\"), field (the value added or compared, such as \"price\"; null for a count), rank (for a place after the extreme, such as 2 for the second cheapest, with op min; null otherwise) and written (the value exactly as the text writes it, once). A task that asks for several places, such as the two cheapest, gets one claim per place, each with its own tally. Code works the value out from every note read, writes it in place of written and cites the records. A value one note states, such as a page's own total of results, is quoted as written, with tally null; so is every claim that works nothing out. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. Say an answer is partial only when a note itself shows part of what the task covers was not reached, never because the notes might lack something. When the task asks for a table, set columns to its column names and make each claim one row: set cells to its values in column order, which code writes as the claim's text. Otherwise set columns and cells to null.\n\n# Trust\n";
+const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself, and every number in digits. For a count, total, minimum or maximum across records, whether found by comparing values or by the order a list is sorted in, set tally to its op (count, sum, min or max), of (the kind of record it ranges over, with the scope the task gives it, such as \"quote by Albert Einstein\" or \"book in the Mystery category\"), field (the value added or compared, such as \"price\"; null for a count), rank (for a place after the extreme, such as 2 for the second cheapest, with op min; null otherwise) and written (the value exactly as the text writes it, once; for a claim that answers which record is at a minimum or maximum without its value, the record's name as the text writes it). A task that asks for several places, such as the two cheapest, gets one claim per place, each with its own tally. Code works the value out from every note read, writes it in place of written and cites the records. A value one note states, such as a page's own total of results, is quoted as written, with tally null; so is every claim that works nothing out. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. Say an answer is partial only when a note itself shows part of what the task covers was not reached, never because the notes might lack something. When the task asks for a table, set columns to its column names and make each claim one row: set cells to its values in column order, which code writes as the claim's text. Otherwise set columns and cells to null.\n\n# Trust\n";
 
 const DESCRIPTIVE_VALUES: &str = "Interpret the requested field by its meaning, not by literal labels in the source. A value stated in descriptive prose counts even when no heading names that field. A statement that a value is not shown contradicts such a value. Use only a value stated by the description, including equivalent wording; do not infer a value from a merely related detail.";
 
@@ -403,6 +406,7 @@ async fn compose_packed(
                 sources: claim.evidence_ids.clone(),
                 superseded: None,
                 page: None,
+                headings: Vec::new(),
             })
             .collect();
         let next = pack_items(task, &items, limit)?;
@@ -593,7 +597,10 @@ async fn review_claims(
         .map(|(index, claim)| match worked.get(&index) {
             Some(Ok(done)) => {
                 tallies.extend(claim.tally.clone().map(|tally| (index, tally)));
-                shown[index] = claim.clone().worked(COMPUTED, claim.evidence_ids.clone());
+                // A claim naming the record keeps it in view, for the record check to judge.
+                if !claim.tally.as_ref().is_some_and(Tally::names_record) {
+                    shown[index] = claim.clone().worked(COMPUTED, claim.evidence_ids.clone());
+                }
                 claim.worked(&done.value, done.evidence_ids.clone())
             }
             Some(Err(Unworked::Draft(reason))) => {
@@ -924,12 +931,16 @@ struct QuoteState<'a> {
     superseded: bool,
 }
 
-fn note_text(text: &str, superseded: Option<bool>, page: Option<&str>) -> String {
-    match (superseded, page) {
-        (Some(superseded), Some(page)) => dumps(&json!({"text": text, "superseded": superseded, "page": page})),
-        (Some(superseded), None) => dumps(&json!({"text": text, "superseded": superseded})),
-        (None, _) => text.into(),
+fn note_text(text: &str, superseded: Option<bool>, page: Option<&str>, headings: &[String]) -> String {
+    let Some(superseded) = superseded else { return text.into() };
+    let mut note = json!({"text": text, "superseded": superseded});
+    if let Some(page) = page {
+        note["page"] = page.into();
     }
+    if !headings.is_empty() {
+        note["headings"] = headings.into();
+    }
+    dumps(&note)
 }
 
 fn fact_page(fact: &Fact) -> Option<String> {
@@ -995,6 +1006,7 @@ fn initial_items(notes: &Notes) -> Vec<ComposeItem> {
                 sources: vec![source],
                 superseded,
                 page: fact_page(fact),
+                headings: fact.evidence.as_ref().map(|evidence| evidence.heading_path.clone()).unwrap_or_default(),
             }
         })
         .collect()
@@ -1616,6 +1628,28 @@ mod tests {
         let checked =
             review_claims(&jev, task, None, vec![ranked(Some(3), "£12")], &notes, None, true, &[]).await.unwrap();
         assert!(checked.claims.is_empty(), "two prices have no third place");
+    }
+
+    /// A cheapest claim can answer with the record rather than its value, and code then keeps the record's name.
+    #[tokio::test]
+    async fn an_extreme_written_as_its_record_keeps_the_name_and_cites_the_winner() {
+        let facts = vec![
+            page_fact(0, "https://shop.test/a", "Item: Grinder £84.99"),
+            page_fact(1, "https://shop.test/b", "Item: Grinder £92.50"),
+        ];
+        let winner = vec![fact_id(&facts[0])];
+        let notes = Notes::new(facts);
+        let claim = tallied("Shop A sells it cheaper.", "Shop A", tally::Op::Min, "item", Some("price"), vec![]);
+        let jev = Tallying::new("Item:", "£");
+        let checked =
+            review_claims(&jev, "Which shop is cheaper?", None, vec![claim], &notes, None, true, &[]).await.unwrap();
+        assert_eq!(checked.claims, [Claim::new("Shop A sells it cheaper.", winner)]);
+        let Question::Choice(record) = &jev.asked()["claim0/record"] else { panic!("record is a choice") };
+        assert!(record.instructions.contains("Shop A"), "the record check sees the name");
+        let total = tallied("The basket costs Shop A.", "Shop A", tally::Op::Sum, "item", Some("price"), vec![]);
+        let checked =
+            review_claims(&jev, "What does it cost?", None, vec![total], &notes, None, true, &[]).await.unwrap();
+        assert!(checked.claims.is_empty(), "a total written as words is sent back");
     }
 
     /// A results block can hold more numbers than one choice may offer, so they are narrowed group by group first.
