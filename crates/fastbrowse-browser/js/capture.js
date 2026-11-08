@@ -80,7 +80,53 @@
     }
     return text;
   };
-  const textOf = e => clean(dated(e, e.innerText ?? e.textContent ?? ''));
+  // A footnote reference is a pointer to a note elsewhere on the page, not part of the text it marks: read inline, an
+  // infobox cell's `41,798,407[3]` was answered as the population, marker and all (#862). It is told by structure: a
+  // link the page names a note reference (`doc-noteref`), or an in-page link whose target links back to exactly that
+  // link, as Wikipedia, GitHub and Pandoc footnotes do. A table of contents or a "back to top" link is never answered
+  // by a link to itself. The note itself stays, where the page lists it.
+  const IN_PAGE = 'a[href^="#"],[role~="doc-noteref"]';
+  const fragmentTarget = (root, href) => {
+    if (!href?.startsWith('#') || href.length < 2) return null;
+    let id = href.slice(1);
+    try {
+      id = decodeURIComponent(id);
+    } catch {
+      // An id that is not valid percent-encoding is looked up as written, as a browser does.
+    }
+    return (root.getElementById ? root : root.ownerDocument ?? document).getElementById(id);
+  };
+  const noteReferences = new WeakMap();
+  const noteReference = e => {
+    if (noteReferences.has(e)) return noteReferences.get(e);
+    let found = (e.getAttribute('role') ?? '').split(/\s+/).includes('doc-noteref');
+    const root = e.getRootNode?.() ?? document;
+    const note = found ? null : fragmentTarget(root, e.getAttribute('href'));
+    if (note && !note.contains(e)) {
+      const marker = clean(e.innerText ?? '');
+      // The back link may point at the reference's wrapper, such as Wikipedia's `sup`, which shows the link alone.
+      found = [...note.querySelectorAll('a[href^="#"]')].some(back => {
+        const target = fragmentTarget(root, back.getAttribute('href'));
+        return target && target.contains(e) && clean(target.innerText ?? '') === marker;
+      });
+    }
+    noteReferences.set(e, found);
+    return found;
+  };
+  // `text` as `e` reads it, without the text of each footnote reference in it, removed in document order.
+  const unnoted = (e, text) => {
+    const references = [...(e.matches(IN_PAGE) ? [e] : []), ...e.querySelectorAll(IN_PAGE)].filter(noteReference);
+    let cursor = 0;
+    for (const reference of references) {
+      const shown = clean(reference.innerText ?? '');
+      const at = shown ? text.indexOf(shown, cursor) : -1;
+      if (at < 0) continue;
+      text = text.slice(0, at) + text.slice(at + shown.length);
+      cursor = at;
+    }
+    return text;
+  };
+  const textOf = e => clean(dated(e, unnoted(e, e.innerText ?? e.textContent ?? '')));
   const isBlock = e => {
     const display = getComputedStyle(e).display;
     return !(display.startsWith('inline') || display === 'contents') || e.tagName === 'BR';
@@ -220,7 +266,7 @@
   function flush(run) {
     if (!run.length) return;
     const elements = run.filter(n => n.nodeType === 1);
-    let text = clean(run.map(n => (n.nodeType === 3 ? n.textContent : dated(n, n.innerText ?? ''))).join(''));
+    let text = clean(run.map(n => (n.nodeType === 3 ? n.textContent : dated(n, unnoted(n, n.innerText ?? '')))).join(''));
     // A host's own text read in its shadow root is a block apart from its row, which may have read it without it.
     // A frame's nodes come from another realm, so the root is told by its node type rather than `instanceof`.
     const host = run[0].parentNode?.nodeType === 11 ? run[0].parentNode.host : null;

@@ -118,6 +118,13 @@ Browser and fetch captures write a `time` or custom element's `datetime` in brac
 relative date such as "3 weeks ago" keeps the exact date the page holds. `ins` and `del` are excluded, and nothing is
 added when the shown text already states the value.
 
+Browser and fetch captures leave a footnote reference out of the text it marks, so an infobox cell reads
+`41,798,407 (37th)`, not `41,798,407[3] (37th)`. A reference is told by structure: a link marked `doc-noteref`, or
+an in-page link whose target links back to that link, or to a wrapper showing only it, as Wikipedia, GitHub and
+Pandoc footnotes do. A table of contents entry or a "back to top" link has no such back link and stays. The notes
+themselves stay where the page lists them. A citation quoting across a removed marker can miss its text-fragment
+highlight, since the page still shows the marker there.
+
 Jev moves through a list. A `rel="next"` link is a stated fact on its element, and every other link keeps its href,
 so choosing the next page is an ordinary step. A page number drawn as text rather than a link or a button is offered
 when it is focusable and has visible text, including a label wrapped in child elements. Hidden menu links do not

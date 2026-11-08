@@ -4,7 +4,7 @@
 //! reader turns them into the blocks `capture.js` makes of the same page.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use encoding_rs::{Encoding, UTF_8};
 use fastbrowse_core::models::Operation;
@@ -199,6 +199,11 @@ struct Element {
     /// The class tokens, in order and without repeats.
     classes: Vec<String>,
     href: Option<String>,
+    id: Option<String>,
+    /// Whether its `role` names it a note reference (`doc-noteref`).
+    noteref: bool,
+    /// Whether text other than white space sits directly in it, not in a child.
+    own_text: bool,
     /// The `aria-label`, else the `title`, which names a fact the element only draws.
     label: Option<String>,
     navigation: bool,
@@ -233,6 +238,9 @@ impl Tree {
             children: Vec::new(),
             classes: Vec::new(),
             href: None,
+            id: None,
+            noteref: false,
+            own_text: false,
             label: None,
             navigation: false,
             hidden: false,
@@ -307,6 +315,54 @@ impl Tree {
         }
     }
 
+    /// The tag tokens opening the footnote references, which `capture.js` leaves out of the text they mark: a link
+    /// the markup names a note reference, or an in-page link whose target links back to exactly that link, or to a
+    /// wrapper showing nothing but it. A table of contents or a "back to top" link is never answered by a link to
+    /// itself.
+    fn note_references(&mut self) -> HashSet<usize> {
+        self.close_from(1, usize::MAX);
+        let elements = &self.elements;
+        let mut ids: HashMap<&str, usize> = HashMap::new();
+        for (i, element) in elements.iter().enumerate().skip(1) {
+            if let Some(id) = element.id.as_deref() {
+                // The first element with an id is the one a fragment reaches.
+                ids.entry(id).or_insert(i);
+            }
+        }
+        let target = |href: Option<&str>| {
+            let fragment = href?.strip_prefix('#').filter(|fragment| !fragment.is_empty())?;
+            let decoded = percent_encoding::percent_decode_str(fragment).decode_utf8().ok();
+            decoded.and_then(|id| ids.get(&*id)).or_else(|| ids.get(fragment)).copied()
+        };
+        let within = |i: usize, outer: usize| outer <= i && i <= elements[outer].last;
+        // Whether `wrapper` shows the link `link` and no text of its own beside it.
+        let shows_only = |wrapper: usize, link: usize| {
+            within(link, wrapper)
+                && (wrapper..=elements[wrapper].last)
+                    .all(|i| within(i, link) || !elements[i].own_text || elements[i].hidden)
+        };
+        let mut found = HashSet::new();
+        for (i, element) in elements.iter().enumerate().skip(1) {
+            if element.hidden {
+                continue;
+            }
+            let referenced = element.noteref
+                || (element.tag == "a"
+                    && target(element.href.as_deref()).is_some_and(|note| {
+                        !within(i, note)
+                            && (note + 1..=elements[note].last).any(|back| {
+                                elements[back].tag == "a"
+                                    && target(elements[back].href.as_deref())
+                                        .is_some_and(|wrapper| shows_only(wrapper, i))
+                            })
+                    }));
+            if referenced {
+                found.insert(element.start);
+            }
+        }
+        found
+    }
+
     /// Marks an element and the elements around it as showing text.
     fn shows_text(&mut self, mut i: usize) {
         while i != 0 && !self.elements[i].text {
@@ -340,6 +396,9 @@ impl Tags for Tree {
             children: Vec::new(),
             classes,
             href: get("href"),
+            id: get("id"),
+            noteref: get("role").is_some_and(|role| role.split_ascii_whitespace().any(|role| role == "doc-noteref")),
+            own_text: false,
             label: nonempty(get("aria-label")).or_else(|| nonempty(get("title"))),
             navigation: get("role").is_some_and(|role| role == "navigation"),
             hidden: hidden
@@ -376,6 +435,7 @@ impl Tags for Tree {
     fn data(&mut self, data: &str) {
         let top = *self.open.last().unwrap_or(&0);
         if !self.elements[top].hidden && !text::strip(data).is_empty() {
+            self.elements[top].own_text = true;
             self.shows_text(top);
         }
     }
@@ -631,6 +691,8 @@ struct Reader<'a> {
     records: HashMap<usize, Record>,
     /// The open card, whose whole text is one block.
     record: Option<Record>,
+    /// The tag tokens opening footnote references, whose text is left out as `capture.js` leaves it out.
+    notes: HashSet<usize>,
 }
 
 impl Tags for Reader<'_> {
@@ -671,7 +733,7 @@ impl Tags for Reader<'_> {
 }
 
 impl<'a> Reader<'a> {
-    fn new(url: &'a str, records: HashMap<usize, Record>) -> Reader<'a> {
+    fn new(url: &'a str, records: HashMap<usize, Record>, notes: HashSet<usize>) -> Reader<'a> {
         Reader {
             url,
             blocks: Vec::new(),
@@ -700,6 +762,7 @@ impl<'a> Reader<'a> {
             stamps: Vec::new(),
             records,
             record: None,
+            notes,
         }
     }
 
@@ -773,8 +836,9 @@ impl<'a> Reader<'a> {
             self.in_title = true;
             return;
         }
-        if get("hidden").is_some() || hides(get("style").unwrap_or_default()) {
-            // A browser never renders this subtree, so a value it holds is not one the user can see or quote.
+        if get("hidden").is_some() || hides(get("style").unwrap_or_default()) || self.notes.contains(&at) {
+            // A browser never renders this subtree, so a value it holds is not one the user can see or quote. A
+            // footnote reference is skipped the same way: it points at a note and is no part of the text it marks.
             self.hidden.push(tag.to_string());
             self.skip += 1;
             return;
@@ -1118,8 +1182,9 @@ pub fn blocks(html: &str, url: &str) -> (String, Vec<Found>) {
 /// hold documents of their own.
 pub fn read(html: &str, url: &str) -> (String, Vec<Found>, Vec<Control>, Vec<Frame>) {
     // A card is told by its siblings, which come after it, so the tree is read before the text.
-    let records = tokenize(html, Sink::new(Tree::new(url))).into_inner().records();
-    let mut reader = tokenize(html, Sink::new(Reader::new(url, records))).into_inner();
+    let mut tree = tokenize(html, Sink::new(Tree::new(url))).into_inner();
+    let notes = tree.note_references();
+    let mut reader = tokenize(html, Sink::new(Reader::new(url, tree.records(), notes))).into_inner();
     reader.close_record();
     reader.flush(None, None, false);
     (clean(&reader.title), reader.blocks, reader.controls, reader.frames)
@@ -1212,6 +1277,28 @@ mod tests {
                 },
             ]
         );
+    }
+
+    /// The markup of `capture.js`'s footnote test, read without a browser: the references go as they go there (#862).
+    #[test]
+    fn a_footnote_reference_is_not_read_as_part_of_the_text_it_marks() {
+        let (_, found) = blocks(
+            r##"<div id="top"><p><a href="#history">[History]</a></p>
+            <table><tr><th>Population</th>
+            <td>41,798,407<sup id="cite_ref-3" class="reference"><a href="#cite_note-3"><span>[</span>3<span>]</span></a></sup> (<a href="/rank">37th</a>)</td></tr>
+            <tr><th>Completed</th><td>31 March 1889<sup id="cite_ref-:0_1-0"><a href="#cite_note-%3A0-1">[1]</a></sup></td></tr></table>
+            <p>Dune is a novel.<sup><a href="#fn1" role="doc-noteref">2</a></sup> It sold well.</p></div>
+            <h2 id="history">History</h2><p><a href="#top">Back to top</a></p>
+            <ol><li id="cite_note-3"><a href="#cite_ref-3">^</a> Statistics Canada.</li>
+            <li id="cite_note-:0-1"><a href="#cite_ref-:0_1-0"><sup>a</sup></a> Tour Eiffel.</li></ol>"##,
+            "https://a.example/",
+        );
+        let read: Vec<&str> = found.iter().map(|b| b.text.as_str()).collect();
+        assert!(read.iter().any(|text| text.starts_with("| Population | 41,798,407 (37th) |")), "{read:?}");
+        assert!(read.iter().any(|text| text.ends_with("| Completed | 31 March 1889 |")), "{read:?}");
+        assert!(read.contains(&"Dune is a novel. It sold well."), "{read:?}");
+        assert!(read.contains(&"[History]") && read.contains(&"Back to top"), "{read:?}");
+        assert!(read.iter().any(|text| text.contains("Statistics Canada.")), "{read:?}");
     }
 
     #[test]

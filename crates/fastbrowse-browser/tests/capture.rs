@@ -306,6 +306,30 @@ async fn test_nested_record_lists_keep_the_inner_records() {
     h.close().await;
 }
 
+/// A footnote reference points at a note elsewhere, so the cell it marks reads without it (#862). An in-page link
+/// whose target does not link back to it, such as a table of contents entry, is page text and stays.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_footnote_reference_is_not_read_as_part_of_the_text_it_marks() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate("about:blank", None).await.expect("navigate");
+    let markup = r##"<div id="top"><p><a href="#history">[History]</a></p>
+        <table><tr><th>Population</th>
+        <td>41,798,407<sup id="cite_ref-3" class="reference"><a href="#cite_note-3"><span>[</span>3<span>]</span></a></sup> (<a href="/rank">37th</a>)</td></tr>
+        <tr><th>Completed</th><td>31 March 1889<sup id="cite_ref-:0_1-0"><a href="#cite_note-:0-1">[1]</a></sup></td></tr></table>
+        <p>Dune is a novel.<sup><a href="#fn1" role="doc-noteref">2</a></sup> It sold well.</p></div>
+        <h2 id="history">History</h2><p><a href="#top">Back to top</a></p>
+        <ol><li id="cite_note-3"><a href="#cite_ref-3">^</a> Statistics Canada.</li>
+        <li id="cite_note-:0-1"><a href="#cite_ref-:0_1-0"><sup>a</sup></a> Tour Eiffel.</li></ol>"##;
+    set_body(&h.session, markup).await;
+    let read = texts(&content_capture(&h.page).await);
+    assert!(read.contains(&"| Population | 41,798,407 (37th) |".to_string()), "{read:?}");
+    assert!(read.iter().any(|text| text.ends_with("\n| Completed | 31 March 1889 |")), "{read:?}");
+    assert!(read.contains(&"Dune is a novel. It sold well.".to_string()), "{read:?}");
+    assert!(read.contains(&"[History]".to_string()) && read.contains(&"Back to top".to_string()), "{read:?}");
+    assert!(read.iter().any(|text| text.contains("Statistics Canada.")), "{read:?}");
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_record_candidates_preserve_frame_and_shadow_boundaries() {
     for boundary in ["iframe", "shadow-host", "shadow-descendant"] {

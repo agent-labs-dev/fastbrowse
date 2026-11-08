@@ -447,6 +447,7 @@ dependencies = [
  "flate2",
  "html5ever",
  "indexmap",
+ "percent-encoding",
  "serde_json",
  "tokio",
  "url",
