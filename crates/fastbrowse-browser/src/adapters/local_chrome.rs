@@ -397,13 +397,18 @@ impl Drop for LocalChromeProcess {
 /// The death signal fires when the thread that forked ends, not the process, and a runtime worker can end while its
 /// runtime runs on (one handed to `block_in_place` does). So one thread that lasts as long as the process forks every
 /// Chrome, inside the caller's runtime so the child is reaped there.
+///
+/// That thread is kept with the id of the process that started it. A process forked from this one, such as an
+/// embedder's worker, inherits the channel but not the thread behind it, so it starts its own instead of waiting on
+/// one that is not there. The owner sits behind an atomic pointer rather than a mutex, because a process forked while
+/// another thread held a mutex inherits it locked with nothing left to unlock it. One owner is leaked per process.
 #[cfg(target_os = "linux")]
 async fn spawn_bound_to_owner(mut command: Command) -> std::io::Result<Child> {
-    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicPtr, Ordering};
     use std::sync::mpsc::{Sender, channel};
     type Job = Box<dyn FnOnce() + Send>;
-    // Started on first use, and again if it could not start or has stopped, so a failure is never kept.
-    static SPAWNER: Mutex<Option<Sender<Job>>> = Mutex::new(None);
+    type Owner = (u32, Sender<Job>);
+    static OWNER: AtomicPtr<Owner> = AtomicPtr::new(std::ptr::null_mut());
 
     let owner = std::process::id() as libc::pid_t;
     // SAFETY: the closure runs between fork and exec, and makes only async-signal-safe calls: prctl, getppid, _exit,
@@ -434,23 +439,25 @@ async fn spawn_bound_to_owner(mut command: Command) -> std::io::Result<Child> {
         let _entered = runtime.enter();
         let _ = reply.send(command.spawn());
     });
-    {
-        let mut spawner = SPAWNER.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        // A thread that has stopped hands the job back, and a new one takes it.
-        let unsent = match spawner.as_ref() {
-            Some(jobs) => jobs.send(job).err().map(|returned| returned.0),
-            None => Some(job),
-        };
-        if let Some(job) = unsent {
-            let (jobs, queue) = channel::<Job>();
-            std::thread::Builder::new().name("fastbrowse-chrome".into()).spawn(move || {
-                for job in queue {
-                    job();
-                }
-            })?;
-            jobs.send(job).map_err(|_| std::io::Error::other("the Chrome spawner stopped"))?;
-            *spawner = Some(jobs);
-        }
+    let pid = std::process::id();
+    let current = OWNER.load(Ordering::Acquire);
+    // SAFETY: a non-null pointer is a leaked `Owner` that is never freed, and a forked process keeps a copy of it.
+    let unsent = match unsafe { current.as_ref() } {
+        Some((started_by, jobs)) if *started_by == pid => jobs.send(job).err().map(|returned| returned.0),
+        _ => Some(job),
+    };
+    if let Some(job) = unsent {
+        let (jobs, queue) = channel::<Job>();
+        std::thread::Builder::new().name("fastbrowse-chrome".into()).spawn(move || {
+            for job in queue {
+                job();
+            }
+        })?;
+        jobs.send(job).map_err(|_| std::io::Error::other("the Chrome spawner stopped"))?;
+        // A launch that lost the race to publish its owner leaks it all the same: freeing it would end the thread,
+        // and with it the death signal would reach the Chrome that thread just forked.
+        let started = Box::into_raw(Box::new((pid, jobs)));
+        let _ = OWNER.compare_exchange(current, started, Ordering::AcqRel, Ordering::Acquire);
     }
     spawned.await.unwrap_or_else(|_| Err(std::io::Error::other("the Chrome spawner stopped")))
 }
@@ -937,6 +944,32 @@ mod tests {
         let fds = std::fs::read_to_string(&listing).unwrap();
         assert!(!fds.lines().any(|fd| fd == leaked.to_string()), "fd {leaked} reached Chrome: {fds:?}");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A process forked after a launch, as an embedder's worker is, launches its own Chrome rather than waiting on the
+    /// spawner thread it inherited the channel of but not the thread.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_process_forked_after_a_launch_can_launch() {
+        let launch = || {
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            runtime.block_on(async {
+                let spawned = tokio::time::timeout(Duration::from_secs(5), spawn_bound_to_owner(Command::new("true")));
+                match spawned.await {
+                    Ok(Ok(mut child)) => child.wait().await.is_ok_and(|status| status.success()),
+                    _ => false,
+                }
+            })
+        };
+        assert!(launch(), "the first launch failed");
+        // SAFETY: the child only builds a runtime, launches and exits; it never returns into the test harness.
+        let child = unsafe { libc::fork() };
+        if child == 0 {
+            unsafe { libc::_exit(if launch() { 0 } else { 1 }) };
+        }
+        let mut status = 0;
+        assert_eq!(unsafe { libc::waitpid(child, &mut status, 0) }, child);
+        assert!(libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0, "the forked process could not launch");
     }
 
     /// Chrome belongs to the process, not to the thread that launched it: a runtime worker that ends, as one handed to
