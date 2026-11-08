@@ -5,8 +5,8 @@
   "owner": "parallax",
   "task_sources": {
     "live_tasks.py": "9cb99d627c4904ee7f04de261f9059f922a54ea23294a4ca79db60b657187095",
-    "more_tasks.py": "4edec47b05163aea404dc440609cb8d886a2393d74f80e3a9ed7638770f51098",
-    "versions.json": "1ada9145c1351dc5e524be2f72bbbd0d92a493b7a463c95f1ff3e89666f95dd4"
+    "more_tasks.py": "7bced0cb86327c1414492dae46635ffb70da3d2b34f1c0f25e74aa9e0b56349b",
+    "versions.json": "c4edb650aabcfe0f5aa123460a9a9b946fe450589700da9576200398f8730303"
   },
   "suites": {
     "core": [
@@ -643,8 +643,8 @@
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "06a3e1b3ceea11a1",
-        "task_version": 8
+        "source_fingerprint": "158d0c7ea896d796",
+        "task_version": 9
       },
       {
         "id": "new-tab-page",
