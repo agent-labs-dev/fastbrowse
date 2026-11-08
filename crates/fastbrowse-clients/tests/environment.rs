@@ -313,7 +313,10 @@ async fn test_llm_prefers_openrouter_when_its_key_is_set() {
     let (seen, result) = llm_requests(&[("OPENROUTER_API_KEY", "o"), ("AI_GATEWAY_API_KEY", "g")], Some(0.0001)).await;
     assert_eq!(seen[0].url, "https://openrouter.ai/api/v1/chat/completions");
     assert_eq!(seen[0].header("authorization"), Some("Bearer o"));
-    assert_eq!(body(&seen[0])["provider"], json!({"require_parameters": true, "sort": "latency"}));
+    assert_eq!(
+        body(&seen[0])["provider"],
+        json!({"require_parameters": true, "sort": "latency", "order": ["parasail", "deepinfra", "inference-net"], "ignore": ["together"]})
+    );
     assert_eq!(result.cost.basis, CostBasis::Metered);
 }
 

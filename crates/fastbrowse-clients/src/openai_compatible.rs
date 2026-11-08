@@ -732,6 +732,18 @@ impl OpenAICompatibleLLM {
         }
         if deepseek(model) {
             body.entry("temperature").or_insert(0.0.into());
+            // Sorting by latency sent DeepSeek V4.1 Flash composes to whichever of about 50 endpoints was fastest, and
+            // Together, the one it chose most, changed words the model copied: the same compose request at temperature
+            // 0 named "Clerkwell Coffee" or "GBP 9.99" in 3 to 6 of 100 replays there. Parasail, DeepInfra and
+            // InferenceNet wrote it correctly 100 of 100 times each, Parasail at Together's 1.2 s median, so they are
+            // tried in that order, and Together is never a fallback. Only OpenRouter's routing takes
+            // `require_parameters`, so the gateway's is left as it is.
+            if let Some(Value::Object(provider)) = body.get_mut("provider")
+                && provider.contains_key("require_parameters")
+            {
+                provider.insert("order".into(), json!(["parasail", "deepinfra", "inference-net"]));
+                provider.insert("ignore".into(), json!(["together"]));
+            }
         }
         if let Some(effort) = self.reasoning_effort {
             body.insert(self.reasoning_field.key().into(), self.reasoning_field.value(effort));

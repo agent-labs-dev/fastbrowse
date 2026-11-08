@@ -760,6 +760,11 @@ async fn test_an_optional_object_goes_out_as_nullable_leaves_and_comes_back_whol
     assert_eq!(schema["properties"]["cite__first"]["anyOf"][1], json!({"type": "null"}));
     assert_eq!(schema["properties"]["cite__first"]["description"], "The blocks the claim reads.");
     assert_eq!(body["temperature"], 0.0);
+    // DeepSeek goes to the endpoints measured to copy text exactly, never to Together, which changed it.
+    assert_eq!(
+        body["provider"],
+        json!({"require_parameters": true, "sort": "latency", "order": ["parasail", "deepinfra", "inference-net"], "ignore": ["together"]})
+    );
 }
 
 #[tokio::test]
