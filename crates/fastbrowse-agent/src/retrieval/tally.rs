@@ -330,9 +330,10 @@ pub async fn work(
             let written = text::repr(&tally.written);
             let reason = if times == 0 {
                 format!(
-                    "Claim {index} does not write its tally.written {written}, and code writes the worked value in its \
-                     place. Rewrite claim {index} to write {written} once, with the record that has it when the task \
-                     asks which record it is."
+                    "Claim {index} does not write its tally.written {written}: written is the value as claim {index}'s own \
+                     text writes it, which code replaces with the worked value. Set tally.written to the value exactly \
+                     as claim {index} writes it, or rewrite claim {index} to write {written} once, with the record that \
+                     has it when the task asks which record it is."
                 )
             } else {
                 format!(

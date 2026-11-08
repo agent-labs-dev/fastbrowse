@@ -29,6 +29,15 @@ use crate::retrieval::text::{Word, edge_options, words};
 use crate::verification::page_state;
 use crate::writing::write_value;
 
+/// Why a conditional commit is refused when the page does not show its condition met.
+const UNSHOWN_CONDITION: &str = "depends on a condition the task sets, and the page does not show it allows this: read the page to check it, or finish";
+
+/// Which of several values a task gives a field is typed. Both ends of a value are picked apart and can land on
+/// different values, and the question that settles where it ends was asked without this: on a checkout given
+/// "NOTAPOSTCODE. If the site rejects anything, ... SW1A 1AA", it picked the second postcode's end 9 times in 10 before
+/// any rejection, and the first postcode 10 times in 10 with it.
+const FIRST_VALUE: &str = "the first comes first, unless the task says when to use another and that has happened.";
+
 /// The field's value is words of the task, which Jev marks.
 const IN_TASK: &str = "task";
 /// The field's value is words of what was read, which Jev marks. Offered with the task's words, a word read from the
@@ -101,7 +110,7 @@ fn value_questions<'a>(
     if !group.is_empty() {
         let span = |end: &str| {
             format!(
-                "If {holder} states the value for {label}, which of its words {end} the value? When it gives this field several values, the first comes first, unless the task says when to use another and that has happened. A search takes what is looked for, not the request around it.{tried}"
+                "If {holder} states the value for {label}, which of its words {end} the value? When it gives this field several values, {FIRST_VALUE} A search takes what is looked for, not the request around it.{tried}"
             )
         };
         asked.push(("first", span("begins"), options.clone()));
@@ -570,10 +579,8 @@ impl Agent {
             if wanted
                 && (!reversible || keeps)
                 && conditional
-                && !self.condition_met(state, observation, action).await?
+                && let Some(why) = self.condition_refusal(state, observation, action).await?
             {
-                let why = "depends on a condition the task sets, and the page does not show it allows this: read the \
-                           page to check it, or finish";
                 return self.refuse_once(state, observation, decision, label, why).await;
             }
             if reversible || wanted {
@@ -602,14 +609,21 @@ impl Agent {
         Err(Stop::new(Status::NeedsConfirmation, reason).into())
     }
 
-    /// Whether the page shows a conditional commit allowed: Jev's yes that it shows the state in which the task says to
-    /// commit, and, when the commit uses values the task gives only for once something happens, its yes that the run
-    /// did what the task asks first and the site responded that way (#872). Any other answer, or none, is not allowed.
+    /// Why the page does not show a conditional commit allowed, or `None` when it does: Jev's yes that it shows the
+    /// state in which the task says to commit, and, when the commit uses values the task gives only for once something
+    /// happens, its yes that the run did what the task asks first and the site responded that way (#872). Any other
+    /// answer, or none, refuses. A commit refused for using the later values says so, because a run that typed them
+    /// before trying the first ones cannot tell from "read the page" that the fix is to enter the first values.
     ///
     /// The one authorization question asked with the page's content, in a request of its own, so a page's text can
     /// only veto a commit and never argue `requested` up. It is shown the masked observation the step decision reads,
     /// with the notes and recent actions that say what the run has already read.
-    async fn condition_met(&self, state: &mut RunState, observation: &Observation, action: &str) -> Step<bool> {
+    async fn condition_refusal(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        action: &str,
+    ) -> Step<Option<&'static str>> {
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
         let elements: Vec<_> =
             observation.controls.iter().map(|c| JsonValue::Object(crate::policy::element(c))).collect();
@@ -639,7 +653,7 @@ impl Agent {
         let evaluation = match jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&page, &questions)).await {
             Ok(evaluation) => evaluation,
             // A page too large to ask about cannot show the condition met.
-            Err(DecisionError::InputTooLarge(_)) => return Ok(false),
+            Err(DecisionError::InputTooLarge(_)) => return Ok(Some(UNSHOWN_CONDITION)),
             Err(error) => return Err(error.into()),
         };
         state.ledger.record([evaluation.cost.clone()])?;
@@ -657,7 +671,18 @@ impl Agent {
         });
         // Unanswered, the values may be the later ones, so only the site having responded as they wait for lets them go.
         let waits = values.as_deref().is_none_or(|v| v == LATER_VALUES);
-        Ok(met.as_deref() == Some(MET) && (!waits || happened.as_deref() == Some(HAPPENED)))
+        let happened = happened.as_deref() == Some(HAPPENED);
+        Ok(if values.as_deref() == Some(LATER_VALUES) && !happened {
+            Some(
+                "depends on a condition the task sets: it uses values the task gives only for once something \
+                 happens, and the page does not show that it happened. Do what the task asks first, with the values \
+                 it gives first, before using these",
+            )
+        } else if met.as_deref() != Some(MET) || (waits && !happened) {
+            Some(UNSHOWN_CONDITION)
+        } else {
+            None
+        })
     }
 
     /// Mask every string in `value`, however deeply it is nested.
@@ -821,7 +846,7 @@ impl Agent {
                 let holder = if source == IN_READ { "what was read" } else { "the task" };
                 let exact = |ends: &str| {
                     format!(
-                        "Which exact text belongs in {label}? Each choice is the complete value that would be copied from {holder}, {ends}. Choose only the field's value, without surrounding task instructions."
+                        "Which exact text belongs in {label}? Each choice is the complete value that would be copied from {holder}, {ends}. Choose only the field's value, without surrounding task instructions. When {holder} gives this field several values, {FIRST_VALUE}"
                     )
                 };
                 let last = if first.index == last.index {
