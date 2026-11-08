@@ -19,8 +19,6 @@ async fn layout_timeout_recovery_opens_a_fresh_tab() {
     fake.queue(
         "Runtime.evaluate",
         [
-            // The observation marks the page's listened elements before it reads the page.
-            json!({"result": {"value": 0}}),
             json!({"result": {"value": {
                 "url": "https://example.test/", "title": "Page", "viewport_text": "Go",
                 "document_key": "document", "page_key": "page",

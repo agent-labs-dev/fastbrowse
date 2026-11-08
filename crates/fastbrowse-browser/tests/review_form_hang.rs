@@ -17,8 +17,6 @@ async fn a_fill_preserves_an_unresponsive_renderer_error() {
     fake.queue(
         "Runtime.evaluate",
         [
-            // The observation marks the page's listened elements before it reads the page.
-            json!({"result": {"value": 0}}),
             json!({"result": {"value": {
                 "url": "https://example.test/", "title": "Form", "viewport_text": "Name",
                 "document_key": "document", "page_key": "page",
