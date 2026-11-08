@@ -980,9 +980,14 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str]) -> int:
-    args = parser().parse_args(argv)
+    root = parser()
+    args = root.parse_args(argv)
     match args.command:
         case "record" | "fill" | "replay":
+            # The run is written as each task finishes, so a directory here would fail only after a paid task,
+            # leaving a stray file beside it.
+            if args.out.is_dir():
+                root.error(f"--out names the run's results file, not a directory: {args.out}")
             return asyncio.run(run_suite(args))
         case "compare":
             return compare(args)
