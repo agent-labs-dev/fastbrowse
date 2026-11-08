@@ -331,7 +331,7 @@ impl LocalChromeProcess {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
             _ => {}
         }
-        quiet_password_manager(&profile)?;
+        set_preferences(&profile)?;
         let mut command = Command::new(binary);
         command
             .args(launch_args(options, &profile))
@@ -478,12 +478,15 @@ async fn terminate(child: &mut Child) {
     let _ = child.start_kill();
 }
 
-/// Keep Chrome's password manager out of the profile, whether it is fresh or kept between runs.
+/// Set the preferences a run depends on, whether the profile is fresh or kept between runs. A kept profile keeps
+/// every other preference its owner set; these are set on each launch.
 ///
-/// After a sign-in, its save and leaked-password bubbles take the browser's input: the page still renders and hit
-/// tests still pass, but no click reaches it, and the bubble is Chrome's own interface, outside the page the agent
-/// sees. A kept profile keeps every other preference its owner set; these three are set on each launch.
-fn quiet_password_manager(profile: &Path) -> Result<(), LocalChromeError> {
+/// - The password manager is off. After a sign-in, its save and leaked-password bubbles take the browser's input:
+///   the page still renders and hit tests still pass, but no click reaches it, and the bubble is Chrome's own
+///   interface, outside the page the agent sees.
+/// - Network prediction is off (`2` is "never"). Chrome preconnects to an address it expects to load before the
+///   request reaches Fetch, so a host outside a run's scope saw TCP connections from a request the scope gate failed.
+fn set_preferences(profile: &Path) -> Result<(), LocalChromeError> {
     let preferences = profile.join("Default").join("Preferences");
     let held: Option<Value> = match std::fs::read(&preferences) {
         Ok(bytes) => String::from_utf8(bytes).ok().and_then(|text| serde_json::from_str(&text).ok()),
@@ -502,6 +505,12 @@ fn quiet_password_manager(profile: &Path) -> Result<(), LocalChromeError> {
     owned.insert("password_manager_enabled".into(), Value::Bool(false));
     owned.insert("password_manager_leak_detection".into(), Value::Bool(false));
     held.insert("profile".into(), Value::Object(owned));
+    let mut net = match held.remove("net") {
+        Some(Value::Object(net)) => net,
+        _ => Map::new(),
+    };
+    net.insert("network_prediction_options".into(), Value::from(2));
+    held.insert("net".into(), Value::Object(net));
     if let Some(parent) = preferences.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -790,35 +799,37 @@ mod tests {
     }
 
     #[test]
-    fn the_password_manager_is_quieted_and_other_preferences_kept() {
+    fn the_password_manager_and_network_prediction_are_off_and_other_preferences_kept() {
         let profile = scratch();
-        quiet_password_manager(&profile).unwrap();
+        set_preferences(&profile).unwrap();
         let preferences = profile.join("Default").join("Preferences");
         let read = || serde_json::from_slice::<Value>(&std::fs::read(&preferences).unwrap()).unwrap();
         assert_eq!(
             read(),
             serde_json::json!({
                 "credentials_enable_service": false,
+                "net": {"network_prediction_options": 2},
                 "profile": {"password_manager_enabled": false, "password_manager_leak_detection": false},
             })
         );
         std::fs::write(
             &preferences,
-            r#"{"homepage": "x", "profile": {"name": "Me", "password_manager_enabled": true}}"#,
+            r#"{"homepage": "x", "net": {"x": 1, "network_prediction_options": 0}, "profile": {"name": "Me", "password_manager_enabled": true}}"#,
         )
         .unwrap();
-        quiet_password_manager(&profile).unwrap();
+        set_preferences(&profile).unwrap();
         assert_eq!(
             read(),
             serde_json::json!({
                 "homepage": "x",
                 "credentials_enable_service": false,
+                "net": {"x": 1, "network_prediction_options": 2},
                 "profile": {"name": "Me", "password_manager_enabled": false, "password_manager_leak_detection": false},
             })
         );
         for garbage in [&b"[1, 2]"[..], b"not json", b"\xff\xfe"] {
             std::fs::write(&preferences, garbage).unwrap();
-            let error = quiet_password_manager(&profile).unwrap_err();
+            let error = set_preferences(&profile).unwrap_err();
             assert_eq!(error.to_string(), format!("{} is not a Chrome preferences file", preferences.display()));
         }
         std::fs::remove_dir_all(profile).unwrap();
