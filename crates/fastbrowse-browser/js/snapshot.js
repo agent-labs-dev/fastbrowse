@@ -449,7 +449,7 @@
       e.hasAttribute('onclick') ||
       (view.getComputedStyle(e).cursor === 'pointer' &&
         (!e.parentElement || view.getComputedStyle(e.parentElement).cursor !== 'pointer'));
-    if (e.parentElement?.closest(SELECTOR) || !(declared || listened(e)) || [...e.querySelectorAll(SELECTOR)].some(visible))
+    if (!(declared || listened(e)) || e.parentElement?.closest(SELECTOR) || [...e.querySelectorAll(SELECTOR)].some(visible))
       return false;
     // A listener can sit on a container to hear its children's clicks, as React's does on its root, so one holding a
     // pressable element leaves the click to it.
