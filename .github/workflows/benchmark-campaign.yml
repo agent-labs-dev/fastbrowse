@@ -37,6 +37,8 @@ name: Benchmark campaign
 #            BROWSER_USE_API_KEY
 #   secrets, optional: FASTBROWSE_SITE_TOKEN (publish-evals.yml checks it when it opens the site pull request;
 #            a campaign measured without it republishes with publish-evals.yml run_id)
+#   secrets, optional: PARALLAX_REPORT_WEBHOOK_URL, PARALLAX_REPORT_WEBHOOK_SECRET (each group's report is also posted
+#            there, signed as the hex HMAC-SHA256 of the body in X-Webhook-Signature)
 #   vars:    PARALLAX_JUDGE_BASE_URL, PARALLAX_JUDGE_MODELS
 #
 # `smoke` finds bugs before a release: one repeat of every task in the chosen group (`groups: all` means the head-to-head
@@ -449,7 +451,46 @@ jobs:
         run: |
           test -s "$OUT" || { echo "::warning::no ledger to track"; exit 0; }
           cd harness/evals
-          uv run --no-sync fastbrowse-evals browser track-ledger "$OUT" --push ${{ env.SMOKE == 'true' && '--smoke' || '' }}
+          uv run --no-sync fastbrowse-evals browser track-ledger "$OUT" --push ${{ env.SMOKE == 'true' && '--smoke' || '' }} \
+            | tee "$RUNNER_TEMP/tracked.json"
+      # The group's result where people look: the job summary and, when the webhook secrets are set, the team's
+      # channel. This repository is public, so the report never quotes the judges' reasons (`parallax report --reasons`).
+      - name: Report the group
+        id: report
+        if: always()
+        continue-on-error: true
+        env:
+          LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          test -s "$RUNNER_TEMP/tracked.json" || { echo "::warning::no tracked experiment to report"; exit 1; }
+          cd harness/evals
+          # track-ledger prints one line per experiment it pushed and verified, after its summary line.
+          jq -r 'select(.id) | [.dataset, .id] | @tsv' "$RUNNER_TEMP/tracked.json" | while IFS=$'\t' read -r dataset id; do
+            uv run --no-sync parallax report "$id" --dataset "$dataset" --link "Workflow run=$RUN_URL"
+          done > "$RUNNER_TEMP/report.md"
+          test -s "$RUNNER_TEMP/report.md"
+          cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Send the report to the team
+        if: always() && steps.report.outcome == 'success'
+        env:
+          WEBHOOK_URL: ${{ secrets.PARALLAX_REPORT_WEBHOOK_URL }}
+          WEBHOOK_SECRET: ${{ secrets.PARALLAX_REPORT_WEBHOOK_SECRET }}
+          CAMPAIGN_ID: ${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
+          GROUP: ${{ matrix.label }}
+          STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [ -n "$WEBHOOK_URL" ] && [ -n "$WEBHOOK_SECRET" ] || exit 0
+          jq -n --rawfile report "$RUNNER_TEMP/report.md" \
+            '{source: "fastbrowse-benchmark-campaign", repository: env.GITHUB_REPOSITORY, campaign_id: env.CAMPAIGN_ID,
+              group: env.GROUP, status: env.STATUS, smoke: (env.SMOKE == "true"), run_url: env.RUN_URL,
+              report_markdown: $report}' > "$RUNNER_TEMP/payload.json"
+          signature=$(openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -hex < "$RUNNER_TEMP/payload.json" | sed 's/^.* //')
+          curl -fsS -X POST "$WEBHOOK_URL" -H "Content-Type: application/json" -H "X-Webhook-Signature: $signature" \
+            --data-binary @"$RUNNER_TEMP/payload.json" > /dev/null || echo "::warning::the report webhook refused the report"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
