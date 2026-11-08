@@ -41,6 +41,36 @@
   registry.nativeRequestAnimationFrame ||= window.requestAnimationFrame.bind(window);
   // What was offered to be acted on; `ids` also names hover targets and fingerprinted nodes.
   registry.controls ||= new WeakSet();
+  // Elements a script gave a pointer listener, such as a Vue click handler on a bare span: the page's only sign that
+  // it is pressed. Chrome's own `getEventListeners` reads them, which the command line API of the evaluate that asks
+  // for this mode lends it, so the page sees no hook. Rebuilt on every look, as a removed listener takes its control
+  // away. A page that defines a global of that name answers for its own elements, as its cursor and `onclick` do.
+  // The root element and the body hear clicks on the whole page, as the document does, so neither counts.
+  if (mode === 'listeners') {
+    const listened = (registry.listened = new WeakSet());
+    const read = globalThis.getEventListeners;
+    if (typeof read !== 'function' || !document.body || !granted(document)) return 0;
+    const pointer = ['click', 'mousedown', 'pointerdown', 'mouseup', 'pointerup'];
+    const mark = root => {
+      for (const e of root.querySelectorAll('*')) {
+        if (e !== e.ownerDocument.documentElement && e !== e.ownerDocument.body) {
+          let listeners = null;
+          try {
+            listeners = read(e);
+          } catch {}
+          if (listeners && pointer.some(type => Array.isArray(listeners[type]) && listeners[type].length))
+            listened.add(e);
+        }
+        if (e.shadowRoot) mark(e.shadowRoot);
+        if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
+          const inner = childDocument(e);
+          if (inner && inner.body && granted(inner)) mark(inner);
+        }
+      }
+    };
+    mark(document);
+    return 0;
+  }
   // Text the page rewrites by itself, such as a player's clock or a countdown, says nothing about which item a control
   // acts on: a Pause beside a ticking remaining time was refused as stale on every one of 52 clicks. Text that changed
   // between two looks with no input in between is the page's own; text that changes after a run's own click, scroll
@@ -415,16 +445,21 @@
     'a[href],a[data-handler][data-event="click"],a[onclick],a[role="button"],' +
     'button,input,textarea,select,summary,label,[contenteditable="true"],[draggable="true"],[ondrop],' +
     ARIA_ROLES.map(role => `[role="${role}"]`).join(',');
-  // A page says an element it styled or scripted is pressable without any role: a declared click handler, or the
-  // pointer cursor. The cursor inherits, so only the element it starts on counts, and an element inside a control or
-  // holding one leaves the click to that control.
+  // A page says an element it styled or scripted is pressable without any role: a declared click handler, a pointer
+  // listener a script added, or the pointer cursor. The cursor inherits, so only the element it starts on counts, and
+  // an element inside a control or holding one leaves the click to that control.
   const pressable = memo(e => {
     const view = e.ownerDocument.defaultView;
-    const starts =
+    const declared =
       e.hasAttribute('onclick') ||
       (view.getComputedStyle(e).cursor === 'pointer' &&
         (!e.parentElement || view.getComputedStyle(e.parentElement).cursor !== 'pointer'));
-    return starts && !e.parentElement?.closest(SELECTOR) && ![...e.querySelectorAll(SELECTOR)].some(visible);
+    const listened = registry.listened?.has(e) ?? false;
+    if (!(declared || listened) || e.parentElement?.closest(SELECTOR) || [...e.querySelectorAll(SELECTOR)].some(visible))
+      return false;
+    // A listener can sit on a container to hear its children's clicks, as React's does on its root, so one holding a
+    // pressable element leaves the click to it.
+    return declared || ![...e.querySelectorAll('*')].some(c => pressable(c) && visible(c));
   });
   // A script can make a focusable label its menu trigger without a role, href or pointer cursor. Its label may
   // be wrapped in a child, and hidden menu links must not hide the trigger that reveals them. A container holding

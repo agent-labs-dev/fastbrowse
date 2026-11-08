@@ -132,6 +132,13 @@ fn serve_one(mut stream: TcpStream, directory: &Path, iframe_origin: Option<&str
         respond(&mut stream, 200, &[html, ("Content-Length", body.len().to_string())], body.as_bytes());
         return;
     }
+    if let Some(query) = path.strip_prefix("/slow-frame?ms=") {
+        // A frame's document whose parse waits on a slow script, so it has its control only after its parent settled.
+        let head = format!("<head><script src=\"/slow?ms={query}\"></script></head>");
+        let body = format!("<html>{head}<body><button>Late frame button</button></body></html>");
+        respond(&mut stream, 200, &[html, ("Content-Length", body.len().to_string())], body.as_bytes());
+        return;
+    }
     if let Some(status) = path.strip_prefix("/http-error/") {
         let body = b"<html><body>Sorry</body></html>";
         respond(&mut stream, status.parse().unwrap_or(500), &[html, ("Content-Length", body.len().to_string())], body);
@@ -179,10 +186,14 @@ fn serve_one(mut stream: TcpStream, directory: &Path, iframe_origin: Option<&str
         return;
     }
     let file = path.split('?').next().unwrap_or("/");
-    if (file == "/" || file == "/index.html")
-        && let Some(origin) = iframe_origin
+    if let Some(origin) = iframe_origin
+        && (file == "/" || file.ends_with(".html"))
     {
-        let content = std::fs::read_to_string(directory.join("index.html")).unwrap_or_default();
+        let name = if file == "/" { "index.html" } else { file.trim_start_matches('/') };
+        let Ok(content) = std::fs::read_to_string(directory.join(name)) else {
+            respond(&mut stream, 404, &[], b"");
+            return;
+        };
         let body = content.replace("__IFRAME_ORIGIN__", origin).into_bytes();
         respond(&mut stream, 200, &[html, ("Content-Length", body.len().to_string())], &body);
         return;

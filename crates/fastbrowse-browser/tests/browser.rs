@@ -1228,6 +1228,70 @@ async fn test_frameset_pages_are_read_through_their_frames() {
     h.close().await;
 }
 
+/// A frame whose document is still loading when its parent is ready is part of the page the navigation opened, so the
+/// first observation holds its controls and the next step's effect does not claim them.
+async fn a_frame_that_loads_after_its_page_is_in_the_first_observation(path: &str, scoped: bool) {
+    let _turn = turn().await;
+    let Some(connection) = chrome() else { return };
+    // A scoped run holds each new frame paused until its gate is on, so its frame session attaches before the load.
+    let allowed_origins = scoped.then(|| vec![sites().main.clone(), sites().iframe.clone()]);
+    let connection = BrowserConnection { allowed_origins, ..connection.clone() };
+    let Some(h) = harness_on(connection, Config::default(), SessionOptions::default()).await else { return };
+    let started = Instant::now();
+    h.goto(path).await;
+    let navigated = started.elapsed();
+    let observation = h.observe().await;
+    eprintln!("{path}: navigate {navigated:?}, observe {:?}", started.elapsed() - navigated);
+    find(&observation, "Late frame button");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_same_site_frame_that_loads_after_its_page_is_in_the_first_observation() {
+    a_frame_that_loads_after_its_page_is_in_the_first_observation("/late-frame.html", false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_cross_site_frame_that_loads_after_its_page_is_in_the_first_observation() {
+    a_frame_that_loads_after_its_page_is_in_the_first_observation("/late-cross-frame.html", false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_scoped_run_waits_for_a_cross_site_frame_that_loads_after_its_page() {
+    a_frame_that_loads_after_its_page_is_in_the_first_observation("/late-cross-frame.html", true).await;
+}
+
+/// An element whose only sign of being pressable is a pointer listener a script added is offered, and clicking it
+/// works; a container whose listener hears its children's clicks, or one holding a control, is not.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_element_with_only_a_script_click_listener_is_offered() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/listened.html").await;
+    let started = Instant::now();
+    let obs = h.observe().await;
+    eprintln!("listened.html: observe {:?}", started.elapsed());
+    let labels: Vec<&str> = obs.controls.iter().map(|c| c.label.as_str()).collect();
+    for label in ["Remove Combat", "Delegated row", "Plain button", "Dropped listener", "Shadow action"] {
+        assert!(labels.contains(&label), "{label:?} not offered in {labels:?}");
+    }
+    for container in ["Box text", "Script listeners"] {
+        assert!(!labels.iter().any(|l| l.contains(container)), "{container:?} offered in {labels:?}");
+    }
+    let remove = find(&obs, "Remove Combat");
+    assert_eq!(remove.role, "button");
+    assert_eq!(act(&h.page, click(remove), &obs).await.outcome, StepOutcome::Executed);
+    assert_eq!(eval_active(&h, "document.getElementById('status').textContent").await, "Nothing chosen");
+    let shadow = h.observe().await;
+    act(&h.page, click(find(&shadow, "Shadow action")), &shadow).await;
+    assert_eq!(eval_active(&h, "document.title").await, "Shadow pressed");
+    // A listener the page took away takes its control with it.
+    eval_active(&h, "dropListener()").await;
+    let labels: Vec<String> = h.observe().await.controls.into_iter().map(|c| c.label).collect();
+    assert!(!labels.iter().any(|l| l == "Dropped listener"), "{labels:?}");
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_table_cell_drawn_with_an_icon_is_not_read_as_blank() {
     let _turn = turn().await;

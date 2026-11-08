@@ -321,7 +321,10 @@ pub(crate) struct State {
     /// Top frames of each session with a navigation requested or a document loading that has not reached
     /// DOMContentLoaded.
     pub(crate) navigating: HashSet<(String, String)>,
-    /// Frames with a parent, whose loading is not the page's.
+    /// The same for frames with a parent. A frame in a process of its own counts from its attach, under its own
+    /// session.
+    pub(crate) frames_loading: HashSet<(String, String)>,
+    /// Frames with a parent.
     pub(crate) subframes: HashSet<String>,
     /// Document requests the grant refused, so a navigation that was cut short is told from one that failed.
     pub(crate) denials: u32,
@@ -726,6 +729,21 @@ impl BrowserSession {
     pub fn navigating(&self) -> bool {
         let Ok(active) = self.active_session_id() else { return false };
         self.0.state.lock().unwrap().navigating.iter().any(|(session, _)| *session == active)
+    }
+
+    /// Whether a frame in the active tab's page is still loading its document.
+    ///
+    /// A frame's document is part of the page as much as the page's own is: one still loading when the page is ready
+    /// would show its controls during the next step, which would claim them as its effect. So a settle waits for it,
+    /// as Playwright's subtree lifecycle does, but its loading is not itself a change of the page.
+    pub fn frames_loading(&self) -> bool {
+        let Ok(active) = self.active_session_id() else { return false };
+        let state = self.0.state.lock().unwrap();
+        let frames = state.frame_sessions_of_active();
+        state
+            .frames_loading
+            .iter()
+            .any(|(session, _)| *session == active || frames.iter().any(|(_, frame_session)| frame_session == session))
     }
 
     /// Whether a fetch, XHR or script request started after `mark` is still waiting for its response.
@@ -1364,7 +1382,10 @@ impl Shared {
     fn landed(&self, params: &Value, session: Option<&str>) {
         let Some(session) = session else { return };
         let key = (session.to_owned(), str_of(&params["frameId"]));
-        if self.state.lock().unwrap().navigating.remove(&key) {
+        let mut state = self.state.lock().unwrap();
+        let top = state.navigating.remove(&key);
+        if state.frames_loading.remove(&key) || top {
+            drop(state);
             self.lifecycle.send_modify(|generation| *generation += 1);
         }
     }
@@ -1391,12 +1412,18 @@ impl Shared {
                 if let Some(session) = session {
                     let frame = str_of(&params["frameId"]);
                     let mut state = self.state.lock().unwrap();
-                    if !state.subframes.contains(&frame) {
-                        state.navigating.insert((session.to_owned(), frame));
+                    let key = (session.to_owned(), frame);
+                    if state.subframes.contains(&key.1) {
+                        state.frames_loading.insert(key);
+                    } else {
+                        state.navigating.insert(key);
                     }
                 }
             }
-            "Page.frameStoppedLoading" | "Page.navigatedWithinDocument" => self.landed(params, session),
+            // A frame removed before it loaded, or handed to a process of its own, whose session then reports it.
+            "Page.frameStoppedLoading" | "Page.navigatedWithinDocument" | "Page.frameDetached" => {
+                self.landed(params, session);
+            }
             // A frame reported a lifecycle transition (init, DOMContentLoaded, load, networkIdle...).
             "Page.lifecycleEvent" => {
                 if params["name"] == "DOMContentLoaded" {
@@ -1461,6 +1488,7 @@ impl Shared {
                 state.requests_open.retain(|(sid, _), _| *sid != child);
                 state.request_bytes_due.retain(|(sid, _), _| *sid != child);
                 state.navigating.retain(|(sid, _)| *sid != child);
+                state.frames_loading.retain(|(sid, _)| *sid != child);
             }
             "Target.targetInfoChanged" => {
                 let info = &params["targetInfo"];
@@ -1536,12 +1564,26 @@ impl Shared {
                 let target = str_of(&info["targetId"]);
                 match state.frame_sessions.iter_mut().find(|(t, _)| *t == target) {
                     Some(entry) => entry.1 = child.clone(),
-                    None => state.frame_sessions.push((target, child.clone())),
+                    None => state.frame_sessions.push((target.clone(), child.clone())),
                 }
                 state.frame_parents.insert(child.clone(), parent.to_owned());
+                // The frame's document may load before its session reports lifecycle events, so once it does, the
+                // document's own state says whether one is still to come.
+                state.frames_loading.insert((child.clone(), target.clone()));
                 let session = self.session();
                 self.spawn(&mut state, async move {
-                    let _ = session.prepare_session(&child, false).await;
+                    let loading = session.prepare_session(&child, false).await.is_ok()
+                        && session
+                            .send(
+                                "Runtime.evaluate",
+                                json!({"expression": "document.readyState", "returnByValue": true}),
+                                Some(&child),
+                            )
+                            .await
+                            .is_ok_and(|out| out["result"]["value"] == "loading");
+                    if !loading {
+                        session.0.landed(&json!({"frameId": target}), Some(&child));
+                    }
                 });
             }
             Some(_) if info["type"] == "page" && paused => self.on_new_page(&mut state, info, &child),

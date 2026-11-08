@@ -91,6 +91,14 @@ controls only while a pointer is over it. The next observation offers what appea
 pointer counts as shown from the start of its fade, unless it ignores the pointer until the fade ends, and one fading
 out counts as gone. A hover only shows content, so a task to carry out is not done by hovering alone.
 
+An element with no role, tabindex or pointer cursor is offered as a button when a script gave it a click, mousedown,
+pointerdown, mouseup or pointerup listener, as a Vue or React handler on a bare icon is. Before each observation the
+page asks Chrome's own `getEventListeners`, which only an evaluate with DevTools' command line API can call, so the
+page sees no hook, and the marks are rebuilt each time, so a removed listener takes its control away. A listened
+element follows the rules a pointer cursor does: one inside a control, or holding one, is not offered, and neither is
+a container whose listener hears its children's clicks while one of them is pressable. Listeners on the window, the
+document, the root element and the body hear the whole page, so they mark nothing.
+
 A browser observation reports each control's `focused` state. A custom page may leave it unknown.
 The optional `invalid` flag reports `aria-invalid` or a failed native constraint on a field that participates
 in form validation. It describes the current field, without claiming that a submission occurred. A field
@@ -252,6 +260,10 @@ Only visible effects or added evidence count as progress. Rewriting the value al
 field cannot count, even when it opens an autocomplete popup. Control changes are compared within one document;
 a new document reports its controls instead of treating reused IDs as edits to the page left behind.
 A navigation retains its observed source page for decisions on the destination, including recovery and decisions after a redraw. The source's text, controls and Jev's sign-in reading are given only while a wall is suspected on the destination: the sign-in question is asked on that step, the destination's sign-in reading is above even odds, or it answered with a 4xx status. Otherwise the decision gets only the source's URL and title. The source is reported as a past observation whose current state is unknown. Credential availability uses each field's frame origin, as secret resolution does. When that origin has no stored secrets, the decision receives that fact before the historical source. The sign-in question distinguishes a restricted route from a task that requires an account; Jev still decides whether the wall blocks the task. Retained context is masked again before a model reads it. If the request exceeds Jev's documented input limit, retained page facts are shortened with an omission marker before the current page's text is shortened.
+
+A navigation or a step settles once no frame of the tab, embedded frames included, is still loading its document
+up to DOMContentLoaded, within the same settle deadline. A frame that loads after its page is ready is part of what
+the navigation opened, so its controls are in the first observation and the next step's effect does not claim them.
 
 An empty observation waits on loading events before action history and progress are recorded.
 The same blank state is waited out once until a readable page appears, so a later navigation gets its own wait.
