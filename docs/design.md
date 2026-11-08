@@ -181,7 +181,7 @@ sources cover the request; the generated result is checked before delivery.
 Answer claims use numbered Markdown links built from those notes. `RunResult.citations` exposes the cited facts and
 text-fragment deep links; unused facts have no citation. The LLM writes a composed answer from the notes. Jev judges
 each final claim against its original cited quotes, including record identity and values, after any packing rounds.
-A count, total, minimum or maximum is never written or judged as a number. The composer marks it as a tally with
+A count, total, minimum or maximum, or a place after one such as the second cheapest, is never written or judged as a number. The composer marks it as a tally with
 the kind of record and the field, and Jev answers one question per note read: for a count, whether it holds exactly one
 such record, and for a total or extreme, whether it holds one with its field, then which number in it is the field. A
 record's name, heading or a link to it holds no value, so it is not counted as a record without one. Code counts, adds
@@ -202,7 +202,8 @@ Initial and repaired compositions are checked
 for both claim support and requested answer coverage in one decision batch. A claim with no cited quote or no
 support judgment is withheld and ends `unverified`. When every check is answered and Jev rejects a composed claim, the run spends an existing recovery to correct the draft or gather
 more evidence. Rejected prose is feedback, never a source fact. Code keeps each claim that passed every
-check, with its citations, word for word in the corrected draft, and the composer writes only the rest; a claim it
+check, with its citations, word for word in the corrected draft, and the composer writes only the rest, unless the
+coverage or step check failed, which fault the claims together; a claim it
 writes again with the same text is kept once. A rewrite that retyped a passed claim could change a copied name and
 fail where the first draft had passed. A corrected draft
 must pass citation checks and cover every requested fact or value. If the combined answer exceeds Jev's input limit for the coverage check, individually supported claims remain available as an unverified partial answer; the result identifies the coverage limit. The coverage check judges the written

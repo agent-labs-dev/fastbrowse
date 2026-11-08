@@ -37,14 +37,26 @@ pub enum Op {
 }
 
 /// A value a claim works out across records: what it does, the kind of record it ranges over, for a total or an
-/// extreme the field it adds or compares, and the value as the claim's text writes it, which code replaces.
+/// extreme the field it adds or compares, for an extreme its place counted from the end, and the value as the claim's
+/// text writes it, which code replaces.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Tally {
     pub op: Op,
     pub of: String,
     pub field: Option<String>,
+    /// The second cheapest is the minimum at rank 2: with no rank a ranking had no tally, so its claim cited one record
+    /// for a place among all of them and was rejected. None is the extreme itself.
+    #[serde(default)]
+    pub rank: Option<u64>,
     pub written: String,
+}
+
+impl Tally {
+    /// The extreme's place counted from its end, 1 for the extreme itself.
+    pub fn place(&self) -> u64 {
+        self.rank.unwrap_or(1)
+    }
 }
 
 impl Schema for Tally {
@@ -55,6 +67,7 @@ impl Schema for Tally {
                 Field::required("op", Ty::literals(&["count", "sum", "min", "max"])),
                 Field::required("of", Ty::Str),
                 Field::default("field", Ty::optional(Ty::Str), serde_json::Value::Null),
+                Field::default("rank", Ty::optional(Ty::Int), serde_json::Value::Null),
                 Field::required("written", Ty::Str),
             ],
         )
@@ -182,6 +195,68 @@ fn value_question(tally: &Tally, note: &serde_json::Value, numbers: &[String]) -
     ))
 }
 
+/// What narrowing a note's numbers to a choice Jev can hold found.
+enum Narrowed {
+    /// The numbers that still may be the field, few enough to offer at once.
+    Offer(Vec<String>),
+    /// Jev said no group holds the field.
+    NoValue,
+    /// Jev left a group question unanswered.
+    Unjudged,
+}
+
+/// The numbers of a note with more than a choice can offer, narrowed group by group to the one holding the field, as
+/// a field read from many candidates is: a results block holding 259 numbers was sent as one choice, Jev refused it
+/// for having more than 255 options, and the claim's support was left unanswered.
+async fn narrowed(
+    jev: &dyn DecisionClient,
+    state: &serde_json::Value,
+    tally: &Tally,
+    note: &serde_json::Value,
+    mut numbers: Vec<String>,
+    tokens: &TokenBudget,
+    ledger: Option<&Ledger>,
+) -> Result<Narrowed> {
+    let max = jev.profile().max_choice_options;
+    let field = text::repr(tally.field.as_deref().unwrap_or("value"));
+    // One option is kept for no value, in the groups and in the final choice alike.
+    while numbers.len() >= max {
+        let size = numbers.len().div_ceil(max - 1);
+        let groups: Vec<Vec<String>> = numbers.chunks(size).map(<[String]>::to_vec).collect();
+        let mut criteria: IndexMap<String, serde_json::Value> = groups
+            .iter()
+            .enumerate()
+            .map(|(index, group)| {
+                let listed = group.iter().map(|number| text::repr(number)).collect::<Vec<_>>().join(", ");
+                (format!("g{index}"), json!(format!("Its {field} is one of {listed}.")))
+            })
+            .collect();
+        criteria.insert(NO_VALUE.into(), json!(format!("None of these numbers is its {field}.")));
+        let question = Question::Choice(ChoiceQuestion::new(
+            format!(
+                "{UNTRUSTED}\nWhich numbers in this note hold the {field} of the record it holds? Note: {}",
+                dumps(note)
+            ),
+            criteria,
+        ));
+        let key = "group".to_string();
+        let answered = ask(jev, state, &IndexMap::from([(key.clone(), question)]), tokens, ledger).await?;
+        let Some(Answer::Choice(answer)) = answered.as_ref().and_then(|answered| answered.get(&key)) else {
+            return Ok(Narrowed::Unjudged);
+        };
+        if answer.choice == NO_VALUE {
+            return Ok(Narrowed::NoValue);
+        }
+        let Some(group) =
+            answer.choice.strip_prefix('g').and_then(|n| n.parse::<usize>().ok()).and_then(|n| groups.get(n))
+        else {
+            return Ok(Narrowed::Unjudged);
+        };
+        numbers = group.clone();
+    }
+    Ok(Narrowed::Offer(numbers))
+}
+
 /// The numbers a note could hold its field as. A comma both groups thousands and separates the cells of a line, as in
 /// a CSV row, and the text alone cannot say which: "INV-01,120.00" reads as 1,120.00 or as 01 and 120.00. Both readings
 /// are offered, and Jev picks the one that is the field.
@@ -262,6 +337,14 @@ pub async fn work(
             worked.insert(*index, Err(Unworked::Draft(reason)));
             continue;
         }
+        if tally.place() == 0 || (tally.rank.is_some() && matches!(tally.op, Op::Count | Op::Sum)) {
+            let reason =
+                "The claim's tally sets a rank, which counts places from a minimum or maximum, from 2 for the \
+                          second: a count or total has no rank, and the extreme itself has none."
+                    .to_string();
+            worked.insert(*index, Err(Unworked::Draft(reason)));
+            continue;
+        }
         if tally.op != Op::Count && tally.field.is_none() {
             let reason = "The claim's tally adds or compares records but names no field.".to_string();
             worked.insert(*index, Err(Unworked::Draft(reason)));
@@ -278,6 +361,8 @@ pub async fn work(
     };
     let mut pending = Vec::new();
     let mut values = IndexMap::new();
+    // The numbers each multi-number note was asked to choose among, after narrowing.
+    let mut offered: HashMap<(usize, usize), Vec<String>> = HashMap::new();
     for (index, tally, _) in claims {
         if worked.contains_key(index) {
             continue;
@@ -300,11 +385,28 @@ pub async fn work(
             worked.insert(*index, Err(Unworked::Draft(reason)));
             continue;
         }
+        let mut unjudged = false;
         for note in &records {
             let numbers = numbers(&found[*note].quote);
             if numbers.len() > 1 {
-                values.insert(format!("t{index}/v{note}"), value_question(tally, &found[*note].note, &numbers));
+                let numbers = match narrowed(jev, &state, tally, &found[*note].note, numbers, tokens, ledger).await? {
+                    Narrowed::Offer(numbers) => numbers,
+                    // No group holds the field, so the note states none, as the final choice would have said.
+                    Narrowed::NoValue => Vec::new(),
+                    Narrowed::Unjudged => {
+                        unjudged = true;
+                        break;
+                    }
+                };
+                if numbers.len() > 1 {
+                    values.insert(format!("t{index}/v{note}"), value_question(tally, &found[*note].note, &numbers));
+                }
+                offered.insert((*index, *note), numbers);
             }
+        }
+        if unjudged {
+            worked.insert(*index, Err(Unworked::Unjudged));
+            continue;
         }
         pending.push((*index, *tally, records));
     }
@@ -312,7 +414,7 @@ pub async fn work(
     for (index, tally, records) in pending {
         let mut amounts = Vec::new();
         for note in records {
-            let numbers = numbers(&found[note].quote);
+            let numbers = offered.remove(&(index, note)).unwrap_or_else(|| numbers(&found[note].quote));
             let chosen = match numbers.len() {
                 0 => None,
                 1 => Some(numbers[0].clone()),
@@ -347,13 +449,25 @@ pub async fn work(
                 Worked { value: total(&all), evidence_ids }
             }
             Op::Min | Op::Max => {
-                let better = |a: f64, b: f64| if tally.op == Op::Min { a < b } else { a > b };
-                let best =
-                    amounts.iter().map(|(_, amount)| amount.value).reduce(|a, b| if better(b, a) { b } else { a });
-                let best = best.expect("a tally over no records stopped above");
-                // Every record at the extreme is cited, so a tie is not settled by reading order.
-                let winners: Vec<&(usize, Amount)> =
-                    amounts.iter().filter(|(_, amount)| amount.value == best).collect();
+                // Places count distinct values, so two records tied at the lowest are both first, and the next value
+                // is second.
+                let mut values: Vec<f64> = amounts.iter().map(|(_, amount)| amount.value).collect();
+                values.sort_by(|a, b| if tally.op == Op::Min { a.total_cmp(b) } else { b.total_cmp(a) });
+                values.dedup();
+                let Some(&at) = values.get(tally.place() as usize - 1) else {
+                    let reason = format!(
+                        "The claim's tally asks for place {} among the {} of every {}, but the notes read give only {} \
+                         different values.",
+                        tally.place(),
+                        text::repr(tally.field.as_deref().unwrap_or("value")),
+                        text::repr(&tally.of),
+                        values.len()
+                    );
+                    worked.insert(index, Err(Unworked::Draft(reason)));
+                    continue;
+                };
+                // Every record at that place is cited, so a tie is not settled by reading order.
+                let winners: Vec<&(usize, Amount)> = amounts.iter().filter(|(_, amount)| amount.value == at).collect();
                 let evidence_ids = winners.iter().map(|(note, _)| found[*note].id.clone()).collect();
                 Worked { value: winners[0].1.written.clone(), evidence_ids }
             }
