@@ -9164,7 +9164,7 @@
   "outcome": {
    "status": "complete",
    "budget": null,
-   "answer": "Your message has been sent. [4](<https://shop.test/contact/sent#:~:text=Your%20message%20has%20been%20sent.>)",
+   "answer": "Your message has been sent. [1](<https://shop.test/contact/sent#:~:text=Your%20message%20has%20been%20sent.>)",
    "data": null,
    "evidence": [
     {
@@ -9317,7 +9317,7 @@
    "artifacts": [],
    "citations": [
     {
-     "id": 4,
+     "id": 1,
      "text": "Your message has been sent.",
      "url": "https://shop.test/contact/sent",
      "quote": "Your message has been sent.",

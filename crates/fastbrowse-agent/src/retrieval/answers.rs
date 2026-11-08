@@ -102,20 +102,24 @@ pub(crate) fn cited_quote(evidence: &Evidence, notes: &Notes, redact: impl Fn(&s
 pub fn assemble_answer(claims: &[Claim], notes: &Notes) -> ComposedAnswer {
     let supports: Vec<Vec<String>> =
         claims.iter().map(|claim| notes.expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str))).collect();
-    // A derived fact has no page to link; its basis records carry the citations.
-    let known: IndexMap<String, Citation> = notes
+    // A derived fact has no page to link; its basis records carry the citations. They are numbered in the order the
+    // answer first cites them: numbered by the run's notes, a two-claim answer cited [124] and [157].
+    let facts: HashMap<String, _> = notes
         .facts()
         .into_iter()
-        .filter_map(|fact| fact.evidence.as_ref().map(|evidence| (fact, evidence)))
-        .enumerate()
-        .map(|(index, (fact, evidence))| {
-            let (quote, deep_link) = cited_quote(evidence, notes, str::to_owned);
-            let citation =
-                Citation { id: index as i64 + 1, text: fact.text.clone(), url: evidence.url.clone(), quote, deep_link };
-            (fact_id(fact), citation)
-        })
+        .filter_map(|fact| fact.evidence.as_ref().map(|evidence| (fact_id(fact), (fact, evidence))))
         .collect();
-    let cited: HashSet<&String> = supports.iter().flatten().collect();
+    let mut known: IndexMap<String, Citation> = IndexMap::new();
+    for key in supports.iter().flatten() {
+        if known.contains_key(key) {
+            continue;
+        }
+        let Some((fact, evidence)) = facts.get(key) else { continue };
+        let (quote, deep_link) = cited_quote(evidence, notes, str::to_owned);
+        let id = known.len() as i64 + 1;
+        known
+            .insert(key.clone(), Citation { id, text: fact.text.clone(), url: evidence.url.clone(), quote, deep_link });
+    }
     let linked: Vec<String> = claims
         .iter()
         .zip(&supports)
@@ -133,7 +137,7 @@ pub fn assemble_answer(claims: &[Claim], notes: &Notes) -> ComposedAnswer {
         linked_answer: linked.join("\n\n"),
         claims: claims.to_vec(),
         problem: None,
-        citations: known.iter().filter(|(key, _)| cited.contains(key)).map(|(_, citation)| citation.clone()).collect(),
+        citations: known.into_values().collect(),
     }
 }
 
@@ -1108,6 +1112,19 @@ mod tests {
         .unwrap();
         let quote = evidence.quote.clone();
         Fact::read(&quote, evidence, FactReader::JevChoice)
+    }
+
+    #[test]
+    fn citations_are_numbered_in_the_order_the_answer_first_cites_them() {
+        let facts: Vec<Fact> = (0..5).map(|index| fact(index, format!("Note {index}"))).collect();
+        let id = |index: usize| crate::memory::fact_id(&facts[index]);
+        let claims = [Claim::new("Last", vec![id(4)]), Claim::new("Middle and last", vec![id(2), id(4)])];
+        let answer = assemble_answer(&claims, &Notes::new(facts.clone()));
+        let links: Vec<&str> = answer.linked_answer.split("\n\n").collect();
+        assert!(links[0].starts_with("Last [1](") && links[1].starts_with("Middle and last [2]("), "{links:?}");
+        assert!(links[1].contains(") [1]("), "{links:?}");
+        let cited: Vec<(i64, &str)> = answer.citations.iter().map(|c| (c.id, c.text.as_str())).collect();
+        assert_eq!(cited, [(1, "Note 4"), (2, "Note 2")]);
     }
 
     #[tokio::test]
