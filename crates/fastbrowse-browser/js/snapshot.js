@@ -41,6 +41,28 @@
   registry.nativeRequestAnimationFrame ||= window.requestAnimationFrame.bind(window);
   // What was offered to be acted on; `ids` also names hover targets and fingerprinted nodes.
   registry.controls ||= new WeakSet();
+  const ARIA_ROLES = [
+    'button',
+    'link',
+    'checkbox',
+    'radio',
+    'switch',
+    'tab',
+    'menuitem',
+    'menuitemradio',
+    'option',
+    'gridcell',
+    'combobox',
+    'textbox',
+    'searchbox',
+    'spinbutton',
+  ];
+  // jQuery UI's datepicker prev/next are anchors with no href, appended to <body> once the field is focused:
+  // they carry no destination, only a click handler, so they need naming here to be walked at all.
+  const SELECTOR =
+    'a[href],a[data-handler][data-event="click"],a[onclick],a[role="button"],' +
+    'button,input,textarea,select,summary,label,[contenteditable="true"],[draggable="true"],[ondrop],' +
+    ARIA_ROLES.map(role => `[role="${role}"]`).join(',');
   // Elements a script gave a pointer listener, such as a Vue click handler on a bare span: the page's only sign that
   // it is pressed. Chrome's own `getEventListeners` reads them, which the command line API of the evaluate that asks
   // for this mode lends it, so the page sees no hook. Rebuilt on every look, as a removed listener takes its control
@@ -53,7 +75,9 @@
     const pointer = ['click', 'mousedown', 'pointerdown', 'mouseup', 'pointerup'];
     const mark = root => {
       for (const e of root.querySelectorAll('*')) {
-        if (e !== e.ownerDocument.documentElement && e !== e.ownerDocument.body) {
+        // A control, or anything inside one, is never pressable on its own (`pressable` below), so its listeners
+        // decide nothing; reading every element's made each look about an eighth slower on dense pages.
+        if (e !== e.ownerDocument.documentElement && e !== e.ownerDocument.body && !e.closest(SELECTOR)) {
           let listeners = null;
           try {
             listeners = read(e);
@@ -423,28 +447,6 @@
       labelFrom(wrappedField(e), new Set()),
   );
 
-  const ARIA_ROLES = [
-    'button',
-    'link',
-    'checkbox',
-    'radio',
-    'switch',
-    'tab',
-    'menuitem',
-    'menuitemradio',
-    'option',
-    'gridcell',
-    'combobox',
-    'textbox',
-    'searchbox',
-    'spinbutton',
-  ];
-  // jQuery UI's datepicker prev/next are anchors with no href, appended to <body> once the field is focused:
-  // they carry no destination, only a click handler, so they need naming here to be walked at all.
-  const SELECTOR =
-    'a[href],a[data-handler][data-event="click"],a[onclick],a[role="button"],' +
-    'button,input,textarea,select,summary,label,[contenteditable="true"],[draggable="true"],[ondrop],' +
-    ARIA_ROLES.map(role => `[role="${role}"]`).join(',');
   // A page says an element it styled or scripted is pressable without any role: a declared click handler, a pointer
   // listener a script added, or the pointer cursor. The cursor inherits, so only the element it starts on counts, and
   // an element inside a control or holding one leaves the click to that control.
