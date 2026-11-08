@@ -781,7 +781,8 @@ impl CdpPage {
         let main_session = self.session.active_session_id()?;
         let target_id = self.session.active_target_id();
         let mut sources: Vec<(String, String)> = vec![(MAIN.to_owned(), main_session)];
-        sources.extend(self.session.frame_sessions());
+        // An ad is not the page's content: read as it, an ad's text was given as a page's answer.
+        sources.extend(self.session.frame_sessions().into_iter().filter(|(frame, _)| !self.session.ad_frame(frame)));
         let mut result: Vec<(String, FrameObservation<T>)> = vec![];
         // Preserve source order regardless of completion order so capture offsets and hashes stay stable.
         let reads = sources.iter().map(|(key, sid)| self.read_frame::<T>(key, sid, expression));

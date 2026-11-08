@@ -29,14 +29,15 @@ pub fn dates_question(task: &str) -> NoulQuestion {
 
 const TEXT: &str = "The task's own words for this date, copied exactly.";
 const YEAR: &str = "The year the task states for it, such as 2027. Null when the task states none.";
-const MONTH: &str =
-    "The month the task states for it, 1 for January to 12 for December. Null when the task states none.";
+const MONTH: &str = "The month the task states for it, 1 for January to 12 for December. A date the task places in a month it names elsewhere, such as \"the 15th of that month\" after \"in March\", takes that month too. Null when the task states none.";
 const DAY: &str = "The day of the month the task states for it, 1 to 31. Null when the task states none.";
 const WEEKDAY: &str = "The weekday the task names for it. Null when it names none.";
 const NTH: &str = "Which of the month's weekdays it is: 1 for the first, 2 for the second, up to 5, or -1 for the last. Null unless the task names a weekday of a month this way.";
 const DAYS: &str = "Days from today the task states, such as 0 for today, 1 for tomorrow or 14 for in two weeks. Null unless the task counts days or weeks from today, and then every other part but text is null.";
-const MONTHS: &str =
-    "Months from this month the task states, such as 1 for next month. Null unless the task counts months from now.";
+/// A date can sit in a month the task names in other words: given "navigate to next month and select its first
+/// Friday", the model listed "its first Friday" with no month 10 times in 10, and with the sentence on a month named
+/// elsewhere it gave it next month's count 10 times in 10.
+const MONTHS: &str = "Months from this month the task states, such as 1 for next month. A date the task places in a month it names elsewhere, such as \"its last Monday\" after \"in two months\", takes that count too. Null unless the task counts months from now.";
 
 /// One date the task names, as the parts it states. Nothing here is computed: code works out the date.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,6 +180,9 @@ pub fn resolve(reference: &DateReference, today: DateTime) -> Option<Resolved> {
             })
             .find(not_before)
             .map(Resolved::Day),
+        // A weekday of a month with no month named is no one date: "its first Friday" with its month left out was
+        // given as the next Friday, and the run was sent to the wrong day.
+        (None, Some(_)) if reference.nth.is_some() => None,
         // A weekday alone: its next occurrence after today.
         (None, Some(weekday)) => {
             let ahead = (weekday + 7 - today.weekday()) % 7;
@@ -245,6 +249,12 @@ mod tests {
         assert_eq!(resolved(today), "2026-09-26 (Saturday)");
         let stated = DateReference { year: Some(2026), month: Some(3), day: Some(1), ..reference("1 March 2026") };
         assert_eq!(resolved(stated), "2026-03-01 (Sunday)");
+    }
+
+    #[test]
+    fn a_weekday_of_a_month_without_its_month_is_left_out() {
+        let first = DateReference { weekday: Some("friday".into()), nth: Some(1), ..reference("its first Friday") };
+        assert_eq!(resolved(first), "");
     }
 
     #[test]

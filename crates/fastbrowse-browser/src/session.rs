@@ -329,6 +329,9 @@ pub(crate) struct State {
     pub(crate) frames_loading: HashSet<(String, String)>,
     /// Frames with a parent.
     pub(crate) subframes: HashSet<String>,
+    /// Frames Chrome's own ad tagging marks as ads or inside one, which a look does not read: once cross-origin frames
+    /// were read, a page's ad slots reached every step as its content, and a run answered with an ad's text.
+    pub(crate) ad_frames: HashSet<String>,
     /// Document requests the grant refused, so a navigation that was cut short is told from one that failed.
     pub(crate) denials: u32,
     /// Requests paused and not yet released, so closing can release what a stopped task left paused.
@@ -666,6 +669,11 @@ impl BrowserSession {
     }
 
     /// Only frame sessions descended from the active tab may contribute observations.
+    /// Whether Chrome's ad tagging marks the frame `frame_id` as an ad or inside one.
+    pub fn ad_frame(&self, frame_id: &str) -> bool {
+        self.0.state.lock().unwrap().ad_frames.contains(frame_id)
+    }
+
     pub fn frame_sessions(&self) -> Vec<(String, String)> {
         self.0.state.lock().unwrap().frame_sessions_of_active()
     }
@@ -1411,6 +1419,7 @@ impl Shared {
             "Page.frameAttached" => {
                 self.state.lock().unwrap().subframes.insert(str_of(&params["frameId"]));
             }
+            "Page.frameNavigated" => self.tag_ad_frame(&params["frame"]),
             "Page.frameRequestedNavigation" | "Page.frameStartedLoading" => {
                 if let Some(session) = session {
                     let frame = str_of(&params["frameId"]);
@@ -1552,6 +1561,18 @@ impl Shared {
         }
     }
 
+    /// Record whether Chrome's ad tagging marks `frame` (a CDP `Page.Frame`) as an ad or as a frame inside one.
+    fn tag_ad_frame(&self, frame: &Value) {
+        let id = str_of(&frame["id"]);
+        let ad = matches!(frame["adFrameStatus"]["adFrameType"].as_str(), Some("root" | "child"));
+        let mut state = self.state.lock().unwrap();
+        if ad {
+            state.ad_frames.insert(id);
+        } else {
+            state.ad_frames.remove(&id);
+        }
+    }
+
     fn on_attached(self: &Arc<Self>, params: &Value, session: Option<&str>) {
         let info = &params["targetInfo"];
         let child = str_of(&params["sessionId"]);
@@ -1575,7 +1596,13 @@ impl Shared {
                 state.frames_loading.insert((child.clone(), target.clone()));
                 let session = self.session();
                 self.spawn(&mut state, async move {
-                    let loading = session.prepare_session(&child, false).await.is_ok()
+                    let prepared = session.prepare_session(&child, false).await.is_ok();
+                    // The frame's own tree says whether Chrome tagged it an ad when it was created: its navigation
+                    // can come before this session reports events, so `Page.frameNavigated` alone can miss it.
+                    if prepared && let Ok(tree) = session.send("Page.getFrameTree", json!({}), Some(&child)).await {
+                        session.0.tag_ad_frame(&tree["frameTree"]["frame"]);
+                    }
+                    let loading = prepared
                         && session
                             .send(
                                 "Runtime.evaluate",

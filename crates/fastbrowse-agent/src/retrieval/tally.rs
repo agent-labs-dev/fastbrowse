@@ -287,9 +287,24 @@ struct Amount {
     written: String,
 }
 
+/// `written` read as a number: one word of digits, beside at most currency signs and ISO 4217 codes such as "GBP".
+/// Any other word makes it something else, such as a record's name: "Galaxy S20 Ultra" read as 20 had the worked
+/// price written over its model number.
 fn amount(written: &str) -> Option<Amount> {
+    let mut number = None;
+    for word in written.split_whitespace() {
+        if word.chars().any(|c| c.is_ascii_digit()) {
+            let numeric = word.chars().all(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '-' | '+') || currency(c));
+            if number.is_some() || !numeric {
+                return None;
+            }
+            number = Some(word);
+        } else if !(word.chars().all(currency) || word.len() == 3 && word.chars().all(|c| c.is_ascii_uppercase())) {
+            return None;
+        }
+    }
     let sign = written.chars().find(|c| currency(*c));
-    let digits: String = written.chars().filter(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+')).collect();
+    let digits: String = number?.chars().filter(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+')).collect();
     let value = digits.parse::<f64>().ok()?;
     let places = digits.split_once('.').map_or(0, |(_, places)| places.len());
     Some(Amount { value, places, sign, written: written.trim().to_string() })
@@ -555,6 +570,9 @@ mod tests {
         let found = amount("£10.69").unwrap();
         assert_eq!((found.value, found.places, found.sign), (10.69, 2, Some('£')));
         assert_eq!(amount("1,234").unwrap().value, 1234.0);
+        assert_eq!(amount("GBP 84.99").unwrap().value, 84.99);
+        assert_eq!(amount("Galaxy S20 Ultra"), None, "a name with a model number is not a number");
+        assert_eq!(amount("Pixel 2"), None);
         let (a, b) = (amount("£1.5").unwrap(), amount("£2.25").unwrap());
         assert_eq!(total(&[&a, &b]), "£3.75");
         assert_eq!(total(&[&a, &amount("2").unwrap()]), "3.5");
