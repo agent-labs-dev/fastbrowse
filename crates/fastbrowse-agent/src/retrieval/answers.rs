@@ -1,6 +1,6 @@
 //! Answers built from notes: Jev's facts, each with the quotes it rests on.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::citations::{page_text, text_fragment};
@@ -16,7 +16,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::tally::{self, COMPUTED, Tally, Unworked};
+use super::tally::{self, COMPUTED, Op, Tally, Unworked};
 use crate::batches::evaluate_batches;
 use crate::error::{AgentError, Result};
 use crate::memory::{Fact, Notes, fact_id, unique};
@@ -566,11 +566,14 @@ async fn review_claims(
     let mut unjudged_tally = false;
     // What each claim's support is judged on: the claim with a worked value shown as computed.
     let mut shown: Vec<Claim> = claims.clone();
+    // The tally each worked claim stated, which its support is judged against.
+    let mut tallies = HashMap::new();
     let claims: Vec<Claim> = claims
         .into_iter()
         .enumerate()
         .map(|(index, claim)| match worked.get(&index) {
             Some(Ok(done)) => {
+                tallies.extend(claim.tally.clone().map(|tally| (index, tally)));
                 shown[index] = claim.clone().worked(COMPUTED, claim.evidence_ids.clone());
                 claim.worked(&done.value, done.evidence_ids.clone())
             }
@@ -604,6 +607,16 @@ async fn review_claims(
             continue;
         }
         let shown = &shown[index];
+        // Code worked a tally's value out from every note Jev judged one of its records, so the count, total or
+        // extreme is not Jev's to confirm: it judges only what the claim says besides it.
+        if let (Some(tally), None) = (tallies.get(&index), columns) {
+            for (check, question) in tally_checks(tally, &shown.text, &sources) {
+                let key = format!("claim{index}/{check}");
+                required[index].push(key.clone());
+                questions.insert(key, Question::Noul(question));
+            }
+            continue;
+        }
         let cited = json!({"columns": columns, "claim": shown.text, "quotes": sources});
         let row =
             columns.and_then(|columns| table_cells(shown.cells.as_deref(), columns).map(|cells| (columns, cells)));
@@ -613,13 +626,10 @@ async fn review_claims(
             }).collect(),
             None => vec![(format!("claim{index}"), "Judge every assertion in this claim.".into())],
         };
-        // A computed value's scope is every note read, which code counted and the coverage question judges, so a
-        // claim holding one is told so in place of the scope rule rather than beside it.
-        let scope = if shown.text.contains(COMPUTED) { COMPUTED_VALUE } else { SCOPE };
         for (key, focus) in checks {
             let question = NoulQuestion::new(
                 format!(
-                    "{UNTRUSTED}\n{focus} Does it follow from its cited quotes, preserving which record each value belongs to and every stated value? A cell marked unavailable is supported only when these quotes give no value for that field of the same record. {scope}\n{cited} {DESCRIPTIVE_VALUES} {SOURCE_STATE}"
+                    "{UNTRUSTED}\n{focus} Does it follow from its cited quotes, preserving which record each value belongs to and every stated value? A cell marked unavailable is supported only when these quotes give no value for that field of the same record. {SCOPE}\n{cited} {DESCRIPTIVE_VALUES} {SOURCE_STATE}"
                 ),
                 Some("Every assertion being judged is supported by these quotes."),
                 Some(
@@ -728,11 +738,43 @@ async fn review_claims(
     Ok(CheckedClaims { claims: supported, problem, rejection, denies_steps })
 }
 
-/// What the support check is told about a value code worked out, from every note read.
-const COMPUTED_VALUE: &str = "Code worked out the value written [computed] from every note read and cited the records it rests on, so the count, total, minimum or maximum the claim states is not judged: judge every other assertion.";
-
 /// The scope rule for a claim whose values the composer wrote.
 const SCOPE: &str = "Judge the scope as well as each value. A statement about every member or an absent value across a whole set needs evidence about that whole set; quotes about some members support only those members. A source's population counter supports its population size, not the number extracted or included in this answer.";
+
+/// The questions a worked tally's claim is judged on: that it states only its tally, and for an extreme, that each
+/// record it names is one code found holding the extreme, which are the records it cites.
+fn tally_checks(tally: &Tally, text: &str, winners: &[serde_json::Value]) -> Vec<(&'static str, NoulQuestion)> {
+    let (of, field) = (text::repr(&tally.of), text::repr(tally.field.as_deref().unwrap_or("value")));
+    let what = match tally.op {
+        Op::Count => format!("how many {of} there are"),
+        Op::Sum => format!("the total {field} of the {of}"),
+        Op::Min => format!("which {of} has the lowest {field}, and that {field}"),
+        Op::Max => format!("which {of} has the highest {field}, and that {field}"),
+    };
+    let claim = text::repr(text);
+    let mut checks = vec![(
+        "states",
+        NoulQuestion::new(
+            format!("{UNTRUSTED}\nDoes this claim state only {what}? Claim: {claim}"),
+            Some(&format!("The claim states only {what}.")),
+            Some("The claim also states something else."),
+        ),
+    )];
+    if matches!(tally.op, Op::Min | Op::Max) {
+        checks.push((
+            "record",
+            NoulQuestion::new(
+                format!(
+                    "{UNTRUSTED}\nIs every {of} this claim names one of these quoted records? Claim: {claim} Quotes: {}",
+                    dumps(&json!(winners))
+                ),
+                Some(&format!("Each {of} the claim names is one of these quoted records, or it names none.")),
+                Some(&format!("The claim names a {of} that is not one of these quoted records.")),
+            ),
+        ));
+    }
+    checks
+}
 
 /// The quotes a claim cites, each with whether a later read superseded it.
 fn cited_quotes(claim: &Claim, notes: &Notes) -> Vec<serde_json::Value> {
@@ -1483,8 +1525,10 @@ mod tests {
         assert_eq!(checked.claims, [Claim::new("There are 3 quotes by Ada.", counted)]);
         let asked = jev.asked();
         assert_eq!(asked.keys().filter(|key| key.starts_with("t0/n")).count(), 5);
-        let Question::Noul(support) = &asked["claim0"] else { panic!("support is a noul") };
-        assert!(support.instructions.contains("There are [computed] quotes by Ada."), "{}", support.instructions);
+        assert!(!asked.contains_key("claim0"), "the count is not Jev's to confirm");
+        let Question::Noul(states) = &asked["claim0/states"] else { panic!("states is a noul") };
+        assert!(states.instructions.contains("only how many 'quote by Ada' there are"), "{}", states.instructions);
+        assert!(states.instructions.contains("There are [computed] quotes by Ada."), "{}", states.instructions);
     }
 
     /// An extreme is the record code finds at it, from the number Jev says is the field: every record tied there is
@@ -1507,7 +1551,18 @@ mod tests {
         assert_eq!(checked.problem, None);
         assert_eq!(checked.claims, [Claim::new("The cheapest is Book X at £10.69.", cheapest)]);
         // Only the note with two numbers needs Jev to say which is the price.
-        assert_eq!(jev.asked().keys().filter(|key| key.contains("/v")).collect::<Vec<_>>(), ["t0/v1"]);
+        let asked = jev.asked();
+        assert_eq!(asked.keys().filter(|key| key.contains("/v")).collect::<Vec<_>>(), ["t0/v1"]);
+        // Jev judges only that the book the claim names is one code found at the extreme.
+        let Question::Noul(record) = &asked["claim0/record"] else { panic!("record is a noul") };
+        assert!(record.instructions.contains("\"quote\": \"Book Z"), "{}", record.instructions);
+        let rejected = Tallying { support: 0.1, ..Tallying::new("Book ", "£") };
+        let claim =
+            tallied("The cheapest is Book Y at £10.69.", "£10.69", tally::Op::Min, "book", Some("price"), vec![]);
+        let checked = review_claims(&rejected, "Find the cheapest book", None, vec![claim], &notes, None, true, &[])
+            .await
+            .unwrap();
+        assert!(checked.claims.is_empty(), "a claim naming a book not at the extreme is not shown");
     }
 
     #[tokio::test]

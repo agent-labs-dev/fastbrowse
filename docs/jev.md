@@ -186,7 +186,7 @@ row is a place fastbrowse keeps Jev out:
 | Jev's limit | What fastbrowse does instead |
 |:--|:--|
 | It does not count, and errs more as the list grows | A composed count is one Noul per note read, "is this one record of the kind?", summed in code (`retrieval/tally.rs`). No question asks Jev whether a stated count holds |
-| It is not a calculator, and numeric representations underperform | A composed total or extreme takes the number Jev picks in each record, and code adds or compares them. The support check is shown `[computed]` in place of the value |
+| It is not a calculator, and numeric representations underperform | A composed total or extreme takes the number Jev picks in each record, and code adds or compares them. The claim is then asked only whether it states nothing besides the tally and, for an extreme, whether it names a record code found at it |
 | It does not generate | Prose, answers and table rows are the LLM's |
 
 Asked whether a claim of 10 quotes followed from its 10 cited quotes, Jev answered 0.43 to 0.53, about what it gave

@@ -160,7 +160,9 @@ each final claim against its original cited quotes, including record identity an
 A count, total, minimum or maximum is never written or judged as a number. The composer marks it as a tally with
 the kind of record and the field, and Jev answers one question per note read: whether it is one such record, and which
 number in it is the field. Code counts, adds or compares, writes the value into the claim and cites every record it
-rests on; the support check sees `[computed]` in its place.
+rests on. Such a claim gets no support question over the value: Jev is asked only whether the claim, with `[computed]`
+in the value's place, states nothing besides the tally, and for a minimum or maximum, whether the record it names is one
+of those code found at it.
 Packing continues only when fewer requests are needed or the rewritten claim text shrinks. Removing source-state
 metadata alone does not count as progress.
 For a table, each cell is judged with the whole row and its quotes as context; every cell must be supported.
