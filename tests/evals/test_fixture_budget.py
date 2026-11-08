@@ -96,6 +96,7 @@ async def test_fixture_campaign_admission_uses_exact_cost_and_stops_on_unknown(
         "steps": 1,
         "cost": charge.model_dump(mode="json"),
         "providers": "Jev test; LLM test",
+        "events": [],
     }
     drive = AsyncMock(side_effect=[row.copy(), row.copy()])
     monkeypatch.setattr(runner, "run_task", drive)

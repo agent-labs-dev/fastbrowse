@@ -70,7 +70,8 @@ jobs:
           uv run python -m fastbrowse.evals.runner "${budget_args[@]}" \
             --suite local mock \
             --repeat "$EVAL_REPEAT" \
-            --out artifacts/evals/nightly.jsonl
+            --out artifacts/evals/nightly.jsonl \
+            --traces artifacts/evals/nightly.traces.jsonl
       - name: Check the stability budget
         # A credential check that failed leaves no rows, and a stability error would then read as a task failure;
         # this step stays out of a run that never started.
