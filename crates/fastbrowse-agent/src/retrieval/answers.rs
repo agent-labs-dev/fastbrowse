@@ -973,8 +973,14 @@ pub fn draft_answer(notes: &Notes) -> Option<ComposedAnswer> {
     (!claims.is_empty()).then(|| assemble_answer(&claims, notes))
 }
 
+/// The same words picked on two pages are one claim citing both: a list walked over pages that each state its total
+/// answered with the total twice (#863).
 fn draft_claims(notes: &Notes) -> Vec<Claim> {
-    notes.supporting().into_iter().map(|(key, fact)| Claim::new(&fact.text, vec![key])).collect()
+    let mut claims: IndexMap<String, Vec<String>> = IndexMap::new();
+    for (key, fact) in notes.supporting() {
+        claims.entry(fact.text).or_default().push(key);
+    }
+    claims.into_iter().map(|(text, keys)| Claim::new(&text, keys)).collect()
 }
 
 /// The notes Jev picked as the whole answer, held to what the task asks to be told as a composed answer is: a pick made

@@ -784,6 +784,15 @@ impl<'a> Reader<'a> {
             },
             _ => return,
         };
+        // A browser offers no disabled control, as the snapshot leaves out `:disabled`, `aria-disabled="true"` and
+        // `inert`. A disabled next link is no next page: the last page of GitHub's issue list keeps one pointing a page
+        // past the end, and each page past it does the same.
+        let disabled = get("aria-disabled").is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
+            || get("inert").is_some()
+            || (tag != "a" && get("disabled").is_some());
+        if disabled {
+            return;
+        }
         let named = ["aria-label", "placeholder", "title", "value", "name"];
         let label = named.iter().find_map(|name| get(name).filter(|value| !clean(value).is_empty()));
         let id = format!("fetched-{}", self.controls.len());
@@ -1346,6 +1355,22 @@ mod tests {
         let next: Vec<_> = controls.iter().map(|c| c.next_page).collect();
         assert_eq!(next, [Some(true), None, Some(true), None, None, None, None]);
         assert_eq!(controls[0].context.as_deref(), Some("Pages"));
+    }
+
+    #[test]
+    fn a_disabled_control_is_not_offered_and_a_disabled_next_link_is_no_next_page() {
+        // The last page of GitHub's issue list, as served: its Next link is disabled but still points one page past
+        // the end, and every page past it does the same (#863).
+        let (_, _, controls, _) = read(
+            "<nav aria-label='Pagination'><a href='/issues?page=1' rel='prev'>Previous</a>\
+             <a rel='next' aria-hidden='true' aria-disabled='true' href='/issues?page=3'>Next</a></nav>\
+             <form><button disabled>Send</button><input name=q disabled><button>Go</button>\
+             <a href='/x' inert>Inert</a><a href='/y' aria-disabled='false'>Enabled</a></form>",
+            "https://a.example/issues?page=2",
+        );
+        let shown: Vec<&str> = controls.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(shown, ["Previous", "Go", "Enabled"]);
+        assert!(controls.iter().all(|c| c.next_page.is_none()), "{controls:?}");
     }
 
     #[test]
