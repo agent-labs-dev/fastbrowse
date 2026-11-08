@@ -12,7 +12,7 @@ use super::recovery::{DONE, Idle};
 use super::state::{Extent, OutputIntent, RunState, Step, Stop};
 use super::{Agent, Outcome};
 use crate::memory::Notes;
-use crate::retrieval::{compose_reviewed, draft_answer, draft_reviewed, marked_partial, verdict};
+use crate::retrieval::{compose_reviewed, draft_answer, draft_reviewed, marked_partial};
 use crate::verification::{ExtractOptions, Extraction, RecordSchema, extract};
 
 impl Agent {
@@ -261,37 +261,27 @@ impl Agent {
         } else if state.compose {
             let (notes, task, ledger) = (state.notes_to_compose(), state.task.clone(), state.ledger.clone());
             let steps = state.executed_steps();
-            let chosen = if state.composition_feedback.is_none() {
-                self.trace.phase("verdict", verdict(&*self.jev, &task, &notes, Some(&ledger))).await?
-            } else {
-                None
-            };
-            match chosen {
-                Some(chosen) => Some(chosen),
-                None => {
-                    let reviewed = self
-                        .trace
-                        .phase(
-                            "compose",
-                            compose_reviewed(
-                                &*self.jev,
-                                &*self.llm,
-                                &task,
-                                &notes,
-                                Some(&ledger),
-                                state.composition_feedback.as_deref(),
-                                intent != OutputIntent::CarriedOut,
-                                &steps,
-                            ),
-                        )
-                        .await?;
-                    rejection = reviewed.rejection;
-                    Some(reviewed.answer)
-                }
-            }
+            let reviewed = self
+                .trace
+                .phase(
+                    "compose",
+                    compose_reviewed(
+                        &*self.jev,
+                        &*self.llm,
+                        &task,
+                        &notes,
+                        Some(&ledger),
+                        state.composition_feedback.as_deref(),
+                        intent != OutputIntent::CarriedOut,
+                        &steps,
+                    ),
+                )
+                .await?;
+            rejection = reviewed.rejection;
+            Some(reviewed.answer)
         } else if matches!(intent, OutputIntent::Text | OutputIntent::TextAndImage) {
             let (notes, task, ledger) = (state.notes.clone(), state.task.clone(), state.ledger.clone());
-            match self.trace.phase("verdict", draft_reviewed(&*self.jev, &task, &notes, Some(&ledger))).await? {
+            match self.trace.phase("coverage", draft_reviewed(&*self.jev, &task, &notes, Some(&ledger))).await? {
                 Some(reviewed) => {
                     // A pick that falls short is written up next time, from everything read by then.
                     state.compose |= reviewed.rejection.is_some() || reviewed.answer.problem.is_some();

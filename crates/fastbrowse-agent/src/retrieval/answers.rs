@@ -2,11 +2,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::citations::{page_text, text_fragment};
-use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionClient, NoulQuestion, Question};
+use fastbrowse_core::decision::{Answer, DecisionClient, NoulQuestion, Question};
 use fastbrowse_core::llm::{LLMClient, LLMError, Message, ResponseSchema, Typed};
-use fastbrowse_core::models::{Citation, CostComponent, Evidence, JevPurpose, LLMPurpose, UNTRUSTED};
+use fastbrowse_core::models::{Citation, Evidence, JevPurpose, LLMPurpose, UNTRUSTED};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::text;
@@ -850,80 +849,6 @@ fn initial_items(notes: &Notes) -> Vec<ComposeItem> {
         .collect()
 }
 
-const QUOTED: &str = "quote";
-
-/// The answer when Jev says the notes already state it: the notes it picks, in reading order, each citing its quote.
-/// None when the answer has to be worked out, or Jev cannot say, which leaves it to `compose`.
-pub async fn verdict(
-    jev: &dyn DecisionClient,
-    task: &str,
-    notes: &Notes,
-    ledger: Option<&Ledger>,
-) -> Result<Option<ComposedAnswer>> {
-    let facts = notes.facts();
-    let written: Vec<String> = facts
-        .iter()
-        .map(|fact| note_text(&fact.text, Some(notes.superseded(&fact_id(fact))), fact_page(fact).as_deref()))
-        .collect();
-    let mut questions: IndexMap<String, Question> = IndexMap::from([(
-        "whole".to_string(),
-        Question::Choice(ChoiceQuestion::new(
-            format!("{UNTRUSTED}\n{SOURCE_STATE}\nWhat does answering `task` take, given `notes`?"),
-            IndexMap::from([
-                (
-                    QUOTED.to_string(),
-                    "Repeating every selected note as written answers only the items the task asks to be told, with no unrelated text. No extraction, rewording, calculation or comparison between notes is needed.".into(),
-                ),
-                (
-                    "work".to_string(),
-                    "The answer needs extraction from broader notes, rewording, calculation, a comparison between notes such as picking the highest or lowest, or sentences no note states.".into(),
-                ),
-            ]),
-        )),
-    )]);
-    for (index, fact) in written.iter().enumerate() {
-        let instructions = format!(
-            "{UNTRUSTED}\n{SOURCE_STATE}\nIs note {index} ({}) an entire answer or requested value that can be repeated as written, without unrelated text? A note that merely contains a requested value among unrelated text needs extraction instead. Labels, navigation and column headings do not answer the task.",
-            text::repr(fact)
-        );
-        let question = NoulQuestion::new(
-            instructions,
-            Some("This entire note is an answer or requested value, ready to repeat as written."),
-            Some("It does not."),
-        );
-        questions.insert(format!("note{index}"), Question::Noul(question));
-    }
-    let state = json!({"task": task, "notes": written});
-    // Notes too many for Jev to read are left to `compose`, which packs them: sent, they are refused (#760).
-    if !super::choices::read_fits(&state, &questions, &jev.profile().fit(None).tokens) {
-        return Ok(None);
-    }
-    if let Some(ledger) = ledger {
-        ledger.reserve(CostComponent::Jev, 0.0, 1)?;
-    }
-    let Ok(evaluation) = jev_purpose(JevPurpose::Verify, jev.evaluate(&state, &questions)).await else {
-        return Ok(None);
-    };
-    if let Some(ledger) = ledger {
-        ledger.record([evaluation.cost.clone()])?;
-    }
-    if !matches!(evaluation.answers.get("whole"), Some(Answer::Choice(answer)) if answer.choice == QUOTED) {
-        return Ok(None);
-    }
-    let picked = |index: usize| matches!(evaluation.answers.get(&format!("note{index}")), Some(Answer::Noul(answer)) if answer.probability > 0.5);
-    let claims: Vec<Claim> = facts
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| picked(*index))
-        .map(|(_, fact)| Claim::new(&fact.text, vec![fact_id(fact)]))
-        .collect();
-    if claims.is_empty() {
-        return Ok(None);
-    }
-    let checked = review_claims(jev, task, None, claims, notes, ledger, true, &[]).await?;
-    Ok(checked.problem.is_none().then(|| assemble_answer(&checked.claims, notes)))
-}
-
 const PARTIAL_NOTICE: &str = "Partial evidence only. Remaining coverage is omitted; totals may be incomplete.";
 
 /// `partial_answer`: everything a stopped run collected, without another model call.
@@ -1232,12 +1157,6 @@ mod tests {
                 let Question::Noul(question) = &asked[0]["claim0"] else { panic!("support is yes-or-no") };
                 assert!(question.instructions.contains("\"superseded\":true"));
             }
-            let jev = Support::new(true);
-            verdict(&jev, task, &notes, None).await.unwrap();
-            let states = jev.states.lock().unwrap();
-            let old_note: Value = serde_json::from_str(states[0]["notes"][0].as_str().unwrap()).unwrap();
-            assert_eq!(old_note["superseded"], true);
-            assert_eq!(old_note["text"], old.text);
         }
     }
 
@@ -1273,92 +1192,6 @@ mod tests {
                 support["pages_read"],
                 json!(["https://flights.test/search?stops=any", "https://flights.test/search?stops=0"])
             );
-        }
-        let jev = Support::new(true);
-        verdict(&jev, task, &notes, None).await.unwrap();
-        let states = jev.states.lock().unwrap();
-        let last: Value = serde_json::from_str(states[0]["notes"][1].as_str().unwrap()).unwrap();
-        assert_eq!(last["page"], "https://flights.test/search?stops=0");
-    }
-
-    #[tokio::test]
-    async fn verbatim_answers_require_whole_notes_to_answer_only_the_requested_items() {
-        let notes = Notes::new([fact(0, "Navigation. Item A costs 12. Unrelated company history.".into())]);
-        let jev = Support::new(true);
-        assert!(verdict(&jev, "Report Item A's price", &notes, None).await.unwrap().is_none());
-        let asked = jev.asked.lock().unwrap();
-        let Question::Choice(whole) = &asked[0]["whole"] else { panic!("verbatim answer is a choice") };
-        assert!(whole.criteria[QUOTED].as_str().unwrap().contains("every selected note as written"));
-        let Question::Noul(note) = &asked[0]["note0"] else { panic!("note reuse is yes-or-no") };
-        assert!(note.instructions.contains("an entire answer or requested value"));
-        assert!(note.instructions.contains("unrelated text"));
-    }
-
-    struct SelectedNotes(Support);
-
-    impl DecisionClient for SelectedNotes {
-        fn evaluate<'a>(
-            &'a self,
-            state: &'a Value,
-            questions: &'a IndexMap<String, Question>,
-        ) -> BoxFuture<
-            'a,
-            std::result::Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>,
-        > {
-            if !questions.contains_key("whole") {
-                return self.0.evaluate(state, questions);
-            }
-            let answers = questions
-                .keys()
-                .map(|key| {
-                    let answer = if key == "whole" {
-                        Answer::Choice(fastbrowse_core::decision::ChoiceAnswer {
-                            kind: Default::default(),
-                            choice: QUOTED.into(),
-                            probabilities: IndexMap::new(),
-                            confidence: 1.0,
-                        })
-                    } else {
-                        Answer::Noul(fastbrowse_core::decision::NoulAnswer {
-                            kind: Default::default(),
-                            probability: if key == "note0" { 1.0 } else { 0.0 },
-                        })
-                    };
-                    (key.clone(), answer)
-                })
-                .collect();
-            Box::pin(async move {
-                Ok(fastbrowse_core::decision::Evaluation {
-                    model: "test".into(),
-                    answers,
-                    input_tokens: 0,
-                    cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
-                    requests: 1,
-                })
-            })
-        }
-
-        fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
-            self.0.profile()
-        }
-    }
-
-    #[tokio::test]
-    async fn verbatim_selection_requires_the_selected_claims_to_cover_the_request() {
-        let notes = Notes::new([fact(0, "Record B: 34".into()), fact(1, "Record C: 56".into())]);
-        for accepted in [false, true] {
-            let mut support = Support::new(true);
-            support.rejected = (!accepted).then(|| "coverage".into());
-            let jev = SelectedNotes(support);
-            let answer = verdict(&jev, "Report B and C", &notes, None).await.unwrap();
-            assert_eq!(answer.is_some(), accepted);
-            let asked = jev.0.asked.lock().unwrap();
-            assert_eq!(asked.len(), 1);
-            assert!(asked[0].contains_key("claim0"));
-            assert!(!asked[0].contains_key("claim1"));
-            let Question::Noul(coverage) = &asked[0]["coverage"] else { panic!("coverage is yes-or-no") };
-            assert!(coverage.instructions.contains("Record B: 34"));
-            assert!(!coverage.instructions.contains("Record C: 56"));
         }
     }
 
@@ -1968,20 +1801,6 @@ mod tests {
         let jev = Support::new(true);
         let reviewed = draft_reviewed(&jev, "Report every record", &notes, None).await.unwrap().unwrap();
         assert!(reviewed.answer.problem.unwrap().contains("input limits"));
-        assert!(jev.asked.lock().unwrap().is_empty());
-    }
-
-    /// The same re-reads left 11,350 notes, and the question whether any of them answers as written went to Jev as a
-    /// 29 MB request it refused. Notes that cannot fit are not sent; the answer is composed instead.
-    #[tokio::test]
-    async fn notes_too_long_to_pick_from_are_not_sent() {
-        let limit = fastbrowse_core::decision::DecisionProfile::jev().max_largest_tokens as usize * 4;
-        let mut notes = Notes::default();
-        for index in 0..16 {
-            notes.add(Fact { answers: true, ..fact(index, format!("{index} {}", "x".repeat(limit / 8))) });
-        }
-        let jev = Support::new(true);
-        assert!(verdict(&jev, "Report every record", &notes, None).await.unwrap().is_none());
         assert!(jev.asked.lock().unwrap().is_empty());
     }
 

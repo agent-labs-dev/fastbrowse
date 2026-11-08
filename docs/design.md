@@ -144,11 +144,12 @@ answer is composed when the run tries to finish, with recovery for a rejected dr
 
 A fresh read, including source quotes kept for synthesis, retires earlier facts from the same address when their
 quotes are no longer shown. The facts stay as history. Quotes still shown and evidence from other addresses remain.
-The composer, verbatim-answer decision and claim support check receive each source's known superseded state.
+The composer and the claim support check receive each source's known superseded state.
 They judge the state the task asks about, retaining earlier quotes for historical answers and comparisons.
 
-Jev selects verbatim answers only when every selected note can be repeated as written without unrelated text.
-A value embedded in a broader note needs extraction through the composer and its support check.
+An answer that must be composed is always composed and checked. The composer is not skipped by asking Jev of each
+note on its own whether it is the answer as written: such a question cannot tell which of two similar notes, such as the
+headings of an opener and the window it opened, is the one the task asks about.
 Before choosing DONE, Jev sees the selected answer with its citation links separately from retained evidence.
 The selected answer must give every requested fact and value; a value kept only as context does not answer it.
 When composition or the caller's schema extraction is pending, the same decision judges whether the retained
@@ -170,8 +171,7 @@ The composer and support check interpret a requested field by its meaning: descr
 value without a matching heading, and that value contradicts a claim that the field was not shown.
 The support question distinguishes facts about a quoted subset from claims about a whole set, and a source's
 population counter from the number of records the answer reports.
-Verbatim note selection is checked against the selected claims' source support and requested coverage before
-returning an answer; a failed check falls back to composition. Initial and repaired compositions are checked
+Initial and repaired compositions are checked
 for both claim support and requested answer coverage in one decision batch. A claim with no cited quote or no
 support judgment is withheld and ends `unverified`. When every check is answered and Jev rejects a composed claim, the run spends an existing recovery to correct the draft or gather
 more evidence. Rejected prose is feedback, never a source fact. Repair feedback retains claim text and citation
