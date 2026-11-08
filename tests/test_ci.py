@@ -19,6 +19,7 @@ RESULTS = (
     "SECRETS_RESULT",
     "CHANGES_RESULT",
     "REPLAY_RESULT",
+    "BLOG_RESULT",
 )
 # Left unbuilt by a change that cannot alter them, which is a pass.
 OPTIONAL = ("BINARIES_RESULT", "AUR_RESULT")

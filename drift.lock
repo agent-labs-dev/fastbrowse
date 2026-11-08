@@ -1,0 +1,71 @@
+version = 1
+
+[[bindings]]
+doc = "blog/agent-credentials-scoped.md"
+target = "crates/fastbrowse-cli/src/bitwarden.rs"
+sig = "c65ef580d8a67c67"
+
+[[bindings]]
+doc = "blog/agent-credentials-scoped.md"
+target = "crates/fastbrowse-cli/src/cli.rs"
+sig = "a0a0f42d7f541e1a"
+
+[[bindings]]
+doc = "blog/agent-skills-browser.md"
+target = "docs/skill.md"
+sig = "bc61afd3bf10da6c"
+
+[[bindings]]
+doc = "blog/agent-skills-browser.md"
+target = "skills/fastbrowse/SKILL.md"
+sig = "7990e5ddf72a113b"
+
+[[bindings]]
+doc = "blog/ai-agent-click-not-on-page.md"
+target = "crates/fastbrowse-core/src/config.rs"
+sig = "9eebcb7d67544dad"
+
+[[bindings]]
+doc = "blog/ai-agent-click-not-on-page.md"
+target = "crates/fastbrowse-core/src/models.rs"
+sig = "b8ddecc235204449"
+
+[[bindings]]
+doc = "blog/attach-to-running-chrome.md"
+target = "crates/fastbrowse-browser/src/session.rs"
+sig = "1eb706685dadb753"
+
+[[bindings]]
+doc = "blog/attach-to-running-chrome.md"
+target = "crates/fastbrowse-cli/src/cli.rs"
+sig = "a0a0f42d7f541e1a"
+
+[[bindings]]
+doc = "blog/attach-to-running-chrome.md"
+target = "crates/fastbrowse-cli/src/options.rs"
+sig = "dcfffa31b67dad11"
+
+[[bindings]]
+doc = "blog/browser-automation-cost-per-run.md"
+target = "crates/fastbrowse-cli/src/cli.rs"
+sig = "a0a0f42d7f541e1a"
+
+[[bindings]]
+doc = "blog/browser-automation-cost-per-run.md"
+target = "crates/fastbrowse-core/src/models.rs"
+sig = "b8ddecc235204449"
+
+[[bindings]]
+doc = "blog/mcp-browser-tool.md"
+target = "crates/fastbrowse-cli/src/mcp/mod.rs"
+sig = "dfd16e6ddd1d30c6"
+
+[[bindings]]
+doc = "blog/verify-browser-agent-results.md"
+target = "crates/fastbrowse-cli/src/cli.rs"
+sig = "a0a0f42d7f541e1a"
+
+[[bindings]]
+doc = "blog/verify-browser-agent-results.md"
+target = "crates/fastbrowse-core/src/models.rs"
+sig = "b8ddecc235204449"
