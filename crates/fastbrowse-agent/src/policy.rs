@@ -1383,11 +1383,15 @@ fn target_element(control: &Control, operation: Operation) -> Map<String, Value>
 }
 
 /// Whether a sign-in wall blocks the task, asked of a fresh page and of the page a run gave up on as signed out.
+///
+/// It asks what the page's main content asks of its visitor. Asked whether a sign-in form took the place of the
+/// page's content, Jev read a page that is only a sign-in, such as an OAuth login, as showing its content: Wago's
+/// scored about 0.3 from its text (#855).
 pub(crate) fn login_question() -> Question {
     noul(
-        "Does a sign-in or account verification form or prompt take the place of this page's content, so the page cannot be read or used without signing in?",
-        "A sign-in or account verification wall takes the place of the page's content.",
-        "The page shows its content, with or without a sign-in link or box beside it, or refuses access with no way to sign in.",
+        "Is signing in what this page asks of its visitor: is its main content a sign-in or account verification form or sign-in options, so the page cannot be read or used without signing in?",
+        "The page's main content asks the visitor to sign in or verify an account.",
+        "The page's main content is something else, with or without a sign-in link or box beside it, or it refuses access with no way to sign in.",
     )
 }
 
