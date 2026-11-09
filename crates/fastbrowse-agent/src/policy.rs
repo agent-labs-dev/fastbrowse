@@ -1276,8 +1276,8 @@ fn relevance_element(control: &Control) -> Map<String, Value> {
     element.insert("label".into(), control.label.clone().into());
     element.insert("role".into(), control.role.clone().into());
     element.insert("operations".into(), sorted_operations(control));
-    if let Some(context) = &control.context {
-        element.insert("context".into(), context.clone().into());
+    if let Some(context) = context_of(control) {
+        element.insert("context".into(), context.into());
     }
     if let Some(href) = &control.href {
         element.insert("href".into(), href.clone().into());
@@ -1294,6 +1294,17 @@ fn relevance_element(control: &Control) -> Map<String, Value> {
     element
 }
 
+/// Where a control belongs, as a model deciding a step reads it: the step that showed it, then its card, row or
+/// section. A popup a page attaches at the end of its body has only its own heading around it, such as "November
+/// 2026", and without the step that opened it a run chose an always-visible calendar's dates over it (#884).
+fn context_of(control: &Control) -> Option<String> {
+    match (&control.shown_by, &control.context) {
+        (Some(step), Some(context)) if !context.is_empty() => Some(format!("shown by {step}; {context}")),
+        (Some(step), _) => Some(format!("shown by {step}")),
+        (None, context) => context.clone(),
+    }
+}
+
 /// A control as the step's state lists it.
 pub fn element(control: &Control) -> Map<String, Value> {
     let mut element = Map::new();
@@ -1302,7 +1313,7 @@ pub fn element(control: &Control) -> Map<String, Value> {
     element.insert("role".into(), control.role.clone().into());
     element.insert("operations".into(), sorted_operations(control));
     let optional = [
-        ("context", control.context.clone().map(Value::from)),
+        ("context", context_of(control).map(Value::from)),
         ("value", control.value.clone().map(Value::from)),
         ("focused", control.focused.map(Value::from)),
         ("href", control.href.clone().map(Value::from)),

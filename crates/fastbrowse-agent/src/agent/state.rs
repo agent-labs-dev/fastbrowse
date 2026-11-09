@@ -372,6 +372,13 @@ pub(crate) struct RunState {
     pub redecided: bool,
     /// Fields the task gives no value for, which recovery has been told about once, by page, label and context.
     pub missing: HashSet<(String, String, Option<String>)>,
+    /// The step that showed each control on the page it stayed on, by document and control id, while the control is
+    /// there. A page can attach what a step opens at the end of its body, such as a date popup, where nothing near it
+    /// names the field that opened it.
+    pub shown_by: HashMap<(String, String), String>,
+    /// The step the next observation judges, as what showed the controls it finds: the step that showed its target,
+    /// when one did, since what a popup's own controls show belongs to what opened the popup.
+    pub showing: Option<String>,
 }
 
 /// A rejected draft's claims that held, the notes it was written from, and how many steps the run had taken then.
@@ -605,6 +612,34 @@ impl RunState {
         }
     }
 
+    /// Record the step `by` as what showed the controls `shown` on `observation`, and forget the controls that are gone.
+    pub fn note_shown(&mut self, observation: &Observation, shown: &[String], by: Option<String>) {
+        let present: HashSet<&str> = observation.controls.iter().map(|c| c.id.as_str()).collect();
+        self.shown_by
+            .retain(|(document, id), _| *document == observation.document_key && present.contains(id.as_str()));
+        let Some(by) = by else { return };
+        for id in shown {
+            self.shown_by.insert((observation.document_key.clone(), id.clone()), by.clone());
+        }
+    }
+
+    /// What the controls a step on `target` shows are shown by: the step that showed `target`, when one did on this
+    /// page, or else the step itself.
+    pub fn shown_through(&self, observation: &Observation, target: Option<&Control>, step: String) -> String {
+        target
+            .and_then(|target| self.shown_by.get(&(observation.document_key.clone(), target.id.clone())))
+            .cloned()
+            .unwrap_or(step)
+    }
+
+    /// Mark each control with the step that showed it, so a later step can tell what it belongs to from what opened
+    /// it as well as from where it sits.
+    pub fn mark_shown(&self, observation: &mut Observation) {
+        for control in &mut observation.controls {
+            control.shown_by = self.shown_by.get(&(observation.document_key.clone(), control.id.clone())).cloned();
+        }
+    }
+
     pub fn carried_on(self, ledger: Arc<Ledger>) -> RunState {
         RunState {
             ledger,
@@ -702,6 +737,8 @@ impl RunState {
             first_url: None,
             redecided: false,
             missing: HashSet::new(),
+            shown_by: HashMap::new(),
+            showing: None,
         }
     }
 }

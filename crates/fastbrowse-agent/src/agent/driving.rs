@@ -15,7 +15,7 @@ use fastbrowse_core::py::text;
 use fastbrowse_core::safety::{may_be_irreversible, origin_of};
 use serde_json::{Map, Value, json};
 
-use super::helpers::{decision_label, describe, drew_something, netloc_of, path_of, scheme_of};
+use super::helpers::{decision_label, describe, doing, drew_something, netloc_of, path_of, scheme_of};
 use super::recovery::{Idle, leave_out_idle, uncover, withheld};
 use super::state::{FailureCause, Flow, RunState, SiteFailure, Step, Stop, Unsure, Written, read_key};
 
@@ -123,6 +123,7 @@ impl Agent {
                     let mut offered = observation.clone();
                     leave_out_idle(state, &mut offered, &mut context);
                     state.mark_read_links(&mut offered);
+                    state.mark_shown(&mut offered);
                     // The next saved step, when its page and control are certain, is the one control Jev is offered:
                     // Jev still judges the page, and may read or stop instead, but has no target to choose and no
                     // screenshot to look at, so no shortlist or picture is paid for.
@@ -671,6 +672,10 @@ impl Agent {
                 state.hint = Some(self.redact(&hint));
             }
             state.acted_from = Some(observation.clone());
+            state.showing = executed.then(|| {
+                let step = doing(decision.operation, label.as_deref());
+                state.shown_through(observation, decision.target.as_ref(), step)
+            });
             // The address a click or navigation asked for, so reading where it landed also reads that address: a
             // site that redirects `/page/2` to `/page/2/` left the asked one unread, and a whole-list answer unverified.
             let asked = match action.operation {
@@ -702,6 +707,8 @@ impl Agent {
                     uncover(&mut state.idle);
                 }
                 state.acted_from = None;
+                let showing = state.showing.take();
+                state.note_shown(&landed, &done.shown, showing);
                 state.settle_change(&landed);
                 setting = done.set_something;
                 effect_now = Some(done.summary);
@@ -937,6 +944,7 @@ impl Agent {
                 state.site_failure = None;
             }
         }
+        let showing = state.showing.take();
         let Some(before) = state.acted_from.take() else { return };
         state.settle_change(observation);
         let landed = read_key(observation);
@@ -959,6 +967,7 @@ impl Agent {
                 set_something: false,
                 added: false,
                 changed: false,
+                shown: Vec::new(),
             }
         } else {
             effect(&before, observation, None, waited)
@@ -993,6 +1002,7 @@ impl Agent {
             Some(detail) => format!("{detail}; {}", done.summary),
             None => done.summary,
         });
+        state.note_shown(observation, &done.shown, showing);
     }
 
     /// Every observation models see has resolved secret values blanked, wherever the page echoes them.

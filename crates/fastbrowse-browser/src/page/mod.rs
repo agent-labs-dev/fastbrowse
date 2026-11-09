@@ -398,6 +398,7 @@ fn control_from_raw(
         next_page: c.next_page,
         download: c.download,
         already_read: None,
+        shown_by: None,
     }
 }
 

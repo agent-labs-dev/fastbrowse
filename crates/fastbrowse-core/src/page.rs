@@ -126,6 +126,11 @@ pub struct Control {
     /// never does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub already_read: Option<bool>,
+    /// The step this run took that showed this control without leaving the page, such as "clicking Depart" for a
+    /// date popup the page attaches at the end of its body, far from the field that opened it: the agent marks it,
+    /// the page never does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shown_by: Option<String>,
 }
 
 impl Control {
@@ -161,6 +166,7 @@ impl Control {
             next_page: None,
             download: None,
             already_read: None,
+            shown_by: None,
         }
     }
 }

@@ -19,6 +19,9 @@ pub struct Effect {
     pub added: bool,
     /// Something a person would see differs: a control, the address or the text in the viewport.
     pub changed: bool,
+    /// The ids of the controls the step showed on the page it stayed on. A step that loaded another document or
+    /// address showed none: every control there is new, and the step's link to them is the address it went to.
+    pub shown: Vec<String>,
 }
 
 /// Whether a field can be left: an editable control the browser reports holds keyboard focus. Focus a browser never
@@ -227,6 +230,7 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
         set_something: navigated || setting,
         added: stayed_whole && (content_changed || !shown.is_empty()),
         changed,
+        shown: if navigated || replaced { Vec::new() } else { shown.iter().map(|c| c.id.clone()).collect() },
     }
 }
 
@@ -301,6 +305,18 @@ mod tests {
         assert!(!effect(&before, &after, None, false).summary.contains("HTTP 400"));
         before.document_key = "form".into();
         assert!(effect(&before, &after, None, false).summary.contains("HTTP 400"));
+    }
+
+    #[test]
+    fn test_controls_a_step_showed_are_named_only_on_the_page_it_stayed_on() {
+        let before = observation(vec![trigger()]);
+        let after = observation([vec![trigger()], options()].concat());
+        let ids: Vec<String> = options().iter().map(|c| c.id.clone()).collect();
+        assert_eq!(effect(&before, &after, None, false).shown, ids);
+        let replaced = Observation { document_key: "next".into(), ..after.clone() };
+        assert!(effect(&before, &replaced, None, false).shown.is_empty());
+        let moved = Observation { url: "https://example.test/next".into(), ..after };
+        assert!(effect(&before, &moved, None, false).shown.is_empty());
     }
 
     #[test]
