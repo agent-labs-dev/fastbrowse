@@ -128,6 +128,7 @@ fn read_groups(candidates: &[Candidate]) -> IndexMap<String, Vec<Candidate>> {
 fn read_request(
     page: &Page<'_>,
     task: &str,
+    date: &str,
     candidates: &[Candidate],
     blocks: Option<&[&Block]>,
     shows: bool,
@@ -180,7 +181,7 @@ fn read_request(
         shown.insert("focused".into(), true.into());
     }
     shown.insert("inaccessible_frames".into(), capture.inaccessible_frames.into());
-    (json!({"page": Value::Object(shown)}), questions)
+    (json!({"date": date, "page": Value::Object(shown)}), questions)
 }
 
 /// Whether the state and the questions fit in one request to Jev.
@@ -196,6 +197,7 @@ async fn focus<'a>(
     jev: &dyn DecisionClient,
     page: &Page<'a>,
     task: &str,
+    date: &str,
     tokens: &TokenBudget,
     ledger: Option<&Ledger>,
     trace: &Trace,
@@ -234,6 +236,7 @@ async fn focus<'a>(
     let state = json!({
         "rules": focus_rules(),
         "task": task,
+        "date": date,
         "page": {"url": capture.url, "title": capture.title},
     });
     let answered = evaluate_batches(JevPurpose::Read, jev, &state, &questions, tokens, ledger, None, true).await?;
@@ -261,7 +264,7 @@ async fn focus<'a>(
     let fits = |shown: usize| {
         let blocks = passages(shown);
         let candidates = iter_read_candidates(page, &blocks, Some(max_options - 1));
-        let (state, questions) = read_request(page, task, &candidates, Some(&blocks), false);
+        let (state, questions) = read_request(page, task, date, &candidates, Some(&blocks), false);
         candidates.len() <= max_options - 2 && read_fits(&state, &questions, tokens)
     };
     let (mut shown, mut high) = (0, ranked.len());
@@ -328,10 +331,16 @@ pub(crate) fn whole_page_facts(capture: &Capture) -> Vec<Fact> {
 
 /// `read_page`: the facts Jev picks from this page, none when it says the page holds nothing for `task`. An answer it
 /// says must be composed keeps every block as a fact.
+///
+/// Jev is told the capture date and the dates the task names, worked out from it, as a step is: asked whether "30/01/2027"
+/// answers "the last Saturday of the month after next" without them, it could not tell, and a run that had set that
+/// date read the page as holding nothing for the task.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn read_page(
     jev: &dyn DecisionClient,
     capture: &Capture,
     task: &str,
+    dates: &[crate::dates::DateReference],
     tokens: &TokenBudget,
     ledger: Option<&Ledger>,
     trace: &Trace,
@@ -340,11 +349,12 @@ pub(crate) async fn read_page(
     let page = Page::new(capture);
     let blocks: Vec<&Block> = capture.blocks.iter().collect();
     let mut candidates = page_read_candidates(&page, &blocks, jev.profile().max_choice_options);
-    let (mut state, mut asked) = read_request(&page, task, &candidates, None, shows);
+    let date = crate::dates::dated(capture.captured_at, dates);
+    let (mut state, mut asked) = read_request(&page, task, &date, &candidates, None, shows);
     // Passages Jev never judged are missing from those it chooses among, so an absent from them is not the page's.
     let mut lost = false;
     if candidates.is_empty() || !read_fits(&state, &asked, tokens) {
-        let (kept, narrowed, _, unjudged) = focus(jev, &page, task, tokens, ledger, trace).await?;
+        let (kept, narrowed, _, unjudged) = focus(jev, &page, task, &date, tokens, ledger, trace).await?;
         if narrowed.is_empty() {
             // Too many value options can hide a passage that still fits as an absent-or-synthesis question.
             if !read_fits(&state, &asked, tokens) {
@@ -354,7 +364,7 @@ pub(crate) async fn read_page(
         } else {
             lost = unjudged;
             candidates = narrowed;
-            (state, asked) = read_request(&page, task, &candidates, Some(&kept), shows);
+            (state, asked) = read_request(&page, task, &date, &candidates, Some(&kept), shows);
         }
     }
     if let Some(ledger) = ledger {
@@ -516,7 +526,7 @@ mod tests {
     fn focused(captured: &Capture, tokens: &TokenBudget) -> Vec<String> {
         let page = Page::new(captured);
         let (kept, _, _, _) =
-            block_on(focus(&Scorer, &page, "Find the version", tokens, None, &Trace::disabled())).unwrap();
+            block_on(focus(&Scorer, &page, "Find the version", "", tokens, None, &Trace::disabled())).unwrap();
         kept.iter().map(|block| block.source_id.clone()).collect()
     }
 
@@ -591,6 +601,7 @@ mod tests {
                 &Reader(choice),
                 &captured,
                 "List the items",
+                &[],
                 &TokenBudget::default(),
                 None,
                 &Trace::disabled(),
@@ -653,8 +664,17 @@ mod tests {
     }
 
     fn judged(jev: &Judge, captured: &Capture) -> PageRead {
-        block_on(read_page(jev, captured, "Find the version", &TokenBudget::default(), None, &Trace::disabled(), false))
-            .unwrap()
+        block_on(read_page(
+            jev,
+            captured,
+            "Find the version",
+            &[],
+            &TokenBudget::default(),
+            None,
+            &Trace::disabled(),
+            false,
+        ))
+        .unwrap()
     }
 
     /// A page too long for one read request, so its passages are judged first.
@@ -683,6 +703,7 @@ mod tests {
             &jev,
             &captured,
             "Find the version",
+            &[],
             &TokenBudget::default(),
             None,
             &Trace::disabled(),
@@ -722,7 +743,9 @@ mod tests {
                 context: String::new(),
             })
             .collect();
-        let (_, questions) = read_request(&page, "Find the second avatar name", &candidates, None, false);
+        let (state, questions) =
+            read_request(&page, "Find the second avatar name", "2026-09-26 (Saturday)", &candidates, None, false);
+        assert_eq!(state["date"], "2026-09-26 (Saturday)", "a read is told the dates a step is");
         let Question::Choice(question) = &questions[CHOICE] else { panic!("a choice") };
         let expected: Vec<Value> = ["1 of 2", "2 of 2"]
             .iter()

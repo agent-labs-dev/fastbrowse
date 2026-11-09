@@ -43,7 +43,8 @@ impl Agent {
         let known = read_sources(&state.notes);
         let (tokens, ledger) = (&self.config.tokens, state.ledger.clone());
         let PageRead { facts, compose, finished } =
-            read_page(&*self.jev, &capture, &state.task, tokens, Some(&ledger), &self.trace, shows).await?;
+            read_page(&*self.jev, &capture, &state.task, &state.dates, tokens, Some(&ledger), &self.trace, shows)
+                .await?;
         state.end_read(observation, finished, tries);
         let added = facts.len();
         // Jev's latest word on a read stands: one fact that alone answers the task needs nothing written around it.
