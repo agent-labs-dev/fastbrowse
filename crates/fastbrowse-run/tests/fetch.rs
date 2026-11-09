@@ -172,6 +172,23 @@ async fn test_a_redirect_inside_the_grant_is_followed() {
 }
 
 #[tokio::test]
+async fn test_a_browser_carries_on_from_the_address_the_read_asked_for() {
+    // Google Flights redirects a client that is not a browser to its unsupported-browser page.
+    let http = serving(|request| {
+        if request.url.ends_with("/travel/flights") {
+            Response::new(302, "").with_header("location", "/travel/flights/unsupported")
+        } else {
+            Response::new(200, "<p>Time for an upgrade</p>").with_header("content-type", "text/html")
+        }
+    });
+    let page = FetchedPage::new(http, None, None);
+    assert_eq!(page.browser_address(), None);
+    page.navigate("https://www.google.com/travel/flights", None).await.unwrap();
+    assert_eq!(page.observe().await.unwrap().url, "https://www.google.com/travel/flights/unsupported");
+    assert_eq!(page.browser_address().as_deref(), Some("https://www.google.com/travel/flights"));
+}
+
+#[tokio::test]
 async fn test_a_fetched_page_has_no_pixels_without_requiring_a_browser() {
     let page = FetchedPage::new(html(PAGE), None, None);
     page.navigate("https://shop.example.com/orders", None).await.unwrap();

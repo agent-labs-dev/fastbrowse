@@ -291,7 +291,8 @@ impl Agent {
                 self.store_recipe(state, sink);
             }
             if let (Some(state), Some(page)) = (slot.take(), self.raw()) {
-                self.seen().resume = Some(Resume { state, url: page.url });
+                let url = self.page.browser_address().unwrap_or(page.url);
+                self.seen().resume = Some(Resume { state, url });
             }
             ended
         });

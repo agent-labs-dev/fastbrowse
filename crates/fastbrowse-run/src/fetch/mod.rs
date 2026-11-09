@@ -311,6 +311,8 @@ async fn serve(http: &Http, url: &str, allowed_origins: Option<&[String]>, secon
 #[derive(Default)]
 struct Loaded {
     capture: Option<Capture>,
+    /// The address the read asked for, before the server redirected it.
+    requested: Option<String>,
     controls: Vec<Control>,
     generation: u64,
 }
@@ -371,6 +373,7 @@ impl FetchedPage {
         let fetched = fetch_document(&self.http, url, self.origins.as_deref(), TIMEOUT_SECONDS).await?;
         let mut loaded = self.loaded.lock().unwrap();
         loaded.capture = Some(fetched.capture);
+        loaded.requested = Some(url.to_string());
         loaded.controls = fetched.controls;
         loaded.generation += 1;
         Ok(())
@@ -385,6 +388,10 @@ impl Page for FetchedPage {
     fn needs_browser(&self, message: String) -> BrowserError {
         self.needed_browser.store(true, Ordering::Relaxed);
         BrowserError::NeedsBrowser(message)
+    }
+
+    fn browser_address(&self) -> Option<String> {
+        self.loaded.lock().unwrap().requested.clone()
     }
 
     /// A fetched run downloads nothing, so it has nothing to report.

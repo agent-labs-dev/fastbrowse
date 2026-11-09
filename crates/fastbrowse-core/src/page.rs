@@ -464,6 +464,14 @@ pub trait Page: Send + Sync {
         BrowserError::NeedsBrowser(message)
     }
 
+    /// The address a browser opens to carry on from this page, when it is not the page's own. A page fetched over HTTP
+    /// was redirected by a server answering a client that is not a browser, so a browser asks for the address the
+    /// read asked for and meets the server's answer to a browser: Google Flights sends the reader's request to its
+    /// unsupported-browser page, and a browser opened there started past a warning it was never shown.
+    fn browser_address(&self) -> Option<String> {
+        None
+    }
+
     fn artifacts(&self) -> Vec<Artifact>;
 
     /// Keeps a capture's masked text as a `capture` artifact where this page keeps its downloads. A page with nowhere
