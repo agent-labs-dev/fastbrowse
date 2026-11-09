@@ -36,7 +36,8 @@ The header of `.github/workflows/release.yml` lists every registry one tag publi
 publishes in. Pull requests and `main` build only the Linux and Windows binaries, leaving the macOS two to the
 release. The macOS two, and their Node addons, are signed ad hoc (`codesign --sign -` in
 `.github/workflows/binaries.yml`), which is enough for a binary installed through npm. The GitHub release takes
-**the changelog entry as its notes**.
+**the changelog entry as its notes**. An entry longer than GitHub's 125,000-character release body is cut at an
+item and ends with a link to the whole entry in `CHANGELOG.md` (`scripts/changelog.py --release-notes`).
 
 No registry takes a version back, so finish a release that failed partway by re-running its failed jobs.
 Started by hand (`gh workflow run release.yml --ref <branch>`), the workflow stops after the binaries and
