@@ -45,14 +45,13 @@ LLM_MOUNT = "/llm"
 UPSTREAMS = {JEV_MOUNT: "https://openrouter.ai/api", LLM_MOUNT: "https://openrouter.ai/api/v1"}
 """Where `record` sends each mount: the hosts a run with only OPENROUTER_API_KEY set would call."""
 
-# Compiled, so the checker has no types for it.
-_core: Any = importlib.import_module("fastbrowse._native")
-
 
 def openrouter_routing(model: object) -> dict[str, Any]:
     """The OpenRouter routing a run keyed with OPENROUTER_API_KEY sends for `model`, which one aimed at the proxy
-    leaves out. The core builds it, so the endpoints it pins for a model are the ones a run is routed to."""
-    return json.loads(_core.openrouter_routing(model if isinstance(model, str) else ""))
+    leaves out. The core builds it, so the endpoints it pins for a model are the ones a run is routed to. The core is
+    loaded here, not on import, so reading a cassette needs no native module."""
+    core: Any = importlib.import_module("fastbrowse._native")  # compiled, so the checker has no types for it
+    return json.loads(core.openrouter_routing(model if isinstance(model, str) else ""))
 
 
 MISS_STATUS = 404
