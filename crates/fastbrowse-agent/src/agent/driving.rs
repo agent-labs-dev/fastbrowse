@@ -672,10 +672,7 @@ impl Agent {
                 state.hint = Some(self.redact(&hint));
             }
             state.acted_from = Some(observation.clone());
-            state.showing = executed.then(|| {
-                let step = doing(decision.operation, label.as_deref());
-                state.shown_through(observation, decision.target.as_ref(), step)
-            });
+            state.showing = executed.then(|| doing(decision.operation, label.as_deref()));
             // The address a click or navigation asked for, so reading where it landed also reads that address: a
             // site that redirects `/page/2` to `/page/2/` left the asked one unread, and a whole-list answer unverified.
             let asked = match action.operation {
@@ -708,7 +705,7 @@ impl Agent {
                 }
                 state.acted_from = None;
                 let showing = state.showing.take();
-                state.note_shown(&landed, &done.shown, showing);
+                state.note_shown(observation, &landed, &done.shown, showing);
                 state.settle_change(&landed);
                 setting = done.set_something;
                 effect_now = Some(done.summary);
@@ -1002,7 +999,7 @@ impl Agent {
             Some(detail) => format!("{detail}; {}", done.summary),
             None => done.summary,
         });
-        state.note_shown(observation, &done.shown, showing);
+        state.note_shown(&before, observation, &done.shown, showing);
     }
 
     /// Every observation models see has resolved secret values blanked, wherever the page echoes them.

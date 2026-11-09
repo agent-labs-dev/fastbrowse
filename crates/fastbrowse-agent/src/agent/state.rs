@@ -372,12 +372,15 @@ pub(crate) struct RunState {
     pub redecided: bool,
     /// Fields the task gives no value for, which recovery has been told about once, by page, label and context.
     pub missing: HashSet<(String, String, Option<String>)>,
-    /// The step that showed each control on the page it stayed on, by document and control id, while the control is
-    /// there. A page can attach what a step opens at the end of its body, such as a date popup, where nothing near it
-    /// names the field that opened it.
+    /// The step that first showed each control on the page it stayed on, by document and control id. A page can
+    /// attach what a step opens at the end of its body, such as a date popup, where nothing near it names the field
+    /// that opened it.
     pub shown_by: HashMap<(String, String), String>,
-    /// The step the next observation judges, as what showed the controls it finds: the step that showed its target,
-    /// when one did, since what a popup's own controls show belongs to what opened the popup.
+    /// Every control seen on the current document, by document and control id. One the page showed before and a step
+    /// brought back is not new: a wizard that returns to its first step after Submit shows the same fields it opened
+    /// with, and marked as shown by Submit they read as the next step to fill, so a run submitted the wizard again.
+    pub seen: HashSet<(String, String)>,
+    /// The step the next observation judges, as what showed the controls it finds.
     pub showing: Option<String>,
 }
 
@@ -612,24 +615,24 @@ impl RunState {
         }
     }
 
-    /// Record the step `by` as what showed the controls `shown` on `observation`, and forget the controls that are gone.
-    pub fn note_shown(&mut self, observation: &Observation, shown: &[String], by: Option<String>) {
-        let present: HashSet<&str> = observation.controls.iter().map(|c| c.id.as_str()).collect();
-        self.shown_by
-            .retain(|(document, id), _| *document == observation.document_key && present.contains(id.as_str()));
-        let Some(by) = by else { return };
-        for id in shown {
-            self.shown_by.insert((observation.document_key.clone(), id.clone()), by.clone());
+    /// Record the step `by` as what showed the controls `shown` on `after` that this document never showed before,
+    /// and remember every control `before` and `after` hold as seen.
+    pub fn note_shown(&mut self, before: &Observation, after: &Observation, shown: &[String], by: Option<String>) {
+        let document = &after.document_key;
+        self.shown_by.retain(|(on, _), _| on == document);
+        self.seen.retain(|(on, _)| on == document);
+        if before.document_key == *document {
+            self.seen.extend(before.controls.iter().map(|c| (document.clone(), c.id.clone())));
         }
-    }
-
-    /// What the controls a step on `target` shows are shown by: the step that showed `target`, when one did on this
-    /// page, or else the step itself.
-    pub fn shown_through(&self, observation: &Observation, target: Option<&Control>, step: String) -> String {
-        target
-            .and_then(|target| self.shown_by.get(&(observation.document_key.clone(), target.id.clone())))
-            .cloned()
-            .unwrap_or(step)
+        if let Some(by) = by {
+            for id in shown {
+                let key = (document.clone(), id.clone());
+                if !self.seen.contains(&key) {
+                    self.shown_by.insert(key, by.clone());
+                }
+            }
+        }
+        self.seen.extend(after.controls.iter().map(|c| (document.clone(), c.id.clone())));
     }
 
     /// Mark each control with the step that showed it, so a later step can tell what it belongs to from what opened
@@ -738,6 +741,7 @@ impl RunState {
             redecided: false,
             missing: HashSet::new(),
             shown_by: HashMap::new(),
+            seen: HashSet::new(),
             showing: None,
         }
     }

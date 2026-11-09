@@ -1670,6 +1670,23 @@ async fn test_native_form_constraints_mark_invalid_controls() {
     h.close().await;
 }
 
+/// An empty required field the page has just shown is not one the browser refused: it says so only after an edit or a
+/// submit, and told it earlier a run that had submitted a wizard read the form it reset to as still to fill.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_untouched_required_field_is_not_refused_until_a_submit() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(&h, "document.body.innerHTML = '<form id=f><label>Name<input id=name required></label><button>Go</button></form>'; 0")
+        .await;
+    let untouched = h.observe().await;
+    assert_eq!(find(&untouched, "Name").invalid, None);
+    assert_eq!(find(&untouched, "Name").required, Some(true));
+    eval_active(&h, "document.getElementById('f').requestSubmit(); 0").await;
+    assert_eq!(find(&h.observe().await, "Name").invalid, Some(true));
+    h.close().await;
+}
+
 /// A refused submit put no page text on screen, so the run saw only that a field was invalid and refilled the one
 /// the task named instead of the empty one the browser was complaining about.
 #[tokio::test(flavor = "multi_thread")]
@@ -2406,7 +2423,9 @@ async fn test_fields_carry_what_the_page_says_about_them() {
     h.page.evaluate(&session_id, &script).await.expect("evaluate");
     let observed = h.observe().await;
     let marks = |label: &str| (find(&observed, label).required, find(&observed, label).invalid);
-    assert_eq!(marks("First"), (Some(true), Some(true)));
+    // Empty and required, but the browser holds that against it only after an edit or a submit; the page's own
+    // aria-invalid stands as the page says it.
+    assert_eq!(marks("First"), (Some(true), None));
     assert_eq!(marks("Last"), (Some(true), Some(true)));
     assert_eq!(marks("Zip"), (None, None));
     h.close().await;

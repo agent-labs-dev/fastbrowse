@@ -711,8 +711,10 @@
     // What the page says about the field. A custom widget marks the element the user sees, not the input
     // underneath it, so both are asked.
     if (source.required || [e, source].some(n => n.getAttribute('aria-required') === 'true')) base.required = true;
-    // Native validation can refuse a form without adding any ARIA attribute or page text.
-    const refused = source.willValidate === true && source.validity?.valid === false;
+    // Native validation can refuse a form without adding any ARIA attribute or page text. The browser holds that
+    // against a field only once it was edited or its form was submitted, as `:user-invalid`: an empty required field a
+    // page has just opened or reset is not refused, and told it was, a run that had submitted a wizard filled it again.
+    const refused = source.willValidate === true && source.validity?.valid === false && source.matches(':user-invalid');
     if ([e, source].some(n => n.getAttribute('aria-invalid') === 'true') || refused) base.invalid = true;
     // Why the browser refused it, in its own words: a refused submit shows that only in a bubble the page text
     // lacks, and a run that saw only `invalid` refilled the field the task named instead of the empty one.

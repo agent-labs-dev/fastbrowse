@@ -263,8 +263,9 @@ async fn test_the_next_observation_records_what_an_action_did() {
 }
 
 /// A popup a page attaches at the end of its body has only its own month around it, nothing naming the field that
-/// opened it, and a run picked an always-visible calendar's dates over it (#884). What a step showed carries that step
-/// into every later choice, the popup's own steps keep what opened it, and a new page forgets it.
+/// opened it, and a run picked an always-visible calendar's dates over it (#884). A control a step showed carries that
+/// step into every later choice. One the page showed before, brought back, is not new: a wizard back at its first step
+/// after Submit, marked as shown by Submit, was filled and submitted again. A new page forgets every mark.
 #[tokio::test]
 async fn test_a_control_a_step_showed_is_told_which_step_showed_it() {
     let field = Control { id: "f".into(), context: Some("Datepicker".into()), ..field("Date") };
@@ -273,32 +274,43 @@ async fn test_a_control_a_step_showed_is_told_which_step_showed_it() {
     let mut state = run_state();
     let step = |state: &mut RunState, before: &Observation, target: &Control, after: &Observation| {
         let label = describe(target);
-        state.showing = Some(state.shown_through(before, Some(target), doing(Operation::Click, Some(&label))));
+        state.showing = Some(doing(Operation::Click, Some(&label)));
         state.acted_from = Some(before.clone());
         state.history.push(executed(Some(Operation::Click), Some(&label), true));
         agent().note_effect(state, after);
     };
-    let closed = observation(std::slice::from_ref(&field));
-    let open = observation(&[field.clone(), month("next", "Next"), month("d1", "1")]);
-    step(&mut state, &closed, &field, &open);
-    let mut offered = open.clone();
-    state.mark_shown(&mut offered);
-    let context = |offered: &Observation, id: &str| {
+    let context = |state: &RunState, page: &Observation, id: &str| {
+        let mut offered = page.clone();
+        state.mark_shown(&mut offered);
         let control = offered.controls.iter().find(|c| c.id == id).unwrap();
         crate::policy::element(control)["context"].as_str().map(str::to_string)
     };
-    assert_eq!(context(&offered, "d1").as_deref(), Some("shown by clicking Date (Datepicker); November 2026"));
-    assert_eq!(context(&offered, "f").as_deref(), Some("Datepicker"));
+    let closed = observation(std::slice::from_ref(&field));
+    let open = observation(&[field.clone(), month("next", "Next"), month("d1", "1")]);
+    step(&mut state, &closed, &field, &open);
+    assert_eq!(context(&state, &open, "d1").as_deref(), Some("shown by clicking Date (Datepicker); November 2026"));
+    assert_eq!(context(&state, &open, "f").as_deref(), Some("Datepicker"));
     let december = observation(&[field.clone(), month("next2", "Next"), month("d2", "1")]);
     step(&mut state, &open, &open.controls[1], &december);
-    let mut offered = december.clone();
-    state.mark_shown(&mut offered);
-    assert_eq!(context(&offered, "d2").as_deref(), Some("shown by clicking Date (Datepicker); November 2026"));
+    assert_eq!(
+        context(&state, &december, "d2").as_deref(),
+        Some("shown by clicking Next (November 2026); November 2026")
+    );
+    // The popup closes and the same day comes back: it keeps the step that first showed it.
+    step(&mut state, &december, &field, &closed);
+    step(&mut state, &closed, &field, &december);
+    assert_eq!(
+        context(&state, &december, "d2").as_deref(),
+        Some("shown by clicking Next (November 2026); November 2026")
+    );
+    let submit = button("Submit");
+    let review = observation(std::slice::from_ref(&submit));
+    let restarted = observation(std::slice::from_ref(&field));
+    step(&mut state, &review, &submit, &restarted);
+    assert_eq!(context(&state, &restarted, "f").as_deref(), Some("Datepicker"), "the field the page opened with");
     let elsewhere = Observation { document_key: "another".into(), ..december.clone() };
     step(&mut state, &december, &field, &elsewhere);
-    let mut offered = elsewhere.clone();
-    state.mark_shown(&mut offered);
-    assert_eq!(context(&offered, "d2").as_deref(), Some("November 2026"));
+    assert_eq!(context(&state, &elsewhere, "d2").as_deref(), Some("November 2026"));
 }
 
 #[tokio::test]
