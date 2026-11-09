@@ -129,7 +129,7 @@ class UnjudgedSlot(PublicModel):
 
 class Source(PublicModel):
     """One campaign run a group's rows came from, and the tasks it supplied. A late fix reruns only the tasks it
-    affects, so a group may take its tasks from several runs of one campaign: each task from the newest run that
+    affects, so a group may take its tasks from more than one run of a campaign: each task from the newest run that
     measured it in full. `run_id` is the run's recorded id, which its traces in the private Langfuse project carry."""
 
     run_id: Identifier
