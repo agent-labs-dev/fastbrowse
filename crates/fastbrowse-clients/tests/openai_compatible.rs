@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use common::{Model, Script, Step, answering, reply, result_model, text};
 use fastbrowse_clients::http::{Http, Response, TransportError};
-use fastbrowse_clients::openai_compatible::{LLMOptions, OpenAICompatibleLLM};
+use fastbrowse_clients::openai_compatible::{LLMOptions, OpenAICompatibleLLM, openrouter_routing_for};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, Role};
 use fastbrowse_core::models::{Bytes, CostBasis, LLMPurpose, Limits};
@@ -764,6 +764,19 @@ async fn test_an_optional_object_goes_out_as_nullable_leaves_and_comes_back_whol
     assert_eq!(
         body["provider"],
         json!({"require_parameters": true, "sort": "latency", "order": ["parasail", "deepinfra", "inference-net"], "ignore": ["together"]})
+    );
+}
+
+#[test]
+fn test_the_routing_a_record_proxy_sends_pins_the_endpoints_a_run_is_routed_to() {
+    // The eval record proxy sends this routing for a run aimed at it, so a cassette holds the pinned endpoints' answers.
+    assert_eq!(
+        openrouter_routing_for("deepseek/deepseek-v4.1-flash-1017"),
+        json!({"require_parameters": true, "sort": "latency", "order": ["parasail", "deepinfra", "inference-net"], "ignore": ["together"]})
+    );
+    assert_eq!(
+        openrouter_routing_for("google/gemini-3.8-flash"),
+        json!({"require_parameters": true, "sort": "latency"})
     );
 }
 
