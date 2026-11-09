@@ -225,6 +225,19 @@ pub struct Media {
     pub duration_seconds: Option<f64>,
 }
 
+/// A CAPTCHA the browser's own solver took on in the active tab, as Browser Use Cloud reports it with its
+/// `BrowserUse.captchaSolverStarted` and `BrowserUse.captchaSolverFinished` events. A solve that succeeded is no
+/// longer held: the page it cleared moves on by itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaptchaSolve {
+    /// The address of the page the CAPTCHA is on.
+    pub url: String,
+    /// The CAPTCHA's provider as the solver names it, such as `cloudflare` or `recaptcha`.
+    pub vendor: String,
+    /// True while the solver works on it, false once it finished without solving it.
+    pub working: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Observation {
@@ -534,8 +547,14 @@ pub trait Page: Send + Sync {
     /// The page's current lifecycle generation, for a caller waiting on the next transition.
     fn lifecycle_mark(&self) -> u64;
 
-    /// Wait for a lifecycle event newer than `mark`, returning whether one arrived before `seconds`.
+    /// Wait for a lifecycle event newer than `mark`, returning whether one arrived before `seconds`. A change in
+    /// [`Page::captcha_solve`] is one.
     fn wait_for_lifecycle(&self, mark: u64, seconds: f64) -> BoxFuture<'_, bool>;
+
+    /// The CAPTCHA the browser's own solver has taken on in the active tab, for a browser that reports one.
+    fn captcha_solve(&self) -> Option<CaptchaSolve> {
+        None
+    }
 }
 
 #[cfg(test)]

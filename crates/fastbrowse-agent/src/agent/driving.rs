@@ -470,10 +470,34 @@ impl Agent {
     /// The wait is on the page's own lifecycle events, not a fixed interval: a document that is navigating or loading
     /// reports each transition, so a stuck page is re-read the moment it moves. A wait that reports nothing new still
     /// re-reads once before the deadline, so a client-side move is never missed.
+    ///
+    /// A CAPTCHA the browser's own solver is working on is waited on until the solver finishes, however long that
+    /// takes, and the deadline counts from then; the run's own time budget bounds the wait. One the solver gave up on
+    /// ends the wait at once: nothing else will clear it.
     pub(super) async fn outwait(&self, stuck: &Observation) -> Step<bool> {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs_f64(INTERSTITIAL_SECONDS);
+        let bound = Duration::from_secs_f64(INTERSTITIAL_SECONDS);
+        let mut deadline = tokio::time::Instant::now() + bound;
         let mut mark = self.page.lifecycle_mark();
+        let mut solving = false;
         loop {
+            match self.page.captcha_solve().filter(|solve| solve.url == stuck.url) {
+                Some(solve) if solve.working => {
+                    if !solving {
+                        self.event("captcha_solving", || {
+                            Map::from_iter([("url".into(), solve.url.into()), ("vendor".into(), solve.vendor.into())])
+                        });
+                    }
+                    solving = true;
+                    deadline = tokio::time::Instant::now() + bound;
+                }
+                Some(solve) => {
+                    self.event("captcha_unsolved", || {
+                        Map::from_iter([("url".into(), solve.url.into()), ("vendor".into(), solve.vendor.into())])
+                    });
+                    return Ok(self.observe().await?.page_key != stuck.page_key);
+                }
+                None => solving = false,
+            }
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             if remaining.is_zero() {
                 return Ok(false);
@@ -483,7 +507,7 @@ impl Agent {
             if self.observe().await?.page_key != stuck.page_key {
                 return Ok(true);
             }
-            if !moved {
+            if !moved && !solving {
                 return Ok(false);
             }
         }

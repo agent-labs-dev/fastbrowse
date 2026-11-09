@@ -14,7 +14,7 @@ use fastbrowse_core::models::{
     LLMPurpose, Limits, Operation, Status, StepOutcome, StepResult,
 };
 use fastbrowse_core::page::{
-    ActResult, Action, BlockKind, BrowserError, Capture, Control, Media, Observation, Page, PageResult,
+    ActResult, Action, BlockKind, BrowserError, CaptchaSolve, Capture, Control, Media, Observation, Page, PageResult,
 };
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::telemetry::{Ledger, Trace};
@@ -608,6 +608,110 @@ impl Page for Unfetchable {
     fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
         Box::pin(async { false })
     }
+}
+
+/// A bot check whose CAPTCHA the browser's solver takes on: it works for `solve_seconds`, then either clears the page
+/// or gives up. The page reports no lifecycle event of its own while the solver works.
+struct Solving {
+    began: tokio::time::Instant,
+    solve_seconds: f64,
+    solved: bool,
+}
+
+impl Solving {
+    fn done(&self) -> bool {
+        self.began.elapsed().as_secs_f64() >= self.solve_seconds
+    }
+}
+
+impl Page for Solving {
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        let url = if self.done() && self.solved { "https://shop.test/results" } else { "https://shop.test/check" };
+        Box::pin(async move { Ok(at(url, &[])) })
+    }
+
+    fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(true) })
+    }
+
+    fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        unreachable!("the wait navigates nowhere")
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        unreachable!("the wait reads nothing")
+    }
+
+    fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        unreachable!("the wait acts on nothing")
+    }
+
+    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        unreachable!("the wait takes no screenshot")
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        unreachable!("the wait asks no address")
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        u64::from(self.done())
+    }
+
+    /// The solver's end is the one event: it wakes a wait that is still in its window.
+    fn wait_for_lifecycle(&self, mark: u64, seconds: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async move {
+            if mark != self.lifecycle_mark() {
+                return true;
+            }
+            let left = (self.solve_seconds - self.began.elapsed().as_secs_f64()).max(0.0);
+            if !self.done() && left <= seconds {
+                tokio::time::sleep(std::time::Duration::from_secs_f64(left)).await;
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs_f64(seconds)).await;
+            false
+        })
+    }
+
+    fn captcha_solve(&self) -> Option<CaptchaSolve> {
+        let solve =
+            |working| CaptchaSolve { url: "https://shop.test/check".into(), vendor: "recaptcha".into(), working };
+        match (self.done(), self.solved) {
+            (false, _) => Some(solve(true)),
+            (true, true) => None,
+            (true, false) => Some(solve(false)),
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_a_bot_check_is_waited_on_for_as_long_as_the_solver_works_on_it() {
+    // A solve longer than the bound on a page that reports nothing: a fixed wait gave up on it while it worked.
+    let solving = Solving { began: tokio::time::Instant::now(), solve_seconds: 30.0, solved: true };
+    let agent = Agent::new(Arc::new(solving), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let stuck = at("https://shop.test/check", &[]);
+    assert!(agent.outwait(&stuck).await.expect("waited"));
+    // One the solver gave up on is not waited on past its end.
+    let began = tokio::time::Instant::now();
+    let solving = Solving { began, solve_seconds: 30.0, solved: false };
+    let agent = Agent::new(Arc::new(solving), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    assert!(!agent.outwait(&stuck).await.expect("waited"));
+    assert_eq!(began.elapsed().as_secs_f64().round(), 30.0);
 }
 
 #[tokio::test]

@@ -147,7 +147,8 @@ limit.
 **Common causes.**
 
 - A bot check, such as a CAPTCHA, that did not clear. The run first waits for a check that clears itself once
-  its script runs, and stops only when the page stays put. The error is `bot check at <origin>; it is not a
+  its script runs, and stops only when the page stays put. On a Browser Use Cloud browser, a CAPTCHA its solver
+  takes on is waited on until the solver finishes, and one it gives up on stops the run at once. The error is `bot check at <origin>; it is not a
   sign-in and no credential passes it. Retry using an attached local browser or choose another source for
   this research.`
 - The site answered HTTP 403 and Jev found no way on. The error is

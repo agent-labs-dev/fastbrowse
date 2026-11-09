@@ -48,9 +48,11 @@ use crate::policy::StepContext;
 use crate::retrieval::{ComposedAnswer, cited_quote, compose, draft_answer, marked_partial, partial_answer};
 use crate::verification::RecordSchema;
 
-/// How long a page that has not moved is watched before the run acts on it: a bot check that never clears then ends
-/// `blocked`, and any other page goes to the step decision. Fitted to PyPI's script-only browser check, not derived
-/// from anything the run knows; replacing it with a signal is open in #868.
+/// How long a page that has not moved, and that no CAPTCHA solver is working on, is watched before the run acts on it:
+/// a bot check that never clears then ends `blocked`, and any other page goes to the step decision. A solver's work is
+/// a signal, and the wait follows it to its end (`Agent::outwait`). A check that runs its own script reports no
+/// progress, and neither does a browser without a solver, so this bound stays for those: it was set from PyPI's
+/// script-only browser check, which cleared within it.
 const INTERSTITIAL_SECONDS: f64 = 12.0;
 /// A fresh observation can wait three seconds for loading, and a background capture needs time to activate.
 const ENDING_FRAME_SECONDS: f64 = 6.0;
