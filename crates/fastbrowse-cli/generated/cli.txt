@@ -4,10 +4,10 @@ usage: fastbrowse [-h] [--version] [--start START] [--context CONTEXT]
                   [--attach] [--target-match PATTERN] [--foreground]
                   [--proxy-country CC] [--viewport WIDTHxHEIGHT] [--authorize]
                   [--secret NAME=ENV_VAR[@ORIGIN]] [--bitwarden ITEM]
-                  [--input NAME=VALUE] [--max-steps MAX_STEPS]
-                  [--max-dollars MAX_DOLLARS] [--downloads DOWNLOADS]
-                  [--json] [--record FILE] [--recipe FILE]
-                  [--save-recipe FILE] [--fetch] [--browser] [--extension]
+                  [--input NAME=VALUE] [--file PATH] [--max-steps MAX_STEPS]
+                  [--max-dollars MAX_DOLLARS] [--downloads DOWNLOADS] [--json]
+                  [--record FILE] [--recipe FILE] [--save-recipe FILE]
+                  [--fetch] [--browser] [--extension]
                   [--extension-browser LABEL] [--trace FILE]
                   [--cursor | --no-cursor]
                   task
@@ -59,6 +59,8 @@ options:
   --input NAME=VALUE    a named value the task can refer to, typed into a field
                         by name, so a recipe types the next run's value
                         (repeatable)
+  --file PATH           a local file the run may attach to a file input on the
+                        page (repeatable)
   --max-steps MAX_STEPS
                         optional step limit (default: no step limit)
   --max-dollars MAX_DOLLARS
