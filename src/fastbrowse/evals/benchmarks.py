@@ -37,7 +37,9 @@ GroupId = Literal[
     "bu-bench",
     "online-mind2web",
 ]
-Arm = Literal["fastbrowse", "fastbrowse-pool", "browser-use", "jev-ultrafast", "browser-harness"]
+Arm = Literal[
+    "fastbrowse", "fastbrowse-pool", "browser-use", "browser-use-ultrafast", "jev-ultrafast", "browser-harness"
+]
 FASTBROWSE_ARMS: frozenset[Arm] = frozenset({"fastbrowse", "fastbrowse-pool"})
 RESULTS = Path("docs/results")
 PUBLISHED = RESULTS / "benchmarks.json"
@@ -179,11 +181,17 @@ class Coverage(NamedTuple):
 # so it runs the six navigation tasks too.
 #
 # The head-to-head (internal-hosted) is one Parallax invocation over fastbrowse's tasks, with rows from whichever of its
-# arms ran, each on the tasks the catalog lists it for. Browser Use Ultrafast and Browser Harness take no credentials or
-# authorization setting, and the hosted Browser Use agent no authorization setting; the catalog states why each skips a
-# task. The official suites publish the fastbrowse arm; a vendor arm's rows reach a candidate only when Parallax marks
-# them publishable.
-HEAD_TO_HEAD: tuple[Arm, ...] = ("fastbrowse", "browser-use", "jev-ultrafast", "browser-harness")
+# arms ran, each on the tasks the catalog lists it for. Jev Ultrafast and Browser Harness take no credentials or
+# authorization setting, and the hosted Browser Use agents (its default model and bu-ultrafast) no authorization
+# setting; the catalog states why each skips a task. The official suites publish the fastbrowse arm; a vendor arm's
+# rows reach a candidate only when Parallax marks them publishable.
+HEAD_TO_HEAD: tuple[Arm, ...] = (
+    "fastbrowse",
+    "browser-use",
+    "browser-use-ultrafast",
+    "jev-ultrafast",
+    "browser-harness",
+)
 OFFICIAL: tuple[Arm, ...] = ("fastbrowse", "browser-use")
 COVERAGE: dict[GroupId, Coverage] = {
     "internal-fastbrowse": Coverage(frozenset({53, 54}), 3, "task-success", ("fastbrowse",)),
@@ -193,7 +201,7 @@ COVERAGE: dict[GroupId, Coverage] = {
         "task-success",
         HEAD_TO_HEAD,
         (),
-        ("browser-use", "jev-ultrafast", "browser-harness"),
+        ("browser-use", "browser-use-ultrafast", "jev-ultrafast", "browser-harness"),
     ),
     "internal-ultrafast": Coverage(frozenset({6, 47}), 3, "task-success", ("fastbrowse-pool", "jev-ultrafast")),
     "internal-backend": Coverage(frozenset({53, 54}), 3, "task-success", ("fastbrowse", "fastbrowse-pool")),

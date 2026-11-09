@@ -187,7 +187,12 @@ def patch_transport(model: Any, meter: Meter) -> None:
         if "api.typesafe.ai" in url and via_gateway:
             payload = send(
                 f"{base_url}/v4/ai/evaluation-model" if base_url else GATEWAY_URL,
-                {"Authorization": f"Bearer {key}", **GATEWAY_HEADERS},
+                {
+                    "Authorization": f"Bearer {key}",
+                    **GATEWAY_HEADERS,
+                    # The pinned Jev release fastbrowse runs; the bare alias moves to each new release.
+                    "ai-model-id": os.environ.get("FASTBROWSE_JEV_MODEL") or GATEWAY_HEADERS["ai-model-id"],
+                },
                 {"state": body["state"], "questions": body["questions"]},
                 "jev",
             )

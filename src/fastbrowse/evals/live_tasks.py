@@ -145,6 +145,7 @@ ARM_BROWSERS = {
     "jev-ultrafast": ("browser-use-cloud",),
     "browser-harness": ("browser-use-cloud",),
     "browser-use": ("browser-use-hosted",),
+    "browser-use-ultrafast": ("browser-use-hosted",),
 }
 """The browsers each arm is measured in. The pool and Browser Use's hosted browser are each the one their arm sells,
 so a pool row's block rate is part of what the backend comparison measures; binding the mode to the arm keeps a

@@ -228,8 +228,10 @@ def test_ultrafast_uses_the_selected_jev_route_and_meters_its_cost(
         assert headers["Authorization"] == f"Bearer {key}"
         if source == "gateway":
             assert "model" not in body
+            assert headers["ai-model-id"] == ("pinned-jev" if pinned else backend.jev_models()["gateway"])
             return {"answers": {}, "usage": {"inputTokens": 100}, "providerMetadata": {"gateway": {"cost": "0.001"}}}
-        assert body["model"] == ("pinned-jev" if pinned else "jev-1.13.0" if source == "typesafe" else "jev-1.13")
+        # The Jev release this fastbrowse build's Rust core sends for the source, never a copy of it.
+        assert body["model"] == ("pinned-jev" if pinned else backend.jev_models()[source or "openrouter"])
         return {"answers": {}, "usage": {"input_tokens": 100, "cost": 0.001}}
 
     monkeypatch.setitem(RUNNER["patch_transport"].__globals__, "_post", post)
@@ -442,169 +444,214 @@ def test_encoded_flight_search_still_needs_results_filters_and_price(
     assert actual is None if failure is None else actual is not None and failure in actual
 
 
-async def test_a_hosted_session_whose_output_fails_the_schema_keeps_its_cost(monkeypatch: pytest.MonkeyPatch) -> None:
-    import browser_use_sdk.v3  # an optional extra
-
-    session = SimpleNamespace(
-        id="s1",
-        output="[Session cost limit reached]",
-        total_cost_usd=0.37,
-        status=SimpleNamespace(value="stopped"),
-        is_task_successful=False,
-        model="claude-opus-4.7",
-        step_count=4,
-        live_url="https://live",
-    )
-
-    class Run:
-        session_id = "s1"
-
-        def __await__(self) -> Any:
-            async def fail() -> None:
-                raise ValueError("Invalid JSON")
-
-            return fail().__await__()
-
-    class Client:
-        def __init__(self, **_: object) -> None:
-            self.browsers = SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(items=[])))
-            self.sessions = SimpleNamespace(
-                get=AsyncMock(return_value=session),
-                stop=AsyncMock(return_value=None),
-                messages=AsyncMock(return_value=SimpleNamespace(messages=[], has_more=False)),
-            )
-
-        def run(self, *_: object, **__: object) -> Run:
-            return Run()
-
-    monkeypatch.setattr(browser_use_sdk.v3, "AsyncBrowserUse", Client)
-    monkeypatch.setattr(backend, "environment", lambda: {"BROWSER_USE_API_KEY": "key", "OPENROUTER_API_KEY": "or"})
-    outcome, report = await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None)
-    assert outcome.answer == "[Session cost limit reached]"
-    assert report.dollars == 0.37 and report.status == "stopped"
-    # Browser Use ending the session itself is its outage, retried like a 503, not its agent's failure.
-    session.output, session.status = "Task ended unexpectedly.", SimpleNamespace(value="error")
-    with pytest.raises(Unavailable):
-        await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None)
-
-    # Any other error ending is its agent's failure, scored like one.
-    session.output = "Failed to complete the task"
-    outcome, report = await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None)
-    assert report.status == "error"
-
-    # A session the attempt's cap cancels is stopped, not left running and billing with nothing waiting for it.
-    class Stuck(Run):
-        def __await__(self) -> Any:
-            return asyncio.Event().wait().__await__()
-
-    stop = AsyncMock()
-    monkeypatch.setattr(Client, "run", lambda *_, **__: Stuck())
-    monkeypatch.setattr(
-        Client,
-        "__init__",
-        lambda self, **_: setattr(self, "sessions", SimpleNamespace(get=AsyncMock(return_value=session), stop=stop)),
-    )
-    with pytest.raises(TimeoutError):
-        async with asyncio.timeout(0.05):
-            await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None)
-    stop.assert_awaited_once_with("s1")
+V4_START = datetime(2026, 11, 9, 12, 0, tzinfo=UTC)
 
 
-async def test_a_hosted_run_is_timed_to_its_agents_answer_not_to_the_session_stopping(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """0.5.7: Browser Use reported sessions stopped up to 114s after its agent's `done`, and that wait was timed."""
-    import browser_use_sdk.v3  # an optional extra
-
-    created = datetime(2026, 9, 25, 22, 0, tzinfo=UTC)
-    session = SimpleNamespace(
-        id="s1",
-        created_at=created,
-        is_task_successful=False,
-        total_cost_usd=0.1,
-        status=SimpleNamespace(value="stopped"),
-        model="m",
-        step_count=2,
-        live_url=None,
-    )
-
-    def message(kind: str, after: float, error: bool = False) -> SimpleNamespace:
-        data = json.dumps({"tool_name": "done", "is_error": error})
-        return SimpleNamespace(id=kind, type=kind, data=data, created_at=created + timedelta(seconds=after))
-
-    messages = [message("assistant_message", 3), message("completion_result", 7), message("completion_result", 9, True)]
-
-    class Run:
-        session_id = "s1"
-
-        def __await__(self) -> Any:
-            async def finish() -> SimpleNamespace:
-                await asyncio.sleep(0.05)
-                return SimpleNamespace(session=session, output="0.28.1")
-
-            return finish().__await__()
-
-    class Client:
-        def __init__(self, **_: object) -> None:
-            self.browsers = SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(items=[])))
-            self.sessions = SimpleNamespace(
-                get=AsyncMock(return_value=session),
-                stop=AsyncMock(return_value=None),
-                messages=AsyncMock(return_value=SimpleNamespace(messages=messages, has_more=False)),
-            )
-
-        def run(self, *_: object, **__: object) -> Run:
-            return Run()
-
-    monkeypatch.setattr(browser_use_sdk.v3, "AsyncBrowserUse", Client)
-    monkeypatch.setattr(backend, "environment", lambda: {"BROWSER_USE_API_KEY": "key", "OPENROUTER_API_KEY": "or"})
-    _, report = await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None)
-    assert report.answered is True and report.task_successful is False
-    answered = live.answered_at(await live.hosted_messages(Client(), "s1"), "0.28.1")
-    assert answered == created + timedelta(seconds=7)  # the `done` that was an error is not an answer
-    # An agent that answered in a reply without calling `done` answered at that reply, if the session kept it.
-    messages[1:] = []
-    assert live.answered_at(await live.hosted_messages(Client(), "s1"), "0.28.1") == created + timedelta(seconds=3)
-    assert live.answered_at(await live.hosted_messages(Client(), "s1"), None) is None
-    # Half a second until the session existed and a second until its browser started, then 6s to the answer by the
-    # session's own clock; never past the session's wall time, less the opening.
-    started = created + timedelta(seconds=1)
-    timing = live.hosted_timing(0.5, session, started, answered, 120.0)
-    assert timing == {"seconds": 6.0, "timing_basis": TIMING_BASIS, "session_open_seconds": 1.5}
-    assert live.hosted_timing(0.5, session, started, answered, 3.0)["seconds"] == 1.5
-    assert live.hosted_timing(0.5, session, started, None, 120.0)["seconds"] == 118.5
-    # No browser listed: none opened, so the agent's time runs from the session existing.
-    timing = live.hosted_timing(0.5, session, None, answered, 120.0)
-    assert timing == {"seconds": 7.0, "timing_basis": TIMING_BASIS, "session_open_seconds": 0.5}
+def v4_event(kind: str, after: float, **data: Any) -> SimpleNamespace:
+    return SimpleNamespace(type=kind, ts=V4_START + timedelta(seconds=after), data=data)
 
 
-async def test_a_hosted_outage_retries_without_quoting_the_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    import browser_use_sdk.v3  # an optional extra
+def v4_tool(after: float, call: str, tool: str, status: str, **state: Any) -> SimpleNamespace:
+    part = {"type": "tool", "tool": tool, "callID": call, "state": {"status": status, **state}}
+    return v4_event("core.event", after, type="tool_use", part=part)
 
-    class Run:
-        session_id = "s1"
 
-        def __await__(self) -> Any:
-            async def fail() -> None:
-                raise browser_use_sdk.v3.BrowserUseError(503, "upstream echoed bu_secret_key")
+class V4Client:
+    """Browser Use's V4 client as `hosted_arm` uses it: a run that ends after its events, a browser kept alive."""
 
-            return fail().__await__()
+    def __init__(self, events: list[SimpleNamespace], *, status: str = "completed", **run: Any) -> None:
+        self.created: dict[str, Any] = {}
+        self.calls: list[str] = []
+        self.run = SimpleNamespace(
+            status=SimpleNamespace(value=status),
+            created_at=V4_START,
+            session_id="sess-1",
+            model="gpt-6-luna",
+            model_params={"reasoning": "high"},
+            result=None,
+            output=None,
+            error=None,
+            total_input_tokens=100,
+            total_output_tokens=20,
+        )
+        vars(self.run).update(run)
+        self.cost = SimpleNamespace(
+            llm_cost_usd="0.01", search_cost_usd="0", browser_cost_usd="0.002", proxy_cost_usd="0.001",
+            total_cost_usd="0.013",
+        )  # fmt: skip
+        self.events = events
+        self.runs = SimpleNamespace(
+            create=self._create,
+            status=AsyncMock(return_value=SimpleNamespace(status=SimpleNamespace(value=status))),
+            events=self._events,
+            get=AsyncMock(return_value=self.run),
+            cancel=AsyncMock(side_effect=lambda *_: self.calls.append("cancel")),
+        )
+        self.browsers = SimpleNamespace(
+            get=AsyncMock(return_value=SimpleNamespace(cdp_url=None, recording_url=None, recording_available=False)),
+            stop=AsyncMock(side_effect=lambda *_: self.calls.append("stop")),
+        )
+        self.sessions = SimpleNamespace(cost=AsyncMock(side_effect=self._cost))
+        self.close = AsyncMock()
 
-    class Client:
-        def __init__(self, **_: object) -> None:
-            self.browsers = SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(items=[])))
-            self.sessions = SimpleNamespace(get=AsyncMock(), stop=AsyncMock(return_value=None))
+    async def _create(self, task: str, **kwargs: Any) -> SimpleNamespace:
+        self.created = {"task": task, **kwargs}
+        return SimpleNamespace(id="run-1")
 
-        def run(self, *_: object, **__: object) -> Run:
-            return Run()
+    async def _events(self, _run: str, *, after: str | None = None) -> SimpleNamespace:
+        # Two pages, so the second must be asked for with the cursor the first returned.
+        half = len(self.events) // 2
+        page = self.events[half:] if after == "c1" else self.events[:half]
+        return SimpleNamespace(events=page, next_after=None if after else "c1", has_more=after is None)
 
-    monkeypatch.setattr(browser_use_sdk.v3, "AsyncBrowserUse", Client)
+    async def _cost(self, _session: str) -> SimpleNamespace:
+        self.calls.append("cost")
+        return self.cost
+
+
+def finished_run() -> list[SimpleNamespace]:
+    return [
+        v4_event("run.created", 0),
+        v4_event("browser.ready", 2, live_view_url="https://live.browser-use.com/b1", browser_session_id="b1"),
+        v4_event("core.event", 3, type="step_start"),
+        v4_tool(3, "c1", "browser_navigate", "running", input={"url": "https://pypi.org/project/httpx/"}),
+        v4_tool(4.5, "c1", "browser_navigate", "completed", input={}, output="key bu_secret_key on the page"),
+        v4_tool(4.6, "c2", "javascript", "completed", input={}, output="1"),
+        v4_event("llm.response", 5, model="gpt-6-luna", cost_usd=0.001),
+        v4_event("core.event", 6, type="text", part={"type": "text", "text": "0.28.1"}),
+        v4_event("run.completed", 8),
+        v4_event("browser.released", 9, status="kept_alive"),
+    ]
+
+
+def use_v4(monkeypatch: pytest.MonkeyPatch, client: V4Client) -> None:
+    import browser_use_sdk.v4  # an optional extra
+
+    monkeypatch.setattr(browser_use_sdk.v4, "AsyncBrowserUse", lambda **_: client)
+    monkeypatch.setattr(live, "HOSTED_POLL_SECONDS", 0)
     monkeypatch.setattr(
         backend, "environment", lambda: {"BROWSER_USE_API_KEY": "bu_secret_key", "OPENROUTER_API_KEY": "or"}
     )
+
+
+@pytest.mark.parametrize(("arm", "model"), [("browser-use", None), ("browser-use-ultrafast", "bu-ultrafast")])
+def test_each_hosted_arm_asks_v4_for_the_same_run_on_its_own_model(arm: str, model: str | None) -> None:
+    request = live.hosted_request(task("pypi-newer"), arm, record=True)
+    # The default model is Browser Use's own choice, so it is omitted; neither arm sends model parameters.
+    assert request.get("model") == model and "model_params" not in request
+    # Always explicit: an omitted max_cost_usd would let Browser Use apply its own $25 default.
+    assert request["max_cost_usd"] == live.HOSTED_UNCAPPED_USD == "1000"
+    assert request["keep_alive"] == live.HOSTED_KEEP_ALIVE_SECONDS and 120 <= request["keep_alive"] <= 14400
+    schema = task("pypi-newer").output_schema
+    assert schema is not None and request["output_schema"] == schema.model_json_schema()
+    assert request["browser_settings"] == {"proxyCountryCode": "us", "record": True}
+    assert request["secret_bindings"] is None
+    navigate = next(t for t in TASKS if t.category is live_tasks.Category.NAVIGATE)
+    assert {"screenWidth", "screenHeight"} <= live.hosted_request(navigate, arm, record=False)[
+        "browser_settings"
+    ].keys()
+
+
+def test_a_login_reaches_the_hosted_agent_as_bindings_typed_only_on_its_start_host() -> None:
+    bindings = live.hosted_request(task("saucedemo-checkout"), "browser-use-ultrafast", record=False)["secret_bindings"]
+    assert bindings == [
+        {"alias": name, "source": {"type": "inline", "value": value}, "allowedDomains": ["www.saucedemo.com"]}
+        for name, value in task("saucedemo-checkout").secrets.items()
+    ]
+
+
+@pytest.mark.parametrize("arm", ["browser-use", "browser-use-ultrafast"])
+async def test_a_hosted_v4_run_is_read_stopped_then_costed(monkeypatch: pytest.MonkeyPatch, arm: str) -> None:
+    client = V4Client(finished_run(), output={"version": "0.28.1"}, model=live.HOSTED_MODELS[arm] or "gpt-6-luna")
+    use_v4(monkeypatch, client)
+    timed: list[tuple[Any, ...]] = []
+    timing = live.hosted_timing
+    monkeypatch.setattr(live, "hosted_timing", lambda *args: timed.append(args) or timing(*args))
+    outcome, report = await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None, arm=arm)
+    assert client.created.get("model") == live.HOSTED_MODELS[arm]
+    assert outcome.data == {"version": "0.28.1"} and json.loads(str(outcome.answer)) == {"version": "0.28.1"}
+    assert report.status == "completed" and report.answered is True
+    assert live.ending_of(arm, report) is Ending.DONE
+    assert report.model == client.run.model and report.provenance["browser_session_id"] == "b1"
+    # The browser is stopped once, before the session's cost is read, so the cost includes all of its time.
+    client.browsers.stop.assert_awaited_once_with("b1")
+    assert client.calls == ["stop", "cost"]
+    assert report.dollars == 0.013 and report.unknown_cost is False
+    assert report.cost_by_component == {"llm": 0.01, "search": 0.0, "browser": 0.002, "proxy": 0.001}
+    # Timed from the browser being ready to the run completing, by Browser Use's own clock.
+    assert timed[0][2:4] == (V4_START + timedelta(seconds=2), V4_START + timedelta(seconds=8))
+    assert report.steps == 1 and report.llm_calls == 1 and report.llm_calls_basis == "physical_requests"
+    assert [s["operation"] for s in report.step_log] == ["browser_navigate", "javascript", "reply"]
+    # A call seen only once it had settled has no opening to time it from; V4 names no browser tools to sum.
+    assert report.step_log[0]["duration_ms"] == 1500 and "duration_ms" not in report.step_log[1]
+    assert report.browser_seconds is None
+    assert "bu_secret_key" not in report.model_dump_json()
+
+
+async def test_a_hosted_browser_the_stop_did_not_reach_leaves_its_cost_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = V4Client(finished_run(), result="0.28.1")
+    client.browsers.stop.side_effect = httpx.ConnectError("down")
+    use_v4(monkeypatch, client)
+    outcome, report = await live.hosted_arm(task("hn-top"), httpx.AsyncClient(), record=None)
+    assert outcome.answer == "0.28.1" and outcome.data is None
+    assert report.dollars is None and report.unknown_cost is True and "cost" not in client.calls
+    assert client.browsers.stop.await_count == 2  # retried on the way out: a kept-alive browser bills until stopped
+
+
+async def test_a_failed_v4_run_is_its_agents_failure_and_a_dispatch_failure_an_outage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = V4Client(finished_run()[:3], status="failed", error="agent crashed")
+    use_v4(monkeypatch, client)
+    _, report = await live.hosted_arm(task("hn-top"), httpx.AsyncClient(), record=None)
+    assert report.status == "failed" and report.answered is False
+    assert live.ending_of("browser-use", report) is Ending.ERROR
+
+    client = V4Client([v4_event("run.dispatch_failed", 1)], status="failed")
+    use_v4(monkeypatch, client)
+    with pytest.raises(Unavailable):
+        await live.hosted_arm(task("hn-top"), httpx.AsyncClient(), record=None)
+    client.runs.cancel.assert_awaited_once_with("run-1")
+
+
+async def test_a_hosted_run_the_attempt_cancels_is_cancelled_and_its_browser_stopped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = V4Client(finished_run()[:2], status="running")
+    use_v4(monkeypatch, client)
+    monkeypatch.setattr(live, "HOSTED_POLL_SECONDS", 0.01)
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.1):
+            await live.hosted_arm(task("hn-top"), httpx.AsyncClient(), record=None)
+    client.runs.cancel.assert_awaited_once_with("run-1")
+    client.browsers.stop.assert_awaited_once_with("b1")
+
+
+async def test_a_hosted_outage_retries_without_quoting_the_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    import browser_use_sdk.v4  # an optional extra
+
+    client = V4Client([])
+    client.runs.create = AsyncMock(side_effect=browser_use_sdk.v4.BrowserUseError(503, "upstream echoed bu_secret_key"))
+    use_v4(monkeypatch, client)
     with pytest.raises(Unavailable) as error:
         await live.hosted_arm(task("pypi-newer"), httpx.AsyncClient(), record=None)
     assert "bu_secret_key" not in str(error.value) and "HTTP 503" in str(error.value)
+    client.close.assert_awaited_once()
+
+
+def test_hosted_timing_runs_from_the_browser_starting_to_the_answer() -> None:
+    created = datetime(2026, 9, 25, 22, 0, tzinfo=UTC)
+    run = SimpleNamespace(created_at=created)
+    answered, started = created + timedelta(seconds=7), created + timedelta(seconds=1)
+    # Half a second until the run existed and a second until its browser started, then 6s to the answer by the
+    # server's own clock; never past the run's wall time, less the opening.
+    timing = live.hosted_timing(0.5, run, started, answered, 120.0)
+    assert timing == {"seconds": 6.0, "timing_basis": TIMING_BASIS, "session_open_seconds": 1.5}
+    assert live.hosted_timing(0.5, run, started, answered, 3.0)["seconds"] == 1.5
+    assert live.hosted_timing(0.5, run, started, None, 120.0)["seconds"] == 118.5
+    # No browser: none opened, so the agent's time runs from the run existing.
+    timing = live.hosted_timing(0.5, run, None, answered, 120.0)
+    assert timing == {"seconds": 7.0, "timing_basis": TIMING_BASIS, "session_open_seconds": 0.5}
 
 
 @pytest.mark.parametrize(
@@ -755,85 +802,6 @@ async def test_cancelling_one_grade_leaves_the_overlapping_probe_for_another() -
             for pending_task in [watching, *grading]:
                 pending_task.cancel()
             await asyncio.gather(watching, *grading, return_exceptions=True)
-
-
-async def test_hosted_idle_session_stops_after_the_published_reply(monkeypatch: pytest.MonkeyPatch) -> None:
-    import browser_use_sdk.v3
-
-    stopped = asyncio.Event()
-    session = SimpleNamespace(
-        id="pause",
-        output="Please confirm the prepared change",
-        total_cost_usd=0.23,
-        status=SimpleNamespace(value="stopped"),
-        model="hosted",
-        step_count=5,
-        live_url=None,
-    )
-    seen = {}
-
-    class Run:
-        session_id = "pause"
-
-        def __await__(self) -> Any:
-            async def finish() -> Any:
-                await stopped.wait()
-                return SimpleNamespace(session=session, output=None)
-
-            return finish().__await__()
-
-    class Client:
-        def __init__(self, **_: object) -> None:
-            self.browsers = SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(items=[])))
-            self.sessions = SimpleNamespace(
-                get=AsyncMock(return_value=session),
-                stop=AsyncMock(side_effect=lambda _: stopped.set()),
-                messages=AsyncMock(return_value=SimpleNamespace(messages=[], has_more=False)),
-            )
-
-        def run(self, *_: object, **kwargs: object) -> Run:
-            seen.update(kwargs)
-            return Run()
-
-    monkeypatch.setattr(browser_use_sdk.v3, "AsyncBrowserUse", Client)
-    monkeypatch.setattr(backend, "environment", lambda: {"BROWSER_USE_API_KEY": "key", "OPENROUTER_API_KEY": "or"})
-    async with httpx.AsyncClient() as http:
-        outcome, report = await live.hosted_arm(task("pypi-newer"), http, record=None, stop_at_answer=True)
-    assert stopped.is_set()
-    assert outcome.answer == session.output and report.dollars == 0.23
-    # Always explicit: an omitted max_cost_usd would let Browser Use apply its own default cost limit.
-    assert seen["max_cost_usd"] == live.HOSTED_UNCAPPED_USD == "1000"
-
-
-async def test_hosted_poll_failure_stops_session_before_retry(monkeypatch: pytest.MonkeyPatch) -> None:
-    import browser_use_sdk.v3
-
-    cancelled = asyncio.Event()
-    sessions = SimpleNamespace(
-        get=AsyncMock(side_effect=[SimpleNamespace(live_url=None), httpx.ReadError("poll failed")]),
-        stop=AsyncMock(),
-    )
-
-    class Run:
-        session_id = "poll-failure"
-
-        def __await__(self) -> Any:
-            async def finish() -> None:
-                try:
-                    await asyncio.Event().wait()
-                finally:
-                    cancelled.set()
-
-            return finish().__await__()
-
-    client = SimpleNamespace(run=lambda *args, **kwargs: Run(), sessions=sessions)
-    monkeypatch.setattr(browser_use_sdk.v3, "AsyncBrowserUse", lambda **kwargs: client)
-    monkeypatch.setattr(backend, "environment", lambda: {"BROWSER_USE_API_KEY": "key", "OPENROUTER_API_KEY": "or"})
-    async with httpx.AsyncClient() as http:
-        with pytest.raises(live.Unavailable, match="ReadError"):
-            await live.hosted_arm(task("pypi-newer"), http, record=None, stop_at_answer=True)
-    assert cancelled.is_set()
-    sessions.stop.assert_awaited_once_with("poll-failure")
 
 
 @pytest.mark.parametrize(("flag", "value"), [("--concurrency", "0"), ("--concurrency", "-1"), ("--repeat", "0")])
@@ -1463,7 +1431,7 @@ async def test_every_arm_runs_uncapped_under_a_budget(arm, monkeypatch, tmp_path
     assert run_record["budget_policy"] == "start-gate-v1" and run_record["budget_usd"] == 10
     assert run_record["reserve_dollars"] == 1 and run_record["browser_reserve_dollars"] == 1
     assert run_record["judge_reserve_dollars"] == 1
-    assert run_record["hosted_max_cost_usd"] == ("1000" if arm == "browser-use" else None)
+    assert run_record["hosted_max_cost_usd"] == ("1000" if arm in live.HOSTED_MODELS else None)
     assert set(run_record["browsers"]) == {arm}
     assert "pool-secret" not in json.dumps(row)
     assert "worker_budgets_usd" not in run_record and "worker_tasks" not in run_record
@@ -1765,89 +1733,6 @@ def test_hosted_steps_never_keep_a_secret_or_the_key() -> None:
     assert "secret_sauce" not in text and "bu_test_key" not in text
     assert steps[-1]["observation"] == 'pv="<secret>password</secret>" auth=<secret>browser_use_api_key</secret>'
     assert trace[-1] == "browser_evaluate  -> error"
-
-
-async def test_a_hosted_run_keeps_its_steps_as_judge_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
-    """0.5.21: 26 correct hosted answers went unknown because the row kept none of the agent's steps."""
-    import browser_use_sdk.v3  # an optional extra
-    from parallax.judging import Decision, Judgment
-
-    messages = recorded_messages()
-    session = SimpleNamespace(
-        id="s1",
-        created_at=messages[0].created_at,
-        is_task_successful=True,
-        total_cost_usd=0.2,
-        status=SimpleNamespace(value="stopped"),
-        model="m",
-        step_count=12,
-        live_url="https://live.example/?token=session-token",
-    )
-
-    class Run:
-        session_id = "s1"
-
-        def __await__(self) -> Any:
-            async def finish() -> SimpleNamespace:
-                return SimpleNamespace(session=session, output="Sauce Labs Backpack, $29.99")
-
-            return finish().__await__()
-
-    stop = AsyncMock(return_value=None)
-    pages = [messages[:10], messages[10:]]
-
-    class Client:
-        def __init__(self, **_: object) -> None:
-            async def page(_: str, **kwargs: object) -> SimpleNamespace:
-                rest = pages[1] if kwargs.get("after") else pages[0]
-                return SimpleNamespace(messages=rest, has_more=rest is pages[0])
-
-            self.browsers = SimpleNamespace(list=AsyncMock(return_value=SimpleNamespace(items=[])))
-            self.sessions = SimpleNamespace(get=AsyncMock(return_value=session), stop=stop, messages=page)
-
-        def run(self, *_: object, **__: object) -> Run:
-            return Run()
-
-    monkeypatch.setattr(browser_use_sdk.v3, "AsyncBrowserUse", Client)
-    monkeypatch.setattr(
-        backend, "environment", lambda: {"BROWSER_USE_API_KEY": "bu_secret_key", "OPENROUTER_API_KEY": "or"}
-    )
-    outcome, report = await live.hosted_arm(task("saucedemo-cart"), httpx.AsyncClient(), record=None)
-    assert report.answered is True and report.trace[-1] == "reply  -> said"
-    assert [s["operation"] for s in report.step_log][:2] == ["fetch", "browser_navigate"]  # both pages read
-    stored = report.model_dump_json()
-    assert "bu_secret_key" not in stored and "session-token" not in stored
-
-    seen: dict[str, Any] = {}
-
-    async def judge(
-        state: dict[str, Any],
-        *,
-        policy: str,
-        questions: dict[str, str] | None = None,
-        fallback_only: str | None,
-        unjudgeable: str | None = None,
-        use_jev: bool = True,
-    ) -> tuple[Judgment, str]:
-        seen.update(state)
-        decisions = {
-            k: Decision(passed=True, source="llm", reason="ok") for k in ("evidence_available", "task_satisfied")
-        }
-        return Judgment(policy=policy, state_sha256="0" * 64, questions={}, decisions=decisions), "f" * 64
-
-    monkeypatch.setattr(live, "judge_browser", judge)
-    monkeypatch.setattr(live, "_judge_policy", ContextVar("judge_policy", default=live.OPUS_V4_POLICY))
-    await live.semantic_grade(task("saucedemo-cart"), None, outcome, report, live.ending_of("fastbrowse", report))
-    assert seen["final_page_unobservable"] is True
-    assert [s["observation"] for s in seen["report"]["step_log"] if "observation" in s] == [
-        s["observation"] for s in report.step_log if "observation" in s
-    ]
-
-    # A kept-alive session the stop did not reach goes on accruing, so what it read then is no charge.
-    assert report.dollars == 0.2 and report.unknown_cost is False
-    session.status, stop.side_effect = SimpleNamespace(value="idle"), httpx.ConnectError("down")
-    _, unsettled = await live.hosted_arm(task("saucedemo-cart"), httpx.AsyncClient(), record=None)
-    assert unsettled.dollars is None and unsettled.unknown_cost is True
 
 
 def test_a_repeated_observation_is_stored_once_and_referenced() -> None:
@@ -2162,7 +2047,12 @@ def test_sigterm_stops_an_ultrafast_runs_cloud_browser(monkeypatch: pytest.Monke
         # What Python's default handler would do here is end pytest; stand in for it with a failure.
         raise AssertionError("SIGTERM reached Python's default handling, which ends the harness at once")
 
-    monkeypatch.setattr(cli.importlib, "import_module", lambda _: SimpleNamespace(main=main))
+    imported = cli.importlib.import_module
+    monkeypatch.setattr(
+        cli.importlib,
+        "import_module",
+        lambda name: SimpleNamespace(main=main) if name.startswith("fastbrowse_evals.") else imported(name),
+    )
     previous = signal.signal(signal.SIGTERM, unhandled)
     try:
         code = cli.run("internal", [])
@@ -2476,16 +2366,12 @@ async def test_an_agent_navigation_error_at_a_down_site_is_judged_and_not_run_ag
     sleep.assert_not_awaited()
 
 
-async def test_the_hosted_agents_final_page_is_read_through_the_browser_its_session_created(
+async def test_the_hosted_agents_final_page_is_read_through_its_kept_alive_browser(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    listed = SimpleNamespace(
-        items=[
-            SimpleNamespace(cdp_url="https://cdp.example/s1", agent_session_id="s1"),
-            SimpleNamespace(cdp_url=None, agent_session_id="s1"),
-        ]
+    client = SimpleNamespace(
+        browsers=SimpleNamespace(get=AsyncMock(return_value=SimpleNamespace(cdp_url="https://cdp.example/b1")))
     )
-    client = SimpleNamespace(browsers=SimpleNamespace(list=AsyncMock(return_value=listed)))
     seen: list[str] = []
 
     async def websocket(_http: Any, url: str) -> str:
@@ -2497,15 +2383,13 @@ async def test_the_hosted_agents_final_page_is_read_through_the_browser_its_sess
 
     monkeypatch.setattr(live, "devtools_websocket", websocket)
     monkeypatch.setattr(live, "observe_browser", observe)
-    final = await live.hosted_final_page(client, httpx.AsyncClient(), "s1")
-    assert final.url == "https://pypi.org/project/httpx/" and seen == ["wss://cdp.example/s1"]
-    client.browsers.list.assert_awaited_once_with(agent_session_id="s1")
-
-    # Two browsers, or none, cannot be told apart: the page is unobservable, never another session's.
-    listed.items.append(SimpleNamespace(cdp_url="https://cdp.example/other", agent_session_id="s1"))
-    assert "found 2" in str((await live.hosted_final_page(client, httpx.AsyncClient(), "s1")).error)
-    client.browsers.list = AsyncMock(side_effect=RuntimeError("gone"))
-    assert "could not be listed" in str((await live.hosted_final_page(client, httpx.AsyncClient(), "s1")).error)
+    final = await live.hosted_final_page(client, httpx.AsyncClient(), "b1")
+    assert final.url == "https://pypi.org/project/httpx/" and seen == ["wss://cdp.example/b1"]
+    client.browsers.get.assert_awaited_once_with("b1")
+    # No browser, or one that cannot be reached: the page is unobservable, never guessed.
+    assert "opened no browser" in str((await live.hosted_final_page(client, httpx.AsyncClient(), None)).error)
+    client.browsers.get = AsyncMock(side_effect=RuntimeError("gone"))
+    assert "did not answer" in str((await live.hosted_final_page(client, httpx.AsyncClient(), "b1")).error)
 
 
 def test_every_head_to_head_arm_runs_the_same_tasks_unless_a_stated_reason_stops_it() -> None:
