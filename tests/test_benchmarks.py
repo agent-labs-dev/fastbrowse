@@ -1428,3 +1428,45 @@ def test_explicit_call_basis_without_count_remains_unknown(candidate: dict, basi
     row.pop("llm_calls", None)
     row["llm_calls_basis"] = basis
     assert Candidate.model_validate(candidate).groups[0].rows[0].llm_calls is None
+
+
+def _unjudge(candidate: dict, index: int, reason: str = "evidence-unavailable") -> dict:
+    """Move one head-to-head row out of the score: a slot the judge could not judge."""
+    group = candidate["groups"][0]
+    row = group["rows"].pop(index)
+    slot = {k: row[k] for k in ("task", "repeat", "arm")} | {"reason": reason}
+    group.setdefault("unjudged", []).append(slot)
+    return slot
+
+
+def test_an_unjudged_slot_fills_its_place_in_the_grid_and_stays_out_of_the_rows(candidate):
+    baseline = Candidate.model_validate(copy.deepcopy(candidate))
+    slot = _unjudge(candidate, 0)
+    published = Candidate.model_validate(candidate)
+    assert [s.model_dump() for s in published.groups[0].unjudged] == [slot]
+    regressions(published, baseline)
+    group = candidate["groups"][0]
+    group["unjudged"].append(dict(group["unjudged"][0]))
+    with pytest.raises(ValidationError, match="exactly one measured row"):
+        Candidate.model_validate(candidate)
+
+
+def test_a_group_names_the_runs_its_tasks_came_from(candidate):
+    group = candidate["groups"][0]
+    tasks = group["task_ids"]
+    older = {"run_id": "r1", "agent_sha": "c" * 40, "runner_sha": "c" * 40, "measured_on": "2026-11-08"}
+    newest = {"run_id": "r2", "agent_sha": "a" * 40, "runner_sha": "b" * 40, "measured_on": "2026-11-09"}
+    group["sources"] = [newest | {"tasks": tasks[:1]}, older | {"tasks": tasks[1:]}]
+    published = Candidate.model_validate(candidate)
+    assert [s.run_id for s in published.groups[0].sources] == ["r2", "r1"]
+    # A group whose newest run is older than the candidate's build names that run's build.
+    group["sources"] = [older | {"tasks": tasks}]
+    group["agent_sha"] = group["runner_sha"] = "c" * 40
+    Candidate.model_validate(candidate)
+    group["sources"] = [older | {"tasks": tasks[1:]}]
+    with pytest.raises(ValidationError, match="every task of the group exactly once"):
+        Candidate.model_validate(candidate)
+    group["sources"] = [older | {"tasks": tasks}]
+    group["agent_sha"] = "a" * 40
+    with pytest.raises(ValidationError, match="newest source"):
+        Candidate.model_validate(candidate)

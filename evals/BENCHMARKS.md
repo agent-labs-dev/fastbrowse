@@ -300,6 +300,16 @@ public page read. Supply any complete groups: the three head-to-head ledgers, `-
 ledger with `--internal-fastbrowse`; or `--official-rows` with the public rows of each official run. Also supply the
 exported catalog and the passing fixture run id. The exporter checks the original evidence.
 
+Each internal option takes the ledgers of one or more runs of one campaign, in any order. A late fix reruns only the
+tasks it affects, so the group takes each task from the newest run, by its recorded start, that measured it in full:
+every arm the run measured at every repeat. This is how the release gate scores a campaign, so the site shows the
+results the release shipped on. A run that supplies no task is not read further, and every run that does is checked
+whole: its protocol, budget journal, judge receipts and Langfuse readback. Every task of the catalog must come from
+some run. The group records its runs, newest first, in `sources`: each run's recorded id, agent and runner commits,
+date and the tasks it supplied. The group's own `agent_sha` is its newest run's, and the candidate's is the newest
+run's of all its groups. The fixture run must be on that build, every earlier run's commits must be in its history,
+and an official group must be of it.
+
 `--competitor-reference PATH` adds the `browser-use` and `browser-harness` rows of this repository's
 `docs/results/competitor-reference.json` to `internal-hosted`, unless its ledger ran both. Without a reference, or with
 one under another judge policy or stale for any task, the exporter refuses the comparison and names the tasks.
@@ -315,7 +325,7 @@ suite's group; only `fastbrowse` is published, so the site shows Browser Use's o
 ones included. `publish-candidate` requires each group's experiments to be there.
 
 The hosted group is the 52 tasks both `fastbrowse` and `browser-use` run. It measures whichever of `fastbrowse`,
-`browser-use`, `jev-ultrafast` and `browser-harness` its one invocation ran, each on the tasks of the 52 it supports
+`browser-use`, `jev-ultrafast` and `browser-harness` its runs ran, each on the tasks of the 52 it supports
 (`jev-ultrafast` skips tasks that need an answer, `browser-harness` those that need credentials or a safe stop); an arm that did not run, or none of whose runs started (its
 provider refused every start, as with a bad key), is not measured rather than blocking the group. The backend group requires the 53 tasks on
 both fastbrowse arms, and the Ultrafast group the 47 tasks `fastbrowse-pool` and `jev-ultrafast` both run,
@@ -332,10 +342,16 @@ The public limits state that no arm was capped, the hosted cost override, the 4-
 the browser of each arm and the concurrency.
 
 - Internal slots total seconds and dollars over every physical run, retries included. An attempt with unknown
-  cost, missing timing or a missing grade blocks export.
+  cost or missing timing blocks export.
+- An internal slot with no verdict on the current task is left out of the rows and every score, counts as neither a
+  pass nor a failure, and is listed in the group's `unjudged` slots with its reason: `evidence-unavailable` when the
+  judge found the run's evidence unavailable (a site's bot check or a provider outage the agent did not cause),
+  `no-verdict` when the judge reached none, and `task-changed` when the run measured an earlier version of the task,
+  which the release gate does not compare either. A newer run of the task replaces it.
 - The catalog must equal the canonical export byte for byte. Official task ids and the dataset hash are read
   from the actual source, not from the manifest. Judge model, reasoning, versions and pricing date must be recorded.
-- One clean agent build and one clean runner, recorded in every row, and the fixture ledger is read, not counted.
+- Every run's agent build and runner are clean and recorded in every row, and the fixture ledger is read, not
+  counted.
 - Source grades stay as the upstream defines them (weighted rubric or binary); completion is the agent's own ending.
 - Official dollars are agent spend, as internal ones are; judge spend counts toward the budget, and any unsettled
   judge reservation blocks export.

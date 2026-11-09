@@ -44,6 +44,11 @@ run-name: Benchmark campaign ${{ inputs.campaign_id || github.event.client_paylo
 # `smoke` finds bugs before a release: one repeat of every task in the chosen group (`groups: all` means the head-to-head
 # group, which holds both arms), its ledger sent to Langfuse marked as smoke, and no candidate or site pull request, so it can never publish.
 #
+# The candidate takes each task from the newest finished run of this campaign that measured it in full, as the release
+# gate scores it, so a late fix reruns only the tasks it affects (`only`) and its stage combines that run with the
+# earlier ones. `candidate_only` runs nothing and builds the candidate from the campaign's finished runs alone; its
+# `fastbrowse_ref` is the newest run's build, which the fixture Evals dispatch must have passed on.
+#
 # `budget` is each group's approved total. It only gates whether the next run may start: a run holds its agent,
 # browser and judge reserves (1 + 1 + 1 dollars) while in flight, and starts only
 # while everything committed plus that hold fits. At Parallax's default 8 runs in flight that is at most 24 dollars
@@ -104,10 +109,15 @@ on:
         type: string
         default: ""
       only:
-        description: Space separated task ids of the chosen suites to run instead of all of them. Outside a smoke it reruns the tasks a fix affects for the release gate, and builds no candidate
+        description: Space separated task ids of the chosen suites to run instead of all of them. Outside a smoke it reruns the tasks a fix affects, and the candidate takes the other tasks from the campaign's earlier runs
         required: false
         type: string
         default: ""
+      candidate_only:
+        description: Run nothing; build the candidate from this campaign's finished runs. fastbrowse_ref is the newest run's build
+        required: false
+        type: boolean
+        default: false
       concurrency:
         description: Smoke only. Runs in flight at once; empty keeps the default of 8
         required: false
@@ -141,6 +151,7 @@ env:
   ONLY: ${{ inputs.only || github.event.client_payload.only || '' }}
   RUN_CONCURRENCY: ${{ inputs.concurrency || github.event.client_payload.concurrency || '' }}
   EXTRA_ARMS: ${{ inputs.extra_arms || github.event.client_payload.extra_arms || '' }}
+  CANDIDATE_ONLY: ${{ inputs.candidate_only || github.event.client_payload.candidate_only == true }}
 
 jobs:
   resolve:
@@ -168,6 +179,9 @@ jobs:
             fastbrowse|head-to-head|all) ;;
             *) echo "::error::groups must be fastbrowse, head-to-head or all, got '$GROUPS_CHOSEN'"; exit 1 ;;
           esac
+          if test "$CANDIDATE_ONLY" = true && test "$SMOKE" = true; then
+            echo "::error::a smoke builds no candidate, so candidate_only cannot be a smoke"; exit 1
+          fi
           if test "$REFRESH" = true && test "$GROUPS_CHOSEN" = fastbrowse; then
             echo "::error::refresh_competitors needs the head-to-head group"; exit 1
           fi
@@ -185,7 +199,7 @@ jobs:
             jq -e --arg key "$key" '(. // {})[$key] != ""' <<< "$PAYLOAD" > /dev/null \
               || { echo "::error::$key in client_payload is empty"; exit 1; }
           done
-          for key in smoke refresh_competitors; do
+          for key in smoke refresh_competitors candidate_only; do
             # Only a JSON true turns these on, so a string "true" would quietly start a full paid run.
             jq -e --arg key "$key" '(. // {})[$key] | . == null or type == "boolean"' <<< "$PAYLOAD" > /dev/null \
               || { echo "::error::$key in client_payload must be true or false"; exit 1; }
@@ -246,9 +260,9 @@ jobs:
             echo "run_on=$(date -u +%F)"
           } >> "$GITHUB_OUTPUT"
       # The stage job needs a passing Evals dispatch on this build, so a campaign that will stage is refused here,
-      # however it was started, rather than after the budget is spent. A smoke or a narrowed rerun never stages.
+      # however it was started, rather than after the budget is spent. A smoke never stages.
       - name: Require an Evals dispatch on the build
-        if: ${{ !(inputs.smoke || github.event.client_payload.smoke == true) && !(inputs.only || github.event.client_payload.only) }}
+        if: ${{ !(inputs.smoke || github.event.client_payload.smoke == true) }}
         env:
           GH_TOKEN: ${{ github.token }}
           FIXTURE_SHA: ${{ steps.pins.outputs.fastbrowse_sha }}
@@ -262,6 +276,8 @@ jobs:
           esac
       - name: Check the credentials
         id: credentials
+        # A candidate built from earlier runs spends nothing; its readback needs only the Langfuse keys.
+        if: ${{ env.CANDIDATE_ONLY != 'true' }}
         env:
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -332,6 +348,7 @@ jobs:
   campaign:
     name: ${{ matrix.label }}
     needs: resolve
+    if: ${{ !(inputs.candidate_only || github.event.client_payload.candidate_only == true) }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     # id-token: the fastbrowse-pool arm signs in to GCP to reach the browser pool.
     permissions: {contents: read, statuses: write, id-token: write}
@@ -468,8 +485,12 @@ jobs:
   stage:
     name: Build the candidate
     needs: [resolve, campaign]
-    # A candidate is one build's full comparison, so a smoke or a narrowed rerun builds none.
-    if: ${{ !(inputs.smoke || github.event.client_payload.smoke == true) && !(inputs.only || github.event.client_payload.only) }}
+    # A smoke builds none. A narrowed rerun, or a candidate_only dispatch that ran nothing, builds it with the
+    # campaign's earlier runs.
+    if: >-
+      ${{ !cancelled() && needs.resolve.result == 'success'
+      && (needs.campaign.result == 'success' || needs.campaign.result == 'skipped')
+      && !(inputs.smoke || github.event.client_payload.smoke == true) }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
@@ -488,6 +509,8 @@ jobs:
         with:
           ref: ${{ needs.resolve.outputs.harness_sha }}
           path: harness
+          # Publication checks that every run's agent and runner commits are in the history of the newest build.
+          fetch-depth: 0
           persist-credentials: false
       - name: Install the harness and fastbrowse
         env:
@@ -499,7 +522,23 @@ jobs:
           # (fastbrowse.evals.versions.provenance); a plain directory install records none and publication refuses it.
           uv pip install "fastbrowse @ git+file://$GITHUB_WORKSPACE/fastbrowse@$FASTBROWSE_SHA"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: ${{ needs.campaign.result == 'success' }}
         with: {path: ledgers, pattern: ledger-*, merge-multiple: true}
+      - name: Fetch the campaign's earlier ledgers
+        # Every finished run of this campaign, found by its title as the release gate finds them. Publication takes
+        # each task from the newest run that measured it in full and reads no further a run that supplies none.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CAMPAIGN_ID: ${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
+        run: |
+          mapfile -t runs < <(gh run list --repo "$GITHUB_REPOSITORY" --workflow benchmark-campaign.yml \
+            --status completed --limit 100 --json databaseId,displayTitle \
+            --jq '.[] | select((.displayTitle | split(" ") | last) == env.CAMPAIGN_ID) | .databaseId')
+          for run in "${runs[@]}"; do
+            test "$run" = "$GITHUB_RUN_ID" && continue
+            gh run download "$run" --repo "$GITHUB_REPOSITORY" --pattern 'ledger-*' --dir "earlier-ledgers/$run" \
+              || echo "run $run kept no ledger"
+          done
       - name: Fetch the official rows
         if: ${{ env.OFFICIAL_RUNS != '' }}
         env:
@@ -548,11 +587,10 @@ jobs:
           mapfile -t official < <(find "$GITHUB_WORKSPACE/official-rows" -name '*.rows.json' 2> /dev/null | sort)
           cd harness/evals
           args=()
-          for spec in \
-            "$GITHUB_WORKSPACE/ledgers/internal-fastbrowse.jsonl:--internal-fastbrowse" \
-            "$GITHUB_WORKSPACE/ledgers/head-to-head.jsonl:--hosted"; do
-            path="${spec%%:*}"
-            if test -f "$path"; then args+=("${spec##*:}" "$path"); fi
+          for spec in internal-fastbrowse.jsonl:--internal-fastbrowse head-to-head.jsonl:--hosted; do
+            mapfile -t found < <(find "$GITHUB_WORKSPACE/ledgers" "$GITHUB_WORKSPACE/earlier-ledgers" \
+              -name "${spec%%:*}" 2> /dev/null | sort)
+            if test "${#found[@]}" -gt 0; then args+=("${spec##*:}" "${found[@]}"); fi
           done
           if test "${#official[@]}" -gt 0; then args+=(--official-rows "${official[@]}"); fi
           if test "$REFRESH" = true; then

@@ -114,6 +114,31 @@ class BlockedSlot(PublicModel):
     physical_runs: Annotated[int, Field(gt=0)]
 
 
+class UnjudgedSlot(PublicModel):
+    """A scheduled slot with no verdict on the current task, so like a blocked slot it is outside every score and
+    counts as neither a pass nor a failure. `evidence-unavailable`: the judge found the run's evidence unavailable, an
+    interruption the agent did not cause such as a site's bot check or a provider outage. `no-verdict`: the judge
+    reached no verdict on the evidence it had. `task-changed`: the run measured an earlier version of the task, so its
+    verdict is not compared, as the release gate does not compare it."""
+
+    task: Identifier
+    repeat: Annotated[int, Field(ge=0)]
+    arm: Arm
+    reason: Literal["evidence-unavailable", "no-verdict", "task-changed"]
+
+
+class Source(PublicModel):
+    """One campaign run a group's rows came from, and the tasks it supplied. A late fix reruns only the tasks it
+    affects, so a group may take its tasks from several runs of one campaign: each task from the newest run that
+    measured it in full. `run_id` is the run's recorded id, which its traces in the private Langfuse project carry."""
+
+    run_id: Identifier
+    agent_sha: Sha
+    runner_sha: Sha
+    measured_on: Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2}$")]
+    tasks: Annotated[list[Identifier], Field(min_length=1)]
+
+
 class Coverage(NamedTuple):
     counts: frozenset[int]
     repeats: int | None
@@ -194,17 +219,34 @@ class Group(PublicModel):
     limits: Annotated[list[Limit], Field(min_length=1, max_length=12)]
     rows: list[Row]
     blocked: list[BlockedSlot] = []
+    unjudged: list[UnjudgedSlot] = []
     references: list[ReferenceArm] = []
     """Which arms' rows come from the fixed competitor reference; an arm not named here was measured on this build."""
+    sources: list[Source] = []
+    """The runs the rows came from, newest first, when the group records them; `agent_sha` and `runner_sha` are then
+    the newest run's."""
 
     @model_serializer(mode="wrap")
     def without_empty_lists(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        """A group with nothing blocked or referenced keeps its old bytes, so approved candidates still match."""
+        """A group with nothing blocked, unjudged, referenced or sourced keeps its old bytes, so approved candidates
+        still match."""
         data = handler(self)
-        for name in ("blocked", "references"):
+        for name in ("blocked", "unjudged", "references", "sources"):
             if not data[name]:
                 del data[name]
         return data
+
+    @model_validator(mode="after")
+    def provenance(self) -> Self:
+        """Each task comes from exactly one source, and the group names the newest one's build."""
+        if not self.sources:
+            return self
+        tasks = [task for source in self.sources for task in source.tasks]
+        if len(tasks) != len(set(tasks)) or set(tasks) != set(self.task_ids):
+            raise ValueError("the sources must supply every task of the group exactly once")
+        if (self.agent_sha, self.runner_sha) != (self.sources[0].agent_sha, self.sources[0].runner_sha):
+            raise ValueError("a group with sources names the newest source's agent and runner build")
+        return self
 
     @model_validator(mode="after")
     def coverage(self) -> Self:
@@ -233,18 +275,21 @@ class Group(PublicModel):
     def check_slots(self, arms: tuple[Arm, ...]) -> None:
         """The arms depend on the candidate's schema, so the candidate checks each group's slots against them.
 
-        Each measured arm has one row or one blocked slot for every repeat of every task it runs: the whole task set,
-        or for a partial arm the part of it its rows name, which `check_catalog` holds to the catalog. Its cost is
-        reported on every row or on none."""
+        Each measured arm has one row, one blocked slot or one unjudged slot for every repeat of every task it runs:
+        the whole task set, or for a partial arm the part of it its slots name, which `check_catalog` holds to the
+        catalog. Its cost is reported on every row or on none."""
         spec = COVERAGE[self.id]
         measured = self.measured_arms(arms)
-        if {r.arm for r in (*self.rows, *self.blocked)} - set(arms) or not measured:
+        ungraded = (*self.blocked, *self.unjudged)
+        if {r.arm for r in (*self.rows, *ungraded)} - set(arms) or not measured:
             raise ValueError(f"{self.id} measures only {', '.join(arms)}")
         if missing := [arm for arm in (arms if spec.required is None else spec.required) if arm not in measured]:
             raise ValueError(f"{self.id} must measure {', '.join(missing)}")
+        if {slot.arm for slot in ungraded} - set(measured):
+            raise ValueError(f"{self.id} has an ungraded slot for an arm with no graded row")
         for arm in measured:
             rows = [r for r in self.rows if r.arm == arm]
-            slots = [(r.task, r.repeat) for r in (*rows, *(b for b in self.blocked if b.arm == arm))]
+            slots = [(r.task, r.repeat) for r in (*rows, *(b for b in ungraded if b.arm == arm))]
             tasks = {task for task, _ in slots} if arm in spec.partial else set(self.task_ids)
             expected = {(task, repeat) for task in tasks for repeat in range(self.repeats)}
             if len(slots) != len(set(slots)) or set(slots) != expected or not tasks <= set(self.task_ids):
@@ -334,9 +379,15 @@ class Candidate(PublicModel):
             group.check_slots(group_arms(group.id, self.schema_version))
             if self.schema_version >= TIMED_SCHEMA and any(r.timing_basis is None for r in group.rows):
                 raise ValueError(f"{group.id}: every row must record its timing basis")
-            for field in ("agent_sha", "runner_sha"):
-                if getattr(group, field) != getattr(self, field):
-                    raise ValueError("each group must identify the measured agent and runner build")
+            # A group with sources names its newest run's build, which may predate the candidate's: the publisher
+            # checks that every source build is in the candidate build's history.
+            if not group.sources and (group.agent_sha, group.runner_sha) != (self.agent_sha, self.runner_sha):
+                raise ValueError("each group must identify the measured agent and runner build")
+        if not any(
+            self.agent_sha in {group.agent_sha, *(source.agent_sha for source in group.sources)}
+            for group in self.groups
+        ):
+            raise ValueError("the candidate's agent build must be one a group measured")
         if (self.fixture is None) == (self.export is None):
             raise ValueError(
                 "a candidate carries exactly one measurement receipt: a live fixture run or a verified export"
@@ -426,7 +477,7 @@ def check_catalog(candidate: Candidate, path: Path) -> None:
             raise ValueError(f"internal rows must cover the exact {kind} catalog")
         for arm in group.measured_arms(partial):
             own = {task.id for task in tasks if task.id in required and eligible(arm, task)}
-            if {r.task for r in group.rows if r.arm == arm} != own:
+            if {r.task for r in (*group.rows, *group.blocked, *group.unjudged) if r.arm == arm} != own:
                 raise ValueError(f"{group.id}/{arm} must run exactly the tasks of its set the catalog lists it for")
 
 
@@ -580,7 +631,7 @@ def regressions(
         for task in group.task_ids:
             now = [r for r in group.rows if r.arm == arm and r.task == task]
             before = [r for r in old.rows if r.arm == arm and r.task == task]
-            # A task the site blocked on every repeat, here or in the baseline, has nothing to compare.
+            # A task with no graded repeat (blocked or unjudged), here or in the baseline, has nothing to compare.
             if not now or not before:
                 continue
             if sum(r.score for r in now) / len(now) < sum(r.score for r in before) / len(before):

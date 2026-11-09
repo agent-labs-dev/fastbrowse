@@ -14,6 +14,11 @@ Versions are patch-by-patch unless the maintainer says otherwise, and every one 
    the newest campaign run that measured it three times and says whether they pass: no task's pass rate below
    the campaign in `docs/results/release-baseline.json`, and the median run time and mean cost below it. The
    fixture Evals run must be on the release commit's tree; a squash merge keeps the pull request's tree.
+   A rerun's campaign builds the site candidate the same way, each task from its newest run. To build it from the
+   finished runs without running anything, dispatch the campaign with `candidate_only` and `fastbrowse_ref` set to
+   the newest run's build. The candidate's fixture Evals run must be on that build and the build must be in `main`'s
+   history, so build it after the release pull request merges, or dispatch Evals again on the merged commit and rerun
+   one task there so the newest run is on it.
 4. Once the maintainer says to release, `git tag v<x.y.z> <sha> && git push origin v<x.y.z>`. The tag's workflow
    publishes once the sdist, the wheels and the five binaries build and pass their smoke tests and its `gate`
    job finds those evals passing on the tagged tree. Then point `docs/results/release-baseline.json` at the new

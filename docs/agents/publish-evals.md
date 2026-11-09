@@ -54,7 +54,12 @@ regression checks; results from different builds cannot be combined under one bu
 Schema 4 adds `internal-backend`: fastbrowse on a Browser Use Cloud browser against fastbrowse on its own
 browser pool. From schema 5, `internal-ultrafast` pairs fastbrowse on its own pool with `jev-ultrafast`; figures
 approved under an older schema keep fastbrowse on a Browser Use Cloud browser there.
-Schema 2 and later record each group's agent and runner commits and require them to match the candidate's build.
+Schema 2 and later record each group's agent and runner commits and require them to match the candidate's build,
+unless the group lists its `sources`: the campaign runs its tasks came from, newest first, each with its commits,
+date and tasks. Its commits are then the newest source's, and the publisher checks that every source's commits are
+in the history of the candidate's build. A slot with no verdict on the current task is listed in `unjudged` with its
+reason, outside every figure, as a blocked slot is. The site's parser (`src/lib/benchmark-feed.ts`) must accept both
+fields before a candidate that has them is published.
 
 `internal-hosted` is the head-to-head over the 53 tasks fastbrowse runs; figures approved at 46, 47 or 52 tasks still
 read. A campaign runs `fastbrowse` and `jev-ultrafast` live in one harness invocation, on Browser Use Cloud browsers
@@ -107,7 +112,8 @@ workflow's `gate` job will not publish without it (see [release.md](release.md))
 dispatch a campaign by hand. An integration holding a token with `contents: write` starts one with a `repository_dispatch`
 through `client_payload`, which takes the same values as the manual inputs and is refused before any spend when a
 value is outside them. Any campaign that is not a smoke is refused before any spend when its build has no passing or
-running Evals dispatch. When every group has run, the campaign builds the candidate and calls `publish-evals.yml`,
+running Evals dispatch. When every group has run, the campaign builds the candidate from this run and the campaign's
+earlier finished runs, each task from the newest run that measured it in full, and calls `publish-evals.yml`,
 which opens a pull request on agent-labs-dev/fastbrowse-site. The pull request carries the candidate byte for
 byte as `data/benchmark-<campaign>.json` and the site's group files under `data/benchmarks/`, written by
 
