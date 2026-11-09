@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 from fastbrowse.models import Limits
 
-from fastbrowse_evals import live, official, official_rows, publication
+from fastbrowse_evals import official, official_rows, publication
 from fastbrowse_evals.attempt_clock import SESSION_OPEN_SECONDS, TIMING_BASIS
 from fastbrowse_evals.catalog import render
 from fastbrowse_evals.judging import OPENROUTER_BASE_URL, OPUS_JUDGE
@@ -34,7 +34,6 @@ BROWSERS = {
     "fastbrowse-pool": {"mode": "fastbrowse-pool", "host": "pool.internal"},
     "jev-ultrafast": {"mode": "browser-use-cloud", "timeout_minutes": 240},
     "browser-use": {"mode": "browser-use-hosted"},
-    "browser-use-ultrafast": {"mode": "browser-use-hosted"},
     "browser-harness": {"mode": "browser-use-cloud", "timeout_minutes": 240},
 }
 
@@ -69,7 +68,7 @@ def run_record(arms: tuple[str, ...], **over: Any) -> dict[str, Any]:
         "timing_basis": TIMING_BASIS,
         "max_dollars": None,
         "agent_limits": UNCAPPED,
-        "hosted_max_cost_usd": "1000" if live.HOSTED_MODELS.keys() & set(arms) else None,
+        "hosted_max_cost_usd": "1000" if "browser-use" in arms else None,
         "browsers": {a: BROWSERS[a] for a in arms},
         "concurrency": 8,
         "run_started": "2026-10-07T09:00:00+00:00",
@@ -302,7 +301,7 @@ class Harness:
         self.hosted = write_ledger(
             tmp_path,
             "hosted",
-            ("fastbrowse", "browser-use", "browser-use-ultrafast", "browser-harness"),
+            ("fastbrowse", "browser-use", "browser-harness"),
             edits.get("hosted"),
             **{"budget_usd": 1000.0} | edits.get("hosted_run", {}),
         )
@@ -398,7 +397,7 @@ def test_export_counts_every_physical_run_and_keeps_source_grades_separate(tmp_p
     retried = next(r for r in groups["internal-hosted"].rows if r.physical_runs == 2)
     assert (retried.seconds, retried.dollars, retried.score, retried.completed) == (7.0, 0.75, 1.0, True)
     assert retried.llm_calls == 5
-    assert sum(r.physical_runs for r in groups["internal-hosted"].rows) == (53 + 52 + 52 + 47) * 3 + 1
+    assert sum(r.physical_runs for r in groups["internal-hosted"].rows) == (53 + 52 + 47) * 3 + 1
     # internal-ultrafast is fastbrowse on its own pool against Ultrafast, which only schema 5 admits.
     assert candidate.schema_version == publication.timed_schema(5)
     assert {r.arm for r in groups["internal-ultrafast"].rows} == {"fastbrowse-pool", "jev-ultrafast"}
@@ -673,12 +672,7 @@ def test_a_campaign_ledger_is_tracked_for_every_arm(
     h = Harness(tmp_path)
     track_ledger.main([str(h.hosted)])
     experiments = json.loads(capsys.readouterr().out)["experiments"]
-    assert [name.split("/")[1] for name in experiments] == [
-        "fastbrowse",
-        "browser-use",
-        "browser-use-ultrafast",
-        "browser-harness",
-    ]
+    assert [name.split("/")[1] for name in experiments] == ["fastbrowse", "browser-use", "browser-harness"]
 
 
 def test_official_rows_hold_nothing_but_the_public_fields(tmp_path: Path) -> None:
@@ -811,8 +805,8 @@ def test_hosted_publication_states_the_cost_override_and_provider_session_maximu
     assert "Hosted Browser Use max_cost_usd set to 1000 to override its provider default" in limits
     assert any("4 hour maximum session" in note for note in limits)
     assert (
-        "Browser per arm: browser-harness browser-use-cloud; browser-use browser-use-hosted; "
-        "browser-use-ultrafast browser-use-hosted; fastbrowse browser-use-cloud" in limits
+        "Browser per arm: browser-harness browser-use-cloud; browser-use browser-use-hosted; fastbrowse browser-use-cloud"
+        in limits
     )
     assert any(note.startswith("Concurrency 8; budget 1000 dollars") for note in limits)
     assert len(limits) <= 12
@@ -1186,7 +1180,7 @@ def test_the_hosted_group_measures_whichever_hosted_arms_ran_on_one_task_set(tmp
     assert len(group.excluded) == 1 + 6
     pause = next(e for e in group.excluded if e.arm == "browser-use")
     assert pause.reason == next(t for t in entries(HOSTED_TASKS) if t["id"] == pause.task)["excluded"]["browser-use"]
-    assert any("failed where it cannot run: browser-use 1, jev-ultrafast 6" in n for n in group.limits)
+    assert any("jev-ultrafast cannot run 6, each a failure" in n for n in group.limits)
     assert any("jev-ultrafast text helper" in n for n in group.limits)
 
     # browser-harness, a coding agent given no credentials, runs only the set's credential-free completion tasks.
@@ -1195,7 +1189,7 @@ def test_the_hosted_group_measures_whichever_hosted_arms_ran_on_one_task_set(tmp
     supported = [t for t in entries(HOSTED_TASKS) if "browser-harness" in t["arms"]]
     assert 0 < len(supported) < 53
     assert sum(r.arm == "browser-harness" for r in group.rows) == 3 * len(supported)
-    assert any(f"browser-harness {53 - len(supported)}" in n for n in group.limits)
+    assert any(f"browser-harness cannot run {53 - len(supported)}, each a failure" in n for n in group.limits)
 
     alone = write_ledger(tmp_path, "alone", ("fastbrowse",), task_arms=HOSTED_TASKS)
     group = publication.internal_group("internal-hosted", alone, CATALOG, DIGEST).group
@@ -1391,7 +1385,7 @@ def test_an_official_slot_counts_the_runs_its_interruption_check_sent_back(tmp_p
 
 
 def refreshed(tmp_path: Path) -> tuple[Any, Any]:
-    arms = ("fastbrowse", "browser-use", "browser-use-ultrafast", "browser-harness")
+    arms = ("fastbrowse", "browser-use", "browser-harness")
     ledger = write_ledger(tmp_path, "refresh", arms, task_arms=HOSTED_TASKS, budget_usd=1000.0)
     group = publication.internal_group("internal-hosted", ledger, CATALOG, DIGEST).group
     live = write_ledger(tmp_path, "live", ("fastbrowse", "jev-ultrafast"), task_arms=HOSTED_TASKS, budget_usd=1000.0)
@@ -1444,14 +1438,8 @@ def test_a_default_campaign_publishes_on_the_reference_and_a_refresh_writes_it(
     path.write_text(made.model_dump_json())
     live = write_ledger(tmp_path, "live", ("fastbrowse", "jev-ultrafast"), task_arms=HOSTED_TASKS, budget_usd=1000.0)
     group = h.export(hosted=live, ultrafast=None, bu_bench=None, mind2web=None, reference=path).groups[0]
-    assert {r.arm for r in group.rows} == {
-        "fastbrowse",
-        "jev-ultrafast",
-        "browser-use",
-        "browser-use-ultrafast",
-        "browser-harness",
-    }
-    assert [a.vendor for a in group.references] == ["Browser Use", "Browser Use Ultrafast", "Browser Harness"]
+    assert {r.arm for r in group.rows} == {"fastbrowse", "jev-ultrafast", "browser-use", "browser-harness"}
+    assert [a.vendor for a in group.references] == ["Browser Use", "Browser Harness"]
     with pytest.raises(PublicationError, match="refresh_competitors"):
         h.export(hosted=live, ultrafast=None, bu_bench=None, mind2web=None)
 
@@ -1612,31 +1600,6 @@ def test_a_slot_measured_on_an_earlier_task_version_is_listed_apart(tmp_path: Pa
     group = publication.internal_group("internal-fastbrowse", results, CATALOG, DIGEST).group
     assert {(s.task, s.reason) for s in group.unjudged} == {(task["id"], "task-changed")}
     assert len(group.unjudged) == 3 and len(group.rows) == 156
-
-
-def test_an_arm_remeasured_on_a_new_pin_leaves_the_earlier_runs_other_arms_publishable(tmp_path: Path) -> None:
-    """A competitor re-run on a new version supplies that arm; the earlier run keeps supplying the arms it alone
-    measured, and only the pins of the arms a run supplies are held to the catalog."""
-    first, second = tmp_path / "first", tmp_path / "second"
-    first.mkdir(), second.mkdir()
-    old = {"pin": "browser-use-sdk==3.0.0 API v3", "tier": "hosted"}
-    arms = ("fastbrowse", "browser-use", "browser-harness")
-    earlier = write_ledger(first, "hosted", arms, task_arms=HOSTED_TASKS, budget_usd=1000.0)
-    for line in (earlier, earlier.with_suffix(".attempts.jsonl")):
-        rows = [json.loads(r) for r in line.read_text().splitlines()]
-        for row in rows:
-            row["run"]["arms"]["browser-use"] = old
-        line.write_text("".join(json.dumps(r) + "\n" for r in rows))
-    competitors = ("fastbrowse", "browser-use", "browser-use-ultrafast", "jev-ultrafast")
-    newer = write_ledger(second, "hosted", competitors, task_arms=HOSTED_TASKS, budget_usd=1000.0, **LATER)
-    group = publication.internal_group("internal-hosted", [earlier, newer], CATALOG, DIGEST).group
-    assert {(s.run_id, s.arm) for s in group.sources} == {
-        ("r2", "fastbrowse"), ("r2", "browser-use"), ("r2", "browser-use-ultrafast"), ("r2", "jev-ultrafast"),
-        ("r1", "browser-harness"),
-    }  # fmt: skip
-    # Alone, the earlier run would publish browser-use on a pin the catalog no longer names.
-    with pytest.raises(PublicationError, match="catalog pins"):
-        publication.internal_group("internal-hosted", earlier, CATALOG, DIGEST)
 
 
 def test_the_head_to_head_takes_fastbrowse_from_a_newer_fastbrowse_only_run(tmp_path: Path) -> None:

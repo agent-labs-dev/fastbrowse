@@ -149,6 +149,17 @@ async def test_setup_marks_reach_the_clock_from_another_context() -> None:
     assert clock.asked_at is None and clock.opened >= 0.0
 
 
+def test_hosted_browser_time_is_its_timed_browser_tools() -> None:
+    steps = [
+        {"operation": "fetch", "duration_ms": 900},
+        {"operation": "browser_navigate", "duration_ms": 1500},
+        {"operation": "browser_click", "duration_ms": None},
+        {"operation": "browser_evaluate", "duration_ms": 500},
+    ]
+    assert live.hosted_browser_seconds(steps) == 2.0
+    assert live.hosted_browser_seconds([{"operation": "fetch", "duration_ms": 900}]) is None
+
+
 def test_browser_round_trips_add_up_from_the_trace_phases() -> None:
     events = [
         {"event": "phase", "phase": "open", "began": 0.0, "ended": 1.0},

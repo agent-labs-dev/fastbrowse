@@ -6,19 +6,22 @@ jev-ultrafast, which cannot import fastbrowse, is given the same route by constr
 environment. The environment is read as fastbrowse reads it (`environment`).
 """
 
-import importlib
 from collections.abc import Mapping
-from typing import Any, Literal
+from typing import Literal
 
 import httpx
 from fastbrowse.evals import harness
 
 type JevSource = Literal["openrouter", "typesafe", "gateway"]
 
-# Values of the pinned fastbrowse build's Rust core: crates/fastbrowse-clients/src/system_one.rs and vercel.rs.
+# Values of the pinned fastbrowse build's Rust core, which no longer exports them to Python:
+# crates/fastbrowse-clients/src/system_one.rs, vercel.rs and crates/fastbrowse-core/src/decision.rs.
 OPENROUTER_URL = "https://openrouter.ai/api"
+OPENROUTER_MODEL = "jev-1.13"
 TYPESAFE_URL = "https://api.typesafe.ai"
+JEV_MODEL = "jev-1.13.0"
 GATEWAY_URL = "https://ai-gateway.vercel.sh"
+GATEWAY_JEV_MODEL = "typesafe-ai/jev"
 JEV_DOLLARS_PER_INPUT_TOKEN = 0.042 / 1_000_000
 RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529})
 """Statuses that say nothing about the request, so a repeat can clear them (crates/fastbrowse-clients/src/validation.rs
@@ -103,26 +106,17 @@ def run_settings(overrides: Mapping[str, str] | None = None) -> dict[str, str]:
     return chosen | {"FASTBROWSE_DECISION_SOURCE": jev_source(env)}
 
 
-def jev_models() -> dict[str, str]:
-    """The Jev model each source sends unless a run names another, as the measured fastbrowse build's Rust core
-    defines it, so jev-ultrafast runs the Jev release fastbrowse runs and no copy here can fall behind."""
-    core: Any = importlib.import_module("fastbrowse._native")  # compiled, so the checker has no types for it
-    return dict(core.jev_models())
-
-
 def jev_route() -> tuple[str, str, str, str | None]:
     """(key variable, base URL, model, key) of `jev_source()`, for jev-ultrafast's isolated runner. A base URL or
     model set for fastbrowse (FASTBROWSE_DECISION_BASE_URL, FASTBROWSE_DECISION_MODEL) applies to it too."""
     env = environment()
-    source = jev_source(env)
-    match source:
+    match jev_source(env):
         case "openrouter":
-            name, url, key = "TYPESAFE_API_KEY", OPENROUTER_URL, env.get("OPENROUTER_API_KEY")
+            name, url, model, key = "TYPESAFE_API_KEY", OPENROUTER_URL, OPENROUTER_MODEL, env.get("OPENROUTER_API_KEY")
         case "typesafe":
-            name, url, key = "TYPESAFE_API_KEY", TYPESAFE_URL, env.get("TYPESAFE_API_KEY")
+            name, url, model, key = "TYPESAFE_API_KEY", TYPESAFE_URL, JEV_MODEL, env.get("TYPESAFE_API_KEY")
         case "gateway":
-            name, url, key = "AI_GATEWAY_API_KEY", GATEWAY_URL, env.get("AI_GATEWAY_API_KEY")
-    model = jev_models()[source]
+            name, url, model, key = "AI_GATEWAY_API_KEY", GATEWAY_URL, GATEWAY_JEV_MODEL, env.get("AI_GATEWAY_API_KEY")
     url = env.get("FASTBROWSE_DECISION_BASE_URL") or env.get("FASTBROWSE_JEV_BASE_URL") or url
     model = env.get("FASTBROWSE_DECISION_MODEL") or env.get("FASTBROWSE_JEV_MODEL") or model
     return name, url, model, key

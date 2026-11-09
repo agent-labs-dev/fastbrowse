@@ -49,7 +49,6 @@ from fastbrowse_evals.catalog import render
 from fastbrowse_evals.judging import OPENROUTER_BASE_URL, OPUS_JUDGE
 from fastbrowse_evals.live import (
     AGENT_LIMITS,
-    HOSTED_MODELS,
     HOSTED_UNCAPPED_USD,
     JUDGE_POLICY,
     OUTAGE_RETRIES,
@@ -214,7 +213,7 @@ INTERNAL = {
 SLOT_FIELDS = ("status", "passed", "seconds", "dollars", "llm_calls", "llm_calls_basis")
 FASTBROWSE_ARMS = {"fastbrowse", "fastbrowse-pool"}
 """Arms that are fastbrowse itself, whose completion is its own `complete` status."""
-HOSTED_ARMS = ("fastbrowse", "browser-use", "browser-use-ultrafast", "jev-ultrafast", "browser-harness")
+HOSTED_ARMS = ("fastbrowse", "browser-use", "jev-ultrafast", "browser-harness")
 """The arms the hosted head-to-head may measure, in display order: any of them its one invocation ran."""
 COST_NOT_REPORTED: set[str] = set()
 """Arms whose provider does not report what a run cost, so their rows publish the pass rate and seconds with no
@@ -225,7 +224,6 @@ BROWSER_MODES = {
     "fastbrowse-pool": {"fastbrowse-pool"},
     "jev-ultrafast": {"browser-use-cloud"},
     "browser-use": {"browser-use-hosted"},
-    "browser-use-ultrafast": {"browser-use-hosted"},
     "browser-harness": {"browser-use-cloud"},
 }
 """The browser each arm may have driven; which one it was is recorded, checked and published per arm."""
@@ -305,28 +303,20 @@ def reference_basis(row: Row) -> str | None:
     return getattr(row, "timing_basis", None)
 
 
-def internal_protocol(
-    run: dict[str, Any], group_id: str, arms: set[str], catalog: dict[str, Any], claimed: set[str] | None = None
-) -> int:
+def internal_protocol(run: dict[str, Any], group_id: str, arms: set[str], catalog: dict[str, Any]) -> int:
     """Check that one invocation produced the ledger under the uncapped start-gate protocol; returns its concurrency.
 
     One protocol for every internal group: no arm had a step, time, dollar or model-call limit, the approved budget
     only gated new physical runs (`start-gate-v1`), and a hosted Browser Use arm overrode the provider's default cost
     limit. Any recorded cap refuses publication rather than being described. Every run is judged semantically, so
     every run also held a positive judge reserve. The run may predate a change to the catalog: each task it supplies
-    is held to the catalog's version of that task (`invocation`), and only the `claimed` arms it supplies rows for
-    (all of `arms` when None) must match the catalog's pins, so a re-measured arm does not void another arm's rows."""
+    is held to the catalog's version of that task (`invocation`)."""
     if amount(run.get("judge_reserve_dollars"), f"{group_id}: judge_reserve_dollars") <= 0:
         raise PublicationError(f"{group_id}: a positive declared judge reserve is required")
-    recorded = run.get("arms")
-    if (
-        not isinstance(recorded, dict)
-        or set(recorded) != arms
-        or any(
-            recorded[name] != {"pin": catalog["arms"][name]["pin"], "tier": catalog["arms"][name]["tier"]}
-            for name in (arms if claimed is None else claimed & arms)
-        )
-    ):
+    expected_arms = {
+        name: {"pin": catalog["arms"][name]["pin"], "tier": catalog["arms"][name]["tier"]} for name in arms
+    }
+    if run.get("arms") != expected_arms:
         raise PublicationError(f"{group_id}: the run's arms differ from the group's agents and catalog pins")
     if run.get("benchmark_family") != "browser-use" or run.get("benchmark_origin") != "fastbrowse-internal":
         raise PublicationError(f"{group_id}: the run was not made against the canonical internal catalog")
@@ -343,7 +333,7 @@ def internal_protocol(
         raise PublicationError(f"{group_id}: the run's limit on opening a browser session differs from the protocol")
     timed(run, group_id)
     uncapped(run.get("agent_limits"), group_id)
-    if HOSTED_MODELS.keys() & arms and run.get("hosted_max_cost_usd") != HOSTED_UNCAPPED_USD:
+    if "browser-use" in arms and run.get("hosted_max_cost_usd") != HOSTED_UNCAPPED_USD:
         raise PublicationError(f"{group_id}: the hosted arm's explicit uncapped max_cost_usd is not recorded")
     for arm in arms:
         browser_identity(run, arm, group_id)
@@ -534,7 +524,7 @@ def invocation(
         raise PublicationError(f"{group_id}: every row must come from one recorded invocation")
     run: dict[str, Any] = attempts[0]["run"]
     ran = measured_arms(group_id, run)
-    concurrency = internal_protocol(run, group_id, ran, catalog, {arm for arm, _ in use})
+    concurrency = internal_protocol(run, group_id, ran, catalog)
     # A hosted arm none of whose runs started (its provider refused every start: a bad key, say) measured nothing. It
     # is left out, as an arm that never ran is, rather than blocking the arms that did; one start refused among runs
     # that did start still blocks, as any failed slot does.
@@ -726,12 +716,13 @@ def internal_group(group_id: str, results: Path | Sequence[Path], catalog: dict[
         for item in used
     )
     present = [arm for arm in HOSTED_ARMS if arm in arms]
-    # One phrase within the public contract's 240 characters for all five head-to-head arms: each arm's count of tasks
-    # it cannot run, every one a failure, follows the list of arms once.
-    skipped = [f"{arm} {len(required) - len(supported[arm])}" for arm in present if len(supported[arm]) < len(required)]
     hosted = (
         f"Agent against agent on one set of {len(required)} tasks: {', '.join(present)}"
-        + (f"; failed where it cannot run: {', '.join(skipped)}" if skipped else "")
+        + "".join(
+            f"; {arm} cannot run {len(required) - len(supported[arm])}, each a failure"
+            for arm in present
+            if len(supported[arm]) < len(required)
+        )
         + "".join(f"; {arm} not measured, no run started" for arm in sorted(unmeasured))
     )
     agents = {
@@ -748,7 +739,7 @@ def internal_group(group_id: str, results: Path | Sequence[Path], catalog: dict[
         f"dollars, each new run holding {each(holds)} until settled",
         "Browser per arm: " + "; ".join(f"{arm} {mode}" for arm, mode in sorted(modes.items())),
     ]
-    if HOSTED_MODELS.keys() & arms:
+    if "browser-use" in arms:
         limits.append(f"Hosted Browser Use max_cost_usd set to {HOSTED_UNCAPPED_USD} to override its provider default")
     if BROWSER_USE_MODES & set(modes.values()):
         limits.append(UNCAPPED_NOTES[1])
@@ -1271,11 +1262,7 @@ def default_checks() -> tuple[Checks, Callable[[], None]]:
 # --- export ---
 
 
-REFERENCE_ARMS = {
-    "browser-use": "Browser Use",
-    "browser-use-ultrafast": "Browser Use Ultrafast",
-    "browser-harness": "Browser Harness",
-}
+REFERENCE_ARMS = {"browser-use": "Browser Use", "browser-harness": "Browser Harness"}
 """Competitors a campaign shows from the fixed reference. Only a `refresh_competitors` dispatch runs them live."""
 
 

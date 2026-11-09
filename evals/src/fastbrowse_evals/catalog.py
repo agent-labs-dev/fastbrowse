@@ -7,14 +7,7 @@ from pathlib import Path
 from fastbrowse_evals.live import ARMS, HEAD_TO_HEAD_ARMS, SUITES, ULTRAFAST_TEXT_MODEL, eligible, excluded_because
 from fastbrowse_evals.versions import fingerprint, load_lock
 
-DERIVED_ARMS = (
-    "fastbrowse-pool",
-    "fastbrowse-hosted",
-    "cua-codex",
-    "browser-harness",
-    "jev-ultrafast",
-    "browser-use-ultrafast",
-)
+DERIVED_ARMS = ("fastbrowse-pool", "fastbrowse-hosted", "cua-codex", "browser-harness", "jev-ultrafast")
 """Arms whose tasks follow from `eligible` rather than a task's own `arms`, so adding one changes no task fingerprint."""
 
 RETIRED: tuple[dict[str, str], ...] = (

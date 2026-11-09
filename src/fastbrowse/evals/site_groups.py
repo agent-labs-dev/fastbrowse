@@ -28,8 +28,7 @@ SiteGroup = Literal["live-suite", "live-suite-fastbrowse", "online-mind2web", "b
 SYSTEMS = {
     "fastbrowse": "fastbrowse",
     "browser-use": "browser-use",
-    "browser-use-ultrafast": "browser-use-ultrafast",
-    "jev-ultrafast": "jev-ultrafast",
+    "jev-ultrafast": "browser-use-ultrafast",
     "browser-harness": "browser-harness",
 }
 """The site system each candidate arm is shown as (`SYSTEM_ARMS` in the site's benchmark-groups.ts)."""

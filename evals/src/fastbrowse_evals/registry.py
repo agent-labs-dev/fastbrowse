@@ -34,7 +34,6 @@ BENCHMARKS = {
             "fastbrowse-pool",
             "fastbrowse-hosted",
             "browser-use",
-            "browser-use-ultrafast",
             "jev-ultrafast",
             "cua-codex",
             "browser-harness",

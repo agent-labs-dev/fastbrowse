@@ -19,23 +19,18 @@ run-name: Benchmark campaign ${{ inputs.campaign_id || github.event.client_paylo
 #
 # Groups:
 #   fastbrowse    fastbrowse alone on every live suite task (internal-fastbrowse).
-#   head-to-head  fastbrowse and Jev Ultrafast (jev-ultrafast) in one Parallax invocation, each on a Browser Use
-#                 Cloud browser with the same settings (published as internal-hosted). Jev Ultrafast runs every task it
-#                 can attempt; the catalog states why it skips the others.
+#   head-to-head  fastbrowse and Browser Use Ultrafast (jev-ultrafast) in one Parallax invocation, each on a Browser Use
+#                 Cloud browser with the same settings (published as internal-hosted). Ultrafast runs every task it can
+#                 attempt; the catalog states why it skips the others.
 #   all           both.
 # The budget gates new attempts; Parallax gives no task time, step or dollar limit to an active arm.
-# Browser Use (its default model and bu-ultrafast) and Browser Harness are not run by default: their figures come from
-# docs/results/competitor-reference.json,
+# Browser Use and Browser Harness are not run by default: their figures come from docs/results/competitor-reference.json,
 # which only the candidate step reads, and each is labelled with the date it was measured. Without a reference that
 # matches the catalog, the candidate is refused.
 #
-# `refresh_competitors` adds all three to the head-to-head group for one full dispatch, and the candidate artifact gains
+# `refresh_competitors` adds both to the head-to-head group for one full dispatch, and the candidate artifact gains
 # competitor-reference.json. Commit that file to docs/results/ so later campaigns reuse it. Browser Harness drives a
-# Browser Use Cloud browser through the Codex CLI on gpt-6-luna, installed only for a dispatch that runs it.
-#
-# `head_to_head_arms` runs exactly the arms it names in the head-to-head group, fastbrowse included only if named, to
-# re-measure some arms alone. The candidate takes every other arm's rows from the campaign's earlier runs (below), each
-# run's build named beside its rows.
+# Browser Use Cloud browser through the Codex CLI on gpt-6-luna, installed only for this dispatch.
 #
 # Repository configuration this file needs (checked before any paid call):
 #   secrets: OPENROUTER_API_KEY, AI_GATEWAY_API_KEY, PARALLAX_JUDGE_API_KEY,
@@ -128,11 +123,6 @@ on:
         required: false
         type: string
         default: ""
-      head_to_head_arms:
-        description: Space separated arms the head-to-head group runs instead of its default ones, from fastbrowse, browser-use, browser-use-ultrafast, jev-ultrafast and browser-harness; the candidate takes the others from the campaign's earlier runs
-        required: false
-        type: string
-        default: ""
       extra_arms:
         description: Smoke only. Space separated arms added to every chosen group, from fastbrowse-pool and fastbrowse-hosted
         required: false
@@ -161,7 +151,6 @@ env:
   ONLY: ${{ inputs.only || github.event.client_payload.only || '' }}
   RUN_CONCURRENCY: ${{ inputs.concurrency || github.event.client_payload.concurrency || '' }}
   EXTRA_ARMS: ${{ inputs.extra_arms || github.event.client_payload.extra_arms || '' }}
-  HEAD_TO_HEAD_ARMS: ${{ inputs.head_to_head_arms || github.event.client_payload.head_to_head_arms || '' }}
   CANDIDATE_ONLY: ${{ inputs.candidate_only || github.event.client_payload.candidate_only == true }}
 
 jobs:
@@ -238,15 +227,6 @@ jobs:
           if test "$SMOKE" != true && { test -n "$RUN_CONCURRENCY" || test -n "$EXTRA_ARMS"; }; then
             echo "::error::concurrency and extra_arms need smoke"; exit 1
           fi
-          if test -n "$HEAD_TO_HEAD_ARMS" && test "$GROUPS_CHOSEN" != head-to-head; then
-            echo "::error::head_to_head_arms needs groups head-to-head"; exit 1
-          fi
-          for arm in $HEAD_TO_HEAD_ARMS; do
-            case "$arm" in
-              fastbrowse|browser-use|browser-use-ultrafast|jev-ultrafast|browser-harness) ;;
-              *) echo "::error::head_to_head_arms takes fastbrowse, browser-use, browser-use-ultrafast, jev-ultrafast and browser-harness, got '$arm'"; exit 1 ;;
-            esac
-          done
           for arm in $EXTRA_ARMS; do
             case "$arm" in
               fastbrowse-pool|fastbrowse-hosted) ;;
@@ -344,13 +324,10 @@ jobs:
           GROUP_SET: ${{ env.SMOKE == 'true' && env.GROUPS_CHOSEN == 'all' && 'head-to-head' || env.GROUPS_CHOSEN }}
         run: |
           vendors="jev-ultrafast"
-          if test "$REFRESH" = true; then vendors="$vendors browser-use browser-use-ultrafast browser-harness"; fi
-          paired="fastbrowse $vendors"
-          # Words only: the validation step admitted nothing but arm names.
-          if test -n "$HEAD_TO_HEAD_ARMS"; then read -ra named <<< "$HEAD_TO_HEAD_ARMS"; paired="${named[*]}"; fi
+          if test "$REFRESH" = true; then vendors="$vendors browser-use browser-harness"; fi
           extra="${EXTRA_ARMS:+ $EXTRA_ARMS}"
           fastbrowse="{\"label\":\"fastbrowse\",\"key\":\"fastbrowse\",\"arms\":\"fastbrowse$extra\",\"out\":\"internal-fastbrowse.jsonl\"}"
-          head_to_head="{\"label\":\"head-to-head\",\"key\":\"head-to-head\",\"arms\":\"$paired$extra\",\"out\":\"head-to-head.jsonl\"}"
+          head_to_head="{\"label\":\"head-to-head\",\"key\":\"head-to-head\",\"arms\":\"fastbrowse $vendors$extra\",\"out\":\"head-to-head.jsonl\"}"
           case "$GROUP_SET" in
             fastbrowse) include="[$fastbrowse]" ;;
             head-to-head) include="[$head_to_head]" ;;
@@ -360,11 +337,12 @@ jobs:
           {
             echo "### Campaign arms"
             echo
-            echo "Groups: \`$GROUP_SET\`."
+            echo "Groups: \`$GROUP_SET\`. Arms measured: \`fastbrowse\`"
             case "$GROUP_SET" in
               fastbrowse) ;;
-              *) echo "Head-to-head arms: \`$paired$extra\`." ;;
+              *) echo ", plus \`$vendors\` for the head-to-head group" ;;
             esac
+            echo "."
           } >> "$GITHUB_STEP_SUMMARY"
 
   campaign:
@@ -412,7 +390,7 @@ jobs:
       # The browser-harness arm's agent, at the version the harness checkout pins: the arm checks it before each
       # attempt, and a version written here as well drifted from it, so every attempt failed before it started.
       - name: Install the Codex CLI Browser Harness drives
-        if: ${{ contains(matrix.arms, 'browser-harness') }}
+        if: ${{ env.REFRESH == 'true' && matrix.key == 'head-to-head' }}
         run: |
           cd harness/evals/src/fastbrowse_evals/adapters
           version=$(uv run --no-sync --project ../../.. python -c "import browser_harness_arm; print(browser_harness_arm.CODEX_VERSION)")
