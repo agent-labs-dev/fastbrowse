@@ -59,9 +59,9 @@ Schema 2 and later record each group's agent and runner commits and require them
 `internal-hosted` is the head-to-head over the 53 tasks fastbrowse runs; figures approved at 46, 47 or 52 tasks still
 read. A campaign runs `fastbrowse` and `jev-ultrafast` live in one harness invocation, on Browser Use Cloud browsers
 with the same settings. Each arm runs every repeat of every task it can attempt: `browser-use` skips the task that
-passes only by stopping before an unauthorized step, and `jev-ultrafast` and `browser-harness` also skip the login
-tasks, so they run 47. The catalog states each reason and the site shows those tasks as not run. Ultrafast returns no
-answer, so on an answer task the judge has only its final page. An arm that did not run has no rows and the site shows it as not measured. An arm
+passes only by stopping before an unauthorized step, and `browser-harness` also skips the login tasks, so it runs 47.
+Ultrafast returns no answer, only DONE or BLOCKED, so it runs only the six navigation tasks, which are graded on the
+page a run ends on. The catalog states each reason and the site shows those tasks as not run. An arm that did not run has no rows and the site shows it as not measured. An arm
 that reports neither its model nor its spend carries `"dollars": null` and the site shows its pass rate and seconds with
 "cost not reported". Fastbrowse receipts retain known dollar figures, but an unknown or unsettled line marks
 the total incomplete. A provisional figure is a lower bound, not a settled bill.

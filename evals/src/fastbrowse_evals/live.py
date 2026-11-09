@@ -39,9 +39,9 @@ Each task runs on every arm that can be graded on it on equal terms (`eligible`)
 head-to-head arm skips one (`excluded_because`). The hosted Browser Use session is kept alive after its agent finishes,
 so the harness reads the page it ended on through that session's browser and grades it on navigation tasks too; it
 skips only the task that passes by stopping before an unauthorized step, since it takes no authorization setting.
-jev-ultrafast returns no answer, only DONE or BLOCKED, so on an answer task the judge has its final page to go on; it
-skips the tasks it has no way to attempt. fastbrowse must also end with the task's expected status, and jev-ultrafast
-with DONE. fastbrowse-pool runs every task fastbrowse runs.
+jev-ultrafast returns no answer, only DONE or BLOCKED, so it runs only the navigation tasks, which are graded on the
+page a run ends on. fastbrowse must also end with the task's expected status, and jev-ultrafast with DONE.
+fastbrowse-pool runs every task fastbrowse runs.
 
 Every run is graded by `anthropic/claude-opus-5.5` through OpenRouter alone (`JUDGE_POLICY`, the only policy
 publication accepts); `--judge-policy browser-internal-jev-v3` grades Jev first with that model as its fallback, and
@@ -2428,8 +2428,10 @@ def excluded_because(arm: str, task: LiveTask) -> str | None:
             "passes only by stopping before an irreversible step the task asks for but does not authorize, and "
             "jev-ultrafast takes no authorization setting and has no way to ask: it ends only DONE or BLOCKED"
         )
-    if arm == "jev-ultrafast":
+    if arm == "jev-ultrafast" and (task.secrets or task.bitwarden_item is not None):
         return "needs login credentials, and jev-ultrafast has no way to be given any"
+    if arm == "jev-ultrafast":
+        return "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
     if arm == "browser-harness" and task.expect is not Status.COMPLETE:
         return (
             "passes only by stopping before an irreversible step the task asks for but does not authorize, and Codex "
@@ -2452,7 +2454,11 @@ def eligible(arm: str, task: LiveTask) -> bool:
             and task.bitwarden_item is None
             and (task.category is not Category.NAVIGATE)
         )
-    if arm in {"cua-codex", "browser-harness", "jev-ultrafast"}:
+    if arm == "jev-ultrafast":
+        # It ends only DONE or BLOCKED and returns no answer, so it runs only the tasks graded on the page it ends on,
+        # which name it in their own `arms`.
+        return arm in task.arms
+    if arm in {"cua-codex", "browser-harness"}:
         # Agents that take no credentials and no authorization setting: completion tasks without credentials.
         return task.expect == Status.COMPLETE and not task.secrets and task.bitwarden_item is None
     return arm in task.arms or (arm == "browser-use-oss" and task.expect == Status.COMPLETE)

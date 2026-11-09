@@ -10,7 +10,7 @@ Browser benchmarking compares exactly three things, each a matched head-to-head 
 |:--|:--|:--|:--|:--|
 | C1 | agent against agent | `fastbrowse` and `jev-ultrafast` live, `browser-use` and `browser-harness` from the competitor reference | `internal-hosted` | 53 |
 | C2 | backend against backend | `fastbrowse` on the Browser Use Cloud browser against `fastbrowse-pool` (Fastbrowse on its own hosted browser pool) | `internal-backend` | 53 |
-| C3 | Fastbrowse and its backend against Browser Use Ultrafast | `fastbrowse-pool` against `jev-ultrafast` | `internal-ultrafast` | 47 |
+| C3 | Fastbrowse and its backend against Browser Use Ultrafast | `fastbrowse-pool` against `jev-ultrafast` | `internal-ultrafast` | 6 |
 
 Each comparison is its own invocation with exactly its two arms, over every suite, three repeats; the publication
 candidate refuses a ledger whose recorded arms differ from its group's. Run one command per comparison:
@@ -63,9 +63,9 @@ Each catalog task lists the head-to-head arms it leaves out under `excluded`, ea
   harness reads the final page through the DevTools address of the browser Browser Use lists for that session, so it
   is graded on the six navigation tasks too. `saucedemo-pause` passes only on a confirmation stop, and the hosted
   agent takes no authorization setting to stop on.
-- `jev-ultrafast` runs 47 tasks. It takes no authorization setting, so it skips `saucedemo-pause`, and it cannot be
-  given credentials, so it skips the login tasks. It returns no answer, so on an answer task the judge has only its
-  final page to go on.
+- `jev-ultrafast` runs the six navigation tasks, which are graded on the page a run ends on. It returns no answer,
+  only DONE or BLOCKED, so it skips every task that asks for one. It also takes no authorization setting and cannot
+  be given credentials.
 
 A comparison scores both arms on the tasks both ran.
 
@@ -318,7 +318,7 @@ The hosted group is the 52 tasks both `fastbrowse` and `browser-use` run. It mea
 `browser-use`, `jev-ultrafast` and `browser-harness` its one invocation ran, each on the tasks of the 52 it supports
 (`jev-ultrafast` skips tasks that need an answer, `browser-harness` those that need credentials or a safe stop); an arm that did not run, or none of whose runs started (its
 provider refused every start, as with a bad key), is not measured rather than blocking the group. The backend group requires the 53 tasks on
-both fastbrowse arms, and the Ultrafast group the 47 tasks `fastbrowse-pool` and `jev-ultrafast` both run,
+both fastbrowse arms, and the Ultrafast group the 6 tasks `fastbrowse-pool` and `jev-ultrafast` both run,
 each with three repeats. The Fastbrowse-only group requires all 53 supported tasks; it needs no competitor reruns.
 A candidate with the Ultrafast group is schema 5, the first in which that group pairs `fastbrowse-pool` (not
 `fastbrowse`) with `jev-ultrafast`; with the backend group and no Ultrafast group it is schema 4.

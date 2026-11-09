@@ -1152,8 +1152,8 @@ def test_the_hosted_group_measures_whichever_hosted_arms_ran_on_one_task_set(tmp
     assert len(group.task_ids) == 53
     counts = {arm: sum(r.arm == arm for r in group.rows) for arm in arms}
     # Each arm runs every task it can attempt, three times each.
-    assert counts == {"fastbrowse": 159, "browser-use": 156, "jev-ultrafast": 141}
-    assert any("jev-ultrafast runs only the 47" in n for n in group.limits)
+    assert counts == {"fastbrowse": 159, "browser-use": 156, "jev-ultrafast": 18}
+    assert any("jev-ultrafast runs only the 6" in n for n in group.limits)
     assert any("jev-ultrafast text helper" in n for n in group.limits)
 
     # browser-harness, a coding agent given no credentials, runs only the set's credential-free completion tasks.
