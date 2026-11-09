@@ -27,8 +27,11 @@ uv run fastbrowse-evals browser internal --arms fastbrowse-pool jev-ultrafast \
 
 `--budget` is the approved total for that campaign. Without `--arms`, `fastbrowse-evals browser internal` runs `fastbrowse`,
 `jev-ultrafast` and `browser-use`; `fastbrowse-pool`, `fastbrowse-hosted`, `browser-use-oss`, `cua-codex` and `browser-harness` run only when named.
-Each comparison is scored on its matched tasks: both arms ran the task, at one task version, outside an outage, in
-one results file.
+Each comparison is scored on the whole task set for every arm. A task an arm cannot run, as the catalog's `excluded`
+says, counts as a failed attempt for that arm at every repeat, so a capability one agent lacks counts against it.
+Time and cost are averaged over the attempts that ran, since an attempt that never ran has neither. Among the tasks
+the arms ran, an attempt is compared only where every arm measured the same repeat, at one task version, outside an
+outage.
 
 Credentials per arm (environment variable names; values never enter Git, rows or projections):
 
@@ -301,12 +304,15 @@ ledger with `--internal-fastbrowse`; or `--official-rows` with the public rows o
 exported catalog and the passing fixture run id. The exporter checks the original evidence.
 
 Each internal option takes the ledgers of one or more runs of one campaign, in any order. A late fix reruns only the
-tasks it affects, so the group takes each task from the newest run, by its recorded start, that measured it in full:
-every arm the run measured at every repeat. This is how the release gate scores a campaign, so the site shows the
-results the release shipped on. A run that supplies no task is not read further, and every run that does is checked
-whole: its protocol, budget journal, judge receipts and Langfuse readback. Every task of the catalog must come from
-some run. The group records its runs, newest first, in `sources`: each run's recorded id, agent and runner commits,
-date and the tasks it supplied. The group's own `agent_sha` is its newest run's, and the candidate's is the newest
+tasks it affects, so the group takes each arm's rows at a task from the newest run, by its recorded start, that
+measured that arm at every repeat of it. This is how the release gate scores a campaign, so the site shows the
+results the release shipped on. The head-to-head also reads the `--internal-fastbrowse` ledgers, so its fastbrowse
+rows come from a newer fastbrowse-only run where there is one, as the release gate pools them, while each competitor
+keeps the run it was measured in. Every run supplying an arm must have driven it on the same browser, and every run is
+held to the one uncapped protocol and clock. A run that supplies nothing is not read further, and every run that does
+is checked whole: its protocol, budget journal, judge receipts and Langfuse readback. Every task of each arm must come
+from some run. The group records its runs, newest first, in `sources`, one entry per run and arm: the run's recorded
+id, the arm, agent and runner commits, date and the tasks it supplied for that arm. The group's own `agent_sha` is its newest run's, and the candidate's is the newest
 run's of all its groups. The fixture run must be on that build, every earlier run's commits must be in its history,
 and an official group must be of it.
 
@@ -327,7 +333,9 @@ ones included. `publish-candidate` requires each group's experiments to be there
 The hosted group is the 52 tasks both `fastbrowse` and `browser-use` run. It measures whichever of `fastbrowse`,
 `browser-use`, `jev-ultrafast` and `browser-harness` its runs ran, each on the tasks of the 52 it supports
 (`jev-ultrafast` skips tasks that need an answer, `browser-harness` those that need credentials or a safe stop); an arm that did not run, or none of whose runs started (its
-provider refused every start, as with a bad key), is not measured rather than blocking the group. The backend group requires the 53 tasks on
+provider refused every start, as with a bad key), is not measured rather than blocking the group. Each task of the
+set a measured arm cannot run is listed in the group's `excluded`, with the arm, the task and the catalog's reason; it
+stands for `repeats` failed attempts in every pass rate. The backend group requires the 53 tasks on
 both fastbrowse arms, and the Ultrafast group the 47 tasks `fastbrowse-pool` and `jev-ultrafast` both run,
 each with three repeats. The Fastbrowse-only group requires all 53 supported tasks; it needs no competitor reruns.
 A candidate with the Ultrafast group is schema 5, the first in which that group pairs `fastbrowse-pool` (not
@@ -343,11 +351,15 @@ the browser of each arm and the concurrency.
 
 - Internal slots total seconds and dollars over every physical run, retries included. An attempt with unknown
   cost or missing timing blocks export.
-- An internal slot with no verdict on the current task is left out of the rows and every score, counts as neither a
-  pass nor a failure, and is listed in the group's `unjudged` slots with its reason: `evidence-unavailable` when the
-  judge found the run's evidence unavailable (a site's bot check or a provider outage the agent did not cause),
-  `no-verdict` when the judge reached none, and `task-changed` when the run measured an earlier version of the task,
-  which the release gate does not compare either. A newer run of the task replaces it.
+- An internal slot whose agent ended `blocked` reached the site and was refused by its bot check. Another agent may
+  get past it, so it is a failed row, with `failure` "blocked by the site's bot check" when the judge gave no verdict.
+- An internal slot with no verdict on the current task for a reason of our own is left out of the rows and every
+  score, counts as neither a pass nor a failure, and is listed in the group's `unjudged` slots with its reason:
+  `evidence-unavailable` when the run ended in an `error` of the harness or its model provider and the judge found its
+  evidence unavailable, `no-verdict` when the judge reached none, and `task-changed` when the run measured an earlier
+  version of the task, which the release gate does not compare either. Evidence the judge found unavailable on a run
+  with any other ending is a failure, since the ledger cannot tell a site's refusal from ours. A newer run of the task
+  replaces an unjudged slot.
 - The catalog must equal the canonical export byte for byte. Official task ids and the dataset hash are read
   from the actual source, not from the manifest. Judge model, reasoning, versions and pricing date must be recorded.
 - Every run's agent build and runner are clean and recorded in every row, and the fixture ledger is read, not

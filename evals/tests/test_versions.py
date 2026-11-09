@@ -523,3 +523,21 @@ def test_a_failed_publication_write_removes_only_its_own_files(results: Path, mo
     assert not (results / "results" / "9.9.9.attempts.jsonl").exists()
     assert not (results / "results" / "9.9.9.jsonl").exists()
     assert _publish(results, _repeats("pypi-version")).exists()
+
+
+def test_a_task_an_arm_cannot_run_is_a_failure_at_every_attempt() -> None:
+    """The catalog says Browser Use cannot run saucedemo-pause, so the head-to-head scores it there as three failed
+    attempts beside fastbrowse's three; time and cost are averaged over the attempts that ran."""
+    from fastbrowse.evals.catalog import SUITES
+
+    pause = next(t for s in SUITES.values() for t in s if t.id == "saucedemo-pause")
+    assert "browser-use" in pause.excluded
+    paused = [_row("saucedemo-pause") | {"task_version": pause.task_version, "repeat": r} for r in range(3)]
+    both = [_row("pypi-version", arm=arm) | {"repeat": r} for arm in ("fastbrowse", "browser-use") for r in range(3)]
+    paired = versions._paired({"fastbrowse": paused}, {"browser-use": "cannot"})
+    assert [(r["arm"], r["repeat"], r["passed"]) for r in paired[3:]] == [("browser-use", r, False) for r in range(3)]
+    [entry] = versions.summary([("1.0.0", [*paused, *both])]).releases
+    assert entry.compared == ["fastbrowse", "browser-use"] and entry.tasks == 2
+    rival = entry.arms["browser-use"]
+    assert (rival.passed, rival.total, rival.unsupported, rival.priced) == (3, 6, 3, 3)
+    assert rival.seconds.mean == 10.0

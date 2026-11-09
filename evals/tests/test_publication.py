@@ -1090,20 +1090,34 @@ def test_a_slot_retried_after_an_infrastructure_unknown_publishes_every_physical
     assert collected.physical_runs == len(collected.group.rows) + 1
 
 
-def test_a_slot_the_judge_could_not_judge_is_listed_apart_and_the_group_still_publishes(tmp_path: Path) -> None:
-    """A site's bot check on every retry (#893): the judge finds the evidence unavailable, so the slot is neither a pass
-    nor a failure. It stays out of the rows and is recorded with its reason."""
-
+def _unjudgeable(status: str) -> Callable[[list[dict[str, Any]]], None]:
     def unknown(attempts: list[dict[str, Any]]) -> None:
         index = next(i for i, a in enumerate(attempts) if a["arm"] == "browser-use")
-        attempts[index] = judged_outage(attempts[index]) | {"selected": True}
+        attempts[index] = judged_outage(attempts[index], status=status) | {"selected": True}
 
-    results = write_ledger(tmp_path, "hosted", ("fastbrowse", "browser-use"), unknown)
+    return unknown
+
+
+def test_a_slot_our_harness_failed_is_listed_apart_and_the_group_still_publishes(tmp_path: Path) -> None:
+    """A run that ended in an error of the harness or its provider, which the judge found unavailable, measured no
+    agent: neither a pass nor a failure, out of the rows and recorded with its reason."""
+    results = write_ledger(tmp_path, "hosted", ("fastbrowse", "browser-use"), _unjudgeable("error"))
     group = publication.internal_group("internal-hosted", results, CATALOG, DIGEST).group
     [slot] = group.unjudged
     assert (slot.arm, slot.reason) == ("browser-use", "evidence-unavailable")
     assert not any((r.arm, r.task, r.repeat) == (slot.arm, slot.task, slot.repeat) for r in group.rows)
     assert group.model_dump(mode="json")["unjudged"] == [slot.model_dump(mode="json")]
+
+
+def test_a_slot_the_site_blocked_is_the_agents_failure(tmp_path: Path) -> None:
+    """Another agent may get past the bot check that stopped this one, so a run that ended `blocked` with no verdict
+    is a failed row that names why, not a slot left out."""
+    results = write_ledger(tmp_path, "hosted", ("fastbrowse", "browser-use"), _unjudgeable("blocked"))
+    group = publication.internal_group("internal-hosted", results, CATALOG, DIGEST).group
+    assert not group.unjudged
+    [row] = [r for r in group.rows if r.failure is not None]
+    assert (row.arm, row.score, row.failure) == ("browser-use", 0.0, publication.SITE_BLOCKED)
+    assert len([r for r in group.rows if r.arm == "browser-use"]) == 3 * (53 - len(group.excluded))
 
 
 def test_an_official_run_publishes_every_repeat_and_states_the_per_task_mean(tmp_path: Path) -> None:
@@ -1159,7 +1173,14 @@ def test_the_hosted_group_measures_whichever_hosted_arms_ran_on_one_task_set(tmp
     counts = {arm: sum(r.arm == arm for r in group.rows) for arm in arms}
     # Each arm runs every task it can attempt, three times each.
     assert counts == {"fastbrowse": 159, "browser-use": 156, "jev-ultrafast": 141}
-    assert any("jev-ultrafast runs only the 47" in n for n in group.limits)
+    # Each task an arm cannot run is listed with the catalog's reason, and stands for three failed attempts.
+    assert [(e.arm, e.task) for e in group.excluded] == sorted(
+        (arm, t["id"]) for arm in arms for t in entries(HOSTED_TASKS) if arm not in t["arms"]
+    )
+    assert len(group.excluded) == 1 + 6
+    pause = next(e for e in group.excluded if e.arm == "browser-use")
+    assert pause.reason == next(t for t in entries(HOSTED_TASKS) if t["id"] == pause.task)["excluded"]["browser-use"]
+    assert any("jev-ultrafast cannot run 6, each a failure" in n for n in group.limits)
     assert any("jev-ultrafast text helper" in n for n in group.limits)
 
     # browser-harness, a coding agent given no credentials, runs only the set's credential-free completion tasks.
@@ -1168,7 +1189,7 @@ def test_the_hosted_group_measures_whichever_hosted_arms_ran_on_one_task_set(tmp
     supported = [t for t in entries(HOSTED_TASKS) if "browser-harness" in t["arms"]]
     assert 0 < len(supported) < 53
     assert sum(r.arm == "browser-harness" for r in group.rows) == 3 * len(supported)
-    assert any(f"browser-harness runs only the {len(supported)} it supports" in n for n in group.limits)
+    assert any(f"browser-harness cannot run {53 - len(supported)}, each a failure" in n for n in group.limits)
 
     alone = write_ledger(tmp_path, "alone", ("fastbrowse",), task_arms=HOSTED_TASKS)
     group = publication.internal_group("internal-hosted", alone, CATALOG, DIGEST).group
@@ -1579,3 +1600,26 @@ def test_a_slot_measured_on_an_earlier_task_version_is_listed_apart(tmp_path: Pa
     group = publication.internal_group("internal-fastbrowse", results, CATALOG, DIGEST).group
     assert {(s.task, s.reason) for s in group.unjudged} == {(task["id"], "task-changed")}
     assert len(group.unjudged) == 3 and len(group.rows) == 156
+
+
+def test_the_head_to_head_takes_fastbrowse_from_a_newer_fastbrowse_only_run(tmp_path: Path) -> None:
+    """As the release gate pools them, fastbrowse's head-to-head tasks come from the newest run that measured
+    fastbrowse there, a fastbrowse-only run included; each competitor keeps the run it was measured in."""
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir(), second.mkdir()
+    duel = write_ledger(first, "hosted", ("fastbrowse", "browser-use"))
+    newer = dict(browsers={"fastbrowse": BROWSERS["fastbrowse"]}, browser_reserve_dollars=0.0, concurrency=1, **LATER)
+    every = {t["id"] for t in entries(("fastbrowse",))}
+    alone = write_ledger(second, "internal-fastbrowse", ("fastbrowse",), narrowed(every, fail=True), **newer)
+    group = publication.internal_group("internal-hosted", [duel, alone], CATALOG, DIGEST).group
+    assert {r.score for r in group.rows if r.arm == "fastbrowse"} == {0.0}
+    assert [(s.run_id, s.arm, len(s.tasks)) for s in group.sources] == [
+        ("r2", "fastbrowse", 53),
+        ("r1", "browser-use", 52),
+    ]
+    assert group.agent_sha == "c" * 40
+    # fastbrowse on another browser in the newer run is not the same measurement.
+    other = dict(newer, browsers={"fastbrowse": LOCAL_CHROME})
+    moved = write_ledger(second, "internal-fastbrowse", ("fastbrowse",), **other)
+    with pytest.raises(PublicationError, match="drove fastbrowse on different browsers"):
+        publication.internal_group("internal-hosted", [duel, moved], CATALOG, DIGEST)

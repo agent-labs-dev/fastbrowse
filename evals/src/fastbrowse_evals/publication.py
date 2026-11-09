@@ -25,6 +25,7 @@ from fastbrowse.evals.benchmarks import (
     BlockedSlot,
     Candidate,
     CompetitorReference,
+    ExcludedTask,
     Fixture,
     Group,
     ReferenceArm,
@@ -166,6 +167,7 @@ def build_group(
     blocked: list[BlockedSlot] | None = None,
     unjudged: list[UnjudgedSlot] | None = None,
     sources: list[Source] | None = None,
+    excluded: list[ExcludedTask] | None = None,
 ) -> Group:
     return Group(
         id=group_id,  # ty: ignore[invalid-argument-type]
@@ -179,8 +181,25 @@ def build_group(
         rows=sorted(rows, key=lambda r: (r.arm, r.task, r.repeat)),
         blocked=blocked or [],
         unjudged=unjudged or [],
+        excluded=excluded or [],
         sources=sources or [],
     )
+
+
+def exclusions(arms: Iterable[str], task_ids: Iterable[str], catalog: dict[str, Any]) -> list[ExcludedTask]:
+    """Each task of the group the catalog says one of `arms` cannot run, with the catalog's reason. It is a failure
+    for that arm at every repeat: a comparison across browser agents counts a capability one lacks against it."""
+    tasks = {t["id"]: t for suite in catalog["suites"].values() for t in suite}
+    found = []
+    for arm in arms:
+        for task in task_ids:
+            if arm in tasks[task]["arms"]:
+                continue
+            reason = tasks[task]["excluded"].get(arm)
+            if reason is None:
+                raise PublicationError(f"{arm}/{task}: the catalog does not say why the arm cannot run the task")
+            found.append(ExcludedTask(arm=arm, task=task, reason=reason))  # ty: ignore[invalid-argument-type]
+    return sorted(found, key=lambda e: (e.arm, e.task))
 
 
 # --- internal comparisons ---
@@ -424,22 +443,40 @@ def ledger_slots(results: Path, group_id: str) -> tuple[dict[str, Any], dict[str
     return run, held
 
 
-def measured_in_full(run: dict[str, Any], held: dict[str, set[tuple[Any, Any]]], required: dict[str, Any]) -> set[str]:
-    """The catalog tasks for which the ledger holds every arm it ran at every repeat."""
+def measured_in_full(
+    run: dict[str, Any], held: dict[str, set[tuple[Any, Any]]], required: dict[str, Any]
+) -> set[tuple[str, str]]:
+    """The (arm, task) pairs of the catalog for which the ledger holds the arm at every repeat of the task."""
     recorded = run.get("arms")
     arms = recorded if isinstance(recorded, dict) else {}
     return {
-        task
+        (arm, task)
         for task, slots in held.items()
         if task in required
-        and {(arm, repeat) for arm in arms if arm in required[task]["arms"] for repeat in range(INTERNAL_REPEATS)}
-        <= slots
+        for arm in arms
+        if arm in required[task]["arms"] and {(arm, repeat) for repeat in range(INTERNAL_REPEATS)} <= slots
     }
 
 
-def unjudged_reason(attempt: dict[str, Any]) -> Literal["evidence-unavailable", "no-verdict"]:
-    """Why the selected attempt has no verdict, read from its judge receipt (`UnjudgedSlot`)."""
-    return "evidence-unavailable" if judged_unavailable(attempt.get("semantic_judge")) else "no-verdict"
+SITE_BLOCKED = "blocked by the site's bot check"
+"""The failure of a slot with no verdict whose agent ended `blocked`: the site refused it, which another agent may get
+past."""
+SITE_REFUSED = "evidence unavailable after the agent reached the site"
+"""The failure of a slot with no verdict whose evidence the judge found unavailable, on a run that did not end in an
+`error` of the harness: the ledger cannot tell a site's refusal from ours, so it counts against the agent."""
+
+
+def unjudged_reason(attempt: dict[str, Any]) -> Literal["evidence-unavailable", "no-verdict"] | None:
+    """Why the selected attempt with no verdict measured nothing (`UnjudgedSlot`), or None when it is the agent's
+    failure. A run that ended `blocked` reached the site and was refused by its bot check, which another agent may get
+    past, so it is a failure. Evidence the judge found unavailable measured nothing only when the run ended in an
+    `error` of the harness or its model provider; with any other ending the ledger cannot tell a site's refusal from
+    ours, so it is a failure too. A judge with no verdict is ours alone."""
+    if attempt.get("status") == "blocked":
+        return None
+    if judged_unavailable(attempt.get("semantic_judge")):
+        return "evidence-unavailable" if attempt.get("status") == "error" else None
+    return "no-verdict"
 
 
 @dataclass(frozen=True)
@@ -449,11 +486,11 @@ class Invocation:
     run: dict[str, Any]
     arms: frozenset[str]
     unmeasured: frozenset[str]
-    supported: dict[str, list[str]]
     concurrency: int
-    tasks: list[str]
     rows: list[Row]
     unjudged: list[UnjudgedSlot]
+    claims: frozenset[tuple[str, str]]
+    """The (arm, task) pairs the group takes from this invocation."""
     models: dict[str, set[str]]
     text_models: set[str]
     modes: dict[str, str]
@@ -463,10 +500,10 @@ class Invocation:
 
 
 def invocation(
-    group_id: str, results: Path, catalog: dict[str, Any], required: dict[str, Any], use: set[str]
+    group_id: str, results: Path, catalog: dict[str, Any], required: dict[str, Any], use: set[tuple[str, str]]
 ) -> Invocation:
     """Check one invocation's ledger exactly as a single-run candidate is checked, its protocol, budget journal and
-    judge receipts whole, and return the slots of the tasks in `use`, which it measured in full."""
+    judge receipts whole, and return the slots of the (arm, task) pairs in `use`, which it measured in full."""
     other = INTERNAL[group_id]
     task_arms = GROUPS[group_id][3]
     attempts = lines(results.with_suffix(".attempts.jsonl"))
@@ -499,11 +536,11 @@ def invocation(
     arms = ran - unmeasured
     if not arms:
         raise PublicationError(f"{group_id}: no arm started a run")
+    # An arm none of whose runs started measured nothing here, so this run supplies none of its tasks.
+    use = {(arm, task) for arm, task in use if arm in arms}
     left_out = {f"{a['arm']}/{a['task']}/{a['repeat']}/{a['retries']}" for a in attempts if a["arm"] in unmeasured}
     attempts = [a for a in attempts if a["arm"] not in unmeasured]
     selected_rows = [r for r in selected_rows if r.get("arm") not in unmeasured]
-    # Each arm runs the group's tasks it supports (jev-ultrafast skips tasks that need an answer), as the catalog says.
-    supported = {arm: [task for task, entry in required.items() if arm in entry["arms"]] for arm in arms}
     sha(run.get("git_sha"), "agent commit")
     sha(run.get("benchmark_runner_sha"), "runner")
     if run.get("git_dirty") is not False or run.get("benchmark_runner_dirty") is not False:
@@ -539,13 +576,7 @@ def invocation(
         slots[str(attempt["arm"]), str(task), repeat].append(attempt)
     if math.fsum(a["dollars"] for a in attempts if a["dollars"] is not None) > run["budget_usd"] + 1e-9:
         raise PublicationError(f"{group_id}: physical spend exceeds its approved campaign budget")
-    expected = {
-        (arm, task, repeat)
-        for arm in arms
-        for task in supported[arm]
-        if task in use
-        for repeat in range(INTERNAL_REPEATS)
-    }
+    expected = {(arm, task, repeat) for arm, task in use for repeat in range(INTERNAL_REPEATS)}
     if not expected <= slots.keys():
         raise PublicationError(f"{group_id}: the ledger does not cover every agent and repeat of the tasks it supplies")
 
@@ -571,7 +602,7 @@ def invocation(
         fields = (*SLOT_FIELDS, "run", "model", "text_model") if arms <= FASTBROWSE_ARMS else (*SLOT_FIELDS, "run")
         if any(chosen.get(k) != by_slot[arm, task, repeat].get(k) for k in fields):
             raise PublicationError(f"{where}: the results row differs from its selected attempt")
-        if task not in use:
+        if (arm, task) not in use:
             continue
         if chosen["task_version"] > required[task]["task_version"]:
             raise PublicationError(f"{where}: task version {chosen['task_version']} is newer than the catalog's")
@@ -580,10 +611,14 @@ def invocation(
             # compared, so listed apart until a run of the current version supplies the task.
             unjudged.append(UnjudgedSlot(task=task, repeat=repeat, arm=arm, reason="task-changed"))  # ty: ignore[invalid-argument-type]
             continue
-        if not isinstance(chosen.get("passed"), bool):
-            # The judge gave no verdict, so the slot measured nothing: it is listed apart, never a pass or a failure.
-            unjudged.append(UnjudgedSlot(task=task, repeat=repeat, arm=arm, reason=unjudged_reason(chosen)))  # ty: ignore[invalid-argument-type]
-            continue
+        verdict, failure = chosen.get("passed"), None
+        if not isinstance(verdict, bool):
+            reason = unjudged_reason(chosen)
+            if reason is not None:
+                # Our harness or judge failed, so the slot measured nothing: listed apart, never a pass or a failure.
+                unjudged.append(UnjudgedSlot(task=task, repeat=repeat, arm=arm, reason=reason))  # ty: ignore[invalid-argument-type]
+                continue
+            verdict, failure = False, SITE_BLOCKED if chosen.get("status") == "blocked" else SITE_REFUSED
         status = chosen.get("status") or chosen.get("normalized_status")
         rows.append(
             Row(
@@ -592,7 +627,8 @@ def invocation(
                 arm=arm,  # ty: ignore[invalid-argument-type]
                 status=text(status, f"{where}: status"),
                 completed=status == "complete" if arm in FASTBROWSE_ARMS else chosen.get("normalized_status") == "done",
-                score=1.0 if chosen["passed"] else 0.0,
+                score=1.0 if verdict else 0.0,
+                failure=failure,
                 seconds=math.fsum(a["seconds"] for a in tries),
                 # A null charge is "cost not reported"; the public contract must accept it for such an arm.
                 dollars=None if arm in COST_NOT_REPORTED else math.fsum(a["dollars"] for a in tries),
@@ -615,11 +651,10 @@ def invocation(
         run=run,
         arms=frozenset(arms),
         unmeasured=frozenset(unmeasured),
-        supported=supported,
         concurrency=concurrency,
-        tasks=sorted(use),
         rows=rows,
         unjudged=unjudged,
+        claims=frozenset(use),
         models={arm: {a["model"] for a in attempts if a["arm"] == arm and a.get("model")} for arm in arms},
         text_models={a["text_model"].strip() for a in attempts if isinstance(a.get("text_model"), str)},
         modes={arm: browser_identity(run, arm, group_id) for arm in arms},
@@ -630,9 +665,11 @@ def invocation(
 
 
 def internal_group(group_id: str, results: Path | Sequence[Path], catalog: dict[str, Any], digest: str) -> Collected:
-    """One internal group from the ledgers of one or more runs of a campaign, as the release gate scores it: each task
-    from the newest run that measured it in full, every arm at every repeat. A run that supplies no task is not read
-    further; every run that does is checked whole."""
+    """One internal group from the ledgers of one or more runs of a campaign, as the release gate scores it: each
+    arm's rows at a task from the newest run that measured that arm at every repeat of it. So the head-to-head may
+    take fastbrowse from a newer fastbrowse-only run, as the release gate pools them, while each competitor keeps its
+    own run; the runs must agree on each arm's browser, and every run is held to the one uncapped protocol and clock.
+    A run that supplies nothing is not read further; every run that does is checked whole."""
     other = INTERNAL[group_id]
     task_arms = GROUPS[group_id][3]
     required = {t["id"]: t for suite in catalog["suites"].values() for t in suite if task_arms <= set(t["arms"])}
@@ -644,23 +681,31 @@ def internal_group(group_id: str, results: Path | Sequence[Path], catalog: dict[
     if len({json.dumps(run, sort_keys=True) for run, _, _ in found}) != len(found):
         raise PublicationError(f"{group_id}: one run's ledger was given twice")
     used: list[Invocation] = []
-    claimed: set[str] = set()
+    claimed: set[tuple[str, str]] = set()
     for run, held, path in found:
         fresh = measured_in_full(run, held, required) - claimed
         if fresh:
-            used.append(invocation(group_id, path, catalog, required, fresh))
-            claimed |= fresh
-    if missing := sorted(required.keys() - claimed):
+            item = invocation(group_id, path, catalog, required, fresh)
+            used.append(item)
+            claimed |= item.claims
+    used = [item for item in used if item.claims]
+    arms = frozenset(arm for arm, _ in claimed)
+    supported = {arm: [task for task, entry in required.items() if arm in entry["arms"]] for arm in arms}
+    missing = sorted(f"{arm}/{task}" for arm in arms for task in supported[arm] if (arm, task) not in claimed)
+    if not arms or missing:
         raise PublicationError(
             f"{group_id}: the ledger does not cover every task, agent and repeat slot; no run measured "
-            f"{', '.join(missing[:5])}{' and more' if len(missing) > 5 else ''} in full"
+            f"{', '.join(missing[:5]) or 'any task'}{' and more' if len(missing) > 5 else ''} in full"
         )
-    if len({item.arms for item in used}) != 1 or len({json.dumps(item.modes, sort_keys=True) for item in used}) != 1:
-        raise PublicationError(f"{group_id}: its runs measured different agents or browsers; rerun them alike")
+    # An arm drove one browser in every run supplying the group, so a newer run cannot move the comparison onto another.
+    modes: dict[str, str] = {}
+    for item in used:
+        for arm in item.arms:
+            if modes.setdefault(arm, item.modes[arm]) != item.modes[arm]:
+                raise PublicationError(f"{group_id}: its runs drove {arm} on different browsers; rerun them alike")
     policies = set().union(*(item.policies for item in used))
     if len(policies) != 1:
         raise PublicationError(f"{group_id}: publication requires one matched semantic judge policy")
-    arms, supported, modes = used[0].arms, used[0].supported, used[0].modes
     unmeasured = set().union(*(item.unmeasured for item in used)) - arms
 
     def each(values: Iterable[Any]) -> str:
@@ -674,7 +719,7 @@ def internal_group(group_id: str, results: Path | Sequence[Path], catalog: dict[
     hosted = (
         f"Agent against agent on one set of {len(required)} tasks: {', '.join(present)}"
         + "".join(
-            f"; {arm} runs only the {len(supported[arm])} it supports"
+            f"; {arm} cannot run {len(required) - len(supported[arm])}, each a failure"
             for arm in present
             if len(supported[arm]) < len(required)
         )
@@ -705,7 +750,7 @@ def internal_group(group_id: str, results: Path | Sequence[Path], catalog: dict[
         TIMING_NOTE,
         f"Score is the recorded {OPUS_JUDGE.replace('/', ' ')} verdict; completion is the agent's own ending, recorded separately",
     ]
-    models = {arm: sorted(set().union(*(item.models[arm] for item in used))) for arm in arms}
+    models = {arm: sorted(set().union(*(item.models[arm] for item in used if arm in item.models))) for arm in arms}
     # One note for every arm's models keeps a pairing within the public contract's twelve notes.
     recorded = [f"{arm} {', '.join(found)}" for arm, found in sorted(models.items()) if found]
     if other == "browser-use" and "jev-ultrafast" in arms:
@@ -723,12 +768,14 @@ def internal_group(group_id: str, results: Path | Sequence[Path], catalog: dict[
     sources = [
         Source(
             run_id=text(item.run.get("run_id"), f"{group_id}: run id"),
+            arm=arm,  # ty: ignore[invalid-argument-type]
             agent_sha=item.run["git_sha"],
             runner_sha=item.run["benchmark_runner_sha"],
             measured_on=item.run["run_started"][:10],
-            tasks=item.tasks,
+            tasks=sorted(task for claimed_arm, task in item.claims if claimed_arm == arm),
         )
         for item in used
+        for arm in sorted({a for a, _ in item.claims})
     ]
     group = build_group(
         group_id,
@@ -739,6 +786,7 @@ def internal_group(group_id: str, results: Path | Sequence[Path], catalog: dict[
         used[0].run,
         unjudged=sorted((slot for item in used for slot in item.unjudged), key=lambda s: (s.arm, s.task, s.repeat)),
         sources=sources,
+        excluded=exclusions(arms, required, catalog),
     )
     newest = used[0].run
     return Collected(
@@ -1287,10 +1335,12 @@ def with_reference(item: Collected, path: Path | None, catalog: dict[str, Any]) 
             f"{group.id}: the competitor reference no longer matches the catalog on {', '.join(stale)}; "
             "dispatch the campaign once with refresh_competitors"
         )
+    arms = {r.arm for r in group.rows} | {a.arm for a in reference.arms}
     merged = group.model_copy(
         update={
             "rows": sorted([*group.rows, *reference.rows], key=lambda r: (r.arm, r.task, r.repeat)),
             "references": reference.arms,
+            "excluded": exclusions(arms, group.task_ids, catalog),
         }
     )
     return dataclasses.replace(item, group=Group.model_validate(merged.model_dump(mode="json")))
@@ -1298,6 +1348,10 @@ def with_reference(item: Collected, path: Path | None, catalog: dict[str, Any]) 
 
 Ledgers = Path | Sequence[Path] | None
 """One run's ledger of a group, or the ledgers of several runs of one campaign (`internal_group`)."""
+
+
+def _ledgers(ledgers: Ledgers) -> list[Path]:
+    return [] if ledgers is None else [ledgers] if isinstance(ledgers, Path) else list(ledgers)
 
 
 def export(
@@ -1329,7 +1383,9 @@ def export(
             internal_group(name, source, catalog_data, digest)
             for name, source in (
                 ("internal-fastbrowse", internal_fastbrowse),
-                ("internal-hosted", hosted),
+                # fastbrowse's rows at a head-to-head task may come from a newer fastbrowse-only run, as the release
+                # gate pools them; each competitor keeps its own run.
+                ("internal-hosted", [*_ledgers(hosted), *_ledgers(internal_fastbrowse)] if hosted else None),
                 ("internal-ultrafast", ultrafast),
                 ("internal-backend", backend),
             )

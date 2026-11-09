@@ -77,12 +77,15 @@ class Row(PublicModel):
     """Opening the browser session, totalled like `seconds` and outside them."""
     session_close_seconds: Amount | None = None
     """Closing the browser session, totalled like `seconds` and outside them."""
+    failure: Limit | None = None
+    """Why a failed slot failed when the verdict alone does not say: a run the site's bot check refused is the
+    agent's failure, since another agent may get past it."""
 
     @model_serializer(mode="wrap")
     def without_unrecorded_timing(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         """A row from before these fields keeps its old bytes, so approved candidates still match."""
         data = handler(self)
-        for name in ("timing_basis", "session_open_seconds", "session_close_seconds", "llm_calls_basis"):
+        for name in ("timing_basis", "session_open_seconds", "session_close_seconds", "llm_calls_basis", "failure"):
             if data.get(name) is None:
                 data.pop(name, None)
         return data
@@ -127,12 +130,25 @@ class UnjudgedSlot(PublicModel):
     reason: Literal["evidence-unavailable", "no-verdict", "task-changed"]
 
 
+class ExcludedTask(PublicModel):
+    """A task of the group's task set the catalog says this arm cannot run, with the catalog's reason. It stands for
+    `repeats` failed attempts in every pass rate: a comparison across browser agents counts a capability one lacks
+    against it. It ran nothing, so it has no time or cost, and those are averaged over the rows."""
+
+    arm: Arm
+    task: Identifier
+    reason: Annotated[str, Field(min_length=1, max_length=500)]
+
+
 class Source(PublicModel):
-    """One campaign run a group's rows came from, and the tasks it supplied. A late fix reruns only the tasks it
-    affects, so a group may take its tasks from more than one run of a campaign: each task from the newest run that
-    measured it in full. `run_id` is the run's recorded id, which its traces in the private Langfuse project carry."""
+    """One campaign run a group's rows of one arm came from, and the tasks it supplied for that arm. A late fix reruns
+    only the tasks it affects, so a group may take an arm's tasks from more than one run of a campaign: each from the
+    newest run that measured the arm at every repeat of it. The head-to-head may so take fastbrowse from a newer
+    fastbrowse-only run while each competitor keeps its own. `run_id` is the run's recorded id, which its traces in the
+    private Langfuse project carry."""
 
     run_id: Identifier
+    arm: Arm
     agent_sha: Sha
     runner_sha: Sha
     measured_on: Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2}$")]
@@ -220,6 +236,8 @@ class Group(PublicModel):
     rows: list[Row]
     blocked: list[BlockedSlot] = []
     unjudged: list[UnjudgedSlot] = []
+    excluded: list[ExcludedTask] = []
+    """Each (arm, task) of the task set the catalog says the arm cannot run, sorted by arm and task."""
     references: list[ReferenceArm] = []
     """Which arms' rows come from the fixed competitor reference; an arm not named here was measured on this build."""
     sources: list[Source] = []
@@ -228,22 +246,28 @@ class Group(PublicModel):
 
     @model_serializer(mode="wrap")
     def without_empty_lists(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        """A group with nothing blocked, unjudged, referenced or sourced keeps its old bytes, so approved candidates
-        still match."""
+        """A group with nothing blocked, unjudged, excluded, referenced or sourced keeps its old bytes, so approved
+        candidates still match."""
         data = handler(self)
-        for name in ("blocked", "unjudged", "references", "sources"):
+        for name in ("blocked", "unjudged", "excluded", "references", "sources"):
             if not data[name]:
                 del data[name]
         return data
 
     @model_validator(mode="after")
     def provenance(self) -> Self:
-        """Each task comes from exactly one source, and the group names the newest one's build."""
+        """Each arm's task comes from exactly one source, and the group names the newest one's build. An arm whose rows
+        are a fixed competitor reference has no source."""
         if not self.sources:
             return self
-        tasks = [task for source in self.sources for task in source.tasks]
-        if len(tasks) != len(set(tasks)) or set(tasks) != set(self.task_ids):
-            raise ValueError("the sources must supply every task of the group exactly once")
+        referenced = {r.arm for r in self.references}
+        for arm in {r.arm for r in (*self.rows, *self.blocked, *self.unjudged)} - referenced:
+            tasks = [task for source in self.sources if source.arm == arm for task in source.tasks]
+            own = {r.task for r in (*self.rows, *self.blocked, *self.unjudged) if r.arm == arm}
+            if len(tasks) != len(set(tasks)) or set(tasks) != own:
+                raise ValueError(f"the sources must supply every task of {arm} exactly once")
+        if {source.arm for source in self.sources} & referenced:
+            raise ValueError("an arm from the competitor reference has no source run")
         if (self.agent_sha, self.runner_sha) != (self.sources[0].agent_sha, self.sources[0].runner_sha):
             raise ValueError("a group with sources names the newest source's agent and runner build")
         return self
@@ -275,9 +299,9 @@ class Group(PublicModel):
     def check_slots(self, arms: tuple[Arm, ...]) -> None:
         """The arms depend on the candidate's schema, so the candidate checks each group's slots against them.
 
-        Each measured arm has one row, one blocked slot or one unjudged slot for every repeat of every task it runs:
-        the whole task set, or for a partial arm the part of it its slots name, which `check_catalog` holds to the
-        catalog. Its cost is reported on every row or on none."""
+        Each measured arm has one row, one blocked slot or one unjudged slot for every repeat of every task it runs,
+        and an excluded entry for every other task of the task set: only a partial arm has those, and
+        `check_catalog` holds them to the catalog. Its cost is reported on every row or on none."""
         spec = COVERAGE[self.id]
         measured = self.measured_arms(arms)
         ungraded = (*self.blocked, *self.unjudged)
@@ -287,13 +311,19 @@ class Group(PublicModel):
             raise ValueError(f"{self.id} must measure {', '.join(missing)}")
         if {slot.arm for slot in ungraded} - set(measured):
             raise ValueError(f"{self.id} has an ungraded slot for an arm with no graded row")
+        pairs = [(e.arm, e.task) for e in self.excluded]
+        if pairs != sorted(set(pairs)) or {arm for arm, _ in pairs} - (set(measured) & set(spec.partial)):
+            raise ValueError(f"{self.id}: excluded tasks are unique, sorted, and only of a measured partial arm")
         for arm in measured:
             rows = [r for r in self.rows if r.arm == arm]
             slots = [(r.task, r.repeat) for r in (*rows, *(b for b in ungraded if b.arm == arm))]
-            tasks = {task for task, _ in slots} if arm in spec.partial else set(self.task_ids)
-            expected = {(task, repeat) for task in tasks for repeat in range(self.repeats)}
-            if len(slots) != len(set(slots)) or set(slots) != expected or not tasks <= set(self.task_ids):
+            tasks = {task for task, _ in slots}
+            excluded = {task for excluded_arm, task in pairs if excluded_arm == arm}
+            expected = {(task, repeat) for task in set(self.task_ids) - excluded for repeat in range(self.repeats)}
+            if len(slots) != len(set(slots)) or set(slots) != expected or not excluded <= set(self.task_ids):
                 raise ValueError("every scheduled slot must have exactly one measured row")
+            if tasks & excluded:
+                raise ValueError(f"{self.id}/{arm} has rows for a task it is excluded from")
             if len({r.dollars is None for r in rows}) > 1:
                 raise ValueError(f"{self.id}/{arm} reports its cost on every row or on none")
 
@@ -475,10 +505,16 @@ def check_catalog(candidate: Candidate, path: Path) -> None:
         if set(group.task_ids) != required or group.source_sha256 != candidate.catalog_sha256:
             kind = "fastbrowse" if group.id == "internal-fastbrowse" else "matched"
             raise ValueError(f"internal rows must cover the exact {kind} catalog")
+        excluded = []
         for arm in group.measured_arms(partial):
             own = {task.id for task in tasks if task.id in required and eligible(arm, task)}
             if {r.task for r in (*group.rows, *group.blocked, *group.unjudged) if r.arm == arm} != own:
                 raise ValueError(f"{group.id}/{arm} must run exactly the tasks of its set the catalog lists it for")
+            excluded += [
+                (arm, task.id, task.excluded.get(arm)) for task in tasks if task.id in required and task.id not in own
+            ]
+        if [(e.arm, e.task, e.reason) for e in group.excluded] != sorted(excluded, key=lambda e: (e[0], e[1])):
+            raise ValueError(f"{group.id}: excluded tasks must be the catalog's, with its reasons")
 
 
 CATALOG_PATH = "src/fastbrowse/evals/benchmark-catalog.json"
