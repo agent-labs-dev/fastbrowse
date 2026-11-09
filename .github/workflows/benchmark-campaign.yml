@@ -104,7 +104,7 @@ on:
         type: string
         default: ""
       only:
-        description: Smoke only. Space separated task ids of the chosen suites to run instead of all of them
+        description: Space separated task ids of the chosen suites to run instead of all of them. Outside a smoke it reruns the tasks a fix affects for the release gate, and builds no candidate
         required: false
         type: string
         default: ""
@@ -208,9 +208,10 @@ jobs:
           case "$OFFICIAL_RUNS" in
             *[!0-9\ ]*) echo "::error::official_runs must be run ids separated by spaces"; exit 1 ;;
           esac
-          # A published comparison covers every task of its suites under one setting, so only a smoke narrows either.
-          if test "$SMOKE" != true && { test -n "$ONLY" || test -n "$RUN_CONCURRENCY" || test -n "$EXTRA_ARMS"; }; then
-            echo "::error::only, concurrency and extra_arms need smoke"; exit 1
+          # A published comparison covers every task of its suites under one setting, so only a smoke changes the
+          # setting. `only` may narrow a release run: the gate scores each task on its newest run (scripts/release_gate.py).
+          if test "$SMOKE" != true && { test -n "$RUN_CONCURRENCY" || test -n "$EXTRA_ARMS"; }; then
+            echo "::error::concurrency and extra_arms need smoke"; exit 1
           fi
           for arm in $EXTRA_ARMS; do
             case "$arm" in
@@ -245,9 +246,9 @@ jobs:
             echo "run_on=$(date -u +%F)"
           } >> "$GITHUB_OUTPUT"
       # The stage job needs a passing Evals dispatch on this build, so a campaign that will stage is refused here,
-      # however it was started, rather than after the budget is spent. A smoke never stages.
+      # however it was started, rather than after the budget is spent. A smoke or a narrowed rerun never stages.
       - name: Require an Evals dispatch on the build
-        if: ${{ !(inputs.smoke || github.event.client_payload.smoke == true) }}
+        if: ${{ !(inputs.smoke || github.event.client_payload.smoke == true) && !(inputs.only || github.event.client_payload.only) }}
         env:
           GH_TOKEN: ${{ github.token }}
           FIXTURE_SHA: ${{ steps.pins.outputs.fastbrowse_sha }}
@@ -467,7 +468,8 @@ jobs:
   stage:
     name: Build the candidate
     needs: [resolve, campaign]
-    if: ${{ !(inputs.smoke || github.event.client_payload.smoke == true) }}
+    # A candidate is one build's full comparison, so a smoke or a narrowed rerun builds none.
+    if: ${{ !(inputs.smoke || github.event.client_payload.smoke == true) && !(inputs.only || github.event.client_payload.only) }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read

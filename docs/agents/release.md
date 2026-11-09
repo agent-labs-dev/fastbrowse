@@ -7,11 +7,13 @@ Versions are patch-by-patch unless the maintainer says otherwise, and every one 
    and the Rust workspace the same number. Open a `chore: <x.y.z>` PR. CI fails if the version has no entry or
    npm or Cargo disagrees with it.
 3. Before tagging, measure the release commit: `gh workflow run evals.yml --ref <sha>`, and for a minor release
-   (or a patch tagged with the line `Benchmarks: run`) the campaign `release-<x.y.z>` on the same commit, every
-   group and suite, three repeats. `python3 scripts/release_gate.py --ref <sha> --version <x.y.z>` says whether
-   they pass: no task's pass rate below the campaign in `docs/results/release-baseline.json`, and the median run
-   time and mean cost below it. A squash merge keeps the pull request's tree, so the head's runs count for the
-   merged commit.
+   (or a patch tagged with the line `Benchmarks: run`) the campaign `release-<x.y.z>`: every group and suite,
+   three repeats, `refresh_competitors` off unless the site needs new competitor rows. After a later fix, rerun
+   only the tasks it affects (`only`, with the same groups and repeats); be generous when the fix changes a
+   prompt every task sees. `python3 scripts/release_gate.py --ref <sha> --version <x.y.z>` scores each task on
+   the newest campaign run that measured it three times and says whether they pass: no task's pass rate below
+   the campaign in `docs/results/release-baseline.json`, and the median run time and mean cost below it. The
+   fixture Evals run must be on the release commit's tree; a squash merge keeps the pull request's tree.
 4. Once the maintainer says to release, `git tag v<x.y.z> <sha> && git push origin v<x.y.z>`. The tag's workflow
    publishes once the sdist, the wheels and the five binaries build and pass their smoke tests and its `gate`
    job finds those evals passing on the tagged tree. Then point `docs/results/release-baseline.json` at the new

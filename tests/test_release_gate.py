@@ -47,11 +47,33 @@ def test_a_run_no_faster_or_cheaper_fails_the_release() -> None:
     assert [failure.split()[0] for failure in failures] == ["median", "mean"]
 
 
-def test_a_task_left_out_or_run_fewer_times_fails_but_a_new_version_is_only_noted() -> None:
+def test_a_task_left_out_fails_but_a_new_version_is_only_noted() -> None:
     candidate = [row("a", True, 8, 0.01), row("b", True, 8, 0.01, version=2), row("b", True, 8, 0.01, version=2)]
     failures, notes = gate.compare(candidate, [*BASELINE, row("c", True)])
-    assert failures == ["core/a: 1 runs, the baseline has 2", "core/c: not run"]
+    assert failures == ["core/c: not run"]
     assert "core/b: version 1 -> 2, not compared" in notes
+
+
+def test_each_task_is_scored_on_the_newest_campaign_run_that_measured_it_three_times(monkeypatch) -> None:
+    def measured(sha: str, task: str, passed: bool, times: int = 3):
+        return [{**row(task, passed), "run": {"git_sha": sha}} for _ in range(times)]
+
+    ledgers = {
+        3: measured("cccccccc", "a", True, times=1),  # a smoke: too few runs to score
+        2: measured("bbbbbbbb", "a", True),  # the targeted rerun of a fix
+        1: [*measured("aaaaaaaa", "a", False), *measured("aaaaaaaa", "b", True)],  # the full campaign
+        0: [{**r, "task_version": 0} for r in measured("99999999", "b", False)],  # b before its task changed
+    }
+    titles = {4: "release-9.9.9", 3: "release-1.0.0", 2: "release-1.0.0", 1: "release-1.0.0", 0: "release-1.0.0"}
+    runs = [{"databaseId": i, "displayTitle": f"Benchmark campaign {name}"} for i, name in titles.items()]
+    monkeypatch.setattr(gate, "_runs", lambda *_: runs)
+    monkeypatch.setattr(gate, "ledger_rows", lambda _, run_id: ledgers[run_id])
+    rows, used = gate.campaign_rows("o/r", "release-1.0.0")
+    assert {(r["task"], r["run"]["git_sha"], r["passed"]) for r in rows} == {
+        ("a", "bbbbbbbb", True),
+        ("b", "aaaaaaaa", True),
+    }
+    assert used == ["run 2 on bbbbbbbb: 1 tasks", "run 1 on aaaaaaaa: 1 tasks"]
 
 
 def test_other_arms_are_not_the_release() -> None:

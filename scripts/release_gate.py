@@ -1,16 +1,17 @@
-"""Gate a release on evals of exactly the tree it tags.
+"""Gate a release on its fixture evals and its benchmark campaign.
 
 The release workflow runs this before it publishes anything. A release passes when:
 
 - a dispatched Evals run on a commit with the tag's tree succeeded, so every fixture task passed every repeat;
-- for a minor release, or a patch whose tag message has the line `Benchmarks: run`, the benchmark campaign
-  `release-<version>` measured that same tree in full, and against the campaign named in
-  `docs/results/release-baseline.json` no task's pass rate fell, and the median run time and the mean cost per
+- for a minor release, or a patch whose tag message has the line `Benchmarks: run`, the runs of the benchmark
+  campaign `release-<version>` together measured every task at least three times, and against the campaign named
+  in `docs/results/release-baseline.json` no task's pass rate fell, and the median run time and the mean cost per
   run are both lower.
 
-The campaign is matched by its ledger, not by its name alone: every fastbrowse row records the commit it measured
-(`run.git_sha`), and that commit's tree must be the tag's. So a campaign of the pull request's head counts for the
-squash-merged commit with the same tree, and a campaign of any other tree does not.
+Fixtures are cheap, so they must pass on the exact tree. Live tasks are not, so a fix late in a release reruns only
+the tasks it affects (the campaign's `only` input): each task is scored on the newest campaign run that measured it
+at least three times. The gate prints the run and the commit behind every task, and every row's trace is in
+Langfuse, so what each task was measured on stays visible.
 
     uv run python scripts/release_gate.py v0.10.0            # what the release workflow runs
     uv run python scripts/release_gate.py --ref <sha>        # before tagging: would this commit pass?
@@ -59,7 +60,7 @@ def compare(candidate: list[dict[str, Any]], baseline: list[dict[str, Any]]) -> 
     """The reasons the candidate fails against the baseline, and notes on what could not be compared.
 
     A task whose version changed since the baseline measures something else, so it is noted rather than compared.
-    A baseline task the candidate did not run, or ran fewer times, fails: a release is measured in full.
+    A baseline task the candidate did not run fails: a release measures every task.
     """
     failures: list[str] = []
     notes: list[str] = []
@@ -74,9 +75,7 @@ def compare(candidate: list[dict[str, Any]], baseline: list[dict[str, Any]]) -> 
             else:
                 notes.append(f"{task.suite}/{task.task}: version {task.version} -> {moved.version}, not compared")
             continue
-        if len(now) < len(before):
-            failures.append(f"{task.suite}/{task.task}: {len(now)} runs, the baseline has {len(before)}")
-        elif _rate(now) < _rate(before):
+        if _rate(now) < _rate(before):
             failures.append(
                 f"{task.suite}/{task.task}: passed {sum(bool(r.get('passed')) for r in now)}/{len(now)}, "
                 f"the baseline {sum(bool(r.get('passed')) for r in before)}/{len(before)}"
@@ -133,19 +132,31 @@ def ledger_rows(repo: str, run_id: int) -> list[dict[str, Any]]:
         ]
 
 
-def campaign_rows(repo: str, campaign: str, tree: str) -> tuple[int, list[dict[str, Any]]]:
-    """The newest finished run of `campaign` whose fastbrowse rows all measured `tree`."""
-    trees: dict[str, str] = {}
+MIN_RUNS = 3
+"""A task's pass rate rests on at least this many runs, as a published comparison does."""
+
+
+def campaign_rows(repo: str, campaign: str) -> tuple[list[dict[str, Any]], list[str]]:
+    """Each task's rows from the newest finished run of `campaign` that measured it `MIN_RUNS` times or more, and a
+    line per run used naming the commits it measured and how many tasks it supplied. An older run never supplies a
+    task a newer one measured, even at another task version."""
+    chosen: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    used: list[str] = []
     for run in _runs(repo, "benchmark-campaign.yml", "--status", "completed"):
         if run["displayTitle"].split()[-1:] != [campaign]:
             continue
-        rows = [row for row in ledger_rows(repo, int(run["databaseId"])) if row.get("arm") == ARM]
-        shas = {row["run"]["git_sha"] for row in rows}
-        for sha in shas - trees.keys():
-            trees[sha] = _tree(repo, sha)
-        if rows and {trees[sha] for sha in shas} == {tree}:
-            return int(run["databaseId"]), rows
-    raise GateError(f"no finished campaign {campaign} measured this tree")
+        fresh = {
+            (task.suite, task.task): rows
+            for task, rows in rows_by_task(ledger_rows(repo, int(run["databaseId"]))).items()
+            if (task.suite, task.task) not in chosen and len(rows) >= MIN_RUNS
+        }
+        if fresh:
+            chosen.update(fresh)
+            shas = sorted({row["run"]["git_sha"][:8] for rows in fresh.values() for row in rows})
+            used.append(f"run {run['databaseId']} on {', '.join(shas)}: {len(fresh)} tasks")
+    if not chosen:
+        raise GateError(f"no finished campaign {campaign} measured any task {MIN_RUNS} times")
+    return [row for rows in chosen.values() for row in rows], used
 
 
 def measures_itself(repo: str, tag: str, version: str) -> bool:
@@ -179,12 +190,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{args.tag} is a patch release without 'Benchmarks: run' in its tag message: no campaign needed")
             return 0
         baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
-        run_id, candidate = campaign_rows(args.repo, f"release-{version}", tree)
+        candidate, used = campaign_rows(args.repo, f"release-{version}")
         failures, notes = compare(candidate, ledger_rows(args.repo, int(baseline["campaign_run"])))
     except GateError as error:
         print(f"::error::{error}", file=sys.stderr)
         return 1
-    print(f"campaign: run {run_id} against {baseline['version']} (run {baseline['campaign_run']})")
+    print(f"campaign release-{version} against {baseline['version']} (run {baseline['campaign_run']}):")
+    for line in used:
+        print(f"  {line}")
     for note in notes:
         print(f"  {note}")
     for failure in failures:

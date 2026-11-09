@@ -5,7 +5,8 @@ name: Release
 #
 # A tag publishes once the sdist, the wheels and the binaries are green and the evals of the tagged tree pass
 # (`gate`): a dispatched Evals run on that tree, and for a minor release, or a patch whose tag message has the line
-# `Benchmarks: run`, the campaign `release-<version>` measured in full and compared with the last release's.
+# `Benchmarks: run`, the runs of the campaign `release-<version>`, which together measure every task, compared with
+# the last release's.
 # scripts/release_gate.py says what passing means. The evals run before the tag, so the numbers a release is
 # published with are the ones it was gated on.
 #
