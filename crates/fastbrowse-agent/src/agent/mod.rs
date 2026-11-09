@@ -48,8 +48,9 @@ use crate::policy::StepContext;
 use crate::retrieval::{ComposedAnswer, cited_quote, compose, draft_answer, marked_partial, partial_answer};
 use crate::verification::RecordSchema;
 
-/// Long enough for a browser-verification page to run its check and hand over, short enough that a page which never
-/// moves still ends as needs_login well inside a run's time budget.
+/// How long a page that has not moved is watched before the run acts on it: a bot check that never clears then ends
+/// `blocked`, and any other page goes to the step decision. Fitted to PyPI's script-only browser check, not derived
+/// from anything the run knows; replacing it with a signal is open in #868.
 const INTERSTITIAL_SECONDS: f64 = 12.0;
 /// A fresh observation can wait three seconds for loading, and a background capture needs time to activate.
 const ENDING_FRAME_SECONDS: f64 = 6.0;
@@ -290,7 +291,8 @@ impl Agent {
                 self.store_recipe(state, sink);
             }
             if let (Some(state), Some(page)) = (slot.take(), self.raw()) {
-                self.seen().resume = Some(Resume { state, url: page.url });
+                let url = self.page.browser_address().unwrap_or(page.url);
+                self.seen().resume = Some(Resume { state, url });
             }
             ended
         });
@@ -370,18 +372,24 @@ impl Agent {
         // `start=None` leaves the browser where it is, which is what a caller stepping a run on from a page it opened
         // itself wants. `choose_start` is the other case: a caller with a goal and no page at all, who wants the first
         // address worked out from the task.
-        let opening = match start {
-            Some(start) => Some(start.to_string()),
-            None if options.choose_start => Some(self.first_page(task, ledger).await?),
-            None => None,
+        let open = async {
+            let opening = match start {
+                Some(start) => Some(start.to_string()),
+                None if options.choose_start => Some(self.first_page(task, ledger).await?),
+                None => None,
+            };
+            if let Some(opening) = &opening {
+                self.trace.phase("open", self.page.navigate(opening, None)).await?;
+            }
+            if let (None, Some(opening)) = (start, &opening) {
+                // The caller gave a goal and no page, so this address was worked out from the task.
+                self.front_page_if_blank(opening).await?;
+            }
+            Ok::<_, Flow>(opening)
         };
-        if let Some(opening) = &opening {
-            self.trace.phase("open", self.page.navigate(opening, None)).await?;
-        }
-        if let (None, Some(opening)) = (start, &opening) {
-            // The caller gave a goal and no page, so this address was worked out from the task.
-            self.front_page_if_blank(opening).await?;
-        }
+        let given = state::with_inputs(task, &options.inputs);
+        let (opening, dates) = tokio::join!(open, self.task_dates(&given, ledger));
+        let (opening, dates) = (opening?, dates?);
         self.tell_page_ready().await;
         let mut state = RunState::new(
             task.to_string(),
@@ -390,6 +398,7 @@ impl Agent {
             options.authorization.clone().unwrap_or_default(),
             ledger.clone(),
         );
+        state.dates = dates;
         state.replay = options.recipe.clone().map(replay::Replay::new);
         state.context = options.context.clone();
         state.started_url = opening.clone();
@@ -402,7 +411,20 @@ impl Agent {
     }
 
     /// The result of a run a step stopped: the error the loop raised, as the status it means.
-    async fn stopped(&self, flow: Flow, state: Option<&mut RunState>, ledger: &Ledger) -> RunResult {
+    async fn stopped(&self, flow: Flow, mut state: Option<&mut RunState>, ledger: &Ledger) -> RunResult {
+        let schema = state.as_deref_mut().and_then(|state| state.schema_partial.take());
+        let mut result = self.stopped_result(flow, state, ledger).await;
+        // The schema was filled before the draft was sent back; a rewrite that fails too does not unfill it.
+        if let Some(extraction) = schema
+            && result.data.is_null()
+        {
+            result.data = extraction.data.unwrap_or(Value::Null);
+            result.evidence.extend(extraction.evidence);
+        }
+        result
+    }
+
+    async fn stopped_result(&self, flow: Flow, state: Option<&mut RunState>, ledger: &Ledger) -> RunResult {
         let (flow, exhausted) = match flow {
             Flow::Agent(AgentError::Budget(error)) => {
                 (Flow::Stop(state::Stop::new(Status::BudgetExceeded, error.to_string())), Some(error.budget))
@@ -446,19 +468,23 @@ impl Agent {
                 let notes = if state.compose { state.notes_to_compose() } else { state.notes.clone() };
                 // Records listed one after another answer no count: a list read to its end came back as a dump of it.
                 let reporting = ledger.for_answer();
+                let steps = state.executed_steps();
                 if state.compose
-                    && let Ok(composed) = compose(&*self.jev, &*self.llm, &state.task, &notes, Some(&reporting)).await
+                    && let Ok(composed) =
+                        compose(&*self.jev, &*self.llm, &state.task, &notes, Some(&reporting), &steps).await
                     && !composed.claims.is_empty()
                 {
                     // Only a rejected composition stops a run unverified, so one that passes every claim and coverage
                     // check answers what that stop was about, as it would have at done.
-                    if stop.status == Status::Unverified && composed.problem.is_none() {
+                    // A step the site refused is still not carried out, however well the answer holds (#779).
+                    if stop.status == Status::Unverified && composed.problem.is_none() && !state.refused {
                         let result =
                             self.answered(&composed, &notes, Some(state), ledger, Status::Complete, None, None);
                         let requested = state.output_intent == state::OutputIntent::TextAndImage;
                         return self.ending_frame(result, requested).await;
                     }
                     let partial = marked_partial(composed);
+                    let error = error.or_else(|| state.refused.then(|| self.redact(finishing::REFUSED)));
                     return self.answered(&partial, &notes, Some(state), ledger, stop.status, error, budget);
                 }
                 return self.partial_result(&notes, Some(state), ledger, stop.status, error, budget);
@@ -512,8 +538,25 @@ impl Agent {
         ledger: &Ledger,
     ) -> RunResult {
         self.event("run_failed", || Map::from_iter([("kind".into(), kind.into())]));
-        let message = self.redact(&message);
-        let status = if unavailable { Status::Unavailable } else { Status::Error };
+        let mut message = self.redact(&message);
+        // `unavailable` tells a caller the same run may pass later, which is safe only while the run has changed
+        // nothing: running it again after a post that went through posts twice.
+        let changed: Vec<String> = state
+            .into_iter()
+            .flat_map(|state| &state.history)
+            .filter(|entry| entry.changed_site())
+            .map(|entry| {
+                let operation = entry.operation.map_or("", |operation| operation.as_str());
+                entry.target.as_deref().map_or_else(|| operation.to_string(), |target| format!("{operation} {target}"))
+            })
+            .collect();
+        let status = if unavailable && changed.is_empty() { Status::Unavailable } else { Status::Error };
+        if unavailable && !changed.is_empty() {
+            let steps = changed.join("; ");
+            message = format!(
+                "{message}. This came after steps that may have changed the site ({steps}), so check the site before running the task again."
+            );
+        }
         let notes = state.map(|state| state.notes.clone()).unwrap_or_default();
         self.partial_result(&notes, state, ledger, status, Some(message), None)
     }
@@ -751,12 +794,13 @@ impl Agent {
             }
         }
         // Historical text is fitted from the end, before the current credential availability fact.
-        if let Some(source) = self.navigation_fact(state, observation) {
+        if let Some(source) = self.navigation_fact(state, observation, check_login) {
             page_facts.push(source);
         }
         Ok(StepContext {
             task: state.task.clone(),
             subgoal: state.hint.clone(),
+            dates: state.dates.clone(),
             notes: self.decision_notes(state),
             answered_in_notes: state.notes.answered(),
             history: state.history.clone(),
@@ -792,10 +836,23 @@ impl Agent {
     }
 
     /// A wall on the route just opened does not describe the alternatives observed before it.
-    fn navigation_fact(&self, state: &RunState, observation: &Observation) -> Option<String> {
+    ///
+    /// The source page's text and controls are given only while a wall is suspected on the destination: the sign-in
+    /// question is asked on this step, the destination's sign-in reading is above even odds, or it answered with a
+    /// 4xx. The sign-in judgment is what uses them. Otherwise the fact names where the run came from.
+    fn navigation_fact(&self, state: &RunState, observation: &Observation, check_login: bool) -> Option<String> {
         let (destination, source) = state.navigation_from.as_ref()?;
         if *destination != state::read_key(observation) {
             return None;
+        }
+        let wall = check_login
+            || state.login_readings.get(destination).is_some_and(|p| *p > fastbrowse_core::decision::EVEN_ODDS)
+            || observation.response_status.is_some_and(|status| (400..500).contains(&status));
+        if !wall {
+            let previous = json!({"page": {"url": self.mask(&source.url), "title": self.mask(&source.title)}});
+            return Some(format!(
+                "The latest navigation began on this observed page. This source is historical context, not content of the current page: {previous}"
+            ));
         }
         let controls: Vec<Value> = source
             .controls

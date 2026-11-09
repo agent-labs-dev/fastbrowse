@@ -1376,6 +1376,56 @@ async fn test_a_wait_lasts_until_the_page_changes_by_itself() {
     h.close().await;
 }
 
+// A Wait while audio played was told the page did not change, so a run pressed Play and Pause to its step limit
+// without seeing the clock it had to confirm move.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_while_a_player_plays_is_a_change() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    let script = r#"{
+        const rate = 8000, n = rate * 30, wav = new DataView(new ArrayBuffer(44 + n));
+        const tag = (at, s) => [...s].forEach((c, i) => wav.setUint8(at + i, c.charCodeAt(0)));
+        tag(0, 'RIFF'); wav.setUint32(4, 36 + n, true); tag(8, 'WAVEfmt '); wav.setUint32(16, 16, true);
+        wav.setUint16(20, 1, true); wav.setUint16(22, 1, true); wav.setUint32(24, rate, true);
+        wav.setUint32(28, rate, true); wav.setUint16(32, 1, true); wav.setUint16(34, 8, true);
+        tag(36, 'data'); wav.setUint32(40, n, true); new Uint8Array(wav.buffer, 44).fill(128);
+        const player = document.createElement('audio');
+        player.controls = true; player.muted = true; player.setAttribute('aria-label', 'Lesson audio');
+        player.src = URL.createObjectURL(new Blob([wav.buffer], { type: 'audio/wav' }));
+        const play = document.createElement('button');
+        play.textContent = 'Play lesson';
+        play.onclick = () => player.play();
+        document.body.append(play, player);
+    } true"#;
+    assert_eq!(eval_active(&h.page, script).await, json!(true));
+    // Chrome plays only after a user gesture, so the player starts from a click the way a run would start it.
+    let page = h.observe().await;
+    let play = find(&page, "Play lesson").clone();
+    h.page.act(&Action { target_id: Some(play.id), ..Action::new(Operation::Click) }, &page).await.expect("play");
+    let mut before = h.observe().await;
+    for _ in 0..50 {
+        if before.media.first().is_some_and(|m| !m.paused && m.elapsed_seconds > 0.0) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        before = h.observe().await;
+    }
+    assert!(before.media.first().is_some_and(|m| !m.paused), "{:?}", before.media);
+    let result = h.page.act(&Action::new(Operation::Wait), &before).await.expect("wait");
+    assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{result:?}");
+    // The clock is no content: it marks no read out of date and counts as no progress.
+    assert!(!result.page_changed, "{result:?}");
+    assert_eq!(eval_active(&h.page, "document.querySelector('audio').pause(); true").await, json!(true));
+    let paused = h.observe().await;
+    let result = h.page.act(&Action::new(Operation::Wait), &paused).await.expect("wait");
+    assert_eq!(
+        (result.outcome, result.detail.as_deref()),
+        (StepOutcome::Executed, Some("the page did not change")),
+        "{result:?}"
+    );
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_an_input_event_to_a_hung_page_fails_soon_while_the_browser_answers() {
     let Some(h) = harness().await else { return };
@@ -1433,5 +1483,80 @@ async fn test_a_clock_beside_a_control_does_not_make_it_stale() {
     }
     assert_eq!(outcomes.last(), Some(&StepOutcome::Executed), "{outcomes:?}");
     assert_eq!(eval_active(&h.page, "window.paused").await, json!(1));
+    h.close().await;
+}
+
+/// A multiple select labelled Topics, with `selected` chosen, observed.
+async fn topics(h: &common::Harness, selected: &str, script: &str) -> fastbrowse_core::page::Observation {
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        &format!(
+            "document.body.innerHTML = '<label>Topics <select id=topics multiple><option>Alpha</option>\
+             <option>Beta</option><option>Gamma</option></select></label>'; \
+             const topics = document.getElementById('topics'); \
+             for (const o of topics.options) o.selected = {selected}.includes(o.label); {script} true"
+        ),
+    )
+    .await;
+    h.observe().await
+}
+
+const SELECTED: &str = "[...document.getElementById('topics').selectedOptions].map(o => o.label)";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_select_on_a_multiple_select_toggles_one_option() {
+    // A list that allows several choices keeps the others: Select adds the named option, as a Ctrl-click does.
+    let Some(h) = harness().await else { return };
+    let obs = topics(&h, "['Alpha']", "").await;
+    let select = Action { text: Some("Beta".into()), ..action(Operation::Select, find(&obs, "Topics")) };
+    let result = h.page.act(&select, &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{:?}", result.detail);
+    assert_eq!(eval_active(&h.page, SELECTED).await, json!(["Alpha", "Beta"]));
+    // And a selected option named again is taken out, leaving the rest.
+    let obs = h.observe().await;
+    let select = Action { text: Some("Alpha".into()), ..action(Operation::Select, find(&obs, "Topics")) };
+    let result = h.page.act(&select, &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{:?}", result.detail);
+    assert!(result.page_changed, "a deselection changes the page");
+    assert_eq!(eval_active(&h.page, SELECTED).await, json!(["Beta"]));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_multiple_select_the_page_restores_is_not_executed() {
+    let Some(h) = harness().await else { return };
+    // The kept selection is reported whole, not only its first option.
+    let restore = "topics.onchange = () => { for (const o of topics.options) o.selected = o.label !== 'Beta'; };";
+    let obs = topics(&h, "['Alpha', 'Gamma']", restore).await;
+    let select = Action { text: Some("Beta".into()), ..action(Operation::Select, find(&obs, "Topics")) };
+    let result = h.page.act(&select, &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Failed);
+    assert!(result.detail.as_deref().is_some_and(|d| d.contains("'Alpha, Gamma'")), "{:?}", result.detail);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_multiple_select_changed_after_observing_is_stale() {
+    // Choosing a later option leaves selectedIndex on the first selected one, so the guard reads every selection.
+    let Some(h) = harness().await else { return };
+    let obs = topics(&h, "['Alpha']", "").await;
+    eval_active(&h.page, "document.getElementById('topics').options[2].selected = true; true").await;
+    let select = Action { text: Some("Beta".into()), ..action(Operation::Select, find(&obs, "Topics")) };
+    let result = h.page.act(&select, &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Stale, "{:?}", result.detail);
+    assert_eq!(eval_active(&h.page, SELECTED).await, json!(["Alpha", "Gamma"]));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_select_naming_no_option_of_a_multiple_select_fails_and_changes_nothing() {
+    let Some(h) = harness().await else { return };
+    let obs = topics(&h, "['Alpha']", "").await;
+    let select = Action { text: Some("Delta".into()), ..action(Operation::Select, find(&obs, "Topics")) };
+    let result = h.page.act(&select, &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Failed);
+    assert_eq!(result.detail.as_deref(), Some("no option labelled 'Delta'"));
+    assert_eq!(eval_active(&h.page, SELECTED).await, json!(["Alpha"]));
     h.close().await;
 }

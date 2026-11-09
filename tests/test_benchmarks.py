@@ -15,6 +15,16 @@ from fastbrowse.evals.status import TIMING_BASIS
 CATALOG = Path(__file__).parents[1] / "src/fastbrowse/evals/benchmark-catalog.json"
 
 
+def excluded(tasks: list[dict], ids: list[str], arms: list[str]) -> list[dict]:
+    """The catalog's exclusions of `arms` among `ids`, as a candidate group lists them."""
+    return [
+        {"arm": arm, "task": t["id"], "reason": t["excluded"][arm]}
+        for arm in sorted(arms)
+        for t in sorted(tasks, key=lambda t: t["id"])
+        if t["id"] in ids and arm not in t["arms"]
+    ]
+
+
 @pytest.fixture
 def candidate() -> dict:
     raw = CATALOG.read_bytes()
@@ -70,6 +80,7 @@ def candidate() -> dict:
                     for arm in arms
                     if arm != "browser-use" or task in hosted
                 ],
+                **({"excluded": excluded(tasks, ids, ["browser-use"])} if name == "internal-hosted" else {}),
             }
         )
     return {
@@ -1274,6 +1285,8 @@ def _head_to_head(candidate: dict, arms: tuple[str, ...]) -> dict:
         if task in own.get(arm, group["task_ids"])
         for repeat in range(3)
     ]
+    tasks = [t for suite in json.loads(CATALOG.read_bytes())["suites"].values() for t in suite]
+    group["excluded"] = excluded(tasks, group["task_ids"], [a for a in arms if a in own])
     return out
 
 
@@ -1315,6 +1328,13 @@ def test_ultrafast_runs_exactly_its_part_of_the_head_to_head(candidate):
     group = data["groups"][0]
     dropped = next(r["task"] for r in group["rows"] if r["arm"] == "jev-ultrafast")
     group["rows"] = [r for r in group["rows"] if not (r["arm"] == "jev-ultrafast" and r["task"] == dropped)]
+    with pytest.raises(ValidationError, match="every scheduled slot"):
+        Candidate.model_validate(data)
+    # Listing the dropped task as excluded fills the grid, but the catalog says jev-ultrafast can run it.
+    group["excluded"] = sorted(
+        [*group["excluded"], {"arm": "jev-ultrafast", "task": dropped, "reason": "no reason"}],
+        key=lambda e: (e["arm"], e["task"]),
+    )
     with pytest.raises(ValueError, match="jev-ultrafast must run exactly the tasks of its set"):
         check_catalog(Candidate.model_validate(data), CATALOG)
 
@@ -1428,3 +1448,77 @@ def test_explicit_call_basis_without_count_remains_unknown(candidate: dict, basi
     row.pop("llm_calls", None)
     row["llm_calls_basis"] = basis
     assert Candidate.model_validate(candidate).groups[0].rows[0].llm_calls is None
+
+
+def _unjudge(candidate: dict, index: int, reason: str = "evidence-unavailable") -> dict:
+    """Move one head-to-head row out of the score: a slot the judge could not judge."""
+    group = candidate["groups"][0]
+    row = group["rows"].pop(index)
+    slot = {k: row[k] for k in ("task", "repeat", "arm")} | {"reason": reason}
+    group.setdefault("unjudged", []).append(slot)
+    return slot
+
+
+def test_an_unjudged_slot_fills_its_place_in_the_grid_and_stays_out_of_the_rows(candidate):
+    baseline = Candidate.model_validate(copy.deepcopy(candidate))
+    slot = _unjudge(candidate, 0)
+    published = Candidate.model_validate(candidate)
+    assert [s.model_dump() for s in published.groups[0].unjudged] == [slot]
+    regressions(published, baseline)
+    group = candidate["groups"][0]
+    group["unjudged"].append(dict(group["unjudged"][0]))
+    with pytest.raises(ValidationError, match="exactly one measured row"):
+        Candidate.model_validate(candidate)
+
+
+def test_a_group_names_the_runs_its_tasks_came_from(candidate):
+    group = candidate["groups"][0]
+    tasks = group["task_ids"]
+    hosted = sorted({r["task"] for r in group["rows"] if r["arm"] == "browser-use"})
+    older = {"run_id": "r1", "agent_sha": "c" * 40, "runner_sha": "c" * 40, "measured_on": "2026-11-08"}
+    newest = {"run_id": "r2", "agent_sha": "a" * 40, "runner_sha": "b" * 40, "measured_on": "2026-11-09"}
+    # fastbrowse takes one task from the newer run; Browser Use keeps the older run it was measured in.
+    rival = older | {"arm": "browser-use", "tasks": hosted}
+    group["sources"] = [
+        newest | {"arm": "fastbrowse", "tasks": tasks[:1]},
+        older | {"arm": "fastbrowse", "tasks": tasks[1:]},
+        rival,
+    ]
+    published = Candidate.model_validate(candidate)
+    assert [(s.run_id, s.arm) for s in published.groups[0].sources] == [
+        ("r2", "fastbrowse"),
+        ("r1", "fastbrowse"),
+        ("r1", "browser-use"),
+    ]
+    # A group whose newest run is older than the candidate's build names that run's build.
+    group["sources"] = [older | {"arm": "fastbrowse", "tasks": tasks}, rival]
+    group["agent_sha"] = group["runner_sha"] = "c" * 40
+    Candidate.model_validate(candidate)
+    group["sources"] = [older | {"arm": "fastbrowse", "tasks": tasks[1:]}, rival]
+    with pytest.raises(ValidationError, match="every task of fastbrowse exactly once"):
+        Candidate.model_validate(candidate)
+    group["sources"] = [older | {"arm": "fastbrowse", "tasks": tasks}, rival]
+    group["agent_sha"] = "a" * 40
+    with pytest.raises(ValidationError, match="newest source"):
+        Candidate.model_validate(candidate)
+
+
+def test_a_task_an_arm_cannot_run_is_listed_as_excluded_never_with_rows(candidate):
+    """Each excluded entry stands for `repeats` failed attempts, so the grid holds rows, ungraded slots or an excluded
+    entry for every arm and task, never two of them, and the entries are the catalog's with its reasons."""
+    group = candidate["groups"][0]
+    entry = group["excluded"][0]
+    parsed = Candidate.model_validate(candidate)
+    assert parsed.groups[0].model_dump(mode="json")["excluded"] == group["excluded"]
+    check_catalog(parsed, CATALOG)
+    assert "excluded" not in parsed.groups[1].model_dump(mode="json")
+    for broken in (
+        dict(group, excluded=[]),
+        dict(group, rows=[*group["rows"], {**group["rows"][0], "arm": entry["arm"], "task": entry["task"]}]),
+        dict(group, excluded=[{**entry, "arm": "fastbrowse"}]),
+    ):
+        with pytest.raises(ValidationError):
+            Candidate.model_validate(candidate | {"groups": [broken, *candidate["groups"][1:]]})
+    group["excluded"] = [{**entry, "reason": "another reason"}]
+    with pytest.raises(ValueError, match="excluded tasks must be the catalog's"):
+        check_catalog(Candidate.model_validate(candidate), CATALOG)

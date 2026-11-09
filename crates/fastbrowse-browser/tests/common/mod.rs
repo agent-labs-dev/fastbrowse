@@ -132,6 +132,13 @@ fn serve_one(mut stream: TcpStream, directory: &Path, iframe_origin: Option<&str
         respond(&mut stream, 200, &[html, ("Content-Length", body.len().to_string())], body.as_bytes());
         return;
     }
+    if let Some(query) = path.strip_prefix("/slow-frame?ms=") {
+        // A frame's document whose parse waits on a slow script, so it has its control only after its parent settled.
+        let head = format!("<head><script src=\"/slow?ms={query}\"></script></head>");
+        let body = format!("<html>{head}<body><button>Late frame button</button></body></html>");
+        respond(&mut stream, 200, &[html, ("Content-Length", body.len().to_string())], body.as_bytes());
+        return;
+    }
     if let Some(status) = path.strip_prefix("/http-error/") {
         let body = b"<html><body>Sorry</body></html>";
         respond(&mut stream, status.parse().unwrap_or(500), &[html, ("Content-Length", body.len().to_string())], body);
@@ -179,10 +186,14 @@ fn serve_one(mut stream: TcpStream, directory: &Path, iframe_origin: Option<&str
         return;
     }
     let file = path.split('?').next().unwrap_or("/");
-    if (file == "/" || file == "/index.html")
-        && let Some(origin) = iframe_origin
+    if let Some(origin) = iframe_origin
+        && (file == "/" || file.ends_with(".html"))
     {
-        let content = std::fs::read_to_string(directory.join("index.html")).unwrap_or_default();
+        let name = if file == "/" { "index.html" } else { file.trim_start_matches('/') };
+        let Ok(content) = std::fs::read_to_string(directory.join(name)) else {
+            respond(&mut stream, 404, &[], b"");
+            return;
+        };
         let body = content.replace("__IFRAME_ORIGIN__", origin).into_bytes();
         respond(&mut stream, 200, &[html, ("Content-Length", body.len().to_string())], &body);
         return;
@@ -263,31 +274,46 @@ pub fn find<'a>(observation: &'a Observation, label: &str) -> &'a Control {
 }
 
 /// `wait_until`: poll `predicate` every 50ms until it holds, failing after `timeout_seconds`.
-pub async fn wait_until<F, Fut>(mut predicate: F, timeout_seconds: f64)
+///
+/// A failure names the caller's line, since a test that waits more than once must say which wait ran out. The outer
+/// function is not async because `#[track_caller]` does not reach into an async body.
+#[track_caller]
+pub fn wait_until<F, Fut>(mut predicate: F, timeout_seconds: f64) -> impl Future<Output = ()>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = bool>,
 {
-    let deadline = Instant::now() + Duration::from_secs_f64(timeout_seconds);
-    while Instant::now() < deadline {
-        if predicate().await {
-            return;
+    let caller = std::panic::Location::caller();
+    async move {
+        let deadline = Instant::now() + Duration::from_secs_f64(timeout_seconds);
+        while Instant::now() < deadline {
+            if predicate().await {
+                return;
+            }
+            sleep(Duration::from_millis(50)).await;
         }
-        sleep(Duration::from_millis(50)).await;
+        panic!("condition was not met in {timeout_seconds}s, waited for at {caller}");
     }
-    panic!("condition was not met in time");
 }
 
 /// `observe_until`: observe until a control is actually there, since an attached frame session predates its document.
-pub async fn observe_until(page: &CdpPage, label: &str) -> Observation {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let observation = page.observe().await.expect("observe");
-        if observation.controls.iter().any(|c| c.label.contains(label)) {
-            return observation;
+/// A failure names the caller's line and the controls the last observation held.
+#[track_caller]
+pub fn observe_until<'a>(page: &'a CdpPage, label: &'a str) -> impl Future<Output = Observation> + 'a {
+    let caller = std::panic::Location::caller();
+    async move {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let observation = page.observe().await.expect("observe");
+            if observation.controls.iter().any(|c| c.label.contains(label)) {
+                return observation;
+            }
+            if Instant::now() >= deadline {
+                let seen: Vec<&str> = observation.controls.iter().map(|c| c.label.as_str()).collect();
+                panic!("no control labelled {label:?} in 5s, waited for at {caller}; the page showed {seen:?}");
+            }
+            sleep(Duration::from_millis(50)).await;
         }
-        assert!(Instant::now() < deadline, "condition was not met in time");
-        sleep(Duration::from_millis(50)).await;
     }
 }
 

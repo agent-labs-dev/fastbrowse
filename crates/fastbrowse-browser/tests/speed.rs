@@ -340,6 +340,13 @@ async fn test_a_frame_that_stops_answering_costs_one_short_deadline() {
     assert!(elapsed < seams::frame_read_seconds() + 2.0, "{elapsed}");
     // The page's own controls are still read, and the frame is reported unread rather than silently empty.
     assert!(has(&observation, "Sign in") && observation.inaccessible_frames == 1, "{observation:?}");
+    assert!(
+        observation
+            .viewport_text
+            .ends_with("[1 frame on this page could not be read: its text and controls are not shown]"),
+        "{:?}",
+        observation.viewport_text
+    );
     let capture = h.page.capture().await.expect("capture");
     assert!(capture.text.contains("Sign in") && capture.inaccessible_frames == 1);
     // Once a frame has missed its deadline, later reads do not wait on it again.

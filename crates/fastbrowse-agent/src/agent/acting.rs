@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use fastbrowse_clients::validation::jev_purpose;
-use fastbrowse_core::decision::{Answer, ChoiceQuestion, NoulQuestion, Question};
+use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionError, EVEN_ODDS, NoulQuestion, Question};
 use fastbrowse_core::models::{CostComponent, Decider, JevPurpose, Operation, Status, StepOutcome, UNTRUSTED};
 use fastbrowse_core::navigation::task_urls;
 use fastbrowse_core::page::{Action, Control, Observation};
@@ -11,9 +11,10 @@ use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::text;
 use fastbrowse_core::recipe::RecipeText;
 use fastbrowse_core::safety::{
-    asks_for_credentials, changes_credentials, control_action, downloads_question, irreversible_question, is_password,
-    lasting_question, may_be_irreversible, origin_of, requested_question, resolve_secret, sets_new_password,
-    starts_download,
+    HAPPENED, LATER_VALUES, MET, asks_for_credentials, changes_a_value, changes_credentials, conditional_question,
+    control_action, downloads_question, edits_question, happened_question, irreversible_question, is_password,
+    lasting_question, may_be_irreversible, met_question, origin_of, requested_question, resolve_secret,
+    sets_new_password, starts_download, values_question,
 };
 use indexmap::IndexMap;
 use serde_json::{Map, Value as JsonValue, json};
@@ -21,12 +22,21 @@ use serde_json::{Map, Value as JsonValue, json};
 use super::Agent;
 use super::driving::require;
 use super::helpers::{caller_link, describe, dialog_question, empty_fields_fact, navigation_question, unsent_fact};
-use super::state::{Flow, OutputIntent, RunState, Step, Stop, Unsure};
+use super::state::{Extent, Flow, OutputIntent, RunState, SignInNeeds, Step, Stop, Unsure};
 use crate::memory::Notes;
 use crate::policy::{Ahead, Decision, HistoryEntry};
-use crate::retrieval::text::{Word, words};
+use crate::retrieval::text::{Word, edge_options, words};
 use crate::verification::page_state;
 use crate::writing::write_value;
+
+/// Why a conditional commit is refused when the page does not show its condition met.
+const UNSHOWN_CONDITION: &str = "depends on a condition the task sets, and the page does not show it allows this: read the page to check it, or finish";
+
+/// Which of several values a task gives a field is typed. Both ends of a value are picked apart and can land on
+/// different values, and the question that settles where it ends was asked without this: on a checkout given
+/// "NOTAPOSTCODE. If the site rejects anything, ... SW1A 1AA", it picked the second postcode's end 9 times in 10 before
+/// any rejection, and the first postcode 10 times in 10 with it.
+const FIRST_VALUE: &str = "the first comes first, unless the task says when to use another and that has happened.";
 
 /// The field's value is words of the task, which Jev marks.
 const IN_TASK: &str = "task";
@@ -100,7 +110,7 @@ fn value_questions<'a>(
     if !group.is_empty() {
         let span = |end: &str| {
             format!(
-                "If {holder} states the value for {label}, which of its words {end} the value? When it gives this field several values, the first comes first, unless the task says when to use another and that has happened. A search takes what is looked for, not the request around it.{tried}"
+                "If {holder} states the value for {label}, which of its words {end} the value? When it gives this field several values, {FIRST_VALUE} A search takes what is looked for, not the request around it.{tried}"
             )
         };
         asked.push(("first", span("begins"), options.clone()));
@@ -150,7 +160,7 @@ fn gate_questions(
     target: &Control,
     destination: Option<&Control>,
     controls: &[Control],
-) -> (Option<NoulQuestion>, NoulQuestion, NoulQuestion) {
+) -> (Option<NoulQuestion>, String, NoulQuestion) {
     let lasting = lasting_question(operation, target, destination, controls);
     let irreversible = (!changes_credentials(controls, target, operation))
         .then(|| irreversible_question(operation, target, destination, controls));
@@ -167,7 +177,16 @@ fn gate_questions(
         let times = if done == 1 { "once".to_string() } else { format!("{done} times") };
         action += &format!("This run has already done this {times}.\n");
     }
-    (irreversible, requested_question(&action), lasting)
+    (irreversible, action, lasting)
+}
+
+/// The finish check's answer about the steps the task asks to be carried out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Carried {
+    Done,
+    Undone,
+    /// Not carried out, and the page or the recent actions show the site does not allow it.
+    Refused,
 }
 
 impl Agent {
@@ -216,11 +235,14 @@ impl Agent {
                 }
                 self.gate_download(state, observation, decision, &caller_link(&url)).await?;
                 let irreversible = navigation_question(&url);
-                let requested = requested_question(&format!("open the address {url}.\n"));
-                self.gate_question(state, observation, decision, &url, Some(irreversible), requested, None).await?;
+                let action = format!("open the address {url}.\n");
+                self.gate_question(state, observation, decision, &url, Some(irreversible), &action, None).await?;
                 Ok(Action { url: Some(url), ..Action::new(Operation::Navigate) })
             }
             Operation::Click | Operation::Enter => {
+                if let Some(target) = target {
+                    self.gate_edit(state, observation, decision, target).await?;
+                }
                 self.gate_irreversible(state, observation, decision).await?;
                 Ok(Action { target_id: target.map(|t| t.id.clone()), ..Action::new(decision.operation) })
             }
@@ -237,6 +259,7 @@ impl Agent {
             }
             Operation::Fill => {
                 let target = require(target)?;
+                self.gate_edit(state, observation, decision, target).await?;
                 // A fetched page takes no typing, so its value is worked out, and a secret asked for, in the browser.
                 if self.page.over_http() {
                     let reason = format!("{} can only be filled in a browser", text::repr(&target.label));
@@ -264,6 +287,7 @@ impl Agent {
             }
             Operation::Select => {
                 let target = require(target)?;
+                self.gate_edit(state, observation, decision, target).await?;
                 let raw = self.raw_target(target);
                 if raw.options.is_empty() {
                     // A fetched page does not list a select's options, and a live one can fill it once another field is set.
@@ -273,7 +297,15 @@ impl Agent {
                     }
                     return Err(Unsure { reason, gives_up_as: Status::Stuck }.into());
                 }
-                let question = format!("Which option should {} be set to?", text::repr(&target.label));
+                let named = text::repr(&describe(target));
+                // A list that allows several choices toggles the option picked, so Jev is told which are chosen.
+                let question = match (target.input_type.as_deref(), target.value.as_deref()) {
+                    (Some("select-multiple"), chosen) => {
+                        let chosen = chosen.filter(|chosen| !chosen.is_empty()).map_or("none".into(), text::repr);
+                        format!("Which option of {named} should be toggled? Selected now: {chosen}.")
+                    }
+                    _ => format!("Which option should {named} be set to?"),
+                };
                 let option = self.choose(state, observation, &question, &raw.options).await?;
                 Ok(Action { target_id: Some(raw.id.clone()), text: Some(option), ..Action::new(Operation::Select) })
             }
@@ -296,14 +328,13 @@ impl Agent {
                     && let Some(irreversible) = dialog_question(&state.task, Some(dialog))
                 {
                     let action = format!("accept this {} dialog: {}.\n", dialog.kind, text::repr(&dialog.message));
-                    let requested = requested_question(&action);
                     self.gate_question(
                         state,
                         observation,
                         decision,
                         &dialog.message,
                         Some(irreversible),
-                        requested,
+                        &action,
                         None,
                     )
                     .await?;
@@ -338,14 +369,14 @@ impl Agent {
         if let Some(destination) = &decision.destination {
             label += &format!(" onto {}", describe(destination));
         }
-        let (irreversible, requested, lasting) = gate_questions(
+        let (irreversible, action, lasting) = gate_questions(
             &state.history,
             decision.operation,
             target,
             decision.destination.as_ref(),
             &observation.controls,
         );
-        self.gate_question(state, observation, decision, &label, irreversible, requested, Some(lasting)).await
+        self.gate_question(state, observation, decision, &label, irreversible, &action, Some(lasting)).await
     }
 
     /// Refuse a control the page says downloads a file when the task rules downloading out.
@@ -362,26 +393,26 @@ impl Agent {
         if !starts_download(control) || !self.downloads_forbidden(state).await? {
             return Ok(());
         }
-        let label = describe(control);
-        let reason = format!(
-            "{} {} downloads a file, and the task rules out downloading",
-            decision.operation,
-            text::repr(&label)
-        );
-        let confidence = Some(decision.confidence());
-        let redacted = self.redact(&reason);
-        self.record_failure(
-            state,
-            observation,
-            decision.operation,
-            &redacted,
-            Some(self.redact(&label)),
-            confidence,
-            Some(false),
-            if decision.replayed { Decider::Recipe } else { Decider::Jev },
-        )
-        .await?;
-        Err(Unsure::new(redacted).into())
+        let why = "downloads a file, and the task rules out downloading";
+        self.refuse_once(state, observation, decision, &describe(control), why).await
+    }
+
+    /// Refuse an action that changes a value on the page when the task rules out changing anything (#838).
+    ///
+    /// An unsaved toggle is reversible, so the irreversible gate lets it through. Authorization does not lift this
+    /// either, for the reason it does not lift the download rule.
+    pub(super) async fn gate_edit(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        decision: &Decision,
+        control: &Control,
+    ) -> Step {
+        if !changes_a_value(decision.operation, control) || !self.edits_forbidden(state).await? {
+            return Ok(());
+        }
+        let why = "changes a value on the page, and the task rules out changing anything";
+        self.refuse_once(state, observation, decision, &describe(control), why).await
     }
 
     /// Whether the task rules out downloading, asked of Jev about the task alone and kept for the run.
@@ -389,25 +420,102 @@ impl Agent {
         if let Some(forbidden) = state.downloads_forbidden {
             return Ok(forbidden);
         }
+        let forbidden = self.task_rules_out(state, "downloads", downloads_question(&state.task)).await?;
+        state.downloads_forbidden = forbidden;
+        Ok(forbidden.unwrap_or(true))
+    }
+
+    /// Whether the task rules out changing what the page's fields and settings hold, asked of Jev about the task alone
+    /// and kept for the run.
+    pub(super) async fn edits_forbidden(&self, state: &mut RunState) -> Step<bool> {
+        if let Some(forbidden) = state.edits_forbidden {
+            return Ok(forbidden);
+        }
+        let forbidden = self.task_rules_out(state, "edits", edits_question(&state.task)).await?;
+        state.edits_forbidden = forbidden;
+        Ok(forbidden.unwrap_or(true))
+    }
+
+    /// Jev's word, from the task alone, that it rules out what `question` asks about. No answer is None: the caller
+    /// refuses the action once, as the irreversible gate does, but keeps nothing, since one failed call must not forbid
+    /// it for the rest of a run that asked for it.
+    async fn task_rules_out(&self, state: &mut RunState, key: &str, question: NoulQuestion) -> Step<Option<bool>> {
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
-        let questions = IndexMap::from([("downloads".to_string(), Question::Noul(downloads_question(&state.task)))]);
+        let questions = IndexMap::from([(key.to_string(), Question::Noul(question))]);
         let evaluation =
             jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&json!({"task": state.task}), &questions)).await?;
         state.ledger.record([evaluation.cost.clone()])?;
-        // No answer refuses this once, as the irreversible gate does, but is not kept: one failed call must not forbid
-        // every download for the rest of a run that asked for one.
-        let Some(Answer::Noul(answer)) = evaluation.answers.get("downloads") else { return Ok(true) };
-        let forbidden = answer.probability > self.config.thresholds.irreversible_above;
-        state.downloads_forbidden = Some(forbidden);
-        Ok(forbidden)
+        let Some(Answer::Noul(answer)) = evaluation.answers.get(key) else { return Ok(None) };
+        Ok(Some(answer.probability > EVEN_ODDS))
+    }
+
+    /// What the task says about signing in, asked once, of the task alone, at the first sign-in wall: three questions
+    /// apart, each one literal hop, which code combines into whether the wall stops the run. No answer to any of them
+    /// is None, and the wall stops the run as it did before they were asked.
+    pub(super) async fn sign_in_needs(&self, state: &mut RunState) -> Step<Option<SignInNeeds>> {
+        if let Some(needs) = state.sign_in {
+            return Ok(Some(needs));
+        }
+        state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+        let noul =
+            |question: &str, yes: &str, no: &str| Question::Noul(NoulQuestion::new(question, Some(yes), Some(no)));
+        let questions = IndexMap::from([
+            (
+                "account".to_string(),
+                noul(
+                    "Does `task` need the agent to act as a signed-in user of the site, such as to see or change an account's own orders, messages, settings or other private pages?",
+                    "The task needs a signed-in account.",
+                    "The task can be done by a visitor who is not signed in.",
+                ),
+            ),
+            (
+                "credentials".to_string(),
+                noul(
+                    "Does `task` give the username, email, password or code to sign in with?",
+                    "The task gives credentials to sign in with.",
+                    "The task gives no credentials.",
+                ),
+            ),
+            (
+                "inspects".to_string(),
+                noul(
+                    "Does `task` ask about the site's access restrictions themselves, such as whether a page needs signing in?",
+                    "The task asks about access restrictions.",
+                    "The task asks about something else.",
+                ),
+            ),
+        ]);
+        let evaluation =
+            jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&json!({"task": state.task}), &questions)).await?;
+        state.ledger.record([evaluation.cost.clone()])?;
+        let yes = |key: &str| match evaluation.answers.get(key) {
+            Some(Answer::Noul(answer)) => Some(answer.probability > EVEN_ODDS),
+            _ => None,
+        };
+        let (Some(account), Some(credentials), Some(inspects)) = (yes("account"), yes("credentials"), yes("inspects"))
+        else {
+            return Ok(None);
+        };
+        let needs = SignInNeeds { account, credentials, inspects };
+        self.event("sign_in", || {
+            Map::from_iter([
+                ("account".into(), account.into()),
+                ("credentials".into(), credentials.into()),
+                ("inspects".into(), inspects.into()),
+            ])
+        });
+        state.sign_in = Some(needs);
+        Ok(Some(needs))
     }
 
     /// The one rule for an action that may commit: it proceeds when Jev judges it not irreversible, or when the run is
     /// authorized and Jev judges the task asked for it. Otherwise the run stops for confirmation.
     ///
     /// `irreversible` is None for an action the page's structure shows commits, which only the task's request lifts.
-    /// `lasting` asks, in an authorized run, whether a reversible action still leaves something the site keeps: one the
-    /// task did not ask for is refused once, so the run can pick again rather than stop (#743).
+    /// `action` is what the agent is about to do, as [`control_action`] writes it for a control. `lasting` asks, in an
+    /// authorized run, whether a reversible action still leaves something the site keeps: one the task did not ask for
+    /// is refused once, so the run can pick again rather than stop (#743). A commit the task asks for only in some state
+    /// of the page goes ahead only once the page is judged not to show the state the task rules it out in (#848).
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn gate_question(
         &self,
@@ -416,7 +524,7 @@ impl Agent {
         decision: &Decision,
         label: &str,
         irreversible: Option<NoulQuestion>,
-        requested: NoulQuestion,
+        action: &str,
         lasting: Option<NoulQuestion>,
     ) -> Step {
         let thresholds = &self.config.thresholds;
@@ -426,7 +534,8 @@ impl Agent {
             questions.insert("irreversible".to_string(), Question::Noul(irreversible));
         }
         if authorized {
-            questions.insert("requested".to_string(), Question::Noul(requested));
+            questions.insert("requested".to_string(), Question::Noul(requested_question(action)));
+            questions.insert("conditional".to_string(), Question::Noul(conditional_question(action)));
             if let Some(lasting) = lasting {
                 questions.insert("lasting".to_string(), Question::Noul(lasting));
             }
@@ -445,6 +554,7 @@ impl Agent {
                 _ => None,
             };
             let (probability, requested, lasting) = (noul("irreversible"), noul("requested"), noul("lasting"));
+            let conditional = noul("conditional");
             self.event("irreversible", || {
                 Map::from_iter([
                     ("target".into(), label.into()),
@@ -452,32 +562,26 @@ impl Agent {
                     ("probability".into(), json!(probability)),
                     ("requested".into(), json!(requested)),
                     ("lasting".into(), json!(lasting)),
+                    ("conditional".into(), json!(conditional)),
                 ])
             });
             let reversible = probability.is_some_and(|p| p <= thresholds.irreversible_above);
             let wanted = requested.is_some_and(|p| p > thresholds.requested_above);
             // An unanswered question refuses once, as an unanswered irreversible one does.
-            let keeps =
-                questions.contains_key("lasting") && !lasting.is_some_and(|p| p <= thresholds.irreversible_above);
+            let keeps = questions.contains_key("lasting") && !lasting.is_some_and(|p| p <= EVEN_ODDS);
             if reversible && keeps && !wanted {
-                let reason = format!(
-                    "{} {} would change what the site keeps, and the task does not ask for it",
-                    decision.operation,
-                    text::repr(label)
-                );
-                let redacted = self.redact(&reason);
-                self.record_failure(
-                    state,
-                    observation,
-                    decision.operation,
-                    &redacted,
-                    Some(self.redact(label)),
-                    Some(decision.confidence()),
-                    Some(false),
-                    if decision.replayed { Decider::Recipe } else { Decider::Jev },
-                )
-                .await?;
-                return Err(Unsure::new(redacted).into());
+                let why = "would change what the site keeps, and the task does not ask for it";
+                return self.refuse_once(state, observation, decision, label, why).await;
+            }
+            // Asked unanswered, the condition is checked as if the task set one: the check costs a call, a missed
+            // condition an irreversible commit.
+            let conditional = conditional.is_none_or(|p| p > EVEN_ODDS);
+            if wanted
+                && (!reversible || keeps)
+                && conditional
+                && let Some(why) = self.condition_refusal(state, observation, action).await?
+            {
+                return self.refuse_once(state, observation, decision, label, why).await;
             }
             if reversible || wanted {
                 state.committing = !reversible;
@@ -503,6 +607,117 @@ impl Agent {
         )
         .await?;
         Err(Stop::new(Status::NeedsConfirmation, reason).into())
+    }
+
+    /// Why the page does not show a conditional commit allowed, or `None` when it does: Jev's yes that it shows the
+    /// state in which the task says to commit, and, when the commit uses values the task gives only for once something
+    /// happens, its yes that the run did what the task asks first and the site responded that way (#872). Any other
+    /// answer, or none, refuses. A commit refused for using the later values says so, because a run that typed them
+    /// before trying the first ones cannot tell from "read the page" that the fix is to enter the first values.
+    ///
+    /// The one authorization question asked with the page's content, in a request of its own, so a page's text can
+    /// only veto a commit and never argue `requested` up. It is shown the masked observation the step decision reads,
+    /// with the notes and recent actions that say what the run has already read.
+    async fn condition_refusal(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        action: &str,
+    ) -> Step<Option<&'static str>> {
+        state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+        let elements: Vec<_> =
+            observation.controls.iter().map(|c| JsonValue::Object(crate::policy::element(c))).collect();
+        let mut page = json!({
+            "page": {
+                "url": observation.url,
+                "title": observation.title,
+                "text": observation.viewport_text,
+                "offscreen_text": observation.offscreen_text,
+                "response_status": observation.response_status,
+                "media": observation.media,
+            },
+            "elements": elements,
+            "dialog": observation.dialog.as_ref().map(Dump::dump_exclude_none),
+            "tabs": observation.tabs.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
+            "notes": self.decision_notes(state),
+            "recent_actions": state.history.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
+        });
+        self.mask_strings(&mut page);
+        page["task"] = state.task.clone().into();
+        page["date"] = crate::dates::dated(observation.captured_at, &state.dates).into();
+        let questions = IndexMap::from([
+            ("met".to_string(), Question::Choice(met_question(action))),
+            ("values".to_string(), Question::Choice(values_question(action))),
+            ("happened".to_string(), Question::Choice(happened_question(action))),
+        ]);
+        let evaluation = match jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&page, &questions)).await {
+            Ok(evaluation) => evaluation,
+            // A page too large to ask about cannot show the condition met.
+            Err(DecisionError::InputTooLarge(_)) => return Ok(Some(UNSHOWN_CONDITION)),
+            Err(error) => return Err(error.into()),
+        };
+        state.ledger.record([evaluation.cost.clone()])?;
+        let choice = |key: &str| match evaluation.answers.get(key) {
+            Some(Answer::Choice(answer)) => Some(answer.choice.clone()),
+            _ => None,
+        };
+        let (met, values, happened) = (choice("met"), choice("values"), choice("happened"));
+        self.event("condition", || {
+            Map::from_iter([
+                ("met".into(), json!(met)),
+                ("values".into(), json!(values)),
+                ("happened".into(), json!(happened)),
+            ])
+        });
+        // Unanswered, the values may be the later ones, so only the site having responded as they wait for lets them go.
+        let waits = values.as_deref().is_none_or(|v| v == LATER_VALUES);
+        let happened = happened.as_deref() == Some(HAPPENED);
+        Ok(if values.as_deref() == Some(LATER_VALUES) && !happened {
+            Some(
+                "depends on a condition the task sets: it uses values the task gives only for once something \
+                 happens, and the page does not show that it happened. Do what the task asks first, with the values \
+                 it gives first, before using these",
+            )
+        } else if met.as_deref() != Some(MET) || (waits && !happened) {
+            Some(UNSHOWN_CONDITION)
+        } else {
+            None
+        })
+    }
+
+    /// Mask every string in `value`, however deeply it is nested.
+    fn mask_strings(&self, value: &mut JsonValue) {
+        match value {
+            JsonValue::String(text) => *text = self.mask(text),
+            JsonValue::Array(items) => items.iter_mut().for_each(|item| self.mask_strings(item)),
+            JsonValue::Object(fields) => fields.values_mut().for_each(|field| self.mask_strings(field)),
+            _ => {}
+        }
+    }
+
+    /// Record `decision` on `label` as refused because it `why`, and refuse it once so the run picks again.
+    async fn refuse_once(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        decision: &Decision,
+        label: &str,
+        why: &str,
+    ) -> Step {
+        let reason = format!("{} {} {why}", decision.operation, text::repr(label));
+        let redacted = self.redact(&reason);
+        self.record_failure(
+            state,
+            observation,
+            decision.operation,
+            &redacted,
+            Some(self.redact(label)),
+            Some(decision.confidence()),
+            Some(false),
+            if decision.replayed { Decider::Recipe } else { Decider::Jev },
+        )
+        .await?;
+        Err(Unsure::new(redacted).into())
     }
 
     /// The text a field gets: an input, a stored secret, or words Jev marks in the task, copied as the task has them.
@@ -563,7 +778,7 @@ impl Agent {
                 &state.task,
                 &label,
                 &typed_into(state, target),
-                &observation.today(),
+                &crate::dates::dated(observation.captured_at, &state.dates),
                 &state.history.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
                 Some(&state.ledger),
             )
@@ -631,7 +846,7 @@ impl Agent {
                 let holder = if source == IN_READ { "what was read" } else { "the task" };
                 let exact = |ends: &str| {
                     format!(
-                        "Which exact text belongs in {label}? Each choice is the complete value that would be copied from {holder}, {ends}. Choose only the field's value, without surrounding task instructions."
+                        "Which exact text belongs in {label}? Each choice is the complete value that would be copied from {holder}, {ends}. Choose only the field's value, without surrounding task instructions. When {holder} gives this field several values, {FIRST_VALUE}"
                     )
                 };
                 let last = if first.index == last.index {
@@ -665,7 +880,22 @@ impl Agent {
                         .find(|word| word.index <= last.index && Some(&word.index.to_string()) == picks.get("start"))
                         .unwrap_or(first)
                 };
-                let value: String = task.chars().skip(first.start).take(last.end - first.start).collect();
+                // Words keep only their letters and digits, so punctuation the value starts or ends with, such as
+                // a handle's sign or a sentence's stop, is offered as part of it for Jev to keep or leave.
+                let max = self.jev.profile().max_choice_options;
+                let question = format!(
+                    "Which exact text belongs in {label}? Each choice is the complete value copied from {holder}; choose whether the punctuation next to it is part of the value."
+                );
+                let edges = edge_options(&chars, (first, last), (0, 0), target.max_length, max);
+                let (lead, mut trail) = self.edges(state, observation, &question, edges).await?;
+                // Each edge was offered as it fits the field alone; when the two together do not, the end is asked
+                // again with what fits after the beginning Jev kept.
+                if target.max_length.is_some_and(|limit| last.end - first.start + lead + trail > limit) {
+                    let edges = edge_options(&chars, (first, last), (lead, 0), target.max_length, max);
+                    let edges: Vec<_> = edges.into_iter().filter(|(edge, _)| *edge == "trail").collect();
+                    trail = self.edges(state, observation, &question, edges).await?.1;
+                }
+                let value: String = chars[first.start - lead..last.end + trail].iter().collect();
                 if source == IN_TASK {
                     state.text_source = Some(RecipeText::Literal(value.clone()));
                 }
@@ -673,6 +903,29 @@ impl Agent {
             }
             _ => Err(self.missing(state, observation, target)),
         }
+    }
+
+    /// How many punctuation characters the beginning and the end of a value keep, as Jev picks among `edges`.
+    async fn edges(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        question: &str,
+        edges: Vec<(&'static str, Vec<(usize, String)>)>,
+    ) -> Step<(usize, usize)> {
+        if edges.is_empty() {
+            return Ok((0, 0));
+        }
+        let asked = edges
+            .into_iter()
+            .map(|(edge, options)| {
+                let options = options.into_iter().map(|(kept, value)| (kept.to_string(), value.into()));
+                (edge, question.to_string(), options.collect())
+            })
+            .collect();
+        let picks = self.ask_choices(state, Some(observation), asked).await?;
+        let kept = |edge: &str| picks.get(edge).and_then(|kept| kept.parse::<usize>().ok()).unwrap_or(0);
+        Ok((kept("lead"), kept("trail")))
     }
 
     /// `group` cut down to what one choice can offer.
@@ -911,14 +1164,32 @@ impl Agent {
             [] => return Err(Stop::new(Status::Stuck, format!("no options to answer: {question}")).into()),
             _ => {}
         }
-        // One Choice offers at most the options the decision model documents.
-        let shown = self.jev.profile().max_choice_options;
-        let keys: IndexMap<String, String> =
-            options.iter().take(shown).enumerate().map(|(i, option)| (i.to_string(), option.clone())).collect();
+        // One Choice offers at most the options the decision model documents, so a longer list, such as a select of
+        // years or airports, is offered as runs of options first and the option is picked inside the run chosen, as
+        // the step decision groups controls.
+        let shown = self.jev.profile().max_choice_options.max(2);
+        let mut options = options;
+        if options.len() > shown {
+            let runs: Vec<&[String]> = options.chunks(options.len().div_ceil(shown)).collect();
+            let criteria = runs
+                .iter()
+                .enumerate()
+                .map(|(i, run)| {
+                    let masked: Vec<String> = run.iter().map(|option| self.mask(option)).collect();
+                    (i.to_string(), JsonValue::from(masked.join(" | ")))
+                })
+                .collect();
+            let grouped = format!("{question} Choose the group of options holding the answer.");
+            let picked = self.ask_choice(state, observation, &grouped, criteria).await?;
+            options = runs[picked.parse::<usize>().expect("a key offered")];
+            if let [only] = options {
+                return Ok(only.clone());
+            }
+        }
         let criteria: IndexMap<String, JsonValue> =
-            keys.iter().map(|(key, option)| (key.clone(), self.mask(option).into())).collect();
+            options.iter().enumerate().map(|(i, option)| (i.to_string(), self.mask(option).into())).collect();
         let picked = self.ask_choice(state, observation, question, criteria).await?;
-        Ok(keys[&picked].clone())
+        Ok(options[picked.parse::<usize>().expect("a key offered")].clone())
     }
 
     async fn ask_choice(
@@ -968,7 +1239,8 @@ impl Agent {
             ),
         ]);
         // Also asked of the task alone: a count over a whole site read only the pages it reached and called that the
-        // whole list, from page 1 or from one record's own page (#750, #798).
+        // whole list, from page 1 or from one record's own page (#750, #798). A task over some pages of a list had no
+        // choice but the whole list, and paged on past the pages it named (#824).
         let extent = IndexMap::from([
             (
                 "shown".to_string(),
@@ -980,6 +1252,12 @@ impl Agent {
                 "every_page".to_string(),
                 JsonValue::from(
                     "The task covers everything a list holds across all of its pages, such as a count or total over a whole site or list.",
+                ),
+            ),
+            (
+                "pages".to_string(),
+                JsonValue::from(
+                    "The task names how many or which pages of a list to cover, such as its first few pages, rather than the whole list.",
                 ),
             ),
         ]);
@@ -995,7 +1273,11 @@ impl Agent {
             )
             .await?;
         state.appearance = picks["evidence"] == "appearance";
-        state.every_page = picks["extent"] == "every_page";
+        state.extent = match picks["extent"].as_str() {
+            "every_page" => Extent::EveryPage,
+            "pages" => Extent::Pages(self.page_range(state).await?),
+            _ => Extent::Shown,
+        };
         let intent = match picks["pick"].as_str() {
             "text" => OutputIntent::Text,
             "image" => OutputIntent::Image,
@@ -1007,6 +1289,21 @@ impl Agent {
         Ok(intent)
     }
 
+    /// The first and last page of the list the task names, read from the task. `None` when it names no last page, or
+    /// the reading failed, so the run neither walks the list nor leaves any page of it out.
+    async fn page_range(&self, state: &RunState) -> Step<Option<(usize, usize)>> {
+        let Ok(range) = crate::start::page_range(&*self.llm, &state.task, Some(&state.ledger)).await else {
+            return Ok(None);
+        };
+        state.ledger.record([range.cost])?;
+        let bounds = |range: crate::start::PageRange| {
+            let first = usize::try_from(range.first.unwrap_or(1)).ok()?;
+            let last = usize::try_from(range.last?).ok()?;
+            (first >= 1 && last >= first).then_some((first, last))
+        };
+        Ok(bounds(range.data))
+    }
+
     pub(super) async fn stops_to_confirm(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
         let criteria = IndexMap::from([
             ("confirm".to_string(), JsonValue::from("The task says to stop before sending and ask for confirmation.")),
@@ -1016,26 +1313,33 @@ impl Agent {
         Ok(self.ask_choice(state, observation, question, criteria).await? == "confirm")
     }
 
-    /// Whether what the task asks to be done in the browser has been done, judged from the steps taken and this page.
-    /// A read that answers the question can come before the actions the task puts first: a run asked to sign in and
-    /// then report its account's email read the email off another page and stopped at the sign-in code.
-    pub(super) async fn actions_done(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
-        let criteria = IndexMap::from([
-            (
-                "done".to_string(),
-                JsonValue::from(
-                    "Every such step has been carried out, or the task asks only to find, read or report something.",
-                ),
+    /// Whether what the task asks to be done in the browser has been done, judged from the steps taken and this page,
+    /// or cannot be because the site does not allow it. A read that answers the question can come before the actions
+    /// the task puts first: a run asked to sign in and then report its account's email read the email off another page
+    /// and stopped at the sign-in code. A step the site refuses, such as an option it marks unavailable, is no step
+    /// left to take, and the run ends with its answer rather than recovering until it runs out (#779).
+    pub(super) async fn actions_done(&self, state: &mut RunState, observation: &Observation) -> Step<Carried> {
+        // Two questions asked apart, each true or false on its own, so no option's place in a list can lean the run
+        // toward ending short of a step (#808). Finding, reading and reporting are judged by the answer's own checks,
+        // from the notes these questions leave out.
+        let carried = NoulQuestion::new(
+            format!(
+                "{UNTRUSTED}\n\n# Task\n{}\n\nJudged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out?",
+                state.task
             ),
-            (
-                "undone".to_string(),
-                JsonValue::from(
-                    "A step the task asks for, other than finding, reading or reporting, has not been carried out yet.",
-                ),
+            Some("Every such step has been carried out, or the task asks only to find, read or report something."),
+            Some("A step the task asks for, other than finding, reading or reporting, has not been carried out yet."),
+        );
+        let refused = NoulQuestion::new(
+            format!(
+                "{UNTRUSTED}\n\n# Task\n{}\n\nDo the current page or the recent actions show that the site does not allow a step the task asks to be carried out, such as an option the page marks unavailable or a control it shows disabled?",
+                state.task
             ),
-        ]);
-        // Finding, reading and reporting are judged by the answer's own checks, from the notes this question leaves out.
-        let question = "Judged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out?";
+            Some(
+                "The page or the recent actions show the site does not allow a step the task asks for, and nothing left to try on the site would carry it out.",
+            ),
+            Some("Nothing shown says the site refuses a step the task asks for."),
+        );
         let history = state.history.iter().map(Dump::dump_exclude_none).collect();
         let mut context = Map::from_iter([("recent_actions".to_string(), JsonValue::Array(history))]);
         // What code already knows was left undone, as the step decision is told it: values typed and never sent, and
@@ -1047,7 +1351,6 @@ impl Agent {
         if !facts.is_empty() {
             context.insert("page_facts".into(), facts.into());
         }
-        let asked = vec![("pick", question.to_string(), criteria)];
         // The whole page, not only what is in view: a feed loaded to its end showed its count at the top and "End of
         // list" below the fold, and judged from the top alone the loading looked unfinished.
         let page = Observation {
@@ -1058,7 +1361,32 @@ impl Agent {
                 .join("\n"),
             ..observation.clone()
         };
-        Ok(self.ask_choices_in(state, Some(&page), asked, Some(&context)).await?["pick"] == "done")
+        let questions = IndexMap::from([
+            ("carried".to_string(), Question::Noul(carried)),
+            ("refused".to_string(), Question::Noul(refused)),
+        ]);
+        let state_json = page_state(
+            &page,
+            &Notes::default(),
+            &self.config.tokens,
+            &questions.values().map(Dump::dump_json).collect::<Vec<_>>(),
+            Some(&context),
+            &state.dates,
+        )?;
+        state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+        let evaluation = jev_purpose(JevPurpose::Action, self.jev.evaluate(&state_json, &questions)).await?;
+        state.ledger.record([evaluation.cost.clone()])?;
+        let holds = |key: &str| match evaluation.answers.get(key) {
+            Some(Answer::Noul(answer)) => Ok(answer.probability > 0.5),
+            _ => Err(DecisionError::Failed(format!("expected a yes-or-no answer to {key}"))),
+        };
+        Ok(if holds("carried")? {
+            Carried::Done
+        } else if holds("refused")? {
+            Carried::Refused
+        } else {
+            Carried::Undone
+        })
     }
 
     /// Several choices in one request, each answer one its question offered.
@@ -1091,7 +1419,7 @@ impl Agent {
         let page = match observation {
             Some(observation) => {
                 let notes = if context.is_some() { &Notes::default() } else { &state.notes };
-                page_state(observation, notes, &self.config.tokens, &dumped, context)?
+                page_state(observation, notes, &self.config.tokens, &dumped, context, &state.dates)?
             }
             // Output format is a requirement of the task, independent of what the page or notes say.
             None => JsonValue::Object(Map::new()),

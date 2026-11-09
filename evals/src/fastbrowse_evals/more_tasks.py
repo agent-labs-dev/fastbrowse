@@ -268,7 +268,7 @@ DEV: tuple[LiveTask, ...] = (
     ),
     LiveTask(
         "httpx-requires-python",
-        "https://pypi.org/",
+        "https://pypi.org/project/httpx/",
         "What is the oldest Python version the latest httpx release supports?",
         _httpx_requires,
         _has_truth,

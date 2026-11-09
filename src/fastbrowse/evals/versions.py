@@ -320,8 +320,9 @@ def published() -> list[tuple[str, list[dict[str, Any]]]]:
 def _measured(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     """The attempts that measured the arm. One that ended `unavailable` was stopped by a provider outage outlasting
     every retry, or by a first navigation that timed out or could not reach the site, so it says nothing about the
-    arm."""
-    return [r for r in rows if r.get("normalized_status") != Ending.UNAVAILABLE]
+    arm. One whose agent ended `blocked` reached the site and was refused by its bot check, which another agent may
+    get past, so it is the arm's failure."""
+    return [r for r in rows if r.get("normalized_status") != Ending.UNAVAILABLE or r.get("status") == "blocked"]
 
 
 def _arm_rank(arm: str) -> int:
@@ -343,43 +344,80 @@ class _Comparison:
     rows: list[Mapping[str, Any]]
     """Selected results, including unavailable outcomes. Earlier retries remain in the attempt ledger."""
     scored: list[Mapping[str, Any]]
-    """The attempts every figure is taken from: as many per arm at each task."""
+    """The attempts every figure is taken from: as many per arm at each task. An arm the catalog says cannot run a
+    task has a failed attempt there for each one the other arms measured, marked `unsupported` with the reason; it
+    ran nothing, so it has no time or cost."""
+
+
+def unsupported(task: str, task_version: object) -> dict[str, str]:
+    """The arms the catalog says cannot run `task`, with the reason each cannot, when the row measured the task as
+    the catalog defines it. A task an arm cannot run is a failure for that arm in every comparison: the comparison
+    is fair across any browser agent only if a capability one lacks counts against it."""
+    from fastbrowse.evals.catalog import SUITES
+
+    for entries in SUITES.values():
+        for entry in entries:
+            if entry.id == task and entry.task_version == task_version:
+                return dict(entry.excluded)
+    return {}
 
 
 def _by_comparison(rows: Sequence[Mapping[str, Any]]) -> list[_Comparison]:
-    """`rows` split by the arms their task ran on, each scored on matched attempts.
+    """`rows` split by the arms their task is compared on, each scored on matched attempts.
 
-    A task runs only on the arms it grades on equal terms (`LiveTask.arms`): pooled, a suite set fastbrowse on 21
-    tasks beside Browser Use on 14. An `unavailable` attempt measured nothing; dropping it from one arm
-    alone would score the arms on different attempts, so at each task an attempt counts only where every arm measured
-    the same repeat of it (rows from before repeats were recorded pair earliest first), and a task some arm has none at
+    A task is compared on the arms that ran it and on the arms of the suite the catalog says cannot run it, which
+    fail it at every attempt. An `unavailable` attempt measured nothing; dropping it from one arm alone would score
+    the arms on different attempts, so at each task an attempt counts only where every arm that ran it measured the
+    same repeat of it (rows from before repeats were recorded pair earliest first), and a task some arm has none at
     is left out. Groups with most arms first."""
+    present = {row["arm"] for row in rows}
     ran: dict[str, set[str]] = {}
+    cannot: dict[str, dict[str, str]] = {}
     for row in rows:
         ran.setdefault(row["task"], set()).add(row["arm"])
+        reasons = unsupported(row["task"], row.get("task_version"))
+        cannot.setdefault(row["task"], {}).update({arm: why for arm, why in reasons.items() if arm in present})
+    for task, arms in ran.items():
+        cannot[task] = {arm: reason for arm, reason in cannot[task].items() if arm not in arms}
     groups: dict[tuple[str, ...], list[Mapping[str, Any]]] = {}
     for row in rows:
-        groups.setdefault(tuple(sorted(ran[row["task"]], key=_arm_rank)), []).append(row)
+        task = row["task"]
+        groups.setdefault(tuple(sorted(ran[task] | cannot[task].keys(), key=_arm_rank)), []).append(row)
     comparisons = []
     for arms, group in sorted(groups.items(), key=lambda item: (-len(item[0]), [_arm_rank(a) for a in item[0]])):
         tasks: dict[str, dict[str, list[Mapping[str, Any]]]] = {}
         for row in _measured(group):
             tasks.setdefault(row["task"], {}).setdefault(row["arm"], []).append(row)
         scored: list[Mapping[str, Any]] = []
-        for per_arm in tasks.values():
-            if len(per_arm) == len(arms):
-                scored += _paired(per_arm)
+        for task, per_arm in tasks.items():
+            if len(per_arm) + len(cannot[task]) == len(arms):
+                scored += _paired(per_arm, cannot[task])
         comparisons.append(_Comparison(arms, group, scored))
     return comparisons
 
 
-def _paired(per_arm: Mapping[str, list[Mapping[str, Any]]]) -> list[Mapping[str, Any]]:
-    """The attempts at one task every arm measured: matched by repeat, or earliest first for rows without one."""
+def _paired(
+    per_arm: Mapping[str, list[Mapping[str, Any]]], cannot: Mapping[str, str] | None = None
+) -> list[Mapping[str, Any]]:
+    """The attempts at one task every arm that ran it measured: matched by repeat, or earliest first for rows without
+    one. Each arm in `cannot`, which cannot run the task, fails every one of those attempts for the reason given."""
     if all(r.get("repeat") is not None for attempts in per_arm.values() for r in attempts):
         shared = set.intersection(*({_pass(r) for r in attempts} for attempts in per_arm.values()))
-        return [r for attempts in per_arm.values() for r in attempts if _pass(r) in shared]
-    fewest = min(map(len, per_arm.values()))
-    return [r for attempts in per_arm.values() for r in sorted(attempts, key=lambda r: r.get("at") or 0.0)[:fewest]]
+        paired = [r for attempts in per_arm.values() for r in attempts if _pass(r) in shared]
+        slots: list[int | None] = sorted(repeat for _, repeat in shared)
+    else:
+        fewest = min(map(len, per_arm.values()))
+        paired = [
+            r for attempts in per_arm.values() for r in sorted(attempts, key=lambda r: r.get("at") or 0.0)[:fewest]
+        ]
+        slots = [None] * fewest
+    task = next(iter(per_arm.values()))[0]["task"]
+    failed = [
+        {"arm": arm, "task": task, "repeat": repeat, "passed": False, "unsupported": reason}
+        for arm, reason in (cannot or {}).items()
+        for repeat in slots
+    ]
+    return [*paired, *failed]
 
 
 def _pass(row: Mapping[str, Any]) -> tuple[object, int]:
@@ -401,9 +439,13 @@ class MetricSummary(BaseModel):
 class ArmSummary(BaseModel):
     passed: int
     total: int
+    """Attempts scored, the `unsupported` ones included."""
     excluded: int = 0
     """Attempts made but not scored: those that ended `unavailable`, and as many of this arm's at the same task when
     another arm lost one, so every arm is scored on the same attempts."""
+    unsupported: int = 0
+    """Failed attempts at tasks the catalog says this arm cannot run. They ran nothing, so time and cost are averaged
+    over the other attempts."""
     priced: int
     seconds: MetricSummary
     dollars: MetricSummary
@@ -460,15 +502,19 @@ def summary(releases: Sequence[tuple[str, list[dict[str, Any]]]] | None = None) 
             group = comparison.rows
             arms = {}
             scored = _by_arm(comparison.scored)
+            ran = [r for r in comparison.scored if "unsupported" not in r]
             # Seconds on two clocks say nothing about either arm, so such a comparison reports none.
-            timed = len({r.get("timing_basis") for r in comparison.scored}) <= 1
-            for arm, attempts in _by_arm(group).items():
-                arm_rows = scored.get(arm, [])
+            timed = len({r.get("timing_basis") for r in ran}) <= 1
+            attempts = _by_arm(group)
+            for arm in comparison.arms:
+                counted = scored.get(arm, [])
+                arm_rows = [r for r in counted if "unsupported" not in r]
                 prices = [r["dollars"] for r in arm_rows if r["dollars"] is not None]
                 arms[arm] = ArmSummary(
-                    passed=sum(bool(r["passed"]) for r in arm_rows),
-                    total=len(arm_rows),
-                    excluded=len(attempts) - len(arm_rows),
+                    passed=sum(bool(r["passed"]) for r in counted),
+                    total=len(counted),
+                    excluded=len(attempts.get(arm, [])) - len(arm_rows),
+                    unsupported=len(counted) - len(arm_rows),
                     priced=len(prices),
                     seconds=_metrics([r["seconds"] for r in arm_rows] if timed else []),
                     dollars=_metrics(prices if len(prices) == len(arm_rows) else []),

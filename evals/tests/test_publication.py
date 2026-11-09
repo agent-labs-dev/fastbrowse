@@ -429,7 +429,7 @@ def test_export_counts_every_physical_run_and_keeps_source_grades_separate(tmp_p
         ({"hosted": lambda a: a[0].update(passed=None)}, "judgment"),
         ({"hosted": lambda a: a.pop()}, "every task"),
         ({"hosted": lambda a: a[0].update(task_version=999)}, "task version"),
-        ({"hosted": lambda a: a[0].update(concurrency=1)}, "task version or concurrency"),
+        ({"hosted": lambda a: a[0].update(concurrency=1)}, "concurrency"),
         ({"hosted_run": {"budget_usd": None}}, "budget"),
         ({"hosted_run": {"max_seconds": 3600}}, "limit was recorded"),
         ({"hosted_run": {"max_steps": 50}}, "limit was recorded"),
@@ -438,7 +438,7 @@ def test_export_counts_every_physical_run_and_keeps_source_grades_separate(tmp_p
         ({"hosted_run": {"budget_policy": "reserve-next-task-v1"}}, "start-gate-v1"),
         ({"hosted_run": {"browsers": {}}}, "browser"),
         ({"hosted_run": {"git_dirty": True}}, "clean"),
-        ({"hosted_run": {"benchmark_catalog_sha256": "0" * 64}}, "canonical internal catalog"),
+        ({"hosted_run": {"benchmark_origin": "upstream"}}, "canonical internal catalog"),
         ({"ultra": lambda a: a[0].update(selected=False)}, "final attempt|one row per slot"),
         ({"ultra": lambda a: a[0].update(retries=2)}, "retry sequence"),
         ({"bu": lambda m: m["run"].update(git_sha="e" * 40)}, "one clean agent build"),
@@ -918,10 +918,10 @@ def test_internal_journal_is_read_by_key_when_attempt_writes_are_reordered(tmp_p
 
 def test_internal_journal_bytes_change_the_private_experiment_identity(tmp_path: Path) -> None:
     results = internal_fastbrowse_ledger(tmp_path)
-    before = publication.internal_group("internal-fastbrowse", results, CATALOG, DIGEST).tracked
+    [before] = publication.internal_group("internal-fastbrowse", results, CATALOG, DIGEST).tracked
     journal = results.with_suffix(".budget.jsonl")
     journal.write_bytes(journal.read_bytes() + b"\n")
-    after = publication.internal_group("internal-fastbrowse", results, CATALOG, DIGEST).tracked
+    [after] = publication.internal_group("internal-fastbrowse", results, CATALOG, DIGEST).tracked
     assert before.run_id != after.run_id
     assert before.runs[0].name != after.runs[0].name
 
@@ -948,7 +948,7 @@ def test_internal_campaign_settlement_includes_paid_semantic_judgments(tmp_path:
     results = internal_fastbrowse_ledger(tmp_path, judge_cost=0.001)
     collected = publication.internal_group("internal-fastbrowse", results, CATALOG, DIGEST)
     assert len(collected.group.rows) == 159
-    scores = {score.name: score.value for score in collected.tracked.runs[0].scores}
+    scores = {score.name: score.value for score in collected.tracked[0].runs[0].scores}
     assert scores["known_judge_cost_usd"] == pytest.approx(0.159)
 
 
@@ -1090,14 +1090,34 @@ def test_a_slot_retried_after_an_infrastructure_unknown_publishes_every_physical
     assert collected.physical_runs == len(collected.group.rows) + 1
 
 
-def test_an_infrastructure_unknown_left_selected_still_cannot_publish(tmp_path: Path) -> None:
+def _unjudgeable(status: str) -> Callable[[list[dict[str, Any]]], None]:
     def unknown(attempts: list[dict[str, Any]]) -> None:
         index = next(i for i, a in enumerate(attempts) if a["arm"] == "browser-use")
-        attempts[index] = judged_outage(attempts[index]) | {"selected": True}
+        attempts[index] = judged_outage(attempts[index], status=status) | {"selected": True}
 
-    results = write_ledger(tmp_path, "hosted", ("fastbrowse", "browser-use"), unknown)
-    with pytest.raises(PublicationError, match="quality judgment is unavailable"):
-        publication.internal_group("internal-hosted", results, CATALOG, DIGEST)
+    return unknown
+
+
+def test_a_slot_our_harness_failed_is_listed_apart_and_the_group_still_publishes(tmp_path: Path) -> None:
+    """A run that ended in an error of the harness or its provider, which the judge found unavailable, measured no
+    agent: neither a pass nor a failure, out of the rows and recorded with its reason."""
+    results = write_ledger(tmp_path, "hosted", ("fastbrowse", "browser-use"), _unjudgeable("error"))
+    group = publication.internal_group("internal-hosted", results, CATALOG, DIGEST).group
+    [slot] = group.unjudged
+    assert (slot.arm, slot.reason) == ("browser-use", "evidence-unavailable")
+    assert not any((r.arm, r.task, r.repeat) == (slot.arm, slot.task, slot.repeat) for r in group.rows)
+    assert group.model_dump(mode="json")["unjudged"] == [slot.model_dump(mode="json")]
+
+
+def test_a_slot_the_site_blocked_is_the_agents_failure(tmp_path: Path) -> None:
+    """Another agent may get past the bot check that stopped this one, so a run that ended `blocked` with no verdict
+    is a failed row that names why, not a slot left out."""
+    results = write_ledger(tmp_path, "hosted", ("fastbrowse", "browser-use"), _unjudgeable("blocked"))
+    group = publication.internal_group("internal-hosted", results, CATALOG, DIGEST).group
+    assert not group.unjudged
+    [row] = [r for r in group.rows if r.failure is not None]
+    assert (row.arm, row.score, row.failure) == ("browser-use", 0.0, publication.SITE_BLOCKED)
+    assert len([r for r in group.rows if r.arm == "browser-use"]) == 3 * (53 - len(group.excluded))
 
 
 def test_an_official_run_publishes_every_repeat_and_states_the_per_task_mean(tmp_path: Path) -> None:
@@ -1153,7 +1173,14 @@ def test_the_hosted_group_measures_whichever_hosted_arms_ran_on_one_task_set(tmp
     counts = {arm: sum(r.arm == arm for r in group.rows) for arm in arms}
     # Each arm runs every task it can attempt, three times each.
     assert counts == {"fastbrowse": 159, "browser-use": 156, "jev-ultrafast": 141}
-    assert any("jev-ultrafast runs only the 47" in n for n in group.limits)
+    # Each task an arm cannot run is listed with the catalog's reason, and stands for three failed attempts.
+    assert [(e.arm, e.task) for e in group.excluded] == sorted(
+        (arm, t["id"]) for arm in arms for t in entries(HOSTED_TASKS) if arm not in t["arms"]
+    )
+    assert len(group.excluded) == 1 + 6
+    pause = next(e for e in group.excluded if e.arm == "browser-use")
+    assert pause.reason == next(t for t in entries(HOSTED_TASKS) if t["id"] == pause.task)["excluded"]["browser-use"]
+    assert any("jev-ultrafast cannot run 6, each a failure" in n for n in group.limits)
     assert any("jev-ultrafast text helper" in n for n in group.limits)
 
     # browser-harness, a coding agent given no credentials, runs only the set's credential-free completion tasks.
@@ -1162,7 +1189,7 @@ def test_the_hosted_group_measures_whichever_hosted_arms_ran_on_one_task_set(tmp
     supported = [t for t in entries(HOSTED_TASKS) if "browser-harness" in t["arms"]]
     assert 0 < len(supported) < 53
     assert sum(r.arm == "browser-harness" for r in group.rows) == 3 * len(supported)
-    assert any(f"browser-harness runs only the {len(supported)} it supports" in n for n in group.limits)
+    assert any(f"browser-harness cannot run {53 - len(supported)}, each a failure" in n for n in group.limits)
 
     alone = write_ledger(tmp_path, "alone", ("fastbrowse",), task_arms=HOSTED_TASKS)
     group = publication.internal_group("internal-hosted", alone, CATALOG, DIGEST).group
@@ -1228,7 +1255,7 @@ def test_one_refused_start_among_started_runs_still_blocks(tmp_path: Path, monke
     ledger = write_ledger(
         tmp_path, "hosted", arms, refuse_arm("browser-use", 1), task_arms=HOSTED_TASKS, budget_usd=1000.0
     )
-    with pytest.raises(PublicationError, match="quality judgment is unavailable"):
+    with pytest.raises(PublicationError, match="complete semantic judge receipt"):
         publication.internal_group("internal-hosted", ledger, CATALOG, DIGEST)
 
 
@@ -1501,3 +1528,98 @@ def test_candidate_export_keeps_physical_call_basis_and_unknown_count(tmp_path: 
     rows = Candidate.model_validate_json(candidate.model_dump_json()).groups[0].rows
     assert any(row.llm_calls is None and row.llm_calls_basis == "physical_requests" for row in rows)
     assert any(row.llm_calls == 2 and row.llm_calls_basis == "physical_requests" for row in rows)
+
+
+def narrowed(tasks: set[str], fail: bool = False) -> Callable[[list[dict[str, Any]]], None]:
+    """A rerun of only `tasks`, as the campaign's `only` input runs it; `fail` makes every one of its slots fail."""
+
+    def edit(attempts: list[dict[str, Any]]) -> None:
+        attempts[:] = [a for a in attempts if a["task"] in tasks]
+        for a in attempts if fail else ():
+            a["passed"], a["semantic_judge"] = False, semantic_receipt(False)
+
+    return edit
+
+
+LATER: dict[str, Any] = {"run_id": "r2", "git_sha": "c" * 40, "run_started": "2026-10-08T09:00:00+00:00"}
+
+
+def test_each_task_comes_from_the_newest_run_that_measured_it_in_full(tmp_path: Path) -> None:
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir(), second.mkdir()
+    full = internal_fastbrowse_ledger(first)
+    rerun = {entries(("fastbrowse",))[0]["id"]}
+    late = write_ledger(
+        second, "internal-fastbrowse", ("fastbrowse",), narrowed(rerun, fail=True),
+        browsers={"fastbrowse": LOCAL_CHROME}, browser_reserve_dollars=0.0, concurrency=1, **LATER,
+    )  # fmt: skip
+    # The order given does not matter: the recorded start decides which run is newest.
+    collected = publication.internal_group("internal-fastbrowse", [full, late], CATALOG, DIGEST)
+    group = collected.group
+    assert {r.score for r in group.rows if r.task in rerun} == {0.0}
+    assert len(group.rows) == 159 and len(collected.tracked) == 2
+    assert [(s.run_id, s.agent_sha, s.tasks) for s in group.sources][0] == ("r2", "c" * 40, sorted(rerun))
+    assert group.sources[1].agent_sha == AGENT and len(group.sources[1].tasks) == 52
+    assert group.agent_sha == "c" * 40
+
+
+def test_a_rerun_supplies_only_the_tasks_it_measured_in_full(tmp_path: Path) -> None:
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir(), second.mkdir()
+    full = internal_fastbrowse_ledger(first)
+    task = entries(("fastbrowse",))[0]["id"]
+
+    def partial(attempts: list[dict[str, Any]]) -> None:
+        narrowed({task}, fail=True)(attempts)
+        attempts.pop()  # one repeat never ran
+
+    late = write_ledger(
+        second, "internal-fastbrowse", ("fastbrowse",), partial,
+        browsers={"fastbrowse": LOCAL_CHROME}, browser_reserve_dollars=0.0, concurrency=1, **LATER,
+    )  # fmt: skip
+    # The rerun measured nothing in full, so the first run supplies every task and the rerun is not read.
+    group = publication.internal_group("internal-fastbrowse", [late, full], CATALOG, DIGEST).group
+    assert [s.run_id for s in group.sources] == ["r1"]
+    # A rerun alone does not cover the catalog.
+    with pytest.raises(PublicationError, match="no run measured"):
+        publication.internal_group("internal-fastbrowse", late, CATALOG, DIGEST)
+
+
+def test_a_slot_measured_on_an_earlier_task_version_is_listed_apart(tmp_path: Path) -> None:
+    task = entries(("fastbrowse",))[0]
+
+    def earlier(attempts: list[dict[str, Any]]) -> None:
+        for a in attempts:
+            if a["task"] == task["id"]:
+                a["task_version"] = task["task_version"] - 1
+
+    results = write_ledger(
+        tmp_path, "internal-fastbrowse", ("fastbrowse",), earlier,
+        browsers={"fastbrowse": LOCAL_CHROME}, browser_reserve_dollars=0.0, concurrency=1,
+    )  # fmt: skip
+    group = publication.internal_group("internal-fastbrowse", results, CATALOG, DIGEST).group
+    assert {(s.task, s.reason) for s in group.unjudged} == {(task["id"], "task-changed")}
+    assert len(group.unjudged) == 3 and len(group.rows) == 156
+
+
+def test_the_head_to_head_takes_fastbrowse_from_a_newer_fastbrowse_only_run(tmp_path: Path) -> None:
+    """As the release gate pools them, fastbrowse's head-to-head tasks come from the newest run that measured
+    fastbrowse there, a fastbrowse-only run included; each competitor keeps the run it was measured in."""
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir(), second.mkdir()
+    duel = write_ledger(first, "hosted", ("fastbrowse", "browser-use"))
+    newer = dict(browsers={"fastbrowse": BROWSERS["fastbrowse"]}, browser_reserve_dollars=0.0, concurrency=1, **LATER)
+    every = {t["id"] for t in entries(("fastbrowse",))}
+    alone = write_ledger(second, "internal-fastbrowse", ("fastbrowse",), narrowed(every, fail=True), **newer)
+    group = publication.internal_group("internal-hosted", [duel, alone], CATALOG, DIGEST).group
+    assert {r.score for r in group.rows if r.arm == "fastbrowse"} == {0.0}
+    assert [(s.run_id, s.arm, len(s.tasks)) for s in group.sources] == [
+        ("r2", "fastbrowse", 53),
+        ("r1", "browser-use", 52),
+    ]
+    assert group.agent_sha == "c" * 40
+    # fastbrowse on another browser in the newer run is not the same measurement.
+    other = dict(newer, browsers={"fastbrowse": LOCAL_CHROME})
+    moved = write_ledger(second, "internal-fastbrowse", ("fastbrowse",), **other)
+    with pytest.raises(PublicationError, match="drove fastbrowse on different browsers"):
+        publication.internal_group("internal-hosted", [duel, moved], CATALOG, DIGEST)

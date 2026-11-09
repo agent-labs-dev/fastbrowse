@@ -1,0 +1,40 @@
+<!doctype html>
+<html><head><title>Media</title>
+<style>.item { display: inline-block; width: 160px; margin: 8px; position: relative; } .item img { width: 160px; height: 90px; }
+.edit-button, .delete-button { width: 32px; height: 32px; }
+/* The controls are always in the document and fade in while the pointer is over their card. */
+.actions { position: absolute; top: 4px; right: 4px; display: flex; gap: 4px; opacity: 0; pointer-events: none;
+  transition: opacity 2s; }
+/* The fade in waits a second at opacity 0 before it moves, so an observation taken right after the hover sees its
+   start whatever the machine's speed. The fade out starts at once. */
+.item:hover .actions { opacity: 1; pointer-events: auto; transition-delay: 1s; }
+/* A page that keeps the controls unclickable until the fade has ended. */
+.late .item:hover .actions:not(.settled) { pointer-events: none; }</style></head>
+<body>
+  <h1>Media</h1>
+  <div id="items">
+    <div class="item" id="m1"><img src="data:," alt=""><p>The map menu with tick boxes</p></div>
+    <div class="item" id="m2"><img src="data:," alt=""><p>The quest log grouped by zone</p></div>
+    <div class="item" id="m3"><img src="data:," alt=""><p>The settings panel</p></div>
+  </div>
+  <p id="status"></p>
+  <script>
+    // Like a real gallery's, the controls carry no name, title or icon class: only their own class says which one
+    // edits and which deletes.
+    for (const item of document.querySelectorAll('.item')) {
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+      actions.innerHTML =
+        '<button class="edit-button"><svg viewBox="0 0 16 16"><path d="M2 12l8-8 2 2-8 8H2z"/></svg></button>' +
+        '<button class="delete-button"><svg viewBox="0 0 16 16"><path d="M4 4h8l-1 10H5zM3 3h10"/></svg></button>';
+      actions.querySelector('.edit-button').addEventListener('click', () => {
+        document.getElementById('status').textContent = 'Edited ' + item.id;
+      });
+      actions.querySelector('.delete-button').addEventListener('click', () => {
+        document.getElementById('status').textContent = 'Deleted ' + item.id;
+      });
+      actions.addEventListener('transitionend', () => actions.classList.toggle('settled', item.matches(':hover')));
+      item.append(actions);
+    }
+  </script>
+</body></html>

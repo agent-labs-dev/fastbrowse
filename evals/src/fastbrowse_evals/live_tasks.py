@@ -360,8 +360,10 @@ def _hn_comments(outcome: Outcome, truth: object) -> str | None:
 
 TASKS: tuple[LiveTask, ...] = (
     LiveTask(
+        # PyPI's search serves a Fastly image CAPTCHA to every cloud browser, which no browser agent can pass
+        # (#854), so the lookups start on the project page.
         "pypi-version",
-        "https://pypi.org/",
+        "https://pypi.org/project/httpx/",
         "What is the latest released version of httpx?",
         _httpx_version,
         _version,
@@ -369,7 +371,7 @@ TASKS: tuple[LiveTask, ...] = (
     ),
     LiveTask(
         "pypi-structured",
-        "https://pypi.org/",
+        "https://pypi.org/project/httpx/",
         "Find the httpx package and report its name and latest released version.",
         _httpx_version,
         _release,

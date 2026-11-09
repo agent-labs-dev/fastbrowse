@@ -21,16 +21,24 @@ pub fn has(observation: &Observation, label: &str) -> bool {
 }
 
 /// `common::observe_until`, except that a failed observe is retried until the deadline.
-pub async fn observe_until(page: &CdpPage, label: &str) -> Observation {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if let Ok(observation) = page.observe().await
-            && has(&observation, label)
-        {
-            return observation;
+#[track_caller]
+pub fn observe_until<'a>(page: &'a CdpPage, label: &'a str) -> impl Future<Output = Observation> + 'a {
+    let caller = std::panic::Location::caller();
+    async move {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let observed = page.observe().await;
+            if let Ok(observation) = &observed
+                && has(observation, label)
+            {
+                return observed.unwrap();
+            }
+            if Instant::now() >= deadline {
+                let seen = observed.map(|o| o.controls.into_iter().map(|c| c.label).collect::<Vec<_>>());
+                panic!("no control labelled {label:?} in 5s, waited for at {caller}; the last observe gave {seen:?}");
+            }
+            sleep(Duration::from_millis(50)).await;
         }
-        assert!(Instant::now() < deadline, "condition was not met in time");
-        sleep(Duration::from_millis(50)).await;
     }
 }
 

@@ -1,4 +1,6 @@
 name: Benchmark campaign
+# The campaign id ends the run's title, which is how the release gate finds `release-<version>`.
+run-name: Benchmark campaign ${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
 
 # Runs the live browser benchmark campaign (Parallax) for one fastbrowse build and publishes it to the site.
 # Dispatch only, by hand, by the release workflow on a minor release, or by a repository_dispatch from an integration:
@@ -41,6 +43,11 @@ name: Benchmark campaign
 #
 # `smoke` finds bugs before a release: one repeat of every task in the chosen group (`groups: all` means the head-to-head
 # group, which holds both arms), its ledger sent to Langfuse marked as smoke, and no candidate or site pull request, so it can never publish.
+#
+# The candidate takes each task from the newest finished run of this campaign that measured it in full, as the release
+# gate scores it, so a late fix reruns only the tasks it affects (`only`) and its stage combines that run with the
+# earlier ones. `candidate_only` runs nothing and builds the candidate from the campaign's finished runs alone; its
+# `fastbrowse_ref` is the newest run's build, which the fixture Evals dispatch must have passed on.
 #
 # `budget` is each group's approved total. It only gates whether the next run may start: a run holds its agent,
 # browser and judge reserves (1 + 1 + 1 dollars) while in flight, and starts only
@@ -102,10 +109,15 @@ on:
         type: string
         default: ""
       only:
-        description: Smoke only. Space separated task ids of the chosen suites to run instead of all of them
+        description: Space separated task ids of the chosen suites to run instead of all of them. Outside a smoke it reruns the tasks a fix affects, and the candidate takes the other tasks from the campaign's earlier runs
         required: false
         type: string
         default: ""
+      candidate_only:
+        description: Run nothing; build the candidate from this campaign's finished runs. fastbrowse_ref is the newest run's build
+        required: false
+        type: boolean
+        default: false
       concurrency:
         description: Smoke only. Runs in flight at once; empty keeps the default of 8
         required: false
@@ -139,6 +151,7 @@ env:
   ONLY: ${{ inputs.only || github.event.client_payload.only || '' }}
   RUN_CONCURRENCY: ${{ inputs.concurrency || github.event.client_payload.concurrency || '' }}
   EXTRA_ARMS: ${{ inputs.extra_arms || github.event.client_payload.extra_arms || '' }}
+  CANDIDATE_ONLY: ${{ inputs.candidate_only || github.event.client_payload.candidate_only == true }}
 
 jobs:
   resolve:
@@ -166,6 +179,9 @@ jobs:
             fastbrowse|head-to-head|all) ;;
             *) echo "::error::groups must be fastbrowse, head-to-head or all, got '$GROUPS_CHOSEN'"; exit 1 ;;
           esac
+          if test "$CANDIDATE_ONLY" = true && test "$SMOKE" = true; then
+            echo "::error::a smoke builds no candidate, so candidate_only cannot be a smoke"; exit 1
+          fi
           if test "$REFRESH" = true && test "$GROUPS_CHOSEN" = fastbrowse; then
             echo "::error::refresh_competitors needs the head-to-head group"; exit 1
           fi
@@ -183,7 +199,7 @@ jobs:
             jq -e --arg key "$key" '(. // {})[$key] != ""' <<< "$PAYLOAD" > /dev/null \
               || { echo "::error::$key in client_payload is empty"; exit 1; }
           done
-          for key in smoke refresh_competitors; do
+          for key in smoke refresh_competitors candidate_only; do
             # Only a JSON true turns these on, so a string "true" would quietly start a full paid run.
             jq -e --arg key "$key" '(. // {})[$key] | . == null or type == "boolean"' <<< "$PAYLOAD" > /dev/null \
               || { echo "::error::$key in client_payload must be true or false"; exit 1; }
@@ -206,9 +222,10 @@ jobs:
           case "$OFFICIAL_RUNS" in
             *[!0-9\ ]*) echo "::error::official_runs must be run ids separated by spaces"; exit 1 ;;
           esac
-          # A published comparison covers every task of its suites under one setting, so only a smoke narrows either.
-          if test "$SMOKE" != true && { test -n "$ONLY" || test -n "$RUN_CONCURRENCY" || test -n "$EXTRA_ARMS"; }; then
-            echo "::error::only, concurrency and extra_arms need smoke"; exit 1
+          # A published comparison covers every task of its suites under one setting, so only a smoke changes the
+          # setting. `only` may narrow a release run: the gate scores each task on its newest run (scripts/release_gate.py).
+          if test "$SMOKE" != true && { test -n "$RUN_CONCURRENCY" || test -n "$EXTRA_ARMS"; }; then
+            echo "::error::concurrency and extra_arms need smoke"; exit 1
           fi
           for arm in $EXTRA_ARMS; do
             case "$arm" in
@@ -242,10 +259,10 @@ jobs:
             echo "harness_sha=$HARNESS_SHA"
             echo "run_on=$(date -u +%F)"
           } >> "$GITHUB_OUTPUT"
-      # The stage job needs a passing Evals dispatch on this build, and an integration that can only send a
-      # repository_dispatch cannot start one, so it is refused here rather than after the budget is spent.
+      # The stage job needs a passing Evals dispatch on this build, so a campaign that will stage is refused here,
+      # however it was started, rather than after the budget is spent. A smoke never stages.
       - name: Require an Evals dispatch on the build
-        if: ${{ github.event_name == 'repository_dispatch' }}
+        if: ${{ !(inputs.smoke || github.event.client_payload.smoke == true) }}
         env:
           GH_TOKEN: ${{ github.token }}
           FIXTURE_SHA: ${{ steps.pins.outputs.fastbrowse_sha }}
@@ -259,6 +276,8 @@ jobs:
           esac
       - name: Check the credentials
         id: credentials
+        # A candidate built from earlier runs spends nothing; its readback needs only the Langfuse keys.
+        if: ${{ env.CANDIDATE_ONLY != 'true' }}
         env:
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -329,6 +348,7 @@ jobs:
   campaign:
     name: ${{ matrix.label }}
     needs: resolve
+    if: ${{ !(inputs.candidate_only || github.event.client_payload.candidate_only == true) }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     # id-token: the fastbrowse-pool arm signs in to GCP to reach the browser pool.
     permissions: {contents: read, statuses: write, id-token: write}
@@ -367,10 +387,14 @@ jobs:
           # (fastbrowse.evals.versions.provenance); a plain directory install records none and publication refuses it.
           uv pip install "fastbrowse @ git+file://$GITHUB_WORKSPACE/fastbrowse@$FASTBROWSE_SHA"
           uv run --no-sync python -c "import fastbrowse, fastbrowse_evals.live"
-      # The browser-harness arm's agent; the arm checks this exact version before each attempt.
+      # The browser-harness arm's agent, at the version the harness checkout pins: the arm checks it before each
+      # attempt, and a version written here as well drifted from it, so every attempt failed before it started.
       - name: Install the Codex CLI Browser Harness drives
         if: ${{ env.REFRESH == 'true' && matrix.key == 'head-to-head' }}
-        run: npm install --global @openai/codex@0.166.0
+        run: |
+          cd harness/evals/src/fastbrowse_evals/adapters
+          version=$(uv run --no-sync --project ../../.. python -c "import browser_harness_arm; print(browser_harness_arm.CODEX_VERSION)")
+          npm install --global "@openai/codex@$version"
       - name: Fetch the progress reporter
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -461,7 +485,12 @@ jobs:
   stage:
     name: Build the candidate
     needs: [resolve, campaign]
-    if: ${{ !(inputs.smoke || github.event.client_payload.smoke == true) }}
+    # A smoke builds none. A narrowed rerun, or a candidate_only dispatch that ran nothing, builds it with the
+    # campaign's earlier runs.
+    if: >-
+      ${{ !cancelled() && needs.resolve.result == 'success'
+      && (needs.campaign.result == 'success' || needs.campaign.result == 'skipped')
+      && !(inputs.smoke || github.event.client_payload.smoke == true) }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
@@ -480,6 +509,8 @@ jobs:
         with:
           ref: ${{ needs.resolve.outputs.harness_sha }}
           path: harness
+          # Publication checks that every run's agent and runner commits are in the history of the newest build.
+          fetch-depth: 0
           persist-credentials: false
       - name: Install the harness and fastbrowse
         env:
@@ -491,7 +522,23 @@ jobs:
           # (fastbrowse.evals.versions.provenance); a plain directory install records none and publication refuses it.
           uv pip install "fastbrowse @ git+file://$GITHUB_WORKSPACE/fastbrowse@$FASTBROWSE_SHA"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: ${{ needs.campaign.result == 'success' }}
         with: {path: ledgers, pattern: ledger-*, merge-multiple: true}
+      - name: Fetch the campaign's earlier ledgers
+        # Every finished run of this campaign, found by its title as the release gate finds them. Publication takes
+        # each task from the newest run that measured it in full and reads no further a run that supplies none.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CAMPAIGN_ID: ${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
+        run: |
+          mapfile -t runs < <(gh run list --repo "$GITHUB_REPOSITORY" --workflow benchmark-campaign.yml \
+            --status completed --limit 100 --json databaseId,displayTitle \
+            --jq '.[] | select((.displayTitle | split(" ") | last) == env.CAMPAIGN_ID) | .databaseId')
+          for run in "${runs[@]}"; do
+            test "$run" = "$GITHUB_RUN_ID" && continue
+            gh run download "$run" --repo "$GITHUB_REPOSITORY" --pattern 'ledger-*' --dir "earlier-ledgers/$run" \
+              || echo "run $run kept no ledger"
+          done
       - name: Fetch the official rows
         if: ${{ env.OFFICIAL_RUNS != '' }}
         env:
@@ -540,11 +587,10 @@ jobs:
           mapfile -t official < <(find "$GITHUB_WORKSPACE/official-rows" -name '*.rows.json' 2> /dev/null | sort)
           cd harness/evals
           args=()
-          for spec in \
-            "$GITHUB_WORKSPACE/ledgers/internal-fastbrowse.jsonl:--internal-fastbrowse" \
-            "$GITHUB_WORKSPACE/ledgers/head-to-head.jsonl:--hosted"; do
-            path="${spec%%:*}"
-            if test -f "$path"; then args+=("${spec##*:}" "$path"); fi
+          for spec in internal-fastbrowse.jsonl:--internal-fastbrowse head-to-head.jsonl:--hosted; do
+            mapfile -t found < <(find "$GITHUB_WORKSPACE/ledgers" "$GITHUB_WORKSPACE/earlier-ledgers" \
+              -name "${spec%%:*}" 2> /dev/null | sort)
+            if test "${#found[@]}" -gt 0; then args+=("${spec##*:}" "${found[@]}"); fi
           done
           if test "${#official[@]}" -gt 0; then args+=(--official-rows "${official[@]}"); fi
           if test "$REFRESH" = true; then
@@ -563,7 +609,6 @@ jobs:
         env:
           RUN_ON: ${{ needs.resolve.outputs.run_on }}
           HARNESS_SHA: ${{ needs.resolve.outputs.harness_sha }}
-          PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
         run: |
           # An official suite has its own run date and upstream judge, read from its rows.
@@ -573,7 +618,7 @@ jobs:
             | from_entries' {} + 2> /dev/null || true)"
           test -n "$groups" || groups='{}'
           jq -n --arg run_on "$RUN_ON" --arg harness "fastbrowse-evals at ${HARNESS_SHA:0:7}" \
-            --arg judge "$PARALLAX_JUDGE_MODELS through $PARALLAX_JUDGE_BASE_URL" --argjson groups "$groups" \
+            --arg judge "$PARALLAX_JUDGE_MODELS through OpenRouter" --argjson groups "$groups" \
             '{run_on: $run_on, harness: $harness, judge: $judge, groups: $groups}' \
             > "$GITHUB_WORKSPACE/candidate/run-facts.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

@@ -4,9 +4,9 @@
   "origin": "fastbrowse-internal",
   "owner": "parallax",
   "task_sources": {
-    "live_tasks.py": "9cb99d627c4904ee7f04de261f9059f922a54ea23294a4ca79db60b657187095",
-    "more_tasks.py": "4edec47b05163aea404dc440609cb8d886a2393d74f80e3a9ed7638770f51098",
-    "versions.json": "1ada9145c1351dc5e524be2f72bbbd0d92a493b7a463c95f1ff3e89666f95dd4"
+    "live_tasks.py": "4863b9de7b17a163473e7b19207e9e190eb0d15efa87dafcf10292b1b73fa309",
+    "more_tasks.py": "7bced0cb86327c1414492dae46635ffb70da3d2b34f1c0f25e74aa9e0b56349b",
+    "versions.json": "5c7778400081a388e0f707068678a5ca47221a16540828da9408e1dc687c8e6f"
   },
   "suites": {
     "core": [
@@ -24,8 +24,8 @@
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "3ddca381348ac770",
-        "task_version": 8
+        "source_fingerprint": "c228539ea1846f5a",
+        "task_version": 9
       },
       {
         "id": "pypi-structured",
@@ -41,8 +41,8 @@
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "1913d20ea1ceb5e6",
-        "task_version": 8
+        "source_fingerprint": "3ca8c54655938a9e",
+        "task_version": 9
       },
       {
         "id": "hn-top",
@@ -643,8 +643,8 @@
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "06a3e1b3ceea11a1",
-        "task_version": 8
+        "source_fingerprint": "158d0c7ea896d796",
+        "task_version": 9
       },
       {
         "id": "new-tab-page",

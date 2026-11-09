@@ -106,20 +106,9 @@ _PART_RULE = (
 )
 
 
-async def judge_browser(
-    state: dict[str, JsonValue],
-    *,
-    policy: str,
-    questions: Mapping[str, str] = QUESTIONS,
-    fallback_only: str | None = None,
-    unjudgeable: str | None = None,
-    use_jev: bool = True,
-    client: httpx.AsyncClient | None = None,
-) -> tuple[Judgment, str]:
-    """`questions` are the policy's own (`QUESTIONS` unless it names others); `fallback_only`, the reason, skips Jev
-    for this state; `unjudgeable`, the reason, asks no judge and records every question unknown; `use_jev` False
-    skips Jev for every state, leaving its route out of the policy's identity. Which states a policy routes either
-    way is fixed by its name."""
+def _route(use_jev: bool) -> tuple[Any, Any, Any]:
+    """The fallback panel, its endpoint and Jev's endpoint as the environment configures them; Jev is None when
+    `use_jev` is False or Jev is not configured."""
     panel = panel_from_env()
     try:
         llm = config_from_env() if panel is not None else None
@@ -129,9 +118,12 @@ async def judge_browser(
     if use_jev:
         with contextlib.suppress(JudgeConfigError):
             primary = jev.config_from_env()
-    else:
-        fallback_only = fallback_only or OPUS_ONLY
-    identity = jev.state_sha(
+    return panel, llm, primary
+
+
+def _identity(policy: str, questions: Mapping[str, str], panel: Any, llm: Any, primary: Any) -> str:
+    """The policy's identity: what it asks and how it routes, hashed. Every receipt of the policy records it."""
+    return jev.state_sha(
         {
             "policy": policy,
             "questions": dict(questions),
@@ -154,6 +146,26 @@ async def judge_browser(
             "attached_images": judging.ATTACHED_IMAGES,
         }
     )
+
+
+async def judge_browser(
+    state: dict[str, JsonValue],
+    *,
+    policy: str,
+    questions: Mapping[str, str] = QUESTIONS,
+    fallback_only: str | None = None,
+    unjudgeable: str | None = None,
+    use_jev: bool = True,
+    client: httpx.AsyncClient | None = None,
+) -> tuple[Judgment, str]:
+    """`questions` are the policy's own (`QUESTIONS` unless it names others); `fallback_only`, the reason, skips Jev
+    for this state; `unjudgeable`, the reason, asks no judge and records every question unknown; `use_jev` False
+    skips Jev for every state, leaving its route out of the policy's identity. Which states a policy routes either
+    way is fixed by its name."""
+    panel, llm, primary = _route(use_jev)
+    if not use_jev:
+        fallback_only = fallback_only or OPUS_ONLY
+    identity = _identity(policy, questions, panel, llm, primary)
     if unjudgeable is not None:
         decisions = {key: Decision(passed=None, source="harness", reason=unjudgeable) for key in questions}
         return Judgment(
@@ -191,13 +203,16 @@ async def judge_browser_parts(
     asked = {key: question + _PART_RULE for key, question in questions.items()}
     judged = [await judge_browser(part, policy=policy, questions=asked, **route) for part in parts]
     results = [result for result, _ in judged]
+    # Hashed from the policy's own questions: the part-worded ones would give a whole-state judgment of the same task
+    # another identity, and a campaign holding both is refused as two policies.
+    identity = _identity(policy, questions, *_route(route.get("use_jev", True)))
     return results[0].model_copy(
         update={
             "state_sha256": jev.state_sha(state),
             "decisions": {key: _combined([r.decisions[key] for r in results]) for key in questions},
             "fallback_calls": tuple(call for r in results for call in r.fallback_calls),
         }
-    ), judged[0][1]
+    ), identity
 
 
 def browser_verdict(result: Judgment) -> tuple[bool | None, str]:

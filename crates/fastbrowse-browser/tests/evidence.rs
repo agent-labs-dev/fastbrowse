@@ -1,8 +1,6 @@
 mod common;
 mod misc_support;
 
-use std::collections::HashSet;
-
 use common::{eval_active, harness, sites};
 use fastbrowse_core::models::Operation;
 use fastbrowse_core::page::{Action, BlockKind};
@@ -48,43 +46,22 @@ async fn test_one_open_reply_form_does_not_inherit_the_first_commenter() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_a_list_records_whether_its_element_holds_a_frame() {
-    for inside in [false, true] {
-        let Some(h) = harness().await else { return };
-        let frame = "<iframe sandbox srcdoc='<p>Advertisement</p>'></iframe>";
-        let url = format!(
-            "data:text/html,<h1>Birch</h1>{}<h2>Comments (2)</h2><ul><li><p>Elm: The map crashes.</p></li>\
-             <li><p>Oak: Thanks.</p>{}</li></ul>",
-            if inside { "" } else { frame },
-            if inside { frame } else { "" }
-        );
-        h.page.navigate(&url, None).await.expect("navigate");
-        let captured = h.page.capture().await.expect("capture");
-        let members: Vec<_> = captured.blocks.iter().filter(|b| b.list_id.is_some()).collect();
-        assert!(!members.is_empty(), "inside={inside}");
-        assert_eq!(members.iter().map(|b| b.list_frameless).collect::<HashSet<_>>(), HashSet::from([!inside]));
-        h.close().await;
-    }
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_a_list_that_hosts_a_shadow_root_is_not_frameless() {
+async fn test_a_captured_list_block_carries_no_list_fields() {
     let Some(h) = harness().await else { return };
     h.page
         .navigate(
-            "data:text/html,<h1>Birch</h1><h2>Comments (2)</h2>\
-             <div id=list role=list><div role=listitem><p>Elm: The map crashes.</p></div>\
-             <div role=listitem><p>Oak: Thanks.</p></div></div>\
-             <script>document.getElementById('list').attachShadow({mode: 'open'}).innerHTML = \
-             \"<slot></slot><iframe sandbox srcdoc='<p>More</p>'></iframe>\";</script>",
+            "data:text/html,<h1>Birch</h1><ul><li><p>Elm: The map crashes.</p></li><li><p>Oak: Thanks.</p></li></ul>",
             None,
         )
         .await
         .expect("navigate");
-    let captured = h.page.capture().await.expect("capture");
-    let members: Vec<_> = captured.blocks.iter().filter(|b| b.list_id.is_some()).collect();
-    assert!(!members.is_empty());
-    assert_eq!(members.iter().map(|b| b.list_frameless).collect::<HashSet<_>>(), HashSet::from([false]));
+    let script = format!("({})(null).blocks", fastbrowse_browser::session::CAPTURE_JS);
+    let blocks = eval_active(&h.session, &script).await;
+    let blocks = blocks.as_array().expect("capture.js returns its blocks");
+    assert!(blocks.iter().any(|block| block["text"].as_str().is_some_and(|text| text.contains("Elm"))), "{blocks:?}");
+    let keys: Vec<&String> =
+        blocks.iter().filter_map(|block| block.as_object()).flat_map(|block| block.keys()).collect();
+    assert!(keys.iter().all(|key| !key.starts_with("list_")), "{keys:?}");
     h.close().await;
 }
 
@@ -315,6 +292,47 @@ async fn test_capture_reports_icon_link_destination_with_its_row() {
     // A bare `#` is a placeholder whose parsed hash is empty, and an unparsable address must not end the capture.
     assert_eq!(capture.text.matches("Link element DOM metadata").count(), 1);
     assert!(!capture.text.contains("http://["));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_capture_keeps_a_time_elements_datetime_with_its_text() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = '<div><a href="/u">rustbot</a> released this ' +
+          '<relative-time id=rt datetime="2026-10-16T04:47:44Z">16 Oct 04:47</relative-time></div>' +
+          '<p>Posted <time datetime="2026-10-16">3 weeks ago</time></p>' +
+          '<ol><li>Opened <time datetime="2026-02-02">Feb 2</time>, closed <time datetime="2026-02-02">today</time></li></ol>' +
+          '<p><time datetime="2026-01-02">2026-01-02</time></p>' +
+          '<p>Edited <del datetime="2020-01-01">old text</del></p>' +
+          '<p><time datetime="1999-01-01" style="display:none">x</time>Kept</p>' +
+          '<a href="/c"><time datetime="2026-11-01">5 days ago</time></a>' +
+          '<ul><li>Shipped <relative-time id=lt datetime="2026-09-01">Sep 1</relative-time></li></ul>' +
+          '<table><tr><th>When</th></tr><tr><td><time datetime="2026-03-04">March</time></td></tr></table>';
+        document.getElementById('rt').attachShadow({ mode: 'open' }).textContent = '3 weeks ago';
+        document.getElementById('lt').attachShadow({ mode: 'open' }).textContent = 'last month';
+        "#,
+    )
+    .await;
+    let capture = h.page.capture().await.expect("capture");
+    // A shadow-drawn relative time reads in its row, followed by the exact date the element holds.
+    assert!(capture.text.contains("rustbot released this 3 weeks ago (2026-10-16T04:47:44Z)"), "{}", capture.text);
+    assert!(capture.text.contains("Posted 3 weeks ago (2026-10-16)"), "{}", capture.text);
+    // Each time in a list item is stamped, even when an earlier one holds the same date.
+    assert!(capture.text.contains("Opened Feb 2 (2026-02-02), closed today (2026-02-02)"), "{}", capture.text);
+    // Shown text that already states the date, an edit's date and a hidden time add nothing.
+    assert!(!capture.text.contains("2026-01-02 (2026-01-02)"));
+    assert!(!capture.text.contains("2020-01-01"));
+    assert!(!capture.text.contains("1999-01-01"));
+    let link = capture.blocks.iter().find(|b| b.kind == BlockKind::Link && b.href.as_deref() == Some("/c")).unwrap();
+    assert_eq!(text_of(&capture, link), "5 days ago (2026-11-01)");
+    // The detached shadow block of a host its list item read without that text still carries the date.
+    assert!(capture.text.contains("last month (2026-09-01)"), "{}", capture.text);
+    let table = capture.blocks.iter().find(|b| b.kind == BlockKind::Table).unwrap();
+    assert!(text_of(&capture, table).contains("March (2026-03-04)"));
     h.close().await;
 }
 

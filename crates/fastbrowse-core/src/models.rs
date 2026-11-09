@@ -395,6 +395,8 @@ str_enum! {
         Compose = "compose",
         ImageRead = "image_read",
         Fill = "fill",
+        Pages = "pages",
+        Dates = "dates",
     }
 }
 

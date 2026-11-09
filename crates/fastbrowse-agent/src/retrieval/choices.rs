@@ -128,6 +128,7 @@ fn read_groups(candidates: &[Candidate]) -> IndexMap<String, Vec<Candidate>> {
 fn read_request(
     page: &Page<'_>,
     task: &str,
+    date: &str,
     candidates: &[Candidate],
     blocks: Option<&[&Block]>,
     shows: bool,
@@ -180,7 +181,7 @@ fn read_request(
         shown.insert("focused".into(), true.into());
     }
     shown.insert("inaccessible_frames".into(), capture.inaccessible_frames.into());
-    (json!({"page": Value::Object(shown)}), questions)
+    (json!({"date": date, "page": Value::Object(shown)}), questions)
 }
 
 /// Whether the state and the questions fit in one request to Jev.
@@ -190,15 +191,17 @@ pub(super) fn read_fits(state: &Value, questions: &IndexMap<String, Question>, t
 }
 
 /// `_focus`: the passages Jev should choose from, best scored first and as many as a choice can hold, or none when a
-/// window went unjudged or no candidate fits.
+/// window went unjudged or no candidate fits, and whether any passage went unjudged: a batch that failed, or a
+/// question too large to send.
 async fn focus<'a>(
     jev: &dyn DecisionClient,
     page: &Page<'a>,
     task: &str,
+    date: &str,
     tokens: &TokenBudget,
     ledger: Option<&Ledger>,
     trace: &Trace,
-) -> Result<(Vec<&'a Block>, Vec<Candidate>, Vec<CostLine>)> {
+) -> Result<(Vec<&'a Block>, Vec<Candidate>, Vec<CostLine>, bool)> {
     let capture = page.capture;
     let mut windows: Vec<Vec<&'a Block>> = Vec::new();
     let mut window_chars = 0;
@@ -233,9 +236,11 @@ async fn focus<'a>(
     let state = json!({
         "rules": focus_rules(),
         "task": task,
+        "date": date,
         "page": {"url": capture.url, "title": capture.title},
     });
     let answered = evaluate_batches(JevPurpose::Read, jev, &state, &questions, tokens, ledger, None, true).await?;
+    let lost = answered.as_ref().is_none_or(|answered| answered.answers.len() < questions.len());
     let (answers, cost) = match answered {
         Some(answered) => (answered.answers, answered.cost),
         None => (IndexMap::new(), Vec::new()),
@@ -259,7 +264,7 @@ async fn focus<'a>(
     let fits = |shown: usize| {
         let blocks = passages(shown);
         let candidates = iter_read_candidates(page, &blocks, Some(max_options - 1));
-        let (state, questions) = read_request(page, task, &candidates, Some(&blocks), false);
+        let (state, questions) = read_request(page, task, date, &candidates, Some(&blocks), false);
         candidates.len() <= max_options - 2 && read_fits(&state, &questions, tokens)
     };
     let (mut shown, mut high) = (0, ranked.len());
@@ -280,17 +285,32 @@ async fn focus<'a>(
         fields.insert("candidates".into(), candidates.len().into());
         fields.insert("requests".into(), cost.len().into());
         fields.insert("scored".into(), scored.into());
+        fields.insert("lost".into(), lost.into());
         fields
     });
-    Ok((kept, candidates, cost))
+    Ok((kept, candidates, cost, lost))
 }
 
 /// What a read took from a page.
-#[derive(Default)]
 pub(crate) struct PageRead {
     pub facts: Vec<Fact>,
     /// No one fact answers the task: the answer is written from the notes when the run ends.
     pub compose: bool,
+    /// Jev answered the read with an offered option. A read whose requests failed, whose reply held no usable answer,
+    /// or whose Absent rests on passages left unjudged, took nothing from the page without saying it holds nothing.
+    pub finished: bool,
+}
+
+impl PageRead {
+    /// A read that took nothing because it did not finish.
+    fn unfinished() -> PageRead {
+        PageRead { facts: Vec::new(), compose: false, finished: false }
+    }
+
+    /// A finished read that found nothing on the page for the task.
+    fn absent() -> PageRead {
+        PageRead { facts: Vec::new(), compose: false, finished: true }
+    }
 }
 
 /// A page as notes to compose from, one fact per whole block, so a table row stays one record: counted cell by cell,
@@ -311,10 +331,16 @@ pub(crate) fn whole_page_facts(capture: &Capture) -> Vec<Fact> {
 
 /// `read_page`: the facts Jev picks from this page, none when it says the page holds nothing for `task`. An answer it
 /// says must be composed keeps every block as a fact.
+///
+/// Jev is told the capture date and the dates the task names, worked out from it, as a step is: asked whether "30/01/2027"
+/// answers "the last Saturday of the month after next" without them, it could not tell, and a run that had set that
+/// date read the page as holding nothing for the task.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn read_page(
     jev: &dyn DecisionClient,
     capture: &Capture,
     task: &str,
+    dates: &[crate::dates::DateReference],
     tokens: &TokenBudget,
     ledger: Option<&Ledger>,
     trace: &Trace,
@@ -323,17 +349,22 @@ pub(crate) async fn read_page(
     let page = Page::new(capture);
     let blocks: Vec<&Block> = capture.blocks.iter().collect();
     let mut candidates = page_read_candidates(&page, &blocks, jev.profile().max_choice_options);
-    let (mut state, mut asked) = read_request(&page, task, &candidates, None, shows);
+    let date = crate::dates::dated(capture.captured_at, dates);
+    let (mut state, mut asked) = read_request(&page, task, &date, &candidates, None, shows);
+    // Passages Jev never judged are missing from those it chooses among, so an absent from them is not the page's.
+    let mut lost = false;
     if candidates.is_empty() || !read_fits(&state, &asked, tokens) {
-        let (kept, narrowed, _) = focus(jev, &page, task, tokens, ledger, trace).await?;
+        let (kept, narrowed, _, unjudged) = focus(jev, &page, task, &date, tokens, ledger, trace).await?;
         if narrowed.is_empty() {
             // Too many value options can hide a passage that still fits as an absent-or-synthesis question.
             if !read_fits(&state, &asked, tokens) {
-                return Ok(PageRead::default());
+                // Every passage judged and none fitting is the same on a second try; one unjudged may not be.
+                return Ok(if unjudged { PageRead::unfinished() } else { PageRead::absent() });
             }
         } else {
+            lost = unjudged;
             candidates = narrowed;
-            (state, asked) = read_request(&page, task, &candidates, Some(&kept), shows);
+            (state, asked) = read_request(&page, task, &date, &candidates, Some(&kept), shows);
         }
     }
     if let Some(ledger) = ledger {
@@ -343,7 +374,7 @@ pub(crate) async fn read_page(
     if let Some(ledger) = ledger {
         ledger.record([evaluation.cost.clone()])?;
     }
-    let Some(Answer::Choice(answer)) = evaluation.answers.get(CHOICE) else { return Ok(PageRead::default()) };
+    let Some(Answer::Choice(answer)) = evaluation.answers.get(CHOICE) else { return Ok(PageRead::unfinished()) };
     let groups = read_groups(&candidates);
     // Absent is one option against every way the page could hold evidence: it stands only when more likely than them
     // together, and otherwise Jev's likeliest of them is the pick.
@@ -355,9 +386,14 @@ pub(crate) async fn read_page(
         answer.choice.as_str()
     };
     if choice == SYNTHESIS {
-        return Ok(PageRead { facts: whole_page_facts(capture), compose: true });
+        return Ok(PageRead { facts: whole_page_facts(capture), compose: true, finished: true });
     }
-    let Some(group) = groups.get(choice) else { return Ok(PageRead::default()) };
+    // Absent is offered only when the read may skip the page; outside that, like any pick outside the offered set, it is
+    // no answer about the page.
+    if choice == ABSENT && !shows {
+        return Ok(if lost { PageRead::unfinished() } else { PageRead::absent() });
+    }
+    let Some(group) = groups.get(choice) else { return Ok(PageRead::unfinished()) };
     let selected = &group[0];
     let context: Vec<Fact> = if group.len() > 1 {
         group.iter().map(|c| Fact::read(&c.value.to_str(), c.evidence.clone(), FactReader::JevChoice)).collect()
@@ -387,7 +423,7 @@ pub(crate) async fn read_page(
         basis,
         reader: FactReader::JevChoice,
     });
-    Ok(PageRead { facts, compose: false })
+    Ok(PageRead { facts, compose: false, finished: true })
 }
 
 /// `_block_context`: the whole block a narrowed quote was cut from, kept beside it as context.
@@ -489,8 +525,8 @@ mod tests {
 
     fn focused(captured: &Capture, tokens: &TokenBudget) -> Vec<String> {
         let page = Page::new(captured);
-        let (kept, _, _) =
-            block_on(focus(&Scorer, &page, "Find the version", tokens, None, &Trace::disabled())).unwrap();
+        let (kept, _, _, _) =
+            block_on(focus(&Scorer, &page, "Find the version", "", tokens, None, &Trace::disabled())).unwrap();
         kept.iter().map(|block| block.source_id.clone()).collect()
     }
 
@@ -565,6 +601,7 @@ mod tests {
                 &Reader(choice),
                 &captured,
                 "List the items",
+                &[],
                 &TokenBudget::default(),
                 None,
                 &Trace::disabled(),
@@ -572,6 +609,7 @@ mod tests {
             ))
             .unwrap();
             assert_eq!(read.compose, choice == SYNTHESIS);
+            assert!(read.finished, "{choice} is a finished read");
             if choice == SYNTHESIS {
                 assert_eq!(read.facts.len(), 1);
                 assert_eq!(read.facts[0].text, values);
@@ -579,6 +617,108 @@ mod tests {
                 assert!(read.facts.is_empty());
             }
         }
+    }
+
+    /// Scores every passage at `focus`, or fails every passage question when it is `None`, and picks `choice`.
+    struct Judge {
+        focus: Option<f64>,
+        choice: &'static str,
+    }
+
+    impl DecisionClient for Judge {
+        fn profile(&self) -> DecisionProfile {
+            DecisionProfile::jev()
+        }
+
+        fn evaluate<'a>(
+            &'a self,
+            _: &'a Value,
+            questions: &'a IndexMap<String, Question>,
+        ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
+            let mut answers = IndexMap::new();
+            for (key, question) in questions {
+                let answer = match question {
+                    Question::Noul(_) => match self.focus {
+                        Some(probability) => Answer::Noul(NoulAnswer { kind: NoulTag, probability }),
+                        None => return Box::pin(async { Err(DecisionError::Failed("unavailable".into())) }),
+                    },
+                    _ => Answer::Choice(ChoiceAnswer {
+                        kind: ChoiceTag,
+                        choice: self.choice.into(),
+                        probabilities: IndexMap::from([(self.choice.into(), 1.0)]),
+                        confidence: 1.0,
+                    }),
+                };
+                answers.insert(key.clone(), answer);
+            }
+            Box::pin(async move {
+                Ok(Evaluation {
+                    model: "test".into(),
+                    answers,
+                    input_tokens: 1,
+                    cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                    requests: 1,
+                })
+            })
+        }
+    }
+
+    fn judged(jev: &Judge, captured: &Capture) -> PageRead {
+        block_on(read_page(
+            jev,
+            captured,
+            "Find the version",
+            &[],
+            &TokenBudget::default(),
+            None,
+            &Trace::disabled(),
+            false,
+        ))
+        .unwrap()
+    }
+
+    /// A page too long for one read request, so its passages are judged first.
+    fn long_page() -> Capture {
+        let count = (TokenBudget::default().input_chars(&[] as &[&str]) as usize / 1400) + 2;
+        let parts: Vec<String> = (0..count).map(|_| passage("0.1", 1400)).collect();
+        capture(&parts.iter().map(|part| (BlockKind::Paragraph, part.as_str())).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn read_page_reports_lost_focus_as_unfinished() {
+        let captured = long_page();
+        let read = judged(&Judge { focus: None, choice: ABSENT }, &captured);
+        assert!(!read.finished, "passages Jev never judged leave the read unfinished");
+        assert!(read.facts.is_empty());
+        let read = judged(&Judge { focus: Some(0.1), choice: ABSENT }, &captured);
+        assert!(read.finished, "absent on every judged passage is a finished read");
+        assert!(read.facts.is_empty());
+    }
+
+    #[test]
+    fn absent_is_no_answer_when_it_was_not_offered() {
+        let captured = capture(&[(BlockKind::Paragraph, "Version 2.1")]);
+        let jev = Judge { focus: Some(0.9), choice: ABSENT };
+        let read = block_on(read_page(
+            &jev,
+            &captured,
+            "Find the version",
+            &[],
+            &TokenBudget::default(),
+            None,
+            &Trace::disabled(),
+            true,
+        ))
+        .unwrap();
+        assert!(!read.finished, "a read that must take something cannot end on an option it was not offered");
+    }
+
+    #[test]
+    fn a_choice_outside_the_offered_set_is_unfinished() {
+        let captured = capture(&[(BlockKind::Paragraph, "Version 2.1")]);
+        let read = judged(&Judge { focus: Some(0.9), choice: "not offered" }, &captured);
+        assert!(!read.finished);
+        assert!(read.facts.is_empty());
     }
 
     #[test]
@@ -603,7 +743,9 @@ mod tests {
                 context: String::new(),
             })
             .collect();
-        let (_, questions) = read_request(&page, "Find the second avatar name", &candidates, None, false);
+        let (state, questions) =
+            read_request(&page, "Find the second avatar name", "2026-09-26 (Saturday)", &candidates, None, false);
+        assert_eq!(state["date"], "2026-09-26 (Saturday)", "a read is told the dates a step is");
         let Question::Choice(question) = &questions[CHOICE] else { panic!("a choice") };
         let expected: Vec<Value> = ["1 of 2", "2 of 2"]
             .iter()

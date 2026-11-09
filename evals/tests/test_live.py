@@ -2124,6 +2124,22 @@ async def test_every_ultrafast_exit_stops_its_cloud_browser(ending: str, monkeyp
     assert cloud.stops == 1
 
 
+async def test_a_wrong_browser_harness_tool_opens_no_browser(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Codex the arm does not pin failed every attempt alike, each after its cloud browser was billed, so each kept
+    its whole budget reserve as unknown cost and the campaign ran out on about $10 of spend. The tools are checked
+    first, and a mismatch is a refused start."""
+
+    async def invoke(*_: object) -> bytes:
+        raise CommandError("command exited 1: RuntimeError: codex must be 0.163.0, got 0.166.0")
+
+    cloud = _ultrafast_fixture(monkeypatch, invoke)
+    task = next(t for t in TASKS if t.id == "flights-search")
+    async with httpx.AsyncClient() as http:
+        with pytest.raises(backend.NotStarted, match="codex must be"):
+            await live.harness_arm(task, http, record=None)
+    assert cloud.stops == 0
+
+
 def test_sigterm_stops_an_ultrafast_runs_cloud_browser(monkeypatch: pytest.MonkeyPatch) -> None:
     """SIGTERM (a container stop, `kill`, `timeout`) used to end the harness where it stood: no `async with` exit, so
     every browser in flight billed until its 240-minute timeout, while its runner, in a session of its own, went on

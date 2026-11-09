@@ -7,7 +7,7 @@ use fastbrowse_core::effects::{leavable, state_key};
 use fastbrowse_core::models::{Operation, Status, StepOutcome};
 use fastbrowse_core::page::Observation;
 use fastbrowse_core::py::text;
-use fastbrowse_core::safety::{origin_of, starts_download};
+use fastbrowse_core::safety::{changes_a_value, origin_of, starts_download};
 use serde_json::{Map, json};
 
 use super::Agent;
@@ -124,7 +124,32 @@ pub(super) fn leave_out_idle(state: &RunState, offered: &mut Observation, contex
             .iter()
             .any(|(url, label, field)| *url == offered.url && control.label == *label && control.context == *field)
     });
+    // A refused edit spends a recovery, so a page of checkboxes offered one at a time would end the run stuck (#838).
+    if state.edits_forbidden == Some(true) {
+        let mut left_out = false;
+        offered.controls.retain_mut(|control| {
+            let edits: Vec<Operation> =
+                control.operations.iter().copied().filter(|&operation| changes_a_value(operation, control)).collect();
+            for operation in &edits {
+                control.operations.remove(operation);
+            }
+            left_out |= !edits.is_empty();
+            edits.is_empty() || !control.operations.is_empty()
+        });
+        if left_out {
+            let mut problem = context.problem.take().unwrap_or_default();
+            if !problem.is_empty() {
+                problem.push('\n');
+            }
+            problem += EDITS_FORBIDDEN;
+            context.problem = Some(problem);
+        }
+    }
 }
+
+/// What an ask is told once the task rules edits out and their operations are no longer offered.
+const EDITS_FORBIDDEN: &str =
+    "The task rules out changing values on the page, so its fields and settings are not offered.";
 
 /// Offer covered actions again once a performed action changed the page, since it may have removed what covered them. A
 /// change the browser made while refusing one, as leaving the field a cover came from, removed no cover.
@@ -214,6 +239,7 @@ impl Agent {
         context.problem = Some(reason.to_string());
         leave_out_idle(state, &mut offered, &mut context);
         state.mark_read_links(&mut offered);
+        state.mark_shown(&mut offered);
         let reason = context.problem.take().unwrap_or_default();
         withhold(&mut offered, &mut context, &reason, &withheld);
         context.screenshot = self.viewport().await?;

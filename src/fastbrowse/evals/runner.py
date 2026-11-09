@@ -209,9 +209,9 @@ async def _drive(
     secrets: TaskSecrets | None,
     limits: Limits,
     attachments: tuple[Attachment, ...] = (),
-) -> tuple[RunResult, float, float, str | None]:
+) -> tuple[RunResult, float, float, str | None, list[object]]:
     """One run of one task through `run_task`, on whichever core the package runs, returning its result, how long
-    it took, wall and transient, and the providers it called, the last two read from the run's trace."""
+    it took, wall and transient, the providers it called, and the run's trace."""
     started = time.monotonic()
     with traced() as events:
         result = await run_fastbrowse(
@@ -228,7 +228,7 @@ async def _drive(
             downloads=downloads,
         )
     ended = time.monotonic()
-    return result, ended - started, transient_seconds(events, started, ended), providers(events)
+    return result, ended - started, transient_seconds(events, started, ended), providers(events), events
 
 
 async def run_task(
@@ -241,12 +241,12 @@ async def run_task(
     limits: Limits = LOCAL_LIMITS,
 ) -> dict[str, object]:
     recorder.clear()
-    result, seconds, lost, route = await _drive(task, base_url + task.start, cdp_url, downloads, None, limits)
+    result, seconds, lost, route, events = await _drive(task, base_url + task.start, cdp_url, downloads, None, limits)
     submitted = recorder.snapshot()
     failure = task.check(result, submitted)
     if failure is None and task.claims:
         failure = await _judge_claims(task, result, submitted)
-    return {"arm": "fastbrowse", "category": "fixture", "suite": "local", "providers": route} | _row(
+    return {"arm": "fastbrowse", "category": "fixture", "suite": "local", "providers": route, "events": events} | _row(
         result, task_id=task.id, failure=failure, seconds=seconds, lost=lost, limit=limits.max_steps
     )
 
@@ -261,7 +261,7 @@ async def run_mock_task(
     """A site of this task's own, so nothing it does can be read by, or decided by, another task's run."""
     with mock_site() as (base_url, site):
         secrets = TaskSecrets(task.secrets, base_url) if task.secrets else None
-        result, seconds, lost, route = await _drive(
+        result, seconds, lost, route, events = await _drive(
             task, base_url + task.start, cdp_url, downloads, secrets, limits, task.attachments
         )
         failure = task.check(result, site)
@@ -280,6 +280,7 @@ async def run_mock_task(
             "suite": "mock",
             "expected_status": task.expect.value,
             "providers": route,
+            "events": events,
         } | (
             _row(
                 result,
@@ -310,6 +311,7 @@ def parser() -> argparse.ArgumentParser:
     argument.add_argument("--repeat", type=int, default=1)
     argument.add_argument("--out", type=Path, default=Path("artifacts/evals/local.jsonl"))
     argument.add_argument("--budget", type=float, help="approved total model dollars for the fixture campaign")
+    argument.add_argument("--traces", type=Path, help="append each run's trace here, one JSON line per run")
     return argument
 
 
@@ -340,6 +342,7 @@ async def main(argv: list[str]) -> int:
         chrome() as cdp_url,
         tempfile.TemporaryDirectory() as downloads,
         args.out.open("a", encoding="utf-8") as out,
+        args.out.with_suffix(".attempts.jsonl").open("a", encoding="utf-8") as attempts,
     ):
         for repeat in range(args.repeat):
             for suite, task in chosen:
@@ -374,9 +377,19 @@ async def main(argv: list[str]) -> int:
                     "task_version": task_version(task.id, lock),
                     "repeat": repeat,
                 }
+                # A failure CI alone shows is replayed from its trace, so the trace is kept beside the row.
+                events = row.pop("events")
+                if args.traces is not None:
+                    with args.traces.open("a", encoding="utf-8") as traces:
+                        line = {"suite": suite, "task": task.id, "repeat": repeat, "events": events}
+                        traces.write(json.dumps(line, default=str) + "\n")
                 rows.append(row)
                 out.write(json.dumps(row) + "\n")
                 out.flush()
+                # The fixture runner never retries, so each row is its one physical attempt; the ledger is what
+                # lets `versions --publish` commit a fixture run as the baseline later runs are compared against.
+                attempts.write(json.dumps(row | {"selected": True}) + "\n")
+                attempts.flush()
                 if campaign is not None:
                     campaign.settle(CostBreakdown.model_validate(row["cost"]))
                 mark = "PASS" if row["passed"] else "FAIL"

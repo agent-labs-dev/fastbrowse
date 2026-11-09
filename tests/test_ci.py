@@ -18,6 +18,7 @@ RESULTS = (
     "RUST_RESULT",
     "SECRETS_RESULT",
     "CHANGES_RESULT",
+    "REPLAY_RESULT",
     "BLOG_RESULT",
 )
 # Left unbuilt by a change that cannot alter them, which is a pass.

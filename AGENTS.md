@@ -27,8 +27,20 @@ These hold for every change, and a reviewer rejects a change that breaks one.
 - **Jev decides.** Steps, reads and when the task is done move toward Jev, never away from it; the LLM is the
   fallback for what Jev cannot be asked. When Jev picks wrong, give it the fact it lacked in its question. A code
   gate that overrules Jev is deleted, not stacked with another.
-- **No heuristics.** A keyword list, a regex over page text or a length cutoff standing in for
-  a judgement is a bug: ask Jev, or the LLM where Jev cannot answer.
+- **Fix the producer.** A wrong answer is fixed where the wrong value is first made: the capture that left text
+  out, the request that misled a model, the schema that made it commit too early. Find it by reading what the
+  model was given, and replay that request to prove the cause before changing anything. A retry or redraft that
+  hopes for a different answer, a check that catches the symptom downstream, or a rule fitted to the failing case
+  is not a fix, and a reviewer rejects it.
+- **No heuristics.** A keyword list, a regex over page text, a cutoff, a threshold fitted to the cases seen, or a
+  patch around a known Jev or LLM weakness masks the bug it works around. Fix the producer: the information a
+  model was not given, or work it was asked to do that it cannot (counting, arithmetic, comparing numbers, which
+  code does). A heuristic stays only when it is the correct design, with the reason beside it in the code. An
+  eval gain from adding one is not a fix, and a reviewer rejects it.
+- **Jev judges, code computes.** Jev does not count, do arithmetic, compare numbers or order dates, and it
+  reads instructions literally ([docs/jev.md](docs/jev.md#where-jev-is-not-used)). Code does those exactly: a
+  count is one Jev question per item, summed in code; a total, comparison or date order is computed from values
+  Jev or the LLM extracted. A Jev question never asks it to verify a number it would have to work out.
 - **No caps.** Nothing a model reads or writes is cut short, except by a limit its provider documents, named as
   that provider's in the code.
 - **Measure before claiming.** A claim about the agent rests on a run made for it, compared with a baseline on

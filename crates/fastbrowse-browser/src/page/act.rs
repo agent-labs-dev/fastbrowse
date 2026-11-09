@@ -970,14 +970,18 @@ impl CdpPage {
             }
             Point::At(..) => {}
         }
+        // A list that allows several choices toggles the named option, as a Ctrl-click does: setting `value` kept only
+        // that one, and nothing could take one out. Playwright's selectOption sets a whole list instead.
         let script = format!(
             "((id, label) => {{ const e = window.__fastbrowse?.nodes.get(id); \
              if (!e?.isConnected || e.tagName !== 'SELECT') return null; \
              const opt = [...e.options].find(o => o.label === label && !o.disabled); \
-             if (!opt) return false; e.value = opt.value; \
+             if (!opt) return false; const wanted = !e.multiple || !opt.selected; \
+             if (e.multiple) opt.selected = wanted; else e.value = opt.value; \
              e.dispatchEvent(new Event('input', {{bubbles: true}})); \
              e.dispatchEvent(new Event('change', {{bubbles: true}})); \
-             return e.value === opt.value || (e.selectedOptions[0]?.label ?? ''); }})({local_id}, {})",
+             return (e.multiple ? opt.selected === wanted : e.value === opt.value) \
+               || [...e.selectedOptions].map(o => o.label).join(', '); }})({local_id}, {})",
             py_json(&json!(option))
         );
         // The events are code's own, not trusted, so the window that counts a move as the run's is opened for them.
@@ -1052,20 +1056,23 @@ impl CdpPage {
     ///
     /// This is the step that lets time pass between two reads of a status line. The page's own mutations say when to
     /// look again; the fingerprint, which the settle that follows compares too, says whether what changed is something
-    /// an observation shows.
+    /// an observation shows. At the deadline a player's clock having moved counts too: the settle fingerprint leaves it
+    /// out, and a Wait while a player plays is not told that the page did not change.
     pub(crate) async fn await_change(&self) -> Result<Outcome, BrowserError> {
         let session_id = self.session.active_session_id()?;
         let watch = format!(
             "new Promise(resolve => {{ const r = window.__fastbrowse; \
              const later = r?.nativeSetTimeout ?? setTimeout, clear = r?.nativeClearTimeout ?? clearTimeout; \
              const sample = () => {{ try {{ return {fingerprint}; }} catch {{ return null; }} }}; \
-             const before = sample(); let queued = false; \
+             const clocks = () => {{ try {{ return {media}; }} catch {{ return null; }} }}; \
+             const before = sample(), clocksBefore = clocks(); let queued = false; \
              const stop = moved => {{ observer.disconnect(); clear(timer); resolve(moved); }}; \
              const look = () => {{ queued = false; if (sample() !== before) stop(true); }}; \
              const observer = new MutationObserver(() => {{ if (!queued) {{ queued = true; later(look, 0); }} }}); \
              observer.observe(document, {{childList: true, subtree: true, attributes: true, characterData: true}}); \
-             const timer = later(() => stop(sample() !== before), {ms}); }})",
+             const timer = later(() => stop(sample() !== before || clocks() !== clocksBefore), {ms}); }})",
             fingerprint = self.fingerprint_js,
+            media = self.media_js,
             ms = py_float(super::SETTLE_SECONDS * 1000.0),
         );
         match self.evaluate(&session_id, &watch).await {

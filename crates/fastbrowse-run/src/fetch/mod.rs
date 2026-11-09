@@ -33,7 +33,7 @@ use fastbrowse_core::page::{
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::{sha256_hex, text};
 
-use html::{Found, clean, join, read};
+use html::{Found, Frame, FrameDocument, clean, join, read};
 
 /// A page that never finishes arriving would hold a run for its whole deadline, so the read is bounded.
 const TIMEOUT_SECONDS: f64 = 15.0;
@@ -44,6 +44,9 @@ const MAX_BYTES: usize = 5 * 1024 * 1024;
 const MAX_REDIRECTS: usize = 10;
 const HTML_TYPES: [&str; 2] = ["text/html", "application/xhtml+xml"];
 const REDIRECTS: [u16; 5] = [301, 302, 303, 307, 308];
+/// The frames of one page whose documents are read into it. A browser capture reads every frame it can reach; past
+/// this, a page of embeds would cost a request each, and the rest are counted as left out.
+const MAX_FRAMES: usize = 4;
 
 /// The document cannot be read without a browser. The message says why, and never quotes page text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,7 +65,7 @@ fn refused(message: impl Into<String>) -> NotFetched {
 }
 
 /// The fetched blocks as a `Capture`, with the spans and hash a quote is validated against.
-fn capture(url: &str, title: String, found: Vec<Found>) -> Capture {
+fn capture(url: &str, title: String, found: Vec<Found>, unread_frames: usize) -> Capture {
     let mut text_out = String::new();
     let mut captured = Vec::with_capacity(found.len());
     let mut offset = 0;
@@ -76,15 +79,12 @@ fn capture(url: &str, title: String, found: Vec<Found>) -> Capture {
             source_url: None,
             complete_source: false,
             kind: block.kind,
-            frame_id: None,
+            frame_id: block.frame_id,
             start: start as i64,
             end: offset as i64,
             heading_path: block.heading_path,
             control_context: None,
             href: block.href,
-            list_id: None,
-            list_count: None,
-            list_frameless: false,
         });
         offset += 2;
     }
@@ -95,7 +95,9 @@ fn capture(url: &str, title: String, found: Vec<Found>) -> Capture {
         sha256: sha256_hex(text_out.as_bytes()),
         text: text_out,
         blocks: captured,
-        inaccessible_frames: 0,
+        // A frame whose document was not read is missing from this read like a frame a browser could not reach: a
+        // reader told nothing is missing would take the page without it as the whole page.
+        inaccessible_frames: unread_frames as i64,
     }
 }
 
@@ -164,13 +166,73 @@ pub struct Fetched {
     pub controls: Vec<Control>,
 }
 
+/// One fetched document before its frames are read into it.
+struct Served {
+    url: String,
+    title: String,
+    found: Vec<Found>,
+    controls: Vec<Control>,
+    frames: Vec<Frame>,
+}
+
 /// `url` read over HTTP, or [`NotFetched`] with the reason a browser is needed.
+///
+/// A frame of the page's own origin is read into it where it stands, as a browser capture reads a same-origin frame:
+/// the email form a page embeds is the page's text to the reader. A frame from another origin, or one that cannot be
+/// fetched, is counted as left out.
 pub async fn fetch_document(
     http: &Http,
     url: &str,
     allowed_origins: Option<&[String]>,
     seconds: f64,
 ) -> Result<Fetched, NotFetched> {
+    let Served { url, title, mut found, controls, frames } = serve(http, url, allowed_origins, seconds).await?;
+    let origin = origin_of(&url);
+    let mut unread = 0;
+    let mut framed = Vec::new();
+    for (index, Frame { at, document, headings }) in frames.into_iter().enumerate() {
+        let blocks = match document {
+            _ if index >= MAX_FRAMES => None,
+            FrameDocument::Markup(markup) => Some(read(&markup, &url).1),
+            FrameDocument::Address(address) if origin.is_some() && origin_of(&address) == origin => {
+                match serve(http, &address, allowed_origins, seconds).await {
+                    Ok(inner) => {
+                        unread += inner.frames.len();
+                        Some(inner.found)
+                    }
+                    Err(_) => None,
+                }
+            }
+            FrameDocument::Address(_) => None,
+        };
+        match blocks {
+            Some(blocks) if blocks.iter().any(|block| !block.text.is_empty()) => {
+                // A frame's text stands under the page's headings above the frame, as a browser capture reads it:
+                // the heading an embedded form shows is that form's, which its own document alone does not say.
+                let frame_id = format!("root/{index}");
+                let blocks = blocks.into_iter().map(|block| Found {
+                    heading_path: headings.iter().chain(&block.heading_path).cloned().collect(),
+                    frame_id: Some(frame_id.clone()),
+                    ..block
+                });
+                framed.push((at, blocks.collect::<Vec<_>>()));
+            }
+            _ => unread += 1,
+        }
+    }
+    for (at, blocks) in framed.into_iter().rev() {
+        found.splice(at..at, blocks);
+    }
+    if found.iter().all(|block| block.text.is_empty()) {
+        // A page whose markup is scripts and styles has nothing to quote: the browser is the only reader of what they
+        // build, and reading the shell as the page would answer from nothing.
+        return Err(refused("the page renders its content with scripts, so the markup holds no readable text"));
+    }
+    Ok(Fetched { capture: capture(&url, title, found, unread), controls })
+}
+
+/// `url`'s own document over HTTP, its frames unread.
+async fn serve(http: &Http, url: &str, allowed_origins: Option<&[String]>, seconds: f64) -> Result<Served, NotFetched> {
     eligible(url, allowed_origins)?;
     // The codings this decodes. A server may compress whatever it is asked, as python.org's CDN gzips a
     // request for identity, so asking for these costs nothing a refusal would have saved.
@@ -223,25 +285,34 @@ pub async fn fetch_document(
         if text::strip(&body).is_empty() {
             return Err(refused("the document is empty"));
         }
-        let found = Found { kind: BlockKind::Paragraph, text: clean(&body), heading_path: Vec::new(), href: None };
-        return Ok(Fetched { capture: capture(&final_url, String::new(), vec![found]), controls: Vec::new() });
+        let found = Found {
+            kind: BlockKind::Paragraph,
+            text: clean(&body),
+            heading_path: Vec::new(),
+            href: None,
+            frame_id: None,
+        };
+        return Ok(Served {
+            url: final_url,
+            title: String::new(),
+            found: vec![found],
+            controls: Vec::new(),
+            frames: Vec::new(),
+        });
     }
     if !HTML_TYPES.contains(&mime.as_str()) {
         let named = if mime.is_empty() { "the response" } else { &mime };
         return Err(refused(format!("{named} is not a document read as text")));
     }
-    let (title, found, controls) = read(&body, &final_url);
-    if found.iter().all(|block| block.text.is_empty()) {
-        // A page whose markup is scripts and styles has nothing to quote: the browser is the only reader of what they
-        // build, and reading the shell as the page would answer from nothing.
-        return Err(refused("the page renders its content with scripts, so the markup holds no readable text"));
-    }
-    Ok(Fetched { capture: capture(&final_url, title, found), controls })
+    let (title, found, controls, frames) = read(&body, &final_url);
+    Ok(Served { url: final_url, title, found, controls, frames })
 }
 
 #[derive(Default)]
 struct Loaded {
     capture: Option<Capture>,
+    /// The address the read asked for, before the server redirected it.
+    requested: Option<String>,
     controls: Vec<Control>,
     generation: u64,
 }
@@ -302,6 +373,7 @@ impl FetchedPage {
         let fetched = fetch_document(&self.http, url, self.origins.as_deref(), TIMEOUT_SECONDS).await?;
         let mut loaded = self.loaded.lock().unwrap();
         loaded.capture = Some(fetched.capture);
+        loaded.requested = Some(url.to_string());
         loaded.controls = fetched.controls;
         loaded.generation += 1;
         Ok(())
@@ -316,6 +388,10 @@ impl Page for FetchedPage {
     fn needs_browser(&self, message: String) -> BrowserError {
         self.needed_browser.store(true, Ordering::Relaxed);
         BrowserError::NeedsBrowser(message)
+    }
+
+    fn browser_address(&self) -> Option<String> {
+        self.loaded.lock().unwrap().requested.clone()
     }
 
     /// A fetched run downloads nothing, so it has nothing to report.
@@ -348,7 +424,7 @@ impl Page for FetchedPage {
                     opener_id: None,
                 }],
                 dialog: None,
-                inaccessible_frames: 0,
+                inaccessible_frames: capture.inaccessible_frames,
                 can_go_back: false,
                 history_entry: Some(capture.url),
             })

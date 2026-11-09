@@ -1,6 +1,6 @@
 [project]
 name = "fastbrowse"
-version = "0.9.1"
+version = "0.10.0"
 description = "Browser automation with cited answers, structured output and code-controlled credentials and authorization."
 readme = "README.md"
 license = "MIT"
@@ -81,6 +81,11 @@ pythonpath = ["."]
 asyncio_mode = "auto"
 # A hung browser call otherwise holds CI for its full hour with no output; this fails the test and dumps every stack.
 timeout = 120
+# The cassette replay runs in its own CI job, which installs Chrome, so the gate's plain run leaves it out.
+addopts = "-m 'not cassette_replay'"
+markers = [
+    "cassette_replay: replays every bench cassette at zero latency (the replay CI job)",
+]
 
 [tool.ty.src]
 include = ["src", "tests", "benchmarks"]

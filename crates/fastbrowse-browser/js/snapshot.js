@@ -3,7 +3,7 @@
 // Adapted to fastbrowse's Control shape (role + operation set, not per-kind actions) and to traverse
 // open shadow roots. Runs once per frame session (main frame or an OOPIF); CdpPage merges frames.
 // biome-ignore format: session.rs appends mode arguments to this parenthesized expression.
-((mode, allowedOrigins = null) => {
+((mode, allowedOrigins = null, own = {}) => {
   // Reading a cross-origin frame's document can throw.
   const childDocument = frame => {
     try {
@@ -41,6 +41,51 @@
   registry.nativeRequestAnimationFrame ||= window.requestAnimationFrame.bind(window);
   // What was offered to be acted on; `ids` also names hover targets and fingerprinted nodes.
   registry.controls ||= new WeakSet();
+  const ARIA_ROLES = [
+    'button',
+    'link',
+    'checkbox',
+    'radio',
+    'switch',
+    'tab',
+    'menuitem',
+    'menuitemradio',
+    'option',
+    'gridcell',
+    'combobox',
+    'textbox',
+    'searchbox',
+    'spinbutton',
+  ];
+  // jQuery UI's datepicker prev/next are anchors with no href, appended to <body> once the field is focused:
+  // they carry no destination, only a click handler, so they need naming here to be walked at all.
+  const SELECTOR =
+    'a[href],a[data-handler][data-event="click"],a[onclick],a[role="button"],' +
+    'button,input,textarea,select,summary,label,[contenteditable="true"],[draggable="true"],[ondrop],' +
+    ARIA_ROLES.map(role => `[role="${role}"]`).join(',');
+  // Elements a script gave a pointer listener, such as a Vue click handler on a bare span: the page's only sign that
+  // it is pressed. Chrome's own `getEventListeners` reads them, but it exists only in an evaluate with the command line
+  // API, so that evaluate (this mode, once per document) keeps it in `own`, the installed function's closure, where the
+  // page cannot reach it. A look then asks it only about the elements it weighs (`pressable`), live, so a removed
+  // listener takes its control away. A look before it is kept throws `own.unread`, which page/mod.rs answers with this
+  // mode. A page that defines a global of that name answers for its own elements, as its cursor and `onclick` do.
+  if (mode === 'listeners') {
+    const read = globalThis.getEventListeners;
+    own.listeners = typeof read === 'function' ? read : null;
+    return 0;
+  }
+  if ((mode === 'snapshot' || mode === 'glance') && !('listeners' in own))
+    throw new Error(own.unread);
+  const POINTER = ['click', 'mousedown', 'pointerdown', 'mouseup', 'pointerup'];
+  // The root element and the body hear clicks on the whole page, as the document does, so neither counts.
+  const listened = e => {
+    if (!own.listeners || e === e.ownerDocument.documentElement || e === e.ownerDocument.body) return false;
+    let listeners = null;
+    try {
+      listeners = own.listeners(e);
+    } catch {}
+    return Boolean(listeners) && POINTER.some(type => Array.isArray(listeners[type]) && listeners[type].length);
+  };
   // Text the page rewrites by itself, such as a player's clock or a countdown, says nothing about which item a control
   // acts on: a Pause beside a ticking remaining time was refused as stale on every one of 52 clicks. Text that changed
   // between two looks with no input in between is the page's own; text that changes after a run's own click, scroll
@@ -77,6 +122,9 @@
     const hashText = text => {
       for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
     };
+    // Players' clocks stay out of the hash: one that plays moves by itself, which must not make a control stale.
+    // They are kept beside it, rounded as readMedia rounds them, for a Wait to tell a moving clock.
+    const clocks = [];
     const include = root => {
       hashText(root.body?.innerText ?? root.textContent ?? '');
       // innerText omits shadow trees and child documents even when their content is visible.
@@ -98,6 +146,9 @@
               e.getAttribute('aria-selected'),
             ]),
           );
+        // readMedia lists the players of documents only, not of shadow roots.
+        if (root.nodeType === Node.DOCUMENT_NODE && (e.tagName === 'AUDIO' || e.tagName === 'VIDEO'))
+          clocks.push(Math.round(e.currentTime * 10) / 10);
         if (e.shadowRoot) include(e.shadowRoot);
         if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
           const inner = childDocument(e);
@@ -109,6 +160,7 @@
     return {
       ...clock(),
       fingerprint: location.href + '|' + document.title + '|' + (hash >>> 0) + '|' + scrollY,
+      media: clocks.join(','),
     };
   }
   if (!document.body) return null;
@@ -143,6 +195,77 @@
   // Password and agent-typed secret values never leave the page: only their length is observed.
   const secret = e => e.type === 'password' || e.dataset?.fastbrowseSecret === '1';
   const reveal = e => (typeof e.value !== 'string' ? null : secret(e) ? '•'.repeat(e.value.length) : e.value);
+  // What a select has chosen. selectedIndex names only the first chosen option, so a list that allows several gives
+  // every chosen index: a later option chosen or taken out changes it.
+  const chosen = e =>
+    e.multiple && e.tagName === 'SELECT' ? [...e.selectedOptions].map(o => o.index) : (e.selectedIndex ?? null);
+  // Tag pickers keep the field they replace on the page, clipped to nothing, and checkVisibility() ignores clip: a
+  // control whose own clip or clip-path leaves no area is not there for a person. A hidden checkbox, radio or file
+  // input is still reached through its label. Text is still read, as a page states facts in visually hidden text.
+  const clippedAway = e => {
+    const style = e.ownerDocument.defaultView.getComputedStyle(e);
+    const rect = /^rect\((.+)\)$/.exec(style.clip);
+    const inset = /^inset\(([^)]*?)(?:\s+round\s.*)?\)$/.exec(style.clipPath);
+    // Almost every element has neither, and its box is not read.
+    if (!rect && !inset) return false;
+    const { width, height } = e.getBoundingClientRect();
+    if (rect && ['absolute', 'fixed'].includes(style.position)) {
+      // An `auto` side is the border box's own edge.
+      const edges = [0, width, height, 0];
+      const [top, right, bottom, left] = rect[1]
+        .split(/[\s,]+/)
+        .map((value, side) => (value === 'auto' ? edges[side] : parseFloat(value)));
+      if (![top, right, bottom, left].some(Number.isNaN) && (bottom <= top || right <= left)) return true;
+    }
+    if (!inset) return false;
+    const sides = inset[1].trim().split(/\s+/);
+    const [top, right = top, bottom = top, left = right] = sides;
+    const length = (value, size) =>
+      value.endsWith('%')
+        ? (parseFloat(value) / 100) * size
+        : value.endsWith('px') || value === '0'
+          ? parseFloat(value)
+          : NaN;
+    const across = length(left, width) + length(right, width),
+      down = length(top, height) + length(bottom, height);
+    return (across > 0 && across >= width) || (down > 0 && down >= height);
+  };
+  // A control that fades in under the pointer starts its opacity transition at zero, and the observation taken right
+  // after the hover would otherwise see only that start. A CSS transition's last keyframe is where it is going, also
+  // after a reversal, which restarts it as a new transition. A keyframe animation's last keyframe gives no direction
+  // when it alternates or repeats, so only transitions count: anything else is NaN.
+  const fadingTo = t =>
+    t instanceof t.effect.target.ownerDocument.defaultView.CSSTransition &&
+    !t.effect.pseudoElement &&
+    t.transitionProperty === 'opacity' &&
+    t.playState === 'running' &&
+    t.playbackRate > 0 &&
+    Number.isFinite(t.effect.getComputedTiming().endTime)
+      ? parseFloat(t.effect.getKeyframes().at(-1)?.opacity)
+      : NaN;
+  // Whether `e` or an ancestor, across shadow roots, passes `test`.
+  const onChain = (e, test) => {
+    for (let a = e; a; a = a.parentElement ?? a.getRootNode().host) if (test(a)) return true;
+    return false;
+  };
+  // Asked only of an element whose opacity check failed. One that ignores the pointer while it fades is not offered,
+  // as what it covers would take the click.
+  const fadingIn = e =>
+    e.checkVisibility({ checkVisibilityCSS: true }) &&
+    e.ownerDocument.defaultView.getComputedStyle(e).pointerEvents !== 'none' &&
+    !onChain(
+      e,
+      a =>
+        a.ownerDocument.defaultView.getComputedStyle(a).opacity === '0' &&
+        !a.getAnimations().some(t => fadingTo(t) > 0),
+    );
+  // What is fading out has gone for a person though its opacity is still above zero, as the controls of a card the
+  // pointer has just left are.
+  const fadingOut = memo(doc => new Set(doc.getAnimations().flatMap(t => (fadingTo(t) === 0 ? [t.effect.target] : []))));
+  const leaving = e => {
+    const out = fadingOut(e.ownerDocument);
+    return out.size > 0 && onChain(e, a => out.has(a));
+  };
   // Asked of each control by the walk and again by its guard, and of each text node's parent.
   const visible = memo(e => {
     // Todo lists paint the checkmark beside a transparent native input without associating a label.
@@ -155,8 +278,10 @@
       ![...(e.labels || [])].some(l => l.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }));
     if (
       e.closest('[aria-hidden="true"],[inert]') ||
-      !e.checkVisibility({ checkOpacity: !choice, checkVisibilityCSS: true }) ||
-      (choice && !shownThrough(e))
+      (!e.checkVisibility({ checkOpacity: !choice, checkVisibilityCSS: true }) && (choice || !fadingIn(e))) ||
+      leaving(e) ||
+      (choice && !shownThrough(e)) ||
+      (clippedAway(e) && (e.matches(SELECTOR) || pressable(e) || focusableText(e)))
     )
       return false;
     if (!choice) return true;
@@ -216,10 +341,47 @@
       .filter(Boolean)
       .join(' ');
   };
+  // An icon-only control with no name and no glyph often still says what it does in its own class: a `.delete-button`
+  // beside an `.edit-button` on a card's hover-revealed controls. Only a class that calls itself a button counts, so
+  // layout and framework classes never name a control.
+  const CONTROL_WORD = /^(?:button|btn|icon)$/;
+  // Style, size and structure words that name no action.
+  const CLASS_STYLE = new Set([
+    'icon', 'ico', 'base', 'root', 'primary', 'secondary', 'tertiary', 'default', 'small', 'large', 'medium', 'sm',
+    'md', 'lg', 'xl', 'xs', 'outline', 'outlined', 'contained', 'ghost', 'flat', 'text', 'link', 'plain', 'round',
+    'rounded', 'circle', 'square', 'pill', 'block', 'group', 'wrapper', 'container', 'inner', 'outer', 'main',
+    'action', 'actions', 'ui', 'has', 'with', 'no', 'is', 'js', 'el', 'component', 'toggle', 'floating', 'fab',
+  ]);
+  const classLabel = e => {
+    const names = new Set();
+    for (const token of e.classList) {
+      // A BEM modifier is dropped and a CSS-modules hash is split off: `Gallery_deleteButton__x7Y2a`.
+      for (const piece of token.split(/--.*$|_+/)) {
+        if (!/^[A-Za-z][A-Za-z-]{0,39}$/.test(piece)) continue;
+        const words = piece
+          .replace(/([a-z])([A-Z])/g, '$1-$2')
+          .toLowerCase()
+          .split('-')
+          .filter(Boolean);
+        if (words.length < 2) continue;
+        let stem;
+        if (CONTROL_WORD.test(words.at(-1))) stem = words.slice(0, -1);
+        else if (/^(?:button|btn)$/.test(words[0])) stem = words.slice(1);
+        else continue;
+        stem = stem.filter(word => word.length > 1 && !CLASS_STYLE.has(word));
+        if (stem.length && stem.length <= 3) names.add(stem.join(' '));
+      }
+    }
+    return names.size === 1 ? [...names][0] : '';
+  };
+  // The label a control is offered under when it has no name, short of its bare role. The guard reads it too, so a
+  // `.delete-button` turned into an `.edit-button` between observing and acting is stale.
+  const fallbackLabel = e => iconLabel(e) || describedBy(e) || classLabel(e);
   // A name taken from content reads only what is shown: a card's hidden "Report fraud item" button named the card.
   // A hidden element named through aria-labelledby is read whole, since it is hidden only to serve as the label.
   // An svg's <title> never renders, yet it is the graphic's name.
   const shown = e => e.localName === 'title' || e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+  const FIELD_CONTAINERS = new Set(['combobox', 'listbox']);
   const labelFrom = (e, seen) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
@@ -239,7 +401,9 @@
         .join(' ') ||
       (['button', 'submit', 'reset'].includes(e.type) ? e.value : '') ||
       e.getAttribute('alt') ||
-      (e.tagName === 'INPUT'
+      // A field's text is its value, not its name: a list-style select shows every option, and a combobox widget its
+      // chosen chips, remove buttons and open options. Accname never names these from content either.
+      (e.tagName === 'INPUT' || e.tagName === 'SELECT' || FIELD_CONTAINERS.has(e.getAttribute('role'))
         ? ''
         : [...e.childNodes]
             .map(n =>
@@ -260,44 +424,36 @@
     );
   };
 
+  // An ARIA 1.1 combobox wraps the field it fronts, and the page labels that field rather than the wrapper. A wrapper
+  // holding two fields, such as a hidden select beside a search input, says nothing about which one names it.
+  const wrappedField = e => {
+    if (!e || e.matches('input,select,textarea') || !FIELD_CONTAINERS.has(e.getAttribute('role'))) return null;
+    const fields = [...e.querySelectorAll('input:not([type=hidden]),select,textarea')].filter(
+      f => !f.parentElement.closest('[hidden]'),
+    );
+    return fields.length === 1 ? fields[0] : null;
+  };
   const labelOf = memo(
     e =>
       (e && !e.getAttribute('aria-label') && !e.getAttribute('aria-labelledby') && focusableText(e)) ||
-      labelFrom(e, new Set()),
+      labelFrom(e, new Set()) ||
+      labelFrom(wrappedField(e), new Set()),
   );
 
-  const ARIA_ROLES = [
-    'button',
-    'link',
-    'checkbox',
-    'radio',
-    'switch',
-    'tab',
-    'menuitem',
-    'menuitemradio',
-    'option',
-    'gridcell',
-    'combobox',
-    'textbox',
-    'searchbox',
-    'spinbutton',
-  ];
-  // jQuery UI's datepicker prev/next are anchors with no href, appended to <body> once the field is focused:
-  // they carry no destination, only a click handler, so they need naming here to be walked at all.
-  const SELECTOR =
-    'a[href],a[data-handler][data-event="click"],a[onclick],a[role="button"],' +
-    'button,input,textarea,select,summary,label,[contenteditable="true"],[draggable="true"],[ondrop],' +
-    ARIA_ROLES.map(role => `[role="${role}"]`).join(',');
-  // A page says an element it styled or scripted is pressable without any role: a declared click handler, or the
-  // pointer cursor. The cursor inherits, so only the element it starts on counts, and an element inside a control or
-  // holding one leaves the click to that control.
+  // A page says an element it styled or scripted is pressable without any role: a declared click handler, a pointer
+  // listener a script added, or the pointer cursor. The cursor inherits, so only the element it starts on counts, and
+  // an element inside a control or holding one leaves the click to that control.
   const pressable = memo(e => {
     const view = e.ownerDocument.defaultView;
-    const starts =
+    const declared =
       e.hasAttribute('onclick') ||
       (view.getComputedStyle(e).cursor === 'pointer' &&
         (!e.parentElement || view.getComputedStyle(e.parentElement).cursor !== 'pointer'));
-    return starts && !e.parentElement?.closest(SELECTOR) && ![...e.querySelectorAll(SELECTOR)].some(visible);
+    if (!(declared || listened(e)) || e.parentElement?.closest(SELECTOR) || [...e.querySelectorAll(SELECTOR)].some(visible))
+      return false;
+    // A listener can sit on a container to hear its children's clicks, as React's does on its root, so one holding a
+    // pressable element leaves the click to it.
+    return declared || ![...e.querySelectorAll('*')].some(c => pressable(c) && visible(c));
   });
   // A script can make a focusable label its menu trigger without a role, href or pointer cursor. Its label may
   // be wrapped in a child, and hidden menu links must not hide the trigger that reveals them. A container holding
@@ -429,10 +585,10 @@
     return [
       identity(e),
       roleOf(e),
-      labelOf(e),
+      labelOf(e) || fallbackLabel(e),
       reveal(source),
       source.checked ?? null,
-      e.selectedIndex ?? null,
+      chosen(e),
       e.readOnly ?? null,
       e.matches(':disabled'),
       e.getAttribute('aria-disabled') === 'true',
@@ -503,7 +659,7 @@
     const base = {
       id,
       role: rname,
-      label: named || iconLabel(e) || describedBy(e) || rname,
+      label: named || fallbackLabel(e) || rname,
       offscreen: y < 0 || y >= innerHeight,
       distance: y < 0 || y >= innerHeight ? 1 + Math.abs(y - innerHeight / 2) : 0,
       sensitive: secret(source),
@@ -555,8 +711,10 @@
     // What the page says about the field. A custom widget marks the element the user sees, not the input
     // underneath it, so both are asked.
     if (source.required || [e, source].some(n => n.getAttribute('aria-required') === 'true')) base.required = true;
-    // Native validation can refuse a form without adding any ARIA attribute or page text.
-    const refused = source.willValidate === true && source.validity?.valid === false;
+    // Native validation can refuse a form without adding any ARIA attribute or page text. The browser holds that
+    // against a field only once it was edited or its form was submitted, as `:user-invalid`: an empty required field a
+    // page has just opened or reset is not refused, and told it was, a run that had submitted a wizard filled it again.
+    const refused = source.willValidate === true && source.validity?.valid === false && source.matches(':user-invalid');
     if ([e, source].some(n => n.getAttribute('aria-invalid') === 'true') || refused) base.invalid = true;
     // Why the browser refused it, in its own words: a refused submit shows that only in a bubble the page text
     // lacks, and a run that saw only `invalid` refilled the field the task named instead of the empty one.
@@ -642,7 +800,7 @@
   };
   // Labels more than one control shares, filled in once every control is listed.
   const repeated = new Set();
-  const nameOf = (scope, element, label, nearest) => {
+  const nameOf = (scope, element, label, nearest, own = null) => {
     const aria = (scope.getAttribute('aria-label') || '').trim();
     if (aria && aria !== label) return aria;
     const section = sectionOf(scope, element, label, nearest);
@@ -663,7 +821,7 @@
     const lines = (innerTextOf(scope) || '')
       .split('\n')
       .map(line => line.replace(/\s+/g, ' ').trim())
-      .filter(line => line && !repeated.has(line) && !peers.has(line) && !onlyPeers(line));
+      .filter(line => line && !repeated.has(line) && !peers.has(line) && !onlyPeers(line) && !own?.has(line));
     return firstLine(lines.map(line => (label ? ` ${line} `.split(` ${label} `).join(' ') : line)).join('\n'));
   };
   const contextOf = (element, holding, label, nearest = true) => {
@@ -881,10 +1039,15 @@
   // card shows the same icon: one left alone, or drawn by another icon set, would name no card and leave the choice
   // guessing which image it removes. It is named by the card that holds it, or failing one by the nearest ancestor
   // that says anything besides it.
+  // An unnamed select or combobox shows its value, and its chips name no section it sits in.
   const nearestName = (element, label) => {
+    const own =
+      element.tagName === 'SELECT' || FIELD_CONTAINERS.has(element.getAttribute('role'))
+        ? new Set((innerTextOf(element) || '').split('\n').map(line => line.replace(/\s+/g, ' ').trim()))
+        : null;
     let first = '';
     for (let e = element.parentElement, path = element; e && e !== e.ownerDocument.body; path = e, e = e.parentElement) {
-      first ||= nameOf(e, element, label, true);
+      first ||= nameOf(e, element, label, true, own);
       if (!isCard(e)) continue;
       // An action row's own caption ("Actions") is the first text the climb meets and names no item, so the card
       // is named by what it holds outside the row that holds the control.
@@ -1133,7 +1296,7 @@
   if (mode !== 'glance') registry.observed = new Map(controls.map(c => [c.id, guards[c.id]]));
   const field_state = [...document.querySelectorAll('input,textarea,select')]
     .filter(safe)
-    .map(e => [identity(e), reveal(e), e.checked, e.selectedIndex, e.disabled, e.readOnly]);
+    .map(e => [identity(e), reveal(e), e.checked, chosen(e), e.disabled, e.readOnly]);
   // Compare meaning and identity for the page_key fingerprint; geometry is re-resolved just before input.
   const semantics = controls.map(({ distance, ...c }) => c);
   const page_key = digest(JSON.stringify([

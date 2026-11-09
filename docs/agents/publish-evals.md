@@ -54,7 +54,14 @@ regression checks; results from different builds cannot be combined under one bu
 Schema 4 adds `internal-backend`: fastbrowse on a Browser Use Cloud browser against fastbrowse on its own
 browser pool. From schema 5, `internal-ultrafast` pairs fastbrowse on its own pool with `jev-ultrafast`; figures
 approved under an older schema keep fastbrowse on a Browser Use Cloud browser there.
-Schema 2 and later record each group's agent and runner commits and require them to match the candidate's build.
+Schema 2 and later record each group's agent and runner commits and require them to match the candidate's build,
+unless the group lists its `sources`: the campaign runs its rows came from, newest first, one entry per run and arm,
+each with its commits, date and the tasks it supplied for that arm. Its commits are then the newest source's, and the
+publisher checks that every source's commits are in the history of the candidate's build. A slot our own harness or
+judge failed is listed in `unjudged` with its reason, outside every figure, as a blocked slot is; a run the site's bot
+check stopped is a failed row. Each task the catalog says an arm cannot run is listed in `excluded` with the catalog's
+reason and counts as `repeats` failed attempts in every pass rate. The site's parser (`src/lib/benchmark-feed.ts`)
+must accept these fields before a candidate that has them is published.
 
 `internal-hosted` is the head-to-head over the 53 tasks fastbrowse runs; figures approved at 46, 47 or 52 tasks still
 read. A campaign runs `fastbrowse` and `jev-ultrafast` live in one harness invocation, on Browser Use Cloud browsers
@@ -102,11 +109,13 @@ every website or grader is free of bugs. Review unexpected outcomes before appro
 
 ## From a campaign to the site
 
-A minor release (`vX.Y.0`) dispatches `benchmark-campaign.yml` on its tag once it is published; a patch release
-does so only when its annotated tag message has the line `Benchmarks: run`, and anyone with write access can
-dispatch it by hand. An integration holding a token with `contents: write` starts one with a `repository_dispatch`
+A release runs `benchmark-campaign.yml` as `release-<x.y.z>` on its commit before it is tagged, and the release
+workflow's `gate` job will not publish without it (see [release.md](release.md)); anyone with write access can
+dispatch a campaign by hand. An integration holding a token with `contents: write` starts one with a `repository_dispatch`
 through `client_payload`, which takes the same values as the manual inputs and is refused before any spend when a
-value is outside them or the build has no Evals dispatch. When every group has run, the campaign builds the candidate and calls `publish-evals.yml`,
+value is outside them. Any campaign that is not a smoke is refused before any spend when its build has no passing or
+running Evals dispatch. When every group has run, the campaign builds the candidate from this run and the campaign's
+earlier finished runs, each task from the newest run that measured it in full, and calls `publish-evals.yml`,
 which opens a pull request on agent-labs-dev/fastbrowse-site. The pull request carries the candidate byte for
 byte as `data/benchmark-<campaign>.json` and the site's group files under `data/benchmarks/`, written by
 

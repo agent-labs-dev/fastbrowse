@@ -459,6 +459,8 @@ async fn push_state_between_history_and_snapshot(pushes: u32) {
     };
     *tab.lock().unwrap() = h.session.active_session_id().unwrap();
     h.goto("/dispatch.html").await;
+    // A document's first look also keeps its listener reader, a second snapshot evaluate; the race is a later look's.
+    h.observe().await;
     armed.store(true, Ordering::SeqCst);
     let observed = h.observe().await;
     armed.store(false, Ordering::SeqCst);

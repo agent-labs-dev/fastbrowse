@@ -354,6 +354,14 @@ impl Notes {
         self.retired.contains(key)
     }
 
+    /// Keep only the facts `keep` accepts; the pages and tables read stay, since other facts may cite them.
+    pub(crate) fn retain(&mut self, mut keep: impl FnMut(&Fact) -> bool) {
+        self.facts.retain(|_, fact| keep(fact));
+        let facts = &self.facts;
+        self.answering.retain(|key| facts.contains_key(key));
+        self.retired.retain(|key| facts.contains_key(key));
+    }
+
     /// Whether a new span was added.
     pub fn add(&mut self, fact: Fact) -> bool {
         let key = fact_id(&fact);

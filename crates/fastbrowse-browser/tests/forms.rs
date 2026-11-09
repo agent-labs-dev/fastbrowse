@@ -349,3 +349,190 @@ async fn test_a_blur_leaves_alone_a_field_that_lost_focus_or_was_replaced() {
     assert_eq!(eval_active(&h.page, "document.activeElement === window.twin").await, json!(true));
     h.close().await;
 }
+
+// A field role is named by its label, never by what it holds (#838).
+
+/// Replaces the page with `html` and returns the one control offered as a combobox.
+async fn combobox(h: &Harness, html: &str) -> fastbrowse_core::page::Control {
+    h.goto("/dispatch.html").await;
+    eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(html).unwrap())).await;
+    let observation = h.observe().await;
+    let found: Vec<_> = observation.controls.iter().filter(|c| c.role == "combobox").collect();
+    assert_eq!(found.len(), 1, "{:?}", observation.controls);
+    found[0].clone()
+}
+
+const VISIBILITY: &str = "<fieldset><legend>Visibility</legend><label><input type=checkbox>Unlisted</label>\
+                          <label><input type=checkbox>Hidden</label></fieldset>";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_unlabelled_list_select_is_named_by_its_section_not_its_options() {
+    let Some(h) = harness().await else { return };
+    let html = format!(
+        "<form><fieldset><legend>Categories</legend><select multiple size=5><option>Achievements</option>\
+         <option>Bags</option><option selected>Chat</option><option>Combat</option></select></fieldset>{VISIBILITY}</form>"
+    );
+    let control = combobox(&h, &html).await;
+    assert_eq!(control.label, "combobox");
+    assert_eq!(control.context.as_deref(), Some("Categories"));
+    // Without a title to name the section, the options are the first text the climb meets, and they name nothing.
+    let html = "<div><div><select multiple size=3><option>Achievements</option><option>Bags</option></select></div>\
+                <span>Categories</span></div><label><input type=checkbox>Unlisted</label>";
+    let control = combobox(&h, html).await;
+    h.close().await;
+    assert_eq!(control.context.as_deref(), Some("Categories"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_combobox_widget_is_not_named_by_its_chips_or_options() {
+    let Some(h) = harness().await else { return };
+    let html = format!(
+        "<form><fieldset><legend>Categories</legend><div role=combobox tabindex=-1 aria-expanded=false>\
+         <span>Chat &amp; Communication</span><input style=\"width:0;padding:0;border:0\"></div></fieldset>{VISIBILITY}</form>"
+    );
+    let control = combobox(&h, &html).await;
+    assert_eq!(control.label, "combobox");
+    assert_eq!(control.context.as_deref(), Some("Categories"));
+    // The widget opening appends its options inside itself: neither the label nor the label the guard reads moves.
+    let unchanged = eval_active(
+        &h.page,
+        "(() => { const r = window.__fastbrowse; const e = document.querySelector('[role=combobox]'); \
+         const before = r.guard(e)[2]; \
+         for (const text of ['Achievements', 'Bags']) { const o = document.createElement('div'); \
+         o.setAttribute('role', 'option'); o.textContent = text; e.append(o); } \
+         return r.guard(e)[2] === before; })()",
+    )
+    .await;
+    let reopened = h.observe().await;
+    h.close().await;
+    assert_eq!(unchanged, json!(true));
+    let control = reopened.controls.iter().find(|c| c.role == "combobox").unwrap();
+    assert_eq!(control.label, "combobox");
+    assert_eq!(control.context.as_deref(), Some("Categories"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_combobox_borrows_the_label_of_the_field_it_wraps() {
+    let Some(h) = harness().await else { return };
+    let html = "<div role=combobox><label for=x>Pick categories</label><span>Chat &amp; Communication</span>\
+                <button type=button aria-label=Close>x</button><input id=x></div>";
+    let control = combobox(&h, html).await;
+    h.close().await;
+    assert_eq!(control.label, "Pick categories");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_combobox_wrapping_two_fields_borrows_no_name() {
+    let Some(h) = harness().await else { return };
+    let html = "<div role=combobox tabindex=0><select hidden><option>Chat</option></select>\
+                <span>Chat</span><input aria-label=Search></div>";
+    let control = combobox(&h, html).await;
+    h.close().await;
+    assert_eq!(control.label, "combobox");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_combobox_named_by_the_page_keeps_its_name() {
+    let Some(h) = harness().await else { return };
+    let html = "<div role=combobox aria-label=Categories><span>Chat</span><input aria-label=Pick></div>";
+    let control = combobox(&h, html).await;
+    h.close().await;
+    assert_eq!(control.label, "Categories");
+}
+
+// A control clipped to nothing is not on the page for a person, and a widget that mirrors it is (#838).
+
+/// How Tom Select and select2 hide the original field they keep in place.
+const CLIPPED: &str = "position:absolute;width:1px;height:1px;clip:rect(0 0 0 0);clip-path:inset(50%);overflow:hidden";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_clipped_select_beside_its_widget_is_not_offered() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    let html = format!(
+        "<form><fieldset><legend>Categories</legend><select multiple style=\"{CLIPPED}\">\
+         <option selected>Chat &amp; Communication</option><option>Achievements</option></select>\
+         <div><span>Chat &amp; Communication</span><input role=combobox aria-label=\"Pick categories\"></div>\
+         </fieldset></form>"
+    );
+    eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(&html).unwrap())).await;
+    let observation = h.observe().await;
+    h.close().await;
+    let selects: Vec<_> = observation.controls.iter().filter(|c| c.operations.contains(&Operation::Select)).collect();
+    assert!(selects.is_empty(), "{selects:?}");
+    find(&observation, "Pick categories");
+}
+
+/// The clip check covers a control a script made pressable without a role, and reads an `auto` side as the box's edge.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_scripted_control_clipped_to_nothing_is_not_offered() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    let html = "<div onclick=\"\" style=\"position:absolute;clip:rect(auto, 0px, auto, 0px)\">Remove hidden</div>\
+                <div onclick=\"\">Remove shown</div>";
+    eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(html).unwrap())).await;
+    let observation = h.observe().await;
+    h.close().await;
+    let labels: Vec<_> = observation.controls.iter().map(|c| c.label.as_str()).collect();
+    assert!(labels.contains(&"Remove shown"), "{labels:?}");
+    assert!(!labels.contains(&"Remove hidden"), "{labels:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_clipped_checkbox_is_offered_through_its_label() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    let html = format!("<form><label><input type=checkbox style=\"{CLIPPED}\">Notify me</label></form>");
+    eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(&html).unwrap())).await;
+    let observation = h.observe().await;
+    let offered: Vec<_> = observation.controls.iter().filter(|c| c.label == "Notify me").collect();
+    assert_eq!(offered.len(), 1, "{:?}", observation.controls);
+    assert_eq!(offered[0].role, "checkbox");
+    let result = h.page.act(&action(Operation::Click, offered[0]), &observation).await.expect("act");
+    let checked = eval_active(&h.page, "document.querySelector('input').checked").await;
+    h.close().await;
+    assert_eq!(result.outcome, StepOutcome::Executed, "{:?}", result.detail);
+    assert_eq!(checked, json!(true));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_clipped_file_input_uploads_through_its_label() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    let html = format!("<input id=file type=file style=\"{CLIPPED}\"><label for=file>Attach a photo</label>");
+    eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(&html).unwrap())).await;
+    let observation = h.observe().await;
+    let offered: Vec<_> = observation.controls.iter().filter(|c| c.operations.contains(&Operation::Upload)).collect();
+    assert_eq!(offered.len(), 1, "{:?}", observation.controls);
+    assert_eq!(offered[0].label, "Attach a photo");
+    let upload = Action {
+        files: vec![Attachment { name: "a.txt".into(), mime_type: "text/plain".into(), content: Bytes(b"x".to_vec()) }],
+        ..action(Operation::Upload, offered[0])
+    };
+    let result = h.page.act(&upload, &observation).await.expect("act");
+    let count = eval_active(&h.page, "document.getElementById('file').files.length").await;
+    h.close().await;
+    assert_eq!(result.outcome, StepOutcome::Executed, "{:?}", result.detail);
+    assert_eq!(count, json!(1));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_select_clipped_after_it_was_observed_is_stale() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    let html = "<form><label>Plan<select><option>Free</option><option>Pro</option></select></label></form>";
+    eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(html).unwrap())).await;
+    let observation = h.observe().await;
+    let plan = find(&observation, "Plan");
+    eval_active(
+        &h.page,
+        &format!("document.querySelector('select').style.cssText = {}", serde_json::to_string(CLIPPED).unwrap()),
+    )
+    .await;
+    let select = Action { text: Some("Pro".into()), ..action(Operation::Select, plan) };
+    let result = h.page.act(&select, &observation).await.expect("act");
+    let value = eval_active(&h.page, "document.querySelector('select').value").await;
+    h.close().await;
+    assert_eq!(result.outcome, StepOutcome::Stale, "{:?}", result.detail);
+    assert_eq!(value, json!("Free"));
+}

@@ -10,12 +10,11 @@ mod choices;
 mod chunks;
 mod fields;
 mod screenshot;
+mod tally;
 pub(crate) mod text;
 
 pub(crate) use answers::cited_quote;
-pub use answers::{
-    Claim, ComposedAnswer, assemble_answer, compose, draft_answer, marked_partial, partial_answer, verdict,
-};
+pub use answers::{Claim, ComposedAnswer, assemble_answer, compose, draft_answer, marked_partial, partial_answer};
 pub use choices::read_candidates;
 pub(crate) use choices::{PageRead, read_page, whole_page_facts};
 pub use chunks::page_quotes;
@@ -49,9 +48,6 @@ pub(crate) mod testing {
                 heading_path: Vec::new(),
                 control_context: None,
                 href: None,
-                list_id: None,
-                list_count: None,
-                list_frameless: false,
             });
             start += length + 2;
         }

@@ -478,7 +478,9 @@ async fn test_navigation_and_redirects_never_reach_a_foreign_origin() {
             not_allowed(s.page.observe().await);
         } else {
             assert!(!s.page.capture().await.expect("capture").text.contains(SECRET_TEXT), "{route}");
-            assert!(!s.page.observe().await.expect("observe").viewport_text.contains(SECRET_TEXT), "{route}");
+            let observation = s.page.observe().await.expect("observe");
+            assert!(!observation.viewport_text.contains(SECRET_TEXT), "{route}");
+            assert!(!observation.offscreen_text.contains(SECRET_TEXT), "{route}");
         }
         assert!(!tab_text(&s.session).contains(SECRET_QUERY), "{route}");
         s.close().await;
@@ -535,6 +537,39 @@ async fn test_popups_are_adopted_only_inside_the_grant() {
     }
 }
 
+/// A popup the gate refuses opens no connection to its address either: Chrome's network prediction would connect
+/// before the request reaches Fetch, so the foreign host would learn the run touched it.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_refused_popup_opens_no_connection_to_its_address() {
+    let _turn = turn().await;
+    let Some(connection) = chrome() else { return };
+    let sites = origin_sites();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let foreign = format!("http://127.0.0.1:{}/page?{SECRET_QUERY}", listener.local_addr().expect("addr").port());
+    let connections = Arc::new(AtomicUsize::new(0));
+    let counted = connections.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            counted.fetch_add(1, Ordering::SeqCst);
+            drop(stream);
+        }
+    });
+    let s = scoped(connection, &sites.granted, false, None).await.expect("scoped session");
+    s.page.navigate(&format!("{}/", sites.granted), None).await.expect("navigate");
+    let active = s.session.active_session_id().expect("active");
+    s.session
+        .send(
+            "Runtime.evaluate",
+            json!({"expression": format!("window.open({})", json!(foreign)), "userGesture": true}),
+            Some(&active),
+        )
+        .await
+        .expect("window.open");
+    settle().await;
+    assert_eq!(connections.load(Ordering::SeqCst), 0);
+    s.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_an_attached_window_keeps_its_foreign_frames_and_other_windows_out() {
     let _turn = turn().await;
@@ -549,7 +584,9 @@ async fn test_an_attached_window_keeps_its_foreign_frames_and_other_windows_out(
     let before = eval_active(&h.session, "location.href").await;
     let s = scoped(connection, &sites.granted, true, Some("Granted frame")).await.expect("attached");
     assert!(!s.page.capture().await.expect("capture").text.contains(SECRET_TEXT));
-    assert!(!s.page.observe().await.expect("observe").viewport_text.contains(SECRET_TEXT));
+    let observation = s.page.observe().await.expect("observe");
+    assert!(!observation.viewport_text.contains(SECRET_TEXT));
+    assert!(!observation.offscreen_text.contains(SECRET_TEXT));
     assert!(matches!(refused(s.page.screenshot().await), BrowserError::ScreenshotsUnavailable(_)));
     s.close().await;
     // A window that is not the grant's is neither matched nor named, and nothing navigates the person's window.

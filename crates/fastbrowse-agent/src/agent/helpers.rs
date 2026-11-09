@@ -74,6 +74,34 @@ pub(crate) fn describe(control: &Control) -> String {
     }
 }
 
+/// A step carried out, as what showed a control: "clicking Depart (Flights)".
+pub(crate) fn doing(operation: Operation, target: Option<&str>) -> String {
+    let doing = match operation {
+        Operation::Click => "clicking",
+        Operation::Hover => "hovering over",
+        Operation::Drag => "dragging",
+        Operation::Fill => "typing in",
+        Operation::Blur => "leaving",
+        Operation::Select => "choosing in",
+        Operation::Enter => "pressing Enter in",
+        Operation::Escape => "pressing Escape",
+        Operation::Scroll => "scrolling down",
+        Operation::ScrollUp => "scrolling up",
+        Operation::Back => "going back",
+        Operation::SwitchTab => "switching tabs",
+        Operation::Upload => "uploading to",
+        Operation::Dialog => "answering the dialog",
+        Operation::Wait => "waiting",
+        Operation::Read => "reading",
+        Operation::Done => "finishing",
+        Operation::Navigate => "opening",
+    };
+    match target {
+        Some(target) => format!("{doing} {target}"),
+        None => doing.to_string(),
+    }
+}
+
 /// A caller-supplied address as the link it stands for, so it meets the same gates a link on a page does.
 pub(crate) fn caller_link(url: &str) -> Control {
     let mut control = Control::new("caller-address", "link", url, [Operation::Click]);

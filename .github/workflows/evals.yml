@@ -5,8 +5,8 @@ name: Evals
 # a schedule and on demand, and the job fails when a task regresses.
 #
 # `pull_request` is deliberately absent: a pull request must never be handed the model key. `workflow_dispatch`
-# needs write access to trigger, so it is a maintainer checking their own branch. The suites do not gate a release:
-# approval is the decision, and a tag publishes on its build and smoke tests alone.
+# needs write access to trigger, so it is a maintainer checking their own branch. A release publishes only after
+# a dispatched run on its tree passed (scripts/release_gate.py).
 on:
   workflow_dispatch:
     inputs:
@@ -70,7 +70,8 @@ jobs:
           uv run python -m fastbrowse.evals.runner "${budget_args[@]}" \
             --suite local mock \
             --repeat "$EVAL_REPEAT" \
-            --out artifacts/evals/nightly.jsonl
+            --out artifacts/evals/nightly.jsonl \
+            --traces artifacts/evals/nightly.traces.jsonl
       - name: Check the stability budget
         # A credential check that failed leaves no rows, and a stability error would then read as a task failure;
         # this step stays out of a run that never started.

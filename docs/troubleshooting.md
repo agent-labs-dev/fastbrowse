@@ -14,7 +14,7 @@ what to do next. The full table is in [Results](cli.md#results).
 | [budget_exceeded](#budget_exceeded-exit-7) | 7 | a limit you set was reached |
 | [unavailable](#unavailable-exit-8) | 8 | a model or browser provider stayed down |
 | [stuck](#stuck-exit-9) | 9 | Jev found no way forward |
-| [unverified](#unverified-exit-10) | 10 | the requested data could not be filled from the page |
+| [unverified](#unverified-exit-10) | 10 | the requested data could not be filled from the page, or the site refused a requested step |
 | [observation_limit](#observation_limit-exit-11) | 11 | the page does not fit the prompt budget |
 | [cancelled](#cancelled-exit-12) | 12 | you stopped an `--extension` run in your browser |
 
@@ -199,7 +199,9 @@ known charges may still be under the cap. A run without a dollar cap does not st
 ## unavailable (exit 8)
 
 **What it means.** A model or browser provider stayed unavailable through every retry. The task itself may
-be fine, and the same run later may pass.
+be fine, and the same run later may pass. A run that had already taken a step that may have changed the site,
+such as a click on Post, ends `error` instead: its error names those steps, so check the site before running
+the task again.
 
 **Common causes.**
 
@@ -290,6 +292,8 @@ Both messages end with Chrome's complete diagnostic output, which names the caus
 **Common causes.**
 
 - Jev, told each time what failed, found no way forward before `max_recoveries` ran out.
+- The task says to change nothing, so the run cannot type into fields, pick options or tick boxes. A run
+  that needs a value entered must not forbid edits. Typing a search is still allowed.
 - The run chose to open an address that neither the task nor `--start` supplied:
   `navigation address was not supplied by the caller`.
 - The site answered an HTTP error that maps to no other status:
@@ -313,14 +317,17 @@ Both messages end with Chrome's complete diagnostic output, which names the caus
 
 ## unverified (exit 10)
 
-**What it means.** Jev finished, but the data the run was asked for could not be filled from the page. Treat the
-result as unconfirmed.
+**What it means.** Jev finished, but the data the run was asked for could not be filled from the page, or a step the
+task asks for was not carried out because the site does not allow it. Treat the result as unconfirmed.
 
 **Common causes.**
 
 - A field of the requested data was not backed by the page.
 - The output schema has a field the run cannot fill. A run fills a flat object of required string, number,
   integer and boolean fields; with any other field it ends `unverified` with no data.
+- The site refused a requested step, for example an option it marks unavailable or a control it shows disabled. The
+  run ends with its answer, which says what was and was not done, and the error says a requested step was not carried
+  out because the site does not allow it.
 
 **Next step.**
 

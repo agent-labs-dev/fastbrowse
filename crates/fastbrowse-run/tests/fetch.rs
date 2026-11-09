@@ -172,6 +172,23 @@ async fn test_a_redirect_inside_the_grant_is_followed() {
 }
 
 #[tokio::test]
+async fn test_a_browser_carries_on_from_the_address_the_read_asked_for() {
+    // Google Flights redirects a client that is not a browser to its unsupported-browser page.
+    let http = serving(|request| {
+        if request.url.ends_with("/travel/flights") {
+            Response::new(302, "").with_header("location", "/travel/flights/unsupported")
+        } else {
+            Response::new(200, "<p>Time for an upgrade</p>").with_header("content-type", "text/html")
+        }
+    });
+    let page = FetchedPage::new(http, None, None);
+    assert_eq!(page.browser_address(), None);
+    page.navigate("https://www.google.com/travel/flights", None).await.unwrap();
+    assert_eq!(page.observe().await.unwrap().url, "https://www.google.com/travel/flights/unsupported");
+    assert_eq!(page.browser_address().as_deref(), Some("https://www.google.com/travel/flights"));
+}
+
+#[tokio::test]
 async fn test_a_fetched_page_has_no_pixels_without_requiring_a_browser() {
     let page = FetchedPage::new(html(PAGE), None, None);
     page.navigate("https://shop.example.com/orders", None).await.unwrap();
@@ -427,4 +444,28 @@ fn test_blocks_match_the_recorded_blocks_of_every_fixture_page() {
         return;
     }
     assert!(differing.is_empty(), "{} of {} differ:\n{}", differing.len(), cases.len(), differing.join("\n"));
+}
+
+#[tokio::test]
+async fn test_a_frame_of_the_page_origin_is_read_where_it_stands() {
+    let http = serving(|request| {
+        let body = if request.url.ends_with("/subscribe") {
+            "<h1>Send updates to my inbox</h1><form><input name=email></form>"
+        } else {
+            "<h2>Internal frame: email</h2><iframe src=/subscribe></iframe><h2>External frame</h2>\
+             <iframe src=https://ads.example.net/></iframe><iframe srcdoc='<p>Inline note'></iframe><p>Footer</p>"
+        };
+        Response::new(200, body.to_string()).with_header("content-type", "text/html")
+    });
+    let capture = fetched(&http, "https://shop.example.com/frames").await.expect("read");
+    let texts: Vec<&str> = capture.blocks.iter().map(|b| &capture.text[b.start as usize..b.end as usize]).collect();
+    assert_eq!(texts, ["Internal frame: email", "Send updates to my inbox", "External frame", "Inline note", "Footer"]);
+    // A frame's heading stands under the page heading above the frame, and is marked as the frame's: the judge of
+    // "the form shows the heading" has only this to tell the form's heading from the page's.
+    let form = &capture.blocks[1];
+    assert_eq!(form.heading_path, ["Internal frame: email"]);
+    assert!(form.frame_id.is_some() && capture.blocks[0].frame_id.is_none());
+    assert_eq!(capture.blocks[3].heading_path, ["External frame"]);
+    // The other origin's frame was not fetched, so the read says one document is missing.
+    assert_eq!(capture.inaccessible_frames, 1);
 }

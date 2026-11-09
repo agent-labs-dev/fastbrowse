@@ -218,6 +218,8 @@ class LLMPurpose(StrEnum):
     COMPOSE = "compose"
     IMAGE_READ = "image_read"
     FILL = "fill"
+    PAGES = "pages"
+    DATES = "dates"
 
 
 class JevPurpose(StrEnum):

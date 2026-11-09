@@ -96,6 +96,7 @@ async def test_fixture_campaign_admission_uses_exact_cost_and_stops_on_unknown(
         "steps": 1,
         "cost": charge.model_dump(mode="json"),
         "providers": "Jev test; LLM test",
+        "events": [],
     }
     drive = AsyncMock(side_effect=[row.copy(), row.copy()])
     monkeypatch.setattr(runner, "run_task", drive)
@@ -118,6 +119,9 @@ async def test_fixture_campaign_admission_uses_exact_cost_and_stops_on_unknown(
     assert rows[0]["run"]["agent_limits"] == first_limits.model_dump(mode="json")
     assert rows[0]["run"]["providers"] == "Jev test; LLM test"
     assert rows[0]["cost"]["lines"][0]["dollars"] == 0.0000049
+    # Each row is its one physical attempt, so the run can be published as a baseline (#874).
+    ledger = [json.loads(line) for line in output.with_suffix(".attempts.jsonl").read_text().splitlines()]
+    assert ledger == [row | {"selected": True} for row in rows]
     if not unknown:
         assert drive.await_args_list[1].kwargs["limits"].max_dollars == 2 - 0.0000049
     receipt = json.loads(output.with_suffix(".budget.json").read_text())

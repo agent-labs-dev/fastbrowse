@@ -20,6 +20,8 @@ flate2 = "1.1.10"
 # The WHATWG HTML tokenizer, which reads a fetched document's tags, raw text and character references as a browser does.
 html5ever = "0.40.1"
 indexmap = "2.14.2"
+# A fragment names an id percent-encoded, as a browser decodes it before looking the id up.
+percent-encoding = "2.3.2"
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
 tokio = { version = "1.54.1", features = ["rt", "time", "macros", "sync", "fs"] }
 url = "2.5.8"

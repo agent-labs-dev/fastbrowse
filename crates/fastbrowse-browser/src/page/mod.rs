@@ -19,6 +19,7 @@ use fastbrowse_core::addresses::search_address;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::JEV_IMAGE_SIDE;
 use fastbrowse_core::models::{Artifact, ArtifactKind, Operation, SourceControl};
+use fastbrowse_core::origins::origin_of;
 use fastbrowse_core::page::{
     ActResult, Action, Block, BlockKind, Capture, Control, Dialog, Media, Observation, Page, PageResult,
 };
@@ -34,7 +35,9 @@ use crate::PdfUnread;
 use crate::cdp::secs;
 use crate::error::BrowserError;
 use crate::pdf::PARSE_SECONDS;
-use crate::session::{BrowserSession, CAPTURE_JS, Refusal, SNAPSHOT_UNINSTALLED, STATUS_WORLD, py_json};
+use crate::session::{
+    BrowserSession, CAPTURE_JS, LISTENERS_UNREAD, Refusal, SNAPSHOT_UNINSTALLED, STATUS_WORLD, py_json,
+};
 use crate::urlsplit::urlsplit;
 use scripts::py_float;
 
@@ -201,10 +204,6 @@ struct SnapshotBlock {
     #[serde(default)]
     source_path: String,
     href: Option<String>,
-    list_id: Option<String>,
-    list_count: Option<i64>,
-    #[serde(default)]
-    list_frameless: bool,
 }
 
 /// capture.js output for one frame.
@@ -233,6 +232,24 @@ struct FrameObservation<T> {
     frame_id: Option<String>,
     session_id: String,
     raw: T,
+}
+
+/// The page's own text, then each cross-origin frame's in `frames` order under a `[Frame: origin]` line. Only the
+/// origin is named: a frame's address often carries tokens. A frame with no text adds no line.
+fn frame_text(frames: &[(String, FrameObservation<Snapshot>)], part: fn(&Snapshot) -> &str) -> String {
+    let mut text = frames.iter().find(|(key, _)| key == MAIN).map(|(_, f)| part(&f.raw).to_owned()).unwrap_or_default();
+    for (_, frame) in frames.iter().filter(|(key, _)| key != MAIN) {
+        let own = part(&frame.raw);
+        if own.trim().is_empty() {
+            continue;
+        }
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        let origin = origin_of(&frame.raw.url).unwrap_or_else(|| "embedded page".into());
+        text.push_str(&format!("[Frame: {origin}]\n{own}"));
+    }
+    text
 }
 
 /// The tab's history read: whether BACK is offered, which entry of which tab the page is, and its address.
@@ -265,6 +282,8 @@ pub struct CdpPage {
     pub(crate) page_js: String,
     capture_js: String,
     pub(crate) fingerprint_js: String,
+    /// The players' clocks, which `fingerprint_js` leaves out.
+    pub(crate) media_js: String,
     pub(crate) state: Mutex<PageState>,
     pub(crate) pointer_marks: Option<Arc<Mutex<Vec<crate::pointer::PointerMark>>>>,
     #[cfg(feature = "cursor")]
@@ -379,6 +398,7 @@ fn control_from_raw(
         next_page: c.next_page,
         download: c.download,
         already_read: None,
+        shown_by: None,
     }
 }
 
@@ -428,12 +448,14 @@ impl CdpPage {
         let page_js = session.snapshot().function.clone();
         let capture_js = format!("({CAPTURE_JS})({origins})");
         let fingerprint_js = format!("{page_js}('fingerprint').fingerprint");
+        let media_js = format!("{page_js}('fingerprint').media");
         Self {
             session,
             config,
             page_js,
             capture_js,
             fingerprint_js,
+            media_js,
             state: Mutex::default(),
             pointer_marks: None,
             #[cfg(feature = "cursor")]
@@ -589,7 +611,9 @@ impl CdpPage {
                 Some(main) => main.raw.url.clone(),
                 None => self.origin_once().await?,
             };
-            let mut viewport_text = main.map(|m| m.raw.viewport_text.clone()).unwrap_or_default();
+            // Each frame splits its text in its own viewport's terms, like its controls' `offscreen` flag;
+            // same-process frames are already inlined by snapshot.js.
+            let mut viewport_text = frame_text(&frames, |s| &s.viewport_text);
             let mut notices = String::new();
             if bind {
                 for download in self.session.pending_download_texts() {
@@ -629,6 +653,16 @@ impl CdpPage {
                     ));
                 }
             }
+            // The count alone reached only the reader; said here, the step, the done check and every verdict on the
+            // page know some of it went unread.
+            match inaccessible {
+                0 => {}
+                1 => notices
+                    .push_str("\n\n[1 frame on this page could not be read: its text and controls are not shown]"),
+                n => notices.push_str(&format!(
+                    "\n\n[{n} frames on this page could not be read: their text and controls are not shown]"
+                )),
+            }
             viewport_text.push_str(&notices);
             let response_status = match main {
                 Some(main) if main.raw.url == document.url && main.raw.document_key == document.document_key => {
@@ -646,7 +680,7 @@ impl CdpPage {
                 document_key: main.map(|m| m.raw.document_key.clone()).unwrap_or_default(),
                 controls: kept,
                 viewport_text,
-                offscreen_text: main.map(|m| m.raw.offscreen_text.clone()).unwrap_or_default(),
+                offscreen_text: frame_text(&frames, |s| &s.offscreen_text),
                 // Any frame's picture counts: a screenshot spans every frame the observation read.
                 visual_content: frames.iter().any(|(_, f)| f.raw.visual_content != 0),
                 media: frames.iter().flat_map(|(_, f)| f.raw.media.iter().cloned()).collect(),
@@ -740,6 +774,7 @@ impl CdpPage {
         Ok((result, inaccessible))
     }
 
+    /// Read every frame of the active tab with `expression`.
     async fn read_frames<T: FrameText>(
         &self,
         expression: &str,
@@ -747,7 +782,8 @@ impl CdpPage {
         let main_session = self.session.active_session_id()?;
         let target_id = self.session.active_target_id();
         let mut sources: Vec<(String, String)> = vec![(MAIN.to_owned(), main_session)];
-        sources.extend(self.session.frame_sessions());
+        // An ad is not the page's content: read as it, an ad's text was given as a page's answer.
+        sources.extend(self.session.frame_sessions().into_iter().filter(|(frame, _)| !self.session.ad_frame(frame)));
         let mut result: Vec<(String, FrameObservation<T>)> = vec![];
         // Preserve source order regardless of completion order so capture offsets and hashes stay stable.
         let reads = sources.iter().map(|(key, sid)| self.read_frame::<T>(key, sid, expression));
@@ -898,9 +934,6 @@ impl CdpPage {
                     heading_path: block.heading_path.clone(),
                     control_context: block.control_context.clone(),
                     href: block.href.clone(),
-                    list_id: block.list_id.as_ref().map(|id| format!("{frame_key}/{}:{id}", block.source_path)),
-                    list_count: block.list_count,
-                    list_frameless: block.list_frameless,
                 });
             }
         }
@@ -939,9 +972,6 @@ impl CdpPage {
                     heading_path: vec![heading.clone()],
                     control_context: None,
                     href: None,
-                    list_id: None,
-                    list_count: None,
-                    list_frameless: false,
                 });
                 text.push_str("\n\n");
                 offset += 2;
@@ -1298,11 +1328,12 @@ impl CdpPage {
 
     /// Wait for the page to settle after an action, then report whether it changed.
     ///
-    /// Settled is what the browser says: no navigation of the page is on its way, no fetch, XHR or script request
-    /// started after `requests` (a `requests_mark`) is open, and the tasks the action queued have run. A click that navigates has requested it by the time the input is answered, and a request a
-    /// handler starts is reported before the reply to the read that follows. A quick-add cart redrew 0.5s after its
-    /// DOM went quiet, and the run took the add for a click that did nothing and added the item again: its open
-    /// request is what holds the settle now. A blocking JavaScript dialog freezes the renderer, and a read that fails
+    /// Settled is what the browser says: no navigation of the page is on its way, no frame in it is still loading its
+    /// document, no fetch, XHR or script request started after `requests` (a `requests_mark`) is open, and the tasks
+    /// the action queued have run. A click that navigates has requested it by the time the input is answered, and a
+    /// request a handler starts is reported before the reply to the read that follows. A quick-add cart redrew 0.5s
+    /// after its DOM went quiet, and the run took the add for a click that did nothing and added the item again: its
+    /// open request is what holds the settle now. A blocking JavaScript dialog freezes the renderer, and a read that fails
     /// mid-navigation is itself evidence of change. `SETTLE_SECONDS` bounds a page that never does any of this.
     #[doc(hidden)]
     pub async fn changed_since(&self, before: &str, requests: u64) -> Result<bool, BrowserError> {
@@ -1342,6 +1373,7 @@ impl CdpPage {
                         // answers, as on a page's first load, would otherwise hold every run to the deadline.
                         if !(acted && self.session.requests_open_since(requests))
                             && !self.session.navigating()
+                            && !self.session.frames_loading()
                             && self.lifecycle_mark() == mark
                         {
                             return Ok(differs);
@@ -1416,6 +1448,18 @@ impl CdpPage {
             let mut install = params.clone();
             install["expression"] = format!("void {}", self.session.snapshot().install).into();
             self.session.send("Runtime.evaluate", install, Some(session_id)).await?;
+            out = self.session.send("Runtime.evaluate", params.clone(), Some(session_id)).await?;
+        }
+        if out.get("exceptionDetails").is_some_and(|details| details.to_string().contains(LISTENERS_UNREAD)) {
+            // A look weighs pointer listeners through `getEventListeners`, which only an evaluate with the command
+            // line API has. That API also lends the page `$` and the rest while it runs, so it gets an evaluate of its
+            // own, once per document, which keeps the function for every later look (snapshot.js `listeners`).
+            let mark = json!({
+                "expression": format!("{}('listeners')", self.page_js),
+                "includeCommandLineAPI": true,
+                "returnByValue": true,
+            });
+            self.session.send("Runtime.evaluate", mark, Some(session_id)).await?;
             out = self.session.send("Runtime.evaluate", params, Some(session_id)).await?;
         }
         if out.get("exceptionDetails").is_some() {
@@ -1653,6 +1697,33 @@ mod tests {
         // A mistyped address, and every error that says nothing about the site, stay a plain failure.
         assert!(!site_unreachable("NAME_NOT_RESOLVED"));
         assert!(!site_unreachable("ABORTED"));
+    }
+
+    fn frame(key: &str, url: &str, viewport: &str, offscreen: &str) -> (String, FrameObservation<Snapshot>) {
+        let raw: Snapshot = serde_json::from_value(json!({
+            "url": url, "title": "", "viewport_text": viewport, "offscreen_text": offscreen,
+            "document_key": "", "controls": [], "page_key": "", "guards": {}, "retarget_keys": {},
+        }))
+        .expect("snapshot");
+        (key.to_owned(), FrameObservation { frame_id: None, session_id: String::new(), raw })
+    }
+
+    #[test]
+    fn frame_text_puts_the_page_first_and_labels_each_frame_by_origin() {
+        let frames = vec![
+            frame("f1", "https://pay.test:8443/card?token=SECRET#x", "Card declined", "Help"),
+            frame(MAIN, "https://shop.test/", "Checkout", ""),
+            frame("f2", "https://ads.test/", "  \n ", ""),
+            frame("f3", "about:srcdoc", "Embedded words", ""),
+        ];
+        let viewport = frame_text(&frames, |s| &s.viewport_text);
+        assert_eq!(
+            viewport,
+            "Checkout\n\n[Frame: https://pay.test:8443]\nCard declined\n\n[Frame: embedded page]\nEmbedded words"
+        );
+        assert!(!viewport.contains("token") && !viewport.contains("/card"));
+        // A page with no text of its own starts with the first frame's label.
+        assert_eq!(frame_text(&frames, |s| &s.offscreen_text), "[Frame: https://pay.test:8443]\nHelp");
     }
 
     #[test]

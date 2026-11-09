@@ -88,7 +88,7 @@ task success, completion, LLM calls, model throughput or cost block publication;
 but moves with cloud load, so it never blocks, and Jev calls are recorded but never block, since Jev decides every step. No result is published until complete runs are reviewed and
 the maintainer explicitly approves it.
 
-The fixture workflow runs nightly and on demand; it does not gate a release. CI validates changed result rows
+The fixture workflow runs nightly and on demand, and a release needs a passing dispatched run on its tree. CI validates changed result rows
 and their ledgers against base-branch baselines.
 
 Public projections contain ids, source hashes, grades, completion, build identity, time, cost, call counts,

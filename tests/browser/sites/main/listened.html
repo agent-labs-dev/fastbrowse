@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head><title>Listened</title></head>
+<body>
+  <h1>Script listeners</h1>
+  <p>Chosen: <span id="chip">Combat <span id="remove">Remove Combat</span></span></p>
+  <p id="status">Combat chosen</p>
+  <div id="list">
+    <div style="cursor: pointer">Delegated row</div>
+  </div>
+  <div id="form-box"><button>Plain button</button> Box text</div>
+  <p><span id="dropped">Dropped listener</span></p>
+  <div id="host"></div>
+  <script>
+    document.getElementById('remove').addEventListener('click', () => {
+      document.getElementById('chip').remove();
+      document.getElementById('status').textContent = 'Nothing chosen';
+    });
+    // A list that handles its rows' clicks itself, as React does on its root.
+    document.getElementById('list').addEventListener('click', () => {});
+    document.getElementById('form-box').addEventListener('mousedown', () => {});
+    const dropped = () => {};
+    document.getElementById('dropped').addEventListener('pointerdown', dropped);
+    window.dropListener = () => document.getElementById('dropped').removeEventListener('pointerdown', dropped);
+    document.body.addEventListener('click', () => {});
+    const root = document.getElementById('host').attachShadow({ mode: 'open' });
+    root.innerHTML = '<span>Shadow action</span>';
+    root.querySelector('span').addEventListener('click', () => (document.title = 'Shadow pressed'));
+  </script>
+</body>
+</html>
