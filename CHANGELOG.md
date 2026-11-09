@@ -11,6 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **The composer names the record in every claim.** Asked for the most expensive Travel book and its price, the composer often answered in two claims, "The most expensive book in the Travel category is A Year in Provence ..." and "It costs £56.88.". Each claim's support is checked on its own, against only the notes it cites, so "It costs £56.88." had no record to belong to and failed, and the run ended `unverified`. The composer was told only to write self-contained claims; it is now told why, and names the record a value belongs to instead of pointing back to another claim.
 - **A browser taking over from a page read over HTTP opens the address the read asked for.** A run reads its first page over HTTP and opens a browser when the page needs one. The browser opened where the server had redirected the HTTP request, and that redirect was the server's answer to a client that is not a browser: Google Flights sends such a request to its unsupported-browser page, so every Google Flights run started on "Time for an upgrade" and clicked "Proceed anyway". The browser now asks for the address the read asked for and follows the server's own answer to a browser.
 
 ## [0.10.0] - 2026-11-08
