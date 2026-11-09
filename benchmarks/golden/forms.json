@@ -10,7 +10,6 @@
    "id": 1,
    "input_name": "name",
    "input_type": "text",
-   "invalid": true,
    "label": "Name",
    "max_length": null,
    "offscreen": false,
@@ -23,7 +22,6 @@
    "role": "textbox",
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/0\",\"text\":\"Booking 0\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
-   "validation_message": "Please fill out this field.",
    "value": ""
   },
   {
@@ -240,7 +238,6 @@
    "id": 13,
    "input_name": "name",
    "input_type": "text",
-   "invalid": true,
    "label": "Name",
    "max_length": null,
    "offscreen": false,
@@ -253,7 +250,6 @@
    "role": "textbox",
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/1\",\"text\":\"Booking 1\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
-   "validation_message": "Please fill out this field.",
    "value": ""
   },
   {
@@ -470,7 +466,6 @@
    "id": 25,
    "input_name": "name",
    "input_type": "text",
-   "invalid": true,
    "label": "Name",
    "max_length": null,
    "offscreen": false,
@@ -483,7 +478,6 @@
    "role": "textbox",
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/2\",\"text\":\"Booking 2\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
-   "validation_message": "Please fill out this field.",
    "value": ""
   },
   {
@@ -700,7 +694,6 @@
    "id": 37,
    "input_name": "name",
    "input_type": "text",
-   "invalid": true,
    "label": "Name",
    "max_length": null,
    "offscreen": false,
@@ -713,7 +706,6 @@
    "role": "textbox",
    "sensitive": false,
    "submit_semantics": "{\"label\":\"Book\",\"method\":\"post\",\"action\":\"http://fixture/submit/3\",\"text\":\"Booking 3\\nName\\nEmail\\nStart Date\\nSingle\\nDouble\\nSuite\\nNewsletter\\nBook\"}",
-   "validation_message": "Please fill out this field.",
    "value": ""
   },
   {
