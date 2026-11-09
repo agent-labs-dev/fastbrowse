@@ -7,6 +7,7 @@ loudly on a missing section: a release whose notes would silently be empty is a 
     uv run python scripts/changelog.py 0.3.3        # that version's entry
     uv run python scripts/changelog.py --latest     # the topmost entry, and its version
     uv run python scripts/changelog.py --check 0.3.3
+    uv run python scripts/changelog.py --release-notes 0.3.3   # the entry as a GitHub release body
 """
 
 import argparse
@@ -15,6 +16,10 @@ import sys
 from pathlib import Path
 
 CHANGELOG = Path(__file__).resolve().parent.parent / "CHANGELOG.md"
+# GitHub refuses a release body over 125,000 characters; 0.10.0's entry was 133,000 and failed the release after
+# every build had passed. The margin leaves room for the closing link.
+RELEASE_BODY_LIMIT = 124_000
+REPOSITORY = "https://github.com/agent-labs-dev/fastbrowse"
 # Keep a Changelog writes a version as a link reference (`## [0.3.3] - 2026-09-20`); the brackets are
 # optional here so an entry written either way is still found.
 _HEADING = re.compile(r"^## \[?(?P<version>\d+\.\d+\.\d+)\]? - (?P<date>\d{4}-\d{2}-\d{2})\s*$", re.MULTILINE)
@@ -45,6 +50,23 @@ def section(text: str, version: str) -> str:
     return body
 
 
+def release_notes(body: str, version: str, limit: int = RELEASE_BODY_LIMIT) -> str:
+    """The entry as a GitHub release body: whole when it fits, else its leading items and a link to all of it."""
+    if len(body) <= limit:
+        return body
+    full = f"{REPOSITORY}/blob/v{version}/CHANGELOG.md"
+    link = f"\n\nThe release notes stop here. Every change is in [CHANGELOG.md]({full})."
+    kept: list[str] = []
+    used = len(link)
+    # An item starts at a line beginning "- " or a heading, so the cut never splits one.
+    for item in re.split(r"\n(?=- |#)", body):
+        if used + len(item) + 1 > limit:
+            break
+        kept.append(item)
+        used += len(item) + 1
+    return "\n".join(kept) + link
+
+
 def latest(text: str) -> tuple[str, str]:
     for version, body in entries(text).items():
         return version, body
@@ -56,6 +78,7 @@ def main() -> int:
     parser.add_argument("version", nargs="?", help="the version to print, e.g. 0.3.3")
     parser.add_argument("--latest", action="store_true", help="print the topmost entry instead")
     parser.add_argument("--check", metavar="VERSION", help="exit non-zero unless that version has an entry")
+    parser.add_argument("--release-notes", action="store_true", help="print the entry cut to fit a GitHub release")
     args = parser.parse_args()
     text = CHANGELOG.read_text(encoding="utf-8")
     try:
@@ -69,7 +92,8 @@ def main() -> int:
             return 0
         if not args.version:
             parser.error("give a version, --latest or --check VERSION")
-        print(section(text, args.version))
+        body = section(text, args.version)
+        print(release_notes(body, args.version) if args.release_notes else body)
     except ChangelogError as error:
         print(str(error), file=sys.stderr)
         return 1
