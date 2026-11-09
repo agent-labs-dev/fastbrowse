@@ -66,7 +66,7 @@ class ScriptedJev:
                         confidence=1.0,
                     )
                 case NoulQuestion():
-                    answers[key] = NoulAnswer(probability=float(key == "coverage"))
+                    answers[key] = NoulAnswer(probability=float(key in ("coverage", "exact")))
                 case _:
                     raise AssertionError(f"the scripted Jev has no answer for {key!r}")
         return Evaluation(

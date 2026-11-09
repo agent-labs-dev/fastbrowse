@@ -12,7 +12,7 @@ use super::recovery::{DONE, Idle};
 use super::state::{Extent, OutputIntent, RunState, Step, Stop};
 use super::{Agent, Outcome};
 use crate::memory::Notes;
-use crate::retrieval::{compose_reviewed, draft_answer, draft_reviewed, marked_partial};
+use crate::retrieval::{Draft, compose_reviewed, draft_answer, draft_reviewed, marked_partial};
 use crate::verification::{ExtractOptions, Extraction, RecordSchema, extract};
 
 impl Agent {
@@ -281,15 +281,33 @@ impl Agent {
             Some(reviewed.answer)
         } else if matches!(intent, OutputIntent::Text | OutputIntent::TextAndImage) {
             let (notes, task, ledger) = (state.notes.clone(), state.task.clone(), state.ledger.clone());
-            match self.trace.phase("coverage", draft_reviewed(&*self.jev, &task, &notes, Some(&ledger))).await? {
-                Some(reviewed) => {
-                    // A pick that falls short is written up next time, from everything read by then.
-                    state.compose |= reviewed.rejection.is_some() || reviewed.answer.problem.is_some();
-                    rejection = reviewed.rejection;
-                    Some(reviewed.answer)
-                }
-                None => None,
-            }
+            let reviewed =
+                match self.trace.phase("coverage", draft_reviewed(&*self.jev, &task, &notes, Some(&ledger))).await? {
+                    Some(Draft::Reviewed(reviewed)) => Some(reviewed),
+                    // The picks hold the answer among other page text, which only a writer can narrow: it writes the
+                    // answer from them now, and their claim check holds it to their quotes.
+                    Some(Draft::Write(feedback)) => {
+                        let steps = state.executed_steps();
+                        let written = compose_reviewed(
+                            &*self.jev,
+                            &*self.llm,
+                            &task,
+                            &notes,
+                            Some(&ledger),
+                            Some(&feedback),
+                            true,
+                            &steps,
+                        );
+                        Some(self.trace.phase("compose", written).await?)
+                    }
+                    None => None,
+                };
+            reviewed.map(|reviewed| {
+                // A pick that falls short is written up next time, from everything read by then.
+                state.compose |= reviewed.rejection.is_some() || reviewed.answer.problem.is_some();
+                rejection = reviewed.rejection;
+                reviewed.answer
+            })
         } else {
             draft_answer(&state.notes)
         };

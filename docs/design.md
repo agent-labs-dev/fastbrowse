@@ -222,7 +222,11 @@ their source evidence remains unchanged and the run has taken no further step. A
 repair preserves the earlier draft. Other stops also retain checked partial claims alongside their status,
 wall or budget details.
 A run that already stopped keeps its stop status. Otherwise the answer is drafted from the facts Jev picked, with
-the same words picked on more than one page stated once and citing each.
+the same words picked on more than one page stated once and citing each. The request that checks the draft covers
+the task also asks whether each picked text is only what the task asks, in the form it asks for. A pick is a span code
+cut from the page, such as a table cell or a sentence, and can hold the value beside other text, or be a whole date
+where the task asks for its year. When it holds more, the composer writes the answer from the picks and their context,
+told that they held more than the task asks, and its claims pass the same checks as any composed answer.
 
 ## Prompt limits and progress
 

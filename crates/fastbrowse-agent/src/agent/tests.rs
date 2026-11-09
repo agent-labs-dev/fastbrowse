@@ -2495,10 +2495,14 @@ async fn test_a_task_about_how_the_page_looks_reads_the_screenshot_of_a_page_sty
     assert_eq!(reads("page_text").await, 0);
 }
 
-/// Jev reading the task's output as `IntentJev` does, judging every claim unsupported by its quotes and the whole
-/// answer's coverage of the task at the given probability: a note picked verbatim is its own quote, so only coverage
-/// can decide it.
-struct Reviewing(IntentJev, f64);
+/// Jev reading the task's output as `IntentJev` does, judging the whole answer's coverage of the task and whether a
+/// pick is the answer as asked at the given probabilities, and every claim's support by its quotes at `claims`.
+struct Reviewing(Judging, f64, f64);
+
+struct Judging {
+    intent: IntentJev,
+    claims: f64,
+}
 
 impl DecisionClient for Reviewing {
     fn evaluate<'a>(
@@ -2507,7 +2511,7 @@ impl DecisionClient for Reviewing {
         questions: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         if !questions.contains_key("coverage") {
-            return self.0.evaluate(state, questions);
+            return self.0.intent.evaluate(state, questions);
         }
         let answers = questions
             .iter()
@@ -2521,7 +2525,11 @@ impl DecisionClient for Reviewing {
                     }),
                     _ => Answer::Noul(NoulAnswer {
                         kind: Default::default(),
-                        probability: if key == "coverage" { self.1 } else { 0.0 },
+                        probability: match key.as_str() {
+                            "coverage" => self.1,
+                            "exact" => self.2,
+                            _ => self.0.claims,
+                        },
                     }),
                 };
                 (key.clone(), answer)
@@ -2538,7 +2546,15 @@ impl DecisionClient for Reviewing {
         })
     }
     fn profile(&self) -> DecisionProfile {
-        self.0.profile()
+        self.0.intent.profile()
+    }
+}
+
+impl Reviewing {
+    /// Judging every claim unsupported by its quotes and the coverage at `coverage`: a note picked verbatim is its own
+    /// quote, so only coverage can decide it.
+    fn coverage(intent: &'static str, coverage: f64) -> Reviewing {
+        Reviewing(Judging { intent: IntentJev::new(intent), claims: 0.0 }, coverage, 1.0)
     }
 }
 
@@ -2547,7 +2563,7 @@ impl DecisionClient for Reviewing {
 /// (#679 rerun). An answer read verbatim is held to what the task asks to be told, as a composed one is.
 #[tokio::test]
 async fn test_an_answer_read_verbatim_is_checked_against_what_the_task_asks_to_be_told() {
-    let agent = Agent::new(Arc::new(NoPage), Arc::new(Reviewing(IntentJev::new("text"), 0.0)), Arc::new(ScriptedLLM));
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Reviewing::coverage("text", 0.0)), Arc::new(ScriptedLLM));
     let mut state = run_state();
     state.task = "Read the status, scroll to the bottom of the table, read the status again and report both.".into();
     let captured = capture(&[(BlockKind::Paragraph, "live, updated 00:00:00")]);
@@ -2558,6 +2574,47 @@ async fn test_an_answer_read_verbatim_is_checked_against_what_the_task_asks_to_b
     assert!(!state.compose, "Jev's pick alone answered the task");
     let result = agent.conclude(&mut state, &observation(&[]), None).await.unwrap();
     assert_eq!(result.status, Status::Unverified);
+}
+
+/// The composer writing the population from the infobox cell it is given, citing that cell.
+struct PopulationWriter(String);
+
+impl LLMClient for PopulationWriter {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        _: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        let reply = match purpose {
+            LLMPurpose::Compose => json!({"claims": [{"text": "41,798,407", "evidence_ids": [self.0]}]}),
+            _ => json!(null),
+        };
+        Box::pin(async move {
+            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+        })
+    }
+}
+
+/// An infobox cell picked as the answer was answered whole, the population with the country's rank beside it:
+/// "41,798,407 (37th)" (#862). A pick that is not the answer as the task asks for it is written up from what was picked,
+/// and the written claim is held to the cell's quote.
+#[tokio::test]
+async fn test_a_pick_holding_more_than_the_answer_is_written_up_from_it() {
+    let captured = capture(&[(BlockKind::Table, "| Population | 41,798,407 (37th) |")]);
+    let picked = Fact::read("41,798,407 (37th)", block_evidence(&captured, "s0"), FactReader::JevChoice).answering();
+    let jev = Reviewing(Judging { intent: IntentJev::new("text"), claims: 1.0 }, 1.0, 0.0);
+    let agent =
+        Agent::new(Arc::new(NoPage), Arc::new(jev), Arc::new(PopulationWriter(crate::memory::fact_id(&picked))));
+    let mut state = run_state();
+    state.task = "What is the population of Canada given in its infobox?".into();
+    state.notes = Notes::new([picked]);
+    let result = agent.conclude(&mut state, &observation(&[]), None).await.unwrap();
+    assert_eq!(result.status, Status::Complete, "{:?}", result.error);
+    let answer = result.answer.unwrap();
+    assert_eq!(answer.split(" [").next(), Some("41,798,407"), "{answer}");
 }
 
 #[tokio::test]
@@ -2629,7 +2686,7 @@ async fn test_a_task_to_carry_out_is_not_done_by_hovering() {
 
 #[tokio::test]
 async fn test_text_and_image_returns_both_evidenced_text_and_frame() {
-    let jev = Arc::new(Reviewing(IntentJev::new("text_image"), 1.0));
+    let jev = Arc::new(Reviewing::coverage("text_image", 1.0));
     let agent = Agent::new(Arc::new(Screenshots::default()), jev, Arc::new(ScriptedLLM));
     let mut state = run_state();
     let captured = capture(&[(BlockKind::Paragraph, "The answer is 42")]);
