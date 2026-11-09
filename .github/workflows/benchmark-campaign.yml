@@ -609,7 +609,6 @@ jobs:
         env:
           RUN_ON: ${{ needs.resolve.outputs.run_on }}
           HARNESS_SHA: ${{ needs.resolve.outputs.harness_sha }}
-          PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
         run: |
           # An official suite has its own run date and upstream judge, read from its rows.
@@ -619,7 +618,7 @@ jobs:
             | from_entries' {} + 2> /dev/null || true)"
           test -n "$groups" || groups='{}'
           jq -n --arg run_on "$RUN_ON" --arg harness "fastbrowse-evals at ${HARNESS_SHA:0:7}" \
-            --arg judge "$PARALLAX_JUDGE_MODELS through $PARALLAX_JUDGE_BASE_URL" --argjson groups "$groups" \
+            --arg judge "$PARALLAX_JUDGE_MODELS through OpenRouter" --argjson groups "$groups" \
             '{run_on: $run_on, harness: $harness, judge: $judge, groups: $groups}' \
             > "$GITHUB_WORKSPACE/candidate/run-facts.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
