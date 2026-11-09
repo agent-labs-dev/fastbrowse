@@ -40,3 +40,17 @@ def test_every_head_to_head_exclusion_is_exported_with_its_reason() -> None:
     lookup = next(t for t in live.TASKS if t.id == "pypi-version")
     with pytest.raises(ValueError, match="without a stated reason"):
         live.excluded_because("browser-use", dataclasses.replace(lookup, arms=("fastbrowse",)))
+
+
+def test_both_hosted_browser_use_arms_are_catalogued_on_the_same_tasks() -> None:
+    """bu-ultrafast is the same hosted agent on another model: it runs and skips exactly what the default model does."""
+    import json
+
+    rendered = json.loads(catalog.render())
+    assert rendered["arms"]["browser-use"]["pin"].endswith("API v4; default model, reported per row")
+    assert rendered["arms"]["browser-use-ultrafast"]["pin"].endswith("API v4; model bu-ultrafast, reported per row")
+    for suite in rendered["suites"].values():
+        for task in suite:
+            assert ("browser-use" in task["arms"]) == ("browser-use-ultrafast" in task["arms"])
+            excluded = task.get("excluded", {})
+            assert excluded.get("browser-use") == excluded.get("browser-use-ultrafast")

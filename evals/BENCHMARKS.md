@@ -8,9 +8,9 @@ Browser benchmarking compares exactly three things, each a matched head-to-head 
 
 | | comparison | arms | publication group | matched tasks |
 |:--|:--|:--|:--|:--|
-| C1 | agent against agent | `fastbrowse` and `jev-ultrafast` live, `browser-use` and `browser-harness` from the competitor reference | `internal-hosted` | 53 |
+| C1 | agent against agent | `fastbrowse` and `jev-ultrafast` live, `browser-use`, `browser-use-ultrafast` and `browser-harness` from the competitor reference | `internal-hosted` | 53 |
 | C2 | backend against backend | `fastbrowse` on the Browser Use Cloud browser against `fastbrowse-pool` (Fastbrowse on its own hosted browser pool) | `internal-backend` | 53 |
-| C3 | Fastbrowse and its backend against Browser Use Ultrafast | `fastbrowse-pool` against `jev-ultrafast` | `internal-ultrafast` | 47 |
+| C3 | Fastbrowse and its backend against Jev Ultrafast | `fastbrowse-pool` against `jev-ultrafast` | `internal-ultrafast` | 47 |
 
 Each comparison is its own invocation with exactly its two arms, over every suite, three repeats; the publication
 candidate refuses a ledger whose recorded arms differ from its group's. Run one command per comparison:
@@ -26,7 +26,7 @@ uv run fastbrowse-evals browser internal --arms fastbrowse-pool jev-ultrafast \
 ```
 
 `--budget` is the approved total for that campaign. Without `--arms`, `fastbrowse-evals browser internal` runs `fastbrowse`,
-`jev-ultrafast` and `browser-use`; `fastbrowse-pool`, `fastbrowse-hosted`, `browser-use-oss`, `cua-codex` and `browser-harness` run only when named.
+`jev-ultrafast`, `browser-use` and `browser-use-ultrafast`; `fastbrowse-pool`, `fastbrowse-hosted`, `browser-use-oss`, `cua-codex` and `browser-harness` run only when named.
 Each comparison is scored on the whole task set for every arm. A task an arm cannot run, as the catalog's `excluded`
 says, counts as a failed attempt for that arm at every repeat, so a capability one agent lacks counts against it.
 Time and cost are averaged over the attempts that ran, since an attempt that never ran has neither. Among the tasks
@@ -40,6 +40,7 @@ Credentials per arm (environment variable names; values never enter Git, rows or
 | `fastbrowse` | `BROWSER_USE_API_KEY` (cloud browser), `OPENROUTER_API_KEY` (its LLM and Jev) |
 | `fastbrowse-pool` | `PARALLAX_POOL_URL`, `PARALLAX_POOL_TOKEN`, `OPENROUTER_API_KEY` |
 | `browser-use` | `BROWSER_USE_API_KEY` |
+| `browser-use-ultrafast` | `BROWSER_USE_API_KEY` |
 | `jev-ultrafast` | `BROWSER_USE_API_KEY`, `OPENROUTER_API_KEY` |
 | `browser-harness` | `BROWSER_USE_API_KEY` (cloud browser), `OPENROUTER_API_KEY` (Codex's model provider); Codex CLI 0.163.0 on PATH |
 | `fastbrowse-hosted` | `FASTBROWSE_HOSTED_API_KEY`; `FASTBROWSE_HOSTED_URL` overrides the public API |
@@ -62,13 +63,18 @@ arm of a comparison. Historical rows keep their original task versions.
 Each catalog task lists the head-to-head arms it leaves out under `excluded`, each with its reason
 (`fastbrowse_evals.live.excluded_because`). Every arm runs the same tasks wherever its product allows:
 
-- `browser-use` runs every task but `saucedemo-pause`. Its session is kept alive after the agent finishes and the
-  harness reads the final page through the DevTools address of the browser Browser Use lists for that session, so it
-  is graded on the six navigation tasks too. `saucedemo-pause` passes only on a confirmation stop, and the hosted
-  agent takes no authorization setting to stop on.
+- `browser-use` and `browser-use-ultrafast` are Browser Use's hosted agent on its V4 API: `browser-use` on V4's
+  default model, `browser-use-ultrafast` on `bu-ultrafast`. Every other setting is the same: a US proxy, the task's
+  output schema, its login as secret bindings typed only on the start host, `maxCostUsd` 1000, recording, and the
+  cloud arms' screen size. Each row records the model the run reports. Both run every task but `saucedemo-pause`.
+  The run's browser is kept alive for 900 seconds after the agent finishes, and the harness reads the final page
+  through that browser's DevTools address, so they are graded on the six navigation tasks too. The harness then stops
+  the browser and reads the session's cost once the stop has settled it. `saucedemo-pause` passes only on a
+  confirmation stop, and V4 takes no authorization or pause setting.
 - `jev-ultrafast` runs 47 tasks. It takes no authorization setting, so it skips `saucedemo-pause`, and it cannot be
   given credentials, so it skips the login tasks. It returns no answer, so on an answer task the judge has only its
-  final page to go on.
+  final page to go on. It sends the Jev release the measured fastbrowse build sends (`fastbrowse._native.jev_models`),
+  and its text helper is `google/gemini-3.1-flash-lite` through OpenRouter (`ULTRAFAST_TEXT_MODEL`).
 
 A comparison scores both arms on the tasks both ran.
 
@@ -112,10 +118,11 @@ A row's outcome is its score, `passed`, which the judges set. Two other fields d
 decide a result:
 
 - `status` is the arm's own word, kept as it reported it: fastbrowse says `complete`, `needs_confirmation`, `stuck`
-  and so on; the hosted Browser Use agent says `stopped` or `idle` for every session that finished, answered or not;
+  and so on; the hosted Browser Use agent says `completed` for every run that finished, answered or not, and
+  `failed` for one that broke;
   jev-ultrafast and Browser Use OSS say `done`. The same word means different things on different arms.
 - `normalized_status` maps every arm's status onto one vocabulary (`done`, `stopped`, `budget`, `timeout`,
-  `blocked`, `unavailable`, `error`; `fastbrowse.evals.status.normalize`). A hosted session that answered is `done`.
+  `blocked`, `unavailable`, `error`; `fastbrowse.evals.status.normalize`). A hosted run that answered is `done`.
   It decides only what is not an agent result: `unavailable` rows are outages, left out of scores and latency.
 
 So a `done` row can fail (the answer was wrong) and a `stopped` row can pass (a safety task's correct pause). Compare
@@ -123,8 +130,8 @@ arms on `passed`, and read `normalized_status` to see how a run ended, never `st
 
 ## No limits on any arm
 
-Benchmarks never limit an agent. No arm (fastbrowse, fastbrowse-pool, jev-ultrafast, browser-use, browser-use-oss,
-cua-codex, browser-harness, or the official-suite agent) has a time, step, dollar, model-call or decision limit,
+Benchmarks never limit an agent. No arm (fastbrowse, fastbrowse-pool, jev-ultrafast, browser-use, browser-use-ultrafast,
+browser-use-oss, cua-codex, browser-harness, or the official-suite agent) has a time, step, dollar, model-call or decision limit,
 budgeted or not, in the internal and official runners alike. An attempt runs until its agent ends it or a provider
 does. A cap ends hard tasks early and then scores the cap, not the agent. Each run and manifest records its limits
 (`max_seconds` and `task_timeout` among them, all empty), and publication refuses any recorded limit.
@@ -238,7 +245,7 @@ judge attempt; an unpriced or interrupted judge charge keeps the full hold. A gr
 completed agent answer, trace and known agent charges, with quality and unfinished judge charges unavailable.
 
 Where a provider would otherwise impose a limit, the arm overrides it explicitly. Browser Use applies a default
-cost limit to a hosted session unless `max_cost_usd` is set, so every hosted session is sent `max_cost_usd=1000`
+cost limit of 25 dollars to a hosted run unless `maxCostUsd` is set, so every hosted run is sent `maxCostUsd=1000`
 (`HOSTED_UNCAPPED_USD`), far above any run and any approved campaign. Fastbrowse asks for a 15-minute cloud browser
 by default, so every Browser Use Cloud browser is requested for 240 minutes. jev-ultrafast ships a 60-action demo budget (120 model calls), so its runner raises that to the same
 1,000,000 ceiling the open-source Browser Use arm uses. What no request can lift is recorded,
@@ -247,7 +254,7 @@ The removed flags `--campaign-budget-only`, `--max-dollars`, `--max-steps`, `--t
 `--max-jev-calls` and `--agent-budget` are refused by name.
 
 Use `--local-browser /path/to/chrome` to run the `fastbrowse` arm on headless local Chrome. It sets that arm's
-browser alone: in the same invocation `browser-use`, `jev-ultrafast` and `browser-harness` keep their own hosted
+browser alone: in the same invocation `browser-use`, `browser-use-ultrafast`, `jev-ultrafast` and `browser-harness` keep their own hosted
 browsers. It explicitly ignores configured cloud keys, creates a temporary profile, and records the browser version
 and executable hash. `--browser-reserve-dollars 0` is accepted only when every arm runs on a local or pool browser.
 Every row records each arm's browser under `run.browsers`.
@@ -308,18 +315,19 @@ tasks it affects, so the group takes each arm's rows at a task from the newest r
 measured that arm at every repeat of it. This is how the release gate scores a campaign, so the site shows the
 results the release shipped on. The head-to-head also reads the `--internal-fastbrowse` ledgers, so its fastbrowse
 rows come from a newer fastbrowse-only run where there is one, as the release gate pools them, while each competitor
-keeps the run it was measured in. Every run supplying an arm must have driven it on the same browser, and every run is
-held to the one uncapped protocol and clock. A run that supplies nothing is not read further, and every run that does
+keeps the run it was measured in. Every run supplying an arm must have driven it on the same browser and at the
+catalog's pin for that arm, and every run is held to the one uncapped protocol and clock. A run's other arms may be on
+older pins, so re-measuring one competitor on a new version leaves the earlier run's other arms publishable. A run that supplies nothing is not read further, and every run that does
 is checked whole: its protocol, budget journal, judge receipts and Langfuse readback. Every task of each arm must come
 from some run. The group records its runs, newest first, in `sources`, one entry per run and arm: the run's recorded
 id, the arm, agent and runner commits, date and the tasks it supplied for that arm. The group's own `agent_sha` is its newest run's, and the candidate's is the newest
 run's of all its groups. The fixture run must be on that build and an official group must be of it. An earlier
 run stays valid whichever build it measured.
 
-`--competitor-reference PATH` adds the `browser-use` and `browser-harness` rows of this repository's
-`docs/results/competitor-reference.json` to `internal-hosted`, unless its ledger ran both. Without a reference, or with
+`--competitor-reference PATH` adds the `browser-use`, `browser-use-ultrafast` and `browser-harness` rows of this
+repository's `docs/results/competitor-reference.json` to `internal-hosted`, unless its ledgers measured all three. Without a reference, or with
 one under another judge policy or stale for any task, the exporter refuses the comparison and names the tasks.
-`--write-reference PATH --measured-on DATE` writes that file from a ledger that ran both.
+`--write-reference PATH --measured-on DATE` writes that file from ledgers that measured all three.
 
 An official run directory holds decrypted BU Bench goals and upstream records, so it never leaves its job in plaintext.
 `fastbrowse-evals browser official-rows GROUP FOLDER --dataset --upstream-root --judge-python --out FILE` runs there, after
@@ -331,7 +339,7 @@ suite's group; only `fastbrowse` is published, so the site shows Browser Use's o
 ones included. `publish-candidate` requires each group's experiments to be there.
 
 The hosted group is the 52 tasks both `fastbrowse` and `browser-use` run. It measures whichever of `fastbrowse`,
-`browser-use`, `jev-ultrafast` and `browser-harness` its runs ran, each on the tasks of the 52 it supports
+`browser-use`, `browser-use-ultrafast`, `jev-ultrafast` and `browser-harness` its runs ran, each on the tasks of the 52 it supports
 (`jev-ultrafast` skips tasks that need an answer, `browser-harness` those that need credentials or a safe stop); an arm that did not run, or none of whose runs started (its
 provider refused every start, as with a bad key), is not measured rather than blocking the group. Each task of the
 set a measured arm cannot run is listed in the group's `excluded`, with the arm, the task and the catalog's reason; it
@@ -474,7 +482,7 @@ and billed spend remains unknown. The arm uses Cua's supported coding-agent MCP 
 `browser-harness` as its CLI and `SKILL.md` (not `browser-harness-mcp`), on `openai/gpt-6-luna` at medium reasoning
 with web search off, attached over CDP to a fresh Browser Use Cloud browser, the browser the `fastbrowse` arm runs on.
 It runs inside the hosted head-to-head (`HEAD_TO_HEAD_ARMS`), the invocation that also runs `fastbrowse`,
-`browser-use` and `jev-ultrafast`, and its rows publish in that `internal-hosted` group with `--hosted`, on the tasks of
+`browser-use`, `browser-use-ultrafast` and `jev-ultrafast`, and its rows publish in that `internal-hosted` group with `--hosted`, on the tasks of
 the 52 it supports. Run alone beside `fastbrowse`:
 
 ```sh
