@@ -343,6 +343,10 @@ pub struct RunTask {
     /// `extension`.
     #[serde(default)]
     pub extension_browser: Option<String>,
+    /// Drive a native desktop window instead of a browser, through deskpilot on Hyprland: its address, its app
+    /// class, or a substring of its class or title that names exactly one window.
+    #[serde(default)]
+    pub desktop: Option<String>,
 }
 
 impl RunTask {
@@ -668,6 +672,7 @@ fn run_task_fields() -> Vec<Field> {
         Field::default("browser", Ty::Bool, false),
         Field::default("extension", Ty::Bool, false),
         Field::default("extension_browser", text(), none()),
+        Field::default("desktop", text(), none()),
     ]
 }
 

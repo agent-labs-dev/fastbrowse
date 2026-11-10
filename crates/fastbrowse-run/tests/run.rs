@@ -418,6 +418,22 @@ fn a_viewport_is_local_or_cloud_and_rejects_handed_browsers() {
     assert!(error.contains("greater than zero"), "{error}");
 }
 
+#[test]
+fn a_desktop_run_refuses_browser_options_and_recipes() {
+    let desktop =
+        |window: &str| RunTask { task: "fill the form".into(), desktop: Some(window.into()), ..RunTask::default() };
+    assert!(fastbrowse_run::check(&desktop("org.gnome.TextEditor")).is_ok());
+    assert!(fastbrowse_run::check(&desktop(" ")).unwrap_err().to_string().contains("must name a window"));
+    let error = fastbrowse_run::check(&RunTask {
+        start: Some("https://example.com".into()),
+        recipe: Some("steps.json".into()),
+        ..desktop("org.gnome.TextEditor")
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("drop start, recipe"), "{error}");
+}
+
 #[tokio::test]
 async fn a_viewport_rejects_open_browser_before_invoking_the_callback() {
     let calls = Arc::new(AtomicUsize::new(0));
