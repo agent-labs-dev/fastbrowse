@@ -42,6 +42,17 @@ use crate::urlsplit::urlsplit;
 use scripts::py_float;
 
 pub(crate) const SETTLE_SECONDS: f64 = 5.0;
+/// How long the document must have gone without a mutation or input before a settle reports it quiet. This is the
+/// page's own event stream answering, not a poll: snapshot.js stamps `registry.lastMutation` from its mutation
+/// observer and input listeners, so a settle waits on one promise instead of being sent again until two reads agree.
+/// A click that mutates settles `SETTLE_QUIET_SECONDS` after its last write; a page that never mutates after the
+/// action has no such wait at all.
+pub(crate) const SETTLE_QUIET_SECONDS: f64 = 0.2;
+/// How long a visible progress indicator outranks a quiet DOM, inside `SETTLE_SECONDS`. A spinner settles the
+/// fingerprint while the page it waits for does not exist yet, but a page that spins forever must not pay the whole
+/// settle budget on every action, so past this quiet decides alone. Only `aria-busy`, a progressbar role and a
+/// `progress` element are read: #501 removed the guessed class and id names, which matched content.
+pub(crate) const SETTLE_LOADING_SECONDS: f64 = 1.5;
 /// A document can replace itself while its snapshot is being read. Restart that read after the replacement settles,
 /// and report failure if replacement continues. Run steps, time and spend are counted separately.
 pub(crate) const REREADS: u32 = 10;
@@ -1378,7 +1389,7 @@ impl CdpPage {
                     _ = self.wait_for_lifecycle(mark, remaining.as_secs_f64()) => continue,
                 }
             }
-            let settled = self.settled_fingerprint();
+            let settled = self.settled_within(remaining.as_secs_f64());
             tokio::select! {
                 () = &mut dialog => return Ok(true),
                 () = sleep(remaining) => return Ok(!unchanged),
@@ -1419,14 +1430,23 @@ impl CdpPage {
 
     #[doc(hidden)]
     pub async fn settled_fingerprint(&self) -> Result<(bool, Option<String>), BrowserError> {
-        // A message comes back after the tasks queued before it, so what the action queued has run. It needs no frame
-        // and no timer: a cloud browser that draws nothing holds both back.
-        let script = format!(
-            "new Promise(resolve => {{ const sample = {page_js}; const {{port1, port2}} = new MessageChannel(); \
-             port1.onmessage = () => {{ const state = sample('fingerprint'); port1.close(); \
-             resolve([state.ready, state.ready ? state.fingerprint : null]); }}; port2.postMessage(0); }})",
-            page_js = self.page_js,
-        );
+        self.settled_within(SETTLE_SECONDS).await
+    }
+
+    /// One settle: a promise the page resolves once its own event stream says it has gone quiet, sampled for the
+    /// fingerprint in the same evaluation.
+    ///
+    /// Waiting in the page is the whole change (#946). The document's mutation observer and input listeners stamp
+    /// `registry.lastMutation`, so a page still writing resolves the promise later, on its own schedule, instead of
+    /// this sending another read to find out whether the previous one is stale. A page that settles 30 ms after a
+    /// click therefore costs one evaluation rather than one per sample, and the fingerprint walk that follows runs on
+    /// a page that has stopped moving, so it is not repeated.
+    ///
+    /// `seconds` is the caller's remaining settle budget, and the promise answers at it with whatever state the page
+    /// is in: an unsettled page is still a readable page. A hidden tab draws no frames, so it answers from one sample,
+    /// as the poll it replaces did.
+    pub async fn settled_within(&self, seconds: f64) -> Result<(bool, Option<String>), BrowserError> {
+        let script = self.settle_script(seconds);
         let result = self.evaluate(&self.session.active_session_id()?, &script).await?;
         match result.as_array().map(Vec::as_slice) {
             Some([Value::Bool(stable), fingerprint]) if fingerprint.is_string() || fingerprint.is_null() => {
@@ -1434,6 +1454,43 @@ impl CdpPage {
             }
             _ => Err(BrowserError::Failed("page script returned an unexpected tuple[bool, str | None]".into())),
         }
+    }
+
+    /// The page script for one settle: a promise the page resolves on its own frame and mutation events once the
+    /// document is interactive, has not mutated for `SETTLE_QUIET_SECONDS`, and shows no progress indicator (or has
+    /// shown one for `SETTLE_LOADING_SECONDS`), then samples the fingerprint in the same call. `seconds` bounds it.
+    ///
+    /// The `fastbrowse:settle` marker is what the integration test matches to count settle reads.
+    fn settle_script(&self, seconds: f64) -> String {
+        format!(
+            "/* fastbrowse:settle */ new Promise(resolve => {{ const r = window.__fastbrowse; \
+             const sample = {page_js}; \
+             const finish = () => {{ const s = sample('fingerprint'); \
+             resolve([Boolean(s && s.ready), s && s.ready ? s.fingerprint : null]); }}; \
+             if (!r || document.hidden) {{ finish(); return; }} \
+             const started = performance.now(); const deadline = started + {deadline}; \
+             const quiet = {quiet}; const loading = {loading}; \
+             let settled = false, frameAt = 0; \
+             const done = () => {{ if (settled) return; settled = true; r.nativeClearTimeout(timer); finish(); }}; \
+             const busy = () => {{ \
+               for (const e of document.querySelectorAll('[aria-busy=\"true\"],[role=\"progressbar\"],progress')) {{ \
+                 try {{ if (e.checkVisibility({{checkOpacity: true, checkVisibilityCSS: true}})) return true; }} catch {{}} \
+               }} return false; }}; \
+             const check = () => {{ \
+               if (settled) return; const now = performance.now(); \
+               const ready = document.readyState !== 'loading'; const held = busy(); \
+               const last = r.lastMutation || 0; \
+               const moved = last >= (r.lastInput || 0); \
+               if (ready && !held && (!moved || now - last >= quiet) && frameAt >= last) return done(); \
+               if (now >= deadline || (held && now - started >= loading)) return done(); \
+               r.nativeRequestAnimationFrame(t => {{ frameAt = t; check(); }}); }}; \
+             const timer = r.nativeSetTimeout(done, {deadline}); \
+             r.nativeRequestAnimationFrame(t => {{ frameAt = t; check(); }}); }})",
+            page_js = self.page_js,
+            deadline = py_float(seconds.max(0.0) * 1000.0),
+            quiet = py_float(SETTLE_QUIET_SECONDS * 1000.0),
+            loading = py_float(SETTLE_LOADING_SECONDS * 1000.0),
+        )
     }
 
     // -- evaluation -------------------------------------------------------------------------------------------

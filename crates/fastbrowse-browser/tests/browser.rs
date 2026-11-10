@@ -329,7 +329,7 @@ async fn test_a_navigation_that_starts_during_the_settle_wait_is_a_change() {
             return Some((value, Duration::ZERO));
         }
         let settle_read = method(&value) == "Runtime.evaluate"
-            && value["params"]["expression"].as_str().is_some_and(|e| e.contains("port2.postMessage(0)"));
+            && value["params"]["expression"].as_str().is_some_and(|e| e.contains("fastbrowse:settle"));
         if toward == Toward::Browser && settle_read && count.fetch_add(1, Ordering::SeqCst) > 0 {
             ids.lock().unwrap().extend(value["id"].as_i64());
         }

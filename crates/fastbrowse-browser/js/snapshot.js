@@ -94,18 +94,32 @@
     registry.selfUpdating = new Set();
     registry.changed = new Set();
     registry.quiet = false;
-    const input = () => (registry.quiet = false);
+    // When the document last moved and when the run last touched it, as `performance.now()` reads them. A settle
+    // resolves from these rather than from re-reading the page: the observer is the page's own report that it is still
+    // writing, so one evaluation waits on it instead of being sent again until two reads agree. The action's own input
+    // is stamped apart from its mutations, so an action that changes nothing is not charged a quiet window it has no
+    // reason to wait out.
+    registry.lastMutation = performance.now();
+    registry.lastInput = 0;
+    const input = () => {
+      registry.quiet = false;
+      registry.lastInput = performance.now();
+    };
     for (const type of ['pointerdown', 'mousedown', 'keydown', 'input', 'change', 'wheel', 'scroll']) {
       addEventListener(type, input, true);
     }
     new MutationObserver(records => {
+      registry.lastMutation = performance.now();
       for (const r of records) {
+        // An attribute change moves the page but rewrites no text, so it stamps the clock above and is not a changed
+        // text node.
+        if (r.type === 'attributes') continue;
         const textOnly =
           r.type === 'characterData' || [...r.addedNodes, ...r.removedNodes].every(n => n.nodeType === Node.TEXT_NODE);
         const element = r.type === 'characterData' ? r.target.parentElement : r.target;
         if (textOnly && element) registry.changed.add(element);
       }
-    }).observe(document, { subtree: true, characterData: true, childList: true });
+    }).observe(document, { subtree: true, characterData: true, childList: true, attributes: true });
   }
   if (mode !== 'glance') {
     if (registry.quiet) for (const e of registry.changed) registry.selfUpdating.add(e);
