@@ -1629,8 +1629,26 @@ impl DecisionClient for RefusesCoverage {
     }
 }
 
+/// `CoverageComposer`, failing the test if it is asked to compose.
+struct NoCompose(CoverageComposer);
+
+impl LLMClient for NoCompose {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        messages: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        ledger: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        assert_ne!(purpose, LLMPurpose::Compose, "a task that asks to be told nothing composed an answer");
+        self.0.generate_value(purpose, messages, schema, ledger)
+    }
+}
+
 /// Sent a support request, a run ended `stuck`: its write-up of the page that confirmed it was asked whether it gave
-/// every fact the task asked to be told, of a task that asks to be told nothing, and Jev said a fact was missing.
+/// every fact the task asked to be told, of a task that asks to be told nothing, and Jev said a fact was missing. A
+/// task that asks to be told nothing has nothing to write up, and composing one cost "Open the comments page of the top
+/// story." 1 to 4.5 seconds (#910): it answers with what was read.
 #[tokio::test]
 async fn test_a_task_carried_out_is_not_held_to_reporting_facts() {
     let page = capture(&[(BlockKind::Paragraph, "We have your request: 'billing'.")]);
@@ -1648,12 +1666,13 @@ async fn test_a_task_carried_out_is_not_held_to_reporting_facts() {
     ));
     let jev = Arc::new(RefusesCoverage(DoneCheckJev::new(Default::default(), 1.0, "done")));
     let cited = Arc::new(Mutex::new(Some(crate::memory::fact_id(state.notes.facts()[0]))));
-    let agent = Agent::new(Arc::new(FinishPage(observation(&[]))), jev.clone(), Arc::new(CoverageComposer(cited)));
+    let llm = Arc::new(NoCompose(CoverageComposer(cited)));
+    let agent = Agent::new(Arc::new(FinishPage(observation(&[]))), jev.clone(), llm);
 
     let result = agent.finish(&mut state, &observation(&[]), None, None).await.expect("finish").expect("a result");
     assert_eq!(result.status, Status::Complete, "{:?}", result.error);
-    let asked = jev.0.3.lock().unwrap();
-    assert!(asked.len() >= 2, "the steps and the write-up are still judged");
+    assert!(result.answer.unwrap().starts_with("We have your request: 'billing'."));
+    assert!(!jev.0.3.lock().unwrap().is_empty(), "the steps are still judged");
 }
 
 /// Picks, for every read requirement, the candidate whose value is the field's, and fails if it is not offered; with no

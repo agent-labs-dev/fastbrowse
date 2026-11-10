@@ -258,6 +258,10 @@ impl Agent {
         let mut rejection = None;
         let mut answered = if intent == OutputIntent::Image {
             None
+        } else if intent == OutputIntent::CarriedOut && !state.refused {
+            // A task that asks to be told nothing is answered by what was read: writing it up cost a task to open a
+            // page 1 to 4.5 seconds of composing (#910). A step the site refused is reported, as REFUSED says.
+            draft_answer(&state.notes)
         } else if state.compose {
             let (notes, task, ledger) = (state.notes_to_compose(), state.task.clone(), state.ledger.clone());
             let steps = state.executed_steps();

@@ -447,8 +447,8 @@ pub(crate) struct ReviewedComposition {
     pub rejection: Option<String>,
 }
 
-/// `reports` is whether the task asks to be told anything: one only carried out has no facts to cover, and its steps
-/// are judged on their own.
+/// `reports` is whether the task asks to be told anything: one only carried out is written up only when a step was
+/// refused, has no facts to cover, and its steps are judged on their own.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn compose_reviewed(
     jev: &dyn DecisionClient,
