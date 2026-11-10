@@ -2346,6 +2346,51 @@ async fn test_page_javascript_cannot_forge_the_http_status() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_the_viewport_a_measurement_read_is_not_asked_for_again() {
+    let _turn = turn().await;
+    let Some(connection) = chrome().cloned() else { return };
+    let sent = Arc::new(Mutex::new(vec![]));
+    let Some(h) = proxied(connection, recording(sent.clone())).await else { return };
+    h.goto("/").await;
+    let viewport_reads = |sent: &Arc<Mutex<Vec<(String, Value)>>>| {
+        sent.lock()
+            .unwrap()
+            .iter()
+            .filter(|(m, p)| {
+                m == "Runtime.evaluate" && matches!(p["expression"].as_str(), Some("[innerWidth, innerHeight]"))
+            })
+            .count()
+    };
+    // A scroll lands where the viewport centre is, which the pre-action measurement already returned.
+    sent.lock().unwrap().clear();
+    let obs = h.observe().await;
+    let scrolled = act(&h.page, Action::new(Operation::Scroll), &obs).await;
+    assert_eq!(scrolled.outcome, StepOutcome::Executed);
+    let wheel = sent
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(m, p)| m == "Input.dispatchMouseEvent" && p["type"] == "mouseWheel")
+        .map(|(_, p)| p.clone())
+        .expect("a wheel event");
+    let (width, height) = (wheel["x"].as_f64().expect("x"), wheel["y"].as_f64().expect("y"));
+    assert!(width > 0.0 && height > 0.0, "{wheel:?}");
+    assert_eq!(viewport_reads(&sent), 0, "{:?}", sent.lock().unwrap().iter().map(|(m, _)| m).collect::<Vec<_>>());
+
+    // Pointer marks need the viewport too, and a recording run has them on: the same measurement answers.
+    let marks = Arc::new(Mutex::new(vec![]));
+    let marked = CdpPage::new(h.session.clone(), Config::default()).with_pointer_marks(marks.clone());
+    h.goto("/").await;
+    let obs = marked.observe().await.expect("observe");
+    sent.lock().unwrap().clear();
+    let clicked = act(&marked, click(find(&obs, "Sign in")), &obs).await;
+    assert_eq!(clicked.outcome, StepOutcome::Executed);
+    assert_eq!(viewport_reads(&sent), 0, "a click re-read the viewport");
+    assert_eq!(marks.lock().unwrap().len(), 1, "the click left no pointer mark");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_http_status_world_is_made_once_per_document() {
     let _turn = turn().await;
     let Some(connection) = chrome().cloned() else { return };
