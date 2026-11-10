@@ -376,11 +376,12 @@ the browser of each arm and the concurrency.
 - Official dollars are agent spend, as internal ones are; judge spend counts toward the budget, and any unsettled
   judge reservation blocks export.
 - An official run may have any number of repeats (`--repeat`, at least one); every task and repeat must be graded or
-  blocked by the site. A slot the interruption check still finds interrupted after every retry measured no agent: it
-  stays out of the rows and every score and is listed in the group's `blocked` slots, with its time and spend, on
-  every arm. Publication confirms each from its saved checks; any other ungraded slot blocks export, and so does a
-  run with nothing graded. Each repeat is its own row, and a task's figure is the mean of its graded repeat scores, as
-  `track-official` aggregates it.
+  blocked by the site. A slot the interruption check still finds interrupted after every retry is the agent's failed
+  attempt, as an internal one is, since another agent may get past what stopped it: a row scoring 0 with its time and
+  spend, whose `failure` names the bot check when the run ended `blocked`. One whose run ended in an error of the
+  harness or its model provider measured nothing and is listed in `unjudged`. Publication confirms each from its saved
+  checks; any other ungraded slot blocks export. Each repeat is its own row, and a task's figure is the mean of its
+  repeat scores.
   The upstream score of each repeat is kept as upstream defines it. Only `fastbrowse` official runs are
   published, graded by `anthropic/claude-opus-5.5` through OpenRouter.
 - Every campaign must already be uploaded with `fastbrowse-evals browser track-ledger --push` or `track-official --push`. The exporter reads each

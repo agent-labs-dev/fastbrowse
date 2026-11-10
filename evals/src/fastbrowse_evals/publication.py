@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastbrowse.evals.benchmarks import (
-    BlockedSlot,
     Candidate,
     CompetitorReference,
     ExcludedTask,
@@ -165,7 +164,6 @@ def build_group(
     rows: list[Row],
     run: dict[str, Any],
     repeats: int | None = None,
-    blocked: list[BlockedSlot] | None = None,
     unjudged: list[UnjudgedSlot] | None = None,
     sources: list[Source] | None = None,
     excluded: list[ExcludedTask] | None = None,
@@ -180,7 +178,6 @@ def build_group(
         repeats=repeats or GROUPS[group_id][1],
         limits=[note(n) for n in limits],
         rows=sorted(rows, key=lambda r: (r.arm, r.task, r.repeat)),
-        blocked=blocked or [],
         unjudged=unjudged or [],
         excluded=excluded or [],
         sources=sources or [],
@@ -893,7 +890,7 @@ class OfficialRows(BaseModel):
     langfuse_dataset: str
     langfuse_run: str
     rows: list[Row]
-    blocked: list[BlockedSlot] = []
+    unjudged: list[UnjudgedSlot] = []
 
 
 def check_blocked(result: dict[str, Any], folder: Path, where: str) -> None:
@@ -1001,7 +998,7 @@ async def official_group(
         if results[key].get("agent_limits") != attempt.get("agent_limits"):
             raise PublicationError(f"{group_id}/{key[0]}: result and attempt agent limits differ")
     rows = []
-    blocked = []
+    unjudged: list[UnjudgedSlot] = []
     physical: dict[str, float] = {}
     missing_captures = 0
     for (task, repeat), result in sorted(results.items()):
@@ -1058,36 +1055,31 @@ async def official_group(
             check = amount(earlier.get("interruption_check_usd"), f"{where}: interrupted run {n} check dollars")
             physical[official.run_id(task, repeat, n)] = spent + check
         physical[official.run_id(task, repeat, len(interruptions))] = final_run
-        if is_blocked:
-            blocked.append(
-                BlockedSlot(
-                    task=task,
-                    repeat=repeat,
-                    arm=arm,
-                    seconds=seconds,
-                    dollars=dollars,
-                    physical_runs=1 + len(interruptions),
-                )
-            )
+        status = text(result.get("status"), f"{where}: status")
+        if is_blocked and status == "error":
+            # The run ended in an error of the harness or its model provider, so it measured nothing, as an internal
+            # slot judged unavailable on that ending measured nothing (`unjudged_reason`).
+            unjudged.append(UnjudgedSlot(task=task, repeat=repeat, arm=arm, reason="evidence-unavailable"))
             continue
         rows.append(
             Row(
                 task=task,
                 repeat=repeat,
                 arm=arm,
-                status=text(result.get("status"), f"{where}: status"),
+                status=status,
                 completed=result.get("completed") is True,
-                score=amount(result.get("upstream_score"), f"{where}: upstream grade"),
+                # A slot the site refused on every retry is the agent's failure, as an internal one is: another agent
+                # may get past what stopped this one.
+                score=0.0 if is_blocked else amount(result.get("upstream_score"), f"{where}: upstream grade"),
                 seconds=seconds,
                 dollars=dollars,
                 physical_runs=1 + len(interruptions),
                 llm_calls=None,
                 llm_calls_basis="physical_requests" if arm in FASTBROWSE_ARMS else None,
                 **timing_fields([*interruptions, result]),
+                failure=(SITE_BLOCKED if status == "blocked" else SITE_REFUSED) if is_blocked else None,
             )
         )
-    if not rows:
-        raise PublicationError(f"{group_id}: the site blocked every slot, so nothing was graded")
     if math.fsum(physical.values()) > manifest["total_budget"] + 1e-9:
         raise PublicationError(f"{group_id}: physical spend exceeds its approved campaign budget")
     # Total spend alone cannot show which holds overlapped, so the start gate's own journal is replayed as well.
@@ -1132,7 +1124,7 @@ async def official_group(
         langfuse_dataset=tracked.dataset,
         langfuse_run=tracked.runs[0].name,
         rows=rows,
-        blocked=blocked,
+        unjudged=unjudged,
     )
     return public, tracked
 
@@ -1156,7 +1148,7 @@ def official_limits(group_id: str, first: OfficialRows) -> list[str]:
         f"Judge {first.judge_model.replace('/', ' ')} via OpenRouter, reasoning {first.judge_reasoning}; "
         f"score threshold {first.score_threshold}",
         f"{first.repeats} repeat(s) per task; a task's figure is the mean of its graded repeat scores; "
-        "a slot the site blocked on every retry is left out, never a pass or a failure",
+        "a slot the site refused on every retry is a failed attempt, unless the run ended in a harness error",
         f"Upstream commit {first.upstream_commit}",
         "Judge libraries: " + ", ".join(f"{k} {v}" for k, v in sorted(first.judge_versions.items())),
         screenshots,
@@ -1176,9 +1168,9 @@ def official_collected(part: OfficialRows) -> Collected:
     run = {"git_sha": part.agent_sha, "benchmark_runner_sha": part.runner_sha}
     limits = official_limits(part.group, part)
     group = build_group(
-        part.group, part.dataset_sha256, part.task_ids, limits, part.rows, run, part.repeats, part.blocked
+        part.group, part.dataset_sha256, part.task_ids, limits, part.rows, run, part.repeats, part.unjudged
     )
-    return Collected(group, part.agent_sha, part.runner_sha, (), len(part.rows) + len(part.blocked))
+    return Collected(group, part.agent_sha, part.runner_sha, (), len(part.rows) + len(part.unjudged))
 
 
 # --- Langfuse readback ---

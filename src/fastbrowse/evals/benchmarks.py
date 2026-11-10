@@ -107,9 +107,10 @@ class Row(PublicModel):
 
 
 class BlockedSlot(PublicModel):
-    """A scheduled slot the site kept from any outcome on every attempt. It measured no agent, so it has no grade: it
-    is outside every score, shown apart from the rows, and counts as neither a pass nor a failure. Its time and spend
-    are what the attempts took."""
+    """The legacy form of a scheduled slot the site kept from any outcome on every attempt, kept so approved
+    candidates keep their bytes. It is a failed attempt: another agent may get past what stopped this one, so the site
+    and the regression check count it as one. A new candidate records such a slot as a `Row` whose `failure` says
+    why. Its time and spend are what the attempts took."""
 
     task: Identifier
     repeat: Annotated[int, Field(ge=0)]
@@ -120,9 +121,9 @@ class BlockedSlot(PublicModel):
 
 
 class UnjudgedSlot(PublicModel):
-    """A scheduled slot with no verdict on the current task, so like a blocked slot it is outside every score and
-    counts as neither a pass nor a failure. `evidence-unavailable`: the judge found the run's evidence unavailable, an
-    interruption the agent did not cause such as a site's bot check or a provider outage. `no-verdict`: the judge
+    """A scheduled slot with no verdict on the current task, so it is outside every score and counts as neither a pass
+    nor a failure. `evidence-unavailable`: the judge found the run's evidence unavailable on a run that ended in an
+    error of the harness or its model provider, which the agent did not cause. `no-verdict`: the judge
     reached no verdict on the evidence it had. `task-changed`: the run measured an earlier version of the task, so its
     verdict is not compared, as the release gate does not compare it."""
 
@@ -675,14 +676,19 @@ def regressions(
         for task in group.task_ids:
             now = [r for r in group.rows if r.arm == arm and r.task == task]
             before = [r for r in old.rows if r.arm == arm and r.task == task]
-            # A task with no graded repeat (blocked or unjudged), here or in the baseline, has nothing to compare.
-            if not now or not before:
+            # A legacy blocked slot is a failed attempt, as the site reads it (`BlockedSlot`).
+            now_blocked = sum(b.arm == arm and b.task == task for b in group.blocked)
+            before_blocked = sum(b.arm == arm and b.task == task for b in old.blocked)
+            # A task with no measured repeat (all unjudged), here or in the baseline, has nothing to compare.
+            if not (now or now_blocked) or not (before or before_blocked):
                 continue
-            if sum(r.score for r in now) / len(now) < sum(r.score for r in before) / len(before):
+            if _rate([r.score for r in now], now_blocked) < _rate([r.score for r in before], before_blocked):
                 raise ValueError(f"source-score regression: {group.id}/{task}")
             # A rate, like the score above: the two runs need not have the same number of repeats.
-            if sum(r.completed for r in now) / len(now) < sum(r.completed for r in before) / len(before):
+            if _rate([r.completed for r in now], now_blocked) < _rate([r.completed for r in before], before_blocked):
                 raise ValueError(f"completion regression: {group.id}/{task}")
+            if not now or not before:
+                continue
             moved = [
                 finding
                 for finding in moves(f"{group.id}/{task}", "the published figures", _dumped(before), _dumped(now))
@@ -690,6 +696,11 @@ def regressions(
             ]
             if moved:
                 raise ValueError(f"{moved[0].check} regression: {moved[0].detail}")
+
+
+def _rate(values: list[float] | list[bool], failed: int) -> float:
+    """The mean of `values` with `failed` more attempts that scored nothing."""
+    return sum(values) / (len(values) + failed)
 
 
 def _dumped(rows: list[Row]) -> list[dict]:

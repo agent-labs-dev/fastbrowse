@@ -145,7 +145,8 @@ question (`judging.SITE_FAILURE_QUESTIONS`) alone, asked of `judging.OPUS_JUDGE`
 outcome, so a run the check finds interrupted by the site (an error page, a rate limit, an outage, a network failure
 the agent did not cause) is never sent upstream: the attempt is run again, as an internal outage is, and the
 interrupted run is kept beside it with the reason. A slot still interrupted after every retry is blocked by the site
-(`blocked_by_site`): outside the score, never a pass or a failure."""
+(`blocked_by_site`): publication counts it as the agent's failed attempt, since another agent may get past what stopped
+this one, unless the run ended in an error of the harness or its model provider."""
 INTERRUPTION_QUESTIONS = {"evidence_available": SITE_FAILURE_QUESTIONS["evidence_available"]}
 
 
@@ -905,8 +906,8 @@ def retry_wait(retries: int) -> int:
 
 
 def blocked_by_site(result: dict[str, Any]) -> bool:
-    """The site kept every attempt of this slot from an outcome (`Interrupted`). It measured no agent, so it is
-    settled, not incomplete: it has no grade, and publication lists it apart from the rows."""
+    """The site kept every attempt of this slot from an outcome (`Interrupted`). It is settled, not incomplete: it has
+    no upstream grade, and publication records it as a failed row naming why."""
     return result.get("error_type") == Interrupted.__name__
 
 

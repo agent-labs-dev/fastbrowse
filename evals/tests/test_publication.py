@@ -1265,7 +1265,9 @@ def test_one_refused_start_among_started_runs_still_blocks(tmp_path: Path, monke
         publication.internal_group("internal-hosted", ledger, CATALOG, DIGEST)
 
 
-def block_slot(h: Harness, retries: int | None = None, *, finding: bool = True, task: str = "bu0") -> None:
+def block_slot(
+    h: Harness, retries: int | None = None, *, finding: bool = True, task: str = "bu0", status: str | None = None
+) -> None:
     """Rewrite one BU Bench slot as the runner leaves one the site blocked on every retry."""
     retries = official.OUTAGE_RETRIES if retries is None else retries
     decision = {"passed": not finding, "source": "llm", "reason": "the site served an error page"}
@@ -1277,10 +1279,13 @@ def block_slot(h: Harness, retries: int | None = None, *, finding: bool = True, 
     }
     check = {"judgment": judgment, "policy_sha256": "f" * 64, "judge_cost_usd": 0.01}
     path, folder = h.bu / "results.jsonl", h.bu / f"{task}-0"
+    if status is not None:
+        saved = json.loads((folder / "agent.json").read_text())
+        (folder / "agent.json").write_text(json.dumps(saved | {"status": status}))
     rows = [json.loads(line) for line in path.read_text().splitlines()]
     keys = ("status", "agent_dollars", "agent_cost_unknown", "seconds", "timing_basis")
     agent = {k: v for k, v in rows[0].items() if k in keys}
-    agent |= {"completed": True}
+    agent |= {"status": status, "completed": False} if status is not None else {"completed": True}
     earlier = []
     for n in range(retries):
         kept = h.bu / f"{task}-0.interrupted-{n}"
@@ -1305,24 +1310,29 @@ def block_slot(h: Harness, retries: int | None = None, *, finding: bool = True, 
     (h.bu / official.JOURNAL).write_text("".join(json.dumps(r) + "\n" for r in journal))
 
 
-def test_a_slot_the_site_blocked_is_listed_apart_and_the_run_still_publishes(tmp_path: Path) -> None:
+def test_a_slot_the_site_refused_on_every_retry_is_a_failed_row(tmp_path: Path) -> None:
+    """Another agent may get past what stopped this one, so an official slot the site refused on every retry is the
+    agent's failed attempt, as an internal one is, never left out of the score."""
     h = Harness(tmp_path)
     block_slot(h)
     candidate = h.export(hosted=None, ultrafast=None, mind2web=None)
     [group] = candidate.groups
-    [slot] = group.blocked
-    assert (slot.task, slot.repeat, slot.arm) == ("bu0", 0, "fastbrowse")
-    assert slot.physical_runs == official.OUTAGE_RETRIES + 1
-    assert slot.seconds == 3.0 * (official.OUTAGE_RETRIES + 1)
-    assert len(group.rows) == 199 and "bu0" not in {r.task for r in group.rows}
-    assert any("blocked" in limit for limit in group.limits)
+    assert group.blocked == []
+    [row] = [r for r in group.rows if r.task == "bu0"]
+    assert (row.repeat, row.arm, row.score) == (0, "fastbrowse", 0.0)
+    assert row.failure == publication.SITE_REFUSED
+    assert row.physical_runs == official.OUTAGE_RETRIES + 1
+    assert row.seconds == 3.0 * (official.OUTAGE_RETRIES + 1)
+    assert len(group.rows) == 200
+    assert any("refused on every retry is a failed attempt" in limit for limit in group.limits)
 
 
-def test_the_rows_file_carries_blocked_slots_to_the_campaign_job(tmp_path: Path) -> None:
+def test_an_official_slot_that_ended_blocked_names_the_bot_check(tmp_path: Path) -> None:
     h = Harness(tmp_path)
-    block_slot(h)
-    part = arm_rows(h, OfficialSource(h.bu, h.tmp / "bu.enc"))
-    assert publication.OfficialRows.model_validate_json(part.model_dump_json()).blocked == part.blocked
+    block_slot(h, status="blocked")
+    [group] = h.export(hosted=None, ultrafast=None, mind2web=None).groups
+    [row] = [r for r in group.rows if r.task == "bu0"]
+    assert (row.status, row.completed, row.score, row.failure) == ("blocked", False, 0.0, publication.SITE_BLOCKED)
 
 
 @pytest.mark.parametrize(
@@ -1356,12 +1366,12 @@ def test_an_ungraded_slot_the_site_did_not_block_still_refuses(tmp_path: Path) -
         h.export(hosted=None, ultrafast=None, mind2web=None)
 
 
-def test_a_run_the_site_blocked_entirely_has_nothing_to_publish(tmp_path: Path) -> None:
+def test_an_official_slot_that_ended_in_a_harness_error_is_unjudged(tmp_path: Path) -> None:
     h = Harness(tmp_path)
-    for task in h.ids["bu-bench"]:
-        block_slot(h, task=task)
-    with pytest.raises(PublicationError, match="nothing was graded"):
-        h.export(hosted=None, ultrafast=None, mind2web=None)
+    block_slot(h, status="error")
+    [group] = h.export(hosted=None, ultrafast=None, mind2web=None).groups
+    assert "bu0" not in {r.task for r in group.rows}
+    assert [(u.task, u.repeat, u.reason) for u in group.unjudged] == [("bu0", 0, "evidence-unavailable")]
 
 
 def test_an_official_slot_counts_the_runs_its_interruption_check_sent_back(tmp_path: Path) -> None:

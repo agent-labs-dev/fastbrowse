@@ -58,8 +58,8 @@ Schema 2 and later record each group's agent and runner commits and require them
 unless the group lists its `sources`: the campaign runs its rows came from, newest first, one entry per run and arm,
 each with its commits, date and the tasks it supplied for that arm. Its commits are then the newest source's. An
 earlier source stays valid on any build, including a branch commit a squash merge left outside `main`. A slot our own harness or
-judge failed is listed in `unjudged` with its reason, outside every figure, as a blocked slot is; a run the site's bot
-check stopped is a failed row. Each task the catalog says an arm cannot run is listed in `excluded` with the catalog's
+judge failed is listed in `unjudged` with its reason, outside every figure; a run the site's bot check or an outage
+stopped is a failed row naming why, and a legacy `blocked` slot reads as one. Each task the catalog says an arm cannot run is listed in `excluded` with the catalog's
 reason and counts as `repeats` failed attempts in every pass rate. The site's parser (`src/lib/benchmark-feed.ts`)
 must accept these fields before a candidate that has them is published.
 
