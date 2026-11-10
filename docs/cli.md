@@ -175,8 +175,8 @@ fastbrowse --desktop org.gnome.TextEditor "Write 'hello' in the open document."
 
 A password field is never read, and `--secret NAME=ENV_VAR@desktop://<class>` types a secret only into the window
 of that app class. `--authorize` and the step and spend ceilings work as for a browser. A combo box is chosen in
-with the keyboard, as a person does without opening its list, since the list opens as a popup the run cannot click
-in. The run stays in the one window: a dialog the app opens as a window of its own, and a menu that opens as a
+with the keyboard: its list opens as a popup the run cannot click in, so a list the click opens is closed again
+and the arrow keys move the choice. The run stays in the one window: a dialog the app opens as a window of its own, and a menu that opens as a
 popup, are out of its reach. Recipes, `--start` and every browser option are refused. Set
 `FASTBROWSE_DESKPILOT` to run a `deskpilot` that is not on `PATH`.
 

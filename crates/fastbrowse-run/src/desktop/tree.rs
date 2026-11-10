@@ -138,8 +138,8 @@ fn aria_role(role: &str) -> &str {
     }
 }
 
-/// The items a combo box offers: the elements below it that the app marks selectable, each named.
-pub fn options(element: &Element) -> Vec<&Element> {
+/// The items of a combo box's list: the elements below it that the app marks selectable, each named.
+fn items(element: &Element) -> Vec<&Element> {
     fn walk<'a>(element: &'a Element, out: &mut Vec<&'a Element>) {
         for child in &element.children {
             if child.has("selectable") && !child.name.is_empty() {
@@ -156,14 +156,19 @@ pub fn options(element: &Element) -> Vec<&Element> {
     out
 }
 
+/// The items a combo box offers to choose: those of its list the app has enabled, since the keys pass over the rest.
+pub fn options(element: &Element) -> Vec<&Element> {
+    items(element).into_iter().filter(|item| item.has("enabled")).collect()
+}
+
 /// The name of the item a combo box has chosen: the one of its options deskpilot marks selected.
 pub fn chosen(element: &Element) -> Option<&str> {
-    options(element).into_iter().find(|item| item.has("selected")).map(|item| item.name.as_str())
+    items(element).into_iter().find(|item| item.has("selected")).map(|item| item.name.as_str())
 }
 
 /// Whether a combo box's list is open on screen.
 pub fn list_open(element: &Element) -> bool {
-    options(element).iter().any(|item| item.showing())
+    items(element).iter().any(|item| item.showing())
 }
 
 /// The element with `id`, anywhere in the tree.
@@ -404,6 +409,7 @@ mod tests {
             vec![
                 node("e6", "menu item", "Ireland", &["enabled", "selectable", "visible", "selected"], None, vec![]),
                 node("e20", "menu item", "France", &["enabled", "selectable", "visible"], None, vec![]),
+                node("e21", "menu item", "Germany", &["selectable", "visible"], None, vec![]),
             ],
         );
         let group = node(
@@ -439,7 +445,7 @@ mod tests {
         // The combo box's value is the item its selection reports, not its name, which is its label.
         let country = observation.controls.iter().find(|c| c.role == "combobox").unwrap();
         assert_eq!((country.label.as_str(), country.value.as_deref()), ("Country", Some("Ireland")));
-        // A combo box is chosen in by naming one of its items, as a web page's dropdown is.
+        // A combo box is chosen in by naming one of its items, as a web page's dropdown is; a disabled one is not offered.
         assert_eq!(country.options, ["Ireland", "France"]);
         let origins: Vec<_> = observation.controls.iter().map(|c| c.frame_origin.as_deref()).collect();
         assert!(origins.iter().all(|&o| o == Some("desktop://dptest-order")), "{origins:?}");
