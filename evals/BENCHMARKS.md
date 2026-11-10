@@ -313,8 +313,8 @@ held to the one uncapped protocol and clock. A run that supplies nothing is not 
 is checked whole: its protocol, budget journal, judge receipts and Langfuse readback. Every task of each arm must come
 from some run. The group records its runs, newest first, in `sources`, one entry per run and arm: the run's recorded
 id, the arm, agent and runner commits, date and the tasks it supplied for that arm. The group's own `agent_sha` is its newest run's, and the candidate's is the newest
-run's of all its groups. The fixture run must be on that build, every earlier run's commits must be in its history,
-and an official group must be of it.
+run's of all its groups. The fixture run must be on that build and an official group must be of it. An earlier
+run stays valid whichever build it measured.
 
 `--competitor-reference PATH` adds the `browser-use` and `browser-harness` rows of this repository's
 `docs/results/competitor-reference.json` to `internal-hosted`, unless its ledger ran both. Without a reference, or with

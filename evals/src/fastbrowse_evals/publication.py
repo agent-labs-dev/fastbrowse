@@ -1233,12 +1233,6 @@ def runner_pinned(commit: str) -> None:
         raise PublicationError("the runner commit is not part of this checkout's history")
 
 
-def agent_in_history(commit: str, build: str) -> None:
-    """A run on an earlier build stays valid for a later one only when that build descends from it."""
-    if commit != build and not is_ancestor(commit, build):
-        raise PublicationError(f"agent build {commit[:12]} is not in the history of the candidate's build {build[:12]}")
-
-
 @dataclass(frozen=True)
 class Checks:
     """External evidence checks; tests substitute them, the CLI uses the defaults."""
@@ -1247,7 +1241,6 @@ class Checks:
     official_readback: Callable[[OfficialRows], None]
     fixture: Callable[[Candidate], None] = check_fixture
     runner: Callable[[str], None] = runner_pinned
-    agent: Callable[[str, str], None] = agent_in_history
 
 
 def default_checks() -> tuple[Checks, Callable[[], None]]:
@@ -1398,16 +1391,15 @@ def export(
     collected = [
         with_reference(c, reference, catalog_data) if c.group.id == "internal-hosted" else c for c in collected
     ]
-    # The candidate is of the newest run's build: the fixtures must pass on it, every earlier run's build must be in
-    # its history, and an official group must be of it. An internal group names the build of each of its runs.
+    # The candidate is of the newest run's build: the fixtures must pass on it and an official group must be of it.
+    # An internal group names the build of each of its runs. A run on an earlier build stays valid whatever branch that
+    # build was on: a squash merge leaves a measured branch commit outside main's history without changing what it
+    # measured, and each source keeps its own commits and date.
     internal = [c for c in collected if c.started is not None]
     newest = max(internal, key=lambda c: c.started or "") if internal else collected[0]
     agent_sha, runner_sha = newest.agent_sha, newest.runner_sha
     if any((c.agent_sha, c.runner_sha) != (agent_sha, runner_sha) for c in collected if c.started is None):
         raise PublicationError("every group must come from one clean agent build and one clean runner")
-    for source in {(s.agent_sha, s.runner_sha) for c in internal for s in c.group.sources}:
-        checks.agent(source[0], agent_sha)
-        checks.runner(source[1])
     checks.runner(runner_sha)
     for item in collected:
         for tracked in item.tracked:

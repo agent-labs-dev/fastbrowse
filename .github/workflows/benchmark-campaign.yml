@@ -576,6 +576,8 @@ jobs:
         env:
           CAMPAIGN_ID: ${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
           FIXTURE_RUN: ${{ steps.fixture.outputs.run }}
+          # The fixture check reads the fixture run back from the Actions API with `gh`.
+          GH_TOKEN: ${{ github.token }}
           # The fixture run's traces and each group's experiments are read back from fastbrowse's Langfuse project
           # (evals/storage.py HOST).
           LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
@@ -605,12 +607,18 @@ jobs:
             --competitor-reference "$GITHUB_WORKSPACE/fastbrowse/docs/results/competitor-reference.json" \
             "${args[@]}"
       - name: Record the run facts
-        # What the site shows beside the figures and the candidate does not hold: the run date, harness and judge.
+        # What the site shows beside the figures: the run date, harness and judge. The date and harness come from the
+        # candidate, the newest run's, so a candidate rebuilt later from finished runs keeps when and how they were
+        # measured rather than the rebuild's own date and checkout.
         env:
-          RUN_ON: ${{ needs.resolve.outputs.run_on }}
-          HARNESS_SHA: ${{ needs.resolve.outputs.harness_sha }}
+          # A group that took every task from this run lists no sources; this run's date is then the measurement's.
+          DISPATCHED_ON: ${{ needs.resolve.outputs.run_on }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
         run: |
+          candidate="$GITHUB_WORKSPACE/candidate/benchmark-candidate.json"
+          RUN_ON="$(jq -r '[.groups[].sources[]?.measured_on] | max // empty' "$candidate")"
+          RUN_ON="${RUN_ON:-$DISPATCHED_ON}"
+          HARNESS_SHA="$(jq -r .runner_sha "$candidate")"
           # An official suite has its own run date and upstream judge, read from its rows.
           groups="$(find official-rows -name '*.rows.json' -exec jq -s '
             sort_by(.measured_on)
@@ -631,6 +639,8 @@ jobs:
   publish:
     name: Open the site pull request
     needs: stage
+    # A candidate_only run skips the measuring jobs, and a skipped ancestor skips this job unless it says otherwise.
+    if: ${{ !cancelled() && needs.stage.result == 'success' }}
     permissions:
       contents: read
       actions: read
