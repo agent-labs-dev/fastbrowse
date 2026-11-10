@@ -1574,7 +1574,7 @@
     "resource": "steps",
     "limit": 1.0
    },
-   "answer": "Partial evidence only. Remaining coverage is omitted; totals may be incomplete.\n\nBooks [1](<https://books.test/#:~:text=Books>)",
+   "answer": "This run ended without finishing after changing fields on the page, which may still hold what it entered:\n- Search: 'Search'\n\nPartial evidence only. Remaining coverage is omitted; totals may be incomplete.\n\nBooks [1](<https://books.test/#:~:text=Books>)",
    "data": null,
    "evidence": [
     {
@@ -3228,7 +3228,7 @@
     "resource": "steps",
     "limit": 2.0
    },
-   "answer": "Partial evidence only. Remaining coverage is omitted; totals may be incomplete.\n\nContact us [1](<https://forms.test/#:~:text=Contact%20us>)",
+   "answer": "This run ended without finishing after changing fields on the page, which may still hold what it entered:\n- First name: 'Fill'\n- Last name: 'Fill'\n\nPartial evidence only. Remaining coverage is omitted; totals may be incomplete.\n\nContact us [1](<https://forms.test/#:~:text=Contact%20us>)",
    "data": null,
    "evidence": [
     {
@@ -3900,7 +3900,7 @@
     "resource": "steps",
     "limit": 2.0
    },
-   "answer": "Partial evidence only. Remaining coverage is omitted; totals may be incomplete.\n\nContact us [1](<https://forms.test/#:~:text=Contact%20us>)",
+   "answer": "This run ended without finishing after changing fields on the page, which may still hold what it entered:\n- First name: 'Fill'\n\nPartial evidence only. Remaining coverage is omitted; totals may be incomplete.\n\nContact us [1](<https://forms.test/#:~:text=Contact%20us>)",
    "data": null,
    "evidence": [
     {
@@ -4339,7 +4339,7 @@
     "resource": "steps",
     "limit": 1.0
    },
-   "answer": "Partial evidence only. Remaining coverage is omitted; totals may be incomplete.\n\nLog in [1](<https://acme.test/login#:~:text=Log%20in>)",
+   "answer": "This run ended without finishing after changing fields on the page, which may still hold what it entered:\n- Password: '<secret>'\n\nPartial evidence only. Remaining coverage is omitted; totals may be incomplete.\n\nLog in [1](<https://acme.test/login#:~:text=Log%20in>)",
    "data": null,
    "evidence": [
     {
@@ -4748,7 +4748,7 @@
     "resource": "steps",
     "limit": 1.0
    },
-   "answer": "Partial evidence only. Remaining coverage is omitted; totals may be incomplete.\n\nTrips [1](<https://travel.test/#:~:text=Trips>)",
+   "answer": "This run ended without finishing after changing fields on the page, which may still hold what it entered:\n- Class: 'Business'\n\nPartial evidence only. Remaining coverage is omitted; totals may be incomplete.\n\nTrips [1](<https://travel.test/#:~:text=Trips>)",
    "data": null,
    "evidence": [
     {
@@ -7807,7 +7807,7 @@
     "resource": "steps",
     "limit": 1.0
    },
-   "answer": "Partial evidence only. Remaining coverage is omitted; totals may be incomplete.\n\nNewsletter [1](<https://news.test/signup#:~:text=Newsletter>)",
+   "answer": "This run ended without finishing after changing fields on the page, which may still hold what it entered:\n- Email: 'ada@example.test'\n\nPartial evidence only. Remaining coverage is omitted; totals may be incomplete.\n\nNewsletter [1](<https://news.test/signup#:~:text=Newsletter>)",
    "data": null,
    "evidence": [
     {
@@ -8247,7 +8247,7 @@
     "resource": "steps",
     "limit": 1.0
    },
-   "answer": "Partial evidence only. Remaining coverage is omitted; totals may be incomplete.\n\nBank [1](<https://bank.test/login#:~:text=Bank>)",
+   "answer": "This run ended without finishing after changing fields on the page, which may still hold what it entered:\n- PIN: '<secret>'\n\nPartial evidence only. Remaining coverage is omitted; totals may be incomplete.\n\nBank [1](<https://bank.test/login#:~:text=Bank>)",
    "data": null,
    "evidence": [
     {

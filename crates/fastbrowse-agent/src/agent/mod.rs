@@ -615,7 +615,13 @@ impl Agent {
         error: Option<String>,
         budget: Option<BudgetStop>,
     ) -> RunResult {
-        // A run that stops with a step of its task undone says so before what it read.
+        // A run that ends unfinished names the fields it left changed, and one that stops with a step of its task
+        // undone says so before both.
+        let changed = (status != Status::Complete)
+            .then(|| state.and_then(|state| finishing::changed_fields(&state.history)))
+            .flatten()
+            .map(|changed| noticed(&self.redact(&changed), partial.clone()));
+        let partial = changed.as_ref().unwrap_or(partial);
         let undone = (status != Status::Complete && state.is_some_and(|state| state.undone))
             .then(|| noticed(finishing::UNDONE, partial.clone()));
         let partial = undone.as_ref().unwrap_or(partial);
@@ -631,7 +637,12 @@ impl Agent {
         )
     }
 
-    fn result(&self, state: Option<&RunState>, ledger: &Ledger, status: Status, outcome: Outcome) -> RunResult {
+    fn result(&self, state: Option<&RunState>, ledger: &Ledger, status: Status, mut outcome: Outcome) -> RunResult {
+        // A run with no answer that ends unfinished still names the fields it left changed; one with an answer says so
+        // in it, where `answered` puts it.
+        if outcome.answer.is_none() && status != Status::Complete {
+            outcome.answer = state.and_then(|state| finishing::changed_fields(&state.history)).map(|c| self.redact(&c));
+        }
         let observed = {
             let seen = self.seen();
             seen.raw.clone().or_else(|| seen.observed.clone())

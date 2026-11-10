@@ -529,6 +529,7 @@ impl Agent {
         let mut typed: Option<String> = None;
         let mut effect_now: Option<String> = None;
         let mut setting = false;
+        let mut checked: Option<bool> = None;
         let frames = self.on_event.is_some() && self.config.step_frames;
         let act: ActResult;
         let changed: bool;
@@ -708,6 +709,7 @@ impl Agent {
                 state.note_shown(observation, &landed, &done.shown, showing);
                 state.settle_change(&landed);
                 setting = done.set_something;
+                checked = landed.controls.iter().find(|c| c.id == target.id).and_then(|c| c.checked);
                 effect_now = Some(done.summary);
             }
             progressed = judged;
@@ -722,6 +724,7 @@ impl Agent {
             text: typed,
             effect: effect_now,
             setting: setting.then_some(true),
+            checked,
             read_progress: decision.operation == Operation::Read && progressed == Some(true),
             ..HistoryEntry::new(Some(decision.operation), label.as_deref(), act.outcome, changed)
         });

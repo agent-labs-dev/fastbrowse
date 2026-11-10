@@ -143,6 +143,10 @@ pub struct HistoryEntry {
     /// The action added to the page without leaving it or taking anything away.
     #[serde(skip)]
     pub added: bool,
+    /// Whether a click on a checkbox, radio or switch left it checked, as the page reads it after the click. Kept out
+    /// of what models are shown: it is the run's own record of what it changed.
+    #[serde(skip)]
+    pub checked: Option<bool>,
 }
 
 impl HistoryEntry {
@@ -158,6 +162,7 @@ impl HistoryEntry {
             read_progress: false,
             setting: None,
             added: false,
+            checked: None,
         }
     }
 

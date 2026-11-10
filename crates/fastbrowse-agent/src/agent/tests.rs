@@ -6529,3 +6529,41 @@ async fn test_a_value_longer_than_one_part_of_the_task_is_copied_whole() {
         .expect("a value");
     assert_eq!(typed, value);
 }
+
+/// Three description pushes ended stuck after typing "Save: disabled" and "disabled" into the description, and nothing
+/// in their answers said the field had been changed; the store pages showed the word until restored by hand (#939). A
+/// run that ends without finishing names each field it changed and what it left there, from its own executed steps.
+#[tokio::test]
+async fn test_a_run_that_ends_unfinished_names_the_fields_it_changed() {
+    use crate::policy::HistoryEntry;
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(None)), Arc::new(ScriptedLLM));
+    let filled = |target: &str, text: &str, outcome: StepOutcome| HistoryEntry {
+        text: Some(text.into()),
+        ..HistoryEntry::new(Some(Operation::Fill), Some(target), outcome, true)
+    };
+    let mut state = run_state();
+    state.history = vec![
+        filled("Description (Edit 'Commissions Forever')", "first draft", StepOutcome::Executed),
+        HistoryEntry::new(Some(Operation::Click), Some("Markdown"), StepOutcome::Executed, true),
+        filled("Summary", "never typed", StepOutcome::Covered),
+        HistoryEntry {
+            text: Some("Retail".into()),
+            ..HistoryEntry::new(Some(Operation::Select), Some("Game version"), StepOutcome::Executed, true)
+        },
+        filled("Description (Edit 'Commissions Forever')", "Save: disabled", StepOutcome::Executed),
+        HistoryEntry {
+            checked: Some(true),
+            ..HistoryEntry::new(Some(Operation::Click), Some("Notify followers"), StepOutcome::Executed, true)
+        },
+    ];
+    let ledger = state.ledger.clone();
+    let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "no progress"));
+    let stopped = agent.stopped(stop, Some(&mut state), &ledger).await;
+    let answer = stopped.answer.expect("the changed fields are reported");
+    assert!(answer.starts_with(super::finishing::CHANGED), "{answer}");
+    assert!(answer.contains("Description (Edit 'Commissions Forever'): 'Save: disabled'"), "{answer}");
+    assert!(answer.contains("Game version: 'Retail'"), "{answer}");
+    assert!(answer.contains("Notify followers: checked"), "{answer}");
+    assert!(!answer.contains("first draft") && !answer.contains("never typed"), "{answer}");
+    assert!(!answer.contains("Markdown"), "{answer}");
+}
