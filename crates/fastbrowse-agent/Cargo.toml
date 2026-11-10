@@ -18,6 +18,8 @@ thiserror = "2.0.21"
 fastbrowse-clients = { workspace = true }
 # Owned startup calls run beside browser startup, page reads beside paging, and a time limit bounds the run.
 tokio = { version = "1.54.1", features = ["rt", "time", "macros", "sync"] }
+# A pictograph such as an emoji is part of a value, not punctuation around it.
+unicode-properties = { version = "0.1.5", default-features = false, features = ["general-category"] }
 url = "2.5.8"
 
 [dev-dependencies]
