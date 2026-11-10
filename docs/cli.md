@@ -165,7 +165,7 @@ restart it without the flag, when you are done.
 ## Desktop apps
 
 `--desktop WINDOW` runs the task in a native Wayland app window on a Hyprland desktop, through
-[deskpilot](https://github.com/cjber/deskpilot) 0.5 or newer. `WINDOW` is anything `deskpilot` matches: a window
+[deskpilot](https://github.com/cjber/deskpilot) 0.5.1 or newer. `WINDOW` is anything `deskpilot` matches: a window
 address, class or title. Jev picks each action from the window's accessibility tree, and deskpilot clicks and types
 in the background, so the pointer and keyboard focus stay where you left them:
 
