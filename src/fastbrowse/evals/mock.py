@@ -1226,7 +1226,11 @@ class _Handler(BaseHTTPRequestHandler):
     def _profile(self, _: dict[str, str]) -> None:
         """A profile form whose Save stays disabled until every required field holds a value, with a required
         country no task gives. Each edit is posted as a draft, as an editor that keeps drafts does, so the site knows
-        what the run left in each field even though nothing could be saved."""
+        what the run left in each field even though nothing could be saved.
+
+        An inline handler looks a name up on its element and then its form before the window, and a form names its
+        controls by id: inside this form `save()` called the button `id='save'`, so Save's handler threw and sent
+        nothing."""
         countries = "".join(f"<option>{name}</option>" for name in ("France", "Japan", "Kenya", "Peru"))
         body = (
             "<p>Edit your public profile. Fields marked * are required.</p>"
@@ -1236,7 +1240,7 @@ class _Handler(BaseHTTPRequestHandler):
             "<p><label for='bio'>Bio</label> <textarea id='bio' name='bio'></textarea></p>"
             "<p><label for='country'>Country *</label> <select id='country' name='country' required>"
             f"<option value=''>Choose a country</option>{countries}</select></p>"
-            "<p><button type='button' id='save' disabled onclick='save()'>Save</button></p>"
+            "<p><button type='button' id='save' disabled onclick='saveProfile()'>Save</button></p>"
             "</form>"
             "<p id='status' role='status'></p>"
             "<script>"
@@ -1245,7 +1249,7 @@ class _Handler(BaseHTTPRequestHandler):
             "function edited(){ document.getElementById('save').disabled = !form.checkValidity();"
             " fetch('/profile/draft', {method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'},"
             " body: fields()}); }"
-            "async function save(){ await fetch('/profile', {method: 'POST',"
+            "async function saveProfile(){ await fetch('/profile', {method: 'POST',"
             " headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: fields()});"
             " document.getElementById('status').textContent = 'Profile saved.'; }"
             "</script>"
