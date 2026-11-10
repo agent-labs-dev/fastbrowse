@@ -6833,3 +6833,54 @@ impl DecisionClient for Noul {
         self.0.profile()
     }
 }
+
+/// The scripted Jev, answering the question of what the task asks to be told with `intent`, and counting the reads
+/// that ask how a page answers the task.
+struct Intent(Noul, &'static str, std::sync::atomic::AtomicUsize);
+
+impl DecisionClient for Intent {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            let mut evaluation = self.0.evaluate(state, questions).await?;
+            for (key, question) in questions {
+                let Question::Choice(choice) = question else { continue };
+                if choice.instructions.contains("How does this page answer the task?") {
+                    self.2.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                if choice.criteria.contains_key("carried_out")
+                    && let Some(Answer::Choice(answer)) = evaluation.answers.get_mut(key)
+                {
+                    answer.choice = self.1.into();
+                }
+            }
+            Ok(evaluation)
+        })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        self.0.profile()
+    }
+}
+
+/// A task that asks only for something to be carried out has nothing on the page it starts on to answer, yet that
+/// page was read for an answer before anything was done: a write task's run answered "Save: disabled", the disabled
+/// Save button it started beside, the read note #939 saw typed into live descriptions. Its start page is read for an
+/// answer only for a task that asks to be told something; what it ends on still reports what was done (#910).
+#[tokio::test]
+async fn test_a_task_that_only_carries_something_out_does_not_read_its_start_page_for_an_answer() {
+    let mut reads = Vec::new();
+    for intent in ["text", "carried_out"] {
+        // Jev scores the page under even odds of showing an answer, as it did the write task's start page.
+        let scripted = ScriptedJev::new(crate::scripted::steps("click One way").unwrap());
+        let jev = Arc::new(Intent(Noul(scripted, &[(crate::policy::keys::SHOWS_ANSWER, 0.2)]), intent, 0.into()));
+        let agent = Agent::new(Arc::new(Picker::new()), jev.clone(), Arc::new(ScriptedLLM));
+        let options = super::RunOptions { start: Some("https://shop.test/ticket".into()), ..Default::default() };
+        agent.run("Set the ticket type to One way", options).await.unwrap();
+        reads.push(jev.2.load(std::sync::atomic::Ordering::Relaxed));
+    }
+    assert_eq!(reads[1] + 1, reads[0], "reads for a text task, then a carried-out one: {reads:?}");
+}

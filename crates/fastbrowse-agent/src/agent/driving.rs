@@ -18,7 +18,7 @@ use serde_json::{Map, Value, json};
 use super::finishing::UNREPORTED;
 use super::helpers::{decision_label, describe, doing, drew_something, netloc_of, path_of, scheme_of};
 use super::recovery::{Idle, leave_out_idle, uncover, withheld};
-use super::state::{FailureCause, Flow, RunState, SiteFailure, Step, Stop, Unsure, Written, read_key};
+use super::state::{FailureCause, Flow, OutputIntent, RunState, SiteFailure, Step, Stop, Unsure, Written, read_key};
 
 use super::{Agent, INTERSTITIAL_SECONDS, REDRAW_WATCH_SECONDS};
 use crate::memory::address;
@@ -263,7 +263,11 @@ impl Agent {
                     _ => return Err(self.meet_wall(&observation, &raw)),
                 }
             }
-            if let Some(shows) = Self::reads_before_leaving(state, &observation, &decision) {
+            if let Some(shows) = Self::reads_before_leaving(state, &observation, &decision)
+                // The page the run began on is read for an answer only for a task that asks to be told something: a
+                // task that only carries something out would otherwise answer with whatever its start page showed.
+                && (shows || self.output_intent(state).await? != OutputIntent::CarriedOut)
+            {
                 let capture = self.capture().await?;
                 self.trace.phase("read", self.read(state, capture, &observation, shows)).await?;
             }
