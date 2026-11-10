@@ -450,8 +450,7 @@ impl Agent {
             if state.composition_partial.is_some() {
                 let notes = state.notes_to_compose();
                 if let Some(partial) = state.checked_composition(&notes) {
-                    let mut result =
-                        self.answered(&partial.clone(), &notes, Some(state), ledger, stop.status, error, budget);
+                    let mut result = self.answered(partial, &notes, Some(state), ledger, stop.status, error, budget);
                     result.wall = self.wall(stop);
                     result.evidence.extend(stop.evidence.clone());
                     return result;
@@ -587,7 +586,7 @@ impl Agent {
         if let Some(state) = state.filter(|state| state.composition_partial.is_some()) {
             let notes = state.notes_to_compose();
             if let Some(partial) = state.checked_composition(&notes) {
-                return self.answered(&partial.clone(), &notes, Some(state), ledger, status, error, budget);
+                return self.answered(partial, &notes, Some(state), ledger, status, error, budget);
             }
         }
         if state.is_some_and(|state| state.compose) {

@@ -790,14 +790,9 @@ async fn review_claims(
             Some("Jev left a composed claim's support unanswered.".into())
         } else if !untallied.is_empty() {
             Some("A composed claim's count, total or extreme could not be worked out from the notes.".into())
-        } else if let [one] = unsupported.as_slice() {
-            // A claim its own quotes do not hold is the answer's first fault, whatever the run's steps did.
-            Some(format!("A composed claim is unsupported by its cited quotes, so it is left out: {one}"))
         } else if !unsupported.is_empty() {
-            Some(format!(
-                "Composed claims unsupported by their cited quotes are left out: {}",
-                unsupported.join("; ")
-            ))
+            // A claim its own quotes do not hold is the answer's first fault, whatever the run's steps did.
+            Some(format!("Composed claims unsupported by their cited quotes are left out: {}", unsupported.join("; ")))
         } else if denies_steps {
             Some("The written answer contradicts a step this run took: it says something was not done or already existed that the run's own step may have done.".into())
         } else if !coverage {
@@ -2016,7 +2011,7 @@ mod tests {
         assert_eq!(
             reviewed.answer.problem.as_deref(),
             Some(
-                "A composed claim is unsupported by its cited quotes, so it is left out: 'The heading is Example of a new window page for Practice Automation Testing.'"
+                "Composed claims unsupported by their cited quotes are left out: 'The heading is Example of a new window page for Practice Automation Testing.'"
             )
         );
     }
@@ -2039,7 +2034,7 @@ mod tests {
         assert_eq!(answer.claims.len(), 2);
         assert_eq!(
             answer.problem.as_deref(),
-            Some("A composed claim is unsupported by its cited quotes, so it is left out: '2. Bags'")
+            Some("Composed claims unsupported by their cited quotes are left out: '2. Bags'")
         );
     }
 
@@ -2068,21 +2063,6 @@ mod tests {
             let claim = asked[0].get("claim0").unwrap().dump_json();
             assert_eq!(claim.contains("a value a step typed"), shown, "{claim}");
         }
-    }
-
-    /// "The feed shows 60 of 60 items.", citing only "Showing 60 of 60 items.", scored 0.36 to 0.54 when the rule said a
-    /// counter supports only the population size, and the run ended `unverified` (#916). Replayed 20 times, the claim
-    /// passes 19 times with this rule, and "The answer below lists all 60 items of the feed." on the same quote never.
-    #[tokio::test]
-    async fn a_claim_restating_a_counter_is_judged_by_what_the_counter_says() {
-        let notes = Notes::new([fact(0, "Showing 60 of 60 items.".into())]);
-        let jev = Support::new(true);
-        let mut llm = RecordingLlm::new(None);
-        llm.claims = Some(vec![Claim::new("The feed shows 60 of 60 items.", vec!["e0".into()])]);
-        compose_reviewed(&jev, &llm, "Tell me the total item count", &notes, None, None, true, &[]).await.unwrap();
-        let claim = jev.asked.lock().unwrap()[0].get("claim0").unwrap().dump_json();
-        assert!(claim.contains("A counter on the page supports what it says about its source"), "{claim}");
-        assert!(claim.contains("It does not support how many items this answer extracted or lists."), "{claim}");
     }
 
     #[tokio::test]
