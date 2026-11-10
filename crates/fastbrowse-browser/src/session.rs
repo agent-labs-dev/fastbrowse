@@ -320,6 +320,12 @@ pub(crate) struct State {
     pub(crate) dialogs: HashMap<String, Dialog>,
     /// The address of the document each pending dialog came from, which `Dialog` does not carry.
     pub(crate) dialog_urls: HashMap<String, String>,
+    /// The file input whose chooser opened, per session, as its backend node id, until an observation ties it to the
+    /// control that opened it.
+    pub(crate) choosers: HashMap<String, i64>,
+    /// The control each session was last clicked on, by its snapshot id. A page opens a file chooser only on user
+    /// activation, and the run's own clicks are the only activation a page gets, so this is the chooser's opener.
+    pub(crate) clicked: HashMap<String, i64>,
     pub(crate) input_navigations: u32,
     /// Top frames of each session with a navigation requested or a document loading that has not reached
     /// DOMContentLoaded.
@@ -846,6 +852,22 @@ impl BrowserSession {
         self.0.state.lock().unwrap().set_tab_info(target_id, url, title);
     }
 
+    /// Note the control a click is about to press in `session_id`, by its snapshot id.
+    pub fn note_click(&self, session_id: &str, local_id: i64) {
+        self.0.state.lock().unwrap().clicked.insert(session_id.to_owned(), local_id);
+    }
+
+    /// Each file chooser opened since this was last asked: its session, its file input's backend node id and the
+    /// control whose click opened it.
+    pub fn take_choosers(&self) -> Vec<(String, i64, i64)> {
+        let mut state = self.0.state.lock().unwrap();
+        let opened: Vec<_> = state.choosers.drain().collect();
+        opened
+            .into_iter()
+            .filter_map(|(session, input)| Some((session.clone(), input, *state.clicked.get(&session)?)))
+            .collect()
+    }
+
     pub fn pending_dialog(&self) -> Option<Dialog> {
         self.0.state.lock().unwrap().pending_dialog().map(|(_, d)| d)
     }
@@ -1196,6 +1218,14 @@ impl BrowserSession {
         for (method, params) in sends {
             commands.push(Box::pin(async move { self.send(method, params, s).await.map(drop) }));
         }
+        // A file input opened from a script then draws no native chooser and is named in `Page.fileChooserOpened`
+        // instead, so a page whose only way to a hidden, unlabelled input is a button can still be given a file. A
+        // browser that refuses it still opens its own chooser and still takes files through inputs and their labels,
+        // so the run goes on without it.
+        commands.push(Box::pin(async move {
+            let _ = self.send("Page.setInterceptFileChooserDialog", json!({"enabled": true}), s).await;
+            Ok(())
+        }));
         // A page behind another tab is hidden and unfocused, so it paints nothing, takes no typing and leaves input
         // unanswered for seconds. Focus emulation has it render and hold focus where it is. A foreground run needs it
         // too: anything can take the front from a tab the run is still driving.
@@ -1510,6 +1540,8 @@ impl Shared {
                 state.request_bytes_due.retain(|(sid, _), _| *sid != child);
                 state.navigating.retain(|(sid, _)| *sid != child);
                 state.frames_loading.retain(|(sid, _)| *sid != child);
+                state.choosers.remove(&child);
+                state.clicked.remove(&child);
             }
             "Target.targetInfoChanged" => {
                 let info = &params["targetInfo"];
@@ -1552,6 +1584,11 @@ impl Shared {
                     state.dialog_urls.insert(session.to_owned(), str_of(&params["url"]));
                 }
                 self.dialog_opened.send_modify(|n| *n += 1);
+            }
+            "Page.fileChooserOpened" => {
+                if let (Some(session), Some(node)) = (session, params["backendNodeId"].as_i64()) {
+                    self.state.lock().unwrap().choosers.insert(session.to_owned(), node);
+                }
             }
             "Runtime.bindingCalled" if params["name"] == INPUT_NAVIGATION_BINDING => {
                 self.state.lock().unwrap().input_navigations += 1;

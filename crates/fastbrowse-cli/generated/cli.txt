@@ -8,8 +8,8 @@ usage: fastbrowse [-h] [--version] [--start START] [--context CONTEXT]
                   [--max-dollars MAX_DOLLARS] [--downloads DOWNLOADS] [--json]
                   [--record FILE] [--recipe FILE] [--save-recipe FILE]
                   [--fetch] [--browser] [--extension]
-                  [--extension-browser LABEL] [--trace FILE]
-                  [--cursor | --no-cursor]
+                  [--extension-browser LABEL] [--desktop WINDOW]
+                  [--trace FILE] [--cursor | --no-cursor]
                   task
 
 Run one browser task.
@@ -85,6 +85,10 @@ options:
                         which browser to use when the extension is connected
                         in more than one, by the label its popup shows
                         (implies --extension)
+  --desktop WINDOW      drive a native desktop window instead of a browser,
+                        through deskpilot on Hyprland, without moving your
+                        pointer or focus: its address, app class, or a part of
+                        its class or title
   --trace FILE          append the run's trace to FILE as JSON lines, or - for
                         stderr: every model call with its purpose and timing,
                         which reader answered each read and why, and every
