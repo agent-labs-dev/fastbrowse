@@ -71,7 +71,9 @@ def latest(package: str) -> str:
 
 def publish(path: Path, version: str) -> Attempt:
     """Publish one directory, then believe the registry rather than npm's exit code."""
-    result = run("npm", "publish", str(path), "--access", "public", "--tag", "latest")
+    # npm reads a relative `owner/name` path, such as the workflow's `packages/sdk`, as a GitHub repository and
+    # tries to clone it (0.10.0's SDK failed with git's exit code 128), so it is given the absolute path.
+    result = run("npm", "publish", str(path.resolve()), "--access", "public", "--tag", "latest")
     output = f"{result.stdout}\n{result.stderr}".strip()
     return Attempt(result.returncode == 0, output)
 
