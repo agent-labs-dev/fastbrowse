@@ -588,6 +588,19 @@ async def test_a_hosted_v4_run_is_read_stopped_then_costed(monkeypatch: pytest.M
     assert "bu_secret_key" not in report.model_dump_json()
 
 
+async def test_a_new_hosted_run_not_yet_visible_is_followed_not_abandoned(monkeypatch: pytest.MonkeyPatch) -> None:
+    import browser_use_sdk.v4  # an optional extra
+
+    client = V4Client(finished_run(), result="0.28.1")
+    visible = client.runs.status.return_value
+    client.runs.status.side_effect = [browser_use_sdk.v4.BrowserUseError(404, "not found"), visible, visible]
+    use_v4(monkeypatch, client)
+    monkeypatch.setattr(live, "HOSTED_VISIBILITY_RETRY_SECONDS", 0.0)
+    outcome, report = await live.hosted_arm(task("hn-top"), httpx.AsyncClient(), record=None)
+    assert outcome.answer == "0.28.1" and report.status == "completed"
+    client.runs.cancel.assert_not_awaited()
+
+
 async def test_a_hosted_browser_the_stop_did_not_reach_leaves_its_cost_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
     client = V4Client(finished_run(), result="0.28.1")
     client.browsers.stop.side_effect = httpx.ConnectError("down")

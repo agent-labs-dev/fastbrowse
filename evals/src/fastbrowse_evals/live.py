@@ -194,6 +194,9 @@ read the page it ended on before stopping it. V4 takes integer seconds from 120 
 browser after 120, which a slow read could outlast; the harness stops the browser once it has read it, so the kept
 time billed is that read alone."""
 HOSTED_POLL_SECONDS = 1.0
+# Browser Use's SDK (v4 runs.wait_for_completion) retries a new run's 404 for five seconds.
+HOSTED_VISIBILITY_SECONDS = 5.0
+HOSTED_VISIBILITY_RETRY_SECONDS = 0.25
 """How often a running hosted run's status and events are read; its seconds come from the server's event times."""
 HOSTED_TERMINAL = frozenset({"completed", "failed", "cancelled"})
 BROWSER_READY = {"browser.ready", "browser.reattached"}
@@ -1338,10 +1341,24 @@ async def _hosted_run(
 
 async def _hosted_follow(client: Any, run_id: Any, events: list[Any], arm: str, task: LiveTask) -> None:
     """Read a hosted run's events into `events` until it ends, as Browser Use documents: the status first, then every
-    page of events, so the last read follows the end. The attempt's session is ready once the run's browser is."""
+    page of events, so the last read follows the end. The attempt's session is ready once the run's browser is.
+
+    A run just created can be invisible to the status endpoint for a moment, so a 404 before the first status read is
+    retried for `HOSTED_VISIBILITY_SECONDS`, as the SDK's own `wait_for_completion` does; after it, a 404 is final."""
+    from browser_use_sdk.v4 import BrowserUseError  # an optional extra
+
     after = None
+    visible_by = time.monotonic() + HOSTED_VISIBILITY_SECONDS
+    seen = False
     while True:
-        status = (await client.runs.status(run_id)).status.value
+        try:
+            status = (await client.runs.status(run_id)).status.value
+        except BrowserUseError as error:
+            if error.status_code != 404 or seen or time.monotonic() >= visible_by:
+                raise
+            await asyncio.sleep(HOSTED_VISIBILITY_RETRY_SECONDS)
+            continue
+        seen = True
         while True:
             page = await client.runs.events(run_id, after=after)
             for event in page.events:
