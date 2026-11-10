@@ -133,6 +133,19 @@ fn aria_role(role: &str) -> &str {
     }
 }
 
+/// The name of the first item below `element` that is selected, for an element that holds a choice.
+fn chosen(element: &Element) -> Option<&str> {
+    if element.role != "combo box" {
+        return None;
+    }
+    fn find(element: &Element) -> Option<&str> {
+        element.children.iter().find_map(|child| {
+            (child.has("selected") && !child.name.is_empty()).then_some(child.name.as_str()).or_else(|| find(child))
+        })
+    }
+    find(element)
+}
+
 fn control(element: &Element, context: Option<&str>) -> Option<Control> {
     if !element.showing() || !element.has("enabled") {
         return None;
@@ -150,6 +163,10 @@ fn control(element: &Element, context: Option<&str>) -> Option<Control> {
     }
     if element.has("editable") && !sensitive {
         control.value = element.text.clone();
+    } else if let Some(item) = chosen(element) {
+        // A choice such as a combo box holds its value as the item its selection reports, which deskpilot marks
+        // selected; the box's own name may be its label.
+        control.value = Some(item.to_string());
     }
     control.context = context.map(str::to_string);
     control.focused = Some(element.has("focused"));
@@ -347,7 +364,7 @@ mod tests {
             "",
             &["enabled", "sensitive"],
             None,
-            vec![node("e6", "menu item", "Ireland", &["enabled", "selectable", "visible"], None, vec![])],
+            vec![node("e6", "menu item", "Ireland", &["enabled", "selectable", "visible", "selected"], None, vec![])],
         );
         let group = node(
             "e2",
@@ -379,6 +396,9 @@ mod tests {
         let observation = observation(&window, &root);
         assert_eq!(observation.url, "desktop://dptest-order/");
         assert_eq!(observation.page_key, "abc-1");
+        // The combo box's value is the item its selection reports, not its name, which is its label.
+        let country = observation.controls.iter().find(|c| c.role == "combobox").unwrap();
+        assert_eq!((country.label.as_str(), country.value.as_deref()), ("Country", Some("Ireland")));
         let origins: Vec<_> = observation.controls.iter().map(|c| c.frame_origin.as_deref()).collect();
         assert!(origins.iter().all(|&o| o == Some("desktop://dptest-order")), "{origins:?}");
         let summary: Vec<(&str, &str, Vec<&str>)> = observation
