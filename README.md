@@ -35,10 +35,10 @@ credentials, irreversible actions and spending under the control of code.
 - **One agent, every interface.** A CLI, a Python library, Node and Go SDKs that need no Python, an MCP
   server, and a skill for coding agents.
 
-![fastbrowse shopping a live store, adding a Raspberry Pi Pico 2 W and an in-stock BME280 sensor to the basket, filling in checkout without paying, and answering with every price cited](docs/assets/demo.gif)
+![fastbrowse signing in to Sauce Demo, adding a backpack and a bike light to the cart, checking out as Ada Lovelace, and answering with the order total cited to the page](docs/assets/demo.gif)
 
-Recorded on local Chrome against thepihut.com: 37 steps, about 4 minutes and $0.29 in model calls. Playback is sped
-up with pauses cut. The full-resolution recording is [docs/assets/demo.mp4](docs/assets/demo.mp4).
+Recorded on fastbrowse 0.10.0 and local Chrome against Sauce Demo, a public practice store: 16.4 seconds, 12 steps and
+$0.0149 in model calls. The full-resolution recording is [docs/assets/demo.mp4](docs/assets/demo.mp4).
 
 On 46 tasks run three times each against the hosted Browser Use agent, under the same limits on Browser Use
 Cloud browsers, fastbrowse passed 99.2% of runs to 96.3% and cost $0.0296 a run to $0.3180, 10.7x less. That
