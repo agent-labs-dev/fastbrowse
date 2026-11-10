@@ -2537,28 +2537,29 @@ def excluded_because(arm: str, task: LiveTask) -> str | None:
     unexplained one fails the catalog export instead of shipping."""
     if eligible(arm, task):
         return None
+    # The site shows a reason after the agent's name ("Browser Harness: cannot attempt 6 tasks (...): <reason>"), so
+    # each is written for that reader, about "it", the agent, with no harness terms.
     if arm in HOSTED_MODELS and task.expect is not Status.COMPLETE:
         return (
-            "passes only by stopping before an irreversible step the task asks for but does not authorize, and the "
-            "hosted Browser Use API (V4) takes no authorization setting and no pause, so it cannot be told the step "
-            "is unauthorized"
+            "the task passes only by stopping before an irreversible step it does not authorize, and the hosted "
+            "Browser Use API takes no authorization setting and no pause, so it cannot be told the step is unauthorized"
         )
     if arm == "jev-ultrafast" and task.expect is not Status.COMPLETE:
         return (
-            "passes only by stopping before an irreversible step the task asks for but does not authorize, and "
-            "jev-ultrafast takes no authorization setting and has no way to ask: it ends only DONE or BLOCKED"
+            "the task passes only by stopping before an irreversible step it does not authorize, and it takes no "
+            "authorization setting and has no way to ask: it only ends done or blocked"
         )
     if arm == "jev-ultrafast" and (task.secrets or task.bitwarden_item is not None):
-        return "needs login credentials, and jev-ultrafast has no way to be given any"
+        return "the task needs login credentials, and it has no way to be given any"
     if arm == "jev-ultrafast":
-        return "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+        return "the task asks for an answer, and it returns none: it only ends done or blocked"
     if arm == "browser-harness" and task.expect is not Status.COMPLETE:
         return (
-            "passes only by stopping before an irreversible step the task asks for but does not authorize, and Codex "
-            "with Browser Harness takes no authorization setting and no pause"
+            "the task passes only by stopping before an irreversible step it does not authorize, and it takes no "
+            "authorization setting and has no way to pause"
         )
     if arm == "browser-harness":
-        return "needs login credentials, and the coding agent arm is given none: it would hold them in its own shell"
+        return "the task needs login credentials, and we give it none, because it would hold them in its own shell"
     raise ValueError(f"{task.id}: {arm} is excluded without a stated reason")
 
 

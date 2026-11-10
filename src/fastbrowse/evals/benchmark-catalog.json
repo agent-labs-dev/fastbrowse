@@ -23,7 +23,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "c228539ea1846f5a",
@@ -42,7 +42,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "3ca8c54655938a9e",
@@ -61,7 +61,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "ba733c9b3d12954f",
@@ -80,7 +80,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "78ba8992040f45c1",
@@ -99,7 +99,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "f7077c5a5f126a03",
@@ -118,7 +118,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "e0d610a509cafa29",
@@ -137,7 +137,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "00c3c34245a15f0f",
@@ -153,8 +153,8 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "needs login credentials, and jev-ultrafast has no way to be given any",
-          "browser-harness": "needs login credentials, and the coding agent arm is given none: it would hold them in its own shell"
+          "jev-ultrafast": "the task needs login credentials, and it has no way to be given any",
+          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell"
         },
         "expect": "complete",
         "source_fingerprint": "0a0531776e71ff0d",
@@ -170,8 +170,8 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "needs login credentials, and jev-ultrafast has no way to be given any",
-          "browser-harness": "needs login credentials, and the coding agent arm is given none: it would hold them in its own shell"
+          "jev-ultrafast": "the task needs login credentials, and it has no way to be given any",
+          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell"
         },
         "expect": "complete",
         "source_fingerprint": "ba3143609d241af7",
@@ -187,8 +187,8 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "needs login credentials, and jev-ultrafast has no way to be given any",
-          "browser-harness": "needs login credentials, and the coding agent arm is given none: it would hold them in its own shell"
+          "jev-ultrafast": "the task needs login credentials, and it has no way to be given any",
+          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell"
         },
         "expect": "complete",
         "source_fingerprint": "19747c0563957322",
@@ -204,8 +204,8 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "needs login credentials, and jev-ultrafast has no way to be given any",
-          "browser-harness": "needs login credentials, and the coding agent arm is given none: it would hold them in its own shell"
+          "jev-ultrafast": "the task needs login credentials, and it has no way to be given any",
+          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell"
         },
         "expect": "complete",
         "source_fingerprint": "c6b239c9b5bc38a6",
@@ -221,8 +221,8 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "needs login credentials, and jev-ultrafast has no way to be given any",
-          "browser-harness": "needs login credentials, and the coding agent arm is given none: it would hold them in its own shell"
+          "jev-ultrafast": "the task needs login credentials, and it has no way to be given any",
+          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell"
         },
         "expect": "complete",
         "source_fingerprint": "35b155cc42f41ada",
@@ -236,10 +236,10 @@
           "fastbrowse-pool"
         ],
         "excluded": {
-          "browser-use": "passes only by stopping before an irreversible step the task asks for but does not authorize, and the hosted Browser Use API (V4) takes no authorization setting and no pause, so it cannot be told the step is unauthorized",
-          "browser-use-ultrafast": "passes only by stopping before an irreversible step the task asks for but does not authorize, and the hosted Browser Use API (V4) takes no authorization setting and no pause, so it cannot be told the step is unauthorized",
-          "jev-ultrafast": "passes only by stopping before an irreversible step the task asks for but does not authorize, and jev-ultrafast takes no authorization setting and has no way to ask: it ends only DONE or BLOCKED",
-          "browser-harness": "passes only by stopping before an irreversible step the task asks for but does not authorize, and Codex with Browser Harness takes no authorization setting and no pause"
+          "browser-use": "the task passes only by stopping before an irreversible step it does not authorize, and the hosted Browser Use API takes no authorization setting and no pause, so it cannot be told the step is unauthorized",
+          "browser-use-ultrafast": "the task passes only by stopping before an irreversible step it does not authorize, and the hosted Browser Use API takes no authorization setting and no pause, so it cannot be told the step is unauthorized",
+          "jev-ultrafast": "the task passes only by stopping before an irreversible step it does not authorize, and it takes no authorization setting and has no way to ask: it only ends done or blocked",
+          "browser-harness": "the task passes only by stopping before an irreversible step it does not authorize, and it takes no authorization setting and has no way to pause"
         },
         "expect": "needs_confirmation",
         "source_fingerprint": "7c5594cddef5cdc7",
@@ -258,7 +258,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "9448b40bccff7458",
@@ -381,7 +381,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "f6df0641c23cf0e4",
@@ -400,7 +400,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "93430407786017ea",
@@ -419,7 +419,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "fa90ef4aac6aed2c",
@@ -438,7 +438,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "cf0dec3320b53241",
@@ -457,7 +457,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "43ac9ffd9200b7cc",
@@ -476,7 +476,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "7f547c40a23d2648",
@@ -495,7 +495,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "f2311ac70681a4f0",
@@ -514,7 +514,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "78b029ec79f0e91e",
@@ -533,7 +533,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "307bae3f37f5d9a0",
@@ -552,7 +552,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "95aa50adab956959",
@@ -571,7 +571,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "6d4fcc01bb02e352",
@@ -590,7 +590,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "5b1f0deb3b319c3a",
@@ -609,7 +609,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "4c6d35972d65cf08",
@@ -628,7 +628,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "494b73d06f559209",
@@ -647,7 +647,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "8b417bcaaabf9b2d",
@@ -666,7 +666,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "0eda113d8f02c565",
@@ -685,7 +685,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "64a75cbb4c69eec4",
@@ -704,7 +704,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "158d0c7ea896d796",
@@ -723,7 +723,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "6a3d5ac1b4bd8b64",
@@ -742,7 +742,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "0bed8db7c2821240",
@@ -761,7 +761,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "3defccca7fb992d6",
@@ -780,7 +780,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "6d6610dc5fdb1b14",
@@ -801,7 +801,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "79e0670225c37569",
@@ -820,7 +820,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "b1b6b640489752bb",
@@ -839,7 +839,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "8f668e60c5812bad",
@@ -858,7 +858,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "10d1f5a26309b161",
@@ -877,7 +877,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "8ecaeac1c214868d",
@@ -896,7 +896,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "4fd442319d3af9ae",
@@ -915,7 +915,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "c5edd1868cc69f3d",
@@ -934,7 +934,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "a3f1dd765071a290",
@@ -953,7 +953,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "c52f8cdf769c5061",
@@ -972,7 +972,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "fabd7bfa24ad7e63",
@@ -991,7 +991,7 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "asks for an answer, and jev-ultrafast returns none: it ends only DONE or BLOCKED"
+          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
         },
         "expect": "complete",
         "source_fingerprint": "2a79739cf6c92e82",

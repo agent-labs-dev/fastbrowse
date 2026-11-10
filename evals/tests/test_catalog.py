@@ -63,3 +63,18 @@ def test_an_exclusion_reason_the_site_cannot_parse_refuses_the_export(monkeypatc
     monkeypatch.setattr(catalog, "excluded_because", lambda arm, task: None if live.eligible(arm, task) else "a/b")
     with pytest.raises(ValueError, match="reason"):
         catalog.render()
+
+
+def test_every_exclusion_reason_reads_plainly_after_the_agents_name() -> None:
+    """The site shows each reason after the agent's name ("Browser Harness: cannot attempt 6 tasks (...): <reason>"),
+    so a reason names no harness arm id and no harness term a first-time reader would not know."""
+    import json
+
+    from fastbrowse_evals import live
+
+    rendered = json.loads(catalog.render())
+    reasons = {r for suite in rendered["suites"].values() for t in suite for r in t["excluded"].values()}
+    assert reasons
+    for reason in reasons:
+        words = set(reason.replace(":", " ").replace(",", " ").split())
+        assert not words & (set(live.ARMS) | {"arm", "DONE", "BLOCKED", "V4"}), reason
