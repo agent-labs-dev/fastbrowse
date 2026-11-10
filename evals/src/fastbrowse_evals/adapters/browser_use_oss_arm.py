@@ -1,9 +1,18 @@
-"""Optional browser-use OSS arm: one JSON request on stdin, one result on stdout.
+"""Optional browser-use OSS arm, run as a conversation of JSON lines with the harness.
 
 browser-use 1.0 as a user of it runs it: its default model (`bu-fast` on the Browser Use gateway, read with the
-Browser Use key) in its default mode (`ultrafast` on bu-fast), on a Browser Use Cloud browser. The caller owns that browser, hands it over by
-its CDP WebSocket and observes it after this process exits. Install only on explicit selection, using the exact
-package pin in the live arm registry.
+Browser Use key) in its default mode (`ultrafast` on bu-fast), on the Browser Use Cloud browser its own `Browser()`
+creates, so every feature 1.0 gives its own cloud browser is on. The conversation lets the harness time the run on its
+own clock and read the final page before the browser stops:
+
+    harness -> {request}                     this process starts its browser
+    harness <- {"event": "ready", ...}       the browser is up: the harness's clock starts
+    harness <- {"event": "result", ...}      the agent answered: the clock stops, the harness reads the final page
+    harness -> {}                            this process stops its browser
+    harness <- {"event": "stopped", ...}
+
+A line from the harness that never comes (it exited) stops the browser too. Install only on explicit selection, using
+the exact package pin in the live arm registry.
 """
 
 import asyncio
@@ -11,6 +20,7 @@ import contextlib
 import json
 import sys
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 STEP_CEILING = 1_000_000
@@ -89,52 +99,86 @@ def output_model(schema: dict[str, Any] | None) -> Any:
     return create_model(schema.get("title", "Answer"), **fields)
 
 
-async def run(request: dict[str, Any]) -> dict[str, Any]:
-    from browser_use import Agent, Browser
+def failed(exc: Exception) -> dict[str, Any]:
+    return {"status": "error", "error": f"{type(exc).__name__}: {exc}", "steps": 0, "dollars": None}
+
+
+async def run(request: dict[str, Any], browser: Any) -> dict[str, Any]:
+    """One agent run on a started browser; the harness times it, so no seconds are reported."""
+    from browser_use import Agent
     from browser_use.agent.loop import TRANSIENT
 
-    started = time.monotonic()
     try:
-        schema = output_model(request.get("output_schema"))
         agent = Agent(
             task=request["goal"],
-            browser=Browser(cdp_url=request["cdp_ws"], keep_alive=True),
-            output_model_schema=schema,
+            browser=browser,
+            output_model_schema=output_model(request.get("output_schema")),
             sensitive_data=request.get("secrets") or None,
         )
         ceiling = STEP_CEILING if request["max_steps"] is None else request["max_steps"]
         result = await agent.run(max_steps=ceiling, timeout=TIMEOUT_CEILING)
-        wall = time.monotonic() - started
-        outage = provider_outage(result.error, frozenset(kind.__name__ for kind in TRANSIENT))
-        structured = result.structured_output
-        return {
-            "status": ending(result, outage),
-            "error": outage or result.error,
-            "answer": result.final_result(),
-            "data": structured.model_dump() if structured is not None and hasattr(structured, "model_dump") else None,
-            "steps": result.steps,
-            "step_log": step_log(result.messages),
-            # 1.0 times its agent loop alone: attaching to the browser and reading the model list come before it.
-            "seconds": result.duration_s,
-            "setup_seconds": round(max(0.0, wall - result.duration_s), 2),
-            "dollars": result.cost_usd,
-            "step_ceiling": ceiling,
-            "timeout_ceiling": TIMEOUT_CEILING,
-            "usage": dict(result.usage),
-        }
     except Exception as exc:
-        return {
-            "status": "error",
-            "error": f"{type(exc).__name__}: {exc}",
-            "steps": 0,
-            "seconds": time.monotonic() - started,
-            "dollars": None,
-        }
+        return failed(exc)
+    outage = provider_outage(result.error, frozenset(kind.__name__ for kind in TRANSIENT))
+    structured = result.structured_output
+    return {
+        "status": ending(result, outage),
+        "error": outage or result.error,
+        "answer": result.final_result(),
+        "data": structured.model_dump() if structured is not None and hasattr(structured, "model_dump") else None,
+        "steps": result.steps,
+        "step_log": step_log(result.messages),
+        "dollars": result.cost_usd,
+        "step_ceiling": ceiling,
+        "timeout_ceiling": TIMEOUT_CEILING,
+        "usage": dict(result.usage),
+    }
+
+
+async def session(read: Callable[[], Awaitable[str]], emit: Callable[[dict[str, Any]], None]) -> None:
+    from browser_use import Browser
+
+    request = json.loads(await read())
+    # 1.0's default browser in every respect but two: it stays up after the run so the harness can read the final
+    # page, and it lives for the provider's maximum instead of its 60 minute default, a time cap the protocol lifts.
+    browser = Browser(keep_alive=True, cloud_timeout=request["browser_minutes"])
+    try:
+        began = time.monotonic()
+        try:
+            await browser.start()
+        except Exception as exc:
+            emit({"event": "result", **failed(exc)})
+            return
+        emit(
+            {
+                "event": "ready",
+                "cdp_url": browser.cloud_cdp_url,
+                "live_url": browser.live_url,
+                "browser_id": browser.id,
+                "open_seconds": round(time.monotonic() - began, 2),
+            }
+        )
+        emit({"event": "result", **await run(request, browser)})
+        await read()
+    finally:
+        browser_id = browser.id
+        stopped = True
+        try:
+            await browser.stop()
+        except Exception:
+            stopped = False
+        emit({"event": "stopped", "browser_id": browser_id, "stopped": stopped})
 
 
 if __name__ == "__main__":
-    request = json.load(sys.stdin)
+    out = sys.stdout
+
+    def emit(message: dict[str, Any]) -> None:
+        print(json.dumps(message, default=str), file=out, flush=True)
+
+    async def read() -> str:
+        return await asyncio.to_thread(sys.stdin.readline)
+
     # Framework banners must not corrupt the caller's JSON protocol.
     with contextlib.redirect_stdout(sys.stderr):
-        result = asyncio.run(run(request))
-    print(json.dumps(result, default=str))
+        asyncio.run(session(read, emit))

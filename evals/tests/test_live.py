@@ -2711,9 +2711,10 @@ def test_a_crash_leaves_its_cost_unknown_for_every_arm(arm: str) -> None:
     assert row.llm_calls_basis == ("physical_requests" if arm == "fastbrowse" else None)
 
 
-def _oss_run(monkeypatch: pytest.MonkeyPatch, status: str, error: str | None = None) -> dict[str, Any]:
+def _oss_runner(
+    monkeypatch: pytest.MonkeyPatch, status: str, error: str | None, seen: dict[str, Any]
+) -> dict[str, Any]:
     """The OSS runner over a fake browser-use 1.0 whose run ends with `status` and `error`, as its history reports."""
-    seen: dict[str, Any] = {}
 
     class Agent:
         def __init__(self, **kwargs: Any) -> None:
@@ -2735,22 +2736,61 @@ def _oss_run(monkeypatch: pytest.MonkeyPatch, status: str, error: str | None = N
                 final_result=lambda: "answer" if done else None,
             )
 
+    class Browser:
+        def __init__(self, **kwargs: Any) -> None:
+            seen["browser_options"] = kwargs
+            self.id, self.live_url, self.cloud_cdp_url = "b1", "https://live.test", "https://b.test"
+
+        async def start(self) -> None:
+            seen.setdefault("calls", []).append("start")
+
+        async def stop(self) -> None:
+            seen.setdefault("calls", []).append("stop")
+            self.id = None
+
     class ModelServerError(Exception): ...
 
     class ModelConnectionError(Exception): ...
 
     fake = types.ModuleType("browser_use")
-    fake.Agent, fake.Browser = Agent, lambda **_: None  # ty: ignore[unresolved-attribute]
+    fake.Agent, fake.Browser = Agent, Browser  # ty: ignore[unresolved-attribute]
     loop = types.ModuleType("browser_use.agent.loop")
     loop.TRANSIENT = (ModelServerError, ModelConnectionError)  # ty: ignore[unresolved-attribute]
     monkeypatch.setitem(sys.modules, "browser_use", fake)
     monkeypatch.setitem(sys.modules, "browser_use.agent", types.ModuleType("browser_use.agent"))
     monkeypatch.setitem(sys.modules, "browser_use.agent.loop", loop)
-    request = {"goal": "g", "cdp_ws": "ws://b", "max_steps": None}
-    result = asyncio.run(runpy.run_path(str(live.OSS_RUNNER))["run"](request))
+    return runpy.run_path(str(live.OSS_RUNNER))
+
+
+def _oss_run(monkeypatch: pytest.MonkeyPatch, status: str, error: str | None = None) -> dict[str, Any]:
+    seen: dict[str, Any] = {}
+    runner = _oss_runner(monkeypatch, status, error, seen)
+    request = {"goal": "g", "max_steps": None, "browser_minutes": 240}
+    browser = SimpleNamespace()
+    result = asyncio.run(runner["run"](request, browser))
     # 1.0's defaults stand: no model or mode is chosen, and its step and time limits are lifted, not left at 100/1700.
+    assert seen["browser"] is browser
     assert "llm" not in seen and "mode" not in seen and seen["max_steps"] >= 1_000_000 and seen["timeout"] >= 86_400
     return result
+
+
+def test_the_oss_runner_owns_its_browser_and_answers_in_order(monkeypatch) -> None:
+    seen: dict[str, Any] = {}
+    runner = _oss_runner(monkeypatch, "completed", None, seen)
+    lines = iter([json.dumps({"goal": "g", "max_steps": None, "browser_minutes": 240}), "{}"])
+    events: list[dict[str, Any]] = []
+
+    async def read() -> str:
+        return next(lines)
+
+    asyncio.run(runner["session"](read, events.append))
+    # 1.0's own cloud browser, its defaults kept but for staying up for the final page and the lifted time cap.
+    assert seen["browser_options"] == {"keep_alive": True, "cloud_timeout": 240}
+    assert seen["calls"] == ["start", "stop"]
+    assert [e["event"] for e in events] == ["ready", "result", "stopped"]
+    assert events[0]["browser_id"] == "b1" and events[0]["cdp_url"] == "https://b.test"
+    assert events[1]["status"] == "done" and "seconds" not in events[1]  # the harness times the run
+    assert events[2] == {"event": "stopped", "browser_id": "b1", "stopped": True}
 
 
 @pytest.mark.parametrize(
@@ -2765,7 +2805,7 @@ def test_a_provider_outage_is_unavailable_on_the_oss_arm(monkeypatch, error) -> 
 def test_a_completed_oss_run_reports_its_answer_and_cost(monkeypatch) -> None:
     result = _oss_run(monkeypatch, "completed")
     assert result["status"] == "done" and result["error"] is None and result["answer"] == "answer"
-    assert result["dollars"] == 0.1 and result["seconds"] == 2.0 and result["steps"] == 3
+    assert result["dollars"] == 0.1 and result["steps"] == 3
 
 
 def test_an_oss_run_the_provider_refused_is_its_own_error(monkeypatch) -> None:

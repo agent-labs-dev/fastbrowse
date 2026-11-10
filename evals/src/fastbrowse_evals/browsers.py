@@ -148,6 +148,29 @@ async def cloud_browser(http: httpx.AsyncClient, *, screen: tuple[int, int] | No
         await client.close()
 
 
+async def metered_cost(browser_id: str) -> tuple[CostLine, ...]:
+    """The metered cost Browser Use reports for a cloud browser an arm started and stopped itself, read once its proxy
+    data has settled; unknown lines when the browser's view could not be read."""
+    from browser_use_sdk.v4 import AsyncBrowserUse
+
+    client = AsyncBrowserUse(api_key=browser_key())
+    try:
+        return _cost(await _settled(client, browser_id))
+    finally:
+        await client.close()
+
+
+async def stop_cloud_browser(browser_id: str) -> None:
+    """Stop a cloud browser an arm started and could not stop itself, so it does not bill until its timeout."""
+    from browser_use_sdk.v4 import AsyncBrowserUse
+
+    client = AsyncBrowserUse(api_key=browser_key())
+    try:
+        await _stop(client, browser_id)
+    finally:
+        await client.close()
+
+
 async def _settled(client: object, browser_id: str) -> object | None:
     """The stopped browser's view once its proxy data is metered; None if it could not be read."""
     from browser_use_sdk.v4 import BrowserUseError

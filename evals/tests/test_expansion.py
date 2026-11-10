@@ -260,7 +260,7 @@ def test_oss_step_log_pairs_calls_with_returns() -> None:
     assert steps == [{"index": 0, "operation": "click", "target": {"index": 3}, "url": None, "observation": "x" * 2000}]
 
 
-@pytest.mark.parametrize("arm", ["jev-ultrafast", "browser-use-oss"])
+@pytest.mark.parametrize("arm", ["jev-ultrafast"])
 @pytest.mark.parametrize("unknown_browser_cost", [False, True])
 async def test_subprocess_uses_shared_prompt_and_harness_evidence(
     arm: str, unknown_browser_cost: bool, monkeypatch: pytest.MonkeyPatch
@@ -287,9 +287,6 @@ async def test_subprocess_uses_shared_prompt_and_harness_evidence(
         assert request["start"] == task.start and request["goal"] == live.prompt(task)
         assert request["max_steps"] is None and request.get("max_seconds") is None  # uncapped: no arm has a limit
         assert "GH_TOKEN" not in env
-        if arm == "browser-use-oss":
-            # 1.0's default model runs on the Browser Use gateway, read with the Browser Use key alone.
-            assert env["BROWSER_USE_API_KEY"] == "cloud" and "text" not in env.values() and "model" not in request
         return json.dumps(
             {
                 "status": "done",
@@ -326,7 +323,7 @@ async def test_subprocess_uses_shared_prompt_and_harness_evidence(
     monkeypatch.setattr(live, "observe_browser", observed)
     monkeypatch.setenv("GH_TOKEN", "unrelated")
     async with httpx.AsyncClient() as http:
-        runner = live.ultrafast_arm if arm == "jev-ultrafast" else live.oss_arm
+        runner = live.ultrafast_arm
         outcome, report = await runner(task, http, record=None)
     assert not entered
     assert report.dollars == (None if unknown_browser_cost else 0.03)
@@ -336,6 +333,104 @@ async def test_subprocess_uses_shared_prompt_and_harness_evidence(
         assert outcome.evidence and outcome.evidence.device_pixel_ratio == 1
     else:
         assert outcome.final_url == "https://pypi.org/project/httpx" and outcome.controls == (("observed", None),)
+
+
+@pytest.mark.parametrize("stopped", [True, False])
+async def test_oss_arm_runs_on_its_own_browser_and_the_harness_clock(stopped: bool, monkeypatch) -> None:
+    """browser-use starts and stops its own cloud browser; the harness times ready to answer, reads the final page
+    before the stop, prices the browser from Browser Use's meter and stops a browser the runner could not."""
+    task = next(t for t in live_tasks.TASKS if t.id == "pypi-open")
+    log: list[str] = []
+    clock = iter([10.0, 14.5])
+    monkeypatch.setattr(live, "session_ready", lambda: next(clock))
+    monkeypatch.setattr(live, "session_answered", lambda: next(clock))
+
+    @asynccontextmanager
+    async def conversation(command: tuple[str, ...], script: Path, env: dict[str, str], cwd: str):
+        assert env["BROWSER_USE_API_KEY"] == "cloud" and "text" not in env.values()
+        events = iter(
+            [
+                {
+                    "event": "ready",
+                    "cdp_url": "https://b.test",
+                    "live_url": "https://live.test",
+                    "browser_id": "b1",
+                    "open_seconds": 2.0,
+                },
+                {
+                    "event": "result",
+                    "status": "done",
+                    "answer": "httpx",
+                    "steps": 2,
+                    "dollars": 0.01,
+                    "step_ceiling": 1_000_000,
+                    "timeout_ceiling": 86_400.0,
+                },
+                {"event": "stopped", "browser_id": "b1", "stopped": stopped},
+            ]
+        )
+
+        async def send(message: dict[str, Any]) -> None:
+            log.append("stop" if message == {} else "request")
+            if message != {}:
+                assert message["goal"] == live.prompt(task) and message["max_steps"] is None
+                assert message["browser_minutes"] == live.CLOUD_BROWSER_MINUTES and "cdp_ws" not in message
+
+        async def receive(event: str) -> dict[str, Any]:
+            message = next(events)
+            assert message["event"] == event
+            log.append(event)
+            return message
+
+        yield send, receive
+
+    async def observed(cdp: str) -> FinalPage:
+        log.append("observe")
+        return FinalPage(url="https://pypi.org/project/httpx", controls=())
+
+    async def stop(browser_id: str) -> None:
+        log.append(f"api-stop {browser_id}")
+
+    async def websocket(_: object, cdp_url: str) -> str:
+        return "ws://b.test"
+
+    async def metered(browser_id: str) -> tuple[CostLine, ...]:
+        return (CostLine(component=CostComponent.BROWSER, basis=CostBasis.METERED, dollars=0.002),)
+
+    monkeypatch.setattr(live, "_conversation", conversation)
+    monkeypatch.setattr(live, "observe_browser", observed)
+    monkeypatch.setattr(live, "devtools_websocket", websocket)
+    monkeypatch.setattr(live, "metered_cost", metered)
+    monkeypatch.setattr(live, "stop_cloud_browser", stop)
+    monkeypatch.setattr(backend, "environment", lambda: {"BROWSER_USE_API_KEY": "cloud", "OPENROUTER_API_KEY": "text"})
+    async with httpx.AsyncClient() as http:
+        outcome, report = await live.oss_arm(task, http, record=None)
+    assert log == ["request", "ready", "result", "observe", "stop", "stopped"] + ([] if stopped else ["api-stop b1"])
+    assert report.seconds == 4.5 and report.session_open_seconds == 2.0 and report.timing_note == live.OSS_SETUP
+    assert report.dollars == pytest.approx(0.012) and report.cost_by_component == {"browser": 0.002, "llm": 0.01}
+    assert report.provenance["llm_cost_basis"] == live.OSS_LLM_COST
+    assert outcome.final_url == "https://pypi.org/project/httpx" and outcome.answer == "httpx"
+
+
+async def test_oss_arm_whose_browser_did_not_start_never_started(monkeypatch) -> None:
+    @asynccontextmanager
+    async def conversation(*_: object):
+        async def send(_: dict[str, Any]) -> None: ...
+
+        async def receive(event: str) -> dict[str, Any]:
+            raise live._OssEvent({"event": "result", "status": "error", "error": "RuntimeError: 402"})
+
+        yield send, receive
+
+    stops: list[str] = []
+    monkeypatch.setattr(live, "_conversation", conversation)
+    monkeypatch.setattr(live, "stop_cloud_browser", AsyncMock(side_effect=stops.append))
+    monkeypatch.setattr(backend, "environment", lambda: {"BROWSER_USE_API_KEY": "cloud"})
+    task = next(t for t in live_tasks.TASKS if t.id == "pypi-open")
+    async with httpx.AsyncClient() as http:
+        with pytest.raises(live.NotStarted, match="402"):
+            await live.oss_arm(task, http, record=None)
+    assert stops == []  # no browser was reported, so none is left to stop
 
 
 def _ultrafast_runner() -> dict:

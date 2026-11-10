@@ -123,6 +123,8 @@ from fastbrowse_evals.browsers import (
     cloud_browser,
     devtools_websocket,
     local_browser,
+    metered_cost,
+    stop_cloud_browser,
 )
 from fastbrowse_evals.budget import POLICY, BudgetStop, CampaignBudget
 from fastbrowse_evals.evidence import parts, run_evidence, shared_step
@@ -2035,38 +2037,156 @@ class _CuaReport(_OssReport):
     session_close_seconds: float | None = None
 
 
+class _OssReady(BaseModel):
+    cdp_url: str
+    live_url: str | None = None
+    browser_id: str
+    open_seconds: float
+
+
+class _OssResult(BaseModel):
+    status: str
+    answer: str | None = None
+    data: JsonValue = None
+    steps: int
+    step_log: list[JsonValue] = []
+    dollars: float | None = None
+    error: str | None = None
+    step_ceiling: int | None = None
+    """The integer browser-use's `Agent.run` was handed in place of no limit (see browser_use_oss_arm.py)."""
+    timeout_ceiling: float | None = None
+    """The seconds browser-use's `Agent.run` was handed in place of no time limit."""
+
+
+class _OssStopped(BaseModel):
+    browser_id: str | None = None
+    stopped: bool
+
+
+OSS_SETUP = "the agent starts the Python worker that drives the browser, and checks its model gateway, inside its run"
+OSS_LLM_COST = (
+    "the Browser Use gateway's own charge for each model response, as browser-use sums it; Browser Use reports no "
+    "billed total per run, so a request cut off before its charge came back would be missing"
+)
+
+
+@asynccontextmanager
+async def _conversation(
+    command: tuple[str, ...], script: Path, env: dict[str, str], cwd: str
+) -> AsyncIterator[
+    tuple[Callable[[Mapping[str, object]], Awaitable[None]], Callable[[str], Awaitable[dict[str, Any]]]]
+]:
+    """A runner that answers in JSON lines while it works: `send` writes one line to it, `receive(event)` reads its
+    next line, which must be that event. On any way out the runner is ended: asked by closing its input, then
+    terminated, which a runner owning a cloud browser answers by stopping it."""
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        str(script),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        env=env,
+        cwd=cwd,
+        start_new_session=True,
+        limit=64 * 1024 * 1024,  # a result line carries the whole step log
+    )
+    assert process.stdin is not None and process.stdout is not None
+    stdin, stdout = process.stdin, process.stdout
+
+    async def send(message: Mapping[str, object]) -> None:
+        stdin.write(json.dumps(message).encode() + b"\n")
+        await stdin.drain()
+
+    async def receive(event: str) -> dict[str, Any]:
+        line = await stdout.readline()
+        if not line:
+            await process.wait()
+            raise RuntimeError(f"{script.name} exited {process.returncode} before its {event}")
+        message = json.loads(line)
+        if message.get("event") != event:
+            raise _OssEvent(message)
+        return message
+
+    async def end(asked: bool) -> None:
+        if asked:
+            with suppress(OSError):
+                stdin.close()
+            with suppress(TimeoutError):
+                async with asyncio.timeout(60):
+                    await process.wait()
+        if process.returncode is None:
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGTERM)
+            try:
+                async with asyncio.timeout(60):
+                    await process.wait()
+            except TimeoutError:
+                process.kill()
+                await process.wait()
+
+    try:
+        yield send, receive
+    except BaseException:
+        await asyncio.shield(end(asked=False))
+        raise
+    await end(asked=True)
+
+
+class _OssEvent(Exception):
+    """The runner sent another event than the one expected: its result before its browser was ready."""
+
+    def __init__(self, message: dict[str, Any]) -> None:
+        super().__init__(message.get("event"))
+        self.message = message
+
+
 async def oss_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | None) -> tuple[Outcome, ArmReport]:
+    """browser-use 1.0 on its own default Browser Use Cloud browser (see browser_use_oss_arm.py). It starts and stops
+    that browser itself; the harness times the run on its own clock from the browser being ready to the answer, reads
+    the final page before the stop, and reads the browser's cost as Browser Use metered it."""
     if record is not None:
         raise ValueError("browser-use-oss recording is not supported by this adapter")
-    async with cloud_browser(http, screen=_screen(task)) as cloud:
-        session_ready()
-        _watch("browser-use-oss", task, cloud.live_url)
-        request: dict[str, object] = {
-            "start": task.start,
-            "goal": prompt(task),
-            "cdp_ws": cloud.cdp_url,
-            # Uncapped; the runner substitutes browser-use's own integer seams (STEP_CEILING, TIMEOUT_CEILING) and
-            # reports them.
-            "max_steps": None,
-            "record": None,
-            "secrets": dict(task.secrets),
-            "output_schema": task.output_schema.model_json_schema() if task.output_schema else None,
-        }
+    request: dict[str, object] = {
+        "goal": prompt(task),
+        # Uncapped; the runner substitutes browser-use's own integer seams (STEP_CEILING, TIMEOUT_CEILING) and
+        # reports them.
+        "max_steps": None,
+        "browser_minutes": CLOUD_BROWSER_MINUTES,
+        "secrets": dict(task.secrets),
+        "output_schema": task.output_schema.model_json_schema() if task.output_schema else None,
+    }
+    ready: _OssReady | None = None
+    stopped = _OssStopped(stopped=False)
+    try:
         with tempfile.TemporaryDirectory(prefix="bu-oss-") as runtime:
             env = arm_environment("browser-use-oss", runtime)
-            # 1.0's default model runs on the Browser Use gateway, which takes the Browser Use key.
+            # 1.0's default model and browser are both Browser Use's, read with the Browser Use key.
             env["BROWSER_USE_API_KEY"] = backend.browser_key()
-            ran = _OssReport.model_validate_json(await _invoke(OSS_COMMAND, OSS_RUNNER, request, env, runtime))
-        session_answered()
-        final = await observe_browser(cloud.cdp_url)
-    browser, unpriced = _browser_dollars(cloud.cost)
+            async with _conversation(OSS_COMMAND, OSS_RUNNER, env, runtime) as (send, receive):
+                await send(request)
+                try:
+                    ready = _OssReady.model_validate(await receive("ready"))
+                except _OssEvent as early:
+                    raise NotStarted(f"browser-use did not start its browser: {early.message.get('error')}") from None
+                began = session_ready()
+                _watch("browser-use-oss", task, ready.live_url)
+                ran = _OssResult.model_validate(await receive("result"))
+                seconds = session_answered() - began
+                final = await observe_browser(await devtools_websocket(http, ready.cdp_url))
+                closing = time.monotonic()
+                await send({})
+                stopped = _OssStopped.model_validate(await receive("stopped"))
+                close_seconds = round(time.monotonic() - closing, 2)
+    finally:
+        if ready is not None and not stopped.stopped:
+            await asyncio.shield(stop_cloud_browser(ready.browser_id))
+    browser, unpriced = _browser_dollars(await metered_cost(ready.browser_id))
     unknown = ran.dollars is None or unpriced
     return Outcome(ran.answer, ran.data, final.url, None, final.controls, *_page_of(final)), ArmReport(
         status=ran.status,
-        # Timed inside the runner as jev-ultrafast is, so neither arm is charged for resolving and importing itself.
-        seconds=round(ran.seconds, 2),
-        session_open_seconds=round((cloud.open_seconds or 0.0) + ran.setup_seconds, 2),
-        session_close_seconds=cloud.close_seconds,
+        seconds=round(seconds, 2),
+        session_open_seconds=ready.open_seconds,
+        session_close_seconds=close_seconds,
+        timing_note=OSS_SETUP,
         dollars=None if unknown else ran.dollars + browser,
         unknown_cost=unknown,
         steps=ran.steps,
@@ -2074,10 +2194,11 @@ async def oss_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | Non
         error=ran.error,
         model=OSS_MODEL,
         observe_error=final.error,
-        provenance=({} if ran.step_ceiling is None else {"upstream_max_steps": ran.step_ceiling})
+        provenance={"llm_cost_basis": OSS_LLM_COST}
+        | ({} if ran.step_ceiling is None else {"upstream_max_steps": ran.step_ceiling})
         | ({} if ran.timeout_ceiling is None else {"upstream_timeout_seconds": ran.timeout_ceiling}),
-        cost_by_component=({} if unpriced else {"browser": browser})
-        | ({} if ran.dollars is None else {"llm": ran.dollars}),
+        cost_by_component=({} if unpriced else {"browser": round(browser, 5)})
+        | ({} if ran.dollars is None else {"llm": round(ran.dollars, 5)}),
     )
 
 
