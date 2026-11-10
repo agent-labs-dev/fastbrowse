@@ -5685,6 +5685,64 @@ fn test_a_403_stop_names_a_bot_or_access_wall_instead_of_an_unknown_cause() {
     assert!(unavailable.error.unwrap().contains(recorded));
 }
 
+/// A CurseForge project page awaiting moderation answers 404, and three runs on it ended `stuck` with "the cause is
+/// unknown" or answered from another page (#931): a 404 or 410 says the page does not exist.
+#[test]
+fn test_a_404_or_410_says_the_page_does_not_exist() {
+    for status in [404, 410] {
+        let stop = SiteFailure::http("https://mods.test/project/skyward", status, 0).stop();
+        assert_eq!(stop.status, Status::Stuck);
+        let error = stop.error.expect("an error names the failure");
+        assert_eq!(
+            error,
+            format!(
+                "Could not complete the task after HTTP {status} at https://mods.test/project/skyward: the page does not exist."
+            )
+        );
+    }
+}
+
+/// A run whose start address answered 404 searched the site and stalled on the results, and ended `stuck` with
+/// `no_progress` once it had left the address (#931). It ends as the start address's failure until that address loads.
+#[tokio::test]
+async fn a_run_stalled_after_leaving_a_failed_start_address_ends_as_that_failure() {
+    let start = "https://mods.test/project/skyward";
+    let missing = Observation { response_status: Some(404), ..at(start, &[]) };
+    let search = Observation { response_status: Some(200), ..at("https://mods.test/search?q=skyward", &[]) };
+    let agent =
+        Agent::new(Arc::new(Screenshots::default()), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let stalled = async |state: &mut RunState| {
+        state.recoveries = agent.config.stall.max_recoveries;
+        match agent.recover(state, &search, "no_progress (3)", Status::Stuck, None).await {
+            Err(Flow::Stop(stop)) => stop,
+            ended => panic!("{ended:?}"),
+        }
+    };
+    let mut state = run_state();
+    state.first_url = Some(start.into());
+    agent.note_effect(&mut state, &missing);
+    agent.note_effect(&mut state, &search);
+    agent.settle(&mut state, &search).await.unwrap();
+    assert_eq!(state.site_failure, None, "the results page loaded");
+    let stop = stalled(&mut state).await;
+    assert_eq!(stop.status, Status::Stuck);
+    assert_eq!(
+        stop.error.as_deref(),
+        Some(format!("Could not complete the task after HTTP 404 at {start}: the page does not exist.").as_str())
+    );
+    // A dead link reached mid-run is not the start address, and the start address loading clears its failure.
+    for (first, reached) in [(start, "https://mods.test/project/other"), (start, start)] {
+        let mut state = run_state();
+        state.first_url = Some(first.into());
+        agent.note_effect(&mut state, &Observation { response_status: Some(404), ..at(reached, &[]) });
+        if reached == start {
+            agent.note_effect(&mut state, &Observation { response_status: Some(200), ..at(start, &[]) });
+        }
+        state.site_failure = None;
+        assert_eq!(stalled(&mut state).await.error.as_deref(), Some("no_progress (3)"));
+    }
+}
+
 #[test]
 fn review_http_403_with_a_password_form_does_not_claim_a_bot_check() {
     use fastbrowse_core::models::WallKind;

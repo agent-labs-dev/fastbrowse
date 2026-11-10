@@ -926,12 +926,18 @@ impl Agent {
     /// Record on the last action what it did, which the next choice and recovery both read.
     pub(super) fn note_effect(&self, state: &mut RunState, observation: &Observation) {
         if let Some(status) = observation.response_status {
+            if status < 400 && state.start_failure.as_ref().is_some_and(|failure| failure.url == observation.url) {
+                state.start_failure = None;
+            }
             if status >= 400 {
                 let since = match &state.site_failure {
                     Some(failure) if failure.url == observation.url => failure.since,
                     _ => state.steps.len(),
                 };
                 state.site_failure = Some(SiteFailure::http(&observation.url, status, since));
+                if state.first_url.as_deref() == Some(observation.url.as_str()) {
+                    state.start_failure = state.site_failure.clone();
+                }
             } else if status >= 200
                 && state.site_failure.as_ref().is_some_and(|failure| {
                     failure.url == observation.url && !matches!(failure.cause, FailureCause::Reported)

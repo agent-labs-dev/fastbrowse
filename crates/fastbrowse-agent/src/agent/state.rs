@@ -206,6 +206,11 @@ impl SiteFailure {
                 "HTTP 403 at {}: the site refused this browser session, which may be an access or bot check or a sign-in it requires.",
                 self.url
             ),
+            // A 404 or 410 says what happened as plainly: runs on a project page awaiting moderation ended "the cause is
+            // unknown" (#931), though the site had said the page does not exist.
+            FailureCause::Http(status @ (404 | 410)) => {
+                format!("HTTP {status} at {}: the page does not exist.", self.url)
+            }
             FailureCause::Http(status) => {
                 format!("HTTP {status} at {} in this browser session; the cause is unknown.", self.url)
             }
@@ -262,6 +267,10 @@ pub(crate) struct RunState {
     pub choices: Vec<StepChoice>,
     pub history: Vec<HistoryEntry>,
     pub site_failure: Option<SiteFailure>,
+    /// A failure on the address the run started at, kept after the run leaves it until that address loads. A run
+    /// whose start page answered 404 searched the site, stalled on the results and ended `no_progress`, since leaving
+    /// the address forgot its failure (#931).
+    pub start_failure: Option<SiteFailure>,
     pub http_seen: HashSet<(String, String, i64)>,
     pub hint: Option<String>,
     /// Jev's pick when asked again after a stall, by the page state it was asked on, taken as the
@@ -688,6 +697,7 @@ impl RunState {
             choices: Vec::new(),
             history: Vec::new(),
             site_failure: None,
+            start_failure: None,
             http_seen: HashSet::new(),
             hint: None,
             picked: None,

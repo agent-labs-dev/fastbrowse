@@ -300,6 +300,9 @@ Both messages end with Chrome's complete diagnostic output, which names the caus
   that needs a value entered must not forbid edits. Typing a search is still allowed.
 - The run chose to open an address that neither the task nor `--start` supplied:
   `navigation address was not supplied by the caller`.
+- The page does not exist: `Could not complete the task after HTTP 404 at <url>: the page does not exist.`, or
+  the same with HTTP 410. When the address the run started at answers this, a run that leaves it and stalls on
+  another page still ends with this error. Check the address, or whether the page is public yet.
 - The site answered an HTTP error that maps to no other status:
   `Could not complete the task after HTTP <status> at <url> in this browser session; the cause is unknown.`
 - The page draws what it shows on a canvas, a picture or a video, and the run could not read it. The error

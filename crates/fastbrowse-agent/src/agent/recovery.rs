@@ -163,8 +163,8 @@ pub(super) fn withheld(decision: &Decision) -> Withheld {
 }
 
 impl Agent {
-    /// Spend one recovery on `reason`. Past `stall.max_recoveries` the run ends: as the failure standing on this page,
-    /// or as `gives_up_as`.
+    /// Spend one recovery on `reason`. Past `stall.max_recoveries` the run ends: as the failure standing on this page or
+    /// on the address the run started at, or as `gives_up_as`.
     pub(super) async fn recover(
         &self,
         state: &mut RunState,
@@ -190,8 +190,9 @@ impl Agent {
             if let Some(failure) = state.site_failure.as_ref().filter(|failure| failure.url == observation.url) {
                 return Err(failure.stop().into());
             }
+            // A run that left a start address that failed and stalled elsewhere ends as that failure, not as a stall.
             if gives_up_as != Status::NeedsInput
-                && let Some(failure) = &state.site_failure
+                && let Some(failure) = state.site_failure.as_ref().or(state.start_failure.as_ref())
             {
                 return Err(failure.stop().into());
             }
