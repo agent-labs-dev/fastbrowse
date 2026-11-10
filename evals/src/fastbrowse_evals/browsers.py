@@ -42,6 +42,8 @@ class Browser:
     """The DevTools websocket address every arm attaches to."""
     live_url: str | None = None
     """Where a cloud browser can be watched live."""
+    session_id: str | None = None
+    """The cloud browser's Browser Use session id; None for any other browser."""
     screen_sized: bool = False
     """Started at the size asked for, on a real screen, so no tab needs an override to reach it."""
     cost: tuple[CostLine, ...] = field(default=())
@@ -130,7 +132,13 @@ async def cloud_browser(http: httpx.AsyncClient, *, screen: tuple[int, int] | No
                 raise RuntimeError(f"Browser Use Cloud browser {created.id} started without a CDP URL")
             websocket = await devtools_websocket(http, created.cdp_url)
             opened = round(time.monotonic() - began, 2)
-            browser = Browser(websocket, created.live_url, screen_sized=screen is not None, open_seconds=opened)
+            browser = Browser(
+                websocket,
+                created.live_url,
+                session_id=str(created.id),
+                screen_sized=screen is not None,
+                open_seconds=opened,
+            )
             yield browser
         finally:
             closing = time.monotonic()
