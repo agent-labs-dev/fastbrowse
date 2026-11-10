@@ -54,7 +54,8 @@ _SKIP = {tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, token
 ARM_LABELS = {
     "fastbrowse": "fastbrowse",
     "browser-use": "Browser Use agent",
-    "jev-ultrafast": "Browser Use Ultrafast",
+    "browser-use-ultrafast": "Browser Use Ultrafast",
+    "jev-ultrafast": "Jev Ultrafast",
 }
 
 

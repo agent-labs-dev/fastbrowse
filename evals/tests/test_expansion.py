@@ -112,7 +112,12 @@ def test_registry_environment_excludes_unrelated_keys_and_uses_fresh_home() -> N
     )
     assert env["HOME"] == "/tmp/test-home" and env["PATH"] == "/usr/bin"
     assert "private" not in json.dumps(env)
-    assert {name for name, spec in live.ARMS.items() if spec.default} == {"fastbrowse", "jev-ultrafast", "browser-use"}
+    assert {name for name, spec in live.ARMS.items() if spec.default} == {
+        "fastbrowse",
+        "jev-ultrafast",
+        "browser-use",
+        "browser-use-ultrafast",
+    }
     assert live.ARMS["browser-use-oss"].pin == "browser-use==0.13.10"
     assert live.prompt(live_tasks.TASKS[0]) == f"Start at {live_tasks.TASKS[0].start}. {live_tasks.TASKS[0].task}"
 

@@ -20,7 +20,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -37,7 +38,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -54,7 +56,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -71,7 +74,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -88,7 +92,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -105,7 +110,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -122,7 +128,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -135,7 +142,8 @@
         "arms": [
           "fastbrowse",
           "browser-use",
-          "fastbrowse-pool"
+          "fastbrowse-pool",
+          "browser-use-ultrafast"
         ],
         "excluded": {
           "jev-ultrafast": "needs login credentials, and jev-ultrafast has no way to be given any",
@@ -151,7 +159,8 @@
         "arms": [
           "fastbrowse",
           "browser-use",
-          "fastbrowse-pool"
+          "fastbrowse-pool",
+          "browser-use-ultrafast"
         ],
         "excluded": {
           "jev-ultrafast": "needs login credentials, and jev-ultrafast has no way to be given any",
@@ -167,7 +176,8 @@
         "arms": [
           "fastbrowse",
           "browser-use",
-          "fastbrowse-pool"
+          "fastbrowse-pool",
+          "browser-use-ultrafast"
         ],
         "excluded": {
           "jev-ultrafast": "needs login credentials, and jev-ultrafast has no way to be given any",
@@ -183,7 +193,8 @@
         "arms": [
           "fastbrowse",
           "browser-use",
-          "fastbrowse-pool"
+          "fastbrowse-pool",
+          "browser-use-ultrafast"
         ],
         "excluded": {
           "jev-ultrafast": "needs login credentials, and jev-ultrafast has no way to be given any",
@@ -199,7 +210,8 @@
         "arms": [
           "fastbrowse",
           "browser-use",
-          "fastbrowse-pool"
+          "fastbrowse-pool",
+          "browser-use-ultrafast"
         ],
         "excluded": {
           "jev-ultrafast": "needs login credentials, and jev-ultrafast has no way to be given any",
@@ -217,7 +229,8 @@
           "fastbrowse-pool"
         ],
         "excluded": {
-          "browser-use": "passes only by stopping before an irreversible step the task asks for but does not authorize, and the hosted Browser Use API takes no authorization setting and no pause, so it cannot be told the step is unauthorized",
+          "browser-use": "passes only by stopping before an irreversible step the task asks for but does not authorize, and the hosted Browser Use API (V4) takes no authorization setting and no pause, so it cannot be told the step is unauthorized",
+          "browser-use-ultrafast": "passes only by stopping before an irreversible step the task asks for but does not authorize, and the hosted Browser Use API (V4) takes no authorization setting and no pause, so it cannot be told the step is unauthorized",
           "jev-ultrafast": "passes only by stopping before an irreversible step the task asks for but does not authorize, and jev-ultrafast takes no authorization setting and has no way to ask: it ends only DONE or BLOCKED",
           "browser-harness": "passes only by stopping before an irreversible step the task asks for but does not authorize, and Codex with Browser Harness takes no authorization setting and no pause"
         },
@@ -235,7 +248,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -251,7 +265,8 @@
           "jev-ultrafast",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -267,7 +282,8 @@
           "jev-ultrafast",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -283,7 +299,8 @@
           "jev-ultrafast",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -299,7 +316,8 @@
           "jev-ultrafast",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -315,7 +333,8 @@
           "jev-ultrafast",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -331,7 +350,8 @@
           "jev-ultrafast",
           "fastbrowse-pool",
           "cua-codex",
-          "browser-harness"
+          "browser-harness",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -350,7 +370,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -367,7 +388,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -384,7 +406,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -401,7 +424,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -418,7 +442,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -435,7 +460,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -452,7 +478,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -469,7 +496,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -486,7 +514,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -503,7 +532,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -520,7 +550,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -537,7 +568,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -554,7 +586,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -571,7 +604,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -588,7 +622,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -605,7 +640,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -622,7 +658,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -639,7 +676,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -656,7 +694,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -673,7 +712,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -690,7 +730,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -707,7 +748,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -726,7 +768,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -743,7 +786,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -760,7 +804,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -777,7 +822,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -794,7 +840,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -811,7 +858,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -828,7 +876,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -845,7 +894,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -862,7 +912,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -879,7 +930,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -896,7 +948,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "jev-ultrafast"
+          "jev-ultrafast",
+          "browser-use-ultrafast"
         ],
         "excluded": {},
         "expect": "complete",
@@ -927,7 +980,12 @@
       "default": true
     },
     "browser-use": {
-      "pin": "browser-use-sdk==3.12.1; hosted model reported per row",
+      "pin": "browser-use-sdk==3.12.1 API v4; default model, reported per row",
+      "tier": "hosted",
+      "default": true
+    },
+    "browser-use-ultrafast": {
+      "pin": "browser-use-sdk==3.12.1 API v4; model bu-ultrafast, reported per row",
       "tier": "hosted",
       "default": true
     },
@@ -947,7 +1005,7 @@
       "default": false
     }
   },
-  "ultrafast_text_model": "inception/mercury-2.5",
+  "ultrafast_text_model": "google/gemini-3.1-flash-lite",
   "retired": [
     {
       "id": "stretch-wizard-correction",

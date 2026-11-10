@@ -31,7 +31,7 @@ use crate::validation::{
 
 pub const GATEWAY_URL: &str = "https://ai-gateway.vercel.sh";
 /// Pinned like every other Jev route: the bare `typesafe-ai/jev` alias moves to each new release before it is measured.
-const MODEL: &str = "typesafe-ai/jev-1.14.0";
+pub const MODEL: &str = "typesafe-ai/jev-1.14.0";
 const PRICE: Option<f64> = Some(JEV_DOLLARS_PER_INPUT_TOKEN);
 
 pub struct VercelGatewayJevClient {

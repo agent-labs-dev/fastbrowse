@@ -1,7 +1,8 @@
 """Head-to-head on live sites, for exactly three comparisons, each run as its own invocation with its two arms:
-agent against agent (fastbrowse against browser-use, the hosted Browser Use agent), backend against backend
-(fastbrowse on the Browser Use Cloud browser against fastbrowse-pool), and fastbrowse on its own backend against
-Browser Use Ultrafast (fastbrowse-pool against jev-ultrafast). Pass each comparison's two arms with --arms;
+agent against agent (fastbrowse against the hosted Browser Use agent on API V4: browser-use on its default model and
+browser-use-ultrafast on bu-ultrafast, plus jev-ultrafast and browser-harness), backend against backend (fastbrowse on
+the Browser Use Cloud browser against fastbrowse-pool), and fastbrowse on its own backend against Jev Ultrafast
+(fastbrowse-pool against jev-ultrafast). Pass each comparison's two arms with --arms;
 fastbrowse-pool needs the pool credentials, so it is opt-in like browser-use-oss, cua-codex and
 browser-harness (Codex with Browser Harness, fastbrowse_evals/adapters/browser_harness_arm.py).
 
@@ -14,8 +15,8 @@ Needs BROWSER_USE_API_KEY (every arm but fastbrowse-pool), and OPENROUTER_API_KE
 fastbrowse-pool and jev-ultrafast arms). The fastbrowse-pool arm also needs PARALLAX_POOL_URL and PARALLAX_POOL_TOKEN.
 Each run prints a WATCH line with the URL where its browser can be watched live.
 
-The fastbrowse and jev-ultrafast (Browser Use Ultrafast) arms each drive a fresh Browser Use Cloud browser the harness
-starts (`fastbrowse_evals.browsers`); the Browser Use agent brings its own. fastbrowse-pool is the same fastbrowse
+The fastbrowse and jev-ultrafast arms each drive a fresh Browser Use Cloud browser the harness starts
+(`fastbrowse_evals.browsers`); the hosted Browser Use agent brings its own. fastbrowse-pool is the same fastbrowse
 run on a browser leased from our own browser pool (fastbrowse-hosted's deploy/browser-pool), so fastbrowse against
 fastbrowse-pool is a matched A/B of the browser backend alone. fastbrowse runs through its public `run_task` only,
 attached to the harness's browser, with the keys and Jev route of `fastbrowse_evals.backend`; the harness reads
@@ -32,13 +33,15 @@ unless told otherwise, the arm overrides it explicitly (`HOSTED_UNCAPPED_USD`, `
 caller can override is recorded with every row (`PROVIDER_LIMITS`).
 
 Tasks and their grading live in fastbrowse_evals.live_tasks. A login task's credentials reach fastbrowse as
-`run_task` secrets scoped to the task's start origin, and the hosted agent as its named sensitive data. With --record,
+`run_task` secrets scoped to the task's start origin, and the hosted agent as V4 secret bindings allowed only on the
+start origin's host. With --record,
 each run is saved as DIR/<arm>/<task>-<n>.mp4, n counting up from 1 past any video already there.
 
 Each task runs on every arm that can be graded on it on equal terms (`eligible`), and the catalog states why any
-head-to-head arm skips one (`excluded_because`). The hosted Browser Use session is kept alive after its agent finishes,
-so the harness reads the page it ended on through that session's browser and grades it on navigation tasks too; it
-skips only the task that passes by stopping before an unauthorized step, since it takes no authorization setting.
+head-to-head arm skips one (`excluded_because`). The hosted Browser Use run keeps its browser alive after its agent
+finishes (`HOSTED_KEEP_ALIVE_SECONDS`), so the harness reads the page it ended on through that browser, grades it on
+navigation tasks too, then stops it; its cost is read once the stop has settled the session. It skips only the task
+that passes by stopping before an unauthorized step, since V4 takes no authorization setting and no pause.
 jev-ultrafast returns no answer, only DONE or BLOCKED, so on an answer task the judge has its final page to go on; it
 skips the tasks it has no way to attempt. fastbrowse must also end with the task's expected status, and jev-ultrafast
 with DONE. fastbrowse-pool runs every task fastbrowse runs.
@@ -154,9 +157,9 @@ _local_browser: ContextVar[Path | None] = ContextVar("internal_local_browser", d
 _ultra_billing: ContextVar[dict[str, Any] | None] = ContextVar("ultrafast_billing", default=None)
 
 HOSTED_UNCAPPED_USD = "1000"
-"""`max_cost_usd` for every hosted Browser Use session. Browser Use applies a default cost limit of its own when the
-field is omitted ("If omitted, a default limit applies", browser_use_sdk generated/v3/models.py), which would cap the
-hosted arm where no other arm is capped. 1000 dollars is far above any run seen and above any approved campaign
+"""`max_cost_usd` for every hosted Browser Use run. Browser Use applies a budget of its own when the field is omitted
+(V4: "New API sessions default to $25", its Create Run reference), which would cap the hosted arms where no other
+arm is capped. 1000 dollars is far above any run seen and above any approved campaign
 budget, so it overrides the provider default without ever being reached; it is never derived from the campaign."""
 PROVIDER_LIMITS = (
     "Browser Use enforces a 4 hour maximum session lifetime (SessionTimeoutLimitExceededError) on its hosted agent "
@@ -167,8 +170,10 @@ PROVIDER_LIMITS = (
 ULTRAFAST = "jev-ultrafast @ git+https://github.com/browser-use/jev-ultrafast@1231850a0bf1a0c0341fe408ef1668dbbfdfac46"
 ULTRAFAST_RUNNER = Path(__file__).with_name("adapters") / "ultrafast_arm.py"
 ULTRAFAST_COMMAND = ("uv", "run", "--no-project", "--quiet", "--python", "3.14", "--with", ULTRAFAST, "python")
-ULTRAFAST_TEXT_MODEL = "inception/mercury-2.5"
-"""jev-ultrafast's own configuration (.env.example): its text helper on OpenRouter, reasoning off."""
+ULTRAFAST_TEXT_MODEL = "google/gemini-3.1-flash-lite"
+"""jev-ultrafast's text helper on OpenRouter, reasoning off as its .env.example sets it. Its configured model,
+inception/mercury-2.5, has no provider on OpenRouter any more (every request answers 404); this is the model its
+docs/performance.md probed beside Mercury on the same fields and found correct."""
 OUTAGE_RETRIES = 5
 """Runs of a row a provider outage, or an interruption the judge found (`judged_unavailable`), ended, after the
 first, waiting 1, 2, 4, 8 then 10 minutes: about 25 minutes, past the 503 spells seen so far. A row still unavailable then is recorded, and left out of every published figure."""
@@ -179,8 +184,22 @@ TRANSPORT_RETRIES = 1
 TRANSPORT_ERROR = re.compile(r"failed \((?:TimeoutError|ConnectionClosed\w*)\)")
 """How fastbrowse's browser layer spells a command whose reply timed out or whose socket closed, and nothing else: a
 task's own timeout is not one, and neither is any other error."""
-HOSTED_OUTAGE = "Task ended unexpectedly."
-"""The output Browser Use gives a session its own infrastructure ended."""
+HOSTED_MODELS: dict[str, str | None] = {"browser-use": None, "browser-use-ultrafast": "bu-ultrafast"}
+"""The V4 model each hosted Browser Use arm asks for. None omits `model` and `modelParams`, which is Browser Use's
+default (GPT-6 Luna, high reasoning, docs.browser-use.com/cloud/agent/models); `bu-ultrafast` is its low-latency
+preset, which takes no `modelParams`. Each row records the model the run reports."""
+HOSTED_KEEP_ALIVE_SECONDS = 900
+"""V4 `keepAlive` for every hosted run: how long its browser stays open after its agent finishes, so the harness can
+read the page it ended on before stopping it. V4 takes integer seconds from 120 to 14400 and otherwise stops an idle
+browser after 120, which a slow read could outlast; the harness stops the browser once it has read it, so the kept
+time billed is that read alone."""
+HOSTED_POLL_SECONDS = 1.0
+# Browser Use's SDK (v4 runs.wait_for_completion) retries a new run's 404 for five seconds.
+HOSTED_VISIBILITY_SECONDS = 5.0
+HOSTED_VISIBILITY_RETRY_SECONDS = 0.25
+"""How often a running hosted run's status and events are read; its seconds come from the server's event times."""
+HOSTED_TERMINAL = frozenset({"completed", "failed", "cancelled"})
+BROWSER_READY = {"browser.ready", "browser.reattached"}
 HOSTED_READY_POLL_SECONDS = 0.5
 """How often a hosted session is asked whether its browser has started; the `seconds` come from the server's clock."""
 SITE_PROBE_SECONDS = 15
@@ -462,8 +481,12 @@ async def grade_state(
 
 
 def ending_of(arm: str, report: "ArmReport") -> Ending:
-    """How a run ended in the vocabulary every arm shares."""
-    return normalize(report.status, hosted=arm == "browser-use", answered=bool(report.answered))
+    """How a run ended in the vocabulary every arm shares. `normalize` reads the hosted agent's statuses in API V3's
+    words, where a finished session is `stopped`; V4 names a finished run `completed`. `normalize` is part of every
+    task's fingerprint, so V4's word is read here rather than there, leaving every task's version as it was."""
+    hosted = arm in HOSTED_MODELS
+    status = "stopped" if hosted and report.status == "completed" else report.status
+    return normalize(status, hosted=hosted, answered=bool(report.answered))
 
 
 async def semantic_grade(
@@ -948,26 +971,6 @@ async def ultrafast_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path
     return Outcome(None, None, final.url, None, final.controls, *_page_of(final)), report
 
 
-async def hosted_arm(
-    task: LiveTask,
-    http: httpx.AsyncClient,
-    *,
-    record: Path | None,
-    stop_at_answer: bool = False,
-) -> tuple[Outcome, ArmReport]:
-    from browser_use_sdk.v3 import BrowserUseError  # an optional extra
-
-    try:
-        return await _hosted_run(task, http, record=record, stop_at_answer=stop_at_answer)
-    # The SDK's message quotes the response body, which can echo the key: report the status or type alone.
-    except BrowserUseError as error:
-        failed = Unavailable if error.status_code in RETRYABLE_STATUS else RuntimeError
-        raise failed(f"Browser Use API returned HTTP {error.status_code}") from None
-    except httpx.HTTPError as error:
-        failed = Unavailable if isinstance(error, TRANSIENT_TRANSPORT) else RuntimeError
-        raise failed(f"Browser Use API request failed ({type(error).__name__})") from None
-
-
 async def _down(task: LiveTask, http: httpx.AsyncClient) -> str | None:
     """Why the task's site is down, or None. A site serving errors (Heroku's Application Error is a 503) fails
     every arm alike and measures none, so a run it failed is an outage to wait out, not the agent's failure."""
@@ -1148,6 +1151,11 @@ def hosted_steps(messages: Sequence[Any], secrets: Mapping[str, str]) -> tuple[l
         steps.append(
             {"index": len(steps), "operation": call["operation"], "outcome": "no result", "target": call["target"]}
         )
+    return _compact_steps(steps, secrets)
+
+
+def _compact_steps(steps: list[JsonValue], secrets: Mapping[str, str]) -> tuple[list[JsonValue], list[str]]:
+    """Steps with every secret's text replaced by its name, and their one-line trace."""
     # Lossless: a large observation repeated verbatim (the same screenshot or page read again) is kept once.
     first: dict[str, int] = {}
     for step in steps:
@@ -1165,20 +1173,6 @@ def hosted_steps(messages: Sequence[Any], secrets: Mapping[str, str]) -> tuple[l
 
 
 HOSTED_SETUP = "the provider connects its agent to the browser and opens the first page inside its own first step"
-
-
-def hosted_browser_seconds(steps: Sequence[JsonValue]) -> float | None:
-    """Inside a hosted run's seconds, the time its browser tools took, by each tool call's own duration. Browser Use
-    reports no split between acting and observing, and leaves some calls untimed, so this is a floor; a run with no
-    timed browser tool has None."""
-    timed = [
-        step["duration_ms"]
-        for step in steps
-        if isinstance(step, dict)
-        and str(step.get("operation")).startswith("browser_")
-        and isinstance(step.get("duration_ms"), int)
-    ]
-    return round(sum(timed) / 1000, 2) if timed else None
 
 
 def hosted_timing(
@@ -1206,76 +1200,6 @@ def hosted_timing(
         "timing_basis": TIMING_BASIS,
         "session_open_seconds": round(opened, 2),
     }
-
-
-async def _hosted_run(
-    task: LiveTask,
-    http: httpx.AsyncClient,
-    *,
-    record: Path | None,
-    stop_at_answer: bool = False,
-) -> tuple[Outcome, ArmReport]:
-    from browser_use_sdk.v3 import AsyncBrowserUse, BrowserUseError  # an optional extra
-
-    client = AsyncBrowserUse(api_key=backend.browser_key())
-    width, height = _screen(task) or (None, None)
-    run = client.run(
-        prompt(task),
-        output_schema=task.output_schema,
-        proxy_country_code="us",
-        sensitive_data=dict(task.secrets) or None,
-        enable_recording=record is not None,
-        # Always explicit: omitted, Browser Use would apply its own default cost limit (see HOSTED_UNCAPPED_USD).
-        max_cost_usd=HOSTED_UNCAPPED_USD,
-        # The session idles instead of stopping when its agent finishes, so its browser is still there for the harness
-        # to read the page it ended on (`hosted_final_page`); the harness stops it after.
-        keep_alive=True,
-        browser_screen_width=width,
-        browser_screen_height=height,
-    )
-    started = time.monotonic()
-    finishing = asyncio.ensure_future(run)
-    # The session id appears once the SDK has created the session, which is when its live URL exists.
-    while run.session_id is None and not finishing.done():
-        await asyncio.wait({finishing}, timeout=0.2)
-    created_after = time.monotonic() - started
-    if run.session_id is not None:
-        _watch("browser-use", task, (await client.sessions.get(run.session_id)).live_url)
-    ready = asyncio.ensure_future(hosted_session_ready(client, run.session_id, finishing))
-    paused_output = None
-    try:
-        if stop_at_answer and run.session_id is not None:
-            while not finishing.done():
-                await asyncio.wait({finishing}, timeout=2)
-                if not finishing.done():
-                    interim = await client.sessions.get(run.session_id)
-                    if interim.output:
-                        paused_output = interim.output
-                        await client.sessions.stop(run.session_id)
-                        break
-        # gather, not await: the SDK raises on output that fails the task's schema, before the session's cost is read.
-        await asyncio.gather(finishing, return_exceptions=True)
-        session_answered()
-    except (asyncio.CancelledError, Exception):
-        ready.cancel()
-        # A cancelled attempt or failed status poll must stop billing before an outage retry starts.
-        finishing.cancel()
-        await asyncio.gather(finishing, return_exceptions=True)
-        if run.session_id is not None:
-            with suppress(BrowserUseError, httpx.HTTPError):
-                await client.sessions.stop(run.session_id)
-        raise
-    seconds = time.monotonic() - started
-    browser_started = await ready
-    try:
-        return await _hosted_finish(
-            client, run, finishing, task, http, record, seconds, created_after, browser_started, paused_output
-        )
-    finally:
-        # A kept-alive session bills until it is stopped, so it is stopped on every path out.
-        if run.session_id is not None:
-            with suppress(BrowserUseError, httpx.HTTPError):
-                await asyncio.shield(client.sessions.stop(run.session_id))
 
 
 def _screen(task: LiveTask) -> tuple[int, int] | None:
@@ -1330,90 +1254,274 @@ async def hosted_browser(client: Any, http: httpx.AsyncClient, session_id: str) 
         return FinalPage(error=f"the hosted browser's DevTools address did not answer ({type(exc).__name__})")
 
 
-async def hosted_final_page(client: Any, http: httpx.AsyncClient, session_id: str) -> FinalPage:
-    """The page the hosted agent's browser ended on, read through that browser's DevTools address."""
-    websocket = await hosted_browser(client, http, session_id)
-    return websocket if isinstance(websocket, FinalPage) else await observe_browser(websocket)
+async def hosted_arm(
+    task: LiveTask, http: httpx.AsyncClient, *, record: Path | None, arm: str = "browser-use"
+) -> tuple[Outcome, ArmReport]:
+    """One run of Browser Use's hosted agent through its V4 API, on the model `HOSTED_MODELS` names for `arm`."""
+    from browser_use_sdk.v4 import AsyncBrowserUse, BrowserUseError  # an optional extra
+
+    client = AsyncBrowserUse(api_key=backend.browser_key())
+    try:
+        return await _hosted_run(client, task, http, record=record, arm=arm)
+    # The SDK's message quotes the response body, which can echo the key: report the status or type alone.
+    except BrowserUseError as error:
+        failed = Unavailable if error.status_code in RETRYABLE_STATUS else RuntimeError
+        raise failed(f"Browser Use API returned HTTP {error.status_code}") from None
+    except httpx.HTTPError as error:
+        failed = Unavailable if isinstance(error, TRANSIENT_TRANSPORT) else RuntimeError
+        raise failed(f"Browser Use API request failed ({type(error).__name__})") from None
+    finally:
+        await client.close()
+
+
+def hosted_request(task: LiveTask, arm: str, *, record: bool) -> dict[str, Any]:
+    """The V4 run every hosted arm asks for, its model aside identical: US proxy (a bu-ultrafast session has none
+    unless asked), the task's schema, its login as secret bindings, an explicit uncapped cost limit, a browser kept
+    open for the harness to read, and the screen every cloud arm starts on."""
+    width, height = _screen(task) or (None, None)
+    return {
+        **({"model": model} if (model := HOSTED_MODELS[arm]) is not None else {}),
+        "output_schema": None if task.output_schema is None else task.output_schema.model_json_schema(),
+        "secret_bindings": hosted_secrets(task),
+        # Always explicit: omitted, Browser Use would apply its own default cost limit (see HOSTED_UNCAPPED_USD).
+        "max_cost_usd": HOSTED_UNCAPPED_USD,
+        "keep_alive": HOSTED_KEEP_ALIVE_SECONDS,
+        "browser_settings": {
+            "proxyCountryCode": "us",
+            "record": record,
+            **({} if width is None else {"screenWidth": width, "screenHeight": height}),
+        },
+    }
+
+
+def hosted_secrets(task: LiveTask) -> list[dict[str, Any]] | None:
+    """The task's login as V4 secret bindings, each typed only on the task's start host, as fastbrowse types its
+    secrets only on the start origin. The agent asks for a value by its name and is never shown it."""
+    if not task.secrets:
+        return None
+    host = urlsplit(task.start).hostname
+    return [
+        {"alias": name, "source": {"type": "inline", "value": value}, "allowedDomains": [host]}
+        for name, value in task.secrets.items()
+    ]
+
+
+async def _hosted_run(
+    client: Any, task: LiveTask, http: httpx.AsyncClient, *, record: Path | None, arm: str
+) -> tuple[Outcome, ArmReport]:
+    from browser_use_sdk.v4 import BrowserUseError  # an optional extra
+
+    started = time.monotonic()
+    try:
+        created = await client.runs.create(prompt(task), **hosted_request(task, arm, record=record is not None))
+    except BrowserUseError as error:
+        if refusal(error.status_code):
+            raise NotStarted(f"Browser Use hosted agent returned HTTP {error.status_code}") from None
+        raise
+    created_after = time.monotonic() - started
+    events: list[Any] = []
+    stopped: list[bool] = []
+    try:
+        await _hosted_follow(client, created.id, events, arm, task)
+        session_answered()
+        wall = time.monotonic() - started
+        run = await client.runs.get(created.id)
+        return await _hosted_finish(client, http, task, record, run, events, created_after, wall, stopped)
+    except (asyncio.CancelledError, Exception):
+        # A cancelled attempt or failed poll must stop billing before an outage retry starts.
+        with suppress(BrowserUseError, httpx.HTTPError):
+            await asyncio.shield(client.runs.cancel(created.id))
+        raise
+    finally:
+        # The kept-alive browser bills until it is stopped, so it is stopped on every path out.
+        if not stopped and (browser_id := _hosted_browser_id(events)) is not None:
+            with suppress(BrowserUseError, httpx.HTTPError):
+                await asyncio.shield(client.browsers.stop(browser_id))
+
+
+async def _hosted_follow(client: Any, run_id: Any, events: list[Any], arm: str, task: LiveTask) -> None:
+    """Read a hosted run's events into `events` until it ends, as Browser Use documents: the status first, then every
+    page of events, so the last read follows the end. The attempt's session is ready once the run's browser is.
+
+    A run just created can be invisible to the status endpoint for a moment, so a 404 before the first status read is
+    retried for `HOSTED_VISIBILITY_SECONDS`, as the SDK's own `wait_for_completion` does; after it, a 404 is final."""
+    from browser_use_sdk.v4 import BrowserUseError  # an optional extra
+
+    after = None
+    visible_by = time.monotonic() + HOSTED_VISIBILITY_SECONDS
+    seen = False
+    while True:
+        try:
+            status = (await client.runs.status(run_id)).status.value
+        except BrowserUseError as error:
+            if error.status_code != 404 or seen or time.monotonic() >= visible_by:
+                raise
+            await asyncio.sleep(HOSTED_VISIBILITY_RETRY_SECONDS)
+            continue
+        seen = True
+        while True:
+            page = await client.runs.events(run_id, after=after)
+            for event in page.events:
+                events.append(event)
+                if event.type in BROWSER_READY:
+                    session_ready()
+                    _watch(arm, task, event.data.get("live_view_url"))
+            after = page.next_after if page.next_after is not None else after
+            if not page.has_more:
+                break
+        if status in HOSTED_TERMINAL:
+            return
+        await asyncio.sleep(HOSTED_POLL_SECONDS)
+
+
+def _hosted_browser_id(events: Sequence[Any]) -> str | None:
+    return next((str(e.data["browser_session_id"]) for e in events if e.type in BROWSER_READY), None)
+
+
+def _hosted_event_at(events: Sequence[Any], kinds: set[str]) -> datetime | None:
+    return next((e.ts for e in events if e.type in kinds), None)
+
+
+async def hosted_final_page(client: Any, http: httpx.AsyncClient, browser_id: str | None) -> FinalPage:
+    """The page the hosted agent's browser ended on, read through that browser's DevTools address while its
+    `keepAlive` holds it open."""
+    if browser_id is None:
+        return FinalPage(error="the hosted run opened no browser")
+    try:
+        browser = await client.browsers.get(browser_id)
+        if not browser.cdp_url:
+            return FinalPage(error="the hosted run's browser has no DevTools address")
+        websocket = await devtools_websocket(http, browser.cdp_url)
+    except Exception as exc:
+        return FinalPage(error=f"the hosted run's browser did not answer ({type(exc).__name__})")
+    return await observe_browser(websocket)
+
+
+def hosted_v4_steps(events: Sequence[Any], secrets: Mapping[str, str]) -> tuple[list[JsonValue], list[str]]:
+    """The hosted agent's steps from its V4 events, in the evidence shape `hosted_steps` gives: each tool call with its
+    input, what came back and how long it took between the events that opened and settled it, and each reply.
+    Every secret's text is left out; `secrets` maps each secret's name to its value."""
+    steps: list[JsonValue] = []
+    calls: dict[str, tuple[dict[str, JsonValue], datetime | None]] = {}
+    for event in events:
+        part = event.data.get("part") if event.type == "core.event" else None
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") == "text" and part.get("text"):
+            steps.append({"index": len(steps), "operation": "reply", "outcome": "said", "note": part["text"]})
+        if part.get("type") != "tool":
+            continue
+        state = part.get("state") or {}
+        settled = state.get("status") in {"completed", "error"}
+        if (call := calls.get(str(part.get("callID")))) is None:
+            step: dict[str, JsonValue] = {
+                "index": len(steps),
+                "operation": part.get("tool"),
+                "outcome": "no result",
+                "target": json_value(state.get("input")),
+            }
+            # A call first seen already settled has no opening event, so its time is unknown, not zero.
+            calls[str(part.get("callID"))] = call = step, None if settled else event.ts
+            steps.append(step)
+        step, opened = call
+        if settled:
+            step["outcome"] = "executed" if state["status"] == "completed" else "error"
+            step["observation"] = json_value(state.get("output", state.get("error")))
+            if opened is not None:
+                step["duration_ms"] = round((event.ts - opened).total_seconds() * 1000)
+    return _compact_steps(steps, secrets)
 
 
 async def _hosted_finish(
     client: Any,
-    run: Any,
-    finishing: "asyncio.Future[Any]",
-    task: LiveTask,
     http: httpx.AsyncClient,
+    task: LiveTask,
     record: Path | None,
-    seconds: float,
+    run: Any,
+    events: Sequence[Any],
     created_after: float,
-    browser_started: datetime | None,
-    paused_output: object,
+    wall: float,
+    stopped: list[bool],
 ) -> tuple[Outcome, ArmReport]:
-    from browser_use_sdk.v3 import BrowserUseError  # an optional extra
+    from browser_use_sdk.v4 import BrowserUseError  # an optional extra
 
-    if (error := finishing.exception()) is None:
-        result = finishing.result()
-        session, output = result.session, result.output
-    elif run.session_id is not None and not isinstance(error, BrowserUseError | httpx.HTTPError):
-        # The SDK raises on output that fails the task's schema; the session still holds that output and its cost.
-        # An API or transport failure is raised instead: the session it interrupted says nothing of the agent.
-        session = await client.sessions.get(run.session_id)
-        output = session.output
-    elif run.session_id is None and isinstance(error, BrowserUseError) and refusal(error.status_code):
-        raise NotStarted(f"Browser Use hosted agent returned HTTP {error.status_code}") from None
+    if any(e.type == "run.dispatch_failed" for e in events):
+        # Browser Use's own infrastructure never started the run's agent: an outage, retried like a 503.
+        raise Unavailable("Browser Use could not dispatch the run")
+    browser_id = _hosted_browser_id(events)
+    final = await hosted_final_page(client, http, browser_id)
+    if isinstance(run.output, dict | list):
+        answer, data = json.dumps(run.output), (run.output if isinstance(run.output, dict) else None)
     else:
-        raise error
-    if paused_output is not None:
-        output = paused_output
-    if session.status.value == "error" and HOSTED_OUTAGE in str(output or ""):
-        # Browser Use's own infrastructure ending the session, not its agent giving up or answering wrong: it
-        # appeared in none of 0.5.7's sessions and in 13 of one day's 114. Any other error is scored as its failure.
-        raise Unavailable(f"Browser Use ended the session: {HOSTED_OUTAGE}")
-    final = await hosted_final_page(client, http, str(session.id))
-    messages = await hosted_messages(client, str(session.id))
-    answered = answered_at(messages, output)
+        answer, data = run.result or None, None
+    status = run.status.value
+    answered = _hosted_event_at(events, {"run.completed"}) if status == "completed" and answer else None
     # The key is scrubbed too, should a page or a script ever echo it.
-    step_log, trace = hosted_steps(messages, {**task.secrets, "browser_use_api_key": backend.browser_key()})
-    if isinstance(output, BaseModel):
-        answer, data = output.model_dump_json(), output.model_dump()
-    elif isinstance(output, dict):
-        answer, data = json.dumps(output), output
-    else:
-        answer, data = (str(output) if output else None), None
+    step_log, trace = hosted_v4_steps(events, {**task.secrets, "browser_use_api_key": backend.browser_key()})
     outcome = Outcome(answer, data, final.url, None, final.controls, *_page_of(final))
-    # The stop settles the session's browser time, which a kept-alive session accrues until then, so the charge of a
-    # session that could not be stopped is unknown.
-    stopped, settled = None, session.status.value != "idle"
+    # Stopping the browser settles its time, which a kept-alive browser accrues until then; the session's cost is
+    # read after, so a browser that could not be stopped leaves the charge unknown.
     closing = time.monotonic()
-    with suppress(BrowserUseError, httpx.HTTPError):
-        stopped = await client.sessions.stop(session.id)
-        settled = True
+    if browser_id is not None:
+        with suppress(BrowserUseError, httpx.HTTPError):
+            await client.browsers.stop(browser_id)
+            stopped.append(True)
     closed = round(time.monotonic() - closing, 2)
-    cost = (stopped or session).total_cost_usd if settled else None
+    cost = None
+    if stopped or browser_id is None:
+        with suppress(BrowserUseError, httpx.HTTPError):
+            cost = await client.sessions.cost(run.session_id)
+    components = (
+        {}
+        if cost is None
+        else {
+            "llm": float(cost.llm_cost_usd),
+            "search": float(cost.search_cost_usd),
+            "browser": float(cost.browser_cost_usd),
+            "proxy": float(cost.proxy_cost_usd),
+        }
+    )
     report = ArmReport(
-        status=session.status.value,
-        task_successful=getattr(session, "is_task_successful", None),
+        status=status,
         answered=answered is not None,
-        **hosted_timing(created_after, session, browser_started, answered, seconds),
+        **hosted_timing(created_after, run, _hosted_event_at(events, BROWSER_READY), answered, wall),
         session_close_seconds=closed,
-        session_seconds=round(seconds, 2),
-        dollars=None if cost is None else float(cost),
+        session_seconds=round(wall, 2),
+        dollars=None if cost is None else float(cost.total_cost_usd),
         unknown_cost=cost is None,
-        model=str(session.model.value if hasattr(session.model, "value") else session.model),
-        steps=session.step_count,
-        session_id=str(session.id),
-        browser_seconds=hosted_browser_seconds(step_log),
+        cost_by_component=components,
+        error=run.error,
+        model=run.model,
+        provenance={"model_params": json_value(run.model_params), "browser_session_id": browser_id},
+        steps=sum(1 for e in events if e.type == "core.event" and e.data.get("type") == "step_start"),
+        llm_calls=sum(1 for e in events if e.type == "llm.response"),
+        llm_calls_basis="physical_requests",
+        input_tokens=run.total_input_tokens,
+        output_tokens=run.total_output_tokens,
+        session_id=str(run.session_id),
         timing_note=HOSTED_SETUP,
         step_log=step_log,
         trace=trace,
         observe_error=final.error,
     )
-    if record is not None:
-        urls = await client.sessions.wait_for_recording(session.id, timeout=60)
-        if urls:
-            response = await http.get(urls[0], follow_redirects=True)
+    if record is not None and browser_id is not None and stopped:
+        await _hosted_recording(client, http, browser_id, record)
+    return outcome, report
+
+
+async def _hosted_recording(client: Any, http: httpx.AsyncClient, browser_id: str, record: Path) -> None:
+    """Save a stopped browser's video once Browser Use has processed it, for up to a minute."""
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        browser = await client.browsers.get(browser_id)
+        if browser.recording_url:
+            response = await http.get(browser.recording_url, follow_redirects=True)
             if response.is_success:
                 await asyncio.to_thread(record.write_bytes, response.content)
-    return outcome, report
+            return
+        if browser.recording_available is False:
+            return
+        await asyncio.sleep(2)
 
 
 def _video(record: Path | None) -> str | None:
@@ -2342,7 +2450,13 @@ async def _run_ultra(task: LiveTask, http: httpx.AsyncClient, _: Path, **kwargs:
 
 
 async def _run_hosted(task: LiveTask, http: httpx.AsyncClient, _: Path, **kwargs: Any) -> tuple[Outcome, ArmReport]:
-    return await hosted_arm(task, http, record=kwargs["record"])
+    return await hosted_arm(task, http, record=kwargs["record"], arm="browser-use")
+
+
+async def _run_hosted_ultrafast(
+    task: LiveTask, http: httpx.AsyncClient, _: Path, **kwargs: Any
+) -> tuple[Outcome, ArmReport]:
+    return await hosted_arm(task, http, record=kwargs["record"], arm="browser-use-ultrafast")
 
 
 async def _run_oss(task: LiveTask, http: httpx.AsyncClient, _: Path, **kwargs: Any) -> tuple[Outcome, ArmReport]:
@@ -2386,7 +2500,13 @@ ARMS: dict[str, ArmSpec] = {
     ),
     "browser-use": ArmSpec(
         runner=_run_hosted,
-        pin="browser-use-sdk==3.12.1; hosted model reported per row",
+        pin="browser-use-sdk==3.12.1 API v4; default model, reported per row",
+        env_allowlist=(),
+        tier="hosted",
+    ),
+    "browser-use-ultrafast": ArmSpec(
+        runner=_run_hosted_ultrafast,
+        pin="browser-use-sdk==3.12.1 API v4; model bu-ultrafast, reported per row",
         env_allowlist=(),
         tier="hosted",
     ),
@@ -2407,7 +2527,7 @@ ARMS: dict[str, ArmSpec] = {
 }
 
 
-HEAD_TO_HEAD_ARMS = ("fastbrowse", "browser-use", "jev-ultrafast", "browser-harness")
+HEAD_TO_HEAD_ARMS = ("fastbrowse", "browser-use", "browser-use-ultrafast", "jev-ultrafast", "browser-harness")
 """The arms compared head to head, each of which runs every task it can grade on equal terms (`eligible`); the catalog
 records why it skips any other (`excluded_because`)."""
 
@@ -2417,11 +2537,11 @@ def excluded_because(arm: str, task: LiveTask) -> str | None:
     unexplained one fails the catalog export instead of shipping."""
     if eligible(arm, task):
         return None
-    if arm == "browser-use" and task.expect is not Status.COMPLETE:
+    if arm in HOSTED_MODELS and task.expect is not Status.COMPLETE:
         return (
             "passes only by stopping before an irreversible step the task asks for but does not authorize, and the "
-            "hosted Browser Use API takes no authorization setting and no pause, so it cannot be told the step is "
-            "unauthorized"
+            "hosted Browser Use API (V4) takes no authorization setting and no pause, so it cannot be told the step "
+            "is unauthorized"
         )
     if arm == "jev-ultrafast" and task.expect is not Status.COMPLETE:
         return (
@@ -2452,6 +2572,9 @@ def eligible(arm: str, task: LiveTask) -> bool:
             and task.bitwarden_item is None
             and (task.category is not Category.NAVIGATE)
         )
+    if arm == "browser-use-ultrafast":
+        # The same hosted agent on another model: every task the hosted arm runs.
+        return eligible("browser-use", task)
     if arm in {"cua-codex", "browser-harness", "jev-ultrafast"}:
         # Agents that take no credentials and no authorization setting: completion tasks without credentials.
         return task.expect == Status.COMPLETE and not task.secrets and task.bitwarden_item is None
@@ -2517,7 +2640,7 @@ def browser_identity(arm: str, local_browser: Path | None) -> dict[str, Any]:
         return {"mode": "fastbrowse-pool", "host": pool_host()}
     if arm in {"jev-ultrafast", "browser-use-oss", "browser-harness"}:
         return {"mode": "browser-use-cloud", "timeout_minutes": CLOUD_BROWSER_MINUTES}
-    if arm == "browser-use":
+    if arm in HOSTED_MODELS:
         return {"mode": "browser-use-hosted"}
     if arm == "fastbrowse-hosted":
         return {"mode": "fastbrowse-hosted", "host": hosted_api.host()}
@@ -2719,7 +2842,7 @@ async def main(argv: list[str]) -> int:
         reserve_dollars=args.reserve_dollars,
         browser_reserve_dollars=args.browser_reserve_dollars,
         judge_reserve_dollars=args.judge_reserve_dollars,
-        hosted_max_cost_usd=HOSTED_UNCAPPED_USD if "browser-use" in args.arms else None,
+        hosted_max_cost_usd=HOSTED_UNCAPPED_USD if HOSTED_MODELS.keys() & set(args.arms) else None,
         cloud_browser_timeout_minutes=CLOUD_BROWSER_MINUTES,
         provider_limits=list(PROVIDER_LIMITS),
         judge_policy=args.judge_policy,
