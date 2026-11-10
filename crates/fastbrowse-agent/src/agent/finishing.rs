@@ -417,33 +417,38 @@ impl Agent {
     }
 }
 
-/// What the answer of a run that stopped with a step of its task undone says first: what it read can show what was
-/// asked for, and without this a run that never pressed the keys its task named answered that the saved description
-/// matched, as if the task were done (#937).
 /// Said before the fields a run that ended without finishing changed, each with what it left there.
 pub(super) const CHANGED: &str =
     "This run ended without finishing after changing fields on the page, which may still hold what it entered:";
 
+/// What a clicked option, box or switch is said to have left when the page changed without any field reporting a
+/// new value, checked or selected state, as a select that shows its choice only in its label does.
+pub(super) const UNREPORTED: &str = "clicked, but no field on the page reports what it now holds";
+
 /// What a run's executed steps left in each field they changed, the latest change to each, as [`CHANGED`] says it:
-/// text typed or an option chosen, quoted as recorded (a secret by its marker), and a box left checked or unchecked.
-/// None when no step changed a field.
+/// text typed or an option chosen, quoted as recorded (a secret by its marker), and what a click left in each field
+/// it changed, as the page read it after the click. None when no step changed a field.
 pub(super) fn changed_fields(history: &[crate::policy::HistoryEntry]) -> Option<String> {
     let mut changed: IndexMap<&str, String> = IndexMap::new();
+    let mut put = |field, left| {
+        changed.shift_remove(field);
+        changed.insert(field, left);
+    };
     for entry in history.iter().filter(|entry| entry.outcome == StepOutcome::Executed) {
-        let left = match (entry.operation, &entry.text, entry.checked) {
-            (Some(Operation::Fill | Operation::Select), Some(text), _) => text::repr(text),
-            (Some(Operation::Click), _, Some(checked)) => (if checked { "checked" } else { "unchecked" }).to_string(),
-            _ => continue,
-        };
-        let Some(target) = entry.target.as_deref() else { continue };
-        changed.shift_remove(target);
-        changed.insert(target, left);
+        match (entry.operation, &entry.text, entry.target.as_deref()) {
+            (Some(Operation::Fill | Operation::Select), Some(text), Some(target)) => put(target, text::repr(text)),
+            _ => entry.set.iter().for_each(|(field, left)| put(field, left.clone())),
+        }
     }
     (!changed.is_empty()).then(|| {
-        let lines: Vec<String> = changed.iter().map(|(target, left)| format!("- {target}: {left}")).collect();
+        let lines: Vec<String> = changed.iter().map(|(field, left)| format!("- {field}: {left}")).collect();
         format!("{CHANGED}\n{}", lines.join("\n"))
     })
 }
+
+/// What the answer of a run that stopped with a step of its task undone says first: what it read can show what was
+/// asked for, and without this a run that never pressed the keys its task named answered that the saved description
+/// matched, as if the task were done (#937).
 pub(super) const UNDONE: &str = "A step the task asks to be carried out was not done, so this answer reports what was read, not that the task was done.";
 
 /// The error of a run whose finish check found a step the site does not allow; the answer names the step.

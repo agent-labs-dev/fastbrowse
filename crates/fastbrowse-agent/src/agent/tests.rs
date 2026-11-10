@@ -6533,16 +6533,13 @@ async fn test_a_value_longer_than_one_part_of_the_task_is_copied_whole() {
 /// Three description pushes ended stuck after typing "Save: disabled" and "disabled" into the description, and nothing
 /// in their answers said the field had been changed; the store pages showed the word until restored by hand (#939). A
 /// run that ends without finishing names each field it changed and what it left there, from its own executed steps.
-#[tokio::test]
-async fn test_a_run_that_ends_unfinished_names_the_fields_it_changed() {
-    use crate::policy::HistoryEntry;
-    let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(None)), Arc::new(ScriptedLLM));
+#[test]
+fn test_a_run_that_ends_unfinished_names_the_fields_it_changed() {
     let filled = |target: &str, text: &str, outcome: StepOutcome| HistoryEntry {
         text: Some(text.into()),
         ..HistoryEntry::new(Some(Operation::Fill), Some(target), outcome, true)
     };
-    let mut state = run_state();
-    state.history = vec![
+    let history = vec![
         filled("Description (Edit 'Commissions Forever')", "first draft", StepOutcome::Executed),
         HistoryEntry::new(Some(Operation::Click), Some("Markdown"), StepOutcome::Executed, true),
         filled("Summary", "never typed", StepOutcome::Covered),
@@ -6552,18 +6549,149 @@ async fn test_a_run_that_ends_unfinished_names_the_fields_it_changed() {
         },
         filled("Description (Edit 'Commissions Forever')", "Save: disabled", StepOutcome::Executed),
         HistoryEntry {
-            checked: Some(true),
+            set: vec![("Notify followers".into(), "checked".into())],
             ..HistoryEntry::new(Some(Operation::Click), Some("Notify followers"), StepOutcome::Executed, true)
         },
     ];
-    let ledger = state.ledger.clone();
-    let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "no progress"));
-    let stopped = agent.stopped(stop, Some(&mut state), &ledger).await;
-    let answer = stopped.answer.expect("the changed fields are reported");
+    let answer = super::finishing::changed_fields(&history).expect("the changed fields are reported");
     assert!(answer.starts_with(super::finishing::CHANGED), "{answer}");
     assert!(answer.contains("Description (Edit 'Commissions Forever'): 'Save: disabled'"), "{answer}");
     assert!(answer.contains("Game version: 'Retail'"), "{answer}");
     assert!(answer.contains("Notify followers: checked"), "{answer}");
     assert!(!answer.contains("first draft") && !answer.contains("never typed"), "{answer}");
     assert!(!answer.contains("Markdown"), "{answer}");
+}
+
+/// A custom select: clicking an option sets the field's value and closes the menu, so the option is gone after.
+struct Picker {
+    now: Mutex<Observation>,
+    /// The field shows its choice only in its label, reporting no value.
+    in_label: bool,
+}
+
+impl Picker {
+    fn new() -> Picker {
+        Picker { in_label: false, ..Picker::shown() }
+    }
+
+    fn in_label() -> Picker {
+        let picker = Picker { in_label: true, ..Picker::shown() };
+        picker.now.lock().unwrap().controls[0].value = None;
+        picker
+    }
+
+    fn shown() -> Picker {
+        let mut field = Control::new("type", "combobox", "Ticket type", [Operation::Click]);
+        field.value = Some("Round trip".into());
+        field.expanded = Some(true);
+        let options = ["One way", "Round trip"].map(|label| Control::new(label, "option", label, [Operation::Click]));
+        let mut notify = Control::new("notify", "checkbox", "Notify followers", [Operation::Click]);
+        notify.checked = Some(false);
+        let controls = [[field, notify].as_slice(), &options].concat();
+        Picker { now: Mutex::new(at("https://shop.test/ticket", &controls)), in_label: false }
+    }
+}
+
+impl Page for Picker {
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        let now = self.now.lock().unwrap().clone();
+        Box::pin(async move { Ok(now) })
+    }
+
+    fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        Box::pin(async { Ok(capture(&[(BlockKind::Paragraph, "Choose a ticket")])) })
+    }
+
+    fn act<'a>(&'a self, action: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        let mut now = self.now.lock().unwrap();
+        if action.target_id.as_deref() == Some("notify") {
+            let notify = now.controls.iter_mut().find(|c| c.id == "notify").unwrap();
+            notify.checked = notify.checked.map(|checked| !checked);
+        } else if let Some(chosen) = action.target_id.as_deref().filter(|id| *id != "type") {
+            now.controls.retain(|c| c.role != "option");
+            let field = now.controls.iter_mut().find(|c| c.id == "type").unwrap();
+            if self.in_label {
+                field.label = format!("Ticket type: {chosen}");
+            } else {
+                field.value = Some(chosen.to_string());
+            }
+            field.expanded = Some(false);
+        }
+        Box::pin(async {
+            Ok(ActResult { outcome: StepOutcome::Executed, page_changed: true, detail: None, moved: false })
+        })
+    }
+
+    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(true) })
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        Box::pin(async { Err(BrowserError::ScreenshotsUnavailable("a scripted page draws nothing".into())) })
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        let url = self.now.lock().unwrap().url.clone();
+        Box::pin(async move { Ok(url) })
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        Box::pin(async { Ok(Some(200)) })
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        0
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async { true })
+    }
+}
+
+/// A custom select is set by clicking an option, which has no checked state and is gone once the menu closes: the
+/// change is the field's value, as the page reads it after the click (#939).
+#[tokio::test]
+async fn test_an_option_click_names_the_value_it_left_in_its_field() {
+    let jev = ScriptedJev::new(crate::scripted::steps("click One way").unwrap());
+    let agent = Agent::new(Arc::new(Picker::new()), Arc::new(jev), Arc::new(ScriptedLLM));
+    let options = super::RunOptions {
+        start: Some("https://shop.test/ticket".into()),
+        limits: Some(Limits { max_steps: Some(1), ..Limits::default() }),
+        ..Default::default()
+    };
+    let result = agent.run("Choose One way as the ticket type and tell me the price", options).await.unwrap();
+    assert_eq!(result.status, Status::BudgetExceeded, "{:?}", result.error);
+    let answer = result.answer.expect("an answer");
+    assert!(answer.contains("- Ticket type: 'One way'"), "{answer}");
+    assert!(!answer.contains("- One way"), "{answer}");
+}
+
+/// A select that shows its choice only in its label holds it in no field the page reports, so the run says what it
+/// clicked and that it cannot say what the field holds, rather than guessing which field took the choice.
+#[tokio::test]
+async fn test_an_option_click_no_field_reports_is_named_as_clicked() {
+    let jev = ScriptedJev::new(crate::scripted::steps("click One way").unwrap());
+    let agent = Agent::new(Arc::new(Picker::in_label()), Arc::new(jev), Arc::new(ScriptedLLM));
+    let options = super::RunOptions {
+        start: Some("https://shop.test/ticket".into()),
+        limits: Some(Limits { max_steps: Some(1), ..Limits::default() }),
+        ..Default::default()
+    };
+    let result = agent.run("Choose One way as the ticket type and tell me the price", options).await.unwrap();
+    let answer = result.answer.expect("an answer");
+    assert!(answer.contains(&format!("- One way: {}", super::finishing::UNREPORTED)), "{answer}");
 }

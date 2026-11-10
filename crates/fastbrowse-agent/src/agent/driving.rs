@@ -4,7 +4,7 @@ use std::future::Future;
 use std::time::{Duration, Instant};
 
 use fastbrowse_core::decision::{EVEN_ODDS, jev_takes_png};
-use fastbrowse_core::effects::{Effect, SETTING_ROLES, effect, state_key};
+use fastbrowse_core::effects::{Effect, SETTING_ROLES, Setting, effect, state_key};
 use fastbrowse_core::models::{
     Decider, Event, Image, Operation, Status, StepChoice, StepEvent, StepOutcome, StepResult, WallKind,
 };
@@ -15,6 +15,7 @@ use fastbrowse_core::py::text;
 use fastbrowse_core::safety::{may_be_irreversible, origin_of};
 use serde_json::{Map, Value, json};
 
+use super::finishing::UNREPORTED;
 use super::helpers::{decision_label, describe, doing, drew_something, netloc_of, path_of, scheme_of};
 use super::recovery::{Idle, leave_out_idle, uncover, withheld};
 use super::state::{FailureCause, Flow, RunState, SiteFailure, Step, Stop, Unsure, Written, read_key};
@@ -529,7 +530,7 @@ impl Agent {
         let mut typed: Option<String> = None;
         let mut effect_now: Option<String> = None;
         let mut setting = false;
-        let mut checked: Option<bool> = None;
+        let mut set: Vec<(String, String)> = Vec::new();
         let frames = self.on_event.is_some() && self.config.step_frames;
         let act: ActResult;
         let changed: bool;
@@ -709,7 +710,28 @@ impl Agent {
                 state.note_shown(observation, &landed, &done.shown, showing);
                 state.settle_change(&landed);
                 setting = done.set_something;
-                checked = landed.controls.iter().find(|c| c.id == target.id).and_then(|c| c.checked);
+                set = done
+                    .set
+                    .iter()
+                    .filter_map(|(id, held)| Some((describe(landed.controls.iter().find(|c| c.id == *id)?), held)))
+                    .map(|(field, held)| {
+                        let left = match held {
+                            Setting::Value(Some(value)) => text::repr(value),
+                            Setting::Value(None) => "empty".to_string(),
+                            Setting::Checked(checked) => (if *checked { "checked" } else { "unchecked" }).to_string(),
+                            Setting::Selected(selected) => {
+                                (if *selected { "selected" } else { "not selected" }).to_string()
+                            }
+                        };
+                        (field, left)
+                    })
+                    .collect();
+                // A page that shows a choice only in a label or in text holds it in no field it reports, so the run
+                // cannot say which field it set: it says what it clicked.
+                let stayed = observation.url == landed.url && observation.document_key == landed.document_key;
+                if set.is_empty() && done.set_something && stayed {
+                    set.push((describe(target), UNREPORTED.to_string()));
+                }
                 effect_now = Some(done.summary);
             }
             progressed = judged;
@@ -724,7 +746,7 @@ impl Agent {
             text: typed,
             effect: effect_now,
             setting: setting.then_some(true),
-            checked,
+            set,
             read_progress: decision.operation == Operation::Read && progressed == Some(true),
             ..HistoryEntry::new(Some(decision.operation), label.as_deref(), act.outcome, changed)
         });
@@ -971,6 +993,7 @@ impl Agent {
             Effect {
                 summary: format!("showed the tab at {}", observation.url),
                 set_something: false,
+                set: Vec::new(),
                 added: false,
                 changed: false,
                 shown: Vec::new(),
