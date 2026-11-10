@@ -295,6 +295,9 @@ pub(crate) struct PageState {
     pub(crate) unanswered: HashMap<String, Instant>,
     /// Tab session -> the unique id of the isolated world its HTTP status is read in.
     pub(crate) status_worlds: HashMap<String, String>,
+    /// Frame session, when it was read, and the viewport size that pre-action measurement already returned. The wheel
+    /// and the pointer marks both need it, and asking again was a command of its own on every action.
+    pub(crate) viewport: Option<(String, Instant, (f64, f64))>,
 }
 
 pub struct CdpPage {

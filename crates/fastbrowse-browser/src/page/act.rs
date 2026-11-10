@@ -26,6 +26,10 @@ const DRAG_STEPS: u32 = 12;
 const DRAG_STEP_SECONDS: f64 = 0.01;
 /// Bound on the measuring call that also waits for a drawn frame, out of the page's reach.
 const MEASURE_DRAWN_SECONDS: f64 = 2.0;
+
+/// How long a viewport a measurement returned is still taken as true of that frame. A resize between actions is the
+/// one thing a kept value gets wrong, so it is kept only this long; past it the size is read again.
+const VIEWPORT_FRESH_SECONDS: f64 = 2.0;
 /// A deadline, not a wait: focus normally lands in one or two ticks. A loaded CI runner took over 0.3s.
 const FOCUS_SETTLE_SECONDS: f64 = 1.0;
 /// Long enough for a suggestion request to come back over a slow connection, and paid only by a field that
@@ -124,9 +128,11 @@ type TargetState = (String, Option<String>, Point, bool, bool, String);
 
 fn parse_target_state(value: &Value) -> Result<TargetState, BrowserError> {
     let shape = "tuple[str, str | None, _Point, bool, bool, str]";
-    let Some([fingerprint, guard, point, announced, opens, address]) = value.as_array().map(Vec::as_slice) else {
+    // The viewport rides along as a seventh element, kept by `CdpPage::measure` and not part of the state.
+    let Some(items) = value.as_array().filter(|items| items.len() >= 6) else {
         return Err(bad(shape));
     };
+    let [fingerprint, guard, point, announced, opens, address] = &items[..6] else { return Err(bad(shape)) };
     let fingerprint = fingerprint.as_str().ok_or_else(|| bad(shape))?.to_owned();
     let guard = match guard {
         Value::Null => None,
@@ -244,11 +250,7 @@ impl CdpPage {
             && let (Some(marks), Point::At(x, y)) = (&self.pointer_marks, point)
             && target.as_ref().is_some_and(|target| target.0 == active)
             && matches!(action.operation, Operation::Click | Operation::Fill | Operation::Hover | Operation::Drag)
-            && let Ok(viewport) = self.evaluate(&active, "[window.innerWidth, window.innerHeight]").await
-            && let (Some(width), Some(height)) = (
-                viewport.get(0).and_then(serde_json::Value::as_f64),
-                viewport.get(1).and_then(serde_json::Value::as_f64),
-            )
+            && let Ok((width, height)) = self.viewport(&active).await
             && width.is_finite()
             && height.is_finite()
             && width > 0.0
@@ -1077,9 +1079,10 @@ impl CdpPage {
     async fn scroll(&self, operation: Operation) -> Result<(), BrowserError> {
         let session_id = self.session.active_session_id()?;
         let delta = if operation == Operation::ScrollUp { -560 } else { 560 };
-        // The wheel lands where the page is under the pointer: a point outside the window scrolls nothing.
-        let centre = self.evaluate(&session_id, "[innerWidth / 2, innerHeight / 2]").await?;
-        let params = json!({"type": "mouseWheel", "x": centre[0], "y": centre[1], "deltaX": 0, "deltaY": delta});
+        // The wheel lands where the page is under the pointer: a point outside the window scrolls nothing. The
+        // pre-action measurement this action already made returned the viewport, so the centre costs no command.
+        let (width, height) = self.viewport(&session_id).await?;
+        let params = json!({"type": "mouseWheel", "x": width / 2.0, "y": height / 2.0, "deltaX": 0, "deltaY": delta});
         self.input(self.session.send("Input.dispatchMouseEvent", params, Some(&session_id))).await
     }
 
@@ -1508,9 +1511,10 @@ impl CdpPage {
              : e.ownerDocument.querySelector('base[target]')?.getAttribute('target'))) || \
              (!!e.form && ['submit', 'image'].includes(e.type) && \
              fresh(e.getAttribute('formtarget') ?? e.form.getAttribute('target')))); \
-             return [fingerprint, guard, point, announced, opens, location.href]; }})()"
+             const viewport = [innerWidth, innerHeight]; \
+             return [fingerprint, guard, point, announced, opens, location.href, viewport]; }})()"
         ));
-        let state = async { parse_target_state(&self.evaluate(session_id, &script).await?) };
+        let state = async { self.measure(session_id, &script).await };
         if same_session || after_move {
             return state.await;
         }
@@ -1519,13 +1523,55 @@ impl CdpPage {
         Ok((fingerprint, live_guard, point, announced, opens, address))
     }
 
-    /// The active page's fingerprint and `location.href`, in one evaluation.
+    /// The active page's fingerprint and `location.href`, in one evaluation, with the viewport beside them.
     async fn fingerprint_and_address(&self) -> Result<(String, String), BrowserError> {
-        let script = format!("[{}, location.href]", self.fingerprint_js);
-        let value = self.evaluate(&self.session.active_session_id()?, &script).await?;
+        let script = format!("[{}, location.href, [innerWidth, innerHeight]]", self.fingerprint_js);
+        let session_id = self.session.active_session_id()?;
+        let value = self.evaluate(&session_id, &script).await?;
         let shape = "tuple[str, str]";
-        let Some([fingerprint, address]) = value.as_array().map(Vec::as_slice) else { return Err(bad(shape)) };
+        let Some(items) = value.as_array().filter(|items| items.len() >= 2) else { return Err(bad(shape)) };
+        self.keep_viewport(&session_id, items.get(2));
+        let (fingerprint, address) = (&items[0], &items[1]);
         Ok((value_str(fingerprint), address.as_str().ok_or_else(|| bad(shape))?.to_owned()))
+    }
+
+    /// Run a pre-action measurement, keeping the viewport it read beside its answer.
+    async fn measure(&self, session_id: &str, script: &str) -> Result<TargetState, BrowserError> {
+        let raw = self.evaluate(session_id, script).await?;
+        self.keep_viewport(session_id, raw.as_array().and_then(|items| items.get(6)));
+        parse_target_state(&raw)
+    }
+
+    /// Keep the viewport a measurement already returned, so the wheel and the pointer marks need not ask again.
+    ///
+    /// A value the page did not send, or one that is not two positive numbers, keeps nothing: the readers then ask.
+    fn keep_viewport(&self, session_id: &str, raw: Option<&Value>) {
+        let Some([width, height]) = raw.and_then(Value::as_array).map(Vec::as_slice) else { return };
+        let (Some(width), Some(height)) = (width.as_f64(), height.as_f64()) else { return };
+        if !(width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0) {
+            return;
+        }
+        let mut state = self.state.lock().unwrap();
+        state.viewport = Some((session_id.to_owned(), Instant::now(), (width, height)));
+    }
+
+    /// The viewport of `session_id`, from the measurement just made when it is still true of this frame.
+    ///
+    /// Only a frame's own measurement answers for it, and only while it is fresh: a resize between actions is the one
+    /// thing a kept value would get wrong, and the wheel lands by it.
+    async fn viewport(&self, session_id: &str) -> Result<(f64, f64), BrowserError> {
+        let kept = self.state.lock().unwrap().viewport.clone();
+        if let Some((kept_session, at, size)) = kept
+            && kept_session == session_id
+            && at.elapsed() < secs(VIEWPORT_FRESH_SECONDS)
+        {
+            return Ok(size);
+        }
+        let raw = self.evaluate(session_id, "[innerWidth, innerHeight]").await?;
+        let shape = "tuple[float, float]";
+        let Some([width, height]) = raw.as_array().map(Vec::as_slice) else { return Err(bad(shape)) };
+        let (Some(width), Some(height)) = (width.as_f64(), height.as_f64()) else { return Err(bad(shape)) };
+        Ok((width, height))
     }
 }
 
