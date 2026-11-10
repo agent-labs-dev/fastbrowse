@@ -159,7 +159,7 @@ restart it without the flag, when you are done.
 
 ## Models
 
-The LLM defaults to `deepseek/deepseek-v4.1-flash-1017`, for proposing a first address when no
+The LLM defaults to `openai/gpt-6-luna` at low reasoning, for proposing a first address when no
 `start` is given and for writing an answer that must be composed from more than one fact.
 
 | Setting | Effect |

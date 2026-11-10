@@ -313,10 +313,7 @@ async fn test_llm_prefers_openrouter_when_its_key_is_set() {
     let (seen, result) = llm_requests(&[("OPENROUTER_API_KEY", "o"), ("AI_GATEWAY_API_KEY", "g")], Some(0.0001)).await;
     assert_eq!(seen[0].url, "https://openrouter.ai/api/v1/chat/completions");
     assert_eq!(seen[0].header("authorization"), Some("Bearer o"));
-    assert_eq!(
-        body(&seen[0])["provider"],
-        json!({"require_parameters": true, "sort": "latency", "order": ["parasail", "deepinfra", "inference-net"], "ignore": ["together"]})
-    );
+    assert_eq!(body(&seen[0])["provider"], json!({"require_parameters": true, "sort": "latency"}));
     assert_eq!(result.cost.basis, CostBasis::Metered);
 }
 
@@ -575,7 +572,10 @@ async fn test_a_local_endpoint_gets_the_reasoning_effort_that_was_asked_for() {
 }
 
 #[tokio::test]
-async fn test_openrouter_gives_gemini_low_reasoning_deepseek_none_and_other_models_their_own() {
+async fn test_openrouter_gives_luna_and_gemini_low_reasoning_deepseek_none_and_other_models_their_own() {
+    let (seen, _) = llm_requests(&[("OPENROUTER_API_KEY", "o")], Some(0.0001)).await;
+    assert_eq!(body(&seen[0])["model"], "openai/gpt-6-luna");
+    assert_eq!(body(&seen[0])["reasoning"], json!({"effort": "low"}));
     let env = [("OPENROUTER_API_KEY", "o"), ("FASTBROWSE_LLM_MODEL", "google/gemini-3.8-flash")];
     let (seen, _) = llm_requests(&env, Some(0.0001)).await;
     assert_eq!(body(&seen[0])["reasoning"], json!({"effort": "low"}));

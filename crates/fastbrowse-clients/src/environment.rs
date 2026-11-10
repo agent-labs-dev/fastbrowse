@@ -55,14 +55,18 @@ use crate::system_one::{
 };
 use crate::vercel::{GATEWAY_URL, VercelGatewayJevClient};
 
-/// The default LLM is DeepSeek V4.1 Flash 1017, the one model every LLM purpose uses, because a second model is a
-/// second set of failure modes to explain. Jev is the decision model and is separate (crates/fastbrowse-core/src/decision.rs).
+/// The default LLM is GPT-6 Luna, the one model every LLM purpose uses, because a second model is a second set of
+/// failure modes to explain. On 8 tasks where the text model matters (build bc2940d9, Browser Use Cloud) it passed
+/// 18 of 22 runs as DeepSeek V4.1 Flash 1017 did, at a 5.30s median passing run against 5.95s and $0.0023 of LLM
+/// spend per run against $0.0041. Jev is the decision model and is separate (crates/fastbrowse-core/src/decision.rs).
 /// FASTBROWSE_LLM_MODEL overrides every purpose.
-pub const DEFAULT_LLM: &str = "deepseek/deepseek-v4.1-flash-1017";
+pub const DEFAULT_LLM: &str = "openai/gpt-6-luna";
 
 /// Through OpenRouter or the gateway, a model with a known best effort gets it unless FASTBROWSE_LLM_REASONING says
 /// otherwise; any other model gets no reasoning field and keeps its provider's default.
 ///
+/// GPT-6 Luna runs at `low`, the effort its measurement as the default used: a run is judged on speed first, and a
+/// higher effort spends time and reasoning tokens on reads and composes that `low` already passed.
 /// Gemini 3.8 Flash rejects disabled reasoning but accepts less of it: `low` took read 2.4s to 2.1s.
 /// DeepSeek answers with reasoning off: with it on, a greedy reasoning trace can repeat the same lines until the
 /// model's own output maximum, and one read spent 131,072 reasoning tokens, 312 seconds and $0.16 restating one
@@ -70,7 +74,7 @@ pub const DEFAULT_LLM: &str = "deepseek/deepseek-v4.1-flash-1017";
 fn default_reasoning(model: &str) -> Option<ReasoningEffort> {
     if model.starts_with("deepseek/") {
         Some(ReasoningEffort::None)
-    } else if model == "google/gemini-3.8-flash" {
+    } else if model == DEFAULT_LLM || model == "google/gemini-3.8-flash" {
         Some(ReasoningEffort::Low)
     } else {
         None
