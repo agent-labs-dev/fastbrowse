@@ -56,8 +56,8 @@ browser pool. From schema 5, `internal-ultrafast` pairs fastbrowse on its own po
 approved under an older schema keep fastbrowse on a Browser Use Cloud browser there.
 Schema 2 and later record each group's agent and runner commits and require them to match the candidate's build,
 unless the group lists its `sources`: the campaign runs its rows came from, newest first, one entry per run and arm,
-each with its commits, date and the tasks it supplied for that arm. Its commits are then the newest source's, and the
-publisher checks that every source's commits are in the history of the candidate's build. A slot our own harness or
+each with its commits, date and the tasks it supplied for that arm. Its commits are then the newest source's. An
+earlier source stays valid on any build, including a branch commit a squash merge left outside `main`. A slot our own harness or
 judge failed is listed in `unjudged` with its reason, outside every figure, as a blocked slot is; a run the site's bot
 check stopped is a failed row. Each task the catalog says an arm cannot run is listed in `excluded` with the catalog's
 reason and counts as `repeats` failed attempts in every pass rate. The site's parser (`src/lib/benchmark-feed.ts`)
