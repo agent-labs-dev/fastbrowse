@@ -118,7 +118,10 @@ def test_registry_environment_excludes_unrelated_keys_and_uses_fresh_home() -> N
         "browser-use",
         "browser-use-ultrafast",
     }
-    assert live.ARMS["browser-use-oss"].pin == "browser-use==0.13.10"
+    assert (
+        live.ARMS["browser-use-oss"].pin
+        == "browser-use==1.0.0; default model bu-fast, default mode (ultrafast on bu-fast)"
+    )
     assert live.prompt(live_tasks.TASKS[0]) == f"Start at {live_tasks.TASKS[0].start}. {live_tasks.TASKS[0].task}"
 
 
@@ -221,19 +224,40 @@ async def test_final_observer_reads_local_chrome_at_the_held_viewport() -> None:
     assert final.controls and any("name" in label.lower() for label, _ in final.controls)
 
 
-def test_oss_done_requires_success_and_step_exhaustion_is_budget() -> None:
+def test_oss_ending_reads_status_and_verdict() -> None:
     runner = runpy.run_path(str(live.OSS_RUNNER))
-    for done, success, steps, status in [
-        (True, True, 1, "done"),
-        (True, False, 1, "stopped"),
-        (False, None, 50, "budget_exceeded"),
+    for status, success, outage, ending in [
+        ("completed", True, None, "done"),
+        ("completed", None, None, "done"),
+        ("completed", False, None, "stopped"),
+        ("max_steps", None, None, "budget_exceeded"),
+        ("timeout", None, None, "budget_exceeded"),
+        ("error", None, None, "error"),
+        ("error", None, "Model provider returned HTTP 503", "unavailable"),
     ]:
-        history = SimpleNamespace(
-            is_done=lambda done=done: done, is_successful=lambda success=success: success, history=[None] * steps
-        )
-        assert runner["ending"](history, 50) == status
+        assert runner["ending"](SimpleNamespace(status=status, success=success), outage) == ending
     schema = runner["output_model"]({"title": "Answer", "properties": {"package": {"type": "string"}}})
     assert schema.model_validate_json('{"package":"test"}').package == "test"
+
+
+def test_oss_outage_reads_the_error_record() -> None:
+    outage = runpy.run_path(str(live.OSS_RUNNER))["provider_outage"]
+    transient = frozenset({"ModelServerError", "ModelConnectionError"})
+    assert (
+        outage("ModelServerError: status_code: 503, body: {}", transient) == "Model provider failed (ModelServerError)"
+    )
+    assert outage("ModelConnectionError: reset", transient) == "Model provider failed (ModelConnectionError)"
+    assert outage("ModelHTTPError: status_code: 400", transient) is None
+    assert outage("ValueError: ModelServerError", transient) is None
+    assert outage(None, transient) is None
+
+
+def test_oss_step_log_pairs_calls_with_returns() -> None:
+    log = runpy.run_path(str(live.OSS_RUNNER))["step_log"]
+    call = SimpleNamespace(part_kind="tool-call", tool_name="click", args={"index": 3}, tool_call_id="a")
+    back = SimpleNamespace(part_kind="tool-return", content="x" * 5000, tool_call_id="a")
+    steps = log([SimpleNamespace(parts=[call]), SimpleNamespace(parts=[back])])
+    assert steps == [{"index": 0, "operation": "click", "target": {"index": 3}, "url": None, "observation": "x" * 2000}]
 
 
 @pytest.mark.parametrize("arm", ["jev-ultrafast", "browser-use-oss"])
@@ -263,6 +287,9 @@ async def test_subprocess_uses_shared_prompt_and_harness_evidence(
         assert request["start"] == task.start and request["goal"] == live.prompt(task)
         assert request["max_steps"] is None and request.get("max_seconds") is None  # uncapped: no arm has a limit
         assert "GH_TOKEN" not in env
+        if arm == "browser-use-oss":
+            # 1.0's default model runs on the Browser Use gateway, read with the Browser Use key alone.
+            assert env["BROWSER_USE_API_KEY"] == "cloud" and "text" not in env.values() and "model" not in request
         return json.dumps(
             {
                 "status": "done",

@@ -1,8 +1,8 @@
 """Head-to-head on live sites, for exactly three comparisons, each run as its own invocation with its two arms:
 agent against agent (fastbrowse against the hosted Browser Use agent on API V4: browser-use on its default model and
-browser-use-ultrafast on bu-ultrafast, plus jev-ultrafast and browser-harness), backend against backend (fastbrowse on
-the Browser Use Cloud browser against fastbrowse-pool), and fastbrowse on its own backend against Jev Ultrafast
-(fastbrowse-pool against jev-ultrafast). Pass each comparison's two arms with --arms;
+browser-use-ultrafast on bu-ultrafast, plus jev-ultrafast, browser-harness and browser-use-oss, the open-source
+browser-use 1.0 on its defaults), backend against backend (fastbrowse on the Browser Use Cloud browser against
+fastbrowse-pool), and fastbrowse on its own backend against Jev Ultrafast (fastbrowse-pool against jev-ultrafast). Pass each comparison's two arms with --arms;
 fastbrowse-pool needs the pool credentials, so it is opt-in like browser-use-oss, cua-codex and
 browser-harness (Codex with Browser Harness, fastbrowse_evals/adapters/browser_harness_arm.py).
 
@@ -1901,10 +1901,12 @@ class ArmSpec(BaseModel):
 
 
 _RUNTIME_ENV = ("PATH", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR")
-OSS_PIN = "browser-use==0.13.10"
-OSS_COMMAND = ("uv", "run", "--no-project", "--quiet", "--with", OSS_PIN, "python")
+OSS_PACKAGE = "browser-use==1.0.0"
+OSS_MODEL = "bu-fast"
+"""browser-use 1.0's default model (`Agent(llm=None)`), a Browser Use gateway alias at its own reasoning effort."""
+OSS_PIN = f"{OSS_PACKAGE}; default model {OSS_MODEL}, default mode (ultrafast on {OSS_MODEL})"
+OSS_COMMAND = ("uv", "run", "--no-project", "--quiet", "--python", "3.12", "--with", OSS_PACKAGE, "python")
 OSS_RUNNER = ULTRAFAST_RUNNER.with_name("browser_use_oss_arm.py")
-OSS_MODEL = "google/gemini-3.8-flash"
 CUA_RUNNER = ULTRAFAST_RUNNER.with_name("cua_codex_arm.py")
 CUA_MODEL = "gpt-6-astra"
 CUA_PIN = "cua-driver==0.34.0; codex-cli==0.160.1"
@@ -2006,6 +2008,8 @@ class _OssReport(BaseModel):
     error: str | None = None
     step_ceiling: int | None = None
     """The integer browser-use's `Agent.run` was handed in place of no limit (see browser_use_oss_arm.py)."""
+    timeout_ceiling: float | None = None
+    """The seconds browser-use's `Agent.run` was handed in place of no time limit."""
 
 
 class _HarnessReport(BaseModel):
@@ -2041,17 +2045,17 @@ async def oss_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | Non
             "start": task.start,
             "goal": prompt(task),
             "cdp_ws": cloud.cdp_url,
-            # Uncapped; the runner substitutes browser-use's own integer seam (OSS_STEP_CEILING) and reports it.
+            # Uncapped; the runner substitutes browser-use's own integer seams (STEP_CEILING, TIMEOUT_CEILING) and
+            # reports them.
             "max_steps": None,
             "record": None,
-            "model": OSS_MODEL,
             "secrets": dict(task.secrets),
             "output_schema": task.output_schema.model_json_schema() if task.output_schema else None,
-            "retryable_status": sorted(RETRYABLE_STATUS),
         }
         with tempfile.TemporaryDirectory(prefix="bu-oss-") as runtime:
             env = arm_environment("browser-use-oss", runtime)
-            env["OPENROUTER_API_KEY"] = backend.openrouter_key()
+            # 1.0's default model runs on the Browser Use gateway, which takes the Browser Use key.
+            env["BROWSER_USE_API_KEY"] = backend.browser_key()
             ran = _OssReport.model_validate_json(await _invoke(OSS_COMMAND, OSS_RUNNER, request, env, runtime))
         session_answered()
         final = await observe_browser(cloud.cdp_url)
@@ -2070,7 +2074,8 @@ async def oss_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | Non
         error=ran.error,
         model=OSS_MODEL,
         observe_error=final.error,
-        provenance={} if ran.step_ceiling is None else {"upstream_max_steps": ran.step_ceiling},
+        provenance=({} if ran.step_ceiling is None else {"upstream_max_steps": ran.step_ceiling})
+        | ({} if ran.timeout_ceiling is None else {"upstream_timeout_seconds": ran.timeout_ceiling}),
         cost_by_component=({} if unpriced else {"browser": browser})
         | ({} if ran.dollars is None else {"llm": ran.dollars}),
     )
@@ -2531,7 +2536,14 @@ ARMS: dict[str, ArmSpec] = {
 }
 
 
-HEAD_TO_HEAD_ARMS = ("fastbrowse", "browser-use", "browser-use-ultrafast", "jev-ultrafast", "browser-harness")
+HEAD_TO_HEAD_ARMS = (
+    "fastbrowse",
+    "browser-use",
+    "browser-use-ultrafast",
+    "jev-ultrafast",
+    "browser-harness",
+    "browser-use-oss",
+)
 """The arms compared head to head, each of which runs every task it can grade on equal terms (`eligible`); the catalog
 records why it skips any other (`excluded_because`)."""
 
@@ -2557,7 +2569,7 @@ def excluded_because(arm: str, task: LiveTask) -> str | None:
         return "the task needs login credentials, and it has no way to be given any"
     if arm == "jev-ultrafast":
         return "the task asks for an answer, and it returns none: it only ends done or blocked"
-    if arm == "browser-harness" and task.expect is not Status.COMPLETE:
+    if arm in {"browser-harness", "browser-use-oss"} and task.expect is not Status.COMPLETE:
         return (
             "the task passes only by stopping before an irreversible step it does not authorize, and it takes no "
             "authorization setting and has no way to pause"
