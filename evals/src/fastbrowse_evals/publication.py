@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastbrowse.evals.benchmarks import (
+    LINK,
     Candidate,
     CompetitorReference,
     ExcludedTask,
@@ -61,7 +62,6 @@ PROJECT = langfuse_runs.PROJECT
 INTERNAL_REPEATS = 3
 # Mirrors the public limit rules: short ASCII phrases, no slash and nothing that names a link.
 LIMIT = re.compile(r"[A-Za-z0-9 ,.;:()'%+_=-]{1,240}")
-LIMIT_LINK = re.compile(r"https?:|www\.|\.(?:com|org|net|io|ai|dev|app)\b", re.IGNORECASE)
 
 
 class PublicationError(ValueError):
@@ -90,7 +90,7 @@ GROUPS: dict[str, tuple[int, int, str, set[str]]] = {
 def note(text: str) -> str:
     """A public limit: the contract's character set, with slashes in model ids shown as colons."""
     text = text.replace("/", ":")
-    if not LIMIT.fullmatch(text) or LIMIT_LINK.search(text):
+    if not LIMIT.fullmatch(text) or LINK.search(text):
         raise PublicationError(f"recorded protocol text cannot be published as a short phrase: {text[:80]!r}")
     return text
 

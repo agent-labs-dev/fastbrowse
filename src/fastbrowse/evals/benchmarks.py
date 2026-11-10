@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, NamedTuple, Self
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
@@ -29,6 +30,20 @@ Sha = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Amount = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 Limit = Annotated[str, Field(pattern=r"^[A-Za-z0-9 ,.;:()'%+_=-]{1,240}$")]
+LINK = re.compile(r"https?:|www\.|\.(?:com|org|net|io|ai|dev|app)\b", re.IGNORECASE)
+"""What the site refuses in public text as naming a link (`LIMIT_LINK` in fastbrowse-site's
+`src/lib/benchmark-feed.ts`). It is that parser's contract, matched exactly, not a judgment of the text."""
+
+
+def _no_link(text: str) -> str:
+    if LINK.search(text):
+        raise ValueError("public text names a link")
+    return text
+
+
+ExclusionReason = Annotated[str, Field(pattern=r"^[A-Za-z0-9 ,.;:()'%+_=-]{1,500}$"), AfterValidator(_no_link)]
+"""The catalog's reason an arm cannot run a task, as the site parses it (`EXCLUSION_REASON` and `LIMIT_LINK` in
+`src/lib/benchmark-feed.ts`): plain words and punctuation, no slash and no link."""
 GroupId = Literal[
     "internal-fastbrowse",
     "internal-hosted",
@@ -140,7 +155,7 @@ class ExcludedTask(PublicModel):
 
     arm: Arm
     task: Identifier
-    reason: Annotated[str, Field(min_length=1, max_length=500)]
+    reason: ExclusionReason
 
 
 class Source(PublicModel):

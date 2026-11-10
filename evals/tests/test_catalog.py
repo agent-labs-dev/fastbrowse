@@ -55,3 +55,11 @@ def test_both_hosted_browser_use_arms_are_catalogued_on_the_same_tasks() -> None
             assert ("browser-use" in task["arms"]) == ("browser-use-ultrafast" in task["arms"])
             excluded = task.get("excluded", {})
             assert excluded.get("browser-use") == excluded.get("browser-use-ultrafast")
+
+
+def test_an_exclusion_reason_the_site_cannot_parse_refuses_the_export(monkeypatch) -> None:
+    from fastbrowse_evals import live
+
+    monkeypatch.setattr(catalog, "excluded_because", lambda arm, task: None if live.eligible(arm, task) else "a/b")
+    with pytest.raises(ValueError, match="reason"):
+        catalog.render()

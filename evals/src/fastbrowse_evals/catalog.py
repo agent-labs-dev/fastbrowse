@@ -4,6 +4,9 @@ import hashlib
 import json
 from pathlib import Path
 
+from fastbrowse.evals.benchmarks import ExclusionReason
+from pydantic import TypeAdapter, ValidationError
+
 from fastbrowse_evals.live import ARMS, HEAD_TO_HEAD_ARMS, SUITES, ULTRAFAST_TEXT_MODEL, eligible, excluded_because
 from fastbrowse_evals.versions import fingerprint, load_lock
 
@@ -26,6 +29,17 @@ RETIRED: tuple[dict[str, str], ...] = (
 )
 """Tasks taken out of the catalog because they can no longer run, never because an agent did badly on them.
 Fastbrowse's publication gate lets an approved group drop exactly these tasks and nothing else."""
+
+
+REASON = TypeAdapter(ExclusionReason)
+
+
+def reason(arm: str, task_id: str, text: str) -> str:
+    """`text` as the site parses an exclusion reason, so a reason it would refuse stops the export, not the site."""
+    try:
+        return REASON.validate_python(text)
+    except ValidationError:
+        raise ValueError(f"{task_id}: {arm}'s exclusion reason cannot be published: {text!r}") from None
 
 
 def render() -> str:
@@ -53,7 +67,9 @@ def render() -> str:
                     "category": t.category.value,
                     "arms": list(t.arms) + [arm for arm in DERIVED_ARMS if arm not in t.arms and eligible(arm, t)],
                     "excluded": {
-                        arm: reason for arm in HEAD_TO_HEAD_ARMS if (reason := excluded_because(arm, t)) is not None
+                        arm: reason(arm, t.id, why)
+                        for arm in HEAD_TO_HEAD_ARMS
+                        if (why := excluded_because(arm, t)) is not None
                     },
                     "expect": t.expect.value,
                     "source_fingerprint": lock[t.id]["fingerprint"],

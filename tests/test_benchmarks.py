@@ -1545,3 +1545,13 @@ def test_a_task_an_arm_cannot_run_is_listed_as_excluded_never_with_rows(candidat
     group["excluded"] = [{**entry, "reason": "another reason"}]
     with pytest.raises(ValueError, match="excluded tasks must be the catalog's"):
         check_catalog(Candidate.model_validate(candidate), CATALOG)
+
+
+@pytest.mark.parametrize(
+    "reason", ["needs a login/2FA", 'asks for an "answer"', "needs a login, none given \u00b2", "see example.com", ""]
+)
+def test_an_exclusion_reason_is_refused_where_the_site_would_refuse_it(reason):
+    """The site parses a reason as plain words and punctuation with no slash or link, so the candidate fails here."""
+    with pytest.raises(ValidationError):
+        benchmarks.ExcludedTask(arm="browser-use", task="pypi-version", reason=reason)
+    benchmarks.ExcludedTask(arm="browser-use", task="pypi-version", reason="needs login credentials: none (100%)")
