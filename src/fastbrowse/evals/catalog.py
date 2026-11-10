@@ -80,4 +80,4 @@ SUITES = CATALOG.suites
 def eligible(arm: str, task: CatalogTask) -> bool:
     if arm == "fastbrowse-pool":
         return "fastbrowse" in task.arms
-    return arm in task.arms or (arm == "browser-use-oss" and task.expect == Status.COMPLETE)
+    return arm in task.arms

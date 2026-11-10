@@ -2151,7 +2151,6 @@ async def oss_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | Non
         # reports them.
         "max_steps": None,
         "browser_minutes": CLOUD_BROWSER_MINUTES,
-        "secrets": dict(task.secrets),
         "output_schema": task.output_schema.model_json_schema() if task.output_schema else None,
     }
     ready: _OssReady | None = None
@@ -2697,6 +2696,11 @@ def excluded_because(arm: str, task: LiveTask) -> str | None:
         )
     if arm == "browser-harness":
         return "the task needs login credentials, and we give it none, because it would hold them in its own shell"
+    if arm == "browser-use-oss":
+        return (
+            "the task needs login credentials, and we give it none, because the code its model writes can read "
+            "any it is given"
+        )
     raise ValueError(f"{task.id}: {arm} is excluded without a stated reason")
 
 
@@ -2719,10 +2723,12 @@ def eligible(arm: str, task: LiveTask) -> bool:
         # It ends only DONE or BLOCKED and returns no answer, so it runs only the tasks graded on the page it ends on,
         # which name it in their own `arms`.
         return arm in task.arms
-    if arm in {"cua-codex", "browser-harness"}:
+    if arm in {"cua-codex", "browser-harness", "browser-use-oss"}:
         # Agents that take no credentials and no authorization setting: completion tasks without credentials.
+        # browser-use 1.0 does take `sensitive_data`, but says it is no sandbox: the Python its model writes can read
+        # the values, so a login would be handed to the model.
         return task.expect == Status.COMPLETE and not task.secrets and task.bitwarden_item is None
-    return arm in task.arms or (arm == "browser-use-oss" and task.expect == Status.COMPLETE)
+    return arm in task.arms
 
 
 SUITES: dict[str, tuple[LiveTask, ...]] = {

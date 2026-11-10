@@ -113,7 +113,6 @@ async def run(request: dict[str, Any], browser: Any) -> dict[str, Any]:
             task=request["goal"],
             browser=browser,
             output_model_schema=output_model(request.get("output_schema")),
-            sensitive_data=request.get("secrets") or None,
         )
         ceiling = STEP_CEILING if request["max_steps"] is None else request["max_steps"]
         result = await agent.run(max_steps=ceiling, timeout=TIMEOUT_CEILING)

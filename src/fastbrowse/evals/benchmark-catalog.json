@@ -157,12 +157,12 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-ultrafast"
         ],
         "excluded": {
           "jev-ultrafast": "the task needs login credentials, and it has no way to be given any",
-          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell"
+          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
+          "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
         },
         "expect": "complete",
         "source_fingerprint": "0a0531776e71ff0d",
@@ -175,12 +175,12 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-ultrafast"
         ],
         "excluded": {
           "jev-ultrafast": "the task needs login credentials, and it has no way to be given any",
-          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell"
+          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
+          "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
         },
         "expect": "complete",
         "source_fingerprint": "ba3143609d241af7",
@@ -193,12 +193,12 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-ultrafast"
         ],
         "excluded": {
           "jev-ultrafast": "the task needs login credentials, and it has no way to be given any",
-          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell"
+          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
+          "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
         },
         "expect": "complete",
         "source_fingerprint": "19747c0563957322",
@@ -211,12 +211,12 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-ultrafast"
         ],
         "excluded": {
           "jev-ultrafast": "the task needs login credentials, and it has no way to be given any",
-          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell"
+          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
+          "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
         },
         "expect": "complete",
         "source_fingerprint": "c6b239c9b5bc38a6",
@@ -229,12 +229,12 @@
           "fastbrowse",
           "browser-use",
           "fastbrowse-pool",
-          "browser-use-ultrafast",
-          "browser-use-oss"
+          "browser-use-ultrafast"
         ],
         "excluded": {
           "jev-ultrafast": "the task needs login credentials, and it has no way to be given any",
-          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell"
+          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
+          "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
         },
         "expect": "complete",
         "source_fingerprint": "35b155cc42f41ada",
