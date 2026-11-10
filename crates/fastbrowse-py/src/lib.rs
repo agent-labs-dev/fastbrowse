@@ -426,6 +426,12 @@ fn recipe_schema() -> String {
     fastbrowse_core::recipe::schema().to_string()
 }
 
+/// `fastbrowse.routing.openrouter_routing`: the OpenRouter provider routing a run sends for `model`, as JSON.
+#[pyfunction]
+fn openrouter_routing(model: &str) -> String {
+    fastbrowse_clients::openai_compatible::openrouter_routing_for(model).to_string()
+}
+
 /// `fastbrowse.origins.origin_of`: the origin the document grant compares, or None for no http(s) address.
 #[pyfunction]
 fn origin_of(url: &str) -> Option<String> {
@@ -522,6 +528,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(monotonic, m)?)?;
     m.add_function(wrap_pyfunction!(validate_recipe, m)?)?;
     m.add_function(wrap_pyfunction!(recipe_schema, m)?)?;
+    m.add_function(wrap_pyfunction!(openrouter_routing, m)?)?;
     m.add_function(wrap_pyfunction!(origin_of, m)?)?;
     m.add_function(wrap_pyfunction!(parse_origin, m)?)?;
     m.add_function(wrap_pyfunction!(secret_origin, m)?)?;

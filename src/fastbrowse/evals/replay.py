@@ -44,9 +44,6 @@ LLM_MOUNT = "/llm"
 UPSTREAMS = {JEV_MOUNT: "https://openrouter.ai/api", LLM_MOUNT: "https://openrouter.ai/api/v1"}
 """Where `record` sends each mount: the hosts a run with only OPENROUTER_API_KEY set would call."""
 
-OPENROUTER_PROVIDER_ROUTING = {"require_parameters": True, "sort": "latency"}
-"""The OpenRouter routing a run keyed with OPENROUTER_API_KEY sends, which one aimed at the proxy leaves out."""
-
 MISS_STATUS = 404
 """Not a status the clients retry, so a miss ends the call at once instead of costing a backoff."""
 
@@ -391,9 +388,13 @@ def openrouter_forward(api_key: str, *, timeout: float = 120.0) -> Forward:
     """Forward to OpenRouter as a run keyed only with OPENROUTER_API_KEY would call it.
 
     A run pointed at a custom LLM endpoint leaves out OpenRouter's provider routing, which a normal run sends, so it
-    is put back here: the recorded answers then come from the endpoints a normal run is routed to. Usage accounting
-    is asked for so every response carries its cost; the key is computed from the body the agent sent.
+    is put back here: the recorded answers then come from the endpoints a normal run is routed to. The core builds
+    that routing for the request's model, endpoint pins included, so the proxy keeps no copy of it. The core is
+    loaded here rather than on import, since reading or replaying a cassette needs none. Usage accounting is asked
+    for so every response carries its cost; the key is computed from the body the agent sent.
     """
+    from fastbrowse.routing import openrouter_routing
+
     client = httpx.Client(timeout=timeout)
 
     def forward(path: str, body: bytes) -> tuple[int, str, str]:
@@ -401,7 +402,7 @@ def openrouter_forward(api_key: str, *, timeout: float = 120.0) -> Forward:
         url = UPSTREAMS[mount] + path[len(mount) :]
         payload = json.loads(body)
         if mount == LLM_MOUNT and isinstance(payload, dict):
-            payload.setdefault("provider", OPENROUTER_PROVIDER_ROUTING)
+            payload.setdefault("provider", openrouter_routing(str(payload.get("model", ""))))
             payload.setdefault("usage", {"include": True})
         try:
             response = client.post(url, json=payload, headers={"Authorization": f"Bearer {api_key}"})
