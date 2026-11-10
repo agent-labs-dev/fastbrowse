@@ -1193,11 +1193,14 @@ pub(crate) async fn draft_reviewed(
         };
     let holds = |key: &str| answered.as_ref().and_then(|pass| judged(pass.answers.get(key)));
     let (problem, rejection) = match holds("coverage") {
-        Some(true) if holds("exact") == Some(false) => {
-            let feedback = json!({"columns": null, "draft_claims": &claims, "rejected_checks": ["exact"]});
-            return Ok(Some(Draft::Write(dumps(&feedback))));
-        }
-        Some(true) => (None, None),
+        Some(true) => match holds("exact") {
+            Some(true) => (None, None),
+            Some(false) => {
+                let feedback = json!({"columns": null, "draft_claims": &claims, "rejected_checks": ["exact"]});
+                return Ok(Some(Draft::Write(dumps(&feedback))));
+            }
+            None => (Some("Jev left unanswered whether the answer states only what the task asks.".to_string()), None),
+        },
         Some(false) => (
             Some("The answer does not establish every requested fact or value.".to_string()),
             Some(dumps(&json!({"columns": null, "draft_claims": &claims, "rejected_checks": ["coverage"]}))),
@@ -1304,6 +1307,7 @@ mod tests {
         accept: Option<bool>,
         fail: bool,
         rejected: Option<String>,
+        unanswered: Option<&'static str>,
         asked: Mutex<Vec<IndexMap<String, Question>>>,
         states: Mutex<Vec<Value>>,
     }
@@ -1314,6 +1318,7 @@ mod tests {
                 accept: Some(accept),
                 fail: false,
                 rejected: None,
+                unanswered: None,
                 asked: Mutex::new(Vec::new()),
                 states: Mutex::new(Vec::new()),
             }
@@ -1340,6 +1345,7 @@ mod tests {
                     model: "test".into(),
                     answers: questions
                         .keys()
+                        .filter(|key| self.unanswered != Some(key.as_str()))
                         .filter_map(|key| {
                             self.accept.map(|accept| {
                                 let accept = accept && self.rejected.as_deref() != Some(key.as_str());
@@ -2369,6 +2375,20 @@ mod tests {
         };
         assert!(reviewed.answer.problem.unwrap().contains("input limits"));
         assert!(jev.asked.lock().unwrap().is_empty());
+    }
+
+    /// A pick Jev holds to cover the task but leaves its exactness unjudged has not been shown to state only what was
+    /// asked, so it stands as unverified rather than complete.
+    #[tokio::test]
+    async fn a_pick_whose_exactness_is_unanswered_is_not_complete() {
+        let notes = Notes::new([Fact { answers: true, ..fact(0, "Record B: 34".into()) }]);
+        let jev = Support { unanswered: Some("exact"), ..Support::new(true) };
+        let Some(Draft::Reviewed(reviewed)) = draft_reviewed(&jev, "Report record B", &notes, None).await.unwrap()
+        else {
+            panic!("an unjudged pick stands as it is");
+        };
+        assert!(reviewed.answer.problem.unwrap().contains("unanswered"));
+        assert!(reviewed.rejection.is_none());
     }
 
     #[tokio::test]

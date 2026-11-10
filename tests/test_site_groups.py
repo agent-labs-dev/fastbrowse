@@ -134,3 +134,26 @@ def test_the_live_suite_names_what_each_measured_system_ran() -> None:
     ]
     live = json.loads(group_files(json.dumps(candidate).encode(), FACTS, CURRENT)["data/benchmarks/live-suite.json"])
     assert live["measured"]["setups"] == {"browser-use": setup}
+
+
+def test_an_arm_pooled_from_several_runs_shows_every_model_and_refuses_split_versions() -> None:
+    """A late rerun supplies some of an arm's tasks, so its setup is every source's, never only the newest one's."""
+    candidate = json.loads(STAGED.read_bytes())
+    group = next(g for g in candidate["groups"] if g["id"] == "internal-hosted")
+    run = {"agent_sha": group["agent_sha"], "runner_sha": group["runner_sha"], "measured_on": "2026-11-01"}
+    bu = sorted({r["task"] for r in group["rows"] if r["arm"] == "browser-use"})
+    fb = sorted({r["task"] for r in group["rows"] if r["arm"] == "fastbrowse"})
+    version = "browser-use-sdk==3.12.1 API v4"
+
+    def write(late_version: str) -> dict:
+        group["sources"] = [
+            {**run, "run_id": "r2", "arm": "browser-use", "tasks": bu[:1], "version": late_version, "models": ["b"]},
+            {**run, "run_id": "r1", "arm": "browser-use", "tasks": bu[1:], "version": version, "models": ["a"]},
+            {**run, "run_id": "r1", "arm": "fastbrowse", "tasks": fb},
+        ]
+        files = group_files(json.dumps(candidate).encode(), FACTS, CURRENT)
+        return json.loads(files["data/benchmarks/live-suite.json"])["measured"]["setups"]
+
+    assert write(version) == {"browser-use": {"version": version, "models": ["b", "a"]}}
+    with pytest.raises(ValueError, match="different versions"):
+        write("browser-use-sdk==3.13.0 API v4")

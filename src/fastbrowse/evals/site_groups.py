@@ -78,14 +78,19 @@ class RunFacts(BaseModel):
 
 
 def setups(group: Group, arms: tuple[str, ...]) -> dict[str, dict[str, object]]:
-    """What each shown system ran, as the candidate records it: a measured arm's newest source, or a reference arm's
-    own record. A system with neither version nor models is left out, as a candidate from before them records none."""
+    """What each shown system ran, as the candidate records it: every source of a measured arm, whose models are all
+    shown, or a reference arm's own record. Sources of one arm that pinned different versions cannot share one label,
+    so they are refused. A system with neither version nor models is left out, as a candidate from before them
+    records none."""
     recorded: dict[str, dict[str, object]] = {}
     for arm in arms:
-        source = next((s for s in group.sources if s.arm == arm), None)
-        held = source or next((r for r in group.references if r.arm == arm), None)
-        if held is not None and (held.version or held.models):
-            recorded[SYSTEMS[arm]] = {"version": held.version, "models": list(held.models)}
+        held = [s for s in group.sources if s.arm == arm] or [r for r in group.references if r.arm == arm][:1]
+        versions = list(dict.fromkeys(h.version for h in held if h.version))
+        if len(versions) > 1:
+            raise ValueError(f"{group.id} pools {arm} runs pinned to different versions: {', '.join(versions)}")
+        models = list(dict.fromkeys(m for h in held for m in h.models))
+        if versions or models:
+            recorded[SYSTEMS[arm]] = {"version": versions[0] if versions else None, "models": models}
     return recorded
 
 
