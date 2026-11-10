@@ -5432,6 +5432,28 @@ fn test_720_fragment_change_keeps_the_earlier_read_retired_when_composing() {
     assert!(!current.iter().any(|quote| quote == "Flight A: $300"), "pre-filter value is current again: {current:?}");
 }
 
+/// #934: a form read before the step that replaced its description must be known as read before it.
+#[test]
+fn a_read_remembers_how_many_site_changing_steps_came_before_it() {
+    let mut state = run_state();
+    let form = results_page_720("https://addons.test/settings", "Description: Old text.");
+    let before = Fact::read("Description: Old text.", block_evidence(&form, "s1"), FactReader::JevChoice);
+    state.record_read(&form, vec![before.clone()], false);
+    // A scroll and a move to another page show what is there; only the fill and the save could change the site.
+    state.history.extend([
+        executed(Some(Operation::Scroll), None, true),
+        executed(Some(Operation::Fill), Some("Description"), true),
+        executed(Some(Operation::Click), Some("Save changes"), true),
+        executed(Some(Operation::Navigate), None, true),
+    ]);
+    let public = results_page_720("https://addons.test/addon", "New text.");
+    let after = Fact::read("New text.", block_evidence(&public, "s1"), FactReader::JevChoice);
+    state.record_read(&public, vec![after.clone()], false);
+    let taken = |fact: &Fact| state.notes.steps_taken(fact.evidence.as_ref().unwrap());
+    assert_eq!((taken(&before), taken(&after)), (Some(0), Some(2)));
+    assert_eq!(state.executed_steps().len(), 2);
+}
+
 #[test]
 fn the_page_a_run_began_on_is_read_before_an_action_leaves_it_whatever_jev_scored_it() {
     // Asked to count a site's Einstein quotes, Jev scored the quote list it began on under even odds and left it for an

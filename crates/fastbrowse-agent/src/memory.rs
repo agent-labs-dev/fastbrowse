@@ -262,6 +262,8 @@ pub struct Notes {
     answering: IndexSet<String>,
     retired: HashSet<String>,
     pages: IndexMap<(String, String, DateTime), CapturedPage>,
+    /// How many of the run's steps that could change the site had been taken when each capture was read.
+    steps_taken: HashMap<(String, String, DateTime), usize>,
     /// Each remembered capture's table blocks by its hash, so a citation can show a quote as the page shows it.
     tables: HashMap<String, Arc<[TableBlock]>>,
 }
@@ -281,11 +283,14 @@ impl Notes {
         notes
     }
 
+    /// Remember a capture read once `steps_taken` of the run's steps that could change the site were taken.
     #[doc(hidden)]
-    pub fn remember_capture(&mut self, capture: &Capture) {
+    pub fn remember_capture(&mut self, capture: &Capture, steps_taken: usize) {
+        let key = (capture.sha256.clone(), capture.url.clone(), capture.captured_at);
+        self.steps_taken.entry(key.clone()).or_insert(steps_taken);
         // A title can change while the quoted body does not; recapturing must not rename older evidence.
         self.pages
-            .entry((capture.sha256.clone(), capture.url.clone(), capture.captured_at))
+            .entry(key)
             .or_insert_with(|| CapturedPage { url: capture.url.clone(), title: capture.title.clone() });
         self.tables.entry(capture.sha256.clone()).or_insert_with(|| table_blocks(capture).into());
     }
@@ -293,6 +298,16 @@ impl Notes {
     /// The table blocks of the capture `evidence` was cut from; none when that capture was never remembered.
     pub fn table_blocks(&self, evidence: &Evidence) -> &[TableBlock] {
         self.tables.get(&evidence.capture_sha256).map_or(&[], |tables| tables)
+    }
+
+    /// How many of the run's steps that could change the site had been taken when `evidence` was read; None for a
+    /// capture never remembered, such as a screenshot reading.
+    ///
+    /// A page read before a step that changed it shows the state before that step: a settings form read before its
+    /// description was replaced was reported as still holding the old text, beside the public page read after the
+    /// save, and the answer that mixed the two was rejected (#934).
+    pub fn steps_taken(&self, evidence: &Evidence) -> Option<usize> {
+        self.steps_taken.get(&(evidence.capture_sha256.clone(), evidence.url.clone(), evidence.captured_at)).copied()
     }
 
     pub fn captured_page(&self, evidence: &Evidence) -> Option<&CapturedPage> {

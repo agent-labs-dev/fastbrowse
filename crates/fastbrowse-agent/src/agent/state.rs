@@ -432,7 +432,8 @@ impl RunState {
     /// earlier reads of that address it supersedes.
     pub fn record_read(&mut self, capture: &Capture, facts: Vec<Fact>, compose: bool) {
         let added = facts.len();
-        self.notes.remember_capture(capture);
+        let steps_taken = self.history.iter().filter(|entry| entry.changed_site()).count();
+        self.notes.remember_capture(capture, steps_taken);
         for fact in facts {
             self.notes.add(fact);
         }
