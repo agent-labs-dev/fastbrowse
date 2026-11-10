@@ -576,6 +576,8 @@ jobs:
         env:
           CAMPAIGN_ID: ${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
           FIXTURE_RUN: ${{ steps.fixture.outputs.run }}
+          # The fixture check reads the fixture run back from the Actions API with `gh`.
+          GH_TOKEN: ${{ github.token }}
           # The fixture run's traces and each group's experiments are read back from fastbrowse's Langfuse project
           # (evals/storage.py HOST).
           LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
