@@ -45,7 +45,7 @@ use state::{Flow, RunState, Stop};
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
 use crate::policy::StepContext;
-use crate::retrieval::{ComposedAnswer, cited_quote, compose, draft_answer, marked_partial, partial_answer};
+use crate::retrieval::{ComposedAnswer, cited_quote, compose, draft_answer, marked_partial, noticed, partial_answer};
 use crate::verification::RecordSchema;
 
 /// How long a page that has not moved is watched before the run acts on it: a bot check that never clears then ends
@@ -615,6 +615,10 @@ impl Agent {
         error: Option<String>,
         budget: Option<BudgetStop>,
     ) -> RunResult {
+        // A run that stops with a step of its task undone says so before what it read.
+        let undone = (status != Status::Complete && state.is_some_and(|state| state.undone))
+            .then(|| noticed(finishing::UNDONE, partial.clone()));
+        let partial = undone.as_ref().unwrap_or(partial);
         let cited =
             notes.expand_evidence_ids(partial.claims.iter().flat_map(|c| c.evidence_ids.iter().map(String::as_str)));
         let (answer, citations) = self.public_answer(partial);

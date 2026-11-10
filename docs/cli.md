@@ -220,8 +220,8 @@ The JSON result says why a run stopped where a caller can act on it:
   texts can answer a `one_time_code` wall with a secret scoped to that origin and run again.
 - A run that stops before completion can retain a cited partial answer from checked claims while their
   source evidence remains unchanged. A `stuck` or `unverified` run can also compose an answer from evidence
-  it read. Partial answers may start with `Partial evidence only.`; the status determines whether the task
-  completed.
+  it read. Partial answers may start with `Partial evidence only.`, and one from a run that left a step of its
+  task undone starts by saying so; the status determines whether the task completed.
 
 A cost a provider omits is looked up from its receipt, or bounded from OpenRouter's listed prices. A cost that
 cannot be bounded is unknown, and a run with a dollar cap then stops with `budget_exceeded`. A page that stops

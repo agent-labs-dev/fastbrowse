@@ -1507,10 +1507,17 @@ async fn test_a_done_with_a_step_of_the_task_undone_is_not_complete() {
 
     let result = agent.finish(&mut state, &observation(&[]), None, None).await;
     assert!(
-        matches!(result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("has not been done")))
+        matches!(&result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("has not been done")))
     );
-    let asked = jev.3.lock().unwrap();
-    assert_eq!(asked[0]["recent_actions"][0]["target"], "Phone", "the steps taken are what Jev judges");
+    {
+        let asked = jev.3.lock().unwrap();
+        assert_eq!(asked[0]["recent_actions"][0]["target"], "Phone", "the steps taken are what Jev judges");
+    }
+    // #937: what was read is still the answer, but it does not stand as the task done.
+    let ledger = state.ledger.clone();
+    let stopped = agent.stopped(result.unwrap_err(), Some(&mut state), &ledger).await;
+    let answer = stopped.answer.expect("what was read is answered");
+    assert!(answer.starts_with(super::finishing::UNDONE) && answer.contains("katherine@example.com"), "{answer}");
 }
 
 /// Asked to start a demo and report the text it loads, a run's click on Start was covered, and it read the page's

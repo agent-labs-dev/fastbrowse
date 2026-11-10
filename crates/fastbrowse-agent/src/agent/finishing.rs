@@ -68,6 +68,7 @@ impl Agent {
         if state.history.iter().any(crate::policy::HistoryEntry::acts) {
             let carried = self.actions_done(state, observation).await?;
             state.refused = carried == Carried::Refused;
+            state.undone = carried == Carried::Undone;
             if carried == Carried::Undone {
                 let reason = "A step the task asks to be carried out has not been done, so it is not done.";
                 self.recover(state, observation, reason, Status::Stuck, Some((Operation::Done, None))).await?;
@@ -415,6 +416,11 @@ impl Agent {
         Ok(Some(self.ending_frame(result, matches!(intent, OutputIntent::Image | OutputIntent::TextAndImage)).await))
     }
 }
+
+/// What the answer of a run that stopped with a step of its task undone says first: what it read can show what was
+/// asked for, and without this a run that never pressed the keys its task named answered that the saved description
+/// matched, as if the task were done (#937).
+pub(super) const UNDONE: &str = "A step the task asks to be carried out was not done, so this answer reports what was read, not that the task was done.";
 
 /// The error of a run whose finish check found a step the site does not allow; the answer names the step.
 pub(super) const REFUSED: &str = "A step the task asks for was not carried out because the site does not allow it, as the page or the recent actions show. The answer reports what was and was not done.";

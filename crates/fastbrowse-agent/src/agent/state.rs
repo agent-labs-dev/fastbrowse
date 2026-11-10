@@ -337,6 +337,8 @@ pub(crate) struct RunState {
     pub to_carry_out: bool,
     /// The latest finish check found a step the task asks for that the site does not allow.
     pub refused: bool,
+    /// The latest finish check found a step the task asks to be carried out not yet done.
+    pub undone: bool,
     pub output_intent: OutputIntent,
     /// What the task says about signing in, asked of the task alone at the first sign-in wall. None until then, and
     /// when Jev gave no answer.
@@ -731,6 +733,7 @@ impl RunState {
             read_whole: Vec::new(),
             to_carry_out: false,
             refused: false,
+            undone: false,
             output_intent: OutputIntent::Unknown,
             sign_in: None,
             dates: Vec::new(),
