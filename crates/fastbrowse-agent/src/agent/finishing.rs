@@ -262,7 +262,7 @@ impl Agent {
         } else if intent == OutputIntent::CarriedOut && !state.refused {
             // A task that asks to be told nothing is answered by what was read: writing it up cost a task to open a
             // page 1 to 4.5 seconds of composing (#910). A step the site refused is reported, as REFUSED says.
-            draft_answer(&state.notes)
+            draft_answer(&outcome_notes(state))
         } else if state.compose {
             let (notes, task, ledger) = (state.notes_to_compose(), state.task.clone(), state.ledger.clone());
             let steps = state.executed_steps();
@@ -540,6 +540,18 @@ fn drafted(feedback: &str) -> Option<Vec<String>> {
     let feedback: Value = serde_json::from_str(feedback).ok()?;
     let claims = feedback.get("draft_claims")?.as_array()?;
     Some(claims.iter().filter_map(|claim| claim.get("text")?.as_str().map(str::to_string)).collect())
+}
+
+/// What a task carried out read once its last step that changes the site was taken: the outcome it reports. What was
+/// read before it was kept for those steps, such as a value read on one page and entered on another, and answering with
+/// it reported a write task's start page, "Save: disabled", the disabled Save button beside the field it was about to
+/// change (#939).
+fn outcome_notes(state: &RunState) -> Notes {
+    let taken = state.history.iter().filter(|entry| entry.changed_site()).count();
+    let mut outcome = state.notes.clone();
+    outcome
+        .retain(|fact| fact.evidence.as_ref().is_some_and(|evidence| state.notes.steps_taken(evidence) == Some(taken)));
+    outcome
 }
 
 #[cfg(test)]

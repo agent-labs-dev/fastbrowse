@@ -1665,6 +1665,8 @@ async fn test_a_task_carried_out_is_not_held_to_reporting_facts() {
     state.compose = true;
     state.task = "Send a support request with the topic 'billing'.".into();
     state.notes = Notes::new([fact.answering()]);
+    // The confirmation was read once the request was sent.
+    state.notes.remember_capture(&page, 1);
     state.history.push(crate::policy::HistoryEntry::new(
         Some(Operation::Click),
         Some("Send request"),
@@ -1680,6 +1682,43 @@ async fn test_a_task_carried_out_is_not_held_to_reporting_facts() {
     assert_eq!(result.status, Status::Complete, "{:?}", result.error);
     assert!(result.answer.unwrap().starts_with("We have your request: 'billing'."));
     assert!(!jev.0.3.lock().unwrap().is_empty(), "the steps are still judged");
+}
+
+/// A task that asks only for something to be carried out answered with a read of the page it started on: a write
+/// task's run reported "Save: disabled", the disabled Save button beside the field it was about to change, the read note
+/// #939 saw typed into live descriptions. What a run reads before its last step that changes the site is kept for those
+/// steps, such as a value read on one page and entered on another; only a page read after it shows the outcome.
+#[tokio::test]
+async fn test_a_task_carried_out_answers_only_with_what_it_read_after_its_last_step() {
+    let start = capture(&[(BlockKind::Paragraph, "Save: disabled")]);
+    let before = Fact::read("Save: disabled", block_evidence(&start, "s0"), FactReader::JevChoice);
+    let saved = capture(&[(BlockKind::Paragraph, "Description saved.")]);
+    let after = Fact::read("Description saved.", block_evidence(&saved, "s0"), FactReader::JevChoice);
+    let mut answers = Vec::new();
+    for read_after in [false, true] {
+        let mut state = run_state();
+        state.output_intent = super::state::OutputIntent::CarriedOut;
+        state.task = "Replace the project description with the new text and save it.".into();
+        state.notes = Notes::new([before.clone().answering()]);
+        state.notes.remember_capture(&start, 0);
+        state.history.push(crate::policy::HistoryEntry::new(
+            Some(Operation::Click),
+            Some("Save"),
+            StepOutcome::Executed,
+            true,
+        ));
+        if read_after {
+            state.notes.add(after.clone().answering());
+            state.notes.remember_capture(&saved, 1);
+        }
+        let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+        let agent = Agent::new(Arc::new(FinishPage(observation(&[]))), jev, Arc::new(ScriptedLLM));
+        let result = agent.finish(&mut state, &observation(&[]), None, None).await.expect("finish").expect("a result");
+        assert_eq!(result.status, Status::Complete, "{:?}", result.error);
+        answers.push(result.answer.map(|answer| answer.lines().next().unwrap_or_default().to_string()));
+    }
+    assert_eq!(answers[0], None, "answered with the page read before the step");
+    assert!(answers[1].as_deref().is_some_and(|answer| answer.starts_with("Description saved.")), "{answers:?}");
 }
 
 /// Picks, for every read requirement, the candidate whose value is the field's, and fails if it is not offered; with no
