@@ -572,6 +572,15 @@
           "default": null,
           "description": "The `uri` of the `capture` artifact holding the page text `start` and `end` index into, if one was kept.",
           "title": "Capture Artifact"
+        },
+        "links": {
+          "default": [],
+          "description": "The links inside the quote and where each leads, which its text alone does not say.",
+          "items": {
+            "$ref": "#/$defs/Link"
+          },
+          "title": "Links",
+          "type": "array"
         }
       },
       "required": [
@@ -730,6 +739,37 @@
         }
       },
       "title": "Limits",
+      "type": "object"
+    },
+    "Link": {
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "start": {
+          "minimum": 0,
+          "title": "Start",
+          "type": "integer"
+        },
+        "end": {
+          "minimum": 0,
+          "title": "End",
+          "type": "integer"
+        },
+        "href": {
+          "title": "Href",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "start",
+        "end",
+        "href"
+      ],
+      "title": "Link",
       "type": "object"
     },
     "LocalChrome": {

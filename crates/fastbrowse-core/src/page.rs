@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::BoxFuture;
-use crate::models::{Artifact, Attachment, MaybeUnavailable, Operation, SourceControl, StepOutcome};
+use crate::models::{Artifact, Attachment, Link, MaybeUnavailable, Operation, SourceControl, StepOutcome};
 use crate::py::datetime::DateTime;
 use crate::py::json::dumped_len;
 use crate::py::{lax, text};
@@ -310,6 +310,10 @@ pub struct Block {
     pub control_context: Option<SourceControl>,
     #[serde(default)]
     pub href: Option<String>,
+    /// The links inside this block, with their text's place in `Capture.text`: a link's text alone does not say
+    /// where it leads, nor where a value the page set apart as its own element ends.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<Link>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

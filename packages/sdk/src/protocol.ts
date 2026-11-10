@@ -246,11 +246,21 @@ export interface Evidence {
    * The `uri` of the `capture` artifact holding the page text `start` and `end` index into, if one was kept.
    */
   capture_artifact?: string | null;
+  /**
+   * The links inside the quote and where each leads, which its text alone does not say.
+   */
+  links?: Link[];
 }
 export interface SourceControl {
   role: string;
   label: string;
   context: string | null;
+}
+export interface Link {
+  text: string;
+  start: number;
+  end: number;
+  href: string;
 }
 /**
  * The client's side of the handshake.

@@ -10,6 +10,7 @@ import java.util.List;
  * @param renderedText False for typed DOM observations whose quote is not literal rendered page text.
  * @param headingPath The headings the quote sits under on the page: which record a bare "£10.69" is the price of.
  * @param captureArtifact The {@code uri} of the {@code capture} artifact holding the page text {@code start} and {@code end} index into, if one was kept.
+ * @param links The links inside the quote and where each leads, which its text alone does not say.
  */
 public record Evidence(
     @JsonProperty("source_id") String sourceId,
@@ -24,7 +25,8 @@ public record Evidence(
     @JsonProperty("control_context") SourceControl controlContext,
     @JsonProperty("rendered_text") boolean renderedText,
     @JsonProperty("heading_path") List<String> headingPath,
-    @JsonProperty("capture_artifact") String captureArtifact) {
+    @JsonProperty("capture_artifact") String captureArtifact,
+    @JsonProperty("links") List<Link> links) {
 
     /** A builder for a {@code Evidence}, every field unset. */
     public static Builder builder() {
@@ -46,6 +48,7 @@ public record Evidence(
         private boolean renderedText;
         private List<String> headingPath;
         private String captureArtifact;
+        private List<Link> links;
 
         private Builder() {}
 
@@ -114,8 +117,13 @@ public record Evidence(
             return this;
         }
 
+        public Builder links(List<Link> links) {
+            this.links = links;
+            return this;
+        }
+
         public Evidence build() {
-            return new Evidence(sourceId, url, frameId, capturedAt, captureSha256, start, end, quote, completeSource, controlContext, renderedText, headingPath, captureArtifact);
+            return new Evidence(sourceId, url, frameId, capturedAt, captureSha256, start, end, quote, completeSource, controlContext, renderedText, headingPath, captureArtifact, links);
         }
     }
 }

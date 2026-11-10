@@ -154,6 +154,65 @@ fn yes() -> bool {
     true
 }
 
+/// A link inside quoted page text: its text, where that text sits in `Capture.text` (code points, as `start` and `end`
+/// of the quote around it), and the address it leads to.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Link {
+    pub text: String,
+    #[serde(deserialize_with = "lax::int_ge0")]
+    pub start: i64,
+    #[serde(deserialize_with = "lax::int_ge0")]
+    pub end: i64,
+    pub href: String,
+}
+
+impl Link {
+    /// The links of `links` whose text lies within `start..end`, the span a quote narrowed to.
+    pub fn within(links: &[Link], start: i64, end: i64) -> Vec<Link> {
+        links.iter().filter(|link| start <= link.start && link.end <= end).cloned().collect()
+    }
+
+    /// Each link of `found` (its text and address, in the order the page shows them) where its text sits in
+    /// `text`, which starts at `offset` in the capture. A link's text is part of its block's text, so each is
+    /// looked up after the one before it; one the block does not show as written, such as a footnote reference
+    /// read out of its text, is left out.
+    pub fn locate(text: &str, offset: i64, found: &[(String, String)]) -> Vec<Link> {
+        let mut links = Vec::new();
+        let mut cursor = 0;
+        for (shown, href) in found {
+            if shown.is_empty() {
+                continue;
+            }
+            let Some(at) = text[cursor..].find(shown.as_str()).map(|at| cursor + at) else { continue };
+            let start = offset + crate::py::text::len(&text[..at]) as i64;
+            links.push(Link {
+                text: shown.clone(),
+                start,
+                end: start + crate::py::text::len(shown) as i64,
+                href: href.clone(),
+            });
+            cursor = at + shown.len();
+        }
+        links
+    }
+}
+
+impl Schema for Link {
+    fn ty() -> Ty {
+        ModelTy::frozen(
+            "Link",
+            vec![
+                Field::required("text", Ty::Str),
+                Field::required("start", Ty::Int.ge(0)),
+                Field::required("end", Ty::Int.ge(0)),
+                Field::required("href", Ty::Str),
+            ],
+        )
+        .ty()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Evidence {
@@ -182,6 +241,9 @@ pub struct Evidence {
     /// The `uri` of the `capture` artifact holding the page text `start` and `end` index into, if one was kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capture_artifact: Option<String>,
+    /// The links inside the quote and where each leads, which its text alone does not say.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<Link>,
 }
 
 impl Schema for Evidence {
@@ -208,6 +270,9 @@ impl Schema for Evidence {
                 Field::default("capture_artifact", Ty::optional(Ty::Str), Value::Null)
                     .omitted_when_empty()
                     .doc("The `uri` of the `capture` artifact holding the page text `start` and `end` index into, if one was kept."),
+                Field::default("links", Ty::list(Link::ty()), Value::Array(vec![]))
+                    .omitted_when_empty()
+                    .doc("The links inside the quote and where each leads, which its text alone does not say."),
             ],
         )
         .ty()

@@ -125,6 +125,15 @@ class SourceControl(Frozen):
     context: str | None = None
 
 
+# A link inside quoted page text: its text, where that text sits in `Capture.text` (code points, as `start` and `end`
+# of the quote around it), and the address it leads to.
+class Link(Frozen):
+    text: str
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+    href: str
+
+
 class Evidence(Frozen):
     source_id: str
     url: str
@@ -143,6 +152,8 @@ class Evidence(Frozen):
     """The headings the quote sits under on the page: which record a bare "£10.69" is the price of."""
     capture_artifact: str | None = Field(default=None, exclude_if=lambda uri: uri is None)
     """The `uri` of the `capture` artifact holding the page text `start` and `end` index into, if one was kept."""
+    links: tuple[Link, ...] = Field(default=(), exclude_if=lambda links: not links)
+    """The links inside the quote and where each leads, which its text alone does not say."""
 
 
 class Citation(Frozen):

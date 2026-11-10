@@ -102,6 +102,40 @@ async fn test_a_fetched_page_is_a_capture_with_spans_and_a_hash() {
     assert_eq!(capture.sha256, sha256_hex(capture.text.as_bytes()));
 }
 
+/// The markup `test_a_link_inside_a_block_keeps_its_text_and_address` in the browser crate's capture tests reads too.
+const LINKED: &str = "<p>Support me on <a href=\"https://ko-fi.com/x\">Ko-fi</a> or <a href=\"/sponsor\">GitHub</a>.</p>\
+     <table><tr><th>Name</th><th>Price</th></tr><tr><td><a href=\"/p/1\">Mug</a></td><td>8.75</td></tr></table>\
+     <p><a href=\"javascript:void(0)\">Menu</a> and <a href=\"/shop\">the shop</a></p>";
+
+/// A link's text says neither where it leads nor where a value the page set apart as its own element ends, so each
+/// link inside a block is kept with its text's place in the capture and its address.
+#[tokio::test]
+async fn test_a_link_inside_a_block_keeps_its_text_and_address() {
+    let capture = fetched(&html(LINKED), "https://shop.example.com/about").await.expect("fetched");
+    // Each link's text is where its offsets say, so a quote narrowed to it is the link.
+    for link in capture.blocks.iter().flat_map(|block| &block.links) {
+        let shown: String =
+            capture.text.chars().skip(link.start as usize).take((link.end - link.start) as usize).collect();
+        assert_eq!(shown, link.text);
+    }
+    let links: Vec<(&str, &str)> = capture
+        .blocks
+        .iter()
+        .flat_map(|block| &block.links)
+        .map(|link| (link.text.as_str(), link.href.as_str()))
+        .collect();
+    assert_eq!(
+        links,
+        [
+            ("Ko-fi", "https://ko-fi.com/x"),
+            ("GitHub", "https://shop.example.com/sponsor"),
+            ("Mug", "https://shop.example.com/p/1"),
+            ("the shop", "https://shop.example.com/shop"),
+        ],
+        "a script link leads nowhere"
+    );
+}
+
 #[tokio::test]
 async fn test_plain_text_is_read_as_one_block() {
     let http = client("total,amount\nkettle,34.50\n", 200, "text/plain");

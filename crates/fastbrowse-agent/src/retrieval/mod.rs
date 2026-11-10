@@ -48,6 +48,7 @@ pub(crate) mod testing {
                 heading_path: Vec::new(),
                 control_context: None,
                 href: None,
+                links: Vec::new(),
             });
             start += length + 2;
         }

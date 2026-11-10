@@ -135,6 +135,17 @@
     const u = new URL(a.href, location.href);
     return u.origin === location.origin ? u.pathname + u.search : u.href;
   };
+  // A link's text reads as one with the words around it and says nothing of where it leads: a product name linked
+  // inside its list item was taken with the item's price as the name, and asked for a description's hyperlinks, a run
+  // had their texts and no address to give. Each link is kept with its block as its text and address, which code
+  // places in the block's text. A footnote reference is no part of the text it marks, and a script link leads nowhere.
+  const linksIn = elements =>
+    elements
+      .flatMap(e => [...(e.matches('a[href]') ? [e] : []), ...e.querySelectorAll('a[href]')])
+      // An SVG link's `href` is an animated value, not an address.
+      .filter(a => typeof a.href === 'string' && !a.href.startsWith('javascript:') && !(a.matches(IN_PAGE) && noteReference(a)))
+      .map(a => ({ text: textOf(a), href: a.href }))
+      .filter(link => link.text);
   const controlOf = nodes => {
     let found = null;
     for (const node of nodes) {
@@ -255,12 +266,16 @@
     let headers = rows.filter(({ row }) => row.parentElement.tagName === 'THEAD');
     if (!headers.length && rows[0].cells.every(c => c.tagName === 'TH')) headers = [rows[0]];
     const line = ({ cells }) => '| ' + cells.map(c => cellText(c).replace(/\|/g, '\\|')).join(' | ') + ' |';
+    const divider = headers.length ? '| ' + headers[0].cells.map(() => '---').join(' | ') + ' |' : '';
+    // A row block is its text with the links of the rows it writes, in the order it writes them.
+    const of = (written, headed) => ({
+      text: [...(headed ? [...headers.map(line), divider] : []), ...written.map(line)].join('\n'),
+      links: linksIn([...(headed ? headers : []), ...written].flatMap(row => row.cells)),
+    });
     // Headerless comparison rows need leading cells for identity and separate source spans for counting.
-    if (!headers.length) return rows.map((row, index) => (index ? [line(rows[0]), line(row)].join('\n') : line(row)));
-    const prefix = headers.map(line);
-    prefix.push('| ' + headers[0].cells.map(() => '---').join(' | ') + ' |');
+    if (!headers.length) return rows.map((row, index) => of(index ? [rows[0], row] : [row], false));
     const data = rows.filter(row => !headers.includes(row));
-    return data.length ? data.map(row => [...prefix, line(row)].join('\n')) : [prefix.join('\n')];
+    return data.length ? data.map(row => of([row], true)) : [of([], true)];
   };
 
   function flush(run) {
@@ -274,8 +289,9 @@
     if (text && stamp && !text.includes(stamp)) text = `${text} (${stamp})`;
     const onlyLink =
       elements.length === 1 && elements[0].tagName === 'A' && elements[0].href && textOf(elements[0]) === text;
-    if (onlyLink) push('link', text, { href: hrefOf(elements[0]) }, run);
-    else push('paragraph', text, {}, run);
+    const links = linksIn(elements);
+    if (onlyLink) push('link', text, { href: hrefOf(elements[0]), links }, run);
+    else push('paragraph', text, { links }, run);
     for (const e of elements) for (const field of fields(e)) push('paragraph', field);
     run.length = 0;
   }
@@ -374,13 +390,13 @@
       const text = textOf(el);
       while (path.length > floor && path.length - floor >= level) path.pop();
       if (text) {
-        push('heading', text, {}, [el]);
+        push('heading', text, { links: linksIn([el]) }, [el]);
         path.push(text);
       }
       return;
     }
     if (el.tagName === 'TABLE') {
-      for (const text of renderTable(el)) push('table', text, {}, [el]);
+      for (const { text, links } of renderTable(el)) push('table', text, { links }, [el]);
       // A form laid out in a table: its cells render as text, which holds none of the controls' values.
       for (const field of fields(el)) push('paragraph', field);
       return;
@@ -392,7 +408,7 @@
       push(
         el.tagName === 'LI' ? 'list_item' : 'record',
         record ?? textOf(el),
-        links.length === 1 ? { href: hrefOf(links[0]) } : {},
+        { ...(links.length === 1 ? { href: hrefOf(links[0]) } : {}), links: linksIn([el]) },
         [el],
       );
       for (const field of fields(el)) push('paragraph', field);

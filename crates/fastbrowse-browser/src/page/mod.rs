@@ -18,7 +18,7 @@ use fastbrowse_core::BoxFuture;
 use fastbrowse_core::addresses::search_address;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::JEV_IMAGE_SIDE;
-use fastbrowse_core::models::{Artifact, ArtifactKind, Operation, SourceControl};
+use fastbrowse_core::models::{Artifact, ArtifactKind, Link, Operation, SourceControl};
 use fastbrowse_core::origins::origin_of;
 use fastbrowse_core::page::{
     ActResult, Action, Block, BlockKind, Capture, Control, Dialog, Media, Observation, Page, PageResult,
@@ -204,6 +204,16 @@ struct SnapshotBlock {
     #[serde(default)]
     source_path: String,
     href: Option<String>,
+    /// Each link's text and address, in the order the block shows them.
+    #[serde(default)]
+    links: Vec<SnapshotLink>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SnapshotLink {
+    text: String,
+    href: String,
 }
 
 /// capture.js output for one frame.
@@ -915,6 +925,9 @@ impl CdpPage {
             }
             for block in &frame.raw.blocks {
                 let start = offset;
+                let found: Vec<(String, String)> =
+                    block.links.iter().map(|link| (link.text.clone(), link.href.clone())).collect();
+                let links = Link::locate(&block.text, int(start), &found);
                 text.push_str(&block.text);
                 offset += text::len(&block.text);
                 let end = offset;
@@ -934,6 +947,7 @@ impl CdpPage {
                     heading_path: block.heading_path.clone(),
                     control_context: block.control_context.clone(),
                     href: block.href.clone(),
+                    links,
                 });
             }
         }
@@ -972,6 +986,7 @@ impl CdpPage {
                     heading_path: vec![heading.clone()],
                     control_context: None,
                     href: None,
+                    links: Vec::new(),
                 });
                 text.push_str("\n\n");
                 offset += 2;

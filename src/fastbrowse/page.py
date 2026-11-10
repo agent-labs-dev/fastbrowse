@@ -9,7 +9,7 @@ from enum import StrEnum
 
 from pydantic import Field, field_serializer
 
-from fastbrowse.models import Attachment, Frozen, Operation, SourceControl, StepOutcome, Unavailable
+from fastbrowse.models import Attachment, Frozen, Link, Operation, SourceControl, StepOutcome, Unavailable
 
 
 class Control(Frozen):
@@ -152,6 +152,9 @@ class Block(Frozen):
     heading_path: tuple[str, ...] = ()
     control_context: SourceControl | None = None
     href: str | None = None
+    links: tuple[Link, ...] = Field(default=(), exclude_if=lambda links: not links)
+    """The links inside this block, with their text's place in `Capture.text`: a link's text alone does not say where
+    it leads, nor where a value the page set apart as its own element ends."""
 
 
 class Capture(Frozen):

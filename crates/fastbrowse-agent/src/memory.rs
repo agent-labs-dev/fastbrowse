@@ -412,6 +412,7 @@ impl Notes {
             rendered_text: false,
             heading_path: Vec::new(),
             capture_artifact: None,
+            links: Vec::new(),
         };
         self.add(Fact {
             answers: true,

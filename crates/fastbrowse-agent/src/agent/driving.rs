@@ -1083,6 +1083,16 @@ impl Agent {
                     context: context.context.as_deref().map(mask),
                 }),
                 href: block.href.as_deref().map(mask),
+                // An address can carry a token in its query, and a link's text is page text like the rest.
+                links: block
+                    .links
+                    .iter()
+                    .map(|link| fastbrowse_core::models::Link {
+                        text: mask(&link.text),
+                        href: mask(&link.href),
+                        ..link.clone()
+                    })
+                    .collect(),
                 source_url: block.source_url.as_deref().map(mask),
                 ..block.clone()
             })
