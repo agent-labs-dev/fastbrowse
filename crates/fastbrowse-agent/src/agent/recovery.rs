@@ -12,6 +12,7 @@ use super::Agent;
 use super::helpers::{decision_label, describe};
 use super::state::{RunState, Step, Stop};
 use crate::policy::{Decision, StepContext, decide};
+use crate::start::{accept_start, propose_route};
 
 /// The action a stall is about, which the next ask leaves out: its operation, and the control it acted on by label.
 pub(super) type Withheld = Option<(Operation, Option<String>)>;
@@ -227,6 +228,38 @@ impl Agent {
             return Err(Stop::new(status, reason).into());
         }
         self.ask_jev_again(state, observation, &reason, withheld).await
+    }
+
+    /// Open another route to what the task needs after a bot check at `walled` did not clear, as the first address
+    /// was proposed: a run whose search met PyPI's challenge stopped blocked, while hosted agents opened the project
+    /// page itself (#953). False when no route is left: none is proposed, the one proposed was opened before or is
+    /// walled, or the run's recoveries are spent.
+    pub(super) async fn route_around(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        walled: &str,
+    ) -> Step<bool> {
+        if !state.walled.iter().any(|known| known == walled) {
+            state.walled.push(walled.to_string());
+        }
+        if state.recoveries >= self.config.stall.max_recoveries {
+            return Ok(false);
+        }
+        let walled: Vec<String> = state.walled.iter().map(|url| self.redact(url)).collect();
+        let mut opened: Vec<String> = state.routes.iter().map(|url| self.redact(url)).collect();
+        opened.sort();
+        let proposal = propose_route(&*self.llm, &state.task, &walled, &opened, Some(&state.ledger)).await?;
+        state.ledger.record([proposal.cost])?;
+        let Some(route) = accept_start(proposal.data.url.as_deref())
+            .filter(|route| !state.walled.contains(route) && state.routes.insert(route.clone()))
+        else {
+            return Ok(false);
+        };
+        state.recoveries += 1;
+        self.event("route_around", || Map::from_iter([("url".into(), self.redact(&route).into())]));
+        self.open_by_code(state, observation, route).await?;
+        Ok(true)
     }
 
     /// Jev asked again on this page, told what went wrong, its pick taken as the next decision there.
