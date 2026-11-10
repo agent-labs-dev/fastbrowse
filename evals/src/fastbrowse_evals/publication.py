@@ -77,7 +77,7 @@ class PublicationError(ValueError):
 GROUPS: dict[str, tuple[int, int, str, set[str]]] = {
     "internal-fastbrowse": (53, 3, "task-success", {"fastbrowse"}),
     "internal-hosted": (53, 3, "task-success", {"fastbrowse"}),
-    "internal-ultrafast": (47, 3, "task-success", {"fastbrowse-pool", "jev-ultrafast"}),
+    "internal-ultrafast": (6, 3, "task-success", {"fastbrowse-pool", "jev-ultrafast"}),
     "internal-backend": (53, 3, "task-success", {"fastbrowse", "fastbrowse-pool"}),
     # Official groups take whatever repeat count their runs recorded (`official_group`).
     "bu-bench": (200, 1, "weighted-rubric", {"fastbrowse"}),

@@ -12,7 +12,6 @@ DERIVED_ARMS = (
     "fastbrowse-hosted",
     "cua-codex",
     "browser-harness",
-    "jev-ultrafast",
     "browser-use-ultrafast",
 )
 """Arms whose tasks follow from `eligible` rather than a task's own `arms`, so adding one changes no task fingerprint."""

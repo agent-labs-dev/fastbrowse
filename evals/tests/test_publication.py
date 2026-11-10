@@ -1178,15 +1178,15 @@ def test_the_hosted_group_measures_whichever_hosted_arms_ran_on_one_task_set(tmp
     assert len(group.task_ids) == 53
     counts = {arm: sum(r.arm == arm for r in group.rows) for arm in arms}
     # Each arm runs every task it can attempt, three times each.
-    assert counts == {"fastbrowse": 159, "browser-use": 156, "jev-ultrafast": 141}
+    assert counts == {"fastbrowse": 159, "browser-use": 156, "jev-ultrafast": 18}
     # Each task an arm cannot run is listed with the catalog's reason, and stands for three failed attempts.
     assert [(e.arm, e.task) for e in group.excluded] == sorted(
         (arm, t["id"]) for arm in arms for t in entries(HOSTED_TASKS) if arm not in t["arms"]
     )
-    assert len(group.excluded) == 1 + 6
+    assert len(group.excluded) == 1 + 47
     pause = next(e for e in group.excluded if e.arm == "browser-use")
     assert pause.reason == next(t for t in entries(HOSTED_TASKS) if t["id"] == pause.task)["excluded"]["browser-use"]
-    assert any("failed where it cannot run: browser-use 1, jev-ultrafast 6" in n for n in group.limits)
+    assert any("failed where it cannot run: browser-use 1, jev-ultrafast 47" in n for n in group.limits)
     assert any("jev-ultrafast text helper" in n for n in group.limits)
 
     # browser-harness, a coding agent given no credentials, runs only the set's credential-free completion tasks.

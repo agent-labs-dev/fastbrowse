@@ -1216,7 +1216,7 @@ def test_the_ultrafast_pairing_follows_the_schema(candidate, schema, arms, valid
             Candidate.model_validate(data)
         return
     parsed = Candidate.model_validate(data)
-    assert len(parsed.groups[0].task_ids) == 47
+    assert len(parsed.groups[0].task_ids) == 6
     if schema < 5:
         # The old pairing still reads, but a new measurement on the current catalog must use the pool.
         with pytest.raises(ValueError, match="pair fastbrowse-pool"):
