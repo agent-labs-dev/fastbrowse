@@ -557,6 +557,43 @@ async fn test_a_clipped_file_input_uploads_through_its_label() {
     assert_eq!(count, json!(1));
 }
 
+/// A hidden, unlabelled file input that only a script-driven button opens: the click opens the browser's file chooser,
+/// and that button is then offered as the place to upload, as a label is for its input.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_button_that_opens_a_hidden_file_input_uploads_through_its_chooser() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = '<input id=file type=file style=display:none><button>Replace File</button>'; \
+         document.querySelector('button').onclick = () => document.getElementById('file').click();",
+    )
+    .await;
+    let observation = h.observe().await;
+    let uploads =
+        |o: &fastbrowse_core::page::Observation| o.controls.iter().any(|c| c.operations.contains(&Operation::Upload));
+    assert!(!uploads(&observation), "{:?}", observation.controls);
+    let clicked =
+        h.page.act(&action(Operation::Click, find(&observation, "Replace File")), &observation).await.expect("act");
+    assert_eq!(clicked.outcome, StepOutcome::Executed, "{:?}", clicked.detail);
+    let observation = h.observe().await;
+    let opener = find(&observation, "Replace File");
+    assert_eq!(opener.operations, [Operation::Upload].into(), "{:?}", observation.controls);
+    let upload = Action {
+        files: vec![Attachment {
+            name: "lid.stl".into(),
+            mime_type: "model/stl".into(),
+            content: Bytes(b"solid".to_vec()),
+        }],
+        ..action(Operation::Upload, opener)
+    };
+    let result = h.page.act(&upload, &observation).await.expect("act");
+    let name = eval_active(&h.page, "document.getElementById('file').files[0]?.name ?? null").await;
+    h.close().await;
+    assert_eq!(result.outcome, StepOutcome::Executed, "{:?}", result.detail);
+    assert_eq!(name, json!("lid.stl"));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_select_clipped_after_it_was_observed_is_stale() {
     let Some(h) = harness().await else { return };
