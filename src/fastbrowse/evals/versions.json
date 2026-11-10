@@ -111,6 +111,10 @@
     "fingerprint": "56aab0583458129c",
     "version": 7
   },
+  "mock-custom-select": {
+    "version": 1,
+    "fingerprint": "97a7e2edd06d0f18"
+  },
   "mock-disguised-delete": {
     "fingerprint": "37abd67293d8bb08",
     "version": 2
@@ -138,6 +142,10 @@
   "mock-invoice-export": {
     "fingerprint": "f390cb827c3b2720",
     "version": 3
+  },
+  "mock-long-description": {
+    "version": 1,
+    "fingerprint": "228d5a64844e19a5"
   },
   "mock-new-tab-story": {
     "fingerprint": "dd541a1723459a5a",
@@ -214,6 +222,10 @@
   "mock-transient-error": {
     "fingerprint": "919f009589d38f61",
     "version": 2
+  },
+  "mock-unfinished-write": {
+    "version": 2,
+    "fingerprint": "24d75cb124eefcb6"
   },
   "mock-upload-document": {
     "fingerprint": "1d699fac373445fe",
