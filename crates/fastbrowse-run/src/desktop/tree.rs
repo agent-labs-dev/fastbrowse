@@ -281,6 +281,14 @@ fn kind(role: &str) -> BlockKind {
 /// Every text the window holds, shown or not, as a capture whose blocks a quote is checked against.
 pub fn capture(window: &Window, root: &Element) -> Capture {
     fn walk<'a>(element: &'a Element, out: &mut Vec<(&'a str, &'a str)>) {
+        // A combo box says the item it has chosen, as it shows on screen; the items of its list are its options, not
+        // what the window says.
+        if element.role == "combo box" {
+            if let Some(item) = chosen(element) {
+                out.push((element.role.as_str(), item));
+            }
+            return;
+        }
         let text = element.text.as_deref().filter(|t| !t.trim().is_empty());
         // A control's text is read too: a field's value or a button's words are part of what the window says.
         let named = (!operations(element).is_empty() && !element.name.is_empty()).then_some(element.name.as_str());
@@ -364,7 +372,10 @@ mod tests {
             "",
             &["enabled", "sensitive"],
             None,
-            vec![node("e6", "menu item", "Ireland", &["enabled", "selectable", "visible", "selected"], None, vec![])],
+            vec![
+                node("e6", "menu item", "Ireland", &["enabled", "selectable", "visible", "selected"], None, vec![]),
+                node("e20", "menu item", "France", &["enabled", "selectable", "visible"], None, vec![]),
+            ],
         );
         let group = node(
             "e2",
@@ -443,6 +454,8 @@ mod tests {
         let capture = capture(&window, &root);
         assert!(capture.text.contains("Scrolled away") && capture.text.contains("Place order"));
         assert!(!capture.text.contains("hunter2"));
+        // A combo box reads as its chosen item, never as the options of its closed list.
+        assert!(capture.text.contains("Ireland") && !capture.text.contains("France"));
         for block in &capture.blocks {
             assert!(!capture.block_text(block).is_empty());
         }
