@@ -3,9 +3,9 @@ title: Connect an agent to a running Chrome over CDP
 description: "Drive a Chrome or Electron app you already have open over its DevTools port: the launch flag, picking a window, and keeping a signed-in browser open."
 topic: Browsers and logins
 published: 2026-11-01
-updated: 2026-11-09
-verifiedAgainst: v0.9.1
-verifiedOn: 2026-11-09
+updated: 2026-11-10
+verifiedAgainst: v0.10.1
+verifiedOn: 2026-11-10
 ---
 
 fastbrowse can drive a browser you already have open, signed in with your profile. Any Chromium app works, including Electron apps, as long as it exposes its DevTools port.
@@ -39,7 +39,7 @@ google-chrome --remote-debugging-port=9222 --user-data-dir="$HOME/.fastbrowse/ch
 fastbrowse "Report my open orders." --start https://www.amazon.com/ --cdp-port 9222
 ```
 
-Each run opens a background tab in that browser and closes it afterwards. The agent never holds the password, because the session is already in the profile. For runs that need credentials handed over, see [browser agent logins without sharing passwords](/blog/agent-credentials-scoped/).
+Each run opens a background tab in that browser and closes it afterwards. A run that stops for you to confirm a step, fill in a value or sign in leaves that tab open, so you can finish in the page it filled. The agent never holds the password, because the session is already in the profile. For runs that need credentials handed over, see [browser agent logins without sharing passwords](/blog/agent-credentials-scoped/).
 
 ## Focus while a run works
 
