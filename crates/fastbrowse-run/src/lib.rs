@@ -1291,33 +1291,60 @@ async fn desktop(
     told: &Told,
 ) -> Result<RunResult, RunError> {
     let program = std::env::var("FASTBROWSE_DESKPILOT").unwrap_or_else(|_| "deskpilot".into());
-    let page = desktop::DeskpilotPage::open(&program, window).await.map_err(RunError::Invalid)?;
     let ledger = Arc::new(Ledger::new(task.limits.clone().unwrap_or_default()));
-    let agent = Agent::new(Arc::new(page), jev, llm)
-        .with_redactor(http.trace.redactor().unwrap_or_default())
-        .with_config(config.clone())
-        .with_secrets(host.secrets.clone())
-        .with_trace(http.trace.clone())
-        .with_events(Some(on_event));
-    let run = RunOptions {
-        start: None,
-        choose_start: false,
-        context: task.context.clone(),
-        inputs: task.inputs.clone().unwrap_or_default(),
-        attachments: attachments(task),
-        output_schema: schema,
-        limits: None,
-        ledger: Some(ledger.clone()),
-        authorization: task.authorization.clone(),
-        until: host.until.clone(),
-        resume: None,
-        recipe: None,
-        recipe_sink: None,
+    let run = async {
+        let page = match desktop::DeskpilotPage::open(&program, window).await {
+            Ok(page) => page,
+            Err(desktop::OpenError::Invalid(message)) => return Err(RunError::Invalid(message)),
+            // A deskpilot that cannot start or answer is an outage, as a cloud browser that cannot start is.
+            Err(desktop::OpenError::Unavailable(message)) => {
+                return Ok(RunResult {
+                    browser: None,
+                    status: Status::Unavailable,
+                    budget: None,
+                    answer: None,
+                    data: Value::Null,
+                    evidence: Vec::new(),
+                    steps: Vec::new(),
+                    cost: ledger.breakdown(),
+                    artifacts: Vec::new(),
+                    citations: Vec::new(),
+                    error: Some(message),
+                    final_url: None,
+                    final_frame: None,
+                    recordings: Vec::new(),
+                    wall: None,
+                });
+            }
+        };
+        let agent = Agent::new(Arc::new(page), jev, llm)
+            .with_redactor(http.trace.redactor().unwrap_or_default())
+            .with_config(config.clone())
+            .with_secrets(host.secrets.clone())
+            .with_trace(http.trace.clone())
+            .with_events(Some(on_event));
+        let run = RunOptions {
+            start: None,
+            choose_start: false,
+            context: task.context.clone(),
+            inputs: task.inputs.clone().unwrap_or_default(),
+            attachments: attachments(task),
+            output_schema: schema,
+            limits: None,
+            ledger: Some(ledger.clone()),
+            authorization: task.authorization.clone(),
+            until: host.until.clone(),
+            resume: None,
+            recipe: None,
+            recipe_sink: None,
+        };
+        agent.run(&task.task, run).await.map_err(|error| RunError::Invalid(error.to_string()))
     };
-    let Ok(outcome) = host.cancel.guard(agent.run(&task.task, run)).await else {
+    // Starting deskpilot is inside the guard too, so a cancel drops a startup that hangs and its child with it.
+    let Ok(outcome) = host.cancel.guard(run).await else {
         return Err(cancelled(told, ledger.breakdown().lines, Vec::new(), None, host.cancel.reason()));
     };
-    outcome.map_err(|error| RunError::Invalid(error.to_string()))
+    outcome
 }
 
 #[cfg(test)]

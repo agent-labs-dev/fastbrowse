@@ -38,6 +38,13 @@ struct Shot {
     height: f64,
 }
 
+/// Why a desktop page could not be opened: a window argument the caller has to fix, or a deskpilot that cannot run.
+#[derive(Debug)]
+pub enum OpenError {
+    Invalid(String),
+    Unavailable(String),
+}
+
 pub struct DeskpilotPage {
     client: Deskpilot,
     window: Mutex<Window>,
@@ -59,19 +66,26 @@ fn read_window(value: &Value) -> Option<Window> {
 impl DeskpilotPage {
     /// Starts deskpilot and pins the one window `query` names (an address, a class, or a substring of a class or
     /// title, as deskpilot reads it): a query that matches no window or several is refused here, before any step.
-    pub async fn open(program: &str, query: &str) -> Result<DeskpilotPage, String> {
-        let client = Deskpilot::start(program).await.map_err(|error| error.message().to_string())?;
-        let found = client
-            .call_json("wait_for", json!({"window": query, "timeout": 5}))
-            .await
-            .map_err(|error| format!("no desktop window to drive for {query:?}: {}", error.message()))?;
+    pub async fn open(program: &str, query: &str) -> Result<DeskpilotPage, OpenError> {
+        let client = Deskpilot::start(program).await.map_err(|error| OpenError::Unavailable(error.message().into()))?;
+        let found = client.call_json("wait_for", json!({"window": query, "timeout": 5})).await.map_err(|error| {
+            let message = format!("no desktop window to drive for {query:?}: {}", error.message());
+            match error {
+                // deskpilot's codes for a query that names no window, several, or is malformed: the caller's to fix.
+                ToolError::Refused { code, .. } if matches!(code.as_str(), "timeout" | "ambiguous" | "invalid") => {
+                    OpenError::Invalid(message)
+                }
+                _ => OpenError::Unavailable(message),
+            }
+        })?;
         if found.get("xwayland").and_then(Value::as_bool) == Some(true) {
-            return Err(format!(
+            return Err(OpenError::Invalid(format!(
                 "{query:?} is an XWayland window; fastbrowse drives desktop windows in deskpilot's hidden mode, which \
                  needs a native Wayland window"
-            ));
+            )));
         }
-        let window = read_window(&found).ok_or_else(|| format!("deskpilot described {query:?} without an address"))?;
+        let window = read_window(&found)
+            .ok_or_else(|| OpenError::Unavailable(format!("deskpilot described {query:?} without an address")))?;
         Ok(DeskpilotPage {
             client,
             window: Mutex::new(window),
