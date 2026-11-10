@@ -6031,8 +6031,8 @@ async fn test_done_on_a_record_page_after_leaving_the_list_returns_to_its_unread
     assert_eq!(state.unread_pager_page(), None);
 }
 
-/// A composer double that proposes `url` as the route around a wall.
-struct ProposesRoute(Option<&'static str>);
+/// A composer double that proposes `url` as the route around a wall, keeping each request it was sent.
+struct ProposesRoute(Option<&'static str>, std::sync::Mutex<Vec<String>>);
 
 impl LLMClient for ProposesRoute {
     fn generate_value<'a>(
@@ -6043,6 +6043,7 @@ impl LLMClient for ProposesRoute {
         _: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         assert!(messages[1].content.contains("# Walled addresses\nhttps://pypi.org/search/?q=httpx"));
+        self.1.lock().unwrap().push(messages[1].content.clone());
         Box::pin(async move {
             let data = schema.validate_json(&json!({"url": self.0}).to_string()).map_err(LLMError::Failed)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
@@ -6066,21 +6067,28 @@ async fn test_a_bot_check_that_does_not_clear_ends_the_route_not_the_run() {
             calls: Default::default(),
             edits_asked: Default::default(),
         });
-        Agent::new(page, jev, Arc::new(ProposesRoute(route)))
+        let llm = Arc::new(ProposesRoute(route, Default::default()));
+        (Agent::new(page, jev, llm.clone()), llm)
     };
-    let agent = around(Some("https://pypi.org/project/httpx/"));
+    let (agent, llm) = around(Some("https://pypi.org/project/httpx/"));
     let mut state = run_state();
     let wall = at(walled, &[]);
     assert!(agent.route_around(&mut state, &wall, walled).await.unwrap());
     let opened: Vec<_> = state.steps.iter().map(|step| (step.operation, step.outcome)).collect();
     assert_eq!(opened, [(Operation::Navigate, StepOutcome::Executed)]);
-    // The same route is opened once: met by a wall again, it is not a way around it.
+    // The same route is opened once: met by a wall again, it is not a way around it, with recoveries to spare.
+    state.recoveries = 0;
     assert!(!agent.route_around(&mut state, &wall, walled).await.unwrap());
     assert_eq!(state.steps.len(), 1);
+    // Asked again, the proposer is told the route it opened, so it can name what the task still needs: told only the
+    // walls, it named the httpx page again when the task also needed requests.
+    let asked = llm.1.lock().unwrap().clone();
+    assert!(!asked[0].contains("# Opened addresses"));
+    assert!(asked[1].contains("# Opened addresses\nhttps://pypi.org/project/httpx/"), "{}", asked[1]);
     // No route proposed, or only the walled address, leaves none.
-    let agent = around(None);
+    let (agent, _) = around(None);
     assert!(!agent.route_around(&mut run_state(), &wall, walled).await.unwrap());
-    let agent = around(Some(walled));
+    let (agent, _) = around(Some(walled));
     let mut state = run_state();
     assert!(!agent.route_around(&mut state, &wall, walled).await.unwrap());
     assert!(state.steps.is_empty());

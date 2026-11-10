@@ -247,7 +247,9 @@ impl Agent {
             return Ok(false);
         }
         let walled: Vec<String> = state.walled.iter().map(|url| self.redact(url)).collect();
-        let proposal = propose_route(&*self.llm, &state.task, &walled, Some(&state.ledger)).await?;
+        let mut opened: Vec<String> = state.routes.iter().map(|url| self.redact(url)).collect();
+        opened.sort();
+        let proposal = propose_route(&*self.llm, &state.task, &walled, &opened, Some(&state.ledger)).await?;
         state.ledger.record([proposal.cost])?;
         let Some(route) = accept_start(proposal.data.url.as_deref())
             .filter(|route| !state.walled.contains(route) && state.routes.insert(route.clone()))
