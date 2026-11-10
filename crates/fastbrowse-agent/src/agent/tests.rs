@@ -3039,6 +3039,35 @@ async fn test_past_the_recovery_budget_a_field_left_unfilled_is_named_in_the_err
     );
 }
 
+/// A select the task gives no option for is as much an input the run lacks as a text field: a profile form's required
+/// Country, answered "nothing given states it", ended the run `stuck` with no field named.
+#[tokio::test]
+async fn test_past_the_recovery_budget_a_select_left_unset_is_named_in_the_error() {
+    let script = vec![crate::scripted::Step { operation: Operation::Click, label: "Next".into(), pick: None }];
+    let jev = Arc::new(Unsure(ScriptedJev::new(script), 0.1, Default::default()));
+    let agent = Agent::new(Arc::new(Screenshots::default()), jev, Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.recoveries = agent.config.stall.max_recoveries;
+    let country = Control {
+        options: vec!["France".into(), "Japan".into()],
+        required: Some(true),
+        ..Control::new("c", "combobox", "Country", [Operation::Select])
+    };
+    let page = observation(&[country.clone(), button("Next")]);
+    state.missing.insert((page.url.clone(), "Country".into(), None));
+    let withheld = super::recovery::withheld(&code_decision(Operation::Select, Some(country)));
+    let error = agent.recover(&mut state, &page, "nothing changed", Status::Stuck, withheld).await.err();
+    assert!(
+        matches!(
+            error,
+            Some(Flow::Stop(ref stop))
+                if stop.status == Status::NeedsInput
+                    && stop.error.as_deref() == Some("'Country' needs a value the task does not give: nothing changed")
+        ),
+        "{error:?}"
+    );
+}
+
 /// #935: asked to replace a description, three runs reached for blank fields the task never named, such as a wiki
 /// link, and ended `needs_input` asking for them. A field the task asks nothing of is left, and is an input the run
 /// lacks only when the page marks it required.
