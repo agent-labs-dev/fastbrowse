@@ -1,4 +1,5 @@
-"""Fastbrowse's browser benchmarks: `fastbrowse-evals browser <command>`, each command with its own `--help`."""
+"""Fastbrowse's benchmarks: `fastbrowse-evals browser <command>`, each command with its own `--help`, and
+`fastbrowse-evals desktop` for desktop apps."""
 
 from __future__ import annotations
 
@@ -74,6 +75,7 @@ def parser() -> argparse.ArgumentParser:
     catalog.add_argument("--check", action="store_true")
     for name in FORWARDED:
         actions.add_parser(name, add_help=False, help=f"{name} benchmark command; use --help for its options")
+    families.add_parser("desktop", add_help=False, help="desktop app tasks through deskpilot; use --help for options")
     return root
 
 
@@ -82,6 +84,9 @@ def main(argv: list[str] | None = None) -> int:
     # A forwarded command's flags, its --help included, belong to its own parser.
     if len(arguments) >= 2 and arguments[0] == "browser" and arguments[1] in FORWARDED:
         return run(arguments[1], arguments[2:])
+    if arguments[:1] == ["desktop"]:
+        importlib.import_module("fastbrowse_evals.desktop.bench").main(arguments[1:])
+        return 0
     args = parser().parse_args(arguments)
     export(args.path, check=args.check)
     return 0

@@ -37,6 +37,11 @@ SKIPPED = {
 }
 RAW = {"JsonValue", "RequestId"}
 BOXED = {"long": "Long", "double": "Double", "boolean": "Boolean"}
+# Each constructor shape a release published, as the protocol keys added since: a new field joins every set here, and
+# the shape before it is added as a set of its own, so no published constructor goes away.
+PUBLISHED_SHAPES = {
+    "RunParams": [{"recipe", "save_recipe", "desktop"}, {"desktop"}],
+}
 
 
 def camel(name: str) -> str:
@@ -118,11 +123,12 @@ class Generator:
             out.append(javadoc(doc + ("\n\n" if doc and params else "") + params, ""))
         components = [f'    @JsonProperty("{key}") {java} {field}' for key, field, java, _ in fields]
         out.append(f"public record {name}(\n" + ",\n".join(components) + ") {\n\n")
-        if name == "RunParams":
-            # Keep source compatibility for callers compiled against the pre-recipe protocol shape.
-            legacy = [(field, java) for key, field, java, _ in fields if key not in {"recipe", "save_recipe"}]
-            signature = ", ".join(f"{java} {field}" for field, java in legacy)
-            values = ", ".join("null" if key in {"recipe", "save_recipe"} else field for key, field, _, _ in fields)
+        # A record's canonical constructor changes with every field, so each shape a release published keeps a
+        # constructor of its own, passing null for the fields it predates, and callers compiled against it still build.
+        for later in PUBLISHED_SHAPES.get(name, []):
+            kept = [(field, java) for key, field, java, _ in fields if key not in later]
+            signature = ", ".join(f"{java} {field}" for field, java in kept)
+            values = ", ".join("null" if key in later else field for key, field, _, _ in fields)
             out.append(f"    public {name}({signature}) {{\n")
             out.append(f"        this({values});\n    }}\n\n")
         out.append(f"    /** A builder for a {{@code {name}}}, every field unset. */\n")

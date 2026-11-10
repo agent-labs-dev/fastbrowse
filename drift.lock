@@ -8,7 +8,7 @@ sig = "c65ef580d8a67c67"
 [[bindings]]
 doc = "blog/agent-credentials-scoped.md"
 target = "crates/fastbrowse-cli/src/cli.rs"
-sig = "5698fead2af5db2d"
+sig = "4617090e61b63371"
 
 [[bindings]]
 doc = "blog/agent-skills-browser.md"
@@ -38,17 +38,17 @@ sig = "14567393b484c37d"
 [[bindings]]
 doc = "blog/attach-to-running-chrome.md"
 target = "crates/fastbrowse-cli/src/cli.rs"
-sig = "5698fead2af5db2d"
+sig = "4617090e61b63371"
 
 [[bindings]]
 doc = "blog/attach-to-running-chrome.md"
 target = "crates/fastbrowse-cli/src/options.rs"
-sig = "dcfffa31b67dad11"
+sig = "3c20a7351f5a1f6c"
 
 [[bindings]]
 doc = "blog/browser-automation-cost-per-run.md"
 target = "crates/fastbrowse-cli/src/cli.rs"
-sig = "5698fead2af5db2d"
+sig = "4617090e61b63371"
 
 [[bindings]]
 doc = "blog/browser-automation-cost-per-run.md"
@@ -63,7 +63,7 @@ sig = "dfd16e6ddd1d30c6"
 [[bindings]]
 doc = "blog/verify-browser-agent-results.md"
 target = "crates/fastbrowse-cli/src/cli.rs"
-sig = "5698fead2af5db2d"
+sig = "4617090e61b63371"
 
 [[bindings]]
 doc = "blog/verify-browser-agent-results.md"

@@ -428,6 +428,7 @@ export interface RunParams {
   browser?: boolean;
   extension?: boolean;
   extension_browser?: string | null;
+  desktop?: string | null;
 }
 export interface SecretRef {
   name: string;

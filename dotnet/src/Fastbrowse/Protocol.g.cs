@@ -643,6 +643,9 @@ public sealed record RunParams
 
     [JsonPropertyName("extension_browser")]
     public string? ExtensionBrowser { get; init; }
+
+    [JsonPropertyName("desktop")]
+    public string? Desktop { get; init; }
 }
 
 public sealed record RunResult
