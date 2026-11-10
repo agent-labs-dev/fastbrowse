@@ -6662,6 +6662,22 @@ impl Page for Picker {
     }
 }
 
+/// A run that reached DONE and ended unverified with an answer went from `conclude_attempt` straight to its result, so
+/// the fields it changed were never named (#939). Every unfinished run is named its changes at the one point its
+/// result leaves the run, whatever path built it.
+#[tokio::test]
+async fn test_a_run_unverified_at_done_names_the_fields_it_changed() {
+    let jev = Noul(ScriptedJev::new(crate::scripted::steps("click Notify followers").unwrap()), REFUSED);
+    let agent = Agent::new(Arc::new(Picker::new()), Arc::new(jev), Arc::new(ScriptedLLM));
+    let options = super::RunOptions { start: Some("https://shop.test/ticket".into()), ..Default::default() };
+    let result = agent.run("Turn on Notify followers and tell me what the page says", options).await.unwrap();
+    assert_eq!(result.status, Status::Unverified, "{:?}", result.error);
+    let answer = result.answer.expect("an answer");
+    assert!(answer.starts_with(super::finishing::CHANGED), "{answer}");
+    assert!(answer.contains("- Notify followers: checked\n"), "{answer}");
+    assert!(answer.contains("Choose a ticket"), "{answer}");
+}
+
 /// A custom select is set by clicking an option, which has no checked state and is gone once the menu closes: the
 /// change is the field's value, as the page reads it after the click (#939).
 #[tokio::test]
@@ -6694,4 +6710,32 @@ async fn test_an_option_click_no_field_reports_is_named_as_clicked() {
     let result = agent.run("Choose One way as the ticket type and tell me the price", options).await.unwrap();
     let answer = result.answer.expect("an answer");
     assert!(answer.contains(&format!("- One way: {}", super::finishing::UNREPORTED)), "{answer}");
+}
+
+/// The done check finding the task's remaining step refused by the site.
+const REFUSED: &[(&str, f64)] = &[("carried", 0.0), ("refused", 1.0)];
+
+/// The scripted Jev, with each named yes/no question answered at its given probability.
+struct Noul(ScriptedJev, &'static [(&'static str, f64)]);
+
+impl DecisionClient for Noul {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            let mut evaluation = self.0.evaluate(state, questions).await?;
+            for (key, probability) in self.1 {
+                if let Some(Answer::Noul(answer)) = evaluation.answers.get_mut(*key) {
+                    answer.probability = *probability;
+                }
+            }
+            Ok(evaluation)
+        })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        self.0.profile()
+    }
 }

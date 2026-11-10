@@ -251,6 +251,7 @@ impl Agent {
         let deadline = ledger.limits.max_seconds.map(|seconds| began + Duration::from_secs_f64(seconds));
         let mut slot: Option<RunState> = None;
         let mut requested_frame = false;
+        let mut changed: Option<String> = None;
         let resume = options.resume.take();
         let scoped = jev_spend(Lines::Ledger(ledger.clone()), Some(ledger.clone()), async {
             let running = Box::pin(async {
@@ -290,6 +291,7 @@ impl Agent {
             if let (Some(sink), Some(state)) = (&options.recipe_sink, &slot) {
                 self.store_recipe(state, sink);
             }
+            changed = slot.as_ref().and_then(|state| finishing::changed_fields(&state.history));
             if let (Some(state), Some(page)) = (slot.take(), self.raw()) {
                 let url = self.page.browser_address().unwrap_or(page.url);
                 self.seen().resume = Some(Resume { state, url });
@@ -297,30 +299,47 @@ impl Agent {
             ended
         });
         let (mut result, mut loop_returned, needs_browser) = self.trace.phase("run", scoped).await;
-        if needs_browser {
+        let result = if needs_browser {
             // A run that needs a browser reports what the ledger spent and nothing else: no budget check and no ending
             // frame.
             result.cost = ledger.breakdown();
-            return Ok(result);
-        }
-        self.keep_captures(&mut result).await;
-        // A run that already failed keeps its error: a refused Jev key's unpriced line reported the run as over a spend
-        // limit instead of naming the key.
-        if let Err(error) = ledger.check_spend(0.0) {
-            if result.status != Status::Error
-                && result.budget.as_ref().is_none_or(|budget| budget.resource != BudgetResource::Seconds)
-            {
-                result.status = Status::BudgetExceeded;
-                result.error = Some(error.to_string());
-                result.budget = Some(error.budget);
+            result
+        } else {
+            self.keep_captures(&mut result).await;
+            // A run that already failed keeps its error: a refused Jev key's unpriced line reported the run as over a
+            // spend limit instead of naming the key.
+            if let Err(error) = ledger.check_spend(0.0) {
+                if result.status != Status::Error
+                    && result.budget.as_ref().is_none_or(|budget| budget.resource != BudgetResource::Seconds)
+                {
+                    result.status = Status::BudgetExceeded;
+                    result.error = Some(error.to_string());
+                    result.budget = Some(error.budget);
+                }
+                loop_returned = false;
             }
-            loop_returned = false;
+            if result.status.waits_on_person() {
+                self.page.hand_over_tab();
+            }
+            result.cost = ledger.breakdown();
+            if loop_returned { result } else { self.ending_frame(result, requested_frame).await }
+        };
+        Ok(self.with_changes(result, changed))
+    }
+
+    /// `result` with the fields its run changed named first in its answer when the run ended without finishing (#939).
+    /// Every result leaves the run here, once its status is final, so no path that builds one can drop them.
+    fn with_changes(&self, mut result: RunResult, changed: Option<String>) -> RunResult {
+        if result.status != Status::Complete
+            && let Some(changed) = changed
+        {
+            let changed = self.redact(&changed);
+            result.answer = Some(match result.answer.take() {
+                Some(answer) => format!("{changed}\n\n{answer}"),
+                None => changed,
+            });
         }
-        if result.status.waits_on_person() {
-            self.page.hand_over_tab();
-        }
-        result.cost = ledger.breakdown();
-        Ok(if loop_returned { result } else { self.ending_frame(result, requested_frame).await })
+        result
     }
 
     /// Keeps each page capture the result's evidence quotes as a `capture` artifact, so a citation can be checked
@@ -615,13 +634,6 @@ impl Agent {
         error: Option<String>,
         budget: Option<BudgetStop>,
     ) -> RunResult {
-        // A run that ends unfinished names the fields it left changed, and one that stops with a step of its task
-        // undone says so before both.
-        let changed = (status != Status::Complete)
-            .then(|| state.and_then(|state| finishing::changed_fields(&state.history)))
-            .flatten()
-            .map(|changed| noticed(&self.redact(&changed), partial.clone()));
-        let partial = changed.as_ref().unwrap_or(partial);
         let undone = (status != Status::Complete && state.is_some_and(|state| state.undone))
             .then(|| noticed(finishing::UNDONE, partial.clone()));
         let partial = undone.as_ref().unwrap_or(partial);
@@ -637,12 +649,7 @@ impl Agent {
         )
     }
 
-    fn result(&self, state: Option<&RunState>, ledger: &Ledger, status: Status, mut outcome: Outcome) -> RunResult {
-        // A run with no answer that ends unfinished still names the fields it left changed; one with an answer says so
-        // in it, where `answered` puts it.
-        if outcome.answer.is_none() && status != Status::Complete {
-            outcome.answer = state.and_then(|state| finishing::changed_fields(&state.history)).map(|c| self.redact(&c));
-        }
+    fn result(&self, state: Option<&RunState>, ledger: &Ledger, status: Status, outcome: Outcome) -> RunResult {
         let observed = {
             let seen = self.seen();
             seen.raw.clone().or_else(|| seen.observed.clone())
