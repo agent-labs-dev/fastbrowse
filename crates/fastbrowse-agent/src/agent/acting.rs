@@ -777,6 +777,7 @@ impl Agent {
                 &*self.llm,
                 &state.task,
                 &label,
+                target.input_type.as_deref(),
                 &typed_into(state, target),
                 &crate::dates::dated(observation.captured_at, &state.dates),
                 &state.history.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),

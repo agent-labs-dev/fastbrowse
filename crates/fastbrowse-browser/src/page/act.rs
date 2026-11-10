@@ -4,7 +4,7 @@ use std::future::Future;
 
 use data_encoding::BASE64;
 use fastbrowse_core::models::{Attachment, Operation, StepOutcome};
-use fastbrowse_core::page::{ActResult, Action, Observation};
+use fastbrowse_core::page::{ActResult, Action, NATIVE_DATE_INPUT_TYPES, Observation};
 use serde_json::{Value, json};
 use tokio::time::{Instant, sleep, timeout};
 
@@ -37,8 +37,6 @@ const POPUP_SECONDS: f64 = 1.2;
 /// A download's bytes are taken off the paused response in a task of its own, which normally finishes before the
 /// click's settle does. Paid only by a click whose own input began a navigation and left the page unchanged.
 const DOWNLOAD_SETTLE_SECONDS: f64 = 1.5;
-/// Types whose committed value is the type's own ISO shape, set through the value setter, not typed keystrokes.
-const DATE_INPUT_TYPES: [&str; 5] = ["date", "datetime-local", "month", "week", "time"];
 const CHANGED: &str = "control changed before keyboard use";
 
 /// Where a hit test found a control: a point of it, covered, still scrolling, or gone (`None` in Python).
@@ -795,7 +793,7 @@ impl CdpPage {
                      return [id, native, focused, focused === true ? ({cover})(id) : null]; }})",
                         handed = *HANDED_FOCUS_JS,
                         secret = py_json(&json!(secret)),
-                        types = py_json(&json!(DATE_INPUT_TYPES)),
+                        types = py_json(&json!(NATIVE_DATE_INPUT_TYPES)),
                         focus = focus_script(true, secret),
                         cover = *COVER_JS,
                     );
@@ -814,7 +812,7 @@ impl CdpPage {
                 Route::Keyboard => {
                     let script = format!(
                         "{}.includes(window.__fastbrowse?.nodes.get({local_id})?.type)",
-                        py_json(&json!(DATE_INPUT_TYPES))
+                        py_json(&json!(NATIVE_DATE_INPUT_TYPES))
                     );
                     let native = self.evaluate(session_id, &script).await?;
                     (Some(local_id), native == Value::Bool(true), None, None)
@@ -906,8 +904,8 @@ impl CdpPage {
     /// Commit an ISO value to a native date/time input the way its own picker would.
     ///
     /// Typed keystrokes land in whichever locale-formatted segment the picker's shadow UI has focused, so the value the
-    /// field writer produces (told the input's type) is set directly through the property setter React and friends also
-    /// patch over, then the input/change events a form's own handlers expect to see.
+    /// field writer produces (told the type's form by `native_date_form`) is set directly through the property setter
+    /// React and friends also patch over, then the input/change events a form's own handlers expect to see.
     async fn fill_native_date(&self, session_id: &str, local_id: i64, value: &str) -> Result<Outcome, BrowserError> {
         let script = format!(
             "((id, value) => {{ const e = window.__fastbrowse?.nodes.get(id); \
