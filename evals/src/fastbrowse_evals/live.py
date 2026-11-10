@@ -42,9 +42,9 @@ head-to-head arm skips one (`excluded_because`). The hosted Browser Use run keep
 finishes (`HOSTED_KEEP_ALIVE_SECONDS`), so the harness reads the page it ended on through that browser, grades it on
 navigation tasks too, then stops it; its cost is read once the stop has settled the session. It skips only the task
 that passes by stopping before an unauthorized step, since V4 takes no authorization setting and no pause.
-jev-ultrafast returns no answer, only DONE or BLOCKED, so on an answer task the judge has its final page to go on; it
-skips the tasks it has no way to attempt. fastbrowse must also end with the task's expected status, and jev-ultrafast
-with DONE. fastbrowse-pool runs every task fastbrowse runs.
+jev-ultrafast returns no answer, only DONE or BLOCKED, so it runs only the navigation tasks, which are graded on the
+page a run ends on. fastbrowse must also end with the task's expected status, and jev-ultrafast with DONE.
+fastbrowse-pool runs every task fastbrowse runs.
 
 Every run is graded by `anthropic/claude-opus-5.5` through OpenRouter alone (`JUDGE_POLICY`, the only policy
 publication accepts); `--judge-policy browser-internal-jev-v3` grades Jev first with that model as its fallback, and
@@ -167,7 +167,11 @@ PROVIDER_LIMITS = (
 )
 """Bounds imposed by a provider that no request can lift, recorded with every row rather than hidden."""
 
-ULTRAFAST = "jev-ultrafast @ git+https://github.com/browser-use/jev-ultrafast@1231850a0bf1a0c0341fe408ef1668dbbfdfac46"
+ULTRAFAST_COMMIT = "1231850a0bf1a0c0341fe408ef1668dbbfdfac46"
+ULTRAFAST = f"jev-ultrafast @ git+https://github.com/browser-use/jev-ultrafast@{ULTRAFAST_COMMIT}"
+ULTRAFAST_PIN = f"jev-ultrafast commit {ULTRAFAST_COMMIT}"
+"""The arm's pin as the catalog and a published source record it. The install spec above holds a URL, which public
+text may not name."""
 ULTRAFAST_RUNNER = Path(__file__).with_name("adapters") / "ultrafast_arm.py"
 ULTRAFAST_COMMAND = ("uv", "run", "--no-project", "--quiet", "--python", "3.14", "--with", ULTRAFAST, "python")
 ULTRAFAST_TEXT_MODEL = "google/gemini-3.1-flash-lite"
@@ -2493,7 +2497,7 @@ ARMS: dict[str, ArmSpec] = {
     ),
     "jev-ultrafast": ArmSpec(
         runner=_run_ultra,
-        pin=ULTRAFAST,
+        pin=ULTRAFAST_PIN,
         env_allowlist=_RUNTIME_ENV,
         tier="A",
         prepare=_prepare_ultra,
@@ -2537,26 +2541,29 @@ def excluded_because(arm: str, task: LiveTask) -> str | None:
     unexplained one fails the catalog export instead of shipping."""
     if eligible(arm, task):
         return None
+    # The site shows a reason after the agent's name ("Browser Harness: cannot attempt 6 tasks (...): <reason>"), so
+    # each is written for that reader, about "it", the agent, with no harness terms.
     if arm in HOSTED_MODELS and task.expect is not Status.COMPLETE:
         return (
-            "passes only by stopping before an irreversible step the task asks for but does not authorize, and the "
-            "hosted Browser Use API (V4) takes no authorization setting and no pause, so it cannot be told the step "
-            "is unauthorized"
+            "the task passes only by stopping before an irreversible step it does not authorize, and the hosted "
+            "Browser Use API takes no authorization setting and no pause, so it cannot be told the step is unauthorized"
         )
     if arm == "jev-ultrafast" and task.expect is not Status.COMPLETE:
         return (
-            "passes only by stopping before an irreversible step the task asks for but does not authorize, and "
-            "jev-ultrafast takes no authorization setting and has no way to ask: it ends only DONE or BLOCKED"
+            "the task passes only by stopping before an irreversible step it does not authorize, and it takes no "
+            "authorization setting and has no way to ask: it only ends done or blocked"
         )
+    if arm == "jev-ultrafast" and (task.secrets or task.bitwarden_item is not None):
+        return "the task needs login credentials, and it has no way to be given any"
     if arm == "jev-ultrafast":
-        return "needs login credentials, and jev-ultrafast has no way to be given any"
+        return "the task asks for an answer, and it returns none: it only ends done or blocked"
     if arm == "browser-harness" and task.expect is not Status.COMPLETE:
         return (
-            "passes only by stopping before an irreversible step the task asks for but does not authorize, and Codex "
-            "with Browser Harness takes no authorization setting and no pause"
+            "the task passes only by stopping before an irreversible step it does not authorize, and it takes no "
+            "authorization setting and has no way to pause"
         )
     if arm == "browser-harness":
-        return "needs login credentials, and the coding agent arm is given none: it would hold them in its own shell"
+        return "the task needs login credentials, and we give it none, because it would hold them in its own shell"
     raise ValueError(f"{task.id}: {arm} is excluded without a stated reason")
 
 
@@ -2575,7 +2582,11 @@ def eligible(arm: str, task: LiveTask) -> bool:
     if arm == "browser-use-ultrafast":
         # The same hosted agent on another model: every task the hosted arm runs.
         return eligible("browser-use", task)
-    if arm in {"cua-codex", "browser-harness", "jev-ultrafast"}:
+    if arm == "jev-ultrafast":
+        # It ends only DONE or BLOCKED and returns no answer, so it runs only the tasks graded on the page it ends on,
+        # which name it in their own `arms`.
+        return arm in task.arms
+    if arm in {"cua-codex", "browser-harness"}:
         # Agents that take no credentials and no authorization setting: completion tasks without credentials.
         return task.expect == Status.COMPLETE and not task.secrets and task.bitwarden_item is None
     return arm in task.arms or (arm == "browser-use-oss" and task.expect == Status.COMPLETE)

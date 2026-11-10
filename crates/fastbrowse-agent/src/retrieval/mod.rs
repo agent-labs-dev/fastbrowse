@@ -5,7 +5,7 @@
 //! extraction and `answers` the answer built from what Jev read.
 
 mod answers;
-pub(crate) use answers::{compose_reviewed, draft_reviewed};
+pub(crate) use answers::{Draft, compose_reviewed, draft_reviewed, noticed};
 mod choices;
 mod chunks;
 mod fields;
@@ -48,6 +48,7 @@ pub(crate) mod testing {
                 heading_path: Vec::new(),
                 control_context: None,
                 href: None,
+                links: Vec::new(),
             });
             start += length + 2;
         }

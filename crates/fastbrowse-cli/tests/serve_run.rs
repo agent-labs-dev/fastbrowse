@@ -8,8 +8,8 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use common::{
-    CHROME, Recorder, START, binary, browser_event, result, run_params, runner, serving, settings, settings_with,
-    step_event,
+    CHROME, Recorder, START, browser_event, isolated_binary, result, run_params, runner, serving, settings,
+    settings_with, step_event,
 };
 use fastbrowse_cli::runner::RunError;
 use fastbrowse_core::models::{Authorization, Limits, LocalChrome, Status};
@@ -497,7 +497,7 @@ async fn test_a_run_that_raises_ends_as_an_error_result_and_the_server_keeps_ser
 }
 
 fn command(arguments: &[&str]) -> Command {
-    let mut command = Command::new(binary());
+    let mut command = isolated_binary();
     command.arg("serve").args(arguments).env("OPENROUTER_API_KEY", "unused").env("AI_GATEWAY_API_KEY", "unused");
     command
 }

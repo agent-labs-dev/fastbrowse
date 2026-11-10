@@ -2,7 +2,7 @@
 
 use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::decision::{Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, Question};
-use fastbrowse_core::models::{CostComponent, Evidence, JevPurpose};
+use fastbrowse_core::models::{CostComponent, Evidence, JevPurpose, Link};
 use fastbrowse_core::output_schema::{OutputField, OutputType};
 use fastbrowse_core::page::{Block, BlockKind, Capture};
 use fastbrowse_core::py::datetime::days_in_month;
@@ -316,6 +316,28 @@ pub(crate) fn context(value: &str, start: usize, end: usize, block: &Block) -> S
     format!("{}column {} in row: {row}", marks(block), text::repr(name))
 }
 
+/// The spans of `value`, which starts at `offset` in the capture, that can hold a field's value: each of its kind's
+/// shapes and, for a string, each link's text as well. A sentence runs past the part of it the page set apart as its own
+/// element, so a product name linked inside its list item was only offered with the item's price, and taken so.
+fn field_spans(value: &str, kind: SpanKind, offset: i64, links: &[Link]) -> Vec<(usize, usize, String)> {
+    let mut found = spans(value, kind);
+    if kind != SpanKind::Str {
+        return found;
+    }
+    let chars: Vec<char> = value.chars().collect();
+    for link in links {
+        let (Ok(start), Ok(end)) = (usize::try_from(link.start - offset), usize::try_from(link.end - offset)) else {
+            continue;
+        };
+        if start < end && end <= chars.len() && !found.iter().any(|(s, e, _)| (*s, *e) == (start, end)) {
+            found.push((start, end, chars[start..end].iter().collect()));
+        }
+    }
+    // In reading order, each sentence before the links inside it.
+    found.sort_by_key(|(start, end, _)| (*start, std::cmp::Reverse(*end)));
+    found
+}
+
 /// `field_candidates(capture, field)`.
 pub fn field_candidates(
     capture: &Capture,
@@ -328,7 +350,7 @@ pub fn field_candidates(
     let mut candidates = Vec::new();
     for block in &capture.blocks {
         let value = page.slice(block.start, block.end);
-        for (start, end, raw) in spans(value, kind) {
+        for (start, end, raw) in field_spans(value, kind, block.start, &block.links) {
             let Some(scalar) = scalar_candidate(field, &raw) else { continue };
             candidates.push(Candidate {
                 id: format!("c{}", candidates.len()),
@@ -377,16 +399,18 @@ pub fn field_candidates_from_notes(
     };
     let mut candidates = Vec::new();
     for evidence in notes.current_evidence(capture).values() {
-        for (start, end, raw) in spans(&evidence.quote, kind) {
+        for (start, end, raw) in field_spans(&evidence.quote, kind, evidence.start, &evidence.links) {
             let Some(scalar) = scalar_candidate(field, &raw) else { continue };
+            let (start, end) = (evidence.start + start as i64, evidence.start + end as i64);
             candidates.push(Candidate {
                 id: format!("q{}", candidates.len()),
                 value: scalar,
                 // The match keeps the note's own page, frame and heading; only its span narrows to the value.
                 evidence: Evidence {
-                    start: evidence.start + start as i64,
-                    end: evidence.start + end as i64,
+                    start,
+                    end,
                     quote: raw,
+                    links: Link::within(&evidence.links, start, end),
                     ..evidence.clone()
                 },
                 context: quote_context(evidence),
@@ -612,5 +636,53 @@ mod calendar_tests {
             assert_eq!(iso_date(value).is_some(), extracted, "extracted {value}");
             assert_eq!(DateTime::parse_str(value).is_ok(), datetime, "datetime {value}");
         }
+    }
+}
+
+#[cfg(test)]
+mod link_tests {
+    use fastbrowse_core::models::{FactReader, Link};
+    use fastbrowse_core::page::{BlockKind, Capture};
+
+    use super::{Annotation, Candidate, Page, ScalarField, field_candidates, field_candidates_from_notes};
+    use crate::memory::{Fact, Notes};
+    use crate::retrieval::chunks::evidence;
+    use crate::retrieval::testing::capture;
+
+    /// A shop's list item whose product name is a link: `<li><a href="/product/7">Paper Filters</a> - GBP 4.60</li>`.
+    fn listed() -> Capture {
+        let mut listed = capture(&[(BlockKind::ListItem, "Paper Filters - GBP 4.60")]);
+        let found = [("Paper Filters".to_string(), "https://shop.test/product/7".to_string())];
+        listed.blocks[0].links = Link::locate("Paper Filters - GBP 4.60", 0, &found);
+        listed
+    }
+
+    fn quotes(candidates: &[Candidate]) -> Vec<&str> {
+        candidates.iter().map(|candidate| candidate.evidence.quote.as_str()).collect()
+    }
+
+    #[test]
+    fn a_linked_name_inside_its_list_item_is_a_string_candidate_of_its_own() {
+        let listed = listed();
+        let field = ScalarField::new(Annotation::Str);
+        let from_capture = field_candidates(&listed, &field).unwrap();
+        assert_eq!(quotes(&from_capture), ["Paper Filters - GBP 4.60", "Paper Filters"]);
+        let block = &listed.blocks[0];
+        assert_eq!(from_capture[1].evidence.links, block.links, "the name's quote holds its link");
+
+        let quote = evidence(&Page::new(&listed), block, block.start, block.end);
+        assert_eq!(quote.links, block.links, "a quote keeps the links inside it");
+        let notes = Notes::new([Fact {
+            answers: true,
+            text: quote.quote.clone(),
+            evidence: Some(quote),
+            basis: Vec::new(),
+            reader: FactReader::JevChoice,
+        }]);
+        let from_notes = field_candidates_from_notes(&notes, &field, None).unwrap();
+        assert_eq!(quotes(&from_notes), ["Paper Filters - GBP 4.60", "Paper Filters"], "a note offers it too");
+
+        let price = field_candidates(&listed, &ScalarField::new(Annotation::Float)).unwrap();
+        assert_eq!(quotes(&price), ["4.60"], "a number is offered by its shape alone");
     }
 }

@@ -1171,6 +1171,61 @@ def test_an_internal_ledger_graded_under_another_policy_cannot_publish(tmp_path:
 HOSTED_TASKS = ("fastbrowse",)
 
 
+def test_each_measured_arm_records_the_version_and_models_it_ran(tmp_path: Path) -> None:
+    """A competitor's pin and the models its rows reported reach the candidate, so a reader of it need not keep its
+    own copy that goes stale when a pin changes."""
+
+    def report(attempts: list[dict[str, Any]]) -> None:
+        for a in attempts:
+            if a["arm"] == "browser-use":
+                a["model"] = "anthropic/claude-opus-4.7"
+            if a["arm"] == "jev-ultrafast":
+                a["model"], a["text_model"] = "jev-model", live.ULTRAFAST_TEXT_MODEL
+
+    arms = ("fastbrowse", "browser-use", "jev-ultrafast")
+    ledger = write_ledger(tmp_path, "hosted", arms, report, task_arms=HOSTED_TASKS, budget_usd=1000.0)
+    group = publication.internal_group("internal-hosted", ledger, CATALOG, DIGEST).group
+    sources = {s.arm: s for s in group.sources}
+    assert sources["browser-use"].version == "browser-use-sdk==3.12.1 API v4; default model, reported per row"
+    assert sources["browser-use"].models == ["anthropic:claude-opus-4.7"]
+    assert sources["jev-ultrafast"].version == f"jev-ultrafast commit {live.ULTRAFAST_COMMIT}"
+    assert sources["jev-ultrafast"].models == ["google:gemini-3.1-flash-lite", "jev-model"]
+    # fastbrowse's build is the source's agent commit.
+    assert sources["fastbrowse"].version is None
+
+
+def test_a_row_states_what_browser_setup_stayed_on_its_clock(tmp_path: Path) -> None:
+    """Hosted Browser Use connects to its browser where the harness cannot see, so its rows say that connection is in
+    their seconds, and a consumer need not know which agents do."""
+
+    def note(attempts: list[dict[str, Any]]) -> None:
+        for a in attempts:
+            if a["arm"] == "browser-use":
+                a["timing_note"] = live.HOSTED_SETUP
+
+    arms = ("fastbrowse", "browser-use")
+    ledger = write_ledger(tmp_path, "hosted", arms, note, task_arms=HOSTED_TASKS, budget_usd=1000.0)
+    group = publication.internal_group("internal-hosted", ledger, CATALOG, DIGEST).group
+    assert {r.timing_note for r in group.rows if r.arm == "browser-use"} == {live.HOSTED_SETUP}
+    assert {r.timing_note for r in group.rows if r.arm == "fastbrowse"} == {None}
+    assert all("timing_note" not in r.model_dump() for r in group.rows if r.arm == "fastbrowse")
+
+
+def test_a_slot_whose_tries_ran_on_different_clocks_cannot_publish(tmp_path: Path) -> None:
+    def retry_on_another_clock(attempts: list[dict[str, Any]]) -> None:
+        first = next(a for a in attempts if a["arm"] == "browser-use")
+        earlier = dict(first, selected=False, status="unavailable", normalized_status="unavailable", passed=False)
+        earlier["semantic_judge"] = json.loads(json.dumps(first["semantic_judge"]))
+        earlier["semantic_judge"]["judgment"]["decisions"]["task_satisfied"]["passed"] = False
+        earlier["timing_note"], first["retries"] = live.HOSTED_SETUP, 1
+        attempts.insert(attempts.index(first), earlier)
+
+    arms = ("fastbrowse", "browser-use")
+    ledger = write_ledger(tmp_path, "hosted", arms, retry_on_another_clock, task_arms=HOSTED_TASKS, budget_usd=1000.0)
+    with pytest.raises(PublicationError, match="browser setup"):
+        publication.internal_group("internal-hosted", ledger, CATALOG, DIGEST)
+
+
 def test_the_hosted_group_measures_whichever_hosted_arms_ran_on_one_task_set(tmp_path: Path) -> None:
     arms = ("fastbrowse", "browser-use", "jev-ultrafast")
     ledger = write_ledger(tmp_path, "hosted", arms, task_arms=HOSTED_TASKS, budget_usd=1000.0)
@@ -1178,15 +1233,15 @@ def test_the_hosted_group_measures_whichever_hosted_arms_ran_on_one_task_set(tmp
     assert len(group.task_ids) == 53
     counts = {arm: sum(r.arm == arm for r in group.rows) for arm in arms}
     # Each arm runs every task it can attempt, three times each.
-    assert counts == {"fastbrowse": 159, "browser-use": 156, "jev-ultrafast": 141}
+    assert counts == {"fastbrowse": 159, "browser-use": 156, "jev-ultrafast": 18}
     # Each task an arm cannot run is listed with the catalog's reason, and stands for three failed attempts.
     assert [(e.arm, e.task) for e in group.excluded] == sorted(
         (arm, t["id"]) for arm in arms for t in entries(HOSTED_TASKS) if arm not in t["arms"]
     )
-    assert len(group.excluded) == 1 + 6
+    assert len(group.excluded) == 1 + 47
     pause = next(e for e in group.excluded if e.arm == "browser-use")
     assert pause.reason == next(t for t in entries(HOSTED_TASKS) if t["id"] == pause.task)["excluded"]["browser-use"]
-    assert any("failed where it cannot run: browser-use 1, jev-ultrafast 6" in n for n in group.limits)
+    assert any("failed where it cannot run: browser-use 1, jev-ultrafast 47" in n for n in group.limits)
     assert any("jev-ultrafast text helper" in n for n in group.limits)
 
     # browser-harness, a coding agent given no credentials, runs only the set's credential-free completion tasks.
@@ -1265,7 +1320,9 @@ def test_one_refused_start_among_started_runs_still_blocks(tmp_path: Path, monke
         publication.internal_group("internal-hosted", ledger, CATALOG, DIGEST)
 
 
-def block_slot(h: Harness, retries: int | None = None, *, finding: bool = True, task: str = "bu0") -> None:
+def block_slot(
+    h: Harness, retries: int | None = None, *, finding: bool = True, task: str = "bu0", status: str | None = None
+) -> None:
     """Rewrite one BU Bench slot as the runner leaves one the site blocked on every retry."""
     retries = official.OUTAGE_RETRIES if retries is None else retries
     decision = {"passed": not finding, "source": "llm", "reason": "the site served an error page"}
@@ -1277,10 +1334,13 @@ def block_slot(h: Harness, retries: int | None = None, *, finding: bool = True, 
     }
     check = {"judgment": judgment, "policy_sha256": "f" * 64, "judge_cost_usd": 0.01}
     path, folder = h.bu / "results.jsonl", h.bu / f"{task}-0"
+    if status is not None:
+        saved = json.loads((folder / "agent.json").read_text())
+        (folder / "agent.json").write_text(json.dumps(saved | {"status": status}))
     rows = [json.loads(line) for line in path.read_text().splitlines()]
     keys = ("status", "agent_dollars", "agent_cost_unknown", "seconds", "timing_basis")
     agent = {k: v for k, v in rows[0].items() if k in keys}
-    agent |= {"completed": True}
+    agent |= {"status": status, "completed": False} if status is not None else {"completed": True}
     earlier = []
     for n in range(retries):
         kept = h.bu / f"{task}-0.interrupted-{n}"
@@ -1305,24 +1365,29 @@ def block_slot(h: Harness, retries: int | None = None, *, finding: bool = True, 
     (h.bu / official.JOURNAL).write_text("".join(json.dumps(r) + "\n" for r in journal))
 
 
-def test_a_slot_the_site_blocked_is_listed_apart_and_the_run_still_publishes(tmp_path: Path) -> None:
+def test_a_slot_the_site_refused_on_every_retry_is_a_failed_row(tmp_path: Path) -> None:
+    """Another agent may get past what stopped this one, so an official slot the site refused on every retry is the
+    agent's failed attempt, as an internal one is, never left out of the score."""
     h = Harness(tmp_path)
     block_slot(h)
     candidate = h.export(hosted=None, ultrafast=None, mind2web=None)
     [group] = candidate.groups
-    [slot] = group.blocked
-    assert (slot.task, slot.repeat, slot.arm) == ("bu0", 0, "fastbrowse")
-    assert slot.physical_runs == official.OUTAGE_RETRIES + 1
-    assert slot.seconds == 3.0 * (official.OUTAGE_RETRIES + 1)
-    assert len(group.rows) == 199 and "bu0" not in {r.task for r in group.rows}
-    assert any("blocked" in limit for limit in group.limits)
+    assert group.blocked == []
+    [row] = [r for r in group.rows if r.task == "bu0"]
+    assert (row.repeat, row.arm, row.score) == (0, "fastbrowse", 0.0)
+    assert row.failure == publication.SITE_REFUSED
+    assert row.physical_runs == official.OUTAGE_RETRIES + 1
+    assert row.seconds == 3.0 * (official.OUTAGE_RETRIES + 1)
+    assert len(group.rows) == 200
+    assert any("refused on every retry is a failed attempt" in limit for limit in group.limits)
 
 
-def test_the_rows_file_carries_blocked_slots_to_the_campaign_job(tmp_path: Path) -> None:
+def test_an_official_slot_that_ended_blocked_names_the_bot_check(tmp_path: Path) -> None:
     h = Harness(tmp_path)
-    block_slot(h)
-    part = arm_rows(h, OfficialSource(h.bu, h.tmp / "bu.enc"))
-    assert publication.OfficialRows.model_validate_json(part.model_dump_json()).blocked == part.blocked
+    block_slot(h, status="blocked")
+    [group] = h.export(hosted=None, ultrafast=None, mind2web=None).groups
+    [row] = [r for r in group.rows if r.task == "bu0"]
+    assert (row.status, row.completed, row.score, row.failure) == ("blocked", False, 0.0, publication.SITE_BLOCKED)
 
 
 @pytest.mark.parametrize(
@@ -1356,12 +1421,12 @@ def test_an_ungraded_slot_the_site_did_not_block_still_refuses(tmp_path: Path) -
         h.export(hosted=None, ultrafast=None, mind2web=None)
 
 
-def test_a_run_the_site_blocked_entirely_has_nothing_to_publish(tmp_path: Path) -> None:
+def test_an_official_slot_that_ended_in_a_harness_error_is_unjudged(tmp_path: Path) -> None:
     h = Harness(tmp_path)
-    for task in h.ids["bu-bench"]:
-        block_slot(h, task=task)
-    with pytest.raises(PublicationError, match="nothing was graded"):
-        h.export(hosted=None, ultrafast=None, mind2web=None)
+    block_slot(h, status="error")
+    [group] = h.export(hosted=None, ultrafast=None, mind2web=None).groups
+    assert "bu0" not in {r.task for r in group.rows}
+    assert [(u.task, u.repeat, u.reason) for u in group.unjudged] == [("bu0", 0, "evidence-unavailable")]
 
 
 def test_an_official_slot_counts_the_runs_its_interruption_check_sent_back(tmp_path: Path) -> None:
@@ -1452,6 +1517,7 @@ def test_a_default_campaign_publishes_on_the_reference_and_a_refresh_writes_it(
         "browser-harness",
     }
     assert [a.vendor for a in group.references] == ["Browser Use", "Browser Use Ultrafast", "Browser Harness"]
+    assert [a.models for a in group.references] == [["model-x"]] * 3
     with pytest.raises(PublicationError, match="refresh_competitors"):
         h.export(hosted=live, ultrafast=None, bu_bench=None, mind2web=None)
 

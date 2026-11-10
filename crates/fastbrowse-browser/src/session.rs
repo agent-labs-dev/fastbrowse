@@ -551,22 +551,31 @@ impl BrowserSession {
                 state
                     .tabs
                     .iter()
-                    .filter(|t| !state.owned.contains(&t.target_id))
+                    .filter(|t| !state.owned.contains(&t.target_id) || state.handed_over.contains(&t.target_id))
                     .map(|t| t.session_id.clone())
                     .collect()
             };
-            // A window the user keeps gets its service workers back.
+            // A window the user keeps, or a tab handed over to them, gets its service workers back.
             for session_id in kept {
                 let _ = self.bypass_service_workers(&session_id, false).await;
             }
         }
-        let owned: Vec<String> = {
+        let (owned, handed_over): (Vec<String>, Vec<String>) = {
             let state = self.0.state.lock().unwrap();
-            state.owned.difference(&state.handed_over).cloned().collect()
+            (
+                state.owned.difference(&state.handed_over).cloned().collect(),
+                state.owned.intersection(&state.handed_over).cloned().collect(),
+            )
         };
         for target_id in owned {
             // Best-effort teardown; the browser may already be gone.
             let _ = self.send("Target.closeTarget", json!({"targetId": target_id}), None).await;
+        }
+        if self.over_extension() {
+            // The extension closes a run's tabs itself when the run lets go of it, so a tab handed over is named to it.
+            for target_id in handed_over {
+                let _ = self.send("Fastbrowse.keepTarget", json!({"targetId": target_id}), None).await;
+            }
         }
         let client = self.0.client.lock().unwrap().take();
         if let Some(client) = client {

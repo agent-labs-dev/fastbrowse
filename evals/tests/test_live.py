@@ -2410,8 +2410,11 @@ def test_every_head_to_head_arm_runs_the_same_tasks_unless_a_stated_reason_stops
     skipped = {arm: {t.id for t in every if live.excluded_because(arm, t)} for arm in live.HEAD_TO_HEAD_ARMS}
     assert skipped["fastbrowse"] == set()
     assert skipped["browser-use"] == {"saucedemo-pause"}
-    assert skipped["jev-ultrafast"] == skipped["browser-harness"]
-    assert len(every) - len(skipped["jev-ultrafast"]) == 47
+    assert len(every) - len(skipped["browser-harness"]) == 47
+    # jev-ultrafast returns no answer, so it runs only the tasks graded on the page a run ends on.
+    assert {t.id for t in every if t.id not in skipped["jev-ultrafast"]} == {
+        t.id for t in every if t.category is live_tasks.Category.NAVIGATE
+    }
 
 
 async def test_local_browser_is_the_fastbrowse_arms_alone_in_a_head_to_head(monkeypatch, tmp_path):

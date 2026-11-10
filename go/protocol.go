@@ -187,6 +187,8 @@ type Evidence struct {
 	HeadingPath []string `json:"heading_path"`
 	// The `uri` of the `capture` artifact holding the page text `start` and `end` index into, if one was kept.
 	CaptureArtifact *string `json:"capture_artifact,omitempty"`
+	// The links inside the quote and where each leads, which its text alone does not say.
+	Links []Link `json:"links,omitempty"`
 }
 
 type FactReader string
@@ -243,6 +245,13 @@ type Limits struct {
 	MaxDollars *float64 `json:"max_dollars,omitempty"`
 	// Stops active work at the time budget. Returning also waits for owned request and browser cleanup.
 	MaxSeconds *float64 `json:"max_seconds,omitempty"`
+}
+
+type Link struct {
+	Text  string `json:"text"`
+	Start int64  `json:"start"`
+	End   int64  `json:"end"`
+	Href  string `json:"href"`
 }
 
 type LocalChrome struct {

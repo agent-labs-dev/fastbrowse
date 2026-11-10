@@ -119,7 +119,8 @@ limit.
 
 - The run opened no page: `the task names no page to start from, and none was given`.
 - A field needs a value the task never states. The run first tries to go on without it, then stops with
-  `'<field>' needs a value the task does not give`, followed by the reason it gave up.
+  `'<field>' needs a value the task does not give`, followed by the reason it gave up. A field the task asks
+  nothing of is left as it is, and is named here only when the page marks it required.
 - The page asks for a file and the run has none: `the page asks for a file and none was provided`.
 - A file is larger than `Config.max_upload_bytes` (25 MiB by default): `<name> exceeds the upload size limit`.
 - A password change without a replacement secret: `A replacement password requires --secret
@@ -259,6 +260,10 @@ browser starts. When the run ends `unavailable` with `no browser has the fastbro
   fastbrowse, since it records where fastbrowse is.
 - Check that the extension is on at `chrome://extensions`, and that Chrome is open.
 - After installing, restart Chrome or turn the extension off and on, so it connects.
+- The error names the directory the run looked in. A connected browser's host writes there too, and on Linux
+  both use `$XDG_RUNTIME_DIR/fastbrowse-hosts`, or `/run/user/<uid>/fastbrowse-hosts` when the variable is
+  unset. A run started with `FASTBROWSE_EXTENSION_DIR` set, or with a different `XDG_RUNTIME_DIR` from
+  Chrome's, looks somewhere else.
 
 ### Another extension's frame takes the tab away
 
@@ -296,6 +301,9 @@ Both messages end with Chrome's complete diagnostic output, which names the caus
   that needs a value entered must not forbid edits. Typing a search is still allowed.
 - The run chose to open an address that neither the task nor `--start` supplied:
   `navigation address was not supplied by the caller`.
+- The page does not exist: `Could not complete the task after HTTP 404 at <url>: the page does not exist.`, or
+  the same with HTTP 410. When the address the run started at answers this, a run that leaves it and stalls on
+  another page still ends with this error. Check the address, or whether the page is public yet.
 - The site answered an HTTP error that maps to no other status:
   `Could not complete the task after HTTP <status> at <url> in this browser session; the cause is unknown.`
 - The page draws what it shows on a canvas, a picture or a video, and the run could not read it. The error

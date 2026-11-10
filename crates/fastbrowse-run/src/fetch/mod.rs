@@ -25,7 +25,7 @@ use fastbrowse_browser::session::{CheckAccess, check_browser_access};
 use fastbrowse_browser::urlsplit::urlsplit;
 use fastbrowse_clients::http::Http;
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::models::{Artifact, Operation, StepOutcome};
+use fastbrowse_core::models::{Artifact, Link, Operation, StepOutcome};
 use fastbrowse_core::origins::origin_of;
 use fastbrowse_core::page::{
     ActResult, Action, Block, BlockKind, BrowserError, Capture, Control, Observation, Page, PageResult, Tab,
@@ -85,6 +85,7 @@ fn capture(url: &str, title: String, found: Vec<Found>, unread_frames: usize) ->
             heading_path: block.heading_path,
             control_context: None,
             href: block.href,
+            links: Link::locate(&block.text, start as i64, &block.links),
         });
         offset += 2;
     }
@@ -290,6 +291,7 @@ async fn serve(http: &Http, url: &str, allowed_origins: Option<&[String]>, secon
             text: clean(&body),
             heading_path: Vec::new(),
             href: None,
+            links: Vec::new(),
             frame_id: None,
         };
         return Ok(Served {

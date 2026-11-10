@@ -198,8 +198,9 @@ metadata alone does not count as progress.
 For a table, each cell is judged with the whole row and its quotes as context; every cell must be supported.
 The composer and support check interpret a requested field by its meaning: descriptive prose can supply its
 value without a matching heading, and that value contradicts a claim that the field was not shown.
-The support question distinguishes facts about a quoted subset from claims about a whole set, and a source's
-population counter from the number of records the answer reports.
+The support question distinguishes facts about a quoted subset from claims about a whole set, and what a counter
+on the page says about its source, which supports a claim that restates it, from the number of records the answer
+reports.
 Initial and repaired compositions are checked
 for both claim support and requested answer coverage in one decision batch. A claim with no cited quote or no
 support judgment is withheld and ends `unverified`. When every check is answered and Jev rejects a composed claim, the run spends an existing recovery to correct the draft or gather
@@ -222,7 +223,11 @@ their source evidence remains unchanged and the run has taken no further step. A
 repair preserves the earlier draft. Other stops also retain checked partial claims alongside their status,
 wall or budget details.
 A run that already stopped keeps its stop status. Otherwise the answer is drafted from the facts Jev picked, with
-the same words picked on more than one page stated once and citing each.
+the same words picked on more than one page stated once and citing each. The request that checks the draft covers
+the task also asks whether each picked text is only what the task asks, in the form it asks for. A pick is a span code
+cut from the page, such as a table cell or a sentence, and can hold the value beside other text, or be a whole date
+where the task asks for its year. When it holds more, the composer writes the answer from the picks and their context,
+told that they held more than the task asks, and its claims pass the same checks as any composed answer.
 
 ## Prompt limits and progress
 

@@ -1,8 +1,6 @@
 //! The stall rule's other half: Jev is asked again, told what went wrong, with the action that moved nothing left out
 //! of its options, until the rule's budget runs out and the run ends.
 
-use std::collections::HashSet;
-
 use fastbrowse_core::effects::{leavable, state_key};
 use fastbrowse_core::models::{Operation, Status, StepOutcome};
 use fastbrowse_core::page::Observation;
@@ -96,14 +94,16 @@ pub(super) fn withhold(offered: &mut Observation, context: &mut StepContext, pro
     context.problem = (!problem.is_empty()).then_some(problem);
 }
 
-/// The labels of the fields standing on this page that the task gave no value for, in page order.
-fn unfilled<'a>(observation: &'a Observation, missing: &HashSet<(String, String, Option<String>)>) -> Vec<&'a str> {
+/// The labels of the fields standing on this page that the task gave no value for, in page order. A field the task asks
+/// nothing of is one only when the page marks it required.
+fn unfilled<'a>(observation: &'a Observation, state: &RunState) -> Vec<&'a str> {
     let mut labels: Vec<&str> = Vec::new();
     for control in observation.controls.iter().filter(|control| control.operations.contains(&Operation::Fill)) {
-        let omitted = missing
-            .iter()
-            .any(|(url, label, field)| *url == observation.url && control.label == *label && control.context == *field);
-        if omitted && !labels.contains(&control.label.as_str()) {
+        let here = |(url, label, field): &(String, String, Option<String>)| {
+            *url == observation.url && control.label == *label && control.context == *field
+        };
+        let needed = control.required == Some(true) || !state.untouched.iter().any(here);
+        if needed && state.missing.iter().any(here) && !labels.contains(&control.label.as_str()) {
             labels.push(&control.label);
         }
     }
@@ -163,8 +163,8 @@ pub(super) fn withheld(decision: &Decision) -> Withheld {
 }
 
 impl Agent {
-    /// Spend one recovery on `reason`. Past `stall.max_recoveries` the run ends: as the failure standing on this page,
-    /// or as `gives_up_as`.
+    /// Spend one recovery on `reason`. Past `stall.max_recoveries` the run ends: as the failure standing on this page or
+    /// on the address the run started at, or as `gives_up_as`.
     pub(super) async fn recover(
         &self,
         state: &mut RunState,
@@ -190,14 +190,15 @@ impl Agent {
             if let Some(failure) = state.site_failure.as_ref().filter(|failure| failure.url == observation.url) {
                 return Err(failure.stop().into());
             }
+            // A run that left a start address that failed and stalled elsewhere ends as that failure, not as a stall.
             if gives_up_as != Status::NeedsInput
-                && let Some(failure) = &state.site_failure
+                && let Some(failure) = state.site_failure.as_ref().or(state.start_failure.as_ref())
             {
                 return Err(failure.stop().into());
             }
             // A run that ends needing a value names it: the stall's own reason names no field, so a caller told only
             // "no_progress (3)" has nothing to supply before running the same task again.
-            let unfilled = unfilled(observation, &state.missing);
+            let unfilled = unfilled(observation, state);
             let status = if unfilled.is_empty() { gives_up_as } else { Status::NeedsInput };
             // A drawn page's answer may be only in its pixels. Read the screenshot before the run gives up, so the
             // answer it composes cites what the screen showed instead of ending empty. The read is the same one

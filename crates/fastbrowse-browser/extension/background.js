@@ -141,6 +141,12 @@ const ops = {
     await chrome.tabs.remove(tabId);
     return {};
   },
+  // A tab the run hands to the person, such as a form left for them to confirm, is released as an adopted tab is:
+  // detached and ungrouped, never closed.
+  async keepTab(conn, { tabId }) {
+    runOf(conn).adopted.add(ownedTab(conn, tabId));
+    return {};
+  },
   async activate(conn, { tabId }) {
     const tab = await chrome.tabs.update(ownedTab(conn, tabId), { active: true });
     await chrome.windows.update(tab.windowId, { focused: true });

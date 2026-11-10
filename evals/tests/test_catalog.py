@@ -36,7 +36,8 @@ def test_every_head_to_head_exclusion_is_exported_with_its_reason() -> None:
     # The hosted agent's final page is read through its browser, so only the unauthorized-step task is left out.
     assert skipped["browser-use"] == {"saucedemo-pause"}
     assert skipped["fastbrowse"] == set()
-    assert len(skipped["jev-ultrafast"]) == len(rendered) - 47
+    assert len(skipped["browser-harness"]) == len(rendered) - 47
+    assert len(skipped["jev-ultrafast"]) == len(rendered) - 6
     lookup = next(t for t in live.TASKS if t.id == "pypi-version")
     with pytest.raises(ValueError, match="without a stated reason"):
         live.excluded_because("browser-use", dataclasses.replace(lookup, arms=("fastbrowse",)))
@@ -54,3 +55,26 @@ def test_both_hosted_browser_use_arms_are_catalogued_on_the_same_tasks() -> None
             assert ("browser-use" in task["arms"]) == ("browser-use-ultrafast" in task["arms"])
             excluded = task.get("excluded", {})
             assert excluded.get("browser-use") == excluded.get("browser-use-ultrafast")
+
+
+def test_an_exclusion_reason_the_site_cannot_parse_refuses_the_export(monkeypatch) -> None:
+    from fastbrowse_evals import live
+
+    monkeypatch.setattr(catalog, "excluded_because", lambda arm, task: None if live.eligible(arm, task) else "a/b")
+    with pytest.raises(ValueError, match="reason"):
+        catalog.render()
+
+
+def test_every_exclusion_reason_reads_plainly_after_the_agents_name() -> None:
+    """The site shows each reason after the agent's name ("Browser Harness: cannot attempt 6 tasks (...): <reason>"),
+    so a reason names no harness arm id and no harness term a first-time reader would not know."""
+    import json
+
+    from fastbrowse_evals import live
+
+    rendered = json.loads(catalog.render())
+    reasons = {r for suite in rendered["suites"].values() for t in suite for r in t["excluded"].values()}
+    assert reasons
+    for reason in reasons:
+        words = set(reason.replace(":", " ").replace(",", " ").split())
+        assert not words & (set(live.ARMS) | {"arm", "DONE", "BLOCKED", "V4"}), reason

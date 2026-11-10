@@ -1,6 +1,6 @@
 //! The spans code cuts from a capture.
 
-use fastbrowse_core::models::Evidence;
+use fastbrowse_core::models::{Evidence, Link};
 use fastbrowse_core::page::{Block, BlockKind, Capture};
 use fastbrowse_core::py::text;
 
@@ -32,6 +32,7 @@ pub(crate) fn evidence(page: &Page<'_>, block: &Block, start: i64, end: i64) -> 
         heading_path: block.heading_path.clone(),
         // Set when the run ends and keeps the captures it cites.
         capture_artifact: None,
+        links: Link::within(&block.links, start, end),
     }
 }
 

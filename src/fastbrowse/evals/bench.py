@@ -106,9 +106,10 @@ def default_agent() -> str:
 def agent_environment(proxy: str) -> dict[str, str]:
     """The agent's environment: the caller's, minus every model key and fastbrowse setting, plus the proxy routes.
 
-    The models are named explicitly because a custom LLM endpoint has no defaults, and they are the defaults a run
-    keyed with OPENROUTER_API_KEY uses. The reasoning effort is set because a custom endpoint is sent one only when
-    it is.
+    The models are named explicitly because a custom LLM endpoint has no defaults, and they are the models the
+    cassettes were recorded with, which the product's default LLM need not be: a request is filed under its body, so
+    a replay on another model would miss every LLM call. The reasoning effort is set because a custom endpoint is
+    sent one only when it is.
     """
     env = {
         name: value

@@ -28,6 +28,28 @@ pub fn openrouter_provider_routing() -> Value {
     json!({"require_parameters": true, "sort": "latency"})
 }
 
+/// The OpenRouter routing a request for `model` sends: [`openrouter_provider_routing`], with the endpoints a model was
+/// measured on pinned. The eval record proxy sends this too, through `fastbrowse.routing`, so a cassette holds answers
+/// from the endpoints a run is routed to.
+pub fn openrouter_routing_for(model: &str) -> Value {
+    let mut routing = openrouter_provider_routing();
+    pin_endpoints(&mut routing, model);
+    routing
+}
+
+/// Sorting by latency sent DeepSeek V4.1 Flash composes to whichever of about 50 endpoints was fastest, and Together,
+/// the one it chose most, changed words the model copied: the same compose request at temperature 0 named "Clerkwell
+/// Coffee" or "GBP 9.99" in 3 to 6 of 100 replays there. Parasail, DeepInfra and InferenceNet wrote it correctly 100 of
+/// 100 times each, Parasail at Together's 1.2 s median, so they are tried in that order, and Together is never a
+/// fallback. OpenRouter tries an `order` before its `sort`. Another model keeps the latency sort: a pin is a
+/// measurement of that model's endpoints, and each response names the provider that served it.
+fn pin_endpoints(routing: &mut Value, model: &str) {
+    if deepseek(model) {
+        routing["order"] = json!(["parasail", "deepinfra", "inference-net"]);
+        routing["ignore"] = json!(["together"]);
+    }
+}
+
 /// DeepSeek is served by many OpenRouter providers, and most of them null every optional object (see
 /// [`flat_optional_objects`]). At its default temperature it also repeated `"true"` to the output cap on
 /// Together; at 0 it did not. Other models keep their schema as written and their default temperature, which Gemini 3 is
@@ -727,23 +749,17 @@ impl OpenAICompatibleLLM {
         body.insert("response_format".into(), response_format);
         // Only OpenRouter and the gateway route, and both take `max_tokens`.
         if let Some(routing) = &self.provider_routing {
-            body.insert("provider".into(), routing.clone());
+            let mut routing = routing.clone();
+            // Only OpenRouter's routing takes `require_parameters`, and the pins name OpenRouter's providers, so the
+            // gateway's is left as it is.
+            if routing.get("require_parameters").is_some() {
+                pin_endpoints(&mut routing, model);
+            }
+            body.insert("provider".into(), routing);
             body.insert("max_tokens".into(), ROUTED_OUTPUT_TOKENS.into());
         }
         if deepseek(model) {
             body.entry("temperature").or_insert(0.0.into());
-            // Sorting by latency sent DeepSeek V4.1 Flash composes to whichever of about 50 endpoints was fastest, and
-            // Together, the one it chose most, changed words the model copied: the same compose request at temperature
-            // 0 named "Clerkwell Coffee" or "GBP 9.99" in 3 to 6 of 100 replays there. Parasail, DeepInfra and
-            // InferenceNet wrote it correctly 100 of 100 times each, Parasail at Together's 1.2 s median, so they are
-            // tried in that order, and Together is never a fallback. Only OpenRouter's routing takes
-            // `require_parameters`, so the gateway's is left as it is.
-            if let Some(Value::Object(provider)) = body.get_mut("provider")
-                && provider.contains_key("require_parameters")
-            {
-                provider.insert("order".into(), json!(["parasail", "deepinfra", "inference-net"]));
-                provider.insert("ignore".into(), json!(["together"]));
-            }
         }
         if let Some(effort) = self.reasoning_effort {
             body.insert(self.reasoning_field.key().into(), self.reasoning_field.value(effort));

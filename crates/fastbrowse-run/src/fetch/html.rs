@@ -628,6 +628,8 @@ pub struct Found {
     pub text: String,
     pub heading_path: Vec<String>,
     pub href: Option<String>,
+    /// Each link's text and address, in the order the block shows them, as `capture.js` lists them.
+    pub links: Vec<(String, String)>,
     /// The frame a block was read from, when its frame's document is read into the page's.
     pub frame_id: Option<String>,
 }
@@ -693,6 +695,13 @@ struct Reader<'a> {
     record: Option<Record>,
     /// The tag tokens opening footnote references, whose text is left out as `capture.js` leaves it out.
     notes: HashSet<usize>,
+    /// The open link's address and the text read inside it so far.
+    link: Option<(String, String)>,
+    /// The links closed since the last block, as text and address, which the next block holds.
+    links: Vec<(String, String)>,
+    /// The links of the open table row, and of each row read so far, which each row's block holds.
+    row_links: Vec<(String, String)>,
+    rows_links: Vec<Vec<(String, String)>>,
 }
 
 impl Tags for Reader<'_> {
@@ -726,6 +735,9 @@ impl Tags for Reader<'_> {
             text.push_str(data);
         }
         for (_, _, text) in &mut self.stamps {
+            text.push_str(data);
+        }
+        if let Some((_, text)) = &mut self.link {
             text.push_str(data);
         }
         self.add(data);
@@ -763,6 +775,10 @@ impl<'a> Reader<'a> {
             records,
             record: None,
             notes,
+            link: None,
+            links: Vec::new(),
+            row_links: Vec::new(),
+            rows_links: Vec::new(),
         }
     }
 
@@ -859,6 +875,13 @@ impl<'a> Reader<'a> {
             self.stamps.push((tag.to_string(), datetime.to_string(), String::new()));
         }
         self.control(tag, attrs);
+        if tag == "a"
+            && let Some(href) = get("href").filter(|href| !href.is_empty()).map(|href| join(self.url, href))
+            && !href.starts_with("javascript:")
+        {
+            // A script link runs code here and leads nowhere to report.
+            self.link = Some((href, String::new()));
+        }
         // Pagination's own words, not "pag" alone: a `<body class="page">` layout class held every carousel open.
         let pages = |value: Option<&str>| {
             value.map(|value| value.to_ascii_lowercase()).is_some_and(|v| v.contains("pagin") || v.contains("pager"))
@@ -983,6 +1006,14 @@ impl<'a> Reader<'a> {
         if tag == "title" {
             self.in_title = false;
             return;
+        }
+        if tag == "a"
+            && let Some((href, text)) = self.link.take()
+        {
+            let text = clean(&text);
+            if !text.is_empty() {
+                if self.cell.is_some() { self.row_links.push((text, href)) } else { self.links.push((text, href)) }
+            }
         }
         if let Some((_, datetime, text)) = self.stamps.pop_if(|(open, _, _)| open == tag) {
             let shown = clean(&text);
@@ -1114,13 +1145,16 @@ impl<'a> Reader<'a> {
     }
 
     fn close_row(&mut self) {
+        let links = std::mem::take(&mut self.row_links);
         if let Some(row) = self.row.take().filter(|row| !row.is_empty()) {
             self.rows.push(row);
+            self.rows_links.push(links);
         }
     }
 
     fn emit_table(&mut self) {
         let path = self.path();
+        let mut links = std::mem::take(&mut self.rows_links).into_iter();
         for (index, cells) in std::mem::take(&mut self.rows).into_iter().enumerate() {
             let line = cells.iter().map(|cell| cell.replace('|', "\\|")).collect::<Vec<_>>().join(" | ");
             let mut text = format!("| {line} |");
@@ -1134,6 +1168,7 @@ impl<'a> Reader<'a> {
                 text,
                 heading_path: path.clone(),
                 href: None,
+                links: links.next().unwrap_or_default(),
                 frame_id: None,
             });
         }
@@ -1147,6 +1182,7 @@ impl<'a> Reader<'a> {
 
     fn flush(&mut self, kind: Option<BlockKind>, href: Option<String>, closing_heading: bool) {
         let raw = std::mem::take(&mut self.buffer);
+        let links = std::mem::take(&mut self.links);
         if let Some(cell) = &mut self.cell {
             // Text of a block inside a cell belongs to that cell's row, not to a block of its own.
             cell.push_str(&raw);
@@ -1166,7 +1202,7 @@ impl<'a> Reader<'a> {
             return;
         }
         let kind = kind.unwrap_or(self.kind);
-        self.blocks.push(Found { kind, text: text.clone(), heading_path: self.path(), href, frame_id: None });
+        self.blocks.push(Found { kind, text: text.clone(), heading_path: self.path(), href, links, frame_id: None });
         if closing_heading && let Some(level) = self.heading {
             // A heading names what follows it, never itself, and a lower heading ends every higher one.
             self.headings.retain(|(higher, _)| *higher < level);

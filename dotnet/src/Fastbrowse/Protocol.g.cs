@@ -301,6 +301,12 @@ public sealed record Evidence
     /// </summary>
     [JsonPropertyName("capture_artifact")]
     public string? CaptureArtifact { get; init; }
+
+    /// <summary>
+    /// The links inside the quote and where each leads, which its text alone does not say.
+    /// </summary>
+    [JsonPropertyName("links")]
+    public IReadOnlyList<Link>? Links { get; init; }
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<FactReader>))]
@@ -397,6 +403,21 @@ public sealed record Limits
     /// </summary>
     [JsonPropertyName("max_seconds")]
     public double? MaxSeconds { get; init; }
+}
+
+public sealed record Link
+{
+    [JsonPropertyName("text")]
+    public required string Text { get; init; }
+
+    [JsonPropertyName("start")]
+    public required long Start { get; init; }
+
+    [JsonPropertyName("end")]
+    public required long End { get; init; }
+
+    [JsonPropertyName("href")]
+    public required string Href { get; init; }
 }
 
 public sealed record LocalChrome

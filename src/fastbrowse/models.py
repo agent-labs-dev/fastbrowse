@@ -23,9 +23,10 @@ class Frozen(BaseModel):
 
 class Status(StrEnum):
     COMPLETE = "complete"
-    """Every planner requirement is evidenced and the caller's `until` check (if any) passed."""
+    """Jev judged the task done and the caller's `until` check (if any) passed."""
     UNVERIFIED = "unverified"
-    """The run believes it finished but could not evidence every requirement."""
+    """Jev finished, but code could not confirm the result: for example, an answer failed its check against the page,
+    part of a list the task covers went unread, or the site refused a requested step."""
     NEEDS_CONFIRMATION = "needs_confirmation"
     """Stopped before an irreversible action the caller has not authorized, having committed nothing."""
     NEEDS_LOGIN = "needs_login"
@@ -36,16 +37,19 @@ class Status(StrEnum):
     NEEDS_INPUT = "needs_input"
     """A required value or file is missing, or an upload exceeds the configured size limit."""
     STUCK = "stuck"
-    """Recovery was exhausted without progress."""
+    """The stall budget ran out without the run reaching a page state it had not seen or reading anything new."""
     BUDGET_EXCEEDED = "budget_exceeded"
+    """A resource limit (steps, seconds, dollars or Jev calls) was reached, or a missing cost prevents enforcing the
+    dollar cap."""
     OBSERVATION_LIMIT = "observation_limit"
-    """The page or requirement evidence could not fit the configured input budgets."""
+    """The page or the run's notes could not fit the configured prompt budget."""
     UNAVAILABLE = "unavailable"
     """A model or browser provider stayed unavailable through every retry. Nothing about the task failed; the same
     run later may pass."""
     CANCELLED = "cancelled"
     """Stopped before it finished, by its caller or by the user in the browser it drove."""
     ERROR = "error"
+    """A model or browser failure."""
 
 
 class Unavailable(RuntimeError):
@@ -121,6 +125,15 @@ class SourceControl(Frozen):
     context: str | None = None
 
 
+# A link inside quoted page text: its text, where that text sits in `Capture.text` (code points, as `start` and `end`
+# of the quote around it), and the address it leads to.
+class Link(Frozen):
+    text: str
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+    href: str
+
+
 class Evidence(Frozen):
     source_id: str
     url: str
@@ -139,6 +152,8 @@ class Evidence(Frozen):
     """The headings the quote sits under on the page: which record a bare "£10.69" is the price of."""
     capture_artifact: str | None = Field(default=None, exclude_if=lambda uri: uri is None)
     """The `uri` of the `capture` artifact holding the page text `start` and `end` index into, if one was kept."""
+    links: tuple[Link, ...] = Field(default=(), exclude_if=lambda links: not links)
+    """The links inside the quote and where each leads, which its text alone does not say."""
 
 
 class Citation(Frozen):

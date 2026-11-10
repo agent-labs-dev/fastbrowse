@@ -206,6 +206,11 @@ impl SiteFailure {
                 "HTTP 403 at {}: the site refused this browser session, which may be an access or bot check or a sign-in it requires.",
                 self.url
             ),
+            // A 404 or 410 says what happened as plainly: runs on a project page awaiting moderation ended "the cause is
+            // unknown" (#931), though the site had said the page does not exist.
+            FailureCause::Http(status @ (404 | 410)) => {
+                format!("HTTP {status} at {}: the page does not exist.", self.url)
+            }
             FailureCause::Http(status) => {
                 format!("HTTP {status} at {} in this browser session; the cause is unknown.", self.url)
             }
@@ -262,6 +267,10 @@ pub(crate) struct RunState {
     pub choices: Vec<StepChoice>,
     pub history: Vec<HistoryEntry>,
     pub site_failure: Option<SiteFailure>,
+    /// A failure on the address the run started at, kept after the run leaves it until that address loads. A run
+    /// whose start page answered 404 searched the site, stalled on the results and ended `no_progress`, since leaving
+    /// the address forgot its failure (#931).
+    pub start_failure: Option<SiteFailure>,
     pub http_seen: HashSet<(String, String, i64)>,
     pub hint: Option<String>,
     /// Jev's pick when asked again after a stall, by the page state it was asked on, taken as the
@@ -328,6 +337,8 @@ pub(crate) struct RunState {
     pub to_carry_out: bool,
     /// The latest finish check found a step the task asks for that the site does not allow.
     pub refused: bool,
+    /// The latest finish check found a step the task asks to be carried out not yet done.
+    pub undone: bool,
     pub output_intent: OutputIntent,
     /// What the task says about signing in, asked of the task alone at the first sign-in wall. None until then, and
     /// when Jev gave no answer.
@@ -372,6 +383,10 @@ pub(crate) struct RunState {
     pub redecided: bool,
     /// Fields the task gives no value for, which recovery has been told about once, by page, label and context.
     pub missing: HashSet<(String, String, Option<String>)>,
+    /// The fields among `missing` the task asks nothing of. One the page does not mark required is no input the run
+    /// needs: three runs that replaced a description and stalled ended `needs_input` naming blank links and a summary
+    /// the task never mentioned (#935).
+    pub untouched: HashSet<(String, String, Option<String>)>,
     /// The step that first showed each control on the page it stayed on, by document and control id. A page can
     /// attach what a step opens at the end of its body, such as a date popup, where nothing near it names the field
     /// that opened it.
@@ -384,7 +399,8 @@ pub(crate) struct RunState {
     pub showing: Option<String>,
 }
 
-/// A rejected draft's claims that held, the notes it was written from, and how many steps the run had taken then.
+/// A rejected draft's claims that held, under a notice naming what was withheld, the notes it was written from, and how
+/// many steps the run had taken then.
 pub type PartialComposition = (ComposedAnswer, Vec<(Fact, bool)>, usize);
 
 impl RunState {
@@ -422,7 +438,8 @@ impl RunState {
     /// earlier reads of that address it supersedes.
     pub fn record_read(&mut self, capture: &Capture, facts: Vec<Fact>, compose: bool) {
         let added = facts.len();
-        self.notes.remember_capture(capture);
+        let steps_taken = self.history.iter().filter(|entry| entry.changed_site()).count();
+        self.notes.remember_capture(capture, steps_taken);
         for fact in facts {
             self.notes.add(fact);
         }
@@ -687,6 +704,7 @@ impl RunState {
             choices: Vec::new(),
             history: Vec::new(),
             site_failure: None,
+            start_failure: None,
             http_seen: HashSet::new(),
             hint: None,
             picked: None,
@@ -719,6 +737,7 @@ impl RunState {
             read_whole: Vec::new(),
             to_carry_out: false,
             refused: false,
+            undone: false,
             output_intent: OutputIntent::Unknown,
             sign_in: None,
             dates: Vec::new(),
@@ -740,6 +759,7 @@ impl RunState {
             first_url: None,
             redecided: false,
             missing: HashSet::new(),
+            untouched: HashSet::new(),
             shown_by: HashMap::new(),
             seen: HashSet::new(),
             showing: None,

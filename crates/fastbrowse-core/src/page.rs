@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::BoxFuture;
-use crate::models::{Artifact, Attachment, MaybeUnavailable, Operation, SourceControl, StepOutcome};
+use crate::models::{Artifact, Attachment, Link, MaybeUnavailable, Operation, SourceControl, StepOutcome};
 use crate::py::datetime::DateTime;
 use crate::py::json::dumped_len;
 use crate::py::{lax, text};
@@ -171,6 +171,24 @@ impl Control {
     }
 }
 
+/// The native date and time input types, whose value is the one form HTML defines for each type whatever the
+/// browser displays. The browser sets their value directly, and a value in any other form leaves the field empty.
+pub const NATIVE_DATE_INPUT_TYPES: [&str; 5] = ["date", "datetime-local", "month", "week", "time"];
+
+/// The value form HTML defines for a native date or time input type, with an example, or `None` for any other type.
+/// A field writer that saw only the label wrote a date the way the page displays it (`11/16/2026`), which a `date`
+/// input refuses, so the writer is told this form.
+pub fn native_date_form(input_type: &str) -> Option<&'static str> {
+    Some(match input_type {
+        "date" => "YYYY-MM-DD, such as 2026-11-16",
+        "datetime-local" => "YYYY-MM-DDThh:mm in 24-hour time, such as 2026-11-16T09:30",
+        "month" => "YYYY-MM, such as 2026-11",
+        "week" => "YYYY-Www with the ISO week number, such as 2026-W47",
+        "time" => "hh:mm in 24-hour time, such as 09:30",
+        _ => return None,
+    })
+}
+
 /// Whether the page marks this control as the link to the next page of a list (`rel="next"`), in any language and
 /// behind any icon. Its label is never read for it: Jev picks a pager the page does not mark.
 pub fn pager_link(control: &Control) -> bool {
@@ -310,6 +328,10 @@ pub struct Block {
     pub control_context: Option<SourceControl>,
     #[serde(default)]
     pub href: Option<String>,
+    /// The links inside this block, with their text's place in `Capture.text`: a link's text alone does not say
+    /// where it leads, nor where a value the page set apart as its own element ends.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<Link>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -5,10 +5,9 @@ mod common;
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 
-use common::{Call, Recorder, binary, model_settings, result};
+use common::{Call, Recorder, isolated_binary, model_settings, result};
 use fastbrowse_cli::cli::{self, Build, Context, Streams};
 use fastbrowse_clients::environment::{Secret, Settings};
 use fastbrowse_core::models::{CostBasis, CostBreakdown, CostComponent, CostLine, RunResult, Status};
@@ -297,6 +296,25 @@ async fn named_inputs_reach_the_run_with_any_equals_sign_in_their_value() {
 }
 
 #[tokio::test]
+async fn files_reach_the_run_as_attachments_under_their_file_names() {
+    let dir = std::env::temp_dir().join(format!("fastbrowse-cli-file-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("shrike_lid.png");
+    std::fs::write(&path, b"lid bytes").unwrap();
+    let ran = cli(&["upload shrike_lid.png", "--local", "--file", path.to_str().unwrap()]).await;
+    let missing = cli(&["t", "--local", "--file", dir.join("absent.stl").to_str().unwrap()]).await;
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(ran.code, 0, "{}", ran.err);
+    let attachments = ran.call.unwrap().task.attachments;
+    assert_eq!(attachments.len(), 1);
+    assert_eq!((attachments[0].name.as_str(), attachments[0].mime_type.as_str()), ("shrike_lid.png", "image/png"));
+    assert_eq!(attachments[0].content.0, b"lid bytes");
+    assert_eq!(missing.code, 1);
+    assert!(missing.err.contains("--file cannot read"), "{}", missing.err);
+    assert!(missing.call.is_none());
+}
+
+#[tokio::test]
 async fn test_cannot_combine_cdp_url_and_cdp_port() {
     let argv = [
         "t",
@@ -340,7 +358,7 @@ fn test_only_serve_as_the_first_argument_is_the_subcommand() {
         &["server", "--cdp-url", "ws://b.test/x"],
         &["--cdp-port", "9222", "serve"],
     ] {
-        let output = Command::new(binary()).args(argv).env_remove("FASTBROWSE_PROFILE").output().unwrap();
+        let output = isolated_binary().args(argv).output().unwrap();
         assert_eq!(output.status.code(), Some(1), "{argv:?}: {}", String::from_utf8_lossy(&output.stderr));
         assert!(String::from_utf8_lossy(&output.stderr).starts_with("fastbrowse: "));
     }
@@ -395,15 +413,8 @@ fn test_the_trace_names_the_build_before_the_run() {
     let dir = std::env::temp_dir().join(format!("fastbrowse-trace-build-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let trace = dir.join("trace.jsonl");
-    let output = Command::new(binary())
-        .args(["t", "--cdp-url", "ws://b.test/x", "--trace"])
-        .arg(&trace)
-        .env_remove("FASTBROWSE_PROFILE")
-        // The run stops at configuration for want of a model key, before any connection is tried.
-        .env_remove("OPENROUTER_API_KEY")
-        .env_remove("AI_GATEWAY_API_KEY")
-        .output()
-        .unwrap();
+    // The run stops at configuration for want of a model key, before any connection is tried.
+    let output = isolated_binary().args(["t", "--cdp-url", "ws://b.test/x", "--trace"]).arg(&trace).output().unwrap();
     assert_eq!(output.status.code(), Some(1), "{}", String::from_utf8_lossy(&output.stderr));
     let text = std::fs::read_to_string(&trace).unwrap();
     std::fs::remove_dir_all(&dir).unwrap();

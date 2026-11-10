@@ -45,8 +45,11 @@ const IN_TASK: &str = "task";
 pub(super) const IN_READ: &str = "read";
 /// The task asks for the value without stating it word for word, as a search box's query, so the LLM writes it.
 const WRITTEN: &str = "write";
-/// Nothing given belongs in the field.
+/// The task asks for the field's value, and nothing given states it.
 const NO_VALUE: &str = "none";
+/// The task asks nothing of the field: it is left as it is, and is no input the run lacks. Asked as one with NO_VALUE,
+/// a blank optional field Jev reached for read as a value the caller had to give (#935).
+const LEAVE: &str = "leave";
 /// Words shown either side of one Jev may pick, so a word the task repeats reads as a different place.
 const WORD_CONTEXT: usize = 3;
 /// A long source is cut into a few broad parts: as hundreds of overlapping fragments, a 330-word request lost the one
@@ -772,11 +775,15 @@ impl Agent {
             None => self.ask_choices(state, Some(observation), asked).await?,
         };
         let source = picks.get("source").cloned().unwrap_or_else(|| NO_VALUE.into());
+        if source == LEAVE {
+            return Err(self.untouched(state, observation, target));
+        }
         if source == WRITTEN {
             let written = write_value(
                 &*self.llm,
                 &state.task,
                 &label,
+                target.input_type.as_deref(),
                 &typed_into(state, target),
                 &crate::dates::dated(observation.captured_at, &state.dates),
                 &state.history.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
@@ -1011,7 +1018,8 @@ impl Agent {
             sources
                 .insert(IN_READ.into(), format!("The task does not state it, and what was read does: {read}").into());
         }
-        sources.insert(NO_VALUE.into(), "Nothing given states a value for this field.".into());
+        sources.insert(NO_VALUE.into(), "The task asks for this field's value, and nothing given states it.".into());
+        sources.insert(LEAVE.into(), "The task asks nothing of this field, so it is left as it is.".into());
         let mut label = text::repr(&target.label);
         if let Some(limit) = target.max_length {
             label = format!("{label}, which holds at most {limit} characters,");
@@ -1148,6 +1156,22 @@ impl Agent {
                 text::repr(&target.label)
             ),
             gives_up_as: Status::NeedsInput,
+        }
+        .into()
+    }
+
+    /// A field the task asks nothing of is a wrong pick, left out of what is offered here as a missing one is. It is an
+    /// input the run lacks only when the page marks it required.
+    fn untouched(&self, state: &mut RunState, observation: &Observation, target: &Control) -> Flow {
+        if target.required == Some(true) {
+            return self.missing(state, observation, target);
+        }
+        let key = (observation.url.clone(), target.label.clone(), target.context.clone());
+        state.missing.insert(key.clone());
+        state.untouched.insert(key);
+        Unsure {
+            reason: format!("the task asks nothing of {}: leave it as it is", text::repr(&target.label)),
+            gives_up_as: Status::Stuck,
         }
         .into()
     }

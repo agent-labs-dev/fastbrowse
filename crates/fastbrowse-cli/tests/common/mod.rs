@@ -318,3 +318,20 @@ where
 pub fn binary() -> &'static str {
     env!("CARGO_BIN_EXE_fastbrowse")
 }
+
+/// The binary with only the environment it needs to start, run from a directory with no `.env`. Settings come from
+/// the environment over `.env` in the working directory, so a caller's model key, even an expired one, took a run
+/// that was meant to stop at configuration on to the network. A test sets each setting its outcome depends on.
+pub fn isolated_binary() -> std::process::Command {
+    let empty = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("no-settings");
+    std::fs::create_dir_all(&empty).unwrap();
+    let mut command = std::process::Command::new(binary());
+    command.env_clear().current_dir(empty);
+    // Windows cannot start a process without SystemRoot.
+    for name in ["PATH", "HOME", "SystemRoot"] {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    command
+}

@@ -35,6 +35,7 @@ from fastbrowse.evals.replay import (
     describe_request,
     miss_diff,
     nearest_body,
+    openrouter_forward,
     request_key,
     response_cost,
     translate_origin,
@@ -390,6 +391,32 @@ def test_record_forwards_everything_and_fill_only_misses() -> None:
         assert _post(base, JEV, {"q": "b"}).json()["q"] == "b"
     assert sent == ["a", "a", "b"]
     assert filling.forwarded == 1 and [m.purpose for m in filling.misses] == ["jev:"]
+
+
+def test_record_forwards_the_routing_a_run_sends_for_its_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cassette holds answers from the endpoints a run is routed to, DeepSeek's pinned ones included."""
+    sent: list[dict[str, object]] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={})
+
+    client = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: client(transport=httpx.MockTransport(upstream), **kwargs))
+    forward = openrouter_forward("key")
+    forward(LLM, json.dumps({"model": "deepseek/deepseek-v4.1-flash-1017"}).encode())
+    forward(LLM, json.dumps({"model": "openai/gpt-6-luna"}).encode())
+    forward(LLM, json.dumps({"model": "deepseek/deepseek-v4.1-flash-1017", "provider": {"only": ["x"]}}).encode())
+    assert [body["provider"] for body in sent] == [
+        {
+            "require_parameters": True,
+            "sort": "latency",
+            "order": ["parasail", "deepinfra", "inference-net"],
+            "ignore": ["together"],
+        },
+        {"require_parameters": True, "sort": "latency"},
+        {"only": ["x"]},
+    ]
 
 
 def test_agent_gets_no_real_key(monkeypatch: pytest.MonkeyPatch) -> None:

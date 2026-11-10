@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastbrowse.evals.benchmarks import (
-    BlockedSlot,
+    LINK,
     Candidate,
     CompetitorReference,
     ExcludedTask,
@@ -62,7 +62,6 @@ PROJECT = langfuse_runs.PROJECT
 INTERNAL_REPEATS = 3
 # Mirrors the public limit rules: short ASCII phrases, no slash and nothing that names a link.
 LIMIT = re.compile(r"[A-Za-z0-9 ,.;:()'%+_=-]{1,240}")
-LIMIT_LINK = re.compile(r"https?:|www\.|\.(?:com|org|net|io|ai|dev|app)\b", re.IGNORECASE)
 
 
 class PublicationError(ValueError):
@@ -77,7 +76,7 @@ class PublicationError(ValueError):
 GROUPS: dict[str, tuple[int, int, str, set[str]]] = {
     "internal-fastbrowse": (53, 3, "task-success", {"fastbrowse"}),
     "internal-hosted": (53, 3, "task-success", {"fastbrowse"}),
-    "internal-ultrafast": (47, 3, "task-success", {"fastbrowse-pool", "jev-ultrafast"}),
+    "internal-ultrafast": (6, 3, "task-success", {"fastbrowse-pool", "jev-ultrafast"}),
     "internal-backend": (53, 3, "task-success", {"fastbrowse", "fastbrowse-pool"}),
     # Official groups take whatever repeat count their runs recorded (`official_group`).
     "bu-bench": (200, 1, "weighted-rubric", {"fastbrowse"}),
@@ -91,7 +90,7 @@ GROUPS: dict[str, tuple[int, int, str, set[str]]] = {
 def note(text: str) -> str:
     """A public limit: the contract's character set, with slashes in model ids shown as colons."""
     text = text.replace("/", ":")
-    if not LIMIT.fullmatch(text) or LIMIT_LINK.search(text):
+    if not LIMIT.fullmatch(text) or LINK.search(text):
         raise PublicationError(f"recorded protocol text cannot be published as a short phrase: {text[:80]!r}")
     return text
 
@@ -165,7 +164,6 @@ def build_group(
     rows: list[Row],
     run: dict[str, Any],
     repeats: int | None = None,
-    blocked: list[BlockedSlot] | None = None,
     unjudged: list[UnjudgedSlot] | None = None,
     sources: list[Source] | None = None,
     excluded: list[ExcludedTask] | None = None,
@@ -180,7 +178,6 @@ def build_group(
         repeats=repeats or GROUPS[group_id][1],
         limits=[note(n) for n in limits],
         rows=sorted(rows, key=lambda r: (r.arm, r.task, r.repeat)),
-        blocked=blocked or [],
         unjudged=unjudged or [],
         excluded=excluded or [],
         sources=sources or [],
@@ -211,7 +208,7 @@ INTERNAL = {
     "internal-ultrafast": "jev-ultrafast",
     "internal-backend": "fastbrowse-pool",
 }
-SLOT_FIELDS = ("status", "passed", "seconds", "dollars", "llm_calls", "llm_calls_basis")
+SLOT_FIELDS = ("status", "passed", "seconds", "dollars", "llm_calls", "llm_calls_basis", "timing_note")
 FASTBROWSE_ARMS = {"fastbrowse", "fastbrowse-pool"}
 """Arms that are fastbrowse itself, whose completion is its own `complete` status."""
 HOSTED_ARMS = ("fastbrowse", "browser-use", "browser-use-ultrafast", "jev-ultrafast", "browser-harness")
@@ -292,7 +289,13 @@ def timing_fields(tries: Iterable[dict[str, Any]]) -> dict[str, Any]:
     agent = {}
     if "agent_seconds" in Row.model_fields and all(t.get("agent_seconds") is not None for t in tries):
         agent = {"agent_seconds": math.fsum(t["agent_seconds"] for t in tries)}
-    return {"timing_basis": TIMING_BASIS, **total, **agent}
+    # Seconds summed over tries are one clock only if every try kept the same browser setup on it.
+    notes = {t.get("timing_note") for t in tries}
+    if len(notes) != 1:
+        raise PublicationError("the tries of one slot kept different browser setup in their seconds")
+    [setup] = notes
+    note = {"timing_note": setup} if setup is not None and "timing_note" in Row.model_fields else {}
+    return {"timing_basis": TIMING_BASIS, **total, **agent, **note}
 
 
 def timed_schema(schema: int) -> Any:
@@ -502,6 +505,8 @@ class Invocation:
     claims: frozenset[tuple[str, str]]
     """The (arm, task) pairs the group takes from this invocation."""
     models: dict[str, set[str]]
+    reported: dict[str, set[str]]
+    """Each arm's models and text models as its attempts reported them, for the arm's `Source`."""
     text_models: set[str]
     modes: dict[str, str]
     policies: set[str]
@@ -666,6 +671,10 @@ def invocation(
         unjudged=unjudged,
         claims=frozenset(use),
         models={arm: {a["model"] for a in attempts if a["arm"] == arm and a.get("model")} for arm in arms},
+        reported={
+            arm: {a[key] for a in attempts if a["arm"] == arm for key in ("model", "text_model") if a.get(key)}
+            for arm in arms
+        },
         text_models={a["text_model"].strip() for a in attempts if isinstance(a.get("text_model"), str)},
         modes={arm: browser_identity(run, arm, group_id) for arm in arms},
         policies={receipt.policy_sha256 for receipt in receipts.values()},
@@ -782,6 +791,9 @@ def internal_group(group_id: str, results: Path | Sequence[Path], catalog: dict[
             runner_sha=item.run["benchmark_runner_sha"],
             measured_on=item.run["run_started"][:10],
             tasks=sorted(task for claimed_arm, task in item.claims if claimed_arm == arm),
+            # A fastbrowse arm's pin names where its build is recorded; the source's agent commit is that build.
+            version=None if arm in FASTBROWSE_ARMS else note(item.run["arms"][arm]["pin"]),
+            models=sorted({note(model) for model in item.reported.get(arm, ())}),
         )
         for item in used
         for arm in sorted({a for a, _ in item.claims})
@@ -893,7 +905,7 @@ class OfficialRows(BaseModel):
     langfuse_dataset: str
     langfuse_run: str
     rows: list[Row]
-    blocked: list[BlockedSlot] = []
+    unjudged: list[UnjudgedSlot] = []
 
 
 def check_blocked(result: dict[str, Any], folder: Path, where: str) -> None:
@@ -1001,7 +1013,7 @@ async def official_group(
         if results[key].get("agent_limits") != attempt.get("agent_limits"):
             raise PublicationError(f"{group_id}/{key[0]}: result and attempt agent limits differ")
     rows = []
-    blocked = []
+    unjudged: list[UnjudgedSlot] = []
     physical: dict[str, float] = {}
     missing_captures = 0
     for (task, repeat), result in sorted(results.items()):
@@ -1058,36 +1070,31 @@ async def official_group(
             check = amount(earlier.get("interruption_check_usd"), f"{where}: interrupted run {n} check dollars")
             physical[official.run_id(task, repeat, n)] = spent + check
         physical[official.run_id(task, repeat, len(interruptions))] = final_run
-        if is_blocked:
-            blocked.append(
-                BlockedSlot(
-                    task=task,
-                    repeat=repeat,
-                    arm=arm,
-                    seconds=seconds,
-                    dollars=dollars,
-                    physical_runs=1 + len(interruptions),
-                )
-            )
+        status = text(result.get("status"), f"{where}: status")
+        if is_blocked and status == "error":
+            # The run ended in an error of the harness or its model provider, so it measured nothing, as an internal
+            # slot judged unavailable on that ending measured nothing (`unjudged_reason`).
+            unjudged.append(UnjudgedSlot(task=task, repeat=repeat, arm=arm, reason="evidence-unavailable"))
             continue
         rows.append(
             Row(
                 task=task,
                 repeat=repeat,
                 arm=arm,
-                status=text(result.get("status"), f"{where}: status"),
+                status=status,
                 completed=result.get("completed") is True,
-                score=amount(result.get("upstream_score"), f"{where}: upstream grade"),
+                # A slot the site refused on every retry is the agent's failure, as an internal one is: another agent
+                # may get past what stopped this one.
+                score=0.0 if is_blocked else amount(result.get("upstream_score"), f"{where}: upstream grade"),
                 seconds=seconds,
                 dollars=dollars,
                 physical_runs=1 + len(interruptions),
                 llm_calls=None,
                 llm_calls_basis="physical_requests" if arm in FASTBROWSE_ARMS else None,
                 **timing_fields([*interruptions, result]),
+                failure=(SITE_BLOCKED if status == "blocked" else SITE_REFUSED) if is_blocked else None,
             )
         )
-    if not rows:
-        raise PublicationError(f"{group_id}: the site blocked every slot, so nothing was graded")
     if math.fsum(physical.values()) > manifest["total_budget"] + 1e-9:
         raise PublicationError(f"{group_id}: physical spend exceeds its approved campaign budget")
     # Total spend alone cannot show which holds overlapped, so the start gate's own journal is replayed as well.
@@ -1132,7 +1139,7 @@ async def official_group(
         langfuse_dataset=tracked.dataset,
         langfuse_run=tracked.runs[0].name,
         rows=rows,
-        blocked=blocked,
+        unjudged=unjudged,
     )
     return public, tracked
 
@@ -1156,7 +1163,7 @@ def official_limits(group_id: str, first: OfficialRows) -> list[str]:
         f"Judge {first.judge_model.replace('/', ' ')} via OpenRouter, reasoning {first.judge_reasoning}; "
         f"score threshold {first.score_threshold}",
         f"{first.repeats} repeat(s) per task; a task's figure is the mean of its graded repeat scores; "
-        "a slot the site blocked on every retry is left out, never a pass or a failure",
+        "a slot the site refused on every retry is a failed attempt, unless the run ended in a harness error",
         f"Upstream commit {first.upstream_commit}",
         "Judge libraries: " + ", ".join(f"{k} {v}" for k, v in sorted(first.judge_versions.items())),
         screenshots,
@@ -1176,9 +1183,9 @@ def official_collected(part: OfficialRows) -> Collected:
     run = {"git_sha": part.agent_sha, "benchmark_runner_sha": part.runner_sha}
     limits = official_limits(part.group, part)
     group = build_group(
-        part.group, part.dataset_sha256, part.task_ids, limits, part.rows, run, part.repeats, part.blocked
+        part.group, part.dataset_sha256, part.task_ids, limits, part.rows, run, part.repeats, part.unjudged
     )
-    return Collected(group, part.agent_sha, part.runner_sha, (), len(part.rows) + len(part.blocked))
+    return Collected(group, part.agent_sha, part.runner_sha, (), len(part.rows) + len(part.unjudged))
 
 
 # --- Langfuse readback ---
@@ -1292,6 +1299,7 @@ def competitor_reference(candidate: Candidate, catalog: dict[str, Any], measured
                 version=note(catalog["arms"][arm]["pin"]),
                 browser=note(next(iter(BROWSER_MODES[arm]))),
                 campaign_id=candidate.campaign_id,
+                models=sorted({model for source in group.sources if source.arm == arm for model in source.models}),
             )
             for arm, vendor in REFERENCE_ARMS.items()
         ],

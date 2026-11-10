@@ -63,11 +63,15 @@ Read [the eval workflow](agents/evals.md) before changing agent behavior or runn
 
 ## Default LLM measurements
 
-`DEFAULT_LLM` in `crates/fastbrowse-clients/src/environment.rs` is `deepseek/deepseek-v4.1-flash-1017` for every
-purpose, with reasoning off. The LLM proposes a first address, writes field values the task does not state word for word, and composes answers; Jev makes every other call.
-On the local and mock suites, one run each on the same build and Jev, it passed 35 of 38 tasks, as
-`anthropic/claude-sonnet-5.5` did, at a tenth of Sonnet's LLM spend ($0.0018 against $0.0191) and a lower mean
-time per task (3.9s against 4.2s).
+`DEFAULT_LLM` in `crates/fastbrowse-clients/src/environment.rs` is `openai/gpt-6-luna` for every purpose, at low
+reasoning. The LLM proposes a first address, writes field values the task does not state word for word, and composes answers; Jev makes every other call.
+On 8 tasks where the text model matters, on build `bc2940d9` with Browser Use Cloud, it passed 18 of 22 runs, as
+`deepseek/deepseek-v4.1-flash-1017` with reasoning off did, at a lower median passing time (5.30s against 5.95s)
+and about half the LLM spend per run ($0.0023 against $0.0041).
+
+DeepSeek V4.1 Flash 1017 was the default before it. On the local and mock suites, one run each on the same build and
+Jev, it passed 35 of 38 tasks, as `anthropic/claude-sonnet-5.5` did, at a tenth of Sonnet's LLM spend ($0.0018
+against $0.0191) and a lower mean time per task (3.9s against 4.2s).
 
 Gemini 3.5 Flash Lite at low reasoning was also measured as a candidate default against DeepSeek V4.1 Flash
 1017 on the Sauce Demo checkout: one task, 3 repeats per arm, identical prompt and limits, local Chrome.
@@ -127,7 +131,9 @@ turn totals, so these bounds cover only recorded tokens, not the complete run. T
 
 A row's `seconds` runs from the browser session being ready to the agent's final answer, for every arm. Opening and
 closing the session are outside it and are recorded apart as `session_open_seconds` and `session_close_seconds`. Each
-row records `timing_basis`, currently `session-ready-to-answer`; a row without one was measured on an older clock.
+row records `timing_basis`, currently `session-ready-to-answer`; a row without one was measured on an older clock. A
+row whose agent connects to its browser where the harness cannot see (hosted Browser Use, Browser Harness) keeps that
+connection in its seconds and says so in `timing_note`.
 `benchmarks.py` refuses a group that mixes bases, the release gate never matches rows across them, and `summary`
 reports no seconds for a comparison across them. `bench.py`'s `wall` is a separate diagnostic: spawn to reply on a
 shared Chrome.

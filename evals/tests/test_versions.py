@@ -371,13 +371,14 @@ def test_every_comparison_sets_arms_on_the_same_tasks() -> None:
     rows = [
         _row("pypi-version"),
         _row("pypi-version", arm="browser-use"),
-        _row("hn-top"),
-        _row("hn-top", arm="jev-ultrafast"),
+        _row("hn-comments"),
+        _row("hn-comments", arm="jev-ultrafast"),
         _row("wiki-open", passed=False),
     ]
     feed = versions.summary([("1.0.0", rows)])
     assert [(r.compared, r.tasks, r.arms["fastbrowse"].total) for r in feed.releases] == [
-        (["fastbrowse", "browser-use"], 1, 1),
+        # jev-ultrafast cannot run the lookup, so it is compared there too, failing it.
+        (["fastbrowse", "browser-use", "jev-ultrafast"], 1, 1),
         (["fastbrowse", "jev-ultrafast"], 1, 1),
         (["fastbrowse"], 1, 1),
     ]

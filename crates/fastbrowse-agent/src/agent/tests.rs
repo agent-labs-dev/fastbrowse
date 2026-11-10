@@ -1507,10 +1507,17 @@ async fn test_a_done_with_a_step_of_the_task_undone_is_not_complete() {
 
     let result = agent.finish(&mut state, &observation(&[]), None, None).await;
     assert!(
-        matches!(result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("has not been done")))
+        matches!(&result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("has not been done")))
     );
-    let asked = jev.3.lock().unwrap();
-    assert_eq!(asked[0]["recent_actions"][0]["target"], "Phone", "the steps taken are what Jev judges");
+    {
+        let asked = jev.3.lock().unwrap();
+        assert_eq!(asked[0]["recent_actions"][0]["target"], "Phone", "the steps taken are what Jev judges");
+    }
+    // #937: what was read is still the answer, but it does not stand as the task done.
+    let ledger = state.ledger.clone();
+    let stopped = agent.stopped(result.unwrap_err(), Some(&mut state), &ledger).await;
+    let answer = stopped.answer.expect("what was read is answered");
+    assert!(answer.starts_with(super::finishing::UNDONE) && answer.contains("katherine@example.com"), "{answer}");
 }
 
 /// Asked to start a demo and report the text it loads, a run's click on Start was covered, and it read the page's
@@ -1629,8 +1636,26 @@ impl DecisionClient for RefusesCoverage {
     }
 }
 
+/// `CoverageComposer`, failing the test if it is asked to compose.
+struct NoCompose(CoverageComposer);
+
+impl LLMClient for NoCompose {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        messages: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        ledger: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        assert_ne!(purpose, LLMPurpose::Compose, "a task that asks to be told nothing composed an answer");
+        self.0.generate_value(purpose, messages, schema, ledger)
+    }
+}
+
 /// Sent a support request, a run ended `stuck`: its write-up of the page that confirmed it was asked whether it gave
-/// every fact the task asked to be told, of a task that asks to be told nothing, and Jev said a fact was missing.
+/// every fact the task asked to be told, of a task that asks to be told nothing, and Jev said a fact was missing. A
+/// task that asks to be told nothing has nothing to write up, and composing one cost "Open the comments page of the top
+/// story." 1 to 4.5 seconds (#910): it answers with what was read.
 #[tokio::test]
 async fn test_a_task_carried_out_is_not_held_to_reporting_facts() {
     let page = capture(&[(BlockKind::Paragraph, "We have your request: 'billing'.")]);
@@ -1648,12 +1673,13 @@ async fn test_a_task_carried_out_is_not_held_to_reporting_facts() {
     ));
     let jev = Arc::new(RefusesCoverage(DoneCheckJev::new(Default::default(), 1.0, "done")));
     let cited = Arc::new(Mutex::new(Some(crate::memory::fact_id(state.notes.facts()[0]))));
-    let agent = Agent::new(Arc::new(FinishPage(observation(&[]))), jev.clone(), Arc::new(CoverageComposer(cited)));
+    let llm = Arc::new(NoCompose(CoverageComposer(cited)));
+    let agent = Agent::new(Arc::new(FinishPage(observation(&[]))), jev.clone(), llm);
 
     let result = agent.finish(&mut state, &observation(&[]), None, None).await.expect("finish").expect("a result");
     assert_eq!(result.status, Status::Complete, "{:?}", result.error);
-    let asked = jev.0.3.lock().unwrap();
-    assert!(asked.len() >= 2, "the steps and the write-up are still judged");
+    assert!(result.answer.unwrap().starts_with("We have your request: 'billing'."));
+    assert!(!jev.0.3.lock().unwrap().is_empty(), "the steps are still judged");
 }
 
 /// Picks, for every read requirement, the candidate whose value is the field's, and fails if it is not offered; with no
@@ -1732,7 +1758,7 @@ impl DecisionClient for Answers {
                 };
                 questions.iter().map(move |(key, question)| {
                     let mut answer = answer.clone();
-                    if *pick == "write"
+                    if matches!(*pick, "write" | "leave")
                         && let Question::Choice(question) = question
                         && !question.criteria.contains_key("write")
                     {
@@ -2546,10 +2572,14 @@ async fn test_a_task_about_how_the_page_looks_reads_the_screenshot_of_a_page_sty
     assert_eq!(reads("page_text").await, 0);
 }
 
-/// Jev reading the task's output as `IntentJev` does, judging every claim unsupported by its quotes and the whole
-/// answer's coverage of the task at the given probability: a note picked verbatim is its own quote, so only coverage
-/// can decide it.
-struct Reviewing(IntentJev, f64);
+/// Jev reading the task's output as `IntentJev` does, judging the whole answer's coverage of the task and whether a
+/// pick is the answer as asked at the given probabilities, and every claim's support by its quotes at `claims`.
+struct Reviewing(Judging, f64, f64);
+
+struct Judging {
+    intent: IntentJev,
+    claims: f64,
+}
 
 impl DecisionClient for Reviewing {
     fn evaluate<'a>(
@@ -2558,7 +2588,7 @@ impl DecisionClient for Reviewing {
         questions: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         if !questions.contains_key("coverage") {
-            return self.0.evaluate(state, questions);
+            return self.0.intent.evaluate(state, questions);
         }
         let answers = questions
             .iter()
@@ -2572,7 +2602,11 @@ impl DecisionClient for Reviewing {
                     }),
                     _ => Answer::Noul(NoulAnswer {
                         kind: Default::default(),
-                        probability: if key == "coverage" { self.1 } else { 0.0 },
+                        probability: match key.as_str() {
+                            "coverage" => self.1,
+                            "exact" => self.2,
+                            _ => self.0.claims,
+                        },
                     }),
                 };
                 (key.clone(), answer)
@@ -2589,7 +2623,15 @@ impl DecisionClient for Reviewing {
         })
     }
     fn profile(&self) -> DecisionProfile {
-        self.0.profile()
+        self.0.intent.profile()
+    }
+}
+
+impl Reviewing {
+    /// Judging every claim unsupported by its quotes and the coverage at `coverage`: a note picked verbatim is its own
+    /// quote, so only coverage can decide it.
+    fn coverage(intent: &'static str, coverage: f64) -> Reviewing {
+        Reviewing(Judging { intent: IntentJev::new(intent), claims: 0.0 }, coverage, 1.0)
     }
 }
 
@@ -2598,7 +2640,7 @@ impl DecisionClient for Reviewing {
 /// (#679 rerun). An answer read verbatim is held to what the task asks to be told, as a composed one is.
 #[tokio::test]
 async fn test_an_answer_read_verbatim_is_checked_against_what_the_task_asks_to_be_told() {
-    let agent = Agent::new(Arc::new(NoPage), Arc::new(Reviewing(IntentJev::new("text"), 0.0)), Arc::new(ScriptedLLM));
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Reviewing::coverage("text", 0.0)), Arc::new(ScriptedLLM));
     let mut state = run_state();
     state.task = "Read the status, scroll to the bottom of the table, read the status again and report both.".into();
     let captured = capture(&[(BlockKind::Paragraph, "live, updated 00:00:00")]);
@@ -2609,6 +2651,47 @@ async fn test_an_answer_read_verbatim_is_checked_against_what_the_task_asks_to_b
     assert!(!state.compose, "Jev's pick alone answered the task");
     let result = agent.conclude(&mut state, &observation(&[]), None).await.unwrap();
     assert_eq!(result.status, Status::Unverified);
+}
+
+/// The composer writing the population from the infobox cell it is given, citing that cell.
+struct PopulationWriter(String);
+
+impl LLMClient for PopulationWriter {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        _: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        let reply = match purpose {
+            LLMPurpose::Compose => json!({"claims": [{"text": "41,798,407", "evidence_ids": [self.0]}]}),
+            _ => json!(null),
+        };
+        Box::pin(async move {
+            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+        })
+    }
+}
+
+/// An infobox cell picked as the answer was answered whole, the population with the country's rank beside it:
+/// "41,798,407 (37th)" (#862). A pick that is not the answer as the task asks for it is written up from what was picked,
+/// and the written claim is held to the cell's quote.
+#[tokio::test]
+async fn test_a_pick_holding_more_than_the_answer_is_written_up_from_it() {
+    let captured = capture(&[(BlockKind::Table, "| Population | 41,798,407 (37th) |")]);
+    let picked = Fact::read("41,798,407 (37th)", block_evidence(&captured, "s0"), FactReader::JevChoice).answering();
+    let jev = Reviewing(Judging { intent: IntentJev::new("text"), claims: 1.0 }, 1.0, 0.0);
+    let agent =
+        Agent::new(Arc::new(NoPage), Arc::new(jev), Arc::new(PopulationWriter(crate::memory::fact_id(&picked))));
+    let mut state = run_state();
+    state.task = "What is the population of Canada given in its infobox?".into();
+    state.notes = Notes::new([picked]);
+    let result = agent.conclude(&mut state, &observation(&[]), None).await.unwrap();
+    assert_eq!(result.status, Status::Complete, "{:?}", result.error);
+    let answer = result.answer.unwrap();
+    assert_eq!(answer.split(" [").next(), Some("41,798,407"), "{answer}");
 }
 
 #[tokio::test]
@@ -2680,7 +2763,7 @@ async fn test_a_task_to_carry_out_is_not_done_by_hovering() {
 
 #[tokio::test]
 async fn test_text_and_image_returns_both_evidenced_text_and_frame() {
-    let jev = Arc::new(Reviewing(IntentJev::new("text_image"), 1.0));
+    let jev = Arc::new(Reviewing::coverage("text_image", 1.0));
     let agent = Agent::new(Arc::new(Screenshots::default()), jev, Arc::new(ScriptedLLM));
     let mut state = run_state();
     let captured = capture(&[(BlockKind::Paragraph, "The answer is 42")]);
@@ -2954,6 +3037,33 @@ async fn test_past_the_recovery_budget_a_field_left_unfilled_is_named_in_the_err
         ),
         "{error:?}"
     );
+}
+
+/// #935: asked to replace a description, three runs reached for blank fields the task never named, such as a wiki
+/// link, and ended `needs_input` asking for them. A field the task asks nothing of is left, and is an input the run
+/// lacks only when the page marks it required.
+#[tokio::test]
+async fn test_a_field_the_task_asks_nothing_of_is_no_missing_input_unless_the_page_requires_it() {
+    for required in [false, true] {
+        let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("leave"))), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.task = "Replace the description with New text. and save it.".into();
+        let mut wiki = field("Addon Wiki");
+        wiki.value = None;
+        wiki.required = required.then_some(true);
+        let page = observation(&[wiki.clone(), button("Save changes")]);
+        let error = agent.text(&mut state, &page, &code_decision(Operation::Fill, None), &wiki).await.unwrap_err();
+        let expected = if required { Status::NeedsInput } else { Status::Stuck };
+        assert!(matches!(&error, Flow::Unsure(unsure) if unsure.gives_up_as == expected), "{error:?}");
+
+        state.recoveries = agent.config.stall.max_recoveries;
+        let decision = code_decision(Operation::Click, Some(button("Save changes")));
+        let withheld = super::recovery::withheld(&decision);
+        let stop = agent.recover(&mut state, &page, "nothing changed", Status::Stuck, withheld).await.err();
+        let Some(Flow::Stop(stop)) = stop else { panic!("{stop:?}") };
+        assert_eq!(stop.status, expected);
+        assert_eq!(stop.error.as_deref().is_some_and(|error| error.contains("'Addon Wiki'")), required, "{stop:?}");
+    }
 }
 
 #[tokio::test]
@@ -4227,6 +4337,30 @@ async fn test_the_tab_an_authorized_commit_was_sent_from_is_handed_over() {
     }
 }
 
+#[tokio::test]
+async fn test_a_run_that_stops_for_a_person_leaves_them_its_tab() {
+    // #887: a run stopped needs_confirmation or needs_input closed its tab, and the person asked to finish the step
+    // lost the filled form with it. A run that stops for any other reason still closes its tab.
+    for (irreversible, stopped) in [(0.99, Status::NeedsConfirmation), (0.0, Status::BudgetExceeded)] {
+        let page = Arc::new(Unmoved {
+            now: at("https://shop.test/basket", &[button("Place order"), button("Keep shopping")]),
+            sent: Mutex::new(Vec::new()),
+            handed_over: Default::default(),
+        });
+        let jev = Commits(ScriptedJev::new(crate::scripted::steps("click Place order").unwrap()), irreversible);
+        let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
+        let options = super::RunOptions {
+            start: Some("https://shop.test/basket".into()),
+            limits: Some(Limits { max_steps: Some(1), ..Limits::default() }),
+            ..Default::default()
+        };
+        let result = agent.run("Place the order for the basket", options).await.unwrap();
+        assert_eq!(result.status, stopped, "{:?}", result.error);
+        let handed = page.handed_over.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(handed, stopped == Status::NeedsConfirmation, "{stopped:?}");
+    }
+}
+
 /// A Jev that answers the choices it is given as `Picks` does, and every other question as the scripted Jev does.
 struct Typist(&'static [(&'static str, &'static str)]);
 
@@ -4447,8 +4581,8 @@ async fn test_a_field_value_beyond_the_first_choice_window_is_offered() {
         (0, 26, 1001),
         (350, 26, 1001),
         (1000, 26, 1001),
-        (0, 3, 9),
-        (8, 3, 9),
+        (0, 4, 9),
+        (8, 4, 9),
     ];
     for (position, max, count) in cases {
         let agent = Agent::new(Arc::new(NoPage), Arc::new(TailValue(position, max)), Arc::new(ScriptedLLM));
@@ -4867,6 +5001,76 @@ async fn test_recovery_retains_the_latest_checked_partial_revision() {
     assert!(answer.contains("Record C: 57"));
 }
 
+/// Drafts "Record B: 34" and "Record A: 99" every time, both citing the one note.
+struct TwoClaimComposer;
+
+impl LLMClient for TwoClaimComposer {
+    fn generate_value<'a>(
+        &'a self,
+        _: LLMPurpose,
+        _: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        Box::pin(async move {
+            let claims = json!([{"text": "Record B: 34", "evidence_ids": ["e0"]}, {"text": "Record A: 99", "evidence_ids": ["e0"]}]);
+            let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+        })
+    }
+}
+
+/// Judges every claim about Record A unsupported and everything else supported.
+struct RejectsRecordA(ScriptedJev);
+
+impl DecisionClient for RejectsRecordA {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        if !questions.contains_key("claim0") {
+            return self.0.evaluate(state, questions);
+        }
+        let answers = questions
+            .iter()
+            .map(|(key, question)| {
+                let probability = if question.dump_json().contains("Record A: 99") { 0.0 } else { 1.0 };
+                (key.clone(), Answer::Noul(NoulAnswer { kind: Default::default(), probability }))
+            })
+            .collect();
+        Box::pin(
+            async move { Ok(Evaluation { model: "test".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+    fn profile(&self) -> DecisionProfile {
+        let mut profile = DecisionProfile::jev();
+        profile.images = false;
+        profile
+    }
+}
+
+/// A run placed an order, drafted one claim its quotes did not hold twice, and answered with "Partial evidence only.
+/// Remaining coverage is omitted; totals may be incomplete.", a notice written for a run that stopped before reading
+/// everything (#892). It says instead which claim was withheld and why.
+#[tokio::test]
+async fn test_a_withheld_claim_is_named_instead_of_calling_the_answer_partial() {
+    let page = observation(&[]);
+    let agent = Agent::new(
+        Arc::new(FinishPage(page.clone())),
+        Arc::new(RejectsRecordA(ScriptedJev::new(Vec::new()))),
+        Arc::new(TwoClaimComposer),
+    );
+    let mut state = composition_repair_state();
+    assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
+    let result = agent.finish(&mut state, &page, None, None).await.unwrap().expect("the same draft ends the run");
+    assert_eq!(result.status, Status::Unverified);
+    let answer = result.answer.unwrap();
+    assert!(!answer.contains("Partial evidence only"), "{answer}");
+    assert!(answer.starts_with("This answer leaves out what did not pass its checks: 'Record A: 99'"), "{answer}");
+    assert!(answer.contains("Record B: 34"), "{answer}");
+}
+
 fn repair_jev(checks: Vec<(f64, f64)>) -> Arc<RepairComposeJev> {
     Arc::new(RepairComposeJev { policy: ScriptedJev::new(Vec::new()), checks: std::sync::Mutex::new(checks.into()) })
 }
@@ -5135,7 +5339,10 @@ async fn test_a_failed_repair_or_hard_deadline_keeps_the_verified_partial() {
         };
         assert_eq!(result.status, if provider_failed { Status::Error } else { Status::BudgetExceeded });
         let answer = result.answer.unwrap();
-        assert!(answer.starts_with("Partial evidence only."), "{answer}");
+        assert!(
+            answer.starts_with("This answer leaves out what did not pass its checks: the answer leaves out"),
+            "{answer}"
+        );
         assert!(answer.contains("Record B: 34"));
         assert_eq!(llm.0.lock().unwrap().len(), 2);
     }
@@ -5215,7 +5422,12 @@ async fn test_checked_partial_preserves_non_composition_stop_statuses_and_wall_m
         let ledger = state.ledger.clone();
         let result = agent.stopped(Flow::Stop(stop), Some(&mut state), &ledger).await;
         assert_eq!(result.status, status);
-        assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("Partial evidence only.")));
+        assert!(
+            result
+                .answer
+                .as_deref()
+                .is_some_and(|answer| answer.starts_with("This answer leaves out what did not pass its checks"))
+        );
         if status == Status::NeedsLogin {
             assert!(result.wall.is_some(), "needs_login keeps the wall metadata with the partial answer");
         }
@@ -5252,6 +5464,28 @@ fn test_720_fragment_change_keeps_the_earlier_read_retired_when_composing() {
     let current = current_quotes_720(&state);
     assert!(current.iter().any(|quote| quote == "Flight B: $450"), "{current:?}");
     assert!(!current.iter().any(|quote| quote == "Flight A: $300"), "pre-filter value is current again: {current:?}");
+}
+
+/// #934: a form read before the step that replaced its description must be known as read before it.
+#[test]
+fn a_read_remembers_how_many_site_changing_steps_came_before_it() {
+    let mut state = run_state();
+    let form = results_page_720("https://addons.test/settings", "Description: Old text.");
+    let before = Fact::read("Description: Old text.", block_evidence(&form, "s1"), FactReader::JevChoice);
+    state.record_read(&form, vec![before.clone()], false);
+    // A scroll and a move to another page show what is there; only the fill and the save could change the site.
+    state.history.extend([
+        executed(Some(Operation::Scroll), None, true),
+        executed(Some(Operation::Fill), Some("Description"), true),
+        executed(Some(Operation::Click), Some("Save changes"), true),
+        executed(Some(Operation::Navigate), None, true),
+    ]);
+    let public = results_page_720("https://addons.test/addon", "New text.");
+    let after = Fact::read("New text.", block_evidence(&public, "s1"), FactReader::JevChoice);
+    state.record_read(&public, vec![after.clone()], false);
+    let taken = |fact: &Fact| state.notes.steps_taken(fact.evidence.as_ref().unwrap());
+    assert_eq!((taken(&before), taken(&after)), (Some(0), Some(2)));
+    assert_eq!(state.executed_steps().len(), 2);
 }
 
 #[test]
@@ -5505,6 +5739,64 @@ fn test_a_403_stop_names_a_bot_or_access_wall_instead_of_an_unknown_cause() {
     assert_eq!(unavailable.status, Status::Unavailable);
     assert_eq!(unavailable.wall, None);
     assert!(unavailable.error.unwrap().contains(recorded));
+}
+
+/// A CurseForge project page awaiting moderation answers 404, and three runs on it ended `stuck` with "the cause is
+/// unknown" or answered from another page (#931): a 404 or 410 says the page does not exist.
+#[test]
+fn test_a_404_or_410_says_the_page_does_not_exist() {
+    for status in [404, 410] {
+        let stop = SiteFailure::http("https://mods.test/project/skyward", status, 0).stop();
+        assert_eq!(stop.status, Status::Stuck);
+        let error = stop.error.expect("an error names the failure");
+        assert_eq!(
+            error,
+            format!(
+                "Could not complete the task after HTTP {status} at https://mods.test/project/skyward: the page does not exist."
+            )
+        );
+    }
+}
+
+/// A run whose start address answered 404 searched the site and stalled on the results, and ended `stuck` with
+/// `no_progress` once it had left the address (#931). It ends as the start address's failure until that address loads.
+#[tokio::test]
+async fn a_run_stalled_after_leaving_a_failed_start_address_ends_as_that_failure() {
+    let start = "https://mods.test/project/skyward";
+    let missing = Observation { response_status: Some(404), ..at(start, &[]) };
+    let search = Observation { response_status: Some(200), ..at("https://mods.test/search?q=skyward", &[]) };
+    let agent =
+        Agent::new(Arc::new(Screenshots::default()), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM));
+    let stalled = async |state: &mut RunState| {
+        state.recoveries = agent.config.stall.max_recoveries;
+        match agent.recover(state, &search, "no_progress (3)", Status::Stuck, None).await {
+            Err(Flow::Stop(stop)) => stop,
+            ended => panic!("{ended:?}"),
+        }
+    };
+    let mut state = run_state();
+    state.first_url = Some(start.into());
+    agent.note_effect(&mut state, &missing);
+    agent.note_effect(&mut state, &search);
+    agent.settle(&mut state, &search).await.unwrap();
+    assert_eq!(state.site_failure, None, "the results page loaded");
+    let stop = stalled(&mut state).await;
+    assert_eq!(stop.status, Status::Stuck);
+    assert_eq!(
+        stop.error.as_deref(),
+        Some(format!("Could not complete the task after HTTP 404 at {start}: the page does not exist.").as_str())
+    );
+    // A dead link reached mid-run is not the start address, and the start address loading clears its failure.
+    for (first, reached) in [(start, "https://mods.test/project/other"), (start, start)] {
+        let mut state = run_state();
+        state.first_url = Some(first.into());
+        agent.note_effect(&mut state, &Observation { response_status: Some(404), ..at(reached, &[]) });
+        if reached == start {
+            agent.note_effect(&mut state, &Observation { response_status: Some(200), ..at(start, &[]) });
+        }
+        state.site_failure = None;
+        assert_eq!(stalled(&mut state).await.error.as_deref(), Some("no_progress (3)"));
+    }
 }
 
 #[test]

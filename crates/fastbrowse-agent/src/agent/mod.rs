@@ -45,7 +45,7 @@ use state::{Flow, RunState, Stop};
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
 use crate::policy::StepContext;
-use crate::retrieval::{ComposedAnswer, cited_quote, compose, draft_answer, marked_partial, partial_answer};
+use crate::retrieval::{ComposedAnswer, cited_quote, compose, draft_answer, marked_partial, noticed, partial_answer};
 use crate::verification::RecordSchema;
 
 /// How long a page that has not moved is watched before the run acts on it: a bot check that never clears then ends
@@ -316,6 +316,9 @@ impl Agent {
             }
             loop_returned = false;
         }
+        if result.status.waits_on_person() {
+            self.page.hand_over_tab();
+        }
         result.cost = ledger.breakdown();
         Ok(if loop_returned { result } else { self.ending_frame(result, requested_frame).await })
     }
@@ -447,15 +450,7 @@ impl Agent {
             if state.composition_partial.is_some() {
                 let notes = state.notes_to_compose();
                 if let Some(partial) = state.checked_composition(&notes) {
-                    let mut result = self.answered(
-                        &marked_partial(partial.clone()),
-                        &notes,
-                        Some(state),
-                        ledger,
-                        stop.status,
-                        error,
-                        budget,
-                    );
+                    let mut result = self.answered(partial, &notes, Some(state), ledger, stop.status, error, budget);
                     result.wall = self.wall(stop);
                     result.evidence.extend(stop.evidence.clone());
                     return result;
@@ -591,15 +586,7 @@ impl Agent {
         if let Some(state) = state.filter(|state| state.composition_partial.is_some()) {
             let notes = state.notes_to_compose();
             if let Some(partial) = state.checked_composition(&notes) {
-                return self.answered(
-                    &marked_partial(partial.clone()),
-                    &notes,
-                    Some(state),
-                    ledger,
-                    status,
-                    error,
-                    budget,
-                );
+                return self.answered(partial, &notes, Some(state), ledger, status, error, budget);
             }
         }
         if state.is_some_and(|state| state.compose) {
@@ -628,6 +615,10 @@ impl Agent {
         error: Option<String>,
         budget: Option<BudgetStop>,
     ) -> RunResult {
+        // A run that stops with a step of its task undone says so before what it read.
+        let undone = (status != Status::Complete && state.is_some_and(|state| state.undone))
+            .then(|| noticed(finishing::UNDONE, partial.clone()));
+        let partial = undone.as_ref().unwrap_or(partial);
         let cited =
             notes.expand_evidence_ids(partial.claims.iter().flat_map(|c| c.evidence_ids.iter().map(String::as_str)));
         let (answer, citations) = self.public_answer(partial);

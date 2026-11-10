@@ -110,9 +110,10 @@ Benchmarking makes three comparisons:
   fastbrowse passed 99.3% at $0.0268 a run.
 - **C2, browser against browser:** the same fastbrowse build on its own browser pool and on a Browser Use Cloud
   browser. In an earlier record (release-0.5.25), not on the published page, the pool passed fewer tasks.
-- **C3, fastbrowse on its pool against `jev-ultrafast`,** over 47 tasks: not yet measured. Browser Use's own
-  Ultrafast is not measured by us either: its vendor-reported 22 seconds and $0.0064 a task cover the model and
-  the search only, with the browser and proxy billed separately, so they are not comparable with our figures.
+- **C3, fastbrowse on its pool against `jev-ultrafast`,** over the 6 navigation tasks, since `jev-ultrafast`
+  returns no answer: not yet measured. Browser Use's own Ultrafast is not measured by us either: its vendor-reported
+  22 seconds and $0.0064 a task cover the model and the search only, with the browser and proxy billed separately, so
+  they are not comparable with our figures.
 
 The [benchmark page](https://fastbrowse.ai/benchmarks) publishes campaign release-0.7.1 (agent commit `7b8b0e8f`,
 data sha256 `7d6ac26f23fa6d354128fa7e4bcc8190125c441f4f136dc39d0e3c35cec5d4e2`). 0.9.1 is the current release and
@@ -241,7 +242,8 @@ async def main() -> None:
 value is worked out in code from every note read and cites each record it rests on. A `quote` is the page's text, a table row as its cells separated by spaces. A `deep_link` is a [text fragment](https://wicg.github.io/scroll-to-text-fragment/#syntax) URL that
 scrolls to the quote; it may not resolve on a page that changes or needs a session. Each page a quote was read from
 is kept as a `capture` artifact in `result.artifacts`, holding the masked page text, and the quote's `Evidence`
-names it in `capture_artifact`; `start` and `end` index into that text. Captures go where downloads go, so pass
+names it in `capture_artifact`; `start` and `end` index into that text. Its `links` lists each link inside the
+quote: the link's `text`, where that text sits as `start` and `end`, and the `href` it leads to. Captures go where downloads go, so pass
 `downloads` or `artifact_sink` to keep them past the run. A page fetched over HTTP keeps none.
 
 **Watching a run.**

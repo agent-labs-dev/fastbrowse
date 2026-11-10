@@ -10,7 +10,7 @@ Browser benchmarking compares exactly three things, each a matched head-to-head 
 |:--|:--|:--|:--|:--|
 | C1 | agent against agent | `fastbrowse` and `jev-ultrafast` live, `browser-use`, `browser-use-ultrafast` and `browser-harness` from the competitor reference | `internal-hosted` | 53 |
 | C2 | backend against backend | `fastbrowse` on the Browser Use Cloud browser against `fastbrowse-pool` (Fastbrowse on its own hosted browser pool) | `internal-backend` | 53 |
-| C3 | Fastbrowse and its backend against Jev Ultrafast | `fastbrowse-pool` against `jev-ultrafast` | `internal-ultrafast` | 47 |
+| C3 | Fastbrowse and its backend against Jev Ultrafast | `fastbrowse-pool` against `jev-ultrafast` | `internal-ultrafast` | 6 |
 
 Each comparison is its own invocation with exactly its two arms, over every suite, three repeats; the publication
 candidate refuses a ledger whose recorded arms differ from its group's. Run one command per comparison:
@@ -71,9 +71,9 @@ Each catalog task lists the head-to-head arms it leaves out under `excluded`, ea
   through that browser's DevTools address, so they are graded on the six navigation tasks too. The harness then stops
   the browser and reads the session's cost once the stop has settled it. `saucedemo-pause` passes only on a
   confirmation stop, and V4 takes no authorization or pause setting.
-- `jev-ultrafast` runs 47 tasks. It takes no authorization setting, so it skips `saucedemo-pause`, and it cannot be
-  given credentials, so it skips the login tasks. It returns no answer, so on an answer task the judge has only its
-  final page to go on. It sends the Jev release the measured fastbrowse build sends (`fastbrowse._native.jev_models`),
+- `jev-ultrafast` runs the six navigation tasks, which are graded on the page a run ends on. It returns no answer,
+  only DONE or BLOCKED, so it skips every task that asks for one. It also takes no authorization setting and cannot
+  be given credentials. It sends the Jev release the measured fastbrowse build sends (`fastbrowse._native.jev_models`),
   and its text helper is `google/gemini-3.1-flash-lite` through OpenRouter (`ULTRAFAST_TEXT_MODEL`).
 
 A comparison scores both arms on the tasks both ran.
@@ -142,7 +142,9 @@ does. A cap ends hard tasks early and then scores the cap, not the agent. Each r
 (`attempt_clock`). Opening and closing the session are outside it and are recorded as `session_open_seconds` and
 `session_close_seconds`, summed per public row. Every row records its `timing_basis`: `session-ready-to-answer`, or
 `session-included` where an arm could not separate them. Publication refuses anything but the first, and comparisons
-refuse mixed bases.
+refuse mixed bases. Hosted Browser Use and Browser Harness connect to their browser where the harness cannot see, so
+that connection stays in their seconds; each of their public rows says so in `timing_note`, and publication refuses a
+slot whose tries disagree on it.
 
 The harness bounds only the provider's two phases around the agent, so a hung provider is never an agent failure.
 Opening is bounded by `attempt_clock.SESSION_OPEN_SECONDS` (recorded as `session_open_limit_seconds`, and checked by
@@ -344,7 +346,7 @@ The hosted group is the 52 tasks both `fastbrowse` and `browser-use` run. It mea
 provider refused every start, as with a bad key), is not measured rather than blocking the group. Each task of the
 set a measured arm cannot run is listed in the group's `excluded`, with the arm, the task and the catalog's reason; it
 stands for `repeats` failed attempts in every pass rate. The backend group requires the 53 tasks on
-both fastbrowse arms, and the Ultrafast group the 47 tasks `fastbrowse-pool` and `jev-ultrafast` both run,
+both fastbrowse arms, and the Ultrafast group the 6 tasks `fastbrowse-pool` and `jev-ultrafast` both run,
 each with three repeats. The Fastbrowse-only group requires all 53 supported tasks; it needs no competitor reruns.
 A candidate with the Ultrafast group is schema 5, the first in which that group pairs `fastbrowse-pool` (not
 `fastbrowse`) with `jev-ultrafast`; with the backend group and no Ultrafast group it is schema 4.
@@ -376,11 +378,12 @@ the browser of each arm and the concurrency.
 - Official dollars are agent spend, as internal ones are; judge spend counts toward the budget, and any unsettled
   judge reservation blocks export.
 - An official run may have any number of repeats (`--repeat`, at least one); every task and repeat must be graded or
-  blocked by the site. A slot the interruption check still finds interrupted after every retry measured no agent: it
-  stays out of the rows and every score and is listed in the group's `blocked` slots, with its time and spend, on
-  every arm. Publication confirms each from its saved checks; any other ungraded slot blocks export, and so does a
-  run with nothing graded. Each repeat is its own row, and a task's figure is the mean of its graded repeat scores, as
-  `track-official` aggregates it.
+  blocked by the site. A slot the interruption check still finds interrupted after every retry is the agent's failed
+  attempt, as an internal one is, since another agent may get past what stopped it: a row scoring 0 with its time and
+  spend, whose `failure` names the bot check when the run ended `blocked`. One whose run ended in an error of the
+  harness or its model provider measured nothing and is listed in `unjudged`. Publication confirms each from its saved
+  checks; any other ungraded slot blocks export. Each repeat is its own row, and a task's figure is the mean of its
+  repeat scores.
   The upstream score of each repeat is kept as upstream defines it. Only `fastbrowse` official runs are
   published, graded by `anthropic/claude-opus-5.5` through OpenRouter.
 - Every campaign must already be uploaded with `fastbrowse-evals browser track-ledger --push` or `track-official --push`. The exporter reads each

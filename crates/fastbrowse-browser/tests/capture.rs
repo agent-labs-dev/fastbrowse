@@ -330,6 +330,47 @@ async fn test_a_footnote_reference_is_not_read_as_part_of_the_text_it_marks() {
     h.close().await;
 }
 
+/// A link's text says neither where it leads nor where a value the page set apart as its own element ends, so each
+/// link inside a block is kept with its text's place in the capture and its address, as a fetched page's are.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_link_inside_a_block_keeps_its_text_and_address() {
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    let markup = "<p>Support me on <a href=\"https://ko-fi.com/x\">Ko-fi</a> or <a href=\"/sponsor\">GitHub</a>.</p>\
+         <table><tr><th>Name</th><th>Price</th></tr><tr><td><a href=\"/p/1\">Mug</a></td><td>8.75</td></tr></table>\
+         <p><a href=\"javascript:void(0)\">Menu</a> and <a href=\"/shop\">the shop</a></p>\
+         <ul><li><a href=\"/product/7\">Paper Filters</a> - GBP 4.60</li><li><a href=\"/product/8\">Bar Cloth</a> - GBP 6.20</li>\
+         <li><a href=\"/product/9\">Drip Tray</a> - GBP 9.95</li></ul>";
+    set_body(&h.session, markup).await;
+    let capture = content_capture(&h.page).await;
+    let origin = capture.url.split("/icons.html").next().unwrap().to_string();
+    for link in capture.blocks.iter().flat_map(|block| &block.links) {
+        let shown: String =
+            capture.text.chars().skip(link.start as usize).take((link.end - link.start) as usize).collect();
+        assert_eq!(shown, link.text, "a link's offsets are where its text is");
+    }
+    let links: Vec<(&str, String)> = capture
+        .blocks
+        .iter()
+        .flat_map(|block| &block.links)
+        .map(|link| (link.text.as_str(), link.href.replace(&origin, "")))
+        .collect();
+    assert_eq!(
+        links,
+        [
+            ("Ko-fi", "https://ko-fi.com/x".to_string()),
+            ("GitHub", "/sponsor".to_string()),
+            ("Mug", "/p/1".to_string()),
+            ("the shop", "/shop".to_string()),
+            ("Paper Filters", "/product/7".to_string()),
+            ("Bar Cloth", "/product/8".to_string()),
+            ("Drip Tray", "/product/9".to_string()),
+        ],
+        "a script link leads nowhere"
+    );
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_record_candidates_preserve_frame_and_shadow_boundaries() {
     for boundary in ["iframe", "shadow-host", "shadow-descendant"] {

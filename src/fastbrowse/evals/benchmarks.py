@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, NamedTuple, Self
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
@@ -29,6 +30,20 @@ Sha = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Amount = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 Limit = Annotated[str, Field(pattern=r"^[A-Za-z0-9 ,.;:()'%+_=-]{1,240}$")]
+LINK = re.compile(r"https?:|www\.|\.(?:com|org|net|io|ai|dev|app)\b", re.IGNORECASE)
+"""What the site refuses in public text as naming a link (`LIMIT_LINK` in fastbrowse-site's
+`src/lib/benchmark-feed.ts`). It is that parser's contract, matched exactly, not a judgment of the text."""
+
+
+def _no_link(text: str) -> str:
+    if LINK.search(text):
+        raise ValueError("public text names a link")
+    return text
+
+
+ExclusionReason = Annotated[str, Field(pattern=r"^[A-Za-z0-9 ,.;:()'%+_=-]{1,500}$"), AfterValidator(_no_link)]
+"""The catalog's reason an arm cannot run a task, as the site parses it (`EXCLUSION_REASON` and `LIMIT_LINK` in
+`src/lib/benchmark-feed.ts`): plain words and punctuation, no slash and no link."""
 GroupId = Literal[
     "internal-fastbrowse",
     "internal-hosted",
@@ -49,6 +64,11 @@ STAGED = RESULTS / "benchmark-candidate.json"
 
 class PublicModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+
+
+def _without_empty(data: dict[str, Any], names: tuple[str, ...]) -> dict[str, Any]:
+    """`data` without the named fields that hold nothing, so a model from before them keeps its old bytes."""
+    return {k: v for k, v in data.items() if k not in names or v not in (None, [])}
 
 
 class Row(PublicModel):
@@ -79,6 +99,9 @@ class Row(PublicModel):
     """Opening the browser session, totalled like `seconds` and outside them."""
     session_close_seconds: Amount | None = None
     """Closing the browser session, totalled like `seconds` and outside them."""
+    timing_note: Limit | None = None
+    """What of browser setup stayed inside `seconds`, for an agent that connects to its browser where the harness
+    cannot see: hosted Browser Use and Browser Harness. None when all of it is outside, in `session_open_seconds`."""
     failure: Limit | None = None
     """Why a failed slot failed when the verdict alone does not say: a run the site's bot check refused is the
     agent's failure, since another agent may get past it."""
@@ -87,7 +110,14 @@ class Row(PublicModel):
     def without_unrecorded_timing(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         """A row from before these fields keeps its old bytes, so approved candidates still match."""
         data = handler(self)
-        for name in ("timing_basis", "session_open_seconds", "session_close_seconds", "llm_calls_basis", "failure"):
+        for name in (
+            "timing_basis",
+            "session_open_seconds",
+            "session_close_seconds",
+            "timing_note",
+            "llm_calls_basis",
+            "failure",
+        ):
             if data.get(name) is None:
                 data.pop(name, None)
         return data
@@ -107,9 +137,10 @@ class Row(PublicModel):
 
 
 class BlockedSlot(PublicModel):
-    """A scheduled slot the site kept from any outcome on every attempt. It measured no agent, so it has no grade: it
-    is outside every score, shown apart from the rows, and counts as neither a pass nor a failure. Its time and spend
-    are what the attempts took."""
+    """The legacy form of a scheduled slot the site kept from any outcome on every attempt, kept so approved
+    candidates keep their bytes. It is a failed attempt: another agent may get past what stopped this one, so the site
+    and the regression check count it as one. A new candidate records such a slot as a `Row` whose `failure` says
+    why. Its time and spend are what the attempts took."""
 
     task: Identifier
     repeat: Annotated[int, Field(ge=0)]
@@ -120,9 +151,9 @@ class BlockedSlot(PublicModel):
 
 
 class UnjudgedSlot(PublicModel):
-    """A scheduled slot with no verdict on the current task, so like a blocked slot it is outside every score and
-    counts as neither a pass nor a failure. `evidence-unavailable`: the judge found the run's evidence unavailable, an
-    interruption the agent did not cause such as a site's bot check or a provider outage. `no-verdict`: the judge
+    """A scheduled slot with no verdict on the current task, so it is outside every score and counts as neither a pass
+    nor a failure. `evidence-unavailable`: the judge found the run's evidence unavailable on a run that ended in an
+    error of the harness or its model provider, which the agent did not cause. `no-verdict`: the judge
     reached no verdict on the evidence it had. `task-changed`: the run measured an earlier version of the task, so its
     verdict is not compared, as the release gate does not compare it."""
 
@@ -139,7 +170,7 @@ class ExcludedTask(PublicModel):
 
     arm: Arm
     task: Identifier
-    reason: Annotated[str, Field(min_length=1, max_length=500)]
+    reason: ExclusionReason
 
 
 class Source(PublicModel):
@@ -155,6 +186,16 @@ class Source(PublicModel):
     runner_sha: Sha
     measured_on: Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2}$")]
     tasks: Annotated[list[Identifier], Field(min_length=1)]
+    version: Limit | None = None
+    """What the arm ran, as the run recorded its pin: the vendor's package and API, or a commit. None for a fastbrowse
+    arm, whose build is `agent_sha`, and on a source recorded before this field."""
+    models: list[Limit] = []
+    """The models the arm's attempts in this run reported, model ids with slashes shown as colons."""
+
+    @model_serializer(mode="wrap")
+    def without_unrecorded_setup(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A source from before these fields keeps its old bytes, so approved candidates still match."""
+        return _without_empty(handler(self), ("version", "models"))
 
 
 class Coverage(NamedTuple):
@@ -230,6 +271,13 @@ class ReferenceArm(PublicModel):
     version: Limit
     browser: Limit
     campaign_id: Identifier
+    models: list[Limit] = []
+    """The models the arm's rows reported in the run that measured them, as its `Source` records them."""
+
+    @model_serializer(mode="wrap")
+    def without_unrecorded_models(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A reference from before this field keeps its old bytes."""
+        return _without_empty(handler(self), ("models",))
 
 
 class Group(PublicModel):
@@ -675,14 +723,19 @@ def regressions(
         for task in group.task_ids:
             now = [r for r in group.rows if r.arm == arm and r.task == task]
             before = [r for r in old.rows if r.arm == arm and r.task == task]
-            # A task with no graded repeat (blocked or unjudged), here or in the baseline, has nothing to compare.
-            if not now or not before:
+            # A legacy blocked slot is a failed attempt, as the site reads it (`BlockedSlot`).
+            now_blocked = sum(b.arm == arm and b.task == task for b in group.blocked)
+            before_blocked = sum(b.arm == arm and b.task == task for b in old.blocked)
+            # A task with no measured repeat (all unjudged), here or in the baseline, has nothing to compare.
+            if not (now or now_blocked) or not (before or before_blocked):
                 continue
-            if sum(r.score for r in now) / len(now) < sum(r.score for r in before) / len(before):
+            if _rate([r.score for r in now], now_blocked) < _rate([r.score for r in before], before_blocked):
                 raise ValueError(f"source-score regression: {group.id}/{task}")
             # A rate, like the score above: the two runs need not have the same number of repeats.
-            if sum(r.completed for r in now) / len(now) < sum(r.completed for r in before) / len(before):
+            if _rate([r.completed for r in now], now_blocked) < _rate([r.completed for r in before], before_blocked):
                 raise ValueError(f"completion regression: {group.id}/{task}")
+            if not now or not before:
+                continue
             moved = [
                 finding
                 for finding in moves(f"{group.id}/{task}", "the published figures", _dumped(before), _dumped(now))
@@ -690,6 +743,11 @@ def regressions(
             ]
             if moved:
                 raise ValueError(f"{moved[0].check} regression: {moved[0].detail}")
+
+
+def _rate(values: list[float] | list[bool], failed: int) -> float:
+    """The mean of `values` with `failed` more attempts that scored nothing."""
+    return sum(values) / (len(values) + failed)
 
 
 def _dumped(rows: list[Row]) -> list[dict]:

@@ -12,7 +12,7 @@ use super::recovery::{DONE, Idle};
 use super::state::{Extent, OutputIntent, RunState, Step, Stop};
 use super::{Agent, Outcome};
 use crate::memory::Notes;
-use crate::retrieval::{compose_reviewed, draft_answer, draft_reviewed, marked_partial};
+use crate::retrieval::{ComposedAnswer, Draft, compose_reviewed, draft_answer, draft_reviewed, noticed};
 use crate::verification::{ExtractOptions, Extraction, RecordSchema, extract};
 
 impl Agent {
@@ -68,6 +68,7 @@ impl Agent {
         if state.history.iter().any(crate::policy::HistoryEntry::acts) {
             let carried = self.actions_done(state, observation).await?;
             state.refused = carried == Carried::Refused;
+            state.undone = carried == Carried::Undone;
             if carried == Carried::Undone {
                 let reason = "A step the task asks to be carried out has not been done, so it is not done.";
                 self.recover(state, observation, reason, Status::Stuck, Some((Operation::Done, None))).await?;
@@ -258,6 +259,10 @@ impl Agent {
         let mut rejection = None;
         let mut answered = if intent == OutputIntent::Image {
             None
+        } else if intent == OutputIntent::CarriedOut && !state.refused {
+            // A task that asks to be told nothing is answered by what was read: writing it up cost a task to open a
+            // page 1 to 4.5 seconds of composing (#910). A step the site refused is reported, as REFUSED says.
+            draft_answer(&state.notes)
         } else if state.compose {
             let (notes, task, ledger) = (state.notes_to_compose(), state.task.clone(), state.ledger.clone());
             let steps = state.executed_steps();
@@ -281,15 +286,33 @@ impl Agent {
             Some(reviewed.answer)
         } else if matches!(intent, OutputIntent::Text | OutputIntent::TextAndImage) {
             let (notes, task, ledger) = (state.notes.clone(), state.task.clone(), state.ledger.clone());
-            match self.trace.phase("coverage", draft_reviewed(&*self.jev, &task, &notes, Some(&ledger))).await? {
-                Some(reviewed) => {
-                    // A pick that falls short is written up next time, from everything read by then.
-                    state.compose |= reviewed.rejection.is_some() || reviewed.answer.problem.is_some();
-                    rejection = reviewed.rejection;
-                    Some(reviewed.answer)
-                }
-                None => None,
-            }
+            let reviewed =
+                match self.trace.phase("coverage", draft_reviewed(&*self.jev, &task, &notes, Some(&ledger))).await? {
+                    Some(Draft::Reviewed(reviewed)) => Some(reviewed),
+                    // The picks hold the answer among other page text, which only a writer can narrow: it writes the
+                    // answer from them now, and their claim check holds it to their quotes.
+                    Some(Draft::Write(feedback)) => {
+                        let steps = state.executed_steps();
+                        let written = compose_reviewed(
+                            &*self.jev,
+                            &*self.llm,
+                            &task,
+                            &notes,
+                            Some(&ledger),
+                            Some(&feedback),
+                            true,
+                            &steps,
+                        );
+                        Some(self.trace.phase("compose", written).await?)
+                    }
+                    None => None,
+                };
+            reviewed.map(|reviewed| {
+                // A pick that falls short is written up next time, from everything read by then.
+                state.compose |= reviewed.rejection.is_some() || reviewed.answer.problem.is_some();
+                rejection = reviewed.rejection;
+                reviewed.answer
+            })
         } else {
             draft_answer(&state.notes)
         };
@@ -308,17 +331,17 @@ impl Agent {
             && let Some(rejection) = rejection
         {
             let reason = rejection_reason(&rejection);
-            state.composition_feedback = Some(rejection);
-            state.schema_partial = extraction;
             if let Some(answer) = &answered
                 && !answer.claims.is_empty()
             {
                 state.composition_partial = Some((
-                    answer.clone(),
+                    withheld(&rejection, answer.clone()),
                     RunState::composition_sources(&state.notes_to_compose()),
                     state.executed_steps().len(),
                 ));
             }
+            state.composition_feedback = Some(rejection);
+            state.schema_partial = extraction;
             self.recover(state, observation, &reason, Status::Unverified, None).await?;
             return Ok(None);
         }
@@ -332,7 +355,7 @@ impl Agent {
         if answer_problem.is_some()
             && let Some(partial) = state.checked_composition(&state.notes_to_compose())
         {
-            answered = Some(marked_partial(partial.clone()));
+            answered = Some(partial.clone());
         }
         if let Some(composed) = answered {
             let (text, cited) = self.public_answer(&composed);
@@ -341,7 +364,8 @@ impl Agent {
         }
         let mut data = Value::Null;
         let mut status = if answer_problem.is_some() { Status::Unverified } else { Status::Complete };
-        let mut error = answer_problem;
+        // A problem can quote a withheld claim, which can hold what the run typed.
+        let mut error = answer_problem.map(|problem| self.redact(&problem));
         // A whole-list answer from part of the list is not the whole: a limit or a refused page left one unread. The same
         // holds for the pages a task names.
         if state.extent.walks()
@@ -393,12 +417,45 @@ impl Agent {
     }
 }
 
+/// What the answer of a run that stopped with a step of its task undone says first: what it read can show what was
+/// asked for, and without this a run that never pressed the keys its task named answered that the saved description
+/// matched, as if the task were done (#937).
+pub(super) const UNDONE: &str = "A step the task asks to be carried out was not done, so this answer reports what was read, not that the task was done.";
+
 /// The error of a run whose finish check found a step the site does not allow; the answer names the step.
 pub(super) const REFUSED: &str = "A step the task asks for was not carried out because the site does not allow it, as the page or the recent actions show. The answer reports what was and was not done.";
 
 /// What the navigator is told about a rejected draft, and what the run's error says if recovery runs out: which
 /// claim failed which check, so it can look for the evidence that is missing rather than propose done again (#810).
 fn rejection_reason(rejection: &str) -> String {
+    let failed = rejected_parts(rejection);
+    if failed.is_empty() {
+        return "The composed answer was rejected against its source quotes or requested coverage. Correct the answer or gather the evidence it needs.".into();
+    }
+    format!(
+        "The composed answer was rejected: {}. Correct the answer or gather the evidence it needs.",
+        failed.join("; ")
+    )
+}
+
+/// The claims of a rejected draft that held, under a notice naming what was withheld and why. A run that finished its
+/// task and withheld one claim was told "Partial evidence only. Remaining coverage is omitted", a notice for a run that
+/// stopped before reading everything, and nothing said which claim was missing (#892).
+fn withheld(rejection: &str, held: ComposedAnswer) -> ComposedAnswer {
+    let failed = rejected_parts(rejection);
+    let notice = if failed.is_empty() {
+        "This answer leaves out what did not pass its checks. Each claim below passed them.".to_string()
+    } else {
+        format!(
+            "This answer leaves out what did not pass its checks: {}. Each claim below passed them.",
+            failed.join("; ")
+        )
+    };
+    noticed(&notice, held)
+}
+
+/// Which claim of a rejected draft failed which check, one sentence part each.
+fn rejected_parts(rejection: &str) -> Vec<String> {
     let feedback: Value = serde_json::from_str(rejection).unwrap_or_default();
     let claim = |index: &Value| {
         let text = index.as_u64().and_then(|index| feedback["draft_claims"].get(index as usize)?["text"].as_str());
@@ -446,13 +503,7 @@ fn rejection_reason(rejection: &str) -> String {
         }
     }
     failed.dedup();
-    if failed.is_empty() {
-        return "The composed answer was rejected against its source quotes or requested coverage. Correct the answer or gather the evidence it needs.".into();
-    }
-    format!(
-        "The composed answer was rejected: {}. Correct the answer or gather the evidence it needs.",
-        failed.join("; ")
-    )
+    failed
 }
 
 /// The claims of a rejected draft, as its feedback records them.

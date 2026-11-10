@@ -316,13 +316,36 @@ def _block(candidate: dict, index: int) -> dict:
     return slot
 
 
-def test_a_blocked_slot_fills_its_place_in_the_grid_and_stays_out_of_the_rows(candidate):
+def test_a_blocked_slot_fills_its_place_in_the_grid_and_counts_as_a_failure(candidate):
     baseline = Candidate.model_validate(copy.deepcopy(candidate))
     slot = _block(candidate, 0)
     published = Candidate.model_validate(candidate)
     assert [b.task for b in published.groups[2].blocked] == [slot["task"]]
     assert len(published.groups[2].rows) == 199
-    regressions(published, baseline)
+    # The site reads a legacy blocked slot as a failed attempt, so it cannot stand in for the pass it replaced.
+    with pytest.raises(ValueError, match="source-score regression"):
+        regressions(published, baseline)
+
+
+def test_a_failed_row_matches_the_legacy_blocked_slot_it_replaces(candidate):
+    """A baseline's blocked slot was a failed attempt, so the row a new candidate records for the same refusal, with
+    its `failure`, is no regression on the repeats that graded."""
+    group = candidate["groups"][0]
+    index = next(i for i, r in enumerate(group["rows"]) if r["arm"] == "fastbrowse")
+    row = group["rows"][index]
+    failed = {
+        **row,
+        "status": "blocked",
+        "completed": False,
+        "score": 0.0,
+        "failure": "blocked by the site's bot check",
+    }
+    legacy = copy.deepcopy(candidate)
+    legacy["groups"][0]["rows"].pop(index)
+    keys = ("task", "repeat", "arm", "seconds", "dollars")
+    legacy["groups"][0]["blocked"] = [{k: row[k] for k in keys} | {"physical_runs": 1}]
+    group["rows"][index] = failed
+    regressions(Candidate.model_validate(candidate), Candidate.model_validate(legacy))
 
 
 def test_a_slot_cannot_be_both_graded_and_blocked(candidate):
@@ -1216,7 +1239,7 @@ def test_the_ultrafast_pairing_follows_the_schema(candidate, schema, arms, valid
             Candidate.model_validate(data)
         return
     parsed = Candidate.model_validate(data)
-    assert len(parsed.groups[0].task_ids) == 47
+    assert len(parsed.groups[0].task_ids) == 6
     if schema < 5:
         # The old pairing still reads, but a new measurement on the current catalog must use the pool.
         with pytest.raises(ValueError, match="pair fastbrowse-pool"):
@@ -1522,3 +1545,13 @@ def test_a_task_an_arm_cannot_run_is_listed_as_excluded_never_with_rows(candidat
     group["excluded"] = [{**entry, "reason": "another reason"}]
     with pytest.raises(ValueError, match="excluded tasks must be the catalog's"):
         check_catalog(Candidate.model_validate(candidate), CATALOG)
+
+
+@pytest.mark.parametrize(
+    "reason", ["needs a login/2FA", 'asks for an "answer"', "needs a login, none given \u00b2", "see example.com", ""]
+)
+def test_an_exclusion_reason_is_refused_where_the_site_would_refuse_it(reason):
+    """The site parses a reason as plain words and punctuation with no slash or link, so the candidate fails here."""
+    with pytest.raises(ValidationError):
+        benchmarks.ExcludedTask(arm="browser-use", task="pypi-version", reason=reason)
+    benchmarks.ExcludedTask(arm="browser-use", task="pypi-version", reason="needs login credentials: none (100%)")

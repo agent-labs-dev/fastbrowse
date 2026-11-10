@@ -92,3 +92,9 @@ For the CLI, pass `--downloads DIR` and include the desired download in the task
 the task. Check the returned download metadata and the resulting files before reporting their paths.
 For MCP, check the tool result and server configuration for download access. A path on a remote server is not
 automatically a local file the user can open.
+
+## Uploads
+
+For the CLI, pass each file the page needs as `--file PATH` and name it in the task by its file name ("upload
+shrike_lid.stl"). A path in the task text alone gives the run nothing to attach. The MCP `browse` tool cannot
+attach files.

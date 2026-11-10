@@ -8,6 +8,8 @@ beside it as `data/benchmark-<campaign>.json`, byte for byte. A group the candid
 Every site system has one of three states in a measured group file: `systems` maps it to the arm whose rows it shows,
 `cost_not_reported` lists the shown systems whose rows carry no cost (`"dollars": null`), so the site shows their pass
 rate and seconds with "cost not reported", and `not_measured` lists the systems with no rows, shown as "Not measured".
+`setups` names what each shown system ran, its version and the models its rows reported, where the candidate records
+them.
 A vendor figure the site already shows for the group is kept only as per-task rows over exactly the campaign's tasks.
 A `reference` block is a vendor figure on another task set, which the site labels and never compares; it stays as it is.
 """
@@ -21,7 +23,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from fastbrowse.evals.benchmarks import Candidate, GroupId, group_arms
+from fastbrowse.evals.benchmarks import Candidate, Group, GroupId, group_arms
 
 SiteGroup = Literal["live-suite", "live-suite-fastbrowse", "online-mind2web", "bu-bench"]
 
@@ -75,6 +77,23 @@ class RunFacts(BaseModel):
         }
 
 
+def setups(group: Group, arms: tuple[str, ...]) -> dict[str, dict[str, object]]:
+    """What each shown system ran, as the candidate records it: every source of a measured arm, whose models are all
+    shown, or a reference arm's own record. Sources of one arm that pinned different versions cannot share one label,
+    so they are refused. A system with neither version nor models is left out, as a candidate from before them
+    records none."""
+    recorded: dict[str, dict[str, object]] = {}
+    for arm in arms:
+        held = [s for s in group.sources if s.arm == arm] or [r for r in group.references if r.arm == arm][:1]
+        versions = list(dict.fromkeys(h.version for h in held if h.version))
+        if len(versions) > 1:
+            raise ValueError(f"{group.id} pools {arm} runs pinned to different versions: {', '.join(versions)}")
+        models = list(dict.fromkeys(m for h in held for m in h.models))
+        if versions or models:
+            recorded[SYSTEMS[arm]] = {"version": versions[0] if versions else None, "models": models}
+    return recorded
+
+
 def group_files(content: bytes, facts: RunFacts, current: dict[str, dict]) -> dict[str, bytes]:
     """Every site file this candidate changes, by path under the site root."""
     candidate = Candidate.model_validate_json(content)
@@ -123,6 +142,7 @@ def group_files(content: bytes, facts: RunFacts, current: dict[str, dict]) -> di
                 "systems": {SYSTEMS[arm]: arm for arm in arms},
                 "cost_not_reported": [SYSTEMS[arm] for arm in arms if arm in unpriced],
                 "not_measured": [system for arm, system in SYSTEMS.items() if arm not in arms],
+                **({"setups": ran} if (ran := setups(source, arms)) else {}),
             },
             "published": published,
             **({"reference": held_figures["reference"]} if "reference" in held_figures else {}),

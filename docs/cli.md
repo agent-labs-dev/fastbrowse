@@ -41,6 +41,7 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 | `--record FILE` | save a captioned MP4 of the run (needs `ffmpeg`); it shows what the pages showed, so watch it before sharing |
 | `--recipe FILE` | replay a [recipe](design.md#recipes): offer Jev each saved action alone where its page and control match, and reuse saved values |
 | `--input NAME=VALUE` | a named value the task refers to ("the person named in input person"), typed into a field by name; a recipe saved with it types the next run's value (repeatable) |
+| `--file PATH` | a local file the run may attach to a file input on the page, offered under its file name, so a task can say "upload shrike_lid.stl"; the file is read when the run starts and sent to the page as bytes, also to a browser on another machine (repeatable) |
 | `--save-recipe FILE` | write the run's steps as a recipe when it ends `complete`; naming the `--recipe` file repairs it after steps the agent had to decide |
 | `--no-cursor` | don't draw the agent's cursor. By default it is drawn with [Cua Driver](https://github.com/trycua/cua) over a Chrome window that shows the run (`--foreground`, or an attached front tab; needs `cua-driver`, and X11 on Linux), and skipped anywhere else |
 | `--cursor` | also bring the window to the front, so the cursor is always drawn |
@@ -69,10 +70,12 @@ Then pass `--extension` to any run:
 fastbrowse "Find my last order's delivery date." --start https://www.amazon.com/ --extension
 ```
 
-Each run works in a tab group of its own, named after the task, and closes its tabs when it ends. While a run is
-attached, Chrome shows a bar saying an extension started debugging the browser. Each run has three ways to stop
-it, and each ends the run `cancelled` with an error that says which one stopped it: **Stop** in the extension's
-popup, **Cancel** on that bar (which stops every run in that browser), or closing all of the run's tabs.
+Each run works in a tab group of its own, named after the task, and closes its tabs when it ends. A run that stops at
+`needs_confirmation`, `needs_input` or `needs_login` leaves the tab it stopped in open, out of the group, so you can
+finish the step in the page it filled. While a run is attached, Chrome shows a bar saying an extension started
+debugging the browser. Each run has three ways to stop it, and each ends the run `cancelled` with an error that says
+which one stopped it: **Stop** in the extension's popup, **Cancel** on that bar (which stops every run in that
+browser), or closing all of the run's tabs.
 
 The extension relays only page-level commands. It cannot read cookies, saved passwords or other sites' storage,
 and fastbrowse accepts connections only from the extension's own ID, over a socket only your user can open. The
@@ -142,8 +145,9 @@ one. `--target-match` picks one by title or URL, and can name an extension page.
 Without `--start` the run begins on whatever the window shows, and the window stays open afterwards. Popups the
 window opens join the run.
 
-For a signed-in browser that stays open, start a Chrome with a data directory of its own (Chrome ignores the port
-on its default one), sign in, and leave it running. Each run opens and closes a background tab in it:
+For a signed-in browser that stays open, start a Chrome with a data directory of its own (Chrome ignores the port on
+its default one), sign in, and leave it running. Each run opens and closes a background tab in it, and leaves the tab
+open when it stops for you to confirm, fill in or sign in:
 
 ```sh
 google-chrome --remote-debugging-port=9222 --user-data-dir="$HOME/.fastbrowse/chrome"
@@ -159,7 +163,7 @@ restart it without the flag, when you are done.
 
 ## Models
 
-The LLM defaults to `deepseek/deepseek-v4.1-flash-1017`, for proposing a first address when no
+The LLM defaults to `openai/gpt-6-luna` at low reasoning, for proposing a first address when no
 `start` is given and for writing an answer that must be composed from more than one fact.
 
 | Setting | Effect |
@@ -216,8 +220,8 @@ The JSON result says why a run stopped where a caller can act on it:
   texts can answer a `one_time_code` wall with a secret scoped to that origin and run again.
 - A run that stops before completion can retain a cited partial answer from checked claims while their
   source evidence remains unchanged. A `stuck` or `unverified` run can also compose an answer from evidence
-  it read. Partial answers may start with `Partial evidence only.`; the status determines whether the task
-  completed.
+  it read. Partial answers may start with `Partial evidence only.`, and one from a run that left a step of its
+  task undone starts by saying so; the status determines whether the task completed.
 
 A cost a provider omits is looked up from its receipt, or bounded from OpenRouter's listed prices. A cost that
 cannot be bounded is unknown, and a run with a dollar cap then stops with `budget_exceeded`. A page that stops

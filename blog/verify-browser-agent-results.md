@@ -3,9 +3,9 @@ title: How to verify browser agent results
 description: What each fastbrowse run status and exit code means, how citations back an answer, and what to do when a run ends unverified.
 topic: Results and cost
 published: 2026-10-31
-updated: 2026-11-04
-verifiedAgainst: v0.9.1
-verifiedOn: 2026-11-07
+updated: 2026-11-10
+verifiedAgainst: v0.10.1
+verifiedOn: 2026-11-10
 ---
 
 fastbrowse marks an answer it could not back with a quote as `unverified` and exits 10. A caller that checks the exit code never mistakes a guess for a result.
@@ -15,7 +15,7 @@ A fact the page states comes back with the quote it came from, as a numbered lin
 ## The three endings to branch on
 
 - `complete` (exit 0): every information requirement is backed by a quote, and every action that changes the site is confirmed on the page.
-- `unverified` (exit 10): the run believes it finished, but could not back a requirement or a field with a quote from the page.
+- `unverified` (exit 10): the run finished, but code could not confirm the result. For example, a claim failed its check against the quotes it cites, part of a list the task covers went unread, or the site refused a requested step.
 - `budget_exceeded` (exit 7): a resource limit was reached, or a missing cost prevented enforcing the dollar cap.
 
 Only `complete` exits 0, so a script can test for zero instead of parsing the status. The full table, including the statuses that stop before an irreversible action, is in [run statuses and exit codes](/docs/results/).
@@ -30,7 +30,7 @@ When a site changes its layout, the run sees a different set of controls instead
 
 1. Branch on the run status before reading the answer.
 2. Keep the citations. They are the record of what the agent read and did.
-3. Read the failed requirement on an `unverified` run before retrying. Either the page did not hold the fact, which a different start page or a narrower task fixes, or the run could not find, read or check it, which is worth investigating first.
+3. Read the error on an `unverified` run before retrying. It names each claim the answer left out and the check that claim failed. Either the page did not hold the fact, which a different start page or a narrower task fixes, or the run could not find, read or check it, which is worth investigating first.
 
 ```sh
 uvx fastbrowse "what is the current price of the pro plan" --start https://example.com/pricing
