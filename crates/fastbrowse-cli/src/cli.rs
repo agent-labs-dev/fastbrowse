@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use fastbrowse_clients::environment::ConfigurationError;
+use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{Authorization, Event, Limits, LocalChrome, SecretValue, Status};
 use fastbrowse_core::protocol::{Base64Bytes, RunAttachment};
 use fastbrowse_core::py::dump::Dump;
@@ -264,17 +265,27 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
 /// The files `--file` names, read now, each under its own file name. A task can only name a path, and a run had no way
 /// to put that file in a page's file input, so an upload it was asked for stopped `stuck` (#878).
 fn attachments(paths: &[PathBuf]) -> Result<Vec<RunAttachment>, ConfigurationError> {
-    paths
+    let attachments = paths
         .iter()
         .map(|path| {
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .ok_or_else(|| ConfigurationError(format!("--file {} names no file", path.display())))?;
             let content = std::fs::read(path)
                 .map_err(|error| ConfigurationError(format!("--file cannot read {}: {error}", path.display())))?;
-            let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
             // The type a browser's own file picker would give: by extension, and none for one it does not know.
             let mime_type = mime_guess::from_path(path).first_raw().unwrap_or_default().to_owned();
             Ok(RunAttachment { name, mime_type, content: Base64Bytes(content) })
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    // Every upload past the limit fails, so a run given more would only end stuck after spending its steps.
+    let total: usize = attachments.iter().map(|attachment| attachment.content.0.len()).sum();
+    let limit = Config::default().max_upload_bytes;
+    if total as i64 > limit {
+        return Err(ConfigurationError(format!("--file totals {total} bytes, over the {limit} byte upload limit")));
+    }
+    Ok(attachments)
 }
 
 /// `NAME=VALUE`, the value taken as given, `=` and all.
@@ -303,6 +314,19 @@ fn parse_viewport(value: &str) -> Result<(u32, u32), &'static str> {
 #[allow(clippy::items_after_test_module)]
 mod viewport_tests {
     use super::*;
+
+    /// A file no upload can carry is refused when the run starts, not after it spends its steps (#878).
+    #[test]
+    fn a_file_over_the_upload_limit_or_without_a_name_is_refused_at_start() {
+        let dir = std::env::temp_dir().join(format!("fastbrowse-file-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let big = dir.join("big.bin");
+        std::fs::File::create(&big).unwrap().set_len(Config::default().max_upload_bytes as u64 + 1).unwrap();
+        assert!(attachments(std::slice::from_ref(&big)).unwrap_err().0.contains("upload limit"));
+        assert!(attachments(&[PathBuf::from("..")]).unwrap_err().0.contains("names no file"));
+        std::fs::remove_file(&big).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+    }
 
     fn args(value: &str) -> Vec<String> {
         vec!["read".into(), "--local".into(), "--viewport".into(), value.into()]
