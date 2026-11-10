@@ -99,7 +99,10 @@ pub(crate) fn cited_quote(evidence: &Evidence, notes: &Notes, redact: impl Fn(&s
 }
 
 /// `assemble_answer`: the claims with their numbered links and the citations they use.
-pub fn assemble_answer(claims: &[Claim], notes: &Notes) -> ComposedAnswer {
+///
+/// A claim may also cite one of the run's own `steps` as sN, for a value it typed there. A step has no page to link,
+/// so it is written beside the claim's page links as the step's own record, such as `[fill 'Postcode' with 'N1']`.
+pub fn assemble_answer(claims: &[Claim], notes: &Notes, steps: &[Value]) -> ComposedAnswer {
     let supports: Vec<Vec<String>> =
         claims.iter().map(|claim| notes.expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str))).collect();
     // A derived fact has no page to link; its basis records carry the citations. They are numbered in the order the
@@ -128,6 +131,9 @@ pub fn assemble_answer(claims: &[Claim], notes: &Notes) -> ComposedAnswer {
                 .iter()
                 .filter_map(|key| known.get(key))
                 .map(|citation| format!("[{}](<{}>)", citation.id, citation.deep_link))
+                .chain(
+                    claim.evidence_ids.iter().filter_map(|id| step_cited(id, steps)).map(|(_, step)| step_link(step)),
+                )
                 .collect();
             format!("{} {}", claim.text, links.join(" "))
         })
@@ -505,12 +511,12 @@ pub(crate) async fn compose_reviewed(
         // Nothing was asked to be told, so the write-up is shown only where it holds and is never a shortfall. One that
         // denies what the run did is still written again, rather than the run ending on nothing.
         let rejection = rejection.filter(|_| denies_steps);
-        return Ok(ReviewedComposition { answer: tabled(columns, assemble_answer(&claims, notes)), rejection });
+        return Ok(ReviewedComposition { answer: tabled(columns, assemble_answer(&claims, notes, steps)), rejection });
     }
     // Each claim was still judged against its quotes, but a count or comparison across requests is not established.
     let problem = problem.or_else(|| (!reduced).then(|| UNREDUCED.to_string()));
     Ok(ReviewedComposition {
-        answer: tabled(columns, ComposedAnswer { problem, ..assemble_answer(&claims, notes) }),
+        answer: tabled(columns, ComposedAnswer { problem, ..assemble_answer(&claims, notes, steps) }),
         rejection: reduced.then_some(rejection).flatten(),
     })
 }
@@ -966,6 +972,19 @@ fn step_cited<'a>(id: &str, steps: &'a [Value]) -> Option<(usize, &'a Value)> {
     steps.get(number.checked_sub(1)?).map(|step| (number, step))
 }
 
+/// A cited step as the answer shows it: what the run did, to which control, with what it typed.
+fn step_link(step: &Value) -> String {
+    let field = |key: &str| step.get(key).and_then(Value::as_str);
+    let mut label = field("operation").unwrap_or("step").to_string();
+    if let Some(target) = field("target") {
+        label.push_str(&format!(" {}", text::repr(target)));
+    }
+    if let Some(typed) = field("text") {
+        label.push_str(&format!(" with {}", text::repr(typed)));
+    }
+    format!("[{label}]")
+}
+
 /// The run's own steps a claim cites, each with its number, for what the run typed or the control it used.
 fn cited_steps(claim: &Claim, steps: &[Value]) -> Vec<Value> {
     claim
@@ -1141,7 +1160,7 @@ pub fn partial_answer(notes: &Notes) -> ComposedAnswer {
         counted.extend(notes.expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str)));
         claims.push(claim);
     }
-    marked_partial(assemble_answer(&claims, notes))
+    marked_partial(assemble_answer(&claims, notes, &[]))
 }
 
 /// `result`, stated as what a run that stopped short could say.
@@ -1161,7 +1180,7 @@ pub(crate) fn noticed(notice: &str, result: ComposedAnswer) -> ComposedAnswer {
 /// The facts standing as the answer, each citing its quote and the records it draws on.
 pub fn draft_answer(notes: &Notes) -> Option<ComposedAnswer> {
     let claims = draft_claims(notes);
-    (!claims.is_empty()).then(|| assemble_answer(&claims, notes))
+    (!claims.is_empty()).then(|| assemble_answer(&claims, notes, &[]))
 }
 
 /// The same words picked on two pages are one claim citing both: a list walked over pages that each state its total
@@ -1223,7 +1242,7 @@ pub(crate) async fn draft_reviewed(
     let state_chars = text::len(&dumps(&state)) as i64;
     if questions.values().any(|question| state_chars > tokens.input_chars(&[question.dump_json()])) {
         let problem = "The answer read exceeds the decision model's input limits for checking task coverage.";
-        let answer = ComposedAnswer { problem: Some(problem.into()), ..assemble_answer(&claims, notes) };
+        let answer = ComposedAnswer { problem: Some(problem.into()), ..assemble_answer(&claims, notes, &[]) };
         return Ok(Some(Draft::Reviewed(ReviewedComposition { answer, rejection: None })));
     }
     let answered =
@@ -1248,7 +1267,7 @@ pub(crate) async fn draft_reviewed(
         ),
         None => (Some("Jev left the answer's coverage of the task unanswered.".to_string()), None),
     };
-    let answer = ComposedAnswer { problem, ..assemble_answer(&claims, notes) };
+    let answer = ComposedAnswer { problem, ..assemble_answer(&claims, notes, &[]) };
     Ok(Some(Draft::Reviewed(ReviewedComposition { answer, rejection })))
 }
 
@@ -1432,7 +1451,7 @@ mod tests {
         let facts: Vec<Fact> = (0..5).map(|index| fact(index, format!("Note {index}"))).collect();
         let id = |index: usize| crate::memory::fact_id(&facts[index]);
         let claims = [Claim::new("Last", vec![id(4)]), Claim::new("Middle and last", vec![id(2), id(4)])];
-        let answer = assemble_answer(&claims, &Notes::new(facts.clone()));
+        let answer = assemble_answer(&claims, &Notes::new(facts.clone()), &[]);
         let links: Vec<&str> = answer.linked_answer.split("\n\n").collect();
         assert!(links[0].starts_with("Last [1](") && links[1].starts_with("Middle and last [2]("), "{links:?}");
         assert!(links[1].contains(") [1]("), "{links:?}");
@@ -1857,8 +1876,9 @@ mod tests {
         assert_eq!(checked.problem, None, "{:?} {:?}", checked.rejection, checked.claims);
         let texts: Vec<&str> = checked.claims.iter().map(|claim| claim.text.as_str()).collect();
         assert_eq!(texts, ["Ada has the most quotes, with 5.", "Bo has the second most quotes, with 4."]);
-        let ada: Vec<String> = [0, 1, 3, 6, 10].iter().map(|at| ids[*at].clone()).collect();
-        assert_eq!(checked.claims[0].evidence_ids, ada);
+        // A place rests on every group's count, so the claim cites every quote, its own group's first.
+        let by_author: Vec<String> = [0, 1, 3, 6, 10, 2, 5, 7, 11, 4, 9, 8].iter().map(|at| ids[*at].clone()).collect();
+        assert_eq!(checked.claims[0].evidence_ids, by_author);
         let asked = jev.asked();
         assert_eq!(asked.keys().filter(|key| key.starts_with("t1/")).count(), 0, "the records are judged once");
         let Question::Noul(states) = &asked["claim1/states"] else { panic!("states is a noul") };
@@ -2237,6 +2257,13 @@ mod tests {
         assert!(claim.contains(r#"\"steps\":[{\"step\":1,"#) && claim.contains("NOTAPOSTCODE"), "{claim}");
         assert!(claim.contains("a value a cited step typed"), "{claim}");
         assert!(asked[0].contains_key("claim1"), "a claim citing only a step is judged on it");
+        // The answer cites the step too, as the run's record of it: a step has no page to link.
+        let linked = assemble_answer(&checked.claims, &notes, &steps).linked_answer;
+        assert!(
+            linked.contains("The run typed NOTAPOSTCODE as the postcode. [fill 'Postcode' with 'NOTAPOSTCODE']"),
+            "{linked}"
+        );
+        assert!(linked.contains("[click 'Place order']"), "{linked}");
         // Only the steps the run took are citable.
         let unknown = vec![Claim::new("The run typed it.", vec!["s3".into()])];
         let checked = review_claims(&jev, "Order it", None, unknown, &notes, None, true, &steps).await.unwrap();

@@ -296,7 +296,13 @@ fn per_group(
     }
     let at = names.iter().position(|name| name == group).expect("a claim's group is among its kind's groups");
     let count = members[at].len();
-    let evidence_ids = members[at].iter().map(|note| found[*note].id.clone()).collect();
+    // A place among the groups rests on every group's count, so a ranked claim cites every grouped record, its own
+    // group's first; a plain count rests on its group's records alone.
+    let cited = match tally.rank {
+        Some(_) => std::iter::once(at).chain((0..names.len()).filter(|other| *other != at)).collect(),
+        None => vec![at],
+    };
+    let evidence_ids = cited.iter().flat_map(|group| &members[*group]).map(|note| found[*note].id.clone()).collect();
     if let Some(rank) = tally.rank {
         let mut counts: Vec<usize> = members.iter().map(Vec::len).collect();
         counts.sort_unstable_by(|a, b| b.cmp(a));

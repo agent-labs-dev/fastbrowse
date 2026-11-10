@@ -40,11 +40,12 @@ use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
+use acting::Carried;
 use state::{Flow, RunState, Stop};
 
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
-use crate::policy::StepContext;
+use crate::policy::{HistoryEntry, StepContext};
 use crate::retrieval::{ComposedAnswer, cited_quote, compose, draft_answer, marked_partial, noticed, partial_answer};
 use crate::verification::RecordSchema;
 
@@ -498,12 +499,23 @@ impl Agent {
                         state.output_intent,
                         state::OutputIntent::Text | state::OutputIntent::Image | state::OutputIntent::TextAndImage
                     );
-                    let answers = match stop.status {
+                    let mut answers = match stop.status {
                         Status::Unverified => true,
                         Status::Stuck => told,
                         _ => false,
-                    };
-                    if answers && composed.problem.is_none() && !state.refused {
+                    } && composed.problem.is_none()
+                        && !state.refused
+                        && !state.undone;
+                    // A task asking to be told can also ask for steps, such as setting a field and then reporting it,
+                    // and a run stuck before any finish check judged its steps may have left one undone: that check's
+                    // own question decides, asked of the last page.
+                    if answers && stop.status == Status::Stuck && state.history.iter().any(HistoryEntry::acts) {
+                        answers = match self.observed() {
+                            Some(page) => matches!(self.actions_done(state, &page).await, Ok(Carried::Done)),
+                            None => false,
+                        };
+                    }
+                    if answers {
                         let result =
                             self.answered(&composed, &notes, Some(state), ledger, Status::Complete, None, None);
                         let requested = state.output_intent == state::OutputIntent::TextAndImage;

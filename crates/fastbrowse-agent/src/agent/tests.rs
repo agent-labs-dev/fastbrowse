@@ -3513,29 +3513,65 @@ async fn test_rejected_composed_claims_cannot_end_complete() {
     assert!(!stopped.evidence.is_empty());
 }
 
+/// Supports every claim, and judges the steps the task asks for carried out or not by `carried`.
+struct JudgesCarried(bool);
+
+impl DecisionClient for JudgesCarried {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            let mut evaluation = ComposeSupport(true).evaluate(state, questions).await?;
+            for (key, held) in [("carried", self.0), ("refused", false)] {
+                if let Some(Answer::Noul(answer)) = evaluation.answers.get_mut(key) {
+                    answer.probability = if held { 1.0 } else { 0.0 };
+                }
+            }
+            Ok(evaluation)
+        })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile::jev()
+    }
+}
+
 /// A run that read every page of a list and then went back and forth between them stopped `no_progress`, and its
 /// answer, which passed every claim and coverage check, came back stuck under "Partial evidence only". A stop over
 /// navigation leaves an answer that holds whole when the task asks only to be told.
 #[tokio::test]
 async fn test_a_stuck_run_whose_answer_passes_every_check_answers_the_task() {
-    let stopped = |intent| async move {
-        let agent =
-            Agent::new(Arc::new(NoPage), Arc::new(ComposeSupport(true)), Arc::new(WritesRecord("Record B: 34")));
+    let stopped = |intent, undone, acted: Option<bool>| async move {
+        let jev = Arc::new(JudgesCarried(acted.unwrap_or(true)));
+        let agent = Agent::new(Arc::new(NoPage), jev, Arc::new(WritesRecord("Record B: 34")));
         let mut state = run_state();
         state.output_intent = intent;
         state.compose = true;
+        state.undone = undone;
+        if acted.is_some() {
+            state.history.push(executed(Some(Operation::Fill), Some("Name"), true));
+            agent.seen().observed = Some(at("https://shop.test/form", &[]));
+        }
         let page = capture(&[(BlockKind::Paragraph, "Record B: 34")]);
         state.notes.add(Fact::read("Record B: 34", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
         let ledger = state.ledger.clone();
         let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "no_progress (3)"));
         agent.stopped(stop, Some(&mut state), &ledger).await
     };
-    let told = stopped(super::state::OutputIntent::Text).await;
+    let text = super::state::OutputIntent::Text;
+    let told = stopped(text, false, None).await;
     assert_eq!((told.status, told.error.as_deref()), (Status::Complete, None));
     assert!(told.answer.unwrap_or_default().starts_with("Record B: 34 [1]"));
     // A task that asks for something done is not done because what was read holds.
-    let carried = stopped(super::state::OutputIntent::CarriedOut).await;
+    let carried = stopped(super::state::OutputIntent::CarriedOut, false, None).await;
     assert_eq!(carried.status, Status::Stuck);
+    // Nor is a task that asks to be told after a step: a finish check that found a step undone, or a run that acted
+    // and whose steps the finish check's question finds not carried out, stays stuck. Steps judged carried answer.
+    assert_eq!(stopped(text, true, None).await.status, Status::Stuck);
+    assert_eq!(stopped(text, false, Some(false)).await.status, Status::Stuck);
+    assert_eq!(stopped(text, false, Some(true)).await.status, Status::Complete);
 }
 
 #[test]
@@ -6438,7 +6474,8 @@ fn test_executed_steps_lists_only_acting_steps() {
     // A draft written before a later step is not the answer after it.
     let notes = state.notes_to_compose();
     let id = crate::memory::fact_id(notes.facts()[0]);
-    let draft = crate::retrieval::assemble_answer(&[crate::retrieval::Claim::new("Record B: 34", vec![id])], &notes);
+    let draft =
+        crate::retrieval::assemble_answer(&[crate::retrieval::Claim::new("Record B: 34", vec![id])], &notes, &[]);
     state.composition_partial = Some((draft, RunState::composition_sources(&notes), steps.len()));
     assert!(state.checked_composition(&notes).is_some());
     state.history.push(executed(Some(Operation::Click), Some("Publish"), true));
