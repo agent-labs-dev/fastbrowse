@@ -1758,7 +1758,7 @@ impl DecisionClient for Answers {
                 };
                 questions.iter().map(move |(key, question)| {
                     let mut answer = answer.clone();
-                    if *pick == "write"
+                    if matches!(*pick, "write" | "leave")
                         && let Question::Choice(question) = question
                         && !question.criteria.contains_key("write")
                     {
@@ -3037,6 +3037,33 @@ async fn test_past_the_recovery_budget_a_field_left_unfilled_is_named_in_the_err
         ),
         "{error:?}"
     );
+}
+
+/// #935: asked to replace a description, three runs reached for blank fields the task never named, such as a wiki
+/// link, and ended `needs_input` asking for them. A field the task asks nothing of is left, and is an input the run
+/// lacks only when the page marks it required.
+#[tokio::test]
+async fn test_a_field_the_task_asks_nothing_of_is_no_missing_input_unless_the_page_requires_it() {
+    for required in [false, true] {
+        let agent = Agent::new(Arc::new(NoPage), Arc::new(Answers(Some("leave"))), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.task = "Replace the description with New text. and save it.".into();
+        let mut wiki = field("Addon Wiki");
+        wiki.value = None;
+        wiki.required = required.then_some(true);
+        let page = observation(&[wiki.clone(), button("Save changes")]);
+        let error = agent.text(&mut state, &page, &code_decision(Operation::Fill, None), &wiki).await.unwrap_err();
+        let expected = if required { Status::NeedsInput } else { Status::Stuck };
+        assert!(matches!(&error, Flow::Unsure(unsure) if unsure.gives_up_as == expected), "{error:?}");
+
+        state.recoveries = agent.config.stall.max_recoveries;
+        let decision = code_decision(Operation::Click, Some(button("Save changes")));
+        let withheld = super::recovery::withheld(&decision);
+        let stop = agent.recover(&mut state, &page, "nothing changed", Status::Stuck, withheld).await.err();
+        let Some(Flow::Stop(stop)) = stop else { panic!("{stop:?}") };
+        assert_eq!(stop.status, expected);
+        assert_eq!(stop.error.as_deref().is_some_and(|error| error.contains("'Addon Wiki'")), required, "{stop:?}");
+    }
 }
 
 #[tokio::test]
@@ -4554,8 +4581,8 @@ async fn test_a_field_value_beyond_the_first_choice_window_is_offered() {
         (0, 26, 1001),
         (350, 26, 1001),
         (1000, 26, 1001),
-        (0, 3, 9),
-        (8, 3, 9),
+        (0, 4, 9),
+        (8, 4, 9),
     ];
     for (position, max, count) in cases {
         let agent = Agent::new(Arc::new(NoPage), Arc::new(TailValue(position, max)), Arc::new(ScriptedLLM));

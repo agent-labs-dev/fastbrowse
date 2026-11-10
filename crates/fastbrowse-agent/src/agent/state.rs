@@ -383,6 +383,10 @@ pub(crate) struct RunState {
     pub redecided: bool,
     /// Fields the task gives no value for, which recovery has been told about once, by page, label and context.
     pub missing: HashSet<(String, String, Option<String>)>,
+    /// The fields among `missing` the task asks nothing of. One the page does not mark required is no input the run
+    /// needs: three runs that replaced a description and stalled ended `needs_input` naming blank links and a summary
+    /// the task never mentioned (#935).
+    pub untouched: HashSet<(String, String, Option<String>)>,
     /// The step that first showed each control on the page it stayed on, by document and control id. A page can
     /// attach what a step opens at the end of its body, such as a date popup, where nothing near it names the field
     /// that opened it.
@@ -755,6 +759,7 @@ impl RunState {
             first_url: None,
             redecided: false,
             missing: HashSet::new(),
+            untouched: HashSet::new(),
             shown_by: HashMap::new(),
             seen: HashSet::new(),
             showing: None,
