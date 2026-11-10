@@ -14,8 +14,17 @@ from urllib.parse import urlencode
 
 import pytest
 
-from fastbrowse.evals.mock import ACCOUNTS, ORDERS, PRODUCTS, Site, code_for, mock_site
-from fastbrowse.evals.mock_tasks import ADA, GRACE, KATHERINE, KATHERINE_PASSWORD, TASKS, MockTask
+from fastbrowse.evals.mock import (
+    ACCOUNTS,
+    LONG_DESCRIPTION,
+    OLD_DESCRIPTION,
+    ORDERS,
+    PRODUCTS,
+    Site,
+    code_for,
+    mock_site,
+)
+from fastbrowse.evals.mock_tasks import ADA, CHANGED, GRACE, KATHERINE, KATHERINE_PASSWORD, TASKS, MockTask
 from fastbrowse.models import JsonValue, RunResult, Status
 
 ADA_PASSWORD = ACCOUNTS[ADA]
@@ -614,3 +623,50 @@ def test_repeated_only_flags_accumulate() -> None:
 
     args = parser().parse_args(["--suite", "mock", "--only", "mock-basket", "--only", "mock-stock-count"])
     assert args.only == ["mock-basket", "mock-stock-count"]
+
+
+def test_the_project_editor_opens_on_what_was_last_saved(browser: tuple[Browser, Site]) -> None:
+    caller, _ = browser
+    code, body = caller.get("/project/edit")
+    assert code == 200 and "class='mde-text'" in body and "id='save' disabled" in body
+    assert OLD_DESCRIPTION in body
+    caller.post("/project/edit", {"description": "# New <text>"})
+    assert "# New &lt;text&gt;" in caller.get("/project/edit")[1]
+
+
+def test_the_long_description_grader_needs_the_markdown_saved_exactly() -> None:
+    task = next(t for t in TASKS if t.id == "mock-long-description")
+    assert len(LONG_DESCRIPTION) > 10_000 and task.task.endswith(LONG_DESCRIPTION)
+    site = Site()
+    assert task.check(_run("Saved."), site) is not None, "nothing saved cannot pass"
+    site.record("/project/edit", {"description": LONG_DESCRIPTION.split("\n")[0]})
+    assert task.check(_run("Saved."), site) is not None, "a first line cannot pass"
+    site.record("/project/edit", {"description": LONG_DESCRIPTION})
+    assert task.check(_run("Saved."), site) is None
+    assert task.check(_run(None, status=Status.STUCK), site) is not None
+
+
+def test_the_ticket_grader_reads_the_type_the_site_saved() -> None:
+    task = next(t for t in TASKS if t.id == "mock-custom-select")
+    site = Site()
+    site.record("/ticket", {"type": "Round trip"})
+    assert task.check(_run("Saved."), site) is not None
+    site.record("/ticket", {"type": "One way"})
+    assert task.check(_run("Saved."), site) is None
+
+
+def test_the_unfinished_write_grader_needs_each_changed_field_named_with_what_it_holds() -> None:
+    task = next(t for t in TASKS if t.id == "mock-unfinished-write")
+    named = (
+        f"{CHANGED}\n- Display name: 'Ada Lovelace'\n- Bio (Profile): 'Writes about engines.'\n\nNo country was given."
+    )
+    site = Site()
+    assert task.check(_run(named, status=Status.NEEDS_INPUT), site) is not None, "a run that changed nothing"
+    site.record("/profile/draft", {"name": "Ada Lovelace", "bio": "Writes about engines.", "country": ""})
+    assert task.check(_run(named, status=Status.NEEDS_INPUT), site) is None
+    assert task.check(_run(named, status=Status.COMPLETE), site) is not None, "claimed success"
+    partly = named.replace("- Bio (Profile): 'Writes about engines.'\n", "")
+    assert task.check(_run(partly, status=Status.NEEDS_INPUT), site) is not None, "a changed field left unnamed"
+    assert task.check(_run("No country was given.", status=Status.NEEDS_INPUT), site) is not None
+    site.record("/profile", {"name": "Ada Lovelace", "bio": "Writes about engines.", "country": "Peru"})
+    assert task.check(_run(named, status=Status.NEEDS_INPUT), site) is not None, "saved with an invented country"

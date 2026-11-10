@@ -32,6 +32,7 @@ skill under test is finding a value on one page and typing it into another, not 
 import base64
 import hashlib
 import hmac
+import html
 import json
 import re
 import secrets
@@ -97,6 +98,68 @@ COMPARISON: Mapping[str, tuple[str, float]] = {
     "a": ("Clerkenwell Coffee", 84.99),
     "b": ("Bermondsey Beans", 92.50),
 }
+
+
+# A project description of about 10 KB, longer than one part of a task Jev reads at once, so copying it whole into a
+# field is the work being tested (#939). Built from parts so the text varies the way a real description does.
+_DESCRIBED = (
+    ("Brewing log", "the brewing log", "each pot"),
+    ("Water hardness", "the hardness reading", "every refill"),
+    ("Grind sizes", "the grind table", "a new bag"),
+    ("Timers", "the timer panel", "each steep"),
+    ("Tasting notes", "the tasting card", "every cup"),
+    ("Beans on hand", "the stock list", "each delivery"),
+    ("Cleaning days", "the cleaning rota", "a descale"),
+    ("Shared kettles", "the sharing page", "each household"),
+    ("Exports", "the export button", "a backup"),
+    ("Keyboard keys", "the shortcut sheet", "each action"),
+    ("Languages", "the translation files", "a release"),
+    ("Privacy", "the privacy switch", "every entry"),
+    ("Known limits", "the limits list", "a large archive"),
+)
+_SAID = (
+    "{Thing} keeps a record of {each} so you can see what changed since last week.",
+    "Open {thing} from the side bar; it remembers where you left off and which filter you chose.",
+    "Nothing in {thing} leaves your device unless you turn on sync in the settings page.",
+    "When {each} goes wrong, {thing} marks the entry in orange and explains the likely cause in plain words.",
+)
+_LISTED = (
+    "Sort by date, by rating or by the person who logged it",
+    "Pin an entry to keep it at the top of {thing}",
+    "Attach a photo of up to 5 MB to any entry",
+    "Undo the last change with Ctrl+Z, up to 20 steps back",
+)
+
+
+def _long_description() -> str:
+    parts = [
+        "# Kettle Log",
+        "",
+        "A small notebook for people who take their tea and coffee seriously. "
+        "It runs in the browser and works offline.",
+    ]
+    for n, (title, thing, each) in enumerate(_DESCRIBED, 1):
+        sentences = " ".join(t.format(thing=thing, Thing=thing[0].upper() + thing[1:], each=each) for t in _SAID)
+        bullets = [f"- {b.format(thing=thing)} ({title.lower()}, item {k})" for k, b in enumerate(_LISTED, 1)]
+        parts += [
+            "",
+            f"## {n}. {title}",
+            "",
+            sentences,
+            "",
+            *bullets,
+            "",
+            f"See [the {title.lower()} guide](https://example.com/kettle-log/{n}) for screenshots.",
+        ]
+    parts += ["", "Version 4.2, released for testers only."]
+    return "\n".join(parts)
+
+
+LONG_DESCRIPTION = _long_description()
+OLD_DESCRIPTION = "A notebook for tea and coffee. More soon."
+TICKET_TYPES = ("Round trip", "One way", "Multi-city")
+PROFILE = {"name": "Ada", "bio": "", "country": ""}
+"""The profile form's fields as the page opens them; the country is required and no task gives one."""
 
 
 def _feed_item(n: int) -> str:
@@ -387,6 +450,9 @@ class _Handler(BaseHTTPRequestHandler):
             "/promo/claim": self._claim_form,
             "/list": self._list,
             "/flights": self._flights,
+            "/project/edit": self._project_edit,
+            "/ticket": self._ticket,
+            "/profile": self._profile,
         }.get(path)
         if route is None:
             if path.startswith("/product/"):
@@ -422,6 +488,10 @@ class _Handler(BaseHTTPRequestHandler):
             "/message": self._message_post,
             "/promo/claim": self._claim_post,
             "/list/delete": self._list_delete,
+            "/project/edit": self._saved,
+            "/ticket": self._saved,
+            "/profile": self._saved,
+            "/profile/draft": self._saved,
         }.get(path)
         if route is None:
             self._send(HTTPStatus.NOT_FOUND, b"<h1>Not found</h1>")
@@ -1083,6 +1153,113 @@ class _Handler(BaseHTTPRequestHandler):
             "<h2>Search results</h2><ul><li>London to Paris, 08:10, GBP 74</li>"
             "<li>London to Paris, 12:45, GBP 59</li><li>London to Paris, 18:30, GBP 91</li></ul>",
         )
+
+    def _project_edit(self, _: dict[str, str]) -> None:
+        """A markdown editor built the way react-mde builds one: Write and Preview tabs over a `textarea.mde-text`,
+        and a Save button that stays disabled until the text differs from what is saved. Saving posts the text, so
+        the site holds exactly what the run left in the field."""
+        stored = self._saved_value("/project/edit", "description", OLD_DESCRIPTION)
+        body = (
+            "<p>Edit the project page for Kettle Log.</p>"
+            "<div class='mde'>"
+            "<label for='description'>Description</label>"
+            "<div class='mde-header' role='tablist'>"
+            "<button type='button' role='tab' aria-selected='true' id='write' onclick='tab(false)'>Write</button>"
+            "<button type='button' role='tab' aria-selected='false' id='preview' onclick='tab(true)'>Preview</button>"
+            "</div>"
+            "<textarea class='mde-text' id='description' rows='12' oninput='changed()'>"
+            f"{html.escape(stored)}</textarea>"
+            "<div class='mde-preview' id='shown' hidden></div>"
+            "</div>"
+            "<button type='button' id='save' disabled onclick='save()'>Save</button>"
+            "<p id='status' role='status'></p>"
+            "<script>"
+            "const field = document.getElementById('description');"
+            "let stored = field.value;"
+            "function changed(){ document.getElementById('save').disabled = field.value === stored;"
+            " document.getElementById('status').textContent = ''; }"
+            "function tab(preview){ field.hidden = preview; const shown = document.getElementById('shown');"
+            " shown.hidden = !preview; shown.textContent = field.value;"
+            " document.getElementById('write').setAttribute('aria-selected', String(!preview));"
+            " document.getElementById('preview').setAttribute('aria-selected', String(preview)); }"
+            "async function save(){ const text = field.value;"
+            " await fetch('/project/edit', {method: 'POST',"
+            " headers: {'Content-Type': 'application/x-www-form-urlencoded'},"
+            " body: new URLSearchParams({description: text})});"
+            " stored = text; changed(); document.getElementById('status').textContent = 'Saved.'; }"
+            "</script>"
+        )
+        self._html("Edit project", body)
+
+    def _ticket(self, _: dict[str, str]) -> None:
+        """A custom select: a `role=combobox` showing its choice as text, and a listbox whose options exist only
+        while it is open, so a click on one leaves no option behind. Save posts the shown choice."""
+        options = "".join(json.dumps(choice) + "," for choice in TICKET_TYPES)
+        body = (
+            "<p>Choose the ticket type and save it.</p>"
+            "<span id='type-label'>Ticket type</span> "
+            "<div role='combobox' id='type' tabindex='0' aria-labelledby='type-label' aria-expanded='false'"
+            f" aria-controls='types' onclick='toggle()'>{TICKET_TYPES[0]}</div>"
+            "<div id='holder'></div>"
+            "<p><button type='button' onclick='save()'>Save</button></p>"
+            "<p id='status' role='status'></p>"
+            "<script>"
+            f"const choices = [{options}];"
+            "const box = document.getElementById('type');"
+            "function toggle(){ const open = box.getAttribute('aria-expanded') !== 'true';"
+            " box.setAttribute('aria-expanded', String(open)); const holder = document.getElementById('holder');"
+            " holder.textContent = ''; if (!open) return;"
+            " const list = document.createElement('ul'); list.id = 'types'; list.setAttribute('role', 'listbox');"
+            " for (const choice of choices) { const item = document.createElement('li');"
+            " item.setAttribute('role', 'option'); item.textContent = choice;"
+            " item.setAttribute('aria-selected', String(choice === box.textContent));"
+            " item.onclick = () => { box.textContent = choice; toggle(); }; list.appendChild(item); }"
+            " holder.appendChild(list); }"
+            "async function save(){ await fetch('/ticket', {method: 'POST',"
+            " headers: {'Content-Type': 'application/x-www-form-urlencoded'},"
+            " body: new URLSearchParams({type: box.textContent})});"
+            " document.getElementById('status').textContent = 'Saved: ' + box.textContent + '.'; }"
+            "</script>"
+        )
+        self._html("Ticket", body)
+
+    def _profile(self, _: dict[str, str]) -> None:
+        """A profile form whose Save stays disabled until every required field holds a value, with a required
+        country no task gives. Each edit is posted as a draft, as an editor that keeps drafts does, so the site knows
+        what the run left in each field even though nothing could be saved."""
+        countries = "".join(f"<option>{name}</option>" for name in ("France", "Japan", "Kenya", "Peru"))
+        body = (
+            "<p>Edit your public profile. Fields marked * are required.</p>"
+            "<form id='profile' onsubmit='event.preventDefault()' oninput='edited()' onchange='edited()'>"
+            "<p><label for='name'>Display name *</label> "
+            f"<input id='name' name='name' required value='{PROFILE['name']}'></p>"
+            "<p><label for='bio'>Bio</label> <textarea id='bio' name='bio'></textarea></p>"
+            "<p><label for='country'>Country *</label> <select id='country' name='country' required>"
+            f"<option value=''>Choose a country</option>{countries}</select></p>"
+            "<p><button type='button' id='save' disabled onclick='save()'>Save</button></p>"
+            "</form>"
+            "<p id='status' role='status'></p>"
+            "<script>"
+            "const form = document.getElementById('profile');"
+            "function fields(){ return new URLSearchParams(new FormData(form)); }"
+            "function edited(){ document.getElementById('save').disabled = !form.checkValidity();"
+            " fetch('/profile/draft', {method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'},"
+            " body: fields()}); }"
+            "async function save(){ await fetch('/profile', {method: 'POST',"
+            " headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: fields()});"
+            " document.getElementById('status').textContent = 'Profile saved.'; }"
+            "</script>"
+        )
+        self._html("Profile", body)
+
+    def _saved_value(self, path: str, name: str, default: str) -> str:
+        """What the last post to `path` saved in `name`, or `default` before any was."""
+        sent = [fields for posted, fields in self.site.posts if posted == path]
+        return sent[-1].get(name, default) if sent else default
+
+    def _saved(self, _: dict[str, str]) -> None:
+        """A post the page sends by script; `do_POST` already recorded what it carried."""
+        self._send(HTTPStatus.OK, b"saved", "text/plain")
 
     def _list_delete(self, _: dict[str, str]) -> None:
         self.site.saved_list.clear()
