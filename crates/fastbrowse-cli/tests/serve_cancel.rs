@@ -6,11 +6,11 @@
 mod common;
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use common::{CHROME, Call, Recorder, binary, browser_event, result, run_params, runner, serving, settings};
+use common::{CHROME, Call, Recorder, browser_event, isolated_binary, result, run_params, runner, serving, settings};
 use fastbrowse_cli::runner::{RunError, Runner};
 use fastbrowse_core::models::{CostBasis, CostBreakdown, CostComponent, CostLine, RunResult, Status};
 use fastbrowse_core::protocol::CancellationReceipt;
@@ -303,7 +303,7 @@ async fn test_shutdown_straight_after_the_run_still_cancels_it() {
 fn served(
     marker: &std::path::Path,
 ) -> (std::process::Child, std::process::ChildStdin, BufReader<std::process::ChildStdout>) {
-    let mut process = Command::new(binary())
+    let mut process = isolated_binary()
         .args(["serve", "--stdio", "--run-task", "tests.serve_scripts:browse_until_cancelled"])
         .env("OPENROUTER_API_KEY", "unused")
         .env("AI_GATEWAY_API_KEY", "unused")

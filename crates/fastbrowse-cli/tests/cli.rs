@@ -5,10 +5,9 @@ mod common;
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 
-use common::{Call, Recorder, binary, model_settings, result};
+use common::{Call, Recorder, isolated_binary, model_settings, result};
 use fastbrowse_cli::cli::{self, Build, Context, Streams};
 use fastbrowse_clients::environment::{Secret, Settings};
 use fastbrowse_core::models::{CostBasis, CostBreakdown, CostComponent, CostLine, RunResult, Status};
@@ -340,7 +339,7 @@ fn test_only_serve_as_the_first_argument_is_the_subcommand() {
         &["server", "--cdp-url", "ws://b.test/x"],
         &["--cdp-port", "9222", "serve"],
     ] {
-        let output = Command::new(binary()).args(argv).env_remove("FASTBROWSE_PROFILE").output().unwrap();
+        let output = isolated_binary().args(argv).output().unwrap();
         assert_eq!(output.status.code(), Some(1), "{argv:?}: {}", String::from_utf8_lossy(&output.stderr));
         assert!(String::from_utf8_lossy(&output.stderr).starts_with("fastbrowse: "));
     }
@@ -395,15 +394,8 @@ fn test_the_trace_names_the_build_before_the_run() {
     let dir = std::env::temp_dir().join(format!("fastbrowse-trace-build-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let trace = dir.join("trace.jsonl");
-    let output = Command::new(binary())
-        .args(["t", "--cdp-url", "ws://b.test/x", "--trace"])
-        .arg(&trace)
-        .env_remove("FASTBROWSE_PROFILE")
-        // The run stops at configuration for want of a model key, before any connection is tried.
-        .env_remove("OPENROUTER_API_KEY")
-        .env_remove("AI_GATEWAY_API_KEY")
-        .output()
-        .unwrap();
+    // The run stops at configuration for want of a model key, before any connection is tried.
+    let output = isolated_binary().args(["t", "--cdp-url", "ws://b.test/x", "--trace"]).arg(&trace).output().unwrap();
     assert_eq!(output.status.code(), Some(1), "{}", String::from_utf8_lossy(&output.stderr));
     let text = std::fs::read_to_string(&trace).unwrap();
     std::fs::remove_dir_all(&dir).unwrap();

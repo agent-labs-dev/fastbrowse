@@ -4,11 +4,11 @@
 mod common;
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
 use common::{
-    CHROME, Call, FakeClient, binary, browser_event, result, run_params, runner, serving, settings, step_event,
+    CHROME, Call, FakeClient, browser_event, isolated_binary, result, run_params, runner, serving, settings, step_event,
 };
 use fastbrowse_cli::runner::{RunError, Runner};
 use fastbrowse_core::models::{RunResult, SecretRef, Status};
@@ -298,7 +298,7 @@ fn test_the_served_command_keeps_the_value_out_of_stdout_and_stderr() {
         "run-1",
         json!({"local": true, "chrome": {"binary": CHROME}, "start": format!("{SHOP}/login"), "secrets": [password()]}),
     );
-    let mut process = Command::new(binary())
+    let mut process = isolated_binary()
         .args(["serve", "--stdio", "--run-task", "tests.serve_scripts:type_secret"])
         .env("OPENROUTER_API_KEY", "unused")
         .env("AI_GATEWAY_API_KEY", "unused")

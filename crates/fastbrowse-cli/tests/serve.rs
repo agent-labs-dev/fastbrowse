@@ -4,9 +4,9 @@
 mod common;
 
 use std::io::{Read, Write};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
-use common::{Recorder, binary, serving, settings};
+use common::{Recorder, isolated_binary, serving, settings};
 use fastbrowse_core::protocol::{ErrorCode, PROTOCOL_VERSION};
 use serde_json::{Value, json};
 
@@ -138,7 +138,7 @@ const INITIALIZE: &[u8] =
     b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocol_version\":2}}\n";
 
 fn start(arguments: &[&str]) -> std::process::Child {
-    Command::new(binary())
+    isolated_binary()
         .args(arguments)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
