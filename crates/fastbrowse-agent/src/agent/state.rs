@@ -384,7 +384,8 @@ pub(crate) struct RunState {
     pub showing: Option<String>,
 }
 
-/// A rejected draft's claims that held, the notes it was written from, and how many steps the run had taken then.
+/// A rejected draft's claims that held, under a notice naming what was withheld, the notes it was written from, and how
+/// many steps the run had taken then.
 pub type PartialComposition = (ComposedAnswer, Vec<(Fact, bool)>, usize);
 
 impl RunState {

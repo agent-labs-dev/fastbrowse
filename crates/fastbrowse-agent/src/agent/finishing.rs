@@ -12,7 +12,7 @@ use super::recovery::{DONE, Idle};
 use super::state::{Extent, OutputIntent, RunState, Step, Stop};
 use super::{Agent, Outcome};
 use crate::memory::Notes;
-use crate::retrieval::{compose_reviewed, draft_answer, draft_reviewed, marked_partial};
+use crate::retrieval::{ComposedAnswer, compose_reviewed, draft_answer, draft_reviewed, noticed};
 use crate::verification::{ExtractOptions, Extraction, RecordSchema, extract};
 
 impl Agent {
@@ -312,17 +312,17 @@ impl Agent {
             && let Some(rejection) = rejection
         {
             let reason = rejection_reason(&rejection);
-            state.composition_feedback = Some(rejection);
-            state.schema_partial = extraction;
             if let Some(answer) = &answered
                 && !answer.claims.is_empty()
             {
                 state.composition_partial = Some((
-                    answer.clone(),
+                    withheld(&rejection, answer.clone()),
                     RunState::composition_sources(&state.notes_to_compose()),
                     state.executed_steps().len(),
                 ));
             }
+            state.composition_feedback = Some(rejection);
+            state.schema_partial = extraction;
             self.recover(state, observation, &reason, Status::Unverified, None).await?;
             return Ok(None);
         }
@@ -336,7 +336,7 @@ impl Agent {
         if answer_problem.is_some()
             && let Some(partial) = state.checked_composition(&state.notes_to_compose())
         {
-            answered = Some(marked_partial(partial.clone()));
+            answered = Some(partial.clone());
         }
         if let Some(composed) = answered {
             let (text, cited) = self.public_answer(&composed);
@@ -403,6 +403,34 @@ pub(super) const REFUSED: &str = "A step the task asks for was not carried out b
 /// What the navigator is told about a rejected draft, and what the run's error says if recovery runs out: which
 /// claim failed which check, so it can look for the evidence that is missing rather than propose done again (#810).
 fn rejection_reason(rejection: &str) -> String {
+    let failed = rejected_parts(rejection);
+    if failed.is_empty() {
+        return "The composed answer was rejected against its source quotes or requested coverage. Correct the answer or gather the evidence it needs.".into();
+    }
+    format!(
+        "The composed answer was rejected: {}. Correct the answer or gather the evidence it needs.",
+        failed.join("; ")
+    )
+}
+
+/// The claims of a rejected draft that held, under a notice naming what was withheld and why. A run that finished its
+/// task and withheld one claim was told "Partial evidence only. Remaining coverage is omitted", a notice for a run that
+/// stopped before reading everything, and nothing said which claim was missing (#892).
+fn withheld(rejection: &str, held: ComposedAnswer) -> ComposedAnswer {
+    let failed = rejected_parts(rejection);
+    let notice = if failed.is_empty() {
+        "This answer leaves out what did not pass its checks. Each claim below passed them.".to_string()
+    } else {
+        format!(
+            "This answer leaves out what did not pass its checks: {}. Each claim below passed them.",
+            failed.join("; ")
+        )
+    };
+    noticed(&notice, held)
+}
+
+/// Which claim of a rejected draft failed which check, one sentence part each.
+fn rejected_parts(rejection: &str) -> Vec<String> {
     let feedback: Value = serde_json::from_str(rejection).unwrap_or_default();
     let claim = |index: &Value| {
         let text = index.as_u64().and_then(|index| feedback["draft_claims"].get(index as usize)?["text"].as_str());
@@ -450,13 +478,7 @@ fn rejection_reason(rejection: &str) -> String {
         }
     }
     failed.dedup();
-    if failed.is_empty() {
-        return "The composed answer was rejected against its source quotes or requested coverage. Correct the answer or gather the evidence it needs.".into();
-    }
-    format!(
-        "The composed answer was rejected: {}. Correct the answer or gather the evidence it needs.",
-        failed.join("; ")
-    )
+    failed
 }
 
 /// The claims of a rejected draft, as its feedback records them.

@@ -4886,6 +4886,76 @@ async fn test_recovery_retains_the_latest_checked_partial_revision() {
     assert!(answer.contains("Record C: 57"));
 }
 
+/// Drafts "Record B: 34" and "Record A: 99" every time, both citing the one note.
+struct TwoClaimComposer;
+
+impl LLMClient for TwoClaimComposer {
+    fn generate_value<'a>(
+        &'a self,
+        _: LLMPurpose,
+        _: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        Box::pin(async move {
+            let claims = json!([{"text": "Record B: 34", "evidence_ids": ["e0"]}, {"text": "Record A: 99", "evidence_ids": ["e0"]}]);
+            let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+        })
+    }
+}
+
+/// Judges every claim about Record A unsupported and everything else supported.
+struct RejectsRecordA(ScriptedJev);
+
+impl DecisionClient for RejectsRecordA {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        if !questions.contains_key("claim0") {
+            return self.0.evaluate(state, questions);
+        }
+        let answers = questions
+            .iter()
+            .map(|(key, question)| {
+                let probability = if question.dump_json().contains("Record A: 99") { 0.0 } else { 1.0 };
+                (key.clone(), Answer::Noul(NoulAnswer { kind: Default::default(), probability }))
+            })
+            .collect();
+        Box::pin(
+            async move { Ok(Evaluation { model: "test".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+    fn profile(&self) -> DecisionProfile {
+        let mut profile = DecisionProfile::jev();
+        profile.images = false;
+        profile
+    }
+}
+
+/// A run placed an order, drafted one claim its quotes did not hold twice, and answered with "Partial evidence only.
+/// Remaining coverage is omitted; totals may be incomplete.", a notice written for a run that stopped before reading
+/// everything (#892). It says instead which claim was withheld and why.
+#[tokio::test]
+async fn test_a_withheld_claim_is_named_instead_of_calling_the_answer_partial() {
+    let page = observation(&[]);
+    let agent = Agent::new(
+        Arc::new(FinishPage(page.clone())),
+        Arc::new(RejectsRecordA(ScriptedJev::new(Vec::new()))),
+        Arc::new(TwoClaimComposer),
+    );
+    let mut state = composition_repair_state();
+    assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
+    let result = agent.finish(&mut state, &page, None, None).await.unwrap().expect("the same draft ends the run");
+    assert_eq!(result.status, Status::Unverified);
+    let answer = result.answer.unwrap();
+    assert!(!answer.contains("Partial evidence only"), "{answer}");
+    assert!(answer.starts_with("This answer leaves out what did not pass its checks: 'Record A: 99'"), "{answer}");
+    assert!(answer.contains("Record B: 34"), "{answer}");
+}
+
 fn repair_jev(checks: Vec<(f64, f64)>) -> Arc<RepairComposeJev> {
     Arc::new(RepairComposeJev { policy: ScriptedJev::new(Vec::new()), checks: std::sync::Mutex::new(checks.into()) })
 }
@@ -5154,7 +5224,10 @@ async fn test_a_failed_repair_or_hard_deadline_keeps_the_verified_partial() {
         };
         assert_eq!(result.status, if provider_failed { Status::Error } else { Status::BudgetExceeded });
         let answer = result.answer.unwrap();
-        assert!(answer.starts_with("Partial evidence only."), "{answer}");
+        assert!(
+            answer.starts_with("This answer leaves out what did not pass its checks: the answer leaves out"),
+            "{answer}"
+        );
         assert!(answer.contains("Record B: 34"));
         assert_eq!(llm.0.lock().unwrap().len(), 2);
     }
@@ -5234,7 +5307,12 @@ async fn test_checked_partial_preserves_non_composition_stop_statuses_and_wall_m
         let ledger = state.ledger.clone();
         let result = agent.stopped(Flow::Stop(stop), Some(&mut state), &ledger).await;
         assert_eq!(result.status, status);
-        assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("Partial evidence only.")));
+        assert!(
+            result
+                .answer
+                .as_deref()
+                .is_some_and(|answer| answer.starts_with("This answer leaves out what did not pass its checks"))
+        );
         if status == Status::NeedsLogin {
             assert!(result.wall.is_some(), "needs_login keeps the wall metadata with the partial answer");
         }

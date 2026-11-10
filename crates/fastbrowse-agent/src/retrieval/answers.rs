@@ -1077,9 +1077,14 @@ pub fn partial_answer(notes: &Notes) -> ComposedAnswer {
 
 /// `result`, stated as what a run that stopped short could say.
 pub fn marked_partial(result: ComposedAnswer) -> ComposedAnswer {
+    noticed(PARTIAL_NOTICE, result)
+}
+
+/// `result` under `notice`, which a reader takes in before any claim.
+pub(crate) fn noticed(notice: &str, result: ComposedAnswer) -> ComposedAnswer {
     ComposedAnswer {
-        answer: text::strip(&format!("{PARTIAL_NOTICE}\n\n{}", result.answer)).to_string(),
-        linked_answer: text::strip(&format!("{PARTIAL_NOTICE}\n\n{}", result.linked_answer)).to_string(),
+        answer: text::strip(&format!("{notice}\n\n{}", result.answer)).to_string(),
+        linked_answer: text::strip(&format!("{notice}\n\n{}", result.linked_answer)).to_string(),
         ..result
     }
 }
