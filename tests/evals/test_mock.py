@@ -664,7 +664,8 @@ def test_the_unfinished_write_grader_needs_each_changed_field_named_with_what_it
     assert task.check(_run(named, status=Status.NEEDS_INPUT), site) is not None, "a run that changed nothing"
     site.record("/profile/draft", {"name": "Ada Lovelace", "bio": "Writes about engines.", "country": ""})
     assert task.check(_run(named, status=Status.NEEDS_INPUT), site) is None
-    assert task.check(_run(named, status=Status.COMPLETE), site) is not None, "claimed success"
+    for status in (Status.COMPLETE, Status.STUCK, Status.NEEDS_LOGIN):
+        assert task.check(_run(named, status=status), site) is not None, f"ended {status.value}"
     partly = named.replace("- Bio (Profile): 'Writes about engines.'\n", "")
     assert task.check(_run(partly, status=Status.NEEDS_INPUT), site) is not None, "a changed field left unnamed"
     assert task.check(_run("No country was given.", status=Status.NEEDS_INPUT), site) is not None

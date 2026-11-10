@@ -3095,6 +3095,48 @@ async fn test_a_field_the_task_asks_nothing_of_is_no_missing_input_unless_the_pa
     }
 }
 
+/// A field the page marks required, that the task asks for and gives no value for, is an input no further step can
+/// supply: the run ends needing it at once. Given a second chance instead, a profile form's run left its required
+/// Country for the site's Account link and ended `needs_login` on a sign-in page it never needed. A field the page
+/// does not require still gets that chance, since the task may go on without it.
+#[tokio::test]
+async fn test_a_required_field_the_task_gives_no_value_for_ends_the_run_needing_it() {
+    for required in [false, true] {
+        let jev = Picks(&[("source", "none"), ("begins", "none"), ("ends", "none"), ("first", "1"), ("last", "1")]);
+        let agent = Agent::new(Arc::new(NoPage), Arc::new(jev), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.task = "Set my display name to Ada Lovelace and save my profile.".into();
+        let mut phone = field("Phone");
+        phone.value = None;
+        phone.required = required.then_some(true);
+        let page = observation(std::slice::from_ref(&phone));
+        let error = agent.text(&mut state, &page, &code_decision(Operation::Fill, None), &phone).await.unwrap_err();
+        if required {
+            assert!(
+                matches!(&error, Flow::Stop(stop) if stop.status == Status::NeedsInput
+                    && stop.error.as_deref() == Some("'Phone' needs a value the task does not give")),
+                "{error:?}"
+            );
+        } else {
+            assert!(matches!(&error, Flow::Unsure(unsure) if unsure.gives_up_as == Status::NeedsInput), "{error:?}");
+        }
+
+        let country = Control {
+            options: vec!["Choose a country".into(), "France".into()],
+            required: required.then_some(true),
+            ..Control::new("c", "combobox", "Country", [Operation::Select])
+        };
+        let page = observation(std::slice::from_ref(&country));
+        let jev = Arc::new(FirstChoice { wants: Some("nothing given states it"), ..Default::default() });
+        let agent = Agent::new(Arc::new(NoPage), jev, Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.edits_forbidden = Some(false);
+        let acted = agent.action(&mut state, &page, &code_decision(Operation::Select, Some(country))).await;
+        let stopped = matches!(&acted, Err(Flow::Stop(stop)) if stop.status == Status::NeedsInput);
+        assert_eq!(stopped, required, "{acted:?}");
+    }
+}
+
 #[tokio::test]
 async fn test_a_stall_is_answered_by_jev_even_when_it_is_unsure() {
     let (state, jev) = stalled_on_apply(0.3).await;

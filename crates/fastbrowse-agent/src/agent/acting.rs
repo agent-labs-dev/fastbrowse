@@ -353,7 +353,7 @@ impl Agent {
                         ..Action::new(Operation::Select)
                     }),
                     Chosen::Instead(LEAVE) => Err(self.untouched(state, observation, target)),
-                    Chosen::Instead(_) => Err(self.missing(state, observation, target)),
+                    Chosen::Instead(_) => Err(self.unsupplied(state, observation, target)),
                 }
             }
             Operation::Upload => {
@@ -955,6 +955,7 @@ impl Agent {
                 }
                 Ok(value)
             }
+            (NO_VALUE, ..) => Err(self.unsupplied(state, observation, target)),
             _ => Err(self.missing(state, observation, target)),
         }
     }
@@ -1238,6 +1239,17 @@ impl Agent {
             gives_up_as: Status::NeedsInput,
         }
         .into()
+    }
+
+    /// A field Jev found the task asks for and gives no value for. One the page marks required is an input no further
+    /// step can supply, so the run ends needing it; given another try, a run left a profile form's required Country for
+    /// the site's Account link and ended on a sign-in it never needed. Any other is [`Self::missing`].
+    fn unsupplied(&self, state: &mut RunState, observation: &Observation, target: &Control) -> Flow {
+        if target.required == Some(true) {
+            let error = format!("{} needs a value the task does not give", text::repr(&target.label));
+            return Stop::new(Status::NeedsInput, error).into();
+        }
+        self.missing(state, observation, target)
     }
 
     /// A field the task asks nothing of is a wrong pick, left out of what is offered here as a missing one is. It is an
