@@ -489,9 +489,21 @@ impl Agent {
                     && !composed.claims.is_empty()
                 {
                     // Only a rejected composition stops a run unverified, so one that passes every claim and coverage
-                    // check answers what that stop was about, as it would have at done.
+                    // check answers what that stop was about, as it would have at done. A run stuck going back and
+                    // forth over pages it had read held such an answer too, and came back stuck under "Partial
+                    // evidence only": when the task asks only to be told, the stop was over navigation, not the
+                    // answer. A task asking for something done is not done because what was read holds.
                     // A step the site refused is still not carried out, however well the answer holds (#779).
-                    if stop.status == Status::Unverified && composed.problem.is_none() && !state.refused {
+                    let told = matches!(
+                        state.output_intent,
+                        state::OutputIntent::Text | state::OutputIntent::Image | state::OutputIntent::TextAndImage
+                    );
+                    let answers = match stop.status {
+                        Status::Unverified => true,
+                        Status::Stuck => told,
+                        _ => false,
+                    };
+                    if answers && composed.problem.is_none() && !state.refused {
                         let result =
                             self.answered(&composed, &notes, Some(state), ledger, Status::Complete, None, None);
                         let requested = state.output_intent == state::OutputIntent::TextAndImage;

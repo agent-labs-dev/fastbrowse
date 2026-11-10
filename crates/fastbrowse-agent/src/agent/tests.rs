@@ -3465,9 +3465,13 @@ impl DecisionClient for ComposeSupport {
     }
 }
 
-struct WrongRecord;
+/// A composer that writes one claim, citing the first note.
+struct WritesRecord(&'static str);
 
-impl LLMClient for WrongRecord {
+#[allow(non_upper_case_globals)]
+const WrongRecord: WritesRecord = WritesRecord("Record A: 99");
+
+impl LLMClient for WritesRecord {
     fn generate_value<'a>(
         &'a self,
         _: LLMPurpose,
@@ -3480,7 +3484,7 @@ impl LLMClient for WrongRecord {
                 ledger.reserve(CostComponent::Llm, 0.0, 1)?;
             }
             let data = schema
-                .validate_json(&json!({"claims": [{"text": "Record A: 99", "evidence_ids": ["e0"]}]}).to_string())
+                .validate_json(&json!({"claims": [{"text": self.0, "evidence_ids": ["e0"]}]}).to_string())
                 .map_err(LLMError::Failed)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
@@ -3507,6 +3511,31 @@ async fn test_rejected_composed_claims_cannot_end_complete() {
     assert_eq!(stopped.error.as_deref(), Some("no_progress (3)"));
     assert!(!stopped.answer.unwrap_or_default().contains("Record A: 99"));
     assert!(!stopped.evidence.is_empty());
+}
+
+/// A run that read every page of a list and then went back and forth between them stopped `no_progress`, and its
+/// answer, which passed every claim and coverage check, came back stuck under "Partial evidence only". A stop over
+/// navigation leaves an answer that holds whole when the task asks only to be told.
+#[tokio::test]
+async fn test_a_stuck_run_whose_answer_passes_every_check_answers_the_task() {
+    let stopped = |intent| async move {
+        let agent =
+            Agent::new(Arc::new(NoPage), Arc::new(ComposeSupport(true)), Arc::new(WritesRecord("Record B: 34")));
+        let mut state = run_state();
+        state.output_intent = intent;
+        state.compose = true;
+        let page = capture(&[(BlockKind::Paragraph, "Record B: 34")]);
+        state.notes.add(Fact::read("Record B: 34", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
+        let ledger = state.ledger.clone();
+        let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "no_progress (3)"));
+        agent.stopped(stop, Some(&mut state), &ledger).await
+    };
+    let told = stopped(super::state::OutputIntent::Text).await;
+    assert_eq!((told.status, told.error.as_deref()), (Status::Complete, None));
+    assert!(told.answer.unwrap_or_default().starts_with("Record B: 34 [1]"));
+    // A task that asks for something done is not done because what was read holds.
+    let carried = stopped(super::state::OutputIntent::CarriedOut).await;
+    assert_eq!(carried.status, Status::Stuck);
 }
 
 #[test]
@@ -6000,6 +6029,61 @@ async fn test_done_on_a_record_page_after_leaving_the_list_returns_to_its_unread
     assert_eq!((step.operation, step.outcome), (Operation::Navigate, StepOutcome::Executed));
     // The same next page is opened once at most: a run that cannot read it does not loop on it.
     assert_eq!(state.unread_pager_page(), None);
+}
+
+/// A composer double that proposes `url` as the route around a wall.
+struct ProposesRoute(Option<&'static str>);
+
+impl LLMClient for ProposesRoute {
+    fn generate_value<'a>(
+        &'a self,
+        _: LLMPurpose,
+        messages: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        assert!(messages[1].content.contains("# Walled addresses\nhttps://pypi.org/search/?q=httpx"));
+        Box::pin(async move {
+            let data = schema.validate_json(&json!({"url": self.0}).to_string()).map_err(LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+        })
+    }
+}
+
+/// PyPI's search met a bot check that did not clear, and the run stopped blocked while hosted agents opened the
+/// project page itself. A wall ends its route: the run opens another proposed route once, and stops only when none is
+/// left (#953).
+#[tokio::test]
+async fn test_a_bot_check_that_does_not_clear_ends_the_route_not_the_run() {
+    let walled = "https://pypi.org/search/?q=httpx";
+    let around = |route| {
+        let page = Arc::new(HungPage::new(0));
+        let jev = Arc::new(Gatekeeper {
+            irreversible: 0.0,
+            requested: 0.0,
+            lasting: 0.0,
+            edits: 0.0,
+            calls: Default::default(),
+            edits_asked: Default::default(),
+        });
+        Agent::new(page, jev, Arc::new(ProposesRoute(route)))
+    };
+    let agent = around(Some("https://pypi.org/project/httpx/"));
+    let mut state = run_state();
+    let wall = at(walled, &[]);
+    assert!(agent.route_around(&mut state, &wall, walled).await.unwrap());
+    let opened: Vec<_> = state.steps.iter().map(|step| (step.operation, step.outcome)).collect();
+    assert_eq!(opened, [(Operation::Navigate, StepOutcome::Executed)]);
+    // The same route is opened once: met by a wall again, it is not a way around it.
+    assert!(!agent.route_around(&mut state, &wall, walled).await.unwrap());
+    assert_eq!(state.steps.len(), 1);
+    // No route proposed, or only the walled address, leaves none.
+    let agent = around(None);
+    assert!(!agent.route_around(&mut run_state(), &wall, walled).await.unwrap());
+    let agent = around(Some(walled));
+    let mut state = run_state();
+    assert!(!agent.route_around(&mut state, &wall, walled).await.unwrap());
+    assert!(state.steps.is_empty());
 }
 
 #[tokio::test]
