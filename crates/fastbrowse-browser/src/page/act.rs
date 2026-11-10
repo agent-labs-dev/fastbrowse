@@ -628,6 +628,7 @@ impl CdpPage {
 
     async fn click(&self, target: Option<&Target>, point: Point, drawn: bool) -> Result<Outcome, BrowserError> {
         let Some(target) = target else { return Ok((StepOutcome::Failed, Some("click requires a target".into()))) };
+        self.session.note_click(&target.0, target.2);
         let (x, y) = match point {
             Point::Gone | Point::Unsettled => return Ok((StepOutcome::Stale, Some("target disconnected".into()))),
             Point::At(x, y) => (x, y),
@@ -638,6 +639,38 @@ impl CdpPage {
             },
         };
         self.click_point(target, (x, y), false, drawn).await
+    }
+
+    /// Tie each file input whose chooser a click opened to the control clicked, so the observation offers that control
+    /// as the upload, as a label is offered for its input. An input or page gone since is skipped: nothing to offer.
+    pub(crate) async fn adopt_choosers(&self) {
+        for (session, input, opener) in self.session.take_choosers() {
+            self.adopt_chooser(&session, input, opener).await;
+        }
+    }
+
+    async fn adopt_chooser(&self, session: &str, input: i64, opener: i64) {
+        let session_id = Some(session);
+        let Ok(resolved) = self.session.send("DOM.resolveNode", json!({"backendNodeId": input}), session_id).await
+        else {
+            return;
+        };
+        let Some(object) = resolved["object"]["objectId"].as_str() else { return };
+        let _ = self
+            .session
+            .send(
+                "Runtime.callFunctionOn",
+                json!({
+                    "objectId": object,
+                    "functionDeclaration": "function (opener) { const registry = window.__fastbrowse; \
+                        const node = registry?.nodes.get(opener); \
+                        if (node) registry.chooser = {input: this, opener: node}; }",
+                    "arguments": [{"value": opener}],
+                }),
+                session_id,
+            )
+            .await;
+        let _ = self.session.send("Runtime.releaseObject", json!({"objectId": object}), session_id).await;
     }
 
     /// Activate a control from the keyboard: focus it and press the key its semantics answer to.
@@ -1129,7 +1162,8 @@ impl CdpPage {
             .collect();
         let script = format!(
             "((id, files, allowed) => {{ const node = window.__fastbrowse?.nodes.get(id); \
-             const e = node?.tagName === 'LABEL' ? node.control : node; \
+             const chooser = window.__fastbrowse?.chooser; \
+             const e = node?.tagName === 'LABEL' ? node.control : chooser?.opener === node ? chooser.input : node; \
              if (!e?.isConnected || e.type !== 'file' || e.disabled || \
              (allowed && !allowed.includes(location.origin))) return null; \
              const dt = new DataTransfer(); \
