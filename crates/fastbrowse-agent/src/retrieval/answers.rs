@@ -949,12 +949,10 @@ fn cited_quotes(claim: &Claim, notes: &Notes, steps: bool) -> Vec<serde_json::Va
         .iter()
         .filter_map(|id| notes.facts_by_id().get(id))
         .filter_map(|fact| {
-            fact.evidence
-                .as_ref()
-                .map(|quote| {
-                    let after_step = notes.steps_taken(quote).filter(|_| steps);
-                    json!(QuoteState { quote, superseded: notes.superseded(&fact_id(fact)), after_step })
-                })
+            fact.evidence.as_ref().map(|quote| {
+                let after_step = notes.steps_taken(quote).filter(|_| steps);
+                json!(QuoteState { quote, superseded: notes.superseded(&fact_id(fact)), after_step })
+            })
         })
         .collect()
 }
