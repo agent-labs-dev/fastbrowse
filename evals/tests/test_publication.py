@@ -1171,6 +1171,38 @@ def test_an_internal_ledger_graded_under_another_policy_cannot_publish(tmp_path:
 HOSTED_TASKS = ("fastbrowse",)
 
 
+def test_a_row_states_what_browser_setup_stayed_on_its_clock(tmp_path: Path) -> None:
+    """Hosted Browser Use connects to its browser where the harness cannot see, so its rows say that connection is in
+    their seconds, and a consumer need not know which agents do."""
+
+    def note(attempts: list[dict[str, Any]]) -> None:
+        for a in attempts:
+            if a["arm"] == "browser-use":
+                a["timing_note"] = live.HOSTED_SETUP
+
+    arms = ("fastbrowse", "browser-use")
+    ledger = write_ledger(tmp_path, "hosted", arms, note, task_arms=HOSTED_TASKS, budget_usd=1000.0)
+    group = publication.internal_group("internal-hosted", ledger, CATALOG, DIGEST).group
+    assert {r.timing_note for r in group.rows if r.arm == "browser-use"} == {live.HOSTED_SETUP}
+    assert {r.timing_note for r in group.rows if r.arm == "fastbrowse"} == {None}
+    assert all("timing_note" not in r.model_dump() for r in group.rows if r.arm == "fastbrowse")
+
+
+def test_a_slot_whose_tries_ran_on_different_clocks_cannot_publish(tmp_path: Path) -> None:
+    def retry_on_another_clock(attempts: list[dict[str, Any]]) -> None:
+        first = next(a for a in attempts if a["arm"] == "browser-use")
+        earlier = dict(first, selected=False, status="unavailable", normalized_status="unavailable", passed=False)
+        earlier["semantic_judge"] = json.loads(json.dumps(first["semantic_judge"]))
+        earlier["semantic_judge"]["judgment"]["decisions"]["task_satisfied"]["passed"] = False
+        earlier["timing_note"], first["retries"] = live.HOSTED_SETUP, 1
+        attempts.insert(attempts.index(first), earlier)
+
+    arms = ("fastbrowse", "browser-use")
+    ledger = write_ledger(tmp_path, "hosted", arms, retry_on_another_clock, task_arms=HOSTED_TASKS, budget_usd=1000.0)
+    with pytest.raises(PublicationError, match="browser setup"):
+        publication.internal_group("internal-hosted", ledger, CATALOG, DIGEST)
+
+
 def test_the_hosted_group_measures_whichever_hosted_arms_ran_on_one_task_set(tmp_path: Path) -> None:
     arms = ("fastbrowse", "browser-use", "jev-ultrafast")
     ledger = write_ledger(tmp_path, "hosted", arms, task_arms=HOSTED_TASKS, budget_usd=1000.0)

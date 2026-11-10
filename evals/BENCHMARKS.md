@@ -142,7 +142,9 @@ does. A cap ends hard tasks early and then scores the cap, not the agent. Each r
 (`attempt_clock`). Opening and closing the session are outside it and are recorded as `session_open_seconds` and
 `session_close_seconds`, summed per public row. Every row records its `timing_basis`: `session-ready-to-answer`, or
 `session-included` where an arm could not separate them. Publication refuses anything but the first, and comparisons
-refuse mixed bases.
+refuse mixed bases. Hosted Browser Use and Browser Harness connect to their browser where the harness cannot see, so
+that connection stays in their seconds; each of their public rows says so in `timing_note`, and publication refuses a
+slot whose tries disagree on it.
 
 The harness bounds only the provider's two phases around the agent, so a hung provider is never an agent failure.
 Opening is bounded by `attempt_clock.SESSION_OPEN_SECONDS` (recorded as `session_open_limit_seconds`, and checked by

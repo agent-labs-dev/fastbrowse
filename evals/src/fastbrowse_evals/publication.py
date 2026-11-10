@@ -208,7 +208,7 @@ INTERNAL = {
     "internal-ultrafast": "jev-ultrafast",
     "internal-backend": "fastbrowse-pool",
 }
-SLOT_FIELDS = ("status", "passed", "seconds", "dollars", "llm_calls", "llm_calls_basis")
+SLOT_FIELDS = ("status", "passed", "seconds", "dollars", "llm_calls", "llm_calls_basis", "timing_note")
 FASTBROWSE_ARMS = {"fastbrowse", "fastbrowse-pool"}
 """Arms that are fastbrowse itself, whose completion is its own `complete` status."""
 HOSTED_ARMS = ("fastbrowse", "browser-use", "browser-use-ultrafast", "jev-ultrafast", "browser-harness")
@@ -289,7 +289,13 @@ def timing_fields(tries: Iterable[dict[str, Any]]) -> dict[str, Any]:
     agent = {}
     if "agent_seconds" in Row.model_fields and all(t.get("agent_seconds") is not None for t in tries):
         agent = {"agent_seconds": math.fsum(t["agent_seconds"] for t in tries)}
-    return {"timing_basis": TIMING_BASIS, **total, **agent}
+    # Seconds summed over tries are one clock only if every try kept the same browser setup on it.
+    notes = {t.get("timing_note") for t in tries}
+    if len(notes) != 1:
+        raise PublicationError("the tries of one slot kept different browser setup in their seconds")
+    [setup] = notes
+    note = {"timing_note": setup} if setup is not None and "timing_note" in Row.model_fields else {}
+    return {"timing_basis": TIMING_BASIS, **total, **agent, **note}
 
 
 def timed_schema(schema: int) -> Any:

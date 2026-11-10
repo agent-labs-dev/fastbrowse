@@ -60,8 +60,10 @@ each with its commits, date and the tasks it supplied for that arm. Its commits 
 earlier source stays valid on any build, including a branch commit a squash merge left outside `main`. A slot our own harness or
 judge failed is listed in `unjudged` with its reason, outside every figure; a run the site's bot check or an outage
 stopped is a failed row naming why, and a legacy `blocked` slot reads as one. Each task the catalog says an arm cannot run is listed in `excluded` with the catalog's
-reason and counts as `repeats` failed attempts in every pass rate. The site's parser (`src/lib/benchmark-feed.ts`)
-must accept these fields before a candidate that has them is published.
+reason and counts as `repeats` failed attempts in every pass rate. A row whose agent connects to its browser where the
+harness cannot see (hosted Browser Use, Browser Harness) states what of that setup stayed in its seconds in
+`timing_note`. The site's parser (`src/lib/benchmark-feed.ts`) must accept these fields before a candidate that has
+them is published.
 
 `internal-hosted` is the head-to-head over the 53 tasks fastbrowse runs; figures approved at 46, 47 or 52 tasks still
 read. A campaign runs `fastbrowse` and `jev-ultrafast` live in one harness invocation, on Browser Use Cloud browsers

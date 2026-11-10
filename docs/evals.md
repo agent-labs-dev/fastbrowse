@@ -131,7 +131,9 @@ turn totals, so these bounds cover only recorded tokens, not the complete run. T
 
 A row's `seconds` runs from the browser session being ready to the agent's final answer, for every arm. Opening and
 closing the session are outside it and are recorded apart as `session_open_seconds` and `session_close_seconds`. Each
-row records `timing_basis`, currently `session-ready-to-answer`; a row without one was measured on an older clock.
+row records `timing_basis`, currently `session-ready-to-answer`; a row without one was measured on an older clock. A
+row whose agent connects to its browser where the harness cannot see (hosted Browser Use, Browser Harness) keeps that
+connection in its seconds and says so in `timing_note`.
 `benchmarks.py` refuses a group that mixes bases, the release gate never matches rows across them, and `summary`
 reports no seconds for a comparison across them. `bench.py`'s `wall` is a separate diagnostic: spawn to reply on a
 shared Chrome.

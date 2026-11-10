@@ -94,6 +94,9 @@ class Row(PublicModel):
     """Opening the browser session, totalled like `seconds` and outside them."""
     session_close_seconds: Amount | None = None
     """Closing the browser session, totalled like `seconds` and outside them."""
+    timing_note: Limit | None = None
+    """What of browser setup stayed inside `seconds`, for an agent that connects to its browser where the harness
+    cannot see: hosted Browser Use and Browser Harness. None when all of it is outside, in `session_open_seconds`."""
     failure: Limit | None = None
     """Why a failed slot failed when the verdict alone does not say: a run the site's bot check refused is the
     agent's failure, since another agent may get past it."""
@@ -102,7 +105,14 @@ class Row(PublicModel):
     def without_unrecorded_timing(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         """A row from before these fields keeps its old bytes, so approved candidates still match."""
         data = handler(self)
-        for name in ("timing_basis", "session_open_seconds", "session_close_seconds", "llm_calls_basis", "failure"):
+        for name in (
+            "timing_basis",
+            "session_open_seconds",
+            "session_close_seconds",
+            "timing_note",
+            "llm_calls_basis",
+            "failure",
+        ):
             if data.get(name) is None:
                 data.pop(name, None)
         return data
