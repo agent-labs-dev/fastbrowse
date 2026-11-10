@@ -6388,6 +6388,29 @@ async fn test_a_select_longer_than_one_choice_still_offers_its_last_options() {
     assert_eq!(action.text.as_deref(), Some("Airport 597"));
 }
 
+/// A required select the task gives no option for was set to one Jev had to pick anyway: asked only which option it
+/// should hold, with no answer for none, a profile form's Country became France (#939's fixture). Its options are
+/// offered beside the same answers a field's value has: nothing given states it, or the task asks nothing of it.
+#[tokio::test]
+async fn test_a_select_the_task_gives_no_option_for_is_a_missing_input() {
+    for (wants, kept, gives_up_as) in
+        [("nothing given states it", true, Status::NeedsInput), ("asks nothing of this field", true, Status::Stuck)]
+    {
+        let select = Control {
+            options: vec!["Choose a country".into(), "France".into(), "Japan".into()],
+            ..Control::new("c", "combobox", "Country", [Operation::Select])
+        };
+        let page = observation(std::slice::from_ref(&select));
+        let jev = Arc::new(FirstChoice { wants: Some(wants), ..Default::default() });
+        let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.edits_forbidden = Some(false);
+        let acted = agent.action(&mut state, &page, &code_decision(Operation::Select, Some(select))).await;
+        assert!(matches!(&acted, Err(Flow::Unsure(unsure)) if unsure.gives_up_as == gives_up_as), "{wants}: {acted:?}");
+        assert_eq!(state.missing.len(), usize::from(kept), "{wants}");
+    }
+}
+
 /// A select that allows several choices, labelled Topics, with `selected` chosen.
 fn topics(selected: &str) -> Control {
     Control {

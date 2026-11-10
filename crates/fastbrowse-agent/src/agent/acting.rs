@@ -50,6 +50,14 @@ const NO_VALUE: &str = "none";
 /// The task asks nothing of the field: it is left as it is, and is no input the run lacks. Asked as one with NO_VALUE,
 /// a blank optional field Jev reached for read as a value the caller had to give (#935).
 const LEAVE: &str = "leave";
+const NO_VALUE_SAID: &str = "The task asks for this field's value, and nothing given states it.";
+const LEAVE_SAID: &str = "The task asks nothing of this field, so it is left as it is.";
+
+/// What a choice among a field's options settled on: one of them, or the key of an answer offered instead.
+enum Chosen {
+    Option(String),
+    Instead(&'static str),
+}
 /// Words shown either side of one Jev may pick, so a word the task repeats reads as a different place.
 const WORD_CONTEXT: usize = 3;
 /// A long source is cut into a few broad parts: as hundreds of overlapping fragments, a 330-word request lost the one
@@ -335,8 +343,18 @@ impl Agent {
                     }
                     _ => format!("Which option should {named} be set to?"),
                 };
-                let option = self.choose(state, observation, &question, &raw.options).await?;
-                Ok(Action { target_id: Some(raw.id.clone()), text: Some(option), ..Action::new(Operation::Select) })
+                // Like a typed value, an option is one the task gives: a required select the task names no option
+                // for, asked only which option it should hold, was set to one Jev had to pick anyway.
+                let instead = [(NO_VALUE, NO_VALUE_SAID), (LEAVE, LEAVE_SAID)];
+                match self.choose_among(state, observation, &question, &raw.options, &instead).await? {
+                    Chosen::Option(option) => Ok(Action {
+                        target_id: Some(raw.id.clone()),
+                        text: Some(option),
+                        ..Action::new(Operation::Select)
+                    }),
+                    Chosen::Instead(LEAVE) => Err(self.untouched(state, observation, target)),
+                    Chosen::Instead(_) => Err(self.missing(state, observation, target)),
+                }
             }
             Operation::Upload => {
                 if state.attachments.is_empty() {
@@ -1080,8 +1098,8 @@ impl Agent {
             sources
                 .insert(IN_READ.into(), format!("The task does not state it, and what was read does: {read}").into());
         }
-        sources.insert(NO_VALUE.into(), "The task asks for this field's value, and nothing given states it.".into());
-        sources.insert(LEAVE.into(), "The task asks nothing of this field, so it is left as it is.".into());
+        sources.insert(NO_VALUE.into(), NO_VALUE_SAID.into());
+        sources.insert(LEAVE.into(), LEAVE_SAID.into());
         let mut label = text::repr(&target.label);
         if let Some(limit) = target.max_length {
             label = format!("{label}, which holds at most {limit} characters,");
@@ -1245,19 +1263,42 @@ impl Agent {
         question: &str,
         options: &[String],
     ) -> Step<String> {
+        match self.choose_among(state, observation, question, options, &[]).await? {
+            Chosen::Option(option) => Ok(option),
+            Chosen::Instead(key) => unreachable!("{key} was not offered"),
+        }
+    }
+
+    /// One of `options`, or one of the answers `instead` offers beside them at every level of the choice, by its key.
+    async fn choose_among(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        question: &str,
+        options: &[String],
+        instead: &[(&'static str, &str)],
+    ) -> Step<Chosen> {
         match options {
-            [only] => return Ok(only.clone()),
+            [only] if instead.is_empty() => return Ok(Chosen::Option(only.clone())),
             [] => return Err(Stop::new(Status::Stuck, format!("no options to answer: {question}")).into()),
             _ => {}
         }
+        let offered = |criteria: &mut IndexMap<String, JsonValue>| {
+            criteria.extend(instead.iter().map(|(key, said)| (key.to_string(), JsonValue::from(*said))));
+        };
+        let settled = |picked: &str, options: &[String]| match instead.iter().find(|(key, _)| *key == picked) {
+            Some((key, _)) => Chosen::Instead(key),
+            None => Chosen::Option(options[picked.parse::<usize>().expect("a key offered")].clone()),
+        };
         // One Choice offers at most the options the decision model documents, so a longer list, such as a select of
         // years or airports, is offered as runs of options first and the option is picked inside the run chosen, as
         // the step decision groups controls.
         let shown = self.jev.profile().max_choice_options.max(2);
         let mut options = options;
-        if options.len() > shown {
-            let runs: Vec<&[String]> = options.chunks(options.len().div_ceil(shown)).collect();
-            let criteria = runs
+        if options.len() + instead.len() > shown {
+            let groups = shown.saturating_sub(instead.len()).max(2);
+            let runs: Vec<&[String]> = options.chunks(options.len().div_ceil(groups)).collect();
+            let mut criteria: IndexMap<String, JsonValue> = runs
                 .iter()
                 .enumerate()
                 .map(|(i, run)| {
@@ -1265,17 +1306,22 @@ impl Agent {
                     (i.to_string(), JsonValue::from(masked.join(" | ")))
                 })
                 .collect();
+            offered(&mut criteria);
             let grouped = format!("{question} Choose the group of options holding the answer.");
             let picked = self.ask_choice(state, observation, &grouped, criteria).await?;
+            if let Some((key, _)) = instead.iter().find(|(key, _)| *key == picked) {
+                return Ok(Chosen::Instead(key));
+            }
             options = runs[picked.parse::<usize>().expect("a key offered")];
             if let [only] = options {
-                return Ok(only.clone());
+                return Ok(Chosen::Option(only.clone()));
             }
         }
-        let criteria: IndexMap<String, JsonValue> =
+        let mut criteria: IndexMap<String, JsonValue> =
             options.iter().enumerate().map(|(i, option)| (i.to_string(), self.mask(option).into())).collect();
+        offered(&mut criteria);
         let picked = self.ask_choice(state, observation, question, criteria).await?;
-        Ok(options[picked.parse::<usize>().expect("a key offered")].clone())
+        Ok(settled(&picked, options))
     }
 
     async fn ask_choice(
