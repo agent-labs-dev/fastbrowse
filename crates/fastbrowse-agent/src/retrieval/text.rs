@@ -7,6 +7,7 @@ use fastbrowse_core::page::Capture;
 use fastbrowse_core::py::text::{is_space, is_word};
 
 use crate::pyre::{Pat, byte_offsets, is_digit};
+use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 
 /// A capture with its text indexed by code point.
 pub(crate) struct Page<'a> {
@@ -291,6 +292,16 @@ mod tests {
     }
 
     #[test]
+    fn a_pictograph_is_a_word_and_the_quote_after_it_an_edge() {
+        let found = super::words("note 'by the door ☕' now", None);
+        let bounds: Vec<_> =
+            found.iter().map(|word| (word.outer_start, word.start, word.end, word.outer_end)).collect();
+        assert_eq!(bounds[4], (18, 18, 19, 20));
+        // A token of punctuation alone is still no word.
+        assert_eq!(super::words("a - b", None).len(), 2);
+    }
+
+    #[test]
     fn edge_options_cut_the_punctuation_next_to_a_value() {
         let task = "say @x y. now";
         let chars: Vec<char> = task.chars().collect();
@@ -371,6 +382,7 @@ impl Word {
 }
 
 /// `value`'s whitespace-separated words with the punctuation around each trimmed off.
+/// A token with no letter, digit or pictograph is no word.
 /// A word longer than `limit` characters is cut into pieces of that size.
 pub(crate) fn words(value: &str, limit: Option<usize>) -> Vec<Word> {
     let chars: Vec<char> = value.chars().collect();
@@ -382,7 +394,9 @@ pub(crate) fn words(value: &str, limit: Option<usize>) -> Vec<Word> {
             (false, None) => from = Some(at),
             (true, Some(start)) => {
                 let word = &chars[start..at];
-                let edge = |ch: &char| ch.is_alphanumeric();
+                // Letters, digits and pictographs (`So`, such as an emoji) are the value; the punctuation and signs
+                // around them are offered as edges to keep or leave.
+                let edge = |ch: &char| ch.is_alphanumeric() || ch.general_category() == GeneralCategory::OtherSymbol;
                 if let (Some(first), Some(last)) = (word.iter().position(edge), word.iter().rposition(edge)) {
                     spans.push((start, start + first, start + last + 1, at));
                 }
