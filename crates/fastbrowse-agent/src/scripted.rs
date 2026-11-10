@@ -138,7 +138,7 @@ impl DecisionClient for ScriptedJev {
                     // The done check holds unless the step scripts what it finds instead.
                     let pick = script.step.as_ref().and_then(|step| step.pick.as_deref());
                     let holds = match key.as_str() {
-                        "coverage" => true,
+                        "coverage" | "exact" => true,
                         "carried" => !matches!(pick, Some("undone" | "refused")),
                         "refused" => pick == Some("refused"),
                         _ => false,

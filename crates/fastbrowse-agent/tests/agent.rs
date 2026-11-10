@@ -317,7 +317,7 @@ fn scripted_jev(script: &Value, state: &Value, questions: &Value, log: &[Value])
             // A case's answer is the one it expects to stand, so the checks of that answer pass unless it scripts them.
             let default = if matches!(key.as_str(), "login_required" | "bot_check" | "site_failure" | "dates") {
                 0.0
-            } else if key == "coverage" || key == "carried" || key.starts_with("claim") {
+            } else if matches!(key.as_str(), "coverage" | "exact" | "carried") || key.starts_with("claim") {
                 1.0
             } else {
                 script["noul"].as_f64().unwrap_or(0.0)
