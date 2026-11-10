@@ -27,7 +27,9 @@ fastbrowse = "fastbrowse.commands:fastbrowse"
 fastbrowse-mcp = "fastbrowse.commands:fastbrowse_mcp"
 
 [build-system]
-requires = ["maturin>=1.16,<2"]
+# The oldest maturin that builds the package, not the one CI pins: the AUR package builds the sdist with Arch's own
+# python-maturin, which refuses a bound above its version.
+requires = ["maturin>=1.15,<2"]
 build-backend = "maturin"
 
 # One abi3 wheel per platform: the Python package with the Rust core beside it as `fastbrowse._native`
