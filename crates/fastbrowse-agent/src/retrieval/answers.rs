@@ -722,7 +722,6 @@ async fn review_claims(
             Err(error) => return Err(error),
         }
     };
-    let count = claims.len();
     let missing = unjudged_tally
         || questions.keys().any(|key| answered.as_ref().is_none_or(|pass| !pass.answers.contains_key(key)));
     let holds = |key: &str| {
@@ -761,6 +760,14 @@ async fn review_claims(
     if !tally_reasons.is_empty() {
         feedback["tally_reasons"] = json!(tally_reasons);
     }
+    // A row left out of a listing must be named where the result says why it is unverified: a caller told only that a
+    // claim was unsupported read a gallery's 4 of 14 rows as all the page held (#929).
+    let unsupported: Vec<String> = claims
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !supports(*index))
+        .map(|(_, claim)| text::repr(&claim.text))
+        .collect();
     let supported = claims
         .into_iter()
         .enumerate()
@@ -783,9 +790,14 @@ async fn review_claims(
             Some("Jev left a composed claim's support unanswered.".into())
         } else if !untallied.is_empty() {
             Some("A composed claim's count, total or extreme could not be worked out from the notes.".into())
-        } else if (0..count).any(|index| !supports(index)) {
+        } else if let [one] = unsupported.as_slice() {
             // A claim its own quotes do not hold is the answer's first fault, whatever the run's steps did.
-            Some("A composed claim is unsupported by its cited quotes.".into())
+            Some(format!("A composed claim is unsupported by its cited quotes, so it is left out: {one}"))
+        } else if !unsupported.is_empty() {
+            Some(format!(
+                "Composed claims unsupported by their cited quotes are left out: {}",
+                unsupported.join("; ")
+            ))
         } else if denies_steps {
             Some("The written answer contradicts a step this run took: it says something was not done or already existed that the run's own step may have done.".into())
         } else if !coverage {
@@ -2001,7 +2013,34 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(reviewed.answer.problem.as_deref(), Some("A composed claim is unsupported by its cited quotes."));
+        assert_eq!(
+            reviewed.answer.problem.as_deref(),
+            Some(
+                "A composed claim is unsupported by its cited quotes, so it is left out: 'The heading is Example of a new window page for Practice Automation Testing.'"
+            )
+        );
+    }
+
+    /// A gallery listing returned 4 of the page's 14 rows, `unverified`, with the error "A composed claim is unsupported
+    /// by its cited quotes.", so a caller read the short list as the page's contents (#929). The error names each
+    /// withheld claim.
+    #[tokio::test]
+    async fn an_unsupported_claim_is_named_in_the_problem() {
+        let notes = Notes::new([fact(0, "Image 1: Map".into()), fact(1, "Image 2: Bags".into())]);
+        let mut jev = Support::new(true);
+        jev.rejected = Some("claim1".into());
+        let mut llm = RecordingLlm::new(None);
+        llm.claims = Some(vec![
+            Claim::new("1. Map", vec!["e0".into()]),
+            Claim::new("2. Bags", vec!["e1".into()]),
+            Claim::new("3. Map again", vec!["e0".into()]),
+        ]);
+        let answer = compose(&jev, &llm, "List every image", &notes, None, &[]).await.unwrap();
+        assert_eq!(answer.claims.len(), 2);
+        assert_eq!(
+            answer.problem.as_deref(),
+            Some("A composed claim is unsupported by its cited quotes, so it is left out: '2. Bags'")
+        );
     }
 
     /// A draft whose columns are `[]` is no table, so a tally's claim still gets its tally's checks.

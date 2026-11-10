@@ -363,7 +363,8 @@ impl Agent {
         }
         let mut data = Value::Null;
         let mut status = if answer_problem.is_some() { Status::Unverified } else { Status::Complete };
-        let mut error = answer_problem;
+        // A problem can quote a withheld claim, which can hold what the run typed.
+        let mut error = answer_problem.map(|problem| self.redact(&problem));
         // A whole-list answer from part of the list is not the whole: a limit or a refused page left one unread. The same
         // holds for the pages a task names.
         if state.extent.walks()
