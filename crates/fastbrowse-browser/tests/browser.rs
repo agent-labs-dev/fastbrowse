@@ -2346,6 +2346,37 @@ async fn test_page_javascript_cannot_forge_the_http_status() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_an_unchanged_document_is_not_read_for_its_status_again() {
+    let _turn = turn().await;
+    let Some(connection) = chrome().cloned() else { return };
+    let sent = Arc::new(Mutex::new(vec![]));
+    let Some(h) = proxied(connection, recording(sent.clone())).await else { return };
+    h.goto("").await;
+    assert_eq!(h.observe().await.response_status, Some(200));
+    sent.lock().unwrap().clear();
+    // The document is the one just read, so its status is the read already made: no command asks again.
+    assert_eq!(h.observe().await.response_status, Some(200));
+    let calls = sent.lock().unwrap();
+    assert!(!calls.iter().any(|(m, _)| m == "Page.getFrameTree" || m == "Page.createIsolatedWorld"), "{calls:?}");
+    assert!(
+        !calls
+            .iter()
+            .any(|(m, p)| m == "Runtime.evaluate"
+                && (p.get("contextId").is_some() || p.get("uniqueContextId").is_some())),
+        "{calls:?}"
+    );
+    drop(calls);
+    // A replaced document is read again, and a client-side route carries no status, as before.
+    h.goto("/http-error/404").await;
+    assert_eq!(h.observe().await.response_status, Some(404));
+    eval_active(&h, "history.pushState({}, '', '/recovered')").await;
+    let recovered = h.observe().await;
+    assert!(recovered.url.ends_with("/recovered"));
+    assert_eq!(recovered.response_status, None);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_http_status_world_is_made_once_per_document() {
     let _turn = turn().await;
     let Some(connection) = chrome().cloned() else { return };
