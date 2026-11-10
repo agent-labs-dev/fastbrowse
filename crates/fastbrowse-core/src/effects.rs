@@ -10,11 +10,23 @@ use crate::py::{json::dumps, sha256_hex, text};
 /// Clicking one of these is choosing a value, so it should leave some value, selection or address changed.
 pub const SETTING_ROLES: [&str; 6] = ["option", "checkbox", "radio", "switch", "menuitemradio", "menuitemcheckbox"];
 
+/// What a control holds after a step changed it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Setting {
+    /// Its value; none when the page reports it emptied.
+    Value(Option<String>),
+    Checked(bool),
+    Selected(bool),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Effect {
     pub summary: String,
     /// The address, or a surviving control's label, value, checked or selected state, changed.
     pub set_something: bool,
+    /// Each surviving control whose value, checked or selected state changed, by its id on the page after the step,
+    /// with what it holds now: what the step left in the page's fields, as the page reports them.
+    pub set: Vec<(String, Setting)>,
     /// The page stayed and its content or controls changed beyond focus, losing no control.
     pub added: bool,
     /// Something a person would see differs: a control, the address or the text in the viewport.
@@ -127,6 +139,7 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
     let mut changes = Vec::new();
     let mut content_changed = before.viewport_text != after.viewport_text;
     let mut setting = false;
+    let mut set = Vec::new();
     // A picker can open as an overlay with its own copy of the field, so the field the choice fills is a different
     // element before and after. A control unmatched by id is compared with the one earlier control sharing its role
     // and label, if exactly one did.
@@ -163,6 +176,13 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
                 setting = setting || name != "expanded";
             }
         }
+        // A flag the page stopped reporting holds nothing it can be said to hold.
+        let held = [
+            (was.value != now.value).then(|| Setting::Value(now.value.clone())),
+            now.checked.filter(|_| was.checked != now.checked).map(Setting::Checked),
+            now.selected.filter(|_| was.selected != now.selected).map(Setting::Selected),
+        ];
+        set.extend(held.into_iter().flatten().map(|held| (now.id.clone(), held)));
         // Focus is told where both readings know it and the control is a field leaving is offered for. Entering or
         // leaving a field is what happened, so it is told and counts as a change, but it sets no value. A reading that
         // never reported focus invents no transition.
@@ -228,6 +248,7 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
     Effect {
         summary,
         set_something: navigated || setting,
+        set,
         added: stayed_whole && (content_changed || !shown.is_empty()),
         changed,
         shown: if navigated || replaced { Vec::new() } else { shown.iter().map(|c| c.id.clone()).collect() },
@@ -339,6 +360,7 @@ mod tests {
         let done = effect(&before, &after, None, false);
         assert!(done.set_something);
         assert!(done.summary.contains("Ticket type value: Round trip -> One way"));
+        assert_eq!(done.set, [(trigger().id, Setting::Value(Some("One way".into())))]);
     }
 
     #[test]

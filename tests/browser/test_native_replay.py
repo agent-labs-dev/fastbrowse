@@ -20,7 +20,14 @@ pytestmark = [
     pytest.mark.cassette_replay,
 ]
 
-PASSING = ("table-extract", "mock-sign-in", "mock-upload-document")
+PASSING = (
+    "table-extract",
+    "mock-sign-in",
+    "mock-upload-document",
+    "mock-long-description",
+    "mock-custom-select",
+    "mock-unfinished-write",
+)
 # Cassettes the agent's requests have moved past, each waiting on a paid `bench fill --only TASK` a maintainer starts.
 # Strict, so the replay job lists them on every run and fails once the fill lands until the entry is removed.
 STALE: dict[str, str] = {}

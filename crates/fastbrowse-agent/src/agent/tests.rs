@@ -1665,6 +1665,8 @@ async fn test_a_task_carried_out_is_not_held_to_reporting_facts() {
     state.compose = true;
     state.task = "Send a support request with the topic 'billing'.".into();
     state.notes = Notes::new([fact.answering()]);
+    // The confirmation was read once the request was sent.
+    state.notes.remember_capture(&page, 1);
     state.history.push(crate::policy::HistoryEntry::new(
         Some(Operation::Click),
         Some("Send request"),
@@ -1680,6 +1682,43 @@ async fn test_a_task_carried_out_is_not_held_to_reporting_facts() {
     assert_eq!(result.status, Status::Complete, "{:?}", result.error);
     assert!(result.answer.unwrap().starts_with("We have your request: 'billing'."));
     assert!(!jev.0.3.lock().unwrap().is_empty(), "the steps are still judged");
+}
+
+/// A task that asks only for something to be carried out answered with a read of the page it started on: a write
+/// task's run reported "Save: disabled", the disabled Save button beside the field it was about to change, the read note
+/// #939 saw typed into live descriptions. What a run reads before its last step that changes the site is kept for those
+/// steps, such as a value read on one page and entered on another; only a page read after it shows the outcome.
+#[tokio::test]
+async fn test_a_task_carried_out_answers_only_with_what_it_read_after_its_last_step() {
+    let start = capture(&[(BlockKind::Paragraph, "Save: disabled")]);
+    let before = Fact::read("Save: disabled", block_evidence(&start, "s0"), FactReader::JevChoice);
+    let saved = capture(&[(BlockKind::Paragraph, "Description saved.")]);
+    let after = Fact::read("Description saved.", block_evidence(&saved, "s0"), FactReader::JevChoice);
+    let mut answers = Vec::new();
+    for read_after in [false, true] {
+        let mut state = run_state();
+        state.output_intent = super::state::OutputIntent::CarriedOut;
+        state.task = "Replace the project description with the new text and save it.".into();
+        state.notes = Notes::new([before.clone().answering()]);
+        state.notes.remember_capture(&start, 0);
+        state.history.push(crate::policy::HistoryEntry::new(
+            Some(Operation::Click),
+            Some("Save"),
+            StepOutcome::Executed,
+            true,
+        ));
+        if read_after {
+            state.notes.add(after.clone().answering());
+            state.notes.remember_capture(&saved, 1);
+        }
+        let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+        let agent = Agent::new(Arc::new(FinishPage(observation(&[]))), jev, Arc::new(ScriptedLLM));
+        let result = agent.finish(&mut state, &observation(&[]), None, None).await.expect("finish").expect("a result");
+        assert_eq!(result.status, Status::Complete, "{:?}", result.error);
+        answers.push(result.answer.map(|answer| answer.lines().next().unwrap_or_default().to_string()));
+    }
+    assert_eq!(answers[0], None, "answered with the page read before the step");
+    assert!(answers[1].as_deref().is_some_and(|answer| answer.starts_with("Description saved.")), "{answers:?}");
 }
 
 /// Picks, for every read requirement, the candidate whose value is the field's, and fails if it is not offered; with no
@@ -3039,6 +3078,35 @@ async fn test_past_the_recovery_budget_a_field_left_unfilled_is_named_in_the_err
     );
 }
 
+/// A select the task gives no option for is as much an input the run lacks as a text field: a profile form's required
+/// Country, answered "nothing given states it", ended the run `stuck` with no field named.
+#[tokio::test]
+async fn test_past_the_recovery_budget_a_select_left_unset_is_named_in_the_error() {
+    let script = vec![crate::scripted::Step { operation: Operation::Click, label: "Next".into(), pick: None }];
+    let jev = Arc::new(Unsure(ScriptedJev::new(script), 0.1, Default::default()));
+    let agent = Agent::new(Arc::new(Screenshots::default()), jev, Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.recoveries = agent.config.stall.max_recoveries;
+    let country = Control {
+        options: vec!["France".into(), "Japan".into()],
+        required: Some(true),
+        ..Control::new("c", "combobox", "Country", [Operation::Select])
+    };
+    let page = observation(&[country.clone(), button("Next")]);
+    state.missing.insert((page.url.clone(), "Country".into(), None));
+    let withheld = super::recovery::withheld(&code_decision(Operation::Select, Some(country)));
+    let error = agent.recover(&mut state, &page, "nothing changed", Status::Stuck, withheld).await.err();
+    assert!(
+        matches!(
+            error,
+            Some(Flow::Stop(ref stop))
+                if stop.status == Status::NeedsInput
+                    && stop.error.as_deref() == Some("'Country' needs a value the task does not give: nothing changed")
+        ),
+        "{error:?}"
+    );
+}
+
 /// #935: asked to replace a description, three runs reached for blank fields the task never named, such as a wiki
 /// link, and ended `needs_input` asking for them. A field the task asks nothing of is left, and is an input the run
 /// lacks only when the page marks it required.
@@ -3063,6 +3131,48 @@ async fn test_a_field_the_task_asks_nothing_of_is_no_missing_input_unless_the_pa
         let Some(Flow::Stop(stop)) = stop else { panic!("{stop:?}") };
         assert_eq!(stop.status, expected);
         assert_eq!(stop.error.as_deref().is_some_and(|error| error.contains("'Addon Wiki'")), required, "{stop:?}");
+    }
+}
+
+/// A field the page marks required, that the task asks for and gives no value for, is an input no further step can
+/// supply: the run ends needing it at once. Given a second chance instead, a profile form's run left its required
+/// Country for the site's Account link and ended `needs_login` on a sign-in page it never needed. A field the page
+/// does not require still gets that chance, since the task may go on without it.
+#[tokio::test]
+async fn test_a_required_field_the_task_gives_no_value_for_ends_the_run_needing_it() {
+    for required in [false, true] {
+        let jev = Picks(&[("source", "none"), ("begins", "none"), ("ends", "none"), ("first", "1"), ("last", "1")]);
+        let agent = Agent::new(Arc::new(NoPage), Arc::new(jev), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.task = "Set my display name to Ada Lovelace and save my profile.".into();
+        let mut phone = field("Phone");
+        phone.value = None;
+        phone.required = required.then_some(true);
+        let page = observation(std::slice::from_ref(&phone));
+        let error = agent.text(&mut state, &page, &code_decision(Operation::Fill, None), &phone).await.unwrap_err();
+        if required {
+            assert!(
+                matches!(&error, Flow::Stop(stop) if stop.status == Status::NeedsInput
+                    && stop.error.as_deref() == Some("'Phone' needs a value the task does not give")),
+                "{error:?}"
+            );
+        } else {
+            assert!(matches!(&error, Flow::Unsure(unsure) if unsure.gives_up_as == Status::NeedsInput), "{error:?}");
+        }
+
+        let country = Control {
+            options: vec!["Choose a country".into(), "France".into()],
+            required: required.then_some(true),
+            ..Control::new("c", "combobox", "Country", [Operation::Select])
+        };
+        let page = observation(std::slice::from_ref(&country));
+        let jev = Arc::new(FirstChoice { wants: Some("nothing given states it"), ..Default::default() });
+        let agent = Agent::new(Arc::new(NoPage), jev, Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.edits_forbidden = Some(false);
+        let acted = agent.action(&mut state, &page, &code_decision(Operation::Select, Some(country))).await;
+        let stopped = matches!(&acted, Err(Flow::Stop(stop)) if stop.status == Status::NeedsInput);
+        assert_eq!(stopped, required, "{acted:?}");
     }
 }
 
@@ -4752,7 +4862,7 @@ impl DecisionClient for RefusedRead {
             .map(|key| {
                 let choice = match key.as_str() {
                     "source" => "read",
-                    "pick" => "none",
+                    "begins" | "ends" => "none",
                     _ => "0",
                 };
                 (
@@ -6388,6 +6498,29 @@ async fn test_a_select_longer_than_one_choice_still_offers_its_last_options() {
     assert_eq!(action.text.as_deref(), Some("Airport 597"));
 }
 
+/// A required select the task gives no option for was set to one Jev had to pick anyway: asked only which option it
+/// should hold, with no answer for none, a profile form's Country became France (#939's fixture). Its options are
+/// offered beside the same answers a field's value has: nothing given states it, or the task asks nothing of it.
+#[tokio::test]
+async fn test_a_select_the_task_gives_no_option_for_is_a_missing_input() {
+    for (wants, kept, gives_up_as) in
+        [("nothing given states it", true, Status::NeedsInput), ("asks nothing of this field", true, Status::Stuck)]
+    {
+        let select = Control {
+            options: vec!["Choose a country".into(), "France".into(), "Japan".into()],
+            ..Control::new("c", "combobox", "Country", [Operation::Select])
+        };
+        let page = observation(std::slice::from_ref(&select));
+        let jev = Arc::new(FirstChoice { wants: Some(wants), ..Default::default() });
+        let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.edits_forbidden = Some(false);
+        let acted = agent.action(&mut state, &page, &code_decision(Operation::Select, Some(select))).await;
+        assert!(matches!(&acted, Err(Flow::Unsure(unsure)) if unsure.gives_up_as == gives_up_as), "{wants}: {acted:?}");
+        assert_eq!(state.missing.len(), usize::from(kept), "{wants}");
+    }
+}
+
 /// A select that allows several choices, labelled Topics, with `selected` chosen.
 fn topics(selected: &str) -> Control {
     Control {
@@ -6456,4 +6589,337 @@ fn test_naming_a_chosen_option_of_a_multiple_select_again_is_not_a_repeat() {
     let decision = code_decision(Operation::Select, Some(select));
     assert_eq!(edit_progress(&decision, &action, &seen), None);
     assert_eq!(edit_progress(&decision, &action, &Written::default()), None);
+}
+
+/// Answers every value question truthfully for a value the task states between `VSTART` and `VEND`: a part is picked
+/// only when it holds what the question asks for, and a word or a copy only when it is that end of the value.
+struct LongValue;
+
+impl DecisionClient for LongValue {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        let answers = questions
+            .iter()
+            .map(|(key, question)| {
+                let Question::Choice(question) = question else { panic!("expected a choice") };
+                let has =
+                    |option: &serde_json::Value, word: &str| option.as_str().is_some_and(|text| text.contains(word));
+                let find = |test: &dyn Fn(&serde_json::Value) -> bool, or: &str| {
+                    question.criteria.iter().find(|(_, option)| test(option)).map_or(or.to_string(), |(k, _)| k.clone())
+                };
+                let asks = |words: &str| question.instructions.contains(words);
+                let choice = if key == "source" {
+                    if question.criteria.contains_key("task") { "task".into() } else { "write".into() }
+                } else if key == "first" {
+                    find(&|option| option.as_str().is_some_and(|text| text.starts_with("'VSTART'")), "none")
+                } else if key == "last" {
+                    find(&|option| option.as_str().is_some_and(|text| text.starts_with("'VEND'")), "none")
+                } else if question.criteria.contains_key("none") && asks("begins") {
+                    find(&|option| has(option, "VSTART"), "none")
+                } else if question.criteria.contains_key("none") && asks("ends") {
+                    find(&|option| has(option, "VEND"), "none")
+                } else if question.criteria.contains_key("none") {
+                    find(&|option| has(option, "VSTART") && has(option, "VEND"), "none")
+                } else if asks("beginning at the selected word") {
+                    find(&|option| option.as_str().is_some_and(|text| text.ends_with("VEND")), "0")
+                } else if asks("ending where the value ends") {
+                    find(&|option| option.as_str().is_some_and(|text| text.starts_with("VSTART")), "0")
+                } else {
+                    "0".into()
+                };
+                let answer =
+                    ChoiceAnswer { kind: Default::default(), choice, probabilities: IndexMap::new(), confidence: 1.0 };
+                (key.clone(), Answer::Choice(answer))
+            })
+            .collect();
+        Box::pin(
+            async move { Ok(Evaluation { model: "test".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile::jev()
+    }
+}
+
+/// A push gave about 10 KB of markdown to put in a description, longer than any one part a long task is cut into. No
+/// part held the whole value, so the task was no longer offered as its source, and the field got a written first
+/// sentence, or a note the run had read: "Save: disabled" (#939). A value is copied whole however many parts it spans.
+#[tokio::test]
+async fn test_a_value_longer_than_one_part_of_the_task_is_copied_whole() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(LongValue), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let body: Vec<String> = (0..1200).map(|n| format!("line{n}")).collect();
+    let value = format!("VSTART {} VEND", body.join(" "));
+    state.task =
+        format!("Replace the description with the text between START and END, then Save.\n\nSTART\n{value}\nEND");
+    let typed = agent
+        .text(&mut state, &observation(&[]), &code_decision(Operation::Fill, None), &field("Description"))
+        .await
+        .expect("a value");
+    assert_eq!(typed, value);
+}
+
+/// Three description pushes ended stuck after typing "Save: disabled" and "disabled" into the description, and nothing
+/// in their answers said the field had been changed; the store pages showed the word until restored by hand (#939). A
+/// run that ends without finishing names each field it changed and what it left there, from its own executed steps.
+#[test]
+fn test_a_run_that_ends_unfinished_names_the_fields_it_changed() {
+    let filled = |target: &str, text: &str, outcome: StepOutcome| HistoryEntry {
+        text: Some(text.into()),
+        ..HistoryEntry::new(Some(Operation::Fill), Some(target), outcome, true)
+    };
+    let history = vec![
+        filled("Description (Edit 'Commissions Forever')", "first draft", StepOutcome::Executed),
+        HistoryEntry::new(Some(Operation::Click), Some("Markdown"), StepOutcome::Executed, true),
+        filled("Summary", "never typed", StepOutcome::Covered),
+        HistoryEntry {
+            text: Some("Retail".into()),
+            ..HistoryEntry::new(Some(Operation::Select), Some("Game version"), StepOutcome::Executed, true)
+        },
+        filled("Description (Edit 'Commissions Forever')", "Save: disabled", StepOutcome::Executed),
+        HistoryEntry {
+            set: vec![("Notify followers".into(), "checked".into())],
+            ..HistoryEntry::new(Some(Operation::Click), Some("Notify followers"), StepOutcome::Executed, true)
+        },
+    ];
+    let answer = super::finishing::changed_fields(&history).expect("the changed fields are reported");
+    assert!(answer.starts_with(super::finishing::CHANGED), "{answer}");
+    assert!(answer.contains("Description (Edit 'Commissions Forever'): 'Save: disabled'"), "{answer}");
+    assert!(answer.contains("Game version: 'Retail'"), "{answer}");
+    assert!(answer.contains("Notify followers: checked"), "{answer}");
+    assert!(!answer.contains("first draft") && !answer.contains("never typed"), "{answer}");
+    assert!(!answer.contains("Markdown"), "{answer}");
+}
+
+/// A custom select: clicking an option sets the field's value and closes the menu, so the option is gone after.
+struct Picker {
+    now: Mutex<Observation>,
+    /// The field shows its choice only in its label, reporting no value.
+    in_label: bool,
+}
+
+impl Picker {
+    fn new() -> Picker {
+        Picker { in_label: false, ..Picker::shown() }
+    }
+
+    fn in_label() -> Picker {
+        let picker = Picker { in_label: true, ..Picker::shown() };
+        picker.now.lock().unwrap().controls[0].value = None;
+        picker
+    }
+
+    fn shown() -> Picker {
+        let mut field = Control::new("type", "combobox", "Ticket type", [Operation::Click]);
+        field.value = Some("Round trip".into());
+        field.expanded = Some(true);
+        let options = ["One way", "Round trip"].map(|label| Control::new(label, "option", label, [Operation::Click]));
+        let mut notify = Control::new("notify", "checkbox", "Notify followers", [Operation::Click]);
+        notify.checked = Some(false);
+        let controls = [[field, notify].as_slice(), &options].concat();
+        Picker { now: Mutex::new(at("https://shop.test/ticket", &controls)), in_label: false }
+    }
+}
+
+impl Page for Picker {
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        let now = self.now.lock().unwrap().clone();
+        Box::pin(async move { Ok(now) })
+    }
+
+    fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        Box::pin(async { Ok(capture(&[(BlockKind::Paragraph, "Choose a ticket")])) })
+    }
+
+    fn act<'a>(&'a self, action: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        let mut now = self.now.lock().unwrap();
+        if action.target_id.as_deref() == Some("notify") {
+            let notify = now.controls.iter_mut().find(|c| c.id == "notify").unwrap();
+            notify.checked = notify.checked.map(|checked| !checked);
+        } else if let Some(chosen) = action.target_id.as_deref().filter(|id| *id != "type") {
+            now.controls.retain(|c| c.role != "option");
+            let field = now.controls.iter_mut().find(|c| c.id == "type").unwrap();
+            if self.in_label {
+                field.label = format!("Ticket type: {chosen}");
+            } else {
+                field.value = Some(chosen.to_string());
+            }
+            field.expanded = Some(false);
+        }
+        Box::pin(async {
+            Ok(ActResult { outcome: StepOutcome::Executed, page_changed: true, detail: None, moved: false })
+        })
+    }
+
+    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(true) })
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        Box::pin(async { Err(BrowserError::ScreenshotsUnavailable("a scripted page draws nothing".into())) })
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        let url = self.now.lock().unwrap().url.clone();
+        Box::pin(async move { Ok(url) })
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        Box::pin(async { Ok(Some(200)) })
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        0
+    }
+
+    fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async { true })
+    }
+}
+
+/// A run that reached DONE and ended unverified with an answer went from `conclude_attempt` straight to its result, so
+/// the fields it changed were never named (#939). Every unfinished run is named its changes at the one point its
+/// result leaves the run, whatever path built it.
+#[tokio::test]
+async fn test_a_run_unverified_at_done_names_the_fields_it_changed() {
+    let jev = Noul(ScriptedJev::new(crate::scripted::steps("click Notify followers").unwrap()), REFUSED);
+    let agent = Agent::new(Arc::new(Picker::new()), Arc::new(jev), Arc::new(ScriptedLLM));
+    let options = super::RunOptions { start: Some("https://shop.test/ticket".into()), ..Default::default() };
+    let result = agent.run("Turn on Notify followers and tell me what the page says", options).await.unwrap();
+    assert_eq!(result.status, Status::Unverified, "{:?}", result.error);
+    let answer = result.answer.expect("an answer");
+    assert!(answer.starts_with(super::finishing::CHANGED), "{answer}");
+    assert!(answer.contains("- Notify followers: checked\n"), "{answer}");
+    assert!(answer.contains("Choose a ticket"), "{answer}");
+}
+
+/// A custom select is set by clicking an option, which has no checked state and is gone once the menu closes: the
+/// change is the field's value, as the page reads it after the click (#939).
+#[tokio::test]
+async fn test_an_option_click_names_the_value_it_left_in_its_field() {
+    let jev = ScriptedJev::new(crate::scripted::steps("click One way").unwrap());
+    let agent = Agent::new(Arc::new(Picker::new()), Arc::new(jev), Arc::new(ScriptedLLM));
+    let options = super::RunOptions {
+        start: Some("https://shop.test/ticket".into()),
+        limits: Some(Limits { max_steps: Some(1), ..Limits::default() }),
+        ..Default::default()
+    };
+    let result = agent.run("Choose One way as the ticket type and tell me the price", options).await.unwrap();
+    assert_eq!(result.status, Status::BudgetExceeded, "{:?}", result.error);
+    let answer = result.answer.expect("an answer");
+    assert!(answer.contains("- Ticket type: 'One way'"), "{answer}");
+    assert!(!answer.contains("- One way"), "{answer}");
+}
+
+/// A select that shows its choice only in its label holds it in no field the page reports, so the run says what it
+/// clicked and that it cannot say what the field holds, rather than guessing which field took the choice.
+#[tokio::test]
+async fn test_an_option_click_no_field_reports_is_named_as_clicked() {
+    let jev = ScriptedJev::new(crate::scripted::steps("click One way").unwrap());
+    let agent = Agent::new(Arc::new(Picker::in_label()), Arc::new(jev), Arc::new(ScriptedLLM));
+    let options = super::RunOptions {
+        start: Some("https://shop.test/ticket".into()),
+        limits: Some(Limits { max_steps: Some(1), ..Limits::default() }),
+        ..Default::default()
+    };
+    let result = agent.run("Choose One way as the ticket type and tell me the price", options).await.unwrap();
+    let answer = result.answer.expect("an answer");
+    assert!(answer.contains(&format!("- One way: {}", super::finishing::UNREPORTED)), "{answer}");
+}
+
+/// The done check finding the task's remaining step refused by the site.
+const REFUSED: &[(&str, f64)] = &[("carried", 0.0), ("refused", 1.0)];
+
+/// The scripted Jev, with each named yes/no question answered at its given probability.
+struct Noul(ScriptedJev, &'static [(&'static str, f64)]);
+
+impl DecisionClient for Noul {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            let mut evaluation = self.0.evaluate(state, questions).await?;
+            for (key, probability) in self.1 {
+                if let Some(Answer::Noul(answer)) = evaluation.answers.get_mut(*key) {
+                    answer.probability = *probability;
+                }
+            }
+            Ok(evaluation)
+        })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        self.0.profile()
+    }
+}
+
+/// The scripted Jev, answering the question of what the task asks to be told with `intent`, and counting the reads
+/// that ask how a page answers the task.
+struct Intent(Noul, &'static str, std::sync::atomic::AtomicUsize);
+
+impl DecisionClient for Intent {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            let mut evaluation = self.0.evaluate(state, questions).await?;
+            for (key, question) in questions {
+                let Question::Choice(choice) = question else { continue };
+                if choice.instructions.contains("How does this page answer the task?") {
+                    self.2.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                if choice.criteria.contains_key("carried_out")
+                    && let Some(Answer::Choice(answer)) = evaluation.answers.get_mut(key)
+                {
+                    answer.choice = self.1.into();
+                }
+            }
+            Ok(evaluation)
+        })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        self.0.profile()
+    }
+}
+
+/// A task that asks only for something to be carried out has nothing on the page it starts on to answer, yet that
+/// page was read for an answer before anything was done: a write task's run answered "Save: disabled", the disabled
+/// Save button it started beside, the read note #939 saw typed into live descriptions. Its start page is read for an
+/// answer only for a task that asks to be told something; what it ends on still reports what was done (#910).
+#[tokio::test]
+async fn test_a_task_that_only_carries_something_out_does_not_read_its_start_page_for_an_answer() {
+    let mut reads = Vec::new();
+    for intent in ["text", "carried_out"] {
+        // Jev scores the page under even odds of showing an answer, as it did the write task's start page.
+        let scripted = ScriptedJev::new(crate::scripted::steps("click One way").unwrap());
+        let jev = Arc::new(Intent(Noul(scripted, &[(crate::policy::keys::SHOWS_ANSWER, 0.2)]), intent, 0.into()));
+        let agent = Agent::new(Arc::new(Picker::new()), jev.clone(), Arc::new(ScriptedLLM));
+        let options = super::RunOptions { start: Some("https://shop.test/ticket".into()), ..Default::default() };
+        agent.run("Set the ticket type to One way", options).await.unwrap();
+        reads.push(jev.2.load(std::sync::atomic::Ordering::Relaxed));
+    }
+    assert_eq!(reads[1] + 1, reads[0], "reads for a text task, then a carried-out one: {reads:?}");
 }

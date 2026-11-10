@@ -50,11 +50,39 @@ const NO_VALUE: &str = "none";
 /// The task asks nothing of the field: it is left as it is, and is no input the run lacks. Asked as one with NO_VALUE,
 /// a blank optional field Jev reached for read as a value the caller had to give (#935).
 const LEAVE: &str = "leave";
+const NO_VALUE_SAID: &str = "The task asks for this field's value, and nothing given states it.";
+const LEAVE_SAID: &str = "The task asks nothing of this field, so it is left as it is.";
+
+/// What a choice among a field's options settled on: one of them, or the key of an answer offered instead.
+enum Chosen {
+    Option(String),
+    Instead(&'static str),
+}
 /// Words shown either side of one Jev may pick, so a word the task repeats reads as a different place.
 const WORD_CONTEXT: usize = 3;
 /// A long source is cut into a few broad parts: as hundreds of overlapping fragments, a 330-word request lost the one
 /// city it named (#636).
 const VALUE_SOURCE_PARTS: usize = 4;
+
+/// Words a long value shows at each end when copies of it are too long to offer whole in one request. Copies offered
+/// to choose between differ at their ends: where the value begins or ends, and the punctuation there. A 10 KB
+/// description offered in full as each of its possible ends is far past what one request may hold (#939).
+const VALUE_ENDS_SHOWN: usize = 12;
+/// Said of a choice among copies shown by their ends.
+const ELIDED: &str = " A long value is shown by its first and last words, with the number of words between them.";
+
+/// `value` shown by its first and last [`VALUE_ENDS_SHOWN`] words around the count of words between them, or whole when
+/// it has no more words than that.
+fn value_ends(value: &str) -> String {
+    let all = words(value, None);
+    if all.len() <= 2 * VALUE_ENDS_SHOWN + 1 {
+        return value.to_string();
+    }
+    let chars: Vec<char> = value.chars().collect();
+    let head: String = chars[..all[VALUE_ENDS_SHOWN - 1].outer_end].iter().collect();
+    let tail: String = chars[all[all.len() - VALUE_ENDS_SHOWN].outer_start..].iter().collect();
+    format!("{head} [... {} words ...] {tail}", all.len() - 2 * VALUE_ENDS_SHOWN)
+}
 
 /// The words Jev may pick from, each with where it stands in the task.
 fn word_options(task: &str, shown: &[Word]) -> IndexMap<String, JsonValue> {
@@ -85,18 +113,19 @@ pub(super) struct Value {
 /// One question about the page, with the options it offers.
 type Asked<'a> = (&'a str, String, IndexMap<String, JsonValue>);
 
-/// What Jev is asked about a field: where its value comes from and, among `group`, where it begins and ends.
+/// What Jev is asked about a field: where its value comes from, where among `begins` it begins and where among `ends`
+/// it ends.
 fn value_questions<'a>(
     state: &RunState,
     target: &Control,
     (text, holder): (&str, &str),
     label: &str,
-    group: &[Word],
+    (begins, ends): (&[Word], &[Word]),
     source_question: String,
     mut sources: IndexMap<String, JsonValue>,
 ) -> Vec<Asked<'a>> {
     // With no words left to copy, saying the task states the value leaves the field empty; it can still be written.
-    if group.is_empty() {
+    if begins.is_empty() || ends.is_empty() {
         sources.shift_remove(IN_TASK);
     }
     let tried = typed_into(state, target);
@@ -108,16 +137,15 @@ fn value_questions<'a>(
             tried.join(", ")
         )
     };
-    let options = word_options(text, group);
     let mut asked = vec![("source", source_question, sources)];
-    if !group.is_empty() {
+    if !begins.is_empty() && !ends.is_empty() {
         let span = |end: &str| {
             format!(
                 "If {holder} states the value for {label}, which of its words {end} the value? When it gives this field several values, {FIRST_VALUE} A search takes what is looked for, not the request around it.{tried}"
             )
         };
-        asked.push(("first", span("begins"), options.clone()));
-        asked.push(("last", span("ends"), options));
+        asked.push(("first", span("begins"), word_options(text, begins)));
+        asked.push(("last", span("ends"), word_options(text, ends)));
     }
     asked
 }
@@ -206,9 +234,15 @@ impl Agent {
             if control.operations.contains(&Operation::Fill) && !is_password(control) {
                 let Value { task, label, group, sources, source_question, .. } = self.value(state, control);
                 if group.len() <= max {
-                    for (name, question, criteria) in
-                        value_questions(state, control, (&task, "the task"), &label, &group, source_question, sources)
-                    {
+                    for (name, question, criteria) in value_questions(
+                        state,
+                        control,
+                        (&task, "the task"),
+                        &label,
+                        (&group, &group),
+                        source_question,
+                        sources,
+                    ) {
                         add(Operation::Fill, name, page_question(&state.task, &question, criteria));
                     }
                 }
@@ -309,8 +343,18 @@ impl Agent {
                     }
                     _ => format!("Which option should {named} be set to?"),
                 };
-                let option = self.choose(state, observation, &question, &raw.options).await?;
-                Ok(Action { target_id: Some(raw.id.clone()), text: Some(option), ..Action::new(Operation::Select) })
+                // Like a typed value, an option is one the task gives: a required select the task names no option
+                // for, asked only which option it should hold, was set to one Jev had to pick anyway.
+                let instead = [(NO_VALUE, NO_VALUE_SAID), (LEAVE, LEAVE_SAID)];
+                match self.choose_among(state, observation, &question, &raw.options, &instead).await? {
+                    Chosen::Option(option) => Ok(Action {
+                        target_id: Some(raw.id.clone()),
+                        text: Some(option),
+                        ..Action::new(Operation::Select)
+                    }),
+                    Chosen::Instead(LEAVE) => Err(self.untouched(state, observation, target)),
+                    Chosen::Instead(_) => Err(self.unsupplied(state, observation, target)),
+                }
             }
             Operation::Upload => {
                 if state.attachments.is_empty() {
@@ -768,8 +812,9 @@ impl Agent {
             return self.sensitive_text(state, observation, target, secrets, &origin).await;
         }
         let Value { mut task, read, label, group, sources, source_question } = self.value(state, target);
-        let mut group = self.narrowed(state, observation, &task, &label, group).await?;
-        let asked = value_questions(state, target, (&task, "the task"), &label, &group, source_question, sources);
+        let (mut begins, mut ends) = self.located(state, observation, &task, &label, group).await?;
+        let asked =
+            value_questions(state, target, (&task, "the task"), &label, (&begins, &ends), source_question, sources);
         let mut picks = match ahead_picks(decision, &asked) {
             Some(picks) => picks,
             None => self.ask_choices(state, Some(observation), asked).await?,
@@ -806,14 +851,13 @@ impl Agent {
         if source == IN_READ {
             state.text_source = Some(RecipeText::Live);
             task = read;
-            group = words(&task, target.max_length);
-            group = self.narrowed(state, observation, &task, &label, group).await?;
+            (begins, ends) = self.located(state, observation, &task, &label, words(&task, target.max_length)).await?;
             let mut asked = value_questions(
                 state,
                 target,
                 (&task, "what was read"),
                 &label,
-                &group,
+                (&begins, &ends),
                 String::new(),
                 IndexMap::new(),
             );
@@ -831,12 +875,13 @@ impl Agent {
             state.text_source = Some(RecipeText::Secret(name.to_string()));
             return self.secret(name, &origin, asks_for_credentials(&self.raw_target(target))).await;
         }
-        let word = |key: &str| {
+        let word = |key: &str, group: &[Word]| {
             let index = picks.get(key)?.parse::<usize>().ok()?;
-            group.iter().find(|word| word.index == index)
+            group.iter().find(|word| word.index == index).cloned()
         };
+        let (first, last) = (word("first", &begins), word("last", &ends));
         // A field with a limit takes the piece the value begins at, whatever the end was picked as.
-        let (first, last) = match (target.max_length, word("first"), word("last")) {
+        let (first, last) = match (target.max_length, first.as_ref(), last.as_ref()) {
             (Some(limit), Some(first), Some(last)) if last.end.saturating_sub(first.start) > limit => {
                 (Some(first), Some(first))
             }
@@ -849,40 +894,42 @@ impl Agent {
                 // end is asked again knowing where this value begins, then the beginning knowing where it ends, since
                 // a beginning picked alone can take in the request around the value.
                 let chars: Vec<char> = task.chars().collect();
-                let copied = |from: &Word, to: &Word| JsonValue::String(chars[from.start..to.end].iter().collect());
+                let copied = |from: &Word, to: &Word| chars[from.start..to.end].iter().collect::<String>();
                 let holder = if source == IN_READ { "what was read" } else { "the task" };
-                let exact = |ends: &str| {
-                    format!(
-                        "Which exact text belongs in {label}? Each choice is the complete value that would be copied from {holder}, {ends}. Choose only the field's value, without surrounding task instructions. When {holder} gives this field several values, {FIRST_VALUE}"
-                    )
+                let run_task = state.task.clone();
+                let exact = |bound: &str, options: &[(String, String)]| {
+                    let question = format!(
+                        "Which exact text belongs in {label}? Each choice is the complete value that would be copied from {holder}, {bound}. Choose only the field's value, without surrounding task instructions. When {holder} gives this field several values, {FIRST_VALUE}"
+                    );
+                    self.offered_copies(&run_task, question, options)
                 };
-                let last = if first.index == last.index {
-                    last
+                let ending: Vec<_> = ends
+                    .iter()
+                    .filter(|word| word.index >= first.index)
+                    .map(|word| (word.index.to_string(), copied(first, word)))
+                    .collect();
+                // The end was picked among words where the value may end; when none of them comes after the
+                // beginning, the value is the one word it begins at, as a crossed pick is.
+                let last = if first.index == last.index || ending.is_empty() {
+                    if ending.is_empty() { first } else { last }
                 } else {
-                    let options = group
-                        .iter()
-                        .filter(|word| word.index >= first.index)
-                        .map(|word| (word.index.to_string(), copied(first, word)));
-                    let picked = self
-                        .ask_choice(state, observation, &exact("beginning at the selected word"), options.collect())
-                        .await?;
-                    group
-                        .iter()
+                    let (question, options) = exact("beginning at the selected word", &ending);
+                    let picked = self.ask_choice(state, observation, &question, options).await?;
+                    ends.iter()
                         .find(|word| word.index >= first.index && word.index.to_string() == picked)
                         .unwrap_or(first)
                 };
                 let first = if first.index >= last.index {
                     first
                 } else {
-                    let options = group
+                    let starting: Vec<_> = begins
                         .iter()
                         .filter(|word| word.index <= last.index)
-                        .map(|word| (word.index.to_string(), copied(word, last)));
-                    let question = exact("ending where the value ends");
-                    let picks = self
-                        .ask_choices(state, Some(observation), vec![("start", question, options.collect())])
-                        .await?;
-                    group
+                        .map(|word| (word.index.to_string(), copied(word, last)))
+                        .collect();
+                    let (question, options) = exact("ending where the value ends", &starting);
+                    let picks = self.ask_choices(state, Some(observation), vec![("start", question, options)]).await?;
+                    begins
                         .iter()
                         .find(|word| word.index <= last.index && Some(&word.index.to_string()) == picks.get("start"))
                         .unwrap_or(first)
@@ -908,6 +955,7 @@ impl Agent {
                 }
                 Ok(value)
             }
+            (NO_VALUE, ..) => Err(self.unsupplied(state, observation, target)),
             _ => Err(self.missing(state, observation, target)),
         }
     }
@@ -926,8 +974,9 @@ impl Agent {
         let asked = edges
             .into_iter()
             .map(|(edge, options)| {
-                let options = options.into_iter().map(|(kept, value)| (kept.to_string(), value.into()));
-                (edge, question.to_string(), options.collect())
+                let options: Vec<_> = options.into_iter().map(|(kept, value)| (kept.to_string(), value)).collect();
+                let (question, options) = self.offered_copies(&state.task, question.to_string(), &options);
+                (edge, question, options)
             })
             .collect();
         let picks = self.ask_choices(state, Some(observation), asked).await?;
@@ -935,15 +984,34 @@ impl Agent {
         Ok((kept("lead"), kept("trail")))
     }
 
-    /// `group` cut down to what one choice can offer.
-    async fn narrowed(
+    /// `options`, copies of a value keyed by what each keeps, as a choice offers them: whole when the question then
+    /// fits one decision request, and otherwise each by its ends, said in the question.
+    fn offered_copies(
+        &self,
+        task: &str,
+        question: String,
+        options: &[(String, String)],
+    ) -> (String, IndexMap<String, JsonValue>) {
+        let whole: IndexMap<String, JsonValue> =
+            options.iter().map(|(key, value)| (key.clone(), JsonValue::from(value.as_str()))).collect();
+        if self.config.tokens.input_chars(&[page_question(task, &question, whole.clone()).dump_json()]) > 0 {
+            return (question, whole);
+        }
+        let ends = options.iter().map(|(key, value)| (key.clone(), JsonValue::from(value_ends(value))));
+        (format!("{question}{ELIDED}"), ends.collect())
+    }
+
+    /// `group` cut down to what one choice can offer, once for where the value begins and once for where it ends, so a
+    /// value longer than one part is still found whole. Both are asked in one request a round; either finding no part
+    /// leaves both empty, as the source then does not state the value.
+    async fn located(
         &self,
         state: &mut RunState,
         observation: &Observation,
         task: &str,
         label: &str,
-        mut group: Vec<Word>,
-    ) -> Step<Vec<Word>> {
+        group: Vec<Word>,
+    ) -> Step<(Vec<Word>, Vec<Word>)> {
         let max = self.jev.profile().max_choice_options;
         if max < 3 {
             return Err(fastbrowse_core::decision::DecisionError::Failed(
@@ -951,40 +1019,53 @@ impl Agent {
             )
             .into());
         }
-        // Parts cover the whole source and overlap so a value across a cut remains whole. Reserving one choice
+        // Parts cover the whole source and overlap so a value's end across a cut remains whole. Reserving one choice
         // for no value lets Jev refuse a source instead of being forced to pick unrelated words.
         let chars: Vec<char> = task.chars().collect();
-        while group.len() > max {
-            let step = group.len().div_ceil((max - 1).min(VALUE_SOURCE_PARTS));
-            let width = (2 * step).min(group.len() - 1);
-            let parts: Vec<&[Word]> = group
-                .chunks(step)
-                .enumerate()
-                .map(|(n, _)| {
-                    let from = n * step;
-                    &group[from..(from + width).min(group.len())]
-                })
-                .collect();
-            let mut criteria: IndexMap<String, JsonValue> = parts
-                .iter()
-                .enumerate()
-                .map(|(n, part)| {
-                    let shown: String = chars[part[0].start..part[part.len() - 1].end].iter().collect();
-                    (n.to_string(), JsonValue::from(shown))
-                })
-                .collect();
-            criteria.insert(NO_VALUE.into(), JsonValue::from("None of these parts states the field's value."));
-            let question = format!("Which part of this source holds the value for {label}, if any does?");
-            let picked = self.ask_choice(state, observation, &question, criteria).await?;
-            if picked == NO_VALUE {
-                return Ok(Vec::new());
+        let (mut begins, mut ends) = (group.clone(), group);
+        while begins.len() > max || ends.len() > max {
+            let mut asked = Vec::new();
+            let mut cut = Vec::new();
+            for (key, group) in [("begins", &begins), ("ends", &ends)] {
+                if group.len() <= max {
+                    continue;
+                }
+                let step = group.len().div_ceil((max - 1).min(VALUE_SOURCE_PARTS));
+                let width = (2 * step).min(group.len() - 1);
+                let parts: Vec<Vec<Word>> = (0..group.len().div_ceil(step))
+                    .map(|n| group[n * step..(n * step + width).min(group.len())].to_vec())
+                    .collect();
+                let mut criteria: IndexMap<String, JsonValue> = parts
+                    .iter()
+                    .enumerate()
+                    .map(|(n, part)| {
+                        let shown: String = chars[part[0].start..part[part.len() - 1].end].iter().collect();
+                        (n.to_string(), JsonValue::from(shown))
+                    })
+                    .collect();
+                criteria.insert(NO_VALUE.into(), JsonValue::from("None of these parts states the field's value."));
+                let question = format!(
+                    "Which part of this source holds the word the value for {label} {key} at, if any does? The value may run on into other parts."
+                );
+                asked.push((key, question, criteria));
+                cut.push((key, parts));
             }
-            let chosen = picked
-                .parse::<usize>()
-                .map_err(|_| fastbrowse_core::decision::DecisionError::Failed("expected a source part index".into()))?;
-            group = parts[chosen].to_vec();
+            let picks = self.ask_choices(state, Some(observation), asked).await?;
+            for (key, parts) in cut {
+                let picked = picks.get(key).map(String::as_str).unwrap_or(NO_VALUE);
+                if picked == NO_VALUE {
+                    return Ok((Vec::new(), Vec::new()));
+                }
+                let chosen = picked.parse::<usize>().map_err(|_| {
+                    fastbrowse_core::decision::DecisionError::Failed("expected a source part index".into())
+                })?;
+                let part = parts.into_iter().nth(chosen).ok_or_else(|| {
+                    fastbrowse_core::decision::DecisionError::Failed("expected a source part index".into())
+                })?;
+                if key == "begins" { begins = part } else { ends = part }
+            }
         }
-        Ok(group)
+        Ok((begins, ends))
     }
 
     /// What a field's value is picked from, and the question that says where it comes from.
@@ -1018,8 +1099,8 @@ impl Agent {
             sources
                 .insert(IN_READ.into(), format!("The task does not state it, and what was read does: {read}").into());
         }
-        sources.insert(NO_VALUE.into(), "The task asks for this field's value, and nothing given states it.".into());
-        sources.insert(LEAVE.into(), "The task asks nothing of this field, so it is left as it is.".into());
+        sources.insert(NO_VALUE.into(), NO_VALUE_SAID.into());
+        sources.insert(LEAVE.into(), LEAVE_SAID.into());
         let mut label = text::repr(&target.label);
         if let Some(limit) = target.max_length {
             label = format!("{label}, which holds at most {limit} characters,");
@@ -1160,6 +1241,17 @@ impl Agent {
         .into()
     }
 
+    /// A field Jev found the task asks for and gives no value for. One the page marks required is an input no further
+    /// step can supply, so the run ends needing it; given another try, a run left a profile form's required Country for
+    /// the site's Account link and ended on a sign-in it never needed. Any other is [`Self::missing`].
+    fn unsupplied(&self, state: &mut RunState, observation: &Observation, target: &Control) -> Flow {
+        if target.required == Some(true) {
+            let error = format!("{} needs a value the task does not give", text::repr(&target.label));
+            return Stop::new(Status::NeedsInput, error).into();
+        }
+        self.missing(state, observation, target)
+    }
+
     /// A field the task asks nothing of is a wrong pick, left out of what is offered here as a missing one is. It is an
     /// input the run lacks only when the page marks it required.
     fn untouched(&self, state: &mut RunState, observation: &Observation, target: &Control) -> Flow {
@@ -1183,19 +1275,42 @@ impl Agent {
         question: &str,
         options: &[String],
     ) -> Step<String> {
+        match self.choose_among(state, observation, question, options, &[]).await? {
+            Chosen::Option(option) => Ok(option),
+            Chosen::Instead(key) => unreachable!("{key} was not offered"),
+        }
+    }
+
+    /// One of `options`, or one of the answers `instead` offers beside them at every level of the choice, by its key.
+    async fn choose_among(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        question: &str,
+        options: &[String],
+        instead: &[(&'static str, &str)],
+    ) -> Step<Chosen> {
         match options {
-            [only] => return Ok(only.clone()),
+            [only] if instead.is_empty() => return Ok(Chosen::Option(only.clone())),
             [] => return Err(Stop::new(Status::Stuck, format!("no options to answer: {question}")).into()),
             _ => {}
         }
+        let offered = |criteria: &mut IndexMap<String, JsonValue>| {
+            criteria.extend(instead.iter().map(|(key, said)| (key.to_string(), JsonValue::from(*said))));
+        };
+        let settled = |picked: &str, options: &[String]| match instead.iter().find(|(key, _)| *key == picked) {
+            Some((key, _)) => Chosen::Instead(key),
+            None => Chosen::Option(options[picked.parse::<usize>().expect("a key offered")].clone()),
+        };
         // One Choice offers at most the options the decision model documents, so a longer list, such as a select of
         // years or airports, is offered as runs of options first and the option is picked inside the run chosen, as
         // the step decision groups controls.
         let shown = self.jev.profile().max_choice_options.max(2);
         let mut options = options;
-        if options.len() > shown {
-            let runs: Vec<&[String]> = options.chunks(options.len().div_ceil(shown)).collect();
-            let criteria = runs
+        if options.len() + instead.len() > shown {
+            let groups = shown.saturating_sub(instead.len()).max(2);
+            let runs: Vec<&[String]> = options.chunks(options.len().div_ceil(groups)).collect();
+            let mut criteria: IndexMap<String, JsonValue> = runs
                 .iter()
                 .enumerate()
                 .map(|(i, run)| {
@@ -1203,17 +1318,22 @@ impl Agent {
                     (i.to_string(), JsonValue::from(masked.join(" | ")))
                 })
                 .collect();
+            offered(&mut criteria);
             let grouped = format!("{question} Choose the group of options holding the answer.");
             let picked = self.ask_choice(state, observation, &grouped, criteria).await?;
+            if let Some((key, _)) = instead.iter().find(|(key, _)| *key == picked) {
+                return Ok(Chosen::Instead(key));
+            }
             options = runs[picked.parse::<usize>().expect("a key offered")];
             if let [only] = options {
-                return Ok(only.clone());
+                return Ok(Chosen::Option(only.clone()));
             }
         }
-        let criteria: IndexMap<String, JsonValue> =
+        let mut criteria: IndexMap<String, JsonValue> =
             options.iter().enumerate().map(|(i, option)| (i.to_string(), self.mask(option).into())).collect();
+        offered(&mut criteria);
         let picked = self.ask_choice(state, observation, question, criteria).await?;
-        Ok(options[picked.parse::<usize>().expect("a key offered")].clone())
+        Ok(settled(&picked, options))
     }
 
     async fn ask_choice(

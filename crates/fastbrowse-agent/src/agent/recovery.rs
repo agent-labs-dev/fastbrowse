@@ -3,7 +3,7 @@
 
 use fastbrowse_core::effects::{leavable, state_key};
 use fastbrowse_core::models::{Operation, Status, StepOutcome};
-use fastbrowse_core::page::Observation;
+use fastbrowse_core::page::{Control, Observation};
 use fastbrowse_core::py::text;
 use fastbrowse_core::safety::{changes_a_value, origin_of, starts_download};
 use serde_json::{Map, json};
@@ -98,7 +98,10 @@ pub(super) fn withhold(offered: &mut Observation, context: &mut StepContext, pro
 /// nothing of is one only when the page marks it required.
 fn unfilled<'a>(observation: &'a Observation, state: &RunState) -> Vec<&'a str> {
     let mut labels: Vec<&str> = Vec::new();
-    for control in observation.controls.iter().filter(|control| control.operations.contains(&Operation::Fill)) {
+    // A value is typed into a field or chosen in a select, and the task can leave either without one.
+    let holds_value =
+        |control: &&Control| [Operation::Fill, Operation::Select].iter().any(|op| control.operations.contains(op));
+    for control in observation.controls.iter().filter(holds_value) {
         let here = |(url, label, field): &(String, String, Option<String>)| {
             *url == observation.url && control.label == *label && control.context == *field
         };

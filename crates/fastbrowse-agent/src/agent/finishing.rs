@@ -262,7 +262,7 @@ impl Agent {
         } else if intent == OutputIntent::CarriedOut && !state.refused {
             // A task that asks to be told nothing is answered by what was read: writing it up cost a task to open a
             // page 1 to 4.5 seconds of composing (#910). A step the site refused is reported, as REFUSED says.
-            draft_answer(&state.notes)
+            draft_answer(&outcome_notes(state))
         } else if state.compose {
             let (notes, task, ledger) = (state.notes_to_compose(), state.task.clone(), state.ledger.clone());
             let steps = state.executed_steps();
@@ -417,6 +417,35 @@ impl Agent {
     }
 }
 
+/// Said before the fields a run that ended without finishing changed, each with what it left there.
+pub(super) const CHANGED: &str =
+    "This run ended without finishing after changing fields on the page, which may still hold what it entered:";
+
+/// What a clicked option, box or switch is said to have left when the page changed without any field reporting a
+/// new value, checked or selected state, as a select that shows its choice only in its label does.
+pub(super) const UNREPORTED: &str = "clicked, but no field on the page reports what it now holds";
+
+/// What a run's executed steps left in each field they changed, the latest change to each, as [`CHANGED`] says it:
+/// text typed or an option chosen, quoted as recorded (a secret by its marker), and what a click left in each field
+/// it changed, as the page read it after the click. None when no step changed a field.
+pub(super) fn changed_fields(history: &[crate::policy::HistoryEntry]) -> Option<String> {
+    let mut changed: IndexMap<&str, String> = IndexMap::new();
+    let mut put = |field, left| {
+        changed.shift_remove(field);
+        changed.insert(field, left);
+    };
+    for entry in history.iter().filter(|entry| entry.outcome == StepOutcome::Executed) {
+        match (entry.operation, &entry.text, entry.target.as_deref()) {
+            (Some(Operation::Fill | Operation::Select), Some(text), Some(target)) => put(target, text::repr(text)),
+            _ => entry.set.iter().for_each(|(field, left)| put(field, left.clone())),
+        }
+    }
+    (!changed.is_empty()).then(|| {
+        let lines: Vec<String> = changed.iter().map(|(field, left)| format!("- {field}: {left}")).collect();
+        format!("{CHANGED}\n{}", lines.join("\n"))
+    })
+}
+
 /// What the answer of a run that stopped with a step of its task undone says first: what it read can show what was
 /// asked for, and without this a run that never pressed the keys its task named answered that the saved description
 /// matched, as if the task were done (#937).
@@ -511,6 +540,18 @@ fn drafted(feedback: &str) -> Option<Vec<String>> {
     let feedback: Value = serde_json::from_str(feedback).ok()?;
     let claims = feedback.get("draft_claims")?.as_array()?;
     Some(claims.iter().filter_map(|claim| claim.get("text")?.as_str().map(str::to_string)).collect())
+}
+
+/// What a task carried out read once its last step that changes the site was taken: the outcome it reports. What was
+/// read before it was kept for those steps, such as a value read on one page and entered on another, and answering with
+/// it reported a write task's start page, "Save: disabled", the disabled Save button beside the field it was about to
+/// change (#939).
+fn outcome_notes(state: &RunState) -> Notes {
+    let taken = state.history.iter().filter(|entry| entry.changed_site()).count();
+    let mut outcome = state.notes.clone();
+    outcome
+        .retain(|fact| fact.evidence.as_ref().is_some_and(|evidence| state.notes.steps_taken(evidence) == Some(taken)));
+    outcome
 }
 
 #[cfg(test)]
