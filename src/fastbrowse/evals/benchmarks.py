@@ -66,6 +66,11 @@ class PublicModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
+def _without_empty(data: dict[str, Any], names: tuple[str, ...]) -> dict[str, Any]:
+    """`data` without the named fields that hold nothing, so a model from before them keeps its old bytes."""
+    return {k: v for k, v in data.items() if k not in names or v not in (None, [])}
+
+
 class Row(PublicModel):
     """One graded slot. `seconds` is measured as `timing_basis` says; a row without one was measured under an older
     clock, so it is compared with nothing that has one (`Group.one_clock`)."""
@@ -181,6 +186,16 @@ class Source(PublicModel):
     runner_sha: Sha
     measured_on: Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2}$")]
     tasks: Annotated[list[Identifier], Field(min_length=1)]
+    version: Limit | None = None
+    """What the arm ran, as the run recorded its pin: the vendor's package and API, or a commit. None for a fastbrowse
+    arm, whose build is `agent_sha`, and on a source recorded before this field."""
+    models: list[Limit] = []
+    """The models the arm's attempts in this run reported, model ids with slashes shown as colons."""
+
+    @model_serializer(mode="wrap")
+    def without_unrecorded_setup(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A source from before these fields keeps its old bytes, so approved candidates still match."""
+        return _without_empty(handler(self), ("version", "models"))
 
 
 class Coverage(NamedTuple):
@@ -256,6 +271,13 @@ class ReferenceArm(PublicModel):
     version: Limit
     browser: Limit
     campaign_id: Identifier
+    models: list[Limit] = []
+    """The models the arm's rows reported in the run that measured them, as its `Source` records them."""
+
+    @model_serializer(mode="wrap")
+    def without_unrecorded_models(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A reference from before this field keeps its old bytes."""
+        return _without_empty(handler(self), ("models",))
 
 
 class Group(PublicModel):

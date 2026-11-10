@@ -1016,7 +1016,7 @@
       "default": false
     },
     "jev-ultrafast": {
-      "pin": "jev-ultrafast @ git+https://github.com/browser-use/jev-ultrafast@1231850a0bf1a0c0341fe408ef1668dbbfdfac46",
+      "pin": "jev-ultrafast commit 1231850a0bf1a0c0341fe408ef1668dbbfdfac46",
       "tier": "A",
       "default": true
     },

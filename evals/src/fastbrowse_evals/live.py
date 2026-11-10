@@ -167,7 +167,11 @@ PROVIDER_LIMITS = (
 )
 """Bounds imposed by a provider that no request can lift, recorded with every row rather than hidden."""
 
-ULTRAFAST = "jev-ultrafast @ git+https://github.com/browser-use/jev-ultrafast@1231850a0bf1a0c0341fe408ef1668dbbfdfac46"
+ULTRAFAST_COMMIT = "1231850a0bf1a0c0341fe408ef1668dbbfdfac46"
+ULTRAFAST = f"jev-ultrafast @ git+https://github.com/browser-use/jev-ultrafast@{ULTRAFAST_COMMIT}"
+ULTRAFAST_PIN = f"jev-ultrafast commit {ULTRAFAST_COMMIT}"
+"""The arm's pin as the catalog and a published source record it. The install spec above holds a URL, which public
+text may not name."""
 ULTRAFAST_RUNNER = Path(__file__).with_name("adapters") / "ultrafast_arm.py"
 ULTRAFAST_COMMAND = ("uv", "run", "--no-project", "--quiet", "--python", "3.14", "--with", ULTRAFAST, "python")
 ULTRAFAST_TEXT_MODEL = "google/gemini-3.1-flash-lite"
@@ -2493,7 +2497,7 @@ ARMS: dict[str, ArmSpec] = {
     ),
     "jev-ultrafast": ArmSpec(
         runner=_run_ultra,
-        pin=ULTRAFAST,
+        pin=ULTRAFAST_PIN,
         env_allowlist=_RUNTIME_ENV,
         tier="A",
         prepare=_prepare_ultra,

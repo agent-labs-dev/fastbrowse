@@ -56,7 +56,8 @@ browser pool. From schema 5, `internal-ultrafast` pairs fastbrowse on its own po
 approved under an older schema keep fastbrowse on a Browser Use Cloud browser there.
 Schema 2 and later record each group's agent and runner commits and require them to match the candidate's build,
 unless the group lists its `sources`: the campaign runs its rows came from, newest first, one entry per run and arm,
-each with its commits, date and the tasks it supplied for that arm. Its commits are then the newest source's. An
+each with its commits, date and the tasks it supplied for that arm, and for an arm other than fastbrowse the pin it
+ran (`version`) and the models its rows reported (`models`). Its commits are then the newest source's. An
 earlier source stays valid on any build, including a branch commit a squash merge left outside `main`. A slot our own harness or
 judge failed is listed in `unjudged` with its reason, outside every figure; a run the site's bot check or an outage
 stopped is a failed row naming why, and a legacy `blocked` slot reads as one. Each task the catalog says an arm cannot run is listed in `excluded` with the catalog's
@@ -127,8 +128,8 @@ uv run python -m fastbrowse.evals.site_groups benchmark-candidate.json run-facts
 
 A group file holds no figure. It names the candidate group, campaign, build and candidate SHA256, and the site
 computes every figure from the candidate's per-attempt rows. Its `systems` maps each site system with rows to its
-arm, `cost_not_reported` lists those of them whose rows carry no cost, and `not_measured` lists the site systems
-with no rows. The live suite has two cards: `live-suite` shows the head-to-head group (`internal-hosted`) and
+arm, `cost_not_reported` lists those of them whose rows carry no cost, `not_measured` lists the site systems
+with no rows, and `setups` names each shown system's version and models where the candidate records them. The live suite has two cards: `live-suite` shows the head-to-head group (`internal-hosted`) and
 `live-suite-fastbrowse` shows `internal-fastbrowse`. A `reference` block in a group file is a vendor figure on another
 task set: the site labels it and never compares it, and a new campaign keeps it. A card the candidate has no group for
 keeps its file only while that file carries no measured figures: the site reads one candidate's rows, so a card still

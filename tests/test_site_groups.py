@@ -115,3 +115,22 @@ def test_a_measured_official_group_keeps_only_vendor_rows_on_its_task_set() -> N
     )
     assert written["reference"] == reference
     assert (written["measured"]["run_on"], written["measured"]["judge"]) == ("2026-10-29", "upstream judge")
+
+
+def test_the_live_suite_names_what_each_measured_system_ran() -> None:
+    """The version and models each arm's source recorded reach the group file, so the site shows them from the data."""
+    candidate = json.loads(STAGED.read_bytes())
+    group = next(g for g in candidate["groups"] if g["id"] == "internal-hosted")
+    run = {"run_id": "r1", "agent_sha": group["agent_sha"], "runner_sha": group["runner_sha"]}
+    run["measured_on"] = "2026-11-01"
+
+    def tasks(arm: str) -> list[str]:
+        return sorted({r["task"] for r in group["rows"] if r["arm"] == arm})
+
+    setup = {"version": "browser-use-sdk==3.12.1 API v4", "models": ["anthropic:claude-opus-4.7"]}
+    group["sources"] = [
+        {**run, "arm": "browser-use", "tasks": tasks("browser-use"), **setup},
+        {**run, "arm": "fastbrowse", "tasks": tasks("fastbrowse")},
+    ]
+    live = json.loads(group_files(json.dumps(candidate).encode(), FACTS, CURRENT)["data/benchmarks/live-suite.json"])
+    assert live["measured"]["setups"] == {"browser-use": setup}

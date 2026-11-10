@@ -505,6 +505,8 @@ class Invocation:
     claims: frozenset[tuple[str, str]]
     """The (arm, task) pairs the group takes from this invocation."""
     models: dict[str, set[str]]
+    reported: dict[str, set[str]]
+    """Each arm's models and text models as its attempts reported them, for the arm's `Source`."""
     text_models: set[str]
     modes: dict[str, str]
     policies: set[str]
@@ -669,6 +671,10 @@ def invocation(
         unjudged=unjudged,
         claims=frozenset(use),
         models={arm: {a["model"] for a in attempts if a["arm"] == arm and a.get("model")} for arm in arms},
+        reported={
+            arm: {a[key] for a in attempts if a["arm"] == arm for key in ("model", "text_model") if a.get(key)}
+            for arm in arms
+        },
         text_models={a["text_model"].strip() for a in attempts if isinstance(a.get("text_model"), str)},
         modes={arm: browser_identity(run, arm, group_id) for arm in arms},
         policies={receipt.policy_sha256 for receipt in receipts.values()},
@@ -785,6 +791,9 @@ def internal_group(group_id: str, results: Path | Sequence[Path], catalog: dict[
             runner_sha=item.run["benchmark_runner_sha"],
             measured_on=item.run["run_started"][:10],
             tasks=sorted(task for claimed_arm, task in item.claims if claimed_arm == arm),
+            # A fastbrowse arm's pin names where its build is recorded; the source's agent commit is that build.
+            version=None if arm in FASTBROWSE_ARMS else note(item.run["arms"][arm]["pin"]),
+            models=sorted({note(model) for model in item.reported.get(arm, ())}),
         )
         for item in used
         for arm in sorted({a for a, _ in item.claims})
@@ -1290,6 +1299,7 @@ def competitor_reference(candidate: Candidate, catalog: dict[str, Any], measured
                 version=note(catalog["arms"][arm]["pin"]),
                 browser=note(next(iter(BROWSER_MODES[arm]))),
                 campaign_id=candidate.campaign_id,
+                models=sorted({model for source in group.sources if source.arm == arm for model in source.models}),
             )
             for arm, vendor in REFERENCE_ARMS.items()
         ],

@@ -1171,6 +1171,29 @@ def test_an_internal_ledger_graded_under_another_policy_cannot_publish(tmp_path:
 HOSTED_TASKS = ("fastbrowse",)
 
 
+def test_each_measured_arm_records_the_version_and_models_it_ran(tmp_path: Path) -> None:
+    """A competitor's pin and the models its rows reported reach the candidate, so a reader of it need not keep its
+    own copy that goes stale when a pin changes."""
+
+    def report(attempts: list[dict[str, Any]]) -> None:
+        for a in attempts:
+            if a["arm"] == "browser-use":
+                a["model"] = "anthropic/claude-opus-4.7"
+            if a["arm"] == "jev-ultrafast":
+                a["model"], a["text_model"] = "jev-model", live.ULTRAFAST_TEXT_MODEL
+
+    arms = ("fastbrowse", "browser-use", "jev-ultrafast")
+    ledger = write_ledger(tmp_path, "hosted", arms, report, task_arms=HOSTED_TASKS, budget_usd=1000.0)
+    group = publication.internal_group("internal-hosted", ledger, CATALOG, DIGEST).group
+    sources = {s.arm: s for s in group.sources}
+    assert sources["browser-use"].version == "browser-use-sdk==3.12.1 API v4; default model, reported per row"
+    assert sources["browser-use"].models == ["anthropic:claude-opus-4.7"]
+    assert sources["jev-ultrafast"].version == f"jev-ultrafast commit {live.ULTRAFAST_COMMIT}"
+    assert sources["jev-ultrafast"].models == ["google:gemini-3.1-flash-lite", "jev-model"]
+    # fastbrowse's build is the source's agent commit.
+    assert sources["fastbrowse"].version is None
+
+
 def test_a_row_states_what_browser_setup_stayed_on_its_clock(tmp_path: Path) -> None:
     """Hosted Browser Use connects to its browser where the harness cannot see, so its rows say that connection is in
     their seconds, and a consumer need not know which agents do."""
@@ -1494,6 +1517,7 @@ def test_a_default_campaign_publishes_on_the_reference_and_a_refresh_writes_it(
         "browser-harness",
     }
     assert [a.vendor for a in group.references] == ["Browser Use", "Browser Use Ultrafast", "Browser Harness"]
+    assert [a.models for a in group.references] == [["model-x"]] * 3
     with pytest.raises(PublicationError, match="refresh_competitors"):
         h.export(hosted=live, ultrafast=None, bu_bench=None, mind2web=None)
 
