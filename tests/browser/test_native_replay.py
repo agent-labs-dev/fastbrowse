@@ -30,10 +30,7 @@ PASSING = (
 )
 # Cassettes the agent's requests have moved past, each waiting on a paid `bench fill --only TASK` a maintainer starts.
 # Strict, so the replay job lists them on every run and fails once the fill lands until the entry is removed.
-STALE: dict[str, str] = {
-    "contact-form": "a select's option question now offers none and leave beside the options",
-    "contact-needs-confirmation": "a select's option question now offers none and leave beside the options",
-}
+STALE: dict[str, str] = {}
 
 
 def recorded_tasks() -> list[Any]:
