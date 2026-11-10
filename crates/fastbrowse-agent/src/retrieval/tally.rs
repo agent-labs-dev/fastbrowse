@@ -166,14 +166,15 @@ fn candidates(notes: &Notes) -> Vec<Candidate> {
 fn member_question(tally: &Tally, note: &serde_json::Value) -> Question {
     let of = text::repr(&tally.of);
     let (question, yes, no) = match tally.field.as_deref().filter(|_| tally.op != Op::Count).map(text::repr) {
-        // "Is this note one" leaves a plain record line near even odds, while "hold exactly one" keeps a note
-        // listing several out as well.
+        // "Is this note one" leaves a plain record line near even odds, while "exactly one whole" keeps a note listing
+        // several out as well. "Record among" reads `of` as the set the records belong to: asked whether a product line
+        // held one whole 'products listed across all pages', Jev said no to every one, and the count was 0.
         None => (
             format!(
-                "Does this note hold exactly one whole {of}? A note holding several is not one, and nor is a record's tags, label or heading alone, or a value a page states across several records, such as a total."
+                "Is this note exactly one whole record among {of}? A note holding several records is not one, and nor is a record's tags, label or heading alone, or a value a page states across several records, such as a total."
             ),
-            format!("The note holds exactly one whole {of}."),
-            format!("The note holds no {of}, several, or only part of one."),
+            format!("The note is exactly one whole record among {of}."),
+            format!("The note is no record among {of}, several, or only part of one."),
         ),
         Some(field) => (
             format!(
