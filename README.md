@@ -30,6 +30,8 @@ credentials, irreversible actions and spending under the control of code.
   origin it was declared for, and models only see its name. Step, time and dollar limits are enforced in code.
 - **Any browser.** A Browser Use Cloud browser by default, local Chrome, or any Chromium browser or Electron app
   that is already running.
+- **Desktop apps too.** On Linux with Hyprland, `--desktop` drives a native app window through its accessibility
+  tree, in the background, with [deskpilot](https://github.com/cjber/deskpilot).
 - **One agent, every interface.** A CLI, a Python library, Node and Go SDKs that need no Python, an MCP
   server, and a skill for coding agents.
 
@@ -86,7 +88,7 @@ uvx fastbrowse "Log in as standard_user with the saved password and add the back
 ```
 
 The [command-line reference](docs/cli.md#flags) has every flag, signed-in profiles and Bitwarden logins, driving open
-windows and Electron apps, model and provider settings, and every status with its exit code.
+windows, Electron and [desktop apps](docs/cli.md#desktop-apps), model and provider settings, and every status with its exit code.
 
 ## How it compares
 

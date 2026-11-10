@@ -5,6 +5,7 @@
 //! definition. An embedder gets the parts that are easy to forget: the cloud browser's own cost folded into the
 //! result, downloads kept when a directory is given, and owned tabs closed on every path out.
 
+pub mod desktop;
 pub mod fetch;
 
 use std::future::Future;
@@ -273,6 +274,40 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
         ]);
         if !browser.is_empty() {
             return refuse(format!("fetch starts no browser, so it cannot be combined with {}", browser.join(", ")));
+        }
+    }
+    if let Some(window) = &task.desktop {
+        if window.trim().is_empty() {
+            return refuse("desktop must name a window".into());
+        }
+        // A desktop run opens no browser and no address. Recipes key their steps by web address, so a desktop run
+        // neither records one nor replays one yet.
+        let browser = given(&[
+            ("start", task.start.is_some()),
+            ("fetch", task.fetch),
+            ("browser", task.browser),
+            ("local", task.local),
+            ("chrome", task.chrome.is_some()),
+            ("cloud_profile", task.cloud_profile.is_some()),
+            ("cdp_url", task.cdp_url.is_some()),
+            ("cdp_port", task.cdp_port.is_some()),
+            ("attach", task.attach),
+            ("target_match", task.target_match.is_some()),
+            ("foreground", task.foreground),
+            ("proxy_country", task.proxy_country.is_some()),
+            ("cloud_extensions", !task.cloud_extensions.is_empty()),
+            ("viewport", task.viewport.is_some()),
+            ("cloud_timeout_minutes", task.cloud_timeout_minutes.is_some()),
+            ("record", task.record.is_some()),
+            ("recipe", task.recipe.is_some()),
+            ("save_recipe", task.save_recipe.is_some()),
+            ("cursor", task.cursor == Some(true)),
+            ("downloads", task.downloads.is_some()),
+            ("extension", extension),
+            ("allowed_origins", task.allowed_origins.is_some()),
+        ]);
+        if !browser.is_empty() {
+            return refuse(format!("desktop drives a window, not a browser, so drop {}", browser.join(", ")));
         }
     }
     if task.cdp_url.is_some() && task.cdp_port.is_some() {
@@ -861,6 +896,10 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
     let mut limits = task.limits.clone();
     let mut resume = None;
     let told: Told = Arc::default();
+    if let Some(window) = task.desktop.clone() {
+        let on_event = noting(host.on_event.clone(), &told);
+        return desktop(&task, &window, &host, schema, &config, &http, (jev, llm), on_event, &told).await;
+    }
     if task.recipe.is_none() && task.save_recipe.is_none() && reads_first(&task, &chrome) {
         let on_event = noting(host.on_event.clone(), &told);
         let began = std::time::Instant::now();
@@ -1235,6 +1274,50 @@ async fn fetched(
         matches!(result.status, Status::Blocked | Status::Unverified) && (fetched.needed_browser() || bot_check);
     let spent = ledger.state().clone();
     Ok(Read { result, needs_browser, spent, resume: agent.resume() })
+}
+
+/// A run on a desktop window: the same agent, with deskpilot as its page. There is no address to start from, so the
+/// run begins on the window as it is.
+#[allow(clippy::too_many_arguments)]
+async fn desktop(
+    task: &RunTask,
+    window: &str,
+    host: &Host,
+    schema: Option<Arc<RecordSchema>>,
+    config: &Config,
+    http: &Http,
+    (jev, llm): (Arc<dyn DecisionClient>, Arc<dyn LLMClient>),
+    on_event: EventHandler,
+    told: &Told,
+) -> Result<RunResult, RunError> {
+    let program = std::env::var("FASTBROWSE_DESKPILOT").unwrap_or_else(|_| "deskpilot".into());
+    let page = desktop::DeskpilotPage::open(&program, window).await.map_err(RunError::Invalid)?;
+    let ledger = Arc::new(Ledger::new(task.limits.clone().unwrap_or_default()));
+    let agent = Agent::new(Arc::new(page), jev, llm)
+        .with_redactor(http.trace.redactor().unwrap_or_default())
+        .with_config(config.clone())
+        .with_secrets(host.secrets.clone())
+        .with_trace(http.trace.clone())
+        .with_events(Some(on_event));
+    let run = RunOptions {
+        start: None,
+        choose_start: false,
+        context: task.context.clone(),
+        inputs: task.inputs.clone().unwrap_or_default(),
+        attachments: attachments(task),
+        output_schema: schema,
+        limits: None,
+        ledger: Some(ledger.clone()),
+        authorization: task.authorization.clone(),
+        until: host.until.clone(),
+        resume: None,
+        recipe: None,
+        recipe_sink: None,
+    };
+    let Ok(outcome) = host.cancel.guard(agent.run(&task.task, run)).await else {
+        return Err(cancelled(told, ledger.breakdown().lines, Vec::new(), None, host.cancel.reason()));
+    };
+    outcome.map_err(|error| RunError::Invalid(error.to_string()))
 }
 
 #[cfg(test)]

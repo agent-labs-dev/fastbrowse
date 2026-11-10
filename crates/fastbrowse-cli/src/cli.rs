@@ -144,6 +144,7 @@ pub fn parser(build: &Build) -> Parser {
             Opt::flag("--browser"),
             Opt::flag("--extension"),
             Opt::value("--extension-browser"),
+            Opt::value("--desktop"),
             Opt::value("--trace"),
             Opt::flag("--cursor"),
             Opt::flag("--no-cursor"),
@@ -190,6 +191,8 @@ pub struct Args {
     pub extension: bool,
     /// Which browser the extension is connected in, by its label; implies `extension`.
     pub extension_browser: Option<String>,
+    /// The desktop window to drive through deskpilot instead of a browser.
+    pub desktop: Option<String>,
     /// Where the run's trace is appended as JSON lines, or `-` for stderr.
     pub trace: Option<String>,
     /// `--cursor` or `--no-cursor`; neither draws the cursor wherever it can be placed.
@@ -257,6 +260,7 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
         browser: parsed.flag("--browser"),
         extension: parsed.flag("--extension"),
         extension_browser: text("--extension-browser"),
+        desktop: text("--desktop"),
         trace: text("--trace"),
         cursor: cursor_choice(parsed.flag("--cursor"), parsed.flag("--no-cursor")),
     })
@@ -459,7 +463,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     let settings = (context.settings)()?;
     let chrome = if args.cloud {
         None
-    } else if args.fetch {
+    } else if args.fetch || args.desktop.is_some() {
         // Kept only to be refused: a browserless run has no window to show or profile to keep.
         (args.headed || args.profile.is_some()).then(|| LocalChrome {
             binary: None,
@@ -496,6 +500,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         browser: args.browser,
         extension: args.extension,
         extension_browser: args.extension_browser.clone(),
+        desktop: args.desktop.clone(),
         ..RunTask::default()
     };
     fastbrowse_run::check(&task).map_err(|error| ConfigurationError(error.to_string()))?;

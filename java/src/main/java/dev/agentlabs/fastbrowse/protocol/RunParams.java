@@ -47,10 +47,11 @@ public record RunParams(
     @JsonProperty("fetch") Boolean fetch,
     @JsonProperty("browser") Boolean browser,
     @JsonProperty("extension") Boolean extension,
-    @JsonProperty("extension_browser") String extensionBrowser) {
+    @JsonProperty("extension_browser") String extensionBrowser,
+    @JsonProperty("desktop") String desktop) {
 
-    public RunParams(String runId, List<SecretRef> secrets, Boolean frames, Boolean until, String task, String start, String context, Map<String, String> inputs, List<RunAttachment> attachments, Limits limits, Authorization authorization, JsonNode outputSchema, String downloads, String record, Boolean cursor, Boolean local, LocalChrome chrome, String cloudProfile, String cdpUrl, Long cdpPort, Boolean attach, String targetMatch, Boolean foreground, String proxyCountry, List<Long> viewport, List<String> cloudExtensions, Long cloudTimeoutMinutes, List<String> allowedOrigins, Boolean fetch, Boolean browser, Boolean extension, String extensionBrowser) {
-        this(runId, secrets, frames, until, task, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record, null, null, cursor, local, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry, viewport, cloudExtensions, cloudTimeoutMinutes, allowedOrigins, fetch, browser, extension, extensionBrowser);
+    public RunParams(String runId, List<SecretRef> secrets, Boolean frames, Boolean until, String task, String start, String context, Map<String, String> inputs, List<RunAttachment> attachments, Limits limits, Authorization authorization, JsonNode outputSchema, String downloads, String record, Boolean cursor, Boolean local, LocalChrome chrome, String cloudProfile, String cdpUrl, Long cdpPort, Boolean attach, String targetMatch, Boolean foreground, String proxyCountry, List<Long> viewport, List<String> cloudExtensions, Long cloudTimeoutMinutes, List<String> allowedOrigins, Boolean fetch, Boolean browser, Boolean extension, String extensionBrowser, String desktop) {
+        this(runId, secrets, frames, until, task, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record, null, null, cursor, local, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry, viewport, cloudExtensions, cloudTimeoutMinutes, allowedOrigins, fetch, browser, extension, extensionBrowser, desktop);
     }
 
     /** A builder for a {@code RunParams}, every field unset. */
@@ -94,6 +95,7 @@ public record RunParams(
         private Boolean browser;
         private Boolean extension;
         private String extensionBrowser;
+        private String desktop;
 
         private Builder() {}
 
@@ -267,8 +269,13 @@ public record RunParams(
             return this;
         }
 
+        public Builder desktop(String desktop) {
+            this.desktop = desktop;
+            return this;
+        }
+
         public RunParams build() {
-            return new RunParams(runId, secrets, frames, until, task, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record, recipe, saveRecipe, cursor, local, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry, viewport, cloudExtensions, cloudTimeoutMinutes, allowedOrigins, fetch, browser, extension, extensionBrowser);
+            return new RunParams(runId, secrets, frames, until, task, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record, recipe, saveRecipe, cursor, local, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry, viewport, cloudExtensions, cloudTimeoutMinutes, allowedOrigins, fetch, browser, extension, extensionBrowser, desktop);
         }
     }
 }
