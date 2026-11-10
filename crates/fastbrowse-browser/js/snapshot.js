@@ -395,7 +395,10 @@
     return (
       referenced ||
       e.getAttribute('aria-label') ||
+      // A hidden label names nothing, as accname skips hidden nodes outside aria-labelledby: two tabbed forms reusing
+      // one id made the hidden tab's label one of the shown field's `labels`, and the field was named twice (#921).
       [...(e.labels || [])]
+        .filter(l => shown(l) || !shown(e))
         .map(l => labelFrom(l, seen))
         .filter(Boolean)
         .join(' ') ||
@@ -435,11 +438,16 @@
     );
     return fields.length === 1 ? fields[0] : null;
   };
-  const labelOf = memo(
-    e =>
+  // A name is flattened as accname flattens it, whitespace runs to one space: a template's line breaks and indentation
+  // inside a label reached callers as `Username               (required)` (#921).
+  const labelOf = memo(e =>
+    (
       (e && !e.getAttribute('aria-label') && !e.getAttribute('aria-labelledby') && focusableText(e)) ||
       labelFrom(e, new Set()) ||
-      labelFrom(wrappedField(e), new Set()),
+      labelFrom(wrappedField(e), new Set())
+    )
+      .replace(/\s+/g, ' ')
+      .trim(),
   );
 
   // A page says an element it styled or scripted is pressable without any role: a declared click handler, a pointer

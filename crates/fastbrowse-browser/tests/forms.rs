@@ -436,6 +436,33 @@ async fn test_a_textarea_is_not_named_by_the_text_it_was_served_with() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_label_is_named_as_it_renders_without_its_template_whitespace() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    let html = "<label for=u>\n      Username\n        <span>(required)</span>\n    </label><input id=u>\
+                <input aria-label=\"Password\n    (required)\" type=password>";
+    eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(html).unwrap())).await;
+    let observation = h.observe().await;
+    h.close().await;
+    let labels: Vec<&str> = observation.controls.iter().map(|c| c.label.as_str()).collect();
+    assert_eq!(labels, ["Username (required)", "Password (required)"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_hidden_label_sharing_a_fields_id_does_not_name_it_twice() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    // Two tabbed forms reuse one id, so the hidden tab's label is also one of the shown field's `labels`.
+    let html = "<form><label for=environment>Environment name (optional)</label><input id=environment></form>\
+                <form hidden><label for=environment>Environment name (optional)</label><input id=environment></form>";
+    eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(html).unwrap())).await;
+    let observation = h.observe().await;
+    h.close().await;
+    let labels: Vec<&str> = observation.controls.iter().map(|c| c.label.as_str()).collect();
+    assert_eq!(labels, ["Environment name (optional)"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_combobox_wrapping_two_fields_borrows_no_name() {
     let Some(h) = harness().await else { return };
     let html = "<div role=combobox tabindex=0><select hidden><option>Chat</option></select>\
