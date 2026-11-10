@@ -25,9 +25,10 @@ pub const BACKGROUND: &str =
 
 str_enum! {
     pub enum Status {
-        /// Jev confirmed the task done and the caller's `until` check (if any) passed.
+        /// Jev judged the task done and the caller's `until` check (if any) passed.
         Complete = "complete",
-        /// The run believes it finished but could not confirm it.
+        /// Jev finished, but code could not confirm the result: for example, an answer failed its check against
+        /// the page, part of a list the task covers went unread, or the site refused a requested step.
         Unverified = "unverified",
         /// Stopped before an irreversible action the caller has not authorized, having committed nothing.
         NeedsConfirmation = "needs_confirmation",
@@ -37,15 +38,18 @@ str_enum! {
         Blocked = "blocked",
         /// A required value or file is missing, or an upload exceeds the configured size limit.
         NeedsInput = "needs_input",
-        /// Recovery was exhausted without progress.
+        /// The stall budget ran out without the run reaching a page state it had not seen or reading anything new.
         Stuck = "stuck",
+        /// A resource limit (steps, seconds, dollars or Jev calls) was reached, or a missing cost prevents
+        /// enforcing the dollar cap.
         BudgetExceeded = "budget_exceeded",
-        /// The page or the evidence could not fit the configured input budgets.
+        /// The page or the run's notes could not fit the configured prompt budget.
         ObservationLimit = "observation_limit",
         /// A model or browser provider stayed unavailable through every retry; the same run later may pass.
         Unavailable = "unavailable",
         /// Stopped before it finished, by its caller or by the user in the browser it drove.
         Cancelled = "cancelled",
+        /// A model or browser failure.
         Error = "error",
     }
 }

@@ -23,9 +23,10 @@ class Frozen(BaseModel):
 
 class Status(StrEnum):
     COMPLETE = "complete"
-    """Every planner requirement is evidenced and the caller's `until` check (if any) passed."""
+    """Jev judged the task done and the caller's `until` check (if any) passed."""
     UNVERIFIED = "unverified"
-    """The run believes it finished but could not evidence every requirement."""
+    """Jev finished, but code could not confirm the result: for example, an answer failed its check against the page,
+    part of a list the task covers went unread, or the site refused a requested step."""
     NEEDS_CONFIRMATION = "needs_confirmation"
     """Stopped before an irreversible action the caller has not authorized, having committed nothing."""
     NEEDS_LOGIN = "needs_login"
@@ -36,16 +37,19 @@ class Status(StrEnum):
     NEEDS_INPUT = "needs_input"
     """A required value or file is missing, or an upload exceeds the configured size limit."""
     STUCK = "stuck"
-    """Recovery was exhausted without progress."""
+    """The stall budget ran out without the run reaching a page state it had not seen or reading anything new."""
     BUDGET_EXCEEDED = "budget_exceeded"
+    """A resource limit (steps, seconds, dollars or Jev calls) was reached, or a missing cost prevents enforcing the
+    dollar cap."""
     OBSERVATION_LIMIT = "observation_limit"
-    """The page or requirement evidence could not fit the configured input budgets."""
+    """The page or the run's notes could not fit the configured prompt budget."""
     UNAVAILABLE = "unavailable"
     """A model or browser provider stayed unavailable through every retry. Nothing about the task failed; the same
     run later may pass."""
     CANCELLED = "cancelled"
     """Stopped before it finished, by its caller or by the user in the browser it drove."""
     ERROR = "error"
+    """A model or browser failure."""
 
 
 class Unavailable(RuntimeError):
