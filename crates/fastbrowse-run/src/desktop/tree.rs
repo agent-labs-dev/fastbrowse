@@ -105,6 +105,11 @@ fn operations(element: &Element) -> Vec<Operation> {
     if element.has("editable") {
         return vec![Operation::Click, Operation::Fill, Operation::Enter];
     }
+    // A combo box's list opens as a popup whose items cannot be clicked in the background, so it is chosen in as a
+    // web page's dropdown is, by naming an option, and the page picks it with the keyboard.
+    if !options(element).is_empty() {
+        return vec![Operation::Select];
+    }
     if CLICKABLE.contains(&element.role.as_str()) {
         return vec![Operation::Click, Operation::Hover];
     }
@@ -133,17 +138,40 @@ fn aria_role(role: &str) -> &str {
     }
 }
 
-/// The name of the first item below `element` that is selected, for an element that holds a choice.
-fn chosen(element: &Element) -> Option<&str> {
-    if element.role != "combo box" {
-        return None;
+/// The items a combo box offers: the elements below it that the app marks selectable, each named.
+pub fn options(element: &Element) -> Vec<&Element> {
+    fn walk<'a>(element: &'a Element, out: &mut Vec<&'a Element>) {
+        for child in &element.children {
+            if child.has("selectable") && !child.name.is_empty() {
+                out.push(child);
+            } else {
+                walk(child, out);
+            }
+        }
     }
-    fn find(element: &Element) -> Option<&str> {
-        element.children.iter().find_map(|child| {
-            (child.has("selected") && !child.name.is_empty()).then_some(child.name.as_str()).or_else(|| find(child))
-        })
+    let mut out = Vec::new();
+    if element.role == "combo box" {
+        walk(element, &mut out);
     }
-    find(element)
+    out
+}
+
+/// The name of the item a combo box has chosen: the one of its options deskpilot marks selected.
+pub fn chosen(element: &Element) -> Option<&str> {
+    options(element).into_iter().find(|item| item.has("selected")).map(|item| item.name.as_str())
+}
+
+/// Whether a combo box's list is open on screen.
+pub fn list_open(element: &Element) -> bool {
+    options(element).iter().any(|item| item.showing())
+}
+
+/// The element with `id`, anywhere in the tree.
+pub fn find<'a>(element: &'a Element, id: &str) -> Option<&'a Element> {
+    if element.id == id {
+        return Some(element);
+    }
+    element.children.iter().find_map(|child| find(child, id))
 }
 
 fn control(element: &Element, context: Option<&str>) -> Option<Control> {
@@ -168,6 +196,7 @@ fn control(element: &Element, context: Option<&str>) -> Option<Control> {
         // selected; the box's own name may be its label.
         control.value = Some(item.to_string());
     }
+    control.options = options(element).iter().map(|item| item.name.clone()).collect();
     control.context = context.map(str::to_string);
     control.focused = Some(element.has("focused"));
     if CHECKABLE.contains(&element.role.as_str()) {
@@ -410,6 +439,8 @@ mod tests {
         // The combo box's value is the item its selection reports, not its name, which is its label.
         let country = observation.controls.iter().find(|c| c.role == "combobox").unwrap();
         assert_eq!((country.label.as_str(), country.value.as_deref()), ("Country", Some("Ireland")));
+        // A combo box is chosen in by naming one of its items, as a web page's dropdown is.
+        assert_eq!(country.options, ["Ireland", "France"]);
         let origins: Vec<_> = observation.controls.iter().map(|c| c.frame_origin.as_deref()).collect();
         assert!(origins.iter().all(|&o| o == Some("desktop://dptest-order")), "{origins:?}");
         let summary: Vec<(&str, &str, Vec<&str>)> = observation
@@ -417,11 +448,11 @@ mod tests {
             .iter()
             .map(|c| (c.id.as_str(), c.label.as_str(), c.operations.iter().map(|o| o.as_str()).collect()))
             .collect();
-        // The closed menu's item is visible and not showing, and the disabled button is not enabled: neither is one.
+        // The closed menu's items are visible and not showing, and the disabled button is not enabled: none is one.
         assert_eq!(
             summary,
             [
-                ("e4", "Country", vec!["click", "hover"]),
+                ("e4", "Country", vec!["select"]),
                 ("e7", "Name", vec!["click", "enter", "fill"]),
                 ("e8", "Gift wrap", vec!["click", "hover"]),
                 ("e9", "Small", vec!["click", "hover"]),

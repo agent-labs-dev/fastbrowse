@@ -241,10 +241,88 @@ impl DeskpilotPage {
                 let dy = if action.operation == Operation::Scroll { -SCROLL_CLICKS } else { SCROLL_CLICKS };
                 self.tool("scroll", json!({"window": window, "element": at, "dy": dy, "hidden": true})).await?
             }
+            Operation::Select => {
+                let wanted = action.text.as_deref().unwrap_or_default();
+                let Some(id) = action.target_id.as_deref() else { return Ok(Some("select needs a target".into())) };
+                let control = observation.controls.iter().find(|c| c.id == id);
+                let offered = control.map(|c| c.options.as_slice()).unwrap_or_default();
+                if !offered.iter().any(|option| option == wanted) {
+                    return Ok(Some(format!("no option labelled {wanted:?}")));
+                }
+                // The click gives the combo box the window's keyboard focus.
+                self.tool("click", json!({"window": window, "element": target, "hidden": true})).await?;
+                return self.choose(&window, id, wanted, offered).await;
+            }
             Operation::Wait => {}
             other => return Ok(Some(format!("{} is not something a desktop window can do", other.as_str()))),
         }
         Ok(None)
+    }
+
+    /// The window's tree, read without replacing the snapshot.
+    async fn peeked(&self, window: &str) -> Result<Element, ToolError> {
+        let value = self.client.call_json("elements", json!({"window": window, "hidden": true, "peek": true})).await?;
+        serde_json::from_value(value)
+            .map_err(|error| ToolError::Transport(format!("deskpilot sent a tree fastbrowse cannot read: {error}")))
+    }
+
+    /// The item combo box `id` has chosen, and whether its list is open, as the window says now.
+    async fn choice(&self, window: &str, id: &str) -> Result<Option<(Option<String>, bool)>, ToolError> {
+        let root = self.peeked(window).await?;
+        Ok(tree::find(&root, id).map(|element| (tree::chosen(element).map(str::to_string), tree::list_open(element))))
+    }
+
+    /// Moves a focused combo box's choice to `wanted` one arrow key at a time, as a person picks in a list they
+    /// cannot see, reading the choice after each key. Its list is a popup that cannot be clicked in the background,
+    /// and while it is open the keys would move only a highlight, so an open list is closed first; the box keeps the
+    /// focus. The keys go the way `offered` places `wanted` from the current choice, and turn back once at the end of
+    /// the list, so an order that differs from the one the keys follow still reaches it.
+    async fn choose(
+        &self,
+        window: &str,
+        id: &str,
+        wanted: &str,
+        offered: &[String],
+    ) -> Result<Option<String>, ToolError> {
+        let gone = || Ok(Some("the combo box is gone".to_string()));
+        let Some((mut now, open)) = self.choice(window, id).await? else { return gone() };
+        if open {
+            self.tool("key", json!({"combo": "Escape", "window": window})).await?;
+            let Some((after, _)) = self.choice(window, id).await? else { return gone() };
+            now = after;
+        }
+        let at = |name: &str| offered.iter().position(|option| option == name);
+        let mut down = now.as_deref().and_then(at).is_none_or(|from| at(wanted).is_some_and(|to| from < to));
+        let mut turned = false;
+        for _ in 0..2 * offered.len() {
+            if now.as_deref() == Some(wanted) {
+                return Ok(None);
+            }
+            self.tool("key", json!({"combo": if down { "Down" } else { "Up" }, "window": window})).await?;
+            // The app reports the new choice a moment after the key; a key at the end of the list changes nothing.
+            let deadline = Instant::now() + Duration::from_secs_f64(SETTLE_SECONDS);
+            let after = loop {
+                let Some((after, _)) = self.choice(window, id).await? else { return gone() };
+                if after != now || Instant::now() >= deadline {
+                    break after;
+                }
+                tokio::time::sleep(POLL).await;
+            };
+            if after == now {
+                if turned {
+                    break;
+                }
+                (turned, down) = (true, !down);
+            }
+            now = after;
+        }
+        if now.as_deref() == Some(wanted) {
+            return Ok(None);
+        }
+        Ok(Some(format!(
+            "the combo box kept {} instead of {wanted:?}",
+            now.map_or("nothing".into(), |n| format!("{n:?}"))
+        )))
     }
 
     async fn measured(
