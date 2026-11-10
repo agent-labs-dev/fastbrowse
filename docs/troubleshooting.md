@@ -259,6 +259,10 @@ browser starts. When the run ends `unavailable` with `no browser has the fastbro
   fastbrowse, since it records where fastbrowse is.
 - Check that the extension is on at `chrome://extensions`, and that Chrome is open.
 - After installing, restart Chrome or turn the extension off and on, so it connects.
+- The error names the directory the run looked in. A connected browser's host writes there too, and on Linux
+  both use `$XDG_RUNTIME_DIR/fastbrowse-hosts`, or `/run/user/<uid>/fastbrowse-hosts` when the variable is
+  unset. A run started with `FASTBROWSE_EXTENSION_DIR` set, or with a different `XDG_RUNTIME_DIR` from
+  Chrome's, looks somewhere else.
 
 ### Another extension's frame takes the tab away
 

@@ -4,6 +4,7 @@
 //! Between a run and the host, they are JSON lines on a per-user local socket. The host tags each run's messages
 //! with its connection id (`conn`) on the way in and routes by it on the way out, so it reads nothing else.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -48,24 +49,43 @@ pub struct HostRecord {
 
 /// Where hosts put their sockets and records: a private per-user directory.
 pub fn host_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("FASTBROWSE_EXTENSION_DIR") {
+    host_dir_from(|name| std::env::var_os(name), Path::new("/run/user"))
+}
+
+fn host_dir_from(
+    var: impl Fn(&str) -> Option<OsString>,
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] run_user: &Path,
+) -> PathBuf {
+    if let Some(dir) = var("FASTBROWSE_EXTENSION_DIR") {
         return PathBuf::from(dir);
     }
     #[cfg(target_os = "linux")]
-    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
-        return PathBuf::from(runtime).join("fastbrowse-hosts");
+    if let Some(runtime) = var("XDG_RUNTIME_DIR").map(PathBuf::from).or_else(|| login_runtime_dir(run_user)) {
+        return runtime.join("fastbrowse-hosts");
     }
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
+    let home = var("HOME").or_else(|| var("USERPROFILE")).map(PathBuf::from);
     let home = home.unwrap_or_else(std::env::temp_dir);
     if cfg!(target_os = "macos") {
         home.join("Library/Caches/fastbrowse/hosts")
     } else if cfg!(windows) {
-        std::env::var_os("LOCALAPPDATA")
-            .map_or_else(|| home.join("AppData/Local"), PathBuf::from)
-            .join("fastbrowse/hosts")
+        var("LOCALAPPDATA").map_or_else(|| home.join("AppData/Local"), PathBuf::from).join("fastbrowse/hosts")
     } else {
         home.join(".cache/fastbrowse/hosts")
     }
+}
+
+/// The user's runtime directory under `run_user`, which systemd-logind creates and sets XDG_RUNTIME_DIR to. The
+/// host Chrome starts has the variable, but a shell whose tool keeps only a core environment (Codex's
+/// `inherit = "core"`) does not, so a run there read another directory and found no browser connected. Reading
+/// the directory itself puts both on the same one. Only a directory the user owns is used, since a host's socket
+/// must not land where another user can reach it.
+#[cfg(target_os = "linux")]
+fn login_runtime_dir(run_user: &Path) -> Option<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: getuid cannot fail.
+    let uid = unsafe { libc::getuid() };
+    let dir = run_user.join(uid.to_string());
+    std::fs::metadata(&dir).is_ok_and(|meta| meta.is_dir() && meta.uid() == uid).then_some(dir)
 }
 
 /// The CDP methods in [`ALLOWED_METHODS`].
@@ -146,11 +166,12 @@ pub fn pick_host(dir: &Path, wanted: Option<&str>) -> Result<(PathBuf, HostRecor
         hosts.iter().map(|(_, r)| format!("{} ({} {})", r.label, r.browser, r.version)).collect::<Vec<_>>().join(", ")
     };
     if hosts.is_empty() {
-        return Err(BrowserError::Unavailable(
-            "no browser has the fastbrowse extension connected. Run `fastbrowse extension install`, add the \
-             extension to Chrome, and keep that Chrome open"
-                .into(),
-        ));
+        // Naming the directory shows a run and a host that disagree on it, which a reinstall does not fix.
+        return Err(BrowserError::Unavailable(format!(
+            "no browser has the fastbrowse extension connected (looked in {}). Run `fastbrowse extension install`, \
+             add the extension to Chrome, and keep that Chrome open",
+            dir.display()
+        )));
     }
     match wanted {
         Some(wanted) => {
@@ -236,6 +257,29 @@ mod tests {
             .collect();
         assert!(missing.is_empty(), "add to extension/allowed-methods.json or answer in the shim: {missing:?}");
     }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_shell_without_xdg_runtime_dir_finds_the_hosts_its_login_session_started() {
+        let run_user = std::env::temp_dir().join(format!("fbx-run-user-{}", std::process::id()));
+        // SAFETY: getuid cannot fail.
+        let uid = unsafe { libc::getuid() };
+        let runtime = run_user.join(uid.to_string());
+        std::fs::create_dir_all(&runtime).unwrap();
+        let var = |set: Option<&'static str>| {
+            move |name: &str| match name {
+                "HOME" => Some(OsString::from("/home/someone")),
+                "XDG_RUNTIME_DIR" => set.map(OsString::from),
+                _ => None,
+            }
+        };
+        assert_eq!(host_dir_from(var(None), &run_user), runtime.join("fastbrowse-hosts"));
+        assert_eq!(host_dir_from(var(Some("/elsewhere")), &run_user), Path::new("/elsewhere/fastbrowse-hosts"));
+        std::fs::remove_dir_all(&run_user).unwrap();
+        // Without a login session's directory, the user's cache is the only private place left.
+        assert_eq!(host_dir_from(var(None), &run_user), Path::new("/home/someone/.cache/fastbrowse/hosts"));
+    }
+
     fn write_record(dir: &Path, label: &str, pid: u32) {
         let record = HostRecord {
             browser_id: format!("id{label}"),
@@ -255,6 +299,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let unavailable = pick_host(&dir, None).unwrap_err();
         assert!(unavailable.is_unavailable(), "{unavailable}");
+        assert!(unavailable.to_string().contains(&format!("looked in {}", dir.display())), "{unavailable}");
         write_record(&dir, "Work", std::process::id());
         // A record whose host is gone is not a connected browser.
         write_record(&dir, "Gone", u32::MAX - 1);
