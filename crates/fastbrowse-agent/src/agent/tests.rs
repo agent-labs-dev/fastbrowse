@@ -4752,7 +4752,7 @@ impl DecisionClient for RefusedRead {
             .map(|key| {
                 let choice = match key.as_str() {
                     "source" => "read",
-                    "pick" => "none",
+                    "begins" | "ends" => "none",
                     _ => "0",
                 };
                 (
@@ -6456,4 +6456,76 @@ fn test_naming_a_chosen_option_of_a_multiple_select_again_is_not_a_repeat() {
     let decision = code_decision(Operation::Select, Some(select));
     assert_eq!(edit_progress(&decision, &action, &seen), None);
     assert_eq!(edit_progress(&decision, &action, &Written::default()), None);
+}
+
+/// Answers every value question truthfully for a value the task states between `VSTART` and `VEND`: a part is picked
+/// only when it holds what the question asks for, and a word or a copy only when it is that end of the value.
+struct LongValue;
+
+impl DecisionClient for LongValue {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        let answers = questions
+            .iter()
+            .map(|(key, question)| {
+                let Question::Choice(question) = question else { panic!("expected a choice") };
+                let has =
+                    |option: &serde_json::Value, word: &str| option.as_str().is_some_and(|text| text.contains(word));
+                let find = |test: &dyn Fn(&serde_json::Value) -> bool, or: &str| {
+                    question.criteria.iter().find(|(_, option)| test(option)).map_or(or.to_string(), |(k, _)| k.clone())
+                };
+                let asks = |words: &str| question.instructions.contains(words);
+                let choice = if key == "source" {
+                    if question.criteria.contains_key("task") { "task".into() } else { "write".into() }
+                } else if key == "first" {
+                    find(&|option| option.as_str().is_some_and(|text| text.starts_with("'VSTART'")), "none")
+                } else if key == "last" {
+                    find(&|option| option.as_str().is_some_and(|text| text.starts_with("'VEND'")), "none")
+                } else if question.criteria.contains_key("none") && asks("begins") {
+                    find(&|option| has(option, "VSTART"), "none")
+                } else if question.criteria.contains_key("none") && asks("ends") {
+                    find(&|option| has(option, "VEND"), "none")
+                } else if question.criteria.contains_key("none") {
+                    find(&|option| has(option, "VSTART") && has(option, "VEND"), "none")
+                } else if asks("beginning at the selected word") {
+                    find(&|option| option.as_str().is_some_and(|text| text.ends_with("VEND")), "0")
+                } else if asks("ending where the value ends") {
+                    find(&|option| option.as_str().is_some_and(|text| text.starts_with("VSTART")), "0")
+                } else {
+                    "0".into()
+                };
+                let answer =
+                    ChoiceAnswer { kind: Default::default(), choice, probabilities: IndexMap::new(), confidence: 1.0 };
+                (key.clone(), Answer::Choice(answer))
+            })
+            .collect();
+        Box::pin(
+            async move { Ok(Evaluation { model: "test".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile::jev()
+    }
+}
+
+/// A push gave about 10 KB of markdown to put in a description, longer than any one part a long task is cut into. No
+/// part held the whole value, so the task was no longer offered as its source, and the field got a written first
+/// sentence, or a note the run had read: "Save: disabled" (#939). A value is copied whole however many parts it spans.
+#[tokio::test]
+async fn test_a_value_longer_than_one_part_of_the_task_is_copied_whole() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(LongValue), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let body: Vec<String> = (0..1200).map(|n| format!("line{n}")).collect();
+    let value = format!("VSTART {} VEND", body.join(" "));
+    state.task =
+        format!("Replace the description with the text between START and END, then Save.\n\nSTART\n{value}\nEND");
+    let typed = agent
+        .text(&mut state, &observation(&[]), &code_decision(Operation::Fill, None), &field("Description"))
+        .await
+        .expect("a value");
+    assert_eq!(typed, value);
 }
