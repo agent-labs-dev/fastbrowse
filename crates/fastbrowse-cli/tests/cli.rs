@@ -296,6 +296,25 @@ async fn named_inputs_reach_the_run_with_any_equals_sign_in_their_value() {
 }
 
 #[tokio::test]
+async fn files_reach_the_run_as_attachments_under_their_file_names() {
+    let dir = std::env::temp_dir().join(format!("fastbrowse-cli-file-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("shrike_lid.png");
+    std::fs::write(&path, b"lid bytes").unwrap();
+    let ran = cli(&["upload shrike_lid.png", "--local", "--file", path.to_str().unwrap()]).await;
+    let missing = cli(&["t", "--local", "--file", dir.join("absent.stl").to_str().unwrap()]).await;
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(ran.code, 0, "{}", ran.err);
+    let attachments = ran.call.unwrap().task.attachments;
+    assert_eq!(attachments.len(), 1);
+    assert_eq!((attachments[0].name.as_str(), attachments[0].mime_type.as_str()), ("shrike_lid.png", "image/png"));
+    assert_eq!(attachments[0].content.0, b"lid bytes");
+    assert_eq!(missing.code, 1);
+    assert!(missing.err.contains("--file cannot read"), "{}", missing.err);
+    assert!(missing.call.is_none());
+}
+
+#[tokio::test]
 async fn test_cannot_combine_cdp_url_and_cdp_port() {
     let argv = [
         "t",

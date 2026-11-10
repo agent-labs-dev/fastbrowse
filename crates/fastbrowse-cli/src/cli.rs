@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use fastbrowse_clients::environment::ConfigurationError;
 use fastbrowse_core::models::{Authorization, Event, Limits, LocalChrome, SecretValue, Status};
+use fastbrowse_core::protocol::{Base64Bytes, RunAttachment};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{self, Style};
 use fastbrowse_core::safety::{ScopedSecrets, origin_of};
@@ -130,6 +131,7 @@ pub fn parser(build: &Build) -> Parser {
             Opt::append("--secret"),
             Opt::value("--bitwarden"),
             Opt::append("--input"),
+            Opt::append("--file"),
             Opt::value("--max-steps"),
             Opt::value("--max-dollars"),
             Opt::value("--downloads"),
@@ -172,6 +174,8 @@ pub struct Args {
     pub bitwarden: Option<String>,
     /// Named values a fill may type, which a saved recipe types again by name: `--input NAME=VALUE`.
     pub input: Vec<(String, String)>,
+    /// Local files the run may attach to a page's file input: `--file PATH`.
+    pub file: Vec<PathBuf>,
     pub max_steps: Option<i64>,
     pub max_dollars: Option<f64>,
     pub downloads: Option<PathBuf>,
@@ -240,6 +244,7 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
         secret: parsed.all("--secret").iter().filter_map(|value| options::scoped_secret(value).ok()).collect(),
         bitwarden: text("--bitwarden"),
         input: parsed.all("--input").iter().filter_map(|value| named_input(value).ok()).collect(),
+        file: parsed.all("--file").iter().map(PathBuf::from).collect(),
         max_steps: parsed.value("--max-steps").and_then(py_int),
         max_dollars: parsed.value("--max-dollars").and_then(py_float),
         downloads: path("--downloads"),
@@ -254,6 +259,22 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
         trace: text("--trace"),
         cursor: cursor_choice(parsed.flag("--cursor"), parsed.flag("--no-cursor")),
     })
+}
+
+/// The files `--file` names, read now, each under its own file name. A task can only name a path, and a run had no way
+/// to put that file in a page's file input, so an upload it was asked for stopped `stuck` (#878).
+fn attachments(paths: &[PathBuf]) -> Result<Vec<RunAttachment>, ConfigurationError> {
+    paths
+        .iter()
+        .map(|path| {
+            let content = std::fs::read(path)
+                .map_err(|error| ConfigurationError(format!("--file cannot read {}: {error}", path.display())))?;
+            let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+            // The type a browser's own file picker would give: by extension, and none for one it does not know.
+            let mime_type = mime_guess::from_path(path).first_raw().unwrap_or_default().to_owned();
+            Ok(RunAttachment { name, mime_type, content: Base64Bytes(content) })
+        })
+        .collect()
 }
 
 /// `NAME=VALUE`, the value taken as given, `=` and all.
@@ -435,6 +456,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         recipe: args.recipe.clone(),
         save_recipe: args.save_recipe.clone(),
         inputs: (!args.input.is_empty()).then(|| args.input.iter().cloned().collect()),
+        attachments: attachments(&args.file)?,
         cursor: args.cursor,
         local: args.local,
         chrome,
