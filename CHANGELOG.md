@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-10
+
 - **A long value the task gives is typed whole.** Asked to replace three CurseForge descriptions with about 10 KB of markdown each, runs saved the first sentence, "Save: disabled" or "disabled" instead, and ended `stuck` ([#939](https://github.com/agent-labs-dev/fastbrowse/issues/939)). A task too long for one Jev question is cut into parts, and Jev was asked which one part holds the value; a value spanning more than one part is in none of them, so the task stopped counting as its source and the value was written or taken from a note the run had read. Jev is now asked which part holds the value's first word and which its last, and the value between them is copied exactly.
 - **A select the task gives no option for is left alone.** A run filling a profile set a required Country to "France", which the task never named, because a select's question offered only the page's options. It now also offers "nothing given states it" and "the task asks nothing of this field", as a typed field does.
 - **A required field the task gives no value for ends the run as `needs_input`.** The run set such a field aside and went on, wandered to an Account link and ended `needs_login`. Since no later step can supply a value the task does not give, the run now stops at once and names the field.
@@ -1983,7 +1985,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.10.0...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.10.1
 [0.10.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.10.0
 [0.9.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.9.1
 [0.9.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.9.0
