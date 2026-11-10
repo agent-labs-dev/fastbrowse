@@ -40,6 +40,12 @@ def name_of(path):
 if args[0] == "view":
     field = args[2] if len(args) > 2 else ""
     if field == "dist-tags.latest":
+        if state["lag"].get(args[1], 0) > 0:
+            # The registry's cache still serves the document from before the publish.
+            state["lag"][args[1]] -= 1
+            save()
+            print("0.9.0")
+            sys.exit(0)
         if args[1] not in state["latest"]:
             sys.exit(1)
         print(state["latest"][args[1]])
@@ -86,7 +92,7 @@ sys.exit(2)
 
 
 def run_script(
-    tmp_path: Path, sdk: str | None = None, **state: object
+    tmp_path: Path, sdk: str | None = None, settle: float = 0, **state: object
 ) -> tuple[subprocess.CompletedProcess[str], dict]:
     """Run the publish script against a fresh fixture registry."""
     state = {
@@ -96,6 +102,7 @@ def run_script(
         "tlog": [],
         "flaky": [],
         "drift": [],
+        "lag": {},
         **state,
     }
     (tmp_path / "registry.json").write_text(json.dumps(state))
@@ -123,6 +130,8 @@ def run_script(
             str(platforms),
             "--sdk",
             sdk or str(tmp_path / "packages" / "sdk"),
+            "--settle",
+            str(settle),
         ],
         cwd=tmp_path,
         capture_output=True,
@@ -183,6 +192,13 @@ def test_a_published_version_whose_latest_tag_did_not_move_fails(tmp_path: Path)
     assert result.returncode == 1
     assert f"npm dist-tag add fastbrowse@{VERSION} latest" in result.stderr
     assert state["latest"].get("fastbrowse") != VERSION
+
+
+def test_a_latest_tag_the_registry_cache_shows_late_is_not_drift(tmp_path: Path) -> None:
+    # 0.10.0: the SDK's publish was accepted, and the first read of `latest` still showed 0.9.1.
+    result, _ = run_script(tmp_path, settle=1, lag={"fastbrowse": 1})
+    assert result.returncode == 0, result.stderr
+    assert f"npm serves {VERSION} as `latest` for 6 packages" in result.stdout
 
 
 def test_the_sdk_given_as_the_workflow_gives_it_is_published(tmp_path: Path) -> None:
