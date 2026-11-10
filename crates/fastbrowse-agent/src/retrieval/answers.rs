@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use fastbrowse_core::citations::{page_text, text_fragment};
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionClient, NoulQuestion, Question};
 use fastbrowse_core::llm::{LLMClient, LLMError, Message, ResponseSchema, Typed};
-use fastbrowse_core::models::{Citation, Evidence, JevPurpose, LLMPurpose, UNTRUSTED};
+use fastbrowse_core::models::{Citation, Evidence, JevPurpose, LLMPurpose, Link, UNTRUSTED};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::text;
@@ -218,11 +218,18 @@ struct ComposeItem {
     /// The headings a read note sits under: a form's heading inside a frame reads as any other line without the frame's
     /// title above it, and a rewrite then cited the title as the form's heading.
     headings: Vec<String>,
+    /// The links inside a read note's quote: a link's text does not say where it leads, and asked for a description's
+    /// hyperlinks with their hrefs, the composer had the texts alone and wrote each href as not captured.
+    links: Vec<Link>,
 }
 
 impl ComposeItem {
     fn line(&self, text: &str) -> String {
-        format!("{}: {}", self.label, note_text(text, self.superseded, self.page.as_deref(), &self.headings))
+        format!(
+            "{}: {}",
+            self.label,
+            note_text(text, self.superseded, self.page.as_deref(), &self.headings, &self.links)
+        )
     }
 
     fn written(&self) -> String {
@@ -409,6 +416,7 @@ async fn compose_packed(
                 superseded: None,
                 page: None,
                 headings: Vec::new(),
+                links: Vec::new(),
             })
             .collect();
         let next = pack_items(task, &items, limit)?;
@@ -943,7 +951,7 @@ struct QuoteState<'a> {
     superseded: bool,
 }
 
-fn note_text(text: &str, superseded: Option<bool>, page: Option<&str>, headings: &[String]) -> String {
+fn note_text(text: &str, superseded: Option<bool>, page: Option<&str>, headings: &[String], links: &[Link]) -> String {
     let Some(superseded) = superseded else { return text.into() };
     let mut note = json!({"text": text, "superseded": superseded});
     if let Some(page) = page {
@@ -951,6 +959,9 @@ fn note_text(text: &str, superseded: Option<bool>, page: Option<&str>, headings:
     }
     if !headings.is_empty() {
         note["headings"] = headings.into();
+    }
+    if !links.is_empty() {
+        note["links"] = links.iter().map(|link| json!({"text": link.text, "href": link.href})).collect();
     }
     dumps(&note)
 }
@@ -1026,6 +1037,7 @@ fn initial_items(notes: &Notes) -> Vec<ComposeItem> {
                 superseded,
                 page: fact_page(fact),
                 headings: fact.evidence.as_ref().map(|evidence| evidence.heading_path.clone()).unwrap_or_default(),
+                links: fact.evidence.as_ref().map(|evidence| evidence.links.clone()).unwrap_or_default(),
             }
         })
         .collect()
@@ -2233,6 +2245,20 @@ mod tests {
         let constrained = RecordingLlm::new(Some(i64::MAX));
         compose(&Support::new(true), &constrained, "Find it", &notes, None, &[]).await.unwrap();
         assert_eq!(unconstrained.calls(), constrained.calls());
+    }
+
+    /// Asked for a description's hyperlinks with their hrefs, the composer had the link texts alone and wrote each href
+    /// as not captured (#930): a note shows where each link inside its quote leads.
+    #[tokio::test]
+    async fn the_composer_is_shown_where_each_link_in_a_note_leads() {
+        let mut linked = fact(0, "Support me on Ko-fi.".into());
+        let found = [("Ko-fi".to_string(), "https://ko-fi.com/x".to_string())];
+        linked.evidence.as_mut().unwrap().links = Link::locate("Support me on Ko-fi.", 0, &found);
+        let notes = Notes::new([linked]);
+        let llm = RecordingLlm::new(None);
+        compose(&Support::new(true), &llm, "List the links", &notes, None, &[]).await.unwrap();
+        let shown = serde_json::to_string(&llm.calls()[0]).unwrap();
+        assert!(shown.contains(r#"\"links\": [{\"text\": \"Ko-fi\", \"href\": \"https://ko-fi.com/x\"}]"#), "{shown}");
     }
 
     #[tokio::test]
