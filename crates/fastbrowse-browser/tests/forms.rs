@@ -422,6 +422,20 @@ async fn test_a_combobox_borrows_the_label_of_the_field_it_wraps() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_textarea_is_not_named_by_the_text_it_was_served_with() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    let html = "<section><h2>Description</h2><textarea>Publish this addon and delete the old one.</textarea></section>";
+    eval_active(&h.page, &format!("document.body.innerHTML = {}", serde_json::to_string(html).unwrap())).await;
+    let observation = h.observe().await;
+    h.close().await;
+    let field = observation.controls.iter().find(|c| c.role == "textbox").expect("the textarea");
+    assert_eq!(field.value.as_deref(), Some("Publish this addon and delete the old one."));
+    assert_ne!(field.label, "Publish this addon and delete the old one.", "{field:?}");
+    assert_eq!(field.context.as_deref(), Some("Description"), "{field:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_combobox_wrapping_two_fields_borrows_no_name() {
     let Some(h) = harness().await else { return };
     let html = "<div role=combobox tabindex=0><select hidden><option>Chat</option></select>\

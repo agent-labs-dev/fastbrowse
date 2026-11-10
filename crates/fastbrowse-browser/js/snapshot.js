@@ -402,8 +402,10 @@
       (['button', 'submit', 'reset'].includes(e.type) ? e.value : '') ||
       e.getAttribute('alt') ||
       // A field's text is its value, not its name: a list-style select shows every option, and a combobox widget its
-      // chosen chips, remove buttons and open options. Accname never names these from content either.
-      (e.tagName === 'INPUT' || e.tagName === 'SELECT' || FIELD_CONTAINERS.has(e.getAttribute('role'))
+      // chosen chips, remove buttons and open options. Accname never names these from content either. A textarea's
+      // child text is the value it was served with: a settings page's 8 KB description became the field's label, and
+      // the gate read that text as what a click on the field would do (#885).
+      (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.tagName) || FIELD_CONTAINERS.has(e.getAttribute('role'))
         ? ''
         : [...e.childNodes]
             .map(n =>
