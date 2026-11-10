@@ -198,8 +198,9 @@ metadata alone does not count as progress.
 For a table, each cell is judged with the whole row and its quotes as context; every cell must be supported.
 The composer and support check interpret a requested field by its meaning: descriptive prose can supply its
 value without a matching heading, and that value contradicts a claim that the field was not shown.
-The support question distinguishes facts about a quoted subset from claims about a whole set, and a source's
-population counter from the number of records the answer reports.
+The support question distinguishes facts about a quoted subset from claims about a whole set, and what a counter
+on the page says about its source, which supports a claim that restates it, from the number of records the answer
+reports.
 Initial and repaired compositions are checked
 for both claim support and requested answer coverage in one decision batch. A claim with no cited quote or no
 support judgment is withheld and ends `unverified`. When every check is answered and Jev rejects a composed claim, the run spends an existing recovery to correct the draft or gather

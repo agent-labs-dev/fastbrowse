@@ -808,7 +808,7 @@ async fn review_claims(
 const OTHER: &str = "other";
 
 /// The scope rule for a claim whose values the composer wrote.
-const SCOPE: &str = "Judge the scope as well as each value. A statement about every member or an absent value across a whole set needs evidence about that whole set; quotes about some members support only those members. A source's population counter supports its population size, not the number extracted or included in this answer.";
+const SCOPE: &str = "Judge the scope as well as each value. A statement about every member or an absent value across a whole set needs evidence about that whole set; quotes about some members support only those members. A counter on the page supports what it says about its source, such as how many items the source holds or shows. It does not support how many items this answer extracted or lists.";
 
 /// A place written as a word, as a task writes it: "second", "third", "21st".
 fn ordinal(place: u64) -> String {
@@ -1433,7 +1433,6 @@ mod tests {
         assert!(question.instructions.contains("Record B: 34"));
         assert!(question.instructions.contains("right panel"));
         assert!(question.instructions.contains("quotes about some members support only those members"));
-        assert!(question.instructions.contains("not the number extracted or included in this answer"));
         assert!(!question.instructions.contains("[computed]"), "a claim with no computed value is not told of one");
     }
 
@@ -1987,6 +1986,21 @@ mod tests {
             let claim = asked[0].get("claim0").unwrap().dump_json();
             assert_eq!(claim.contains("a value a step typed"), shown, "{claim}");
         }
+    }
+
+    /// "The feed shows 60 of 60 items.", citing only "Showing 60 of 60 items.", scored 0.36 to 0.54 when the rule said a
+    /// counter supports only the population size, and the run ended `unverified` (#916). Replayed 20 times, the claim
+    /// passes 19 times with this rule, and "The answer below lists all 60 items of the feed." on the same quote never.
+    #[tokio::test]
+    async fn a_claim_restating_a_counter_is_judged_by_what_the_counter_says() {
+        let notes = Notes::new([fact(0, "Showing 60 of 60 items.".into())]);
+        let jev = Support::new(true);
+        let mut llm = RecordingLlm::new(None);
+        llm.claims = Some(vec![Claim::new("The feed shows 60 of 60 items.", vec!["e0".into()])]);
+        compose_reviewed(&jev, &llm, "Tell me the total item count", &notes, None, None, true, &[]).await.unwrap();
+        let claim = jev.asked.lock().unwrap()[0].get("claim0").unwrap().dump_json();
+        assert!(claim.contains("A counter on the page supports what it says about its source"), "{claim}");
+        assert!(claim.contains("It does not support how many items this answer extracted or lists."), "{claim}");
     }
 
     #[tokio::test]
