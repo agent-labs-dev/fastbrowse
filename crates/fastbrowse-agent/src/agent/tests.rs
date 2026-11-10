@@ -4303,6 +4303,30 @@ async fn test_the_tab_an_authorized_commit_was_sent_from_is_handed_over() {
     }
 }
 
+#[tokio::test]
+async fn test_a_run_that_stops_for_a_person_leaves_them_its_tab() {
+    // #887: a run stopped needs_confirmation or needs_input closed its tab, and the person asked to finish the step
+    // lost the filled form with it. A run that stops for any other reason still closes its tab.
+    for (irreversible, stopped) in [(0.99, Status::NeedsConfirmation), (0.0, Status::BudgetExceeded)] {
+        let page = Arc::new(Unmoved {
+            now: at("https://shop.test/basket", &[button("Place order"), button("Keep shopping")]),
+            sent: Mutex::new(Vec::new()),
+            handed_over: Default::default(),
+        });
+        let jev = Commits(ScriptedJev::new(crate::scripted::steps("click Place order").unwrap()), irreversible);
+        let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
+        let options = super::RunOptions {
+            start: Some("https://shop.test/basket".into()),
+            limits: Some(Limits { max_steps: Some(1), ..Limits::default() }),
+            ..Default::default()
+        };
+        let result = agent.run("Place the order for the basket", options).await.unwrap();
+        assert_eq!(result.status, stopped, "{:?}", result.error);
+        let handed = page.handed_over.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(handed, stopped == Status::NeedsConfirmation, "{stopped:?}");
+    }
+}
+
 /// A Jev that answers the choices it is given as `Picks` does, and every other question as the scripted Jev does.
 struct Typist(&'static [(&'static str, &'static str)]);
 

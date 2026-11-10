@@ -316,6 +316,9 @@ impl Agent {
             }
             loop_returned = false;
         }
+        if result.status.waits_on_person() {
+            self.page.hand_over_tab();
+        }
         result.cost = ledger.breakdown();
         Ok(if loop_returned { result } else { self.ending_frame(result, requested_frame).await })
     }

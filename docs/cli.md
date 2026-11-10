@@ -69,10 +69,12 @@ Then pass `--extension` to any run:
 fastbrowse "Find my last order's delivery date." --start https://www.amazon.com/ --extension
 ```
 
-Each run works in a tab group of its own, named after the task, and closes its tabs when it ends. While a run is
-attached, Chrome shows a bar saying an extension started debugging the browser. Each run has three ways to stop
-it, and each ends the run `cancelled` with an error that says which one stopped it: **Stop** in the extension's
-popup, **Cancel** on that bar (which stops every run in that browser), or closing all of the run's tabs.
+Each run works in a tab group of its own, named after the task, and closes its tabs when it ends. A run that stops at
+`needs_confirmation`, `needs_input` or `needs_login` leaves the tab it stopped in open, out of the group, so you can
+finish the step in the page it filled. While a run is attached, Chrome shows a bar saying an extension started
+debugging the browser. Each run has three ways to stop it, and each ends the run `cancelled` with an error that says
+which one stopped it: **Stop** in the extension's popup, **Cancel** on that bar (which stops every run in that
+browser), or closing all of the run's tabs.
 
 The extension relays only page-level commands. It cannot read cookies, saved passwords or other sites' storage,
 and fastbrowse accepts connections only from the extension's own ID, over a socket only your user can open. The
@@ -142,8 +144,9 @@ one. `--target-match` picks one by title or URL, and can name an extension page.
 Without `--start` the run begins on whatever the window shows, and the window stays open afterwards. Popups the
 window opens join the run.
 
-For a signed-in browser that stays open, start a Chrome with a data directory of its own (Chrome ignores the port
-on its default one), sign in, and leave it running. Each run opens and closes a background tab in it:
+For a signed-in browser that stays open, start a Chrome with a data directory of its own (Chrome ignores the port on
+its default one), sign in, and leave it running. Each run opens and closes a background tab in it, and leaves the tab
+open when it stops for you to confirm, fill in or sign in:
 
 ```sh
 google-chrome --remote-debugging-port=9222 --user-data-dir="$HOME/.fastbrowse/chrome"

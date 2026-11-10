@@ -1000,9 +1000,12 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
         };
         let result = agent.run(&task.task, run).await.map_err(|error| refused(&error.to_string()))?;
         // The card is a data: document navigated into the tab, which would replace the caller's own app page; an
-        // attached window is theirs and stays where it is.
+        // attached window is theirs and stays where it is, as does a tab the run left for a person to finish.
         // Shown while the recording stays in its slot, so a run cancelled during the card still finishes the videos.
-        if !attach && let Some(filming) = recording.lock().await.as_mut() {
+        if !attach
+            && !result.status.waits_on_person()
+            && let Some(filming) = recording.lock().await.as_mut()
+        {
             let _ = filming.show_result(&task.task, &card(&result)).await;
         }
         Ok(result)

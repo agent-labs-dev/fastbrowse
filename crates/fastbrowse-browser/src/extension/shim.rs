@@ -23,8 +23,10 @@ use crate::error::BrowserError;
 pub const ENABLED_DOMAINS: [&str; 4] = ["Page", "Runtime", "DOM", "Network"];
 
 /// Browser-level methods the shim answers itself rather than relaying.
-pub const ANSWERED: [&str; 10] = [
+pub const ANSWERED: [&str; 11] = [
     "Browser.getVersion",
+    // Not CDP: the extension closes a run's tabs when the run lets go of it, except a tab named to it here.
+    "Fastbrowse.keepTarget",
     "SystemInfo.getProcessInfo",
     "Target.activateTarget",
     "Target.attachToTarget",
@@ -299,6 +301,11 @@ impl Relay {
             "Target.activateTarget" => {
                 let tab = target_tab(&params)?;
                 self.op("activate", json!({"tabId": tab})).await?;
+                Ok(json!({}))
+            }
+            "Fastbrowse.keepTarget" => {
+                let tab = target_tab(&params)?;
+                self.op("keepTab", json!({"tabId": tab})).await?;
                 Ok(json!({}))
             }
             "Target.detachFromTarget" => {
@@ -659,6 +666,22 @@ mod tests {
         relay.event(&frame("chrome-extension://abcdefgh/audio-devices.html"));
         relay.event(&json!({"event": "cdp", "tabId": 7, "method": "Page.frameDetached", "params": {"frameId": "F"}}));
         assert_eq!(relay.event(&serde_json::from_str(DETACHED).unwrap()), None, "the frame went before the detach");
+    }
+
+    #[tokio::test]
+    async fn a_tab_handed_over_is_named_to_the_extension_that_would_close_it() {
+        // #887: the extension closes every tab a run opened when the run lets go of it, so a form left for a person
+        // to confirm was lost even though the session had not closed its tab.
+        let (out, mut to_extension) = mpsc::unbounded_channel();
+        let relay = Arc::new(relay_to(out));
+        let keeping = tokio::spawn({
+            let relay = relay.clone();
+            async move { relay.browser_command("Fastbrowse.keepTarget", json!({"targetId": target_id(7)})).await }
+        });
+        let sent = tokio::time::timeout(std::time::Duration::from_secs(5), to_extension.recv()).await;
+        keeping.abort();
+        let sent: Value = serde_json::from_str(&sent.expect("an operation sent").unwrap()).unwrap();
+        assert_eq!((sent["op"].as_str(), sent["tabId"].as_i64()), (Some("keepTab"), Some(7)));
     }
 
     #[test]

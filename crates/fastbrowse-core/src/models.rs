@@ -54,6 +54,14 @@ str_enum! {
     }
 }
 
+impl Status {
+    /// Whether the run stopped at a step a person can take in the page the run reached: confirm the action, give
+    /// the missing value or sign in. Closing that tab would throw away the form the run filled for them (#887).
+    pub fn waits_on_person(self) -> bool {
+        matches!(self, Status::NeedsConfirmation | Status::NeedsInput | Status::NeedsLogin)
+    }
+}
+
 /// `Unavailable`: a provider answered only with retryable statuses, or not at all, until its retries ran out.
 ///
 /// Python marks such errors by inheriting from it; here each error type says so through this trait.
