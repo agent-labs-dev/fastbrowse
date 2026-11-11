@@ -25,7 +25,7 @@ use super::answers::{context_limit, request_bytes};
 use super::text::{SpanKind, currency, spans};
 use crate::batches::evaluate_batches;
 use crate::error::{AgentError, Result};
-use crate::memory::{Notes, fact_id};
+use crate::memory::{Notes, address, fact_id};
 use crate::support::generate;
 
 /// What the support check is shown in place of the value, which it is not asked to judge.
@@ -130,6 +130,10 @@ struct Candidate {
     note: serde_json::Value,
     /// The capture the quote was cut from, and its span there.
     span: (String, i64, i64),
+    /// Whether the quote is the page's own text, rather than a reading of its screenshot or an element's markup.
+    literal: bool,
+    /// The page the note was read from.
+    page: String,
 }
 
 impl Candidate {
@@ -143,6 +147,78 @@ impl Candidate {
 /// The records Jev judged members, less any inside another member: part of a record is not one of its own.
 fn whole(records: Vec<usize>, found: &[Candidate]) -> Vec<usize> {
     records.iter().copied().filter(|&note| !records.iter().any(|&other| found[note].within(&found[other]))).collect()
+}
+
+/// For each record that is not page text, the questions asking which other record on its page it is. A record read
+/// from a screenshot or an element's markup is in the reader's words, so no text match finds it among the notes cut
+/// from its page's text: a book read off a listing's screenshot was counted beside its own text note, and a category of
+/// 11 one-star books was given as 12 (#984). Jev says which record it repeats, and code counts the rest. Offered are
+/// the records cut from its page's text, and those not cut from text that come before it, so of two such readings the
+/// first stays; a page shows only its own records, so no other page's are offered. The offers are split to fit one
+/// choice, with an option kept for none.
+fn repeat_questions(index: usize, records: &[usize], found: &[Candidate], most: usize) -> IndexMap<String, Question> {
+    let mut questions = IndexMap::new();
+    for (at, &note) in records.iter().enumerate() {
+        let reading = &found[note];
+        if reading.literal {
+            continue;
+        }
+        let offered: Vec<usize> = records
+            .iter()
+            .enumerate()
+            .filter(|&(other, &record)| {
+                other != at && found[record].page == reading.page && (found[record].literal || other < at)
+            })
+            .map(|(_, &record)| record)
+            .collect();
+        for (chunk, offer) in offered.chunks(most - 1).enumerate() {
+            let mut criteria: IndexMap<String, serde_json::Value> = offer
+                .iter()
+                .map(|record| {
+                    let note = dumps(&found[*record].note);
+                    (format!("m{record}"), json!(format!("It is the record in this note: {note}")))
+                })
+                .collect();
+            criteria.insert(NO_VALUE.into(), json!("It is a record none of these notes holds."));
+            let question = format!(
+                "{UNTRUSTED}\nThis note was not cut from its page's text: it was read from a screenshot of the page or from an element's markup, so a note cut from the page's text may hold the same record in other words. Which of these notes holds the record this one gives? Note: {}",
+                dumps(&reading.note)
+            );
+            questions
+                .insert(format!("t{index}/s{note}c{chunk}"), Question::Choice(ChoiceQuestion::new(question, criteria)));
+        }
+    }
+    questions
+}
+
+/// `records` less each one Jev said repeats another, or None when Jev left one of those questions unanswered.
+fn distinct(
+    index: usize,
+    records: Vec<usize>,
+    found: &[Candidate],
+    questions: &IndexMap<String, Question>,
+    answered: Option<&IndexMap<String, Answer>>,
+) -> Option<Vec<usize>> {
+    let mut kept = Vec::new();
+    for note in records {
+        let prefix = format!("t{index}/s{note}c");
+        let mut repeats = false;
+        for key in questions.keys().filter(|key| key.starts_with(&prefix)) {
+            let Some(Answer::Choice(answer)) = answered.and_then(|answered| answered.get(key)) else {
+                return None;
+            };
+            let picked = answer.choice.strip_prefix('m').and_then(|n| n.parse::<usize>().ok());
+            match picked.filter(|n| *n < found.len()) {
+                Some(_) => repeats = true,
+                None if answer.choice == NO_VALUE => {}
+                None => return None,
+            }
+        }
+        if !repeats {
+            kept.push(note);
+        }
+    }
+    Some(kept)
 }
 
 /// Every note read, once each: a superseded read is a past state, and a note whose whole text a note before it
@@ -173,7 +249,8 @@ fn candidates(notes: &Notes) -> Vec<Candidate> {
         })
         .map(|(id, evidence)| {
             let span = (evidence.capture_sha256.clone(), evidence.start, evidence.end);
-            Candidate { id, quote: evidence.quote.clone(), note: shown(notes, evidence), span }
+            let (literal, page) = (evidence.rendered_text, address(&evidence.url));
+            Candidate { id, quote: evidence.quote.clone(), note: shown(notes, evidence), span, literal, page }
         })
         .collect()
 }
@@ -623,6 +700,24 @@ pub async fn work(
             _ => None,
         }
     };
+    // Each claim's records Jev judged, whole, before any repeat among them is dropped.
+    let mut judged: HashMap<usize, Option<Vec<usize>>> = HashMap::new();
+    let mut repeats = IndexMap::new();
+    for (index, _, _, _) in claims {
+        if worked.contains_key(index) {
+            continue;
+        }
+        let records = (0..found.len())
+            .map(|note| member(*index, note).map(|is| is.then_some(note)))
+            .collect::<Option<Vec<_>>>()
+            .map(|notes| whole(notes.into_iter().flatten().collect(), &found));
+        if let Some(records) = &records {
+            let asking = led.get(index).copied().unwrap_or(*index);
+            repeats.extend(repeat_questions(asking, records, &found, jev.profile().max_choice_options));
+        }
+        judged.insert(*index, records);
+    }
+    let repeated = ask(jev, &state, &repeats, tokens, ledger).await?;
     let mut pending = Vec::new();
     let mut values = IndexMap::new();
     // The numbers each multi-number note was asked to choose among, after narrowing.
@@ -631,11 +726,10 @@ pub async fn work(
         if worked.contains_key(index) {
             continue;
         }
-        let judged: Option<Vec<usize>> = (0..found.len())
-            .map(|note| member(*index, note).map(|is| is.then_some(note)))
-            .collect::<Option<Vec<_>>>()
-            .map(|notes| notes.into_iter().flatten().collect());
-        let Some(records) = judged.map(|records| whole(records, &found)) else {
+        let asking = led.get(index).copied().unwrap_or(*index);
+        let records = judged.remove(index).flatten();
+        let Some(records) = records.and_then(|records| distinct(asking, records, &found, &repeats, repeated.as_ref()))
+        else {
             worked.insert(*index, Err(Unworked::Unjudged));
             continue;
         };
@@ -849,6 +943,8 @@ mod tests {
             quote: String::new(),
             note: json!({}),
             span: (capture.into(), start, end),
+            literal: true,
+            page: String::new(),
         };
         let found = [note("a", 0, 50), note("a", 0, 20), note("b", 0, 20), note("a", 60, 90)];
         assert_eq!(whole(vec![0, 1, 2, 3], &found), [0, 2, 3], "only the line inside card 0 on its capture goes");

@@ -1609,12 +1609,14 @@ mod tests {
         support: f64,
         /// A plain claim check judged unsupported, whatever `support` says.
         rejects: Option<&'static str>,
+        /// A note not cut from page text repeats the offered note holding this, and with None no note.
+        same: Option<&'static str>,
         asked: Mutex<Vec<IndexMap<String, Question>>>,
     }
 
     impl Tallying {
         fn new(member: &'static str, value: &'static str) -> Tallying {
-            Tallying { member, value, support: 0.9, rejects: None, asked: Mutex::new(Vec::new()) }
+            Tallying { member, value, support: 0.9, rejects: None, same: None, asked: Mutex::new(Vec::new()) }
         }
 
         fn asked(&self) -> IndexMap<String, Question> {
@@ -1654,6 +1656,12 @@ mod tests {
                         Some("states") => stated.to_string(),
                         Some(check) if check.starts_with('g') => {
                             group.map_or("none".into(), |(option, _)| option.clone())
+                        }
+                        Some(check) if check.starts_with('s') => {
+                            let same = choice.criteria.iter().find(|(_, criterion)| {
+                                self.same.is_some_and(|same| criterion.as_str().is_some_and(|c| c.contains(same)))
+                            });
+                            same.map_or("none".into(), |(option, _)| option.clone())
                         }
                         _ => pick,
                     };
@@ -2003,6 +2011,43 @@ mod tests {
                 .unwrap();
         assert_eq!(checked.claims[0].text, "The basket costs £1.50.");
         assert!(jev.asked().contains_key("group"), "the numbers were narrowed before the value was chosen");
+    }
+
+    /// A book read off a screenshot of a listing page is the same record as its text note there, in other words, so no
+    /// text check can match the two; counted apart, a category of 11 one-star books was given as 12 (#984). Jev says
+    /// which note on the same page holds the record, and a record no text note holds still counts.
+    #[tokio::test]
+    async fn a_record_read_from_a_screenshot_and_from_page_text_counts_once() {
+        let mut image = page_fact(2, "https://books.test/page-3", "Cinder (The Lunar Chronicles), one star, £26.09");
+        let evidence = image.evidence.as_mut().unwrap();
+        evidence.rendered_text = false;
+        evidence.quote = format!("read from the screenshot: {}", image.text);
+        image.reader = FactReader::LlmImage;
+        let facts = [
+            page_fact(0, "https://books.test/page-3", "Cinder £26.09 [star-rating One]"),
+            page_fact(1, "https://books.test/page-3", "Girl Online £53.47 [star-rating One]"),
+            image,
+            page_fact(3, "https://books.test/page-2", "The Alien Club £54.40 [star-rating One]"),
+        ];
+        let notes = Notes::new(facts.clone());
+        let counted =
+            |text: &str| tallied(text, "9", tally::Op::Count, "one-star book", None, vec![fact_id(&facts[0])]);
+        let task = "How many one-star books are there?";
+        let jev = Tallying { same: Some("Cinder"), ..Tallying::new("star", "") };
+        let checked = review_claims(&jev, task, None, vec![counted("There are 9.")], &notes, None, true, &[]).await;
+        let checked = checked.unwrap();
+        assert_eq!(checked.problem, None, "{:?}", checked.rejection);
+        assert_eq!(checked.claims[0].text, "There are 3.");
+        let ids: Vec<String> = [&facts[0], &facts[1], &facts[3]].into_iter().map(fact_id).collect();
+        assert_eq!(checked.claims[0].evidence_ids, ids);
+        let asked = jev.asked();
+        let repeats: Vec<&String> = asked.keys().filter(|key| key.starts_with("t0/s")).collect();
+        assert_eq!(repeats, ["t0/s2c0"], "only the note not cut from page text is asked about");
+        let Question::Choice(repeat) = &asked["t0/s2c0"] else { panic!("a repeat is a choice") };
+        assert_eq!(repeat.criteria.keys().collect::<Vec<_>>(), ["m0", "m1", "none"], "the notes on its page");
+        let unmatched = Tallying::new("star", "");
+        let checked = review_claims(&unmatched, task, None, vec![counted("There are 9.")], &notes, None, true, &[]);
+        assert_eq!(checked.await.unwrap().claims[0].text, "There are 4.", "a record only the screenshot holds counts");
     }
 
     /// Two tables holding the same row are two records, while the same page read again gives the same records.
