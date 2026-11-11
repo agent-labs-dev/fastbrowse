@@ -88,3 +88,75 @@ def test_a_publish_rewrites_only_the_files_that_differ() -> None:
     assert aur_package.changed(committed, {**committed, "PKGBUILD": aur_package.render(NEW)["PKGBUILD"]}) == [
         "PKGBUILD"
     ]
+
+
+# Bodies of the shape the AUR RPC (`/rpc/v5/info`) returns, from the Arch wiki page "Aurweb RPC interface".
+AUR_NONE = {"resultcount": 0, "results": [], "type": "multiinfo", "version": 5}
+AUR_ERROR = {
+    "error": "Incorrect request type specified.",
+    "resultcount": 0,
+    "results": [],
+    "type": "error",
+    "version": 5,
+}
+
+
+def _aur_holding(version: str) -> dict:
+    return {
+        "resultcount": 1,
+        "results": [{"Name": "fastbrowse", "Version": version}],
+        "type": "multiinfo",
+        "version": 5,
+    }
+
+
+def test_the_aur_version_is_read_from_the_rpc() -> None:
+    assert aur_package.aur_version(AUR_NONE) is None
+    assert aur_package.aur_version(_aur_holding("0.10.1-1")) == "0.10.1"
+    assert aur_package.aur_version(_aur_holding("1:0.10.1-2")) == "0.10.1"
+
+
+def test_an_rpc_error_stops_the_check_with_its_own_message() -> None:
+    with pytest.raises(SystemExit, match="Incorrect request type specified"):
+        aur_package.aur_version(AUR_ERROR)
+
+
+def _checkout(root: Path, pinned: aur_package.Release, aur: dict, monkeypatch: pytest.MonkeyPatch) -> None:
+    (root / "pyproject.toml").write_text('[project]\nname = "fastbrowse"\nversion = "9.9.9"\n', encoding="utf-8")
+    directory = root / "packaging" / "aur"
+    directory.mkdir(parents=True)
+    for name, text in aur_package.render(pinned).items():
+        (directory / name).write_text(text, encoding="utf-8")
+    record = {
+        "info": {"name": "fastbrowse", "version": "9.9.9", "requires_dist": ["httpx[http2]>=0.28", "pydantic>=2.11"]},
+        "urls": [{"packagetype": "sdist", "digests": {"sha256": NEW.sha256}}],
+    }
+    monkeypatch.setattr(aur_package, "_pypi", lambda *_: record)
+    monkeypatch.setattr(aur_package, "_aur_info", lambda _: aur)
+    monkeypatch.setattr("sys.argv", ["aur_package.py", "--root", str(root)])
+
+
+def test_the_check_fails_while_the_aur_lacks_the_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _checkout(tmp_path, NEW, AUR_NONE, monkeypatch)
+
+    assert aur_package.main() == 1
+    assert "the AUR has no fastbrowse, and PyPI has 9.9.9" in capsys.readouterr().err
+
+
+def test_the_check_passes_when_the_aur_holds_the_release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _checkout(tmp_path, NEW, _aur_holding("9.9.9-1"), monkeypatch)
+
+    assert aur_package.main() == 0
+
+
+def test_one_check_reports_a_stale_package_and_a_missing_aur_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _checkout(tmp_path, aur_package.Release("9.9.8", "c" * 64), AUR_NONE, monkeypatch)
+
+    assert aur_package.main() == 1
+    err = capsys.readouterr().err
+    assert "packaging/aur is fastbrowse 9.9.8, and PyPI has 9.9.9" in err
+    assert "the AUR has no fastbrowse, and PyPI has 9.9.9" in err
