@@ -42,7 +42,7 @@ Credentials per arm (environment variable names; values never enter Git, rows or
 | `browser-use` | `BROWSER_USE_API_KEY` |
 | `browser-use-ultrafast` | `BROWSER_USE_API_KEY` |
 | `jev-ultrafast` | `BROWSER_USE_API_KEY`, `OPENROUTER_API_KEY` |
-| `browser-harness` | `BROWSER_USE_API_KEY` (cloud browser), `OPENROUTER_API_KEY` (Codex's model provider); Codex CLI 0.163.0 on PATH |
+| `browser-harness` | `BROWSER_USE_API_KEY` (cloud browser), `OPENROUTER_API_KEY` (Codex's model provider); the pinned Codex CLI on PATH |
 | `fastbrowse-hosted` | `FASTBROWSE_HOSTED_API_KEY`; `FASTBROWSE_HOSTED_URL` overrides the public API |
 | every run (the judge) | `PARALLAX_JUDGE_MODELS=anthropic/claude-opus-5.5`, `PARALLAX_JUDGE_BASE_URL=https://openrouter.ai/api/v1`, `PARALLAX_JUDGE_API_KEY`; `AI_GATEWAY_API_KEY` only with `--judge-policy browser-internal-jev-v3` |
 
@@ -457,11 +457,26 @@ group (`fastbrowse_evals.hosted_api`).
 
 ### Open-source Browser Use
 
-`browser-use-oss` (`browser-use==0.13.10`) is opt-in: `--arms browser-use-oss`.
+`browser-use-oss` (browser-use 1.0 on its defaults) is opt-in: `--arms browser-use-oss`.
+
+### Diagnostic suites
+
+`--suite sweep` runs three store-page reads from a maintainer's weekly addon sweep (a CurseForge project page
+behind a Cloudflare check, its comments, and a Wago Addons listing; `src/fastbrowse_evals/sweep_tasks.py`). It is
+outside the catalog: never versioned, published or gated on, and a campaign runs it only as a smoke:
+`suites: sweep`, `smoke: true`, `groups: head-to-head`, `head_to_head_arms: fastbrowse browser-use-oss`.
+
+### Competitor versions
+
+Every competitor arm runs its latest release. `src/fastbrowse_evals/adapters/arm-pins.json` pins browser-use, Browser
+Harness, Cua Driver, the Codex CLI and jev-ultrafast, and `pyproject.toml` pins `browser-use-sdk`.
+`python -m fastbrowse_evals.arm_pins check` names any pin behind its latest release, and a campaign group runs the
+same check on its own arms before its first paid call. The daily Arm pins workflow opens the bump as a pull request
+on `bot/arm-pins`.
 
 ### Codex with Cua Driver
 
-`cua-codex` is an opt-in internal comparison arm using Cua Driver 0.34.0 and Codex CLI 0.160.1.
+`cua-codex` is an opt-in internal comparison arm using the pinned Cua Driver and Codex CLI.
 It runs `gpt-6-astra` with xhigh reasoning and the default service tier, through Cua browser tools
 on an owned Linux Xvfb/Openbox desktop. Install those tools and dbus-daemon, authenticate Codex, then run:
 
@@ -481,7 +496,7 @@ and billed spend remains unknown. The arm uses Cua's supported coding-agent MCP 
 ### Codex with Browser Harness
 
 `browser-harness` is a head-to-head arm for [Browser Harness](https://github.com/browser-use/browser-harness)
-0.1.13, run the way Browser Use measured it in its own README comparison: the Codex CLI (0.163.0) given
+run the way Browser Use measured it in its own README comparison: the Codex CLI given
 `browser-harness` as its CLI and `SKILL.md` (not `browser-harness-mcp`), on `openai/gpt-6-luna` at medium reasoning
 with web search off, attached over CDP to a fresh Browser Use Cloud browser, the browser the `fastbrowse` arm runs on.
 It runs inside the hosted head-to-head (`HEAD_TO_HEAD_ARMS`), the invocation that also runs `fastbrowse`,

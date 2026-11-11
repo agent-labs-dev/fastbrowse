@@ -848,6 +848,7 @@
         "hover",
         "drag",
         "fill",
+        "press",
         "blur",
         "select",
         "enter",

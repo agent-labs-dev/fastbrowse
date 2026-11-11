@@ -7,7 +7,7 @@
 //! keep their real ids. Replies and events come back as CDP JSON, so [`crate::cdp::Cdp`] and the session code see
 //! one kind of browser.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -16,7 +16,7 @@ use serde_json::{Map, Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
 
-use super::protocol::{EXTENSION_IDS, HostRecord, PROTOCOL};
+use super::protocol::{EXTENSION_IDS, HostRecord, PROTOCOL, allowed_methods};
 use crate::error::BrowserError;
 
 /// Domains the session enables with `<Domain>.enable`, which the extension must relay.
@@ -527,6 +527,14 @@ pub async fn connect(record: &HostRecord, task: &str, trace: Trace) -> Result<En
              {update}"
         )));
     }
+    let missing = missing_methods(&hello);
+    if !missing.is_empty() {
+        return Err(unavailable(&format!(
+            "the fastbrowse extension does not relay {} that this fastbrowse sends: update the fastbrowse extension \
+             (from the Chrome Web Store, or run `fastbrowse extension path` and click Reload on chrome://extensions)",
+            missing.join(", ")
+        )));
+    }
     let (to_cdp, replies) = mpsc::unbounded_channel();
     let (commands, mut incoming) = mpsc::unbounded_channel::<String>();
     let relay = Arc::new(Relay {
@@ -589,6 +597,13 @@ fn unavailable(message: &str) -> BrowserError {
     BrowserError::Unavailable(message.to_owned())
 }
 
+/// The CDP methods this build sends that the extension's hello does not list. A copy older than the list sends none,
+/// so every method is missing; a newer copy relaying more passes.
+fn missing_methods(hello: &Value) -> Vec<String> {
+    let theirs: HashSet<&str> = hello["methods"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    allowed_methods().into_iter().filter(|method| !theirs.contains(method.as_str())).collect()
+}
+
 #[cfg(unix)]
 async fn dial(socket: &Path) -> Result<tokio::net::UnixStream, BrowserError> {
     tokio::net::UnixStream::connect(socket)
@@ -606,6 +621,17 @@ async fn dial(socket: &Path) -> Result<tokio::net::windows::named_pipe::NamedPip
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_extension_that_cannot_relay_a_method_this_build_sends_is_named_before_the_run() {
+        let ours = allowed_methods();
+        assert_eq!(missing_methods(&json!({"protocol": PROTOCOL})), ours, "a copy older than the list relays none");
+        let short: Vec<&String> = ours.iter().filter(|m| *m != "Page.setInterceptFileChooserDialog").collect();
+        assert_eq!(missing_methods(&json!({"methods": short})), ["Page.setInterceptFileChooserDialog"]);
+        let mut more: Vec<String> = ours.clone();
+        more.push("Some.newerMethod".to_owned());
+        assert!(missing_methods(&json!({"methods": more})).is_empty(), "a newer copy relaying more passes");
+    }
 
     fn relay() -> Relay {
         relay_to(mpsc::unbounded_channel().0)

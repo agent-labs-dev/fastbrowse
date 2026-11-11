@@ -1,6 +1,6 @@
 //! Answers built from notes: Jev's facts, each with the quotes it rests on.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use fastbrowse_core::citations::{page_text, text_fragment};
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionClient, NoulQuestion, Question};
@@ -1141,34 +1141,11 @@ fn initial_items(notes: &Notes, steps: bool) -> Vec<ComposeItem> {
 
 const PARTIAL_NOTICE: &str = "Partial evidence only. Remaining coverage is omitted; totals may be incomplete.";
 
-/// `partial_answer`: everything a stopped run collected, without another model call.
-pub fn partial_answer(notes: &Notes) -> ComposedAnswer {
-    let facts = notes.facts();
-    let mut quoted: Vec<&&crate::memory::Fact> = facts.iter().filter(|fact| fact.evidence.is_some()).collect();
-    quoted.sort_by_key(|fact| !notes.answers(&fact_id(fact)));
-    let mut ranks: IndexMap<Option<String>, usize> = IndexMap::new();
-    let mut ranked: Vec<(usize, &&crate::memory::Fact)> = Vec::new();
-    // Early sources can fill the partial answer before a later target's finding gets a turn.
-    for fact in quoted {
-        let source = fact.evidence.as_ref().map(|evidence| evidence.url.clone());
-        let rank = ranks.get(&source).copied().unwrap_or(0);
-        ranked.push((rank, fact));
-        ranks.insert(source, rank + 1);
-    }
-    ranked.sort_by_key(|(rank, _)| *rank);
-    let mut counted: HashSet<String> = HashSet::new();
-    let mut claims: Vec<Claim> = Vec::new();
-    for (_, fact) in ranked {
-        let key = fact_id(fact);
-        if counted.contains(&key) {
-            continue;
-        }
-        let claim_text = fact.evidence.as_ref().map(|evidence| evidence.quote.clone()).unwrap_or_default();
-        let claim = Claim::new(&claim_text, vec![key]);
-        counted.extend(notes.expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str)));
-        claims.push(claim);
-    }
-    marked_partial(assemble_answer(&claims, notes, &[]))
+/// `partial_answer`: the facts a stopped run read as answering its task, each citing its quote and the records it
+/// draws on, without another model call, or `None` when it read none. Context it collected on the way is not an
+/// answer: a write run that lost its browser cited six lone `}` lines of a comment's error dump as its answer (#857).
+pub fn partial_answer(notes: &Notes) -> Option<ComposedAnswer> {
+    draft_answer(notes).map(marked_partial)
 }
 
 /// `result`, stated as what a run that stopped short could say.
@@ -1281,6 +1258,7 @@ pub(crate) async fn draft_reviewed(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::sync::Mutex;
 
     use serde_json::Value;

@@ -22,8 +22,9 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 if TYPE_CHECKING:
     from fastbrowse_evals.final_page import FinalPage
 
-DRIVER_VERSION = "0.34.0"
-CODEX_VERSION = "0.160.1"
+PINS = json.loads(Path(__file__).with_name("arm-pins.json").read_text())
+DRIVER_VERSION = PINS["cua-driver"]["version"]
+CODEX_VERSION = PINS["@openai/codex"]["version"]
 TOOLS = ("get_browser_state", "browser_navigate", "browser_click", "browser_type", "browser_dialog", "browser_pointer")
 
 

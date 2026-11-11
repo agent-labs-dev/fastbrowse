@@ -57,6 +57,7 @@ HOSTED = {"mode": "browser-use-hosted"}
         ("fastbrowse-pool", POOL),
         ("jev-ultrafast", CLOUD),
         ("browser-use", HOSTED),
+        ("browser-use-oss", CLOUD),
     ],
 )
 def test_each_arm_may_publish_from_the_browser_it_is_measured_in(arm: str, browser: dict[str, object]) -> None:
@@ -71,7 +72,8 @@ def test_each_arm_may_publish_from_the_browser_it_is_measured_in(arm: str, brows
         ("browser-use", CLOUD),
         ("jev-ultrafast", HOSTED),
         ("fastbrowse", {"mode": "local-chrome"}),  # still headless with a throwaway profile
-        ("browser-use-oss", CLOUD),  # an arm this build does not know
+        ("cua-codex", CLOUD),  # an arm this build does not know
+        ("browser-use-oss", HOSTED),
         ("fastbrowse", None),
     ],
 )

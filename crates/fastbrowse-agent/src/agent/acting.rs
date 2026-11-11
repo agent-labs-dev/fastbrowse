@@ -11,9 +11,9 @@ use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::text;
 use fastbrowse_core::recipe::RecipeText;
 use fastbrowse_core::safety::{
-    HAPPENED, LATER_VALUES, MET, asks_for_credentials, changes_a_value, changes_credentials, conditional_question,
-    control_action, downloads_question, edits_question, happened_question, irreversible_question, is_password,
-    lasting_question, may_be_irreversible, met_question, origin_of, requested_question, resolve_secret,
+    DONE, HAPPENED, LATER_VALUES, MET, asks_for_credentials, changes_a_value, changes_credentials,
+    conditional_question, control_action, downloads_question, edits_question, happened_question, irreversible_question,
+    is_password, lasting_question, may_be_irreversible, met_question, origin_of, requested_question, resolve_secret,
     sets_new_password, starts_download, values_question,
 };
 use indexmap::IndexMap;
@@ -25,7 +25,7 @@ use super::helpers::{caller_link, describe, dialog_question, empty_fields_fact, 
 use super::state::{Extent, Flow, OutputIntent, RunState, SignInNeeds, Step, Stop, Unsure};
 use crate::memory::Notes;
 use crate::policy::{Ahead, Decision, HistoryEntry};
-use crate::retrieval::text::{Word, edge_options, words};
+use crate::retrieval::text::{SpanKind, Word, edge_options, spans, words};
 use crate::verification::page_state;
 use crate::writing::write_value;
 
@@ -137,6 +137,14 @@ fn value_questions<'a>(
             tried.join(", ")
         )
     };
+    // A fill replaces what the field holds, so a value chosen without it dropped the @mention a reply box opened with
+    // when the task said to type after it (#857).
+    let holds = holding(target)
+        .map(|now| format!(" The field holds {now} now, and typing replaces all of it."))
+        .unwrap_or_default();
+    let source_question =
+        if source_question.is_empty() { source_question } else { format!("{source_question}{holds}") };
+    let tried = format!("{tried}{holds}");
     let mut asked = vec![("source", source_question, sources)];
     if !begins.is_empty() && !ends.is_empty() {
         let span = |end: &str| {
@@ -148,6 +156,12 @@ fn value_questions<'a>(
         asked.push(("last", span("ends"), word_options(text, ends)));
     }
     asked
+}
+
+/// What `target` holds now, quoted, unless it is empty or sensitive: a sensitive field's value is masked and never goes
+/// into a request.
+fn holding(target: &Control) -> Option<String> {
+    target.value.as_deref().filter(|value| !target.sensitive && !value.trim().is_empty()).map(text::repr)
 }
 
 /// What was already typed into `target` this run, quoted.
@@ -212,10 +226,10 @@ fn gate_questions(
 }
 
 /// The finish check's answer about the steps the task asks to be carried out.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Carried {
     Done,
-    Undone,
+    Undone(String),
     /// Not carried out, and the page or the recent actions show the site does not allow it.
     Refused,
 }
@@ -284,6 +298,17 @@ impl Agent {
                 }
                 self.gate_irreversible(state, observation, decision).await?;
                 Ok(Action { target_id: target.map(|t| t.id.clone()), ..Action::new(decision.operation) })
+            }
+            Operation::Press => {
+                let target = require(target)?;
+                if self.page.over_http() {
+                    let reason = format!("{} can only receive a key press in a browser", text::repr(&target.label));
+                    return Err(self.page.needs_browser(reason).into());
+                }
+                self.gate_edit(state, observation, decision, target).await?;
+                let chord = self.text_with_scope(state, observation, decision, target, true).await?;
+                self.gate_irreversible(state, observation, decision).await?;
+                Ok(Action { target_id: Some(target.id.clone()), text: Some(chord), ..Action::new(Operation::Press) })
             }
             Operation::Drag => {
                 let Some(destination) = &decision.destination else {
@@ -564,7 +589,9 @@ impl Agent {
     /// `action` is what the agent is about to do, as [`control_action`] writes it for a control. `lasting` asks, in an
     /// authorized run, whether a reversible action still leaves something the site keeps: one the task did not ask for
     /// is refused once, so the run can pick again rather than stop (#743). A commit the task asks for only in some state
-    /// of the page goes ahead only once the page is judged not to show the state the task rules it out in (#848).
+    /// of the page goes ahead only once the page is judged not to show the state the task rules it out in (#848), and so
+    /// does every commit after the run's first: `requested` reads the task alone, and still judged a reply the task asks
+    /// for once asked for after the run had posted it twice (#882).
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn gate_question(
         &self,
@@ -624,7 +651,7 @@ impl Agent {
             }
             // Asked unanswered, the condition is checked as if the task set one: the check costs a call, a missed
             // condition an irreversible commit.
-            let conditional = conditional.is_none_or(|p| p > EVEN_ODDS);
+            let conditional = conditional.is_none_or(|p| p > EVEN_ODDS) || state.commits > 0;
             if wanted
                 && (!reversible || keeps)
                 && conditional
@@ -727,6 +754,10 @@ impl Agent {
                  happens, and the page does not show that it happened. Do what the task asks first, with the values \
                  it gives first, before using these",
             )
+        } else if met.as_deref() == Some(DONE) {
+            Some(
+                "has already been done by this run, and the task does not ask for it again: check the page shows it, or finish",
+            )
         } else if met.as_deref() != Some(MET) || (waits && !happened) {
             Some(UNSHOWN_CONDITION)
         } else {
@@ -777,6 +808,19 @@ impl Agent {
         decision: &Decision,
         target: &Control,
     ) -> Step<String> {
+        self.text_with_scope(state, observation, decision, target, false).await
+    }
+
+    /// The text `text` gives, or with `task_only` words copied from the task alone: a key chord, which neither a secret
+    /// nor what was read can give.
+    async fn text_with_scope(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        decision: &Decision,
+        target: &Control,
+        task_only: bool,
+    ) -> Step<String> {
         let origin = self.target_origin(target);
         state.text_source = Some(RecipeText::Live);
         let missing = state.missing.contains(&(observation.url.clone(), target.label.clone(), target.context.clone()));
@@ -784,6 +828,9 @@ impl Agent {
             .replayed
             .then(|| state.replay.as_ref().and_then(|replay| replay.text_for(target, missing)).cloned())
             .flatten();
+        // A key chord comes from the task alone, so a recipe gives one only as the literal it recorded: a secret or an
+        // input in its place would be pressed without the handling a secret's fill gets.
+        let recorded = recorded.filter(|source| !task_only || matches!(source, RecipeText::Literal(_)));
         if let Some(source) = recorded {
             match source {
                 RecipeText::Literal(text) => {
@@ -809,11 +856,14 @@ impl Agent {
                 RecipeText::Live => {}
             }
         }
-        if is_password(target) {
+        if is_password(target) && !task_only {
             let secrets = self.secret_names(&origin);
             return self.sensitive_text(state, observation, target, secrets, &origin).await;
         }
-        let Value { mut task, read, label, group, sources, source_question } = self.value(state, target);
+        let Value { mut task, read, label, group, mut sources, source_question } = self.value(state, target);
+        if task_only {
+            sources.retain(|source, _| source == IN_TASK);
+        }
         let (mut begins, mut ends) = self.located(state, observation, &task, &label, group).await?;
         let asked =
             value_questions(state, target, (&task, "the task"), &label, (&begins, &ends), source_question, sources);
@@ -832,6 +882,7 @@ impl Agent {
                 &label,
                 target.input_type.as_deref(),
                 &typed_into(state, target),
+                holding(target).as_deref(),
                 &crate::dates::dated(observation.captured_at, &state.dates),
                 &state.history.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
                 Some(&state.ledger),
@@ -1531,7 +1582,26 @@ impl Agent {
         } else if holds("refused")? {
             Carried::Refused
         } else {
-            Carried::Undone
+            let steps = spans(&state.task, SpanKind::Str);
+            let criteria = steps
+                .iter()
+                .enumerate()
+                .map(|(index, (_, _, step))| (index.to_string(), JsonValue::from(step.clone())))
+                .collect();
+            let picked = self
+                .ask_choice(
+                    state,
+                    observation,
+                    "Which sentence or clause of the task has not been carried out? Choose the task's own wording.",
+                    criteria,
+                )
+                .await?;
+            let index =
+                picked.parse::<usize>().map_err(|_| DecisionError::Failed("expected an undone task step".into()))?;
+            let Some((_, _, step)) = steps.get(index) else {
+                return Err(DecisionError::Failed("expected an undone task step".into()).into());
+            };
+            Carried::Undone(step.clone())
         })
     }
 

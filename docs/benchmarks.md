@@ -138,10 +138,10 @@ them in no column above.
 We have not run that arm, and no C1 or C3 figure for it is claimed. The arms the runner can measure are fixed
 by `src/fastbrowse/evals/benchmarks.py` (`fastbrowse`, `fastbrowse-pool`, `browser-use`, `jev-ultrafast`), and
 each publication group validates the arms it may carry: `internal-hosted` pairs `fastbrowse` with `browser-use`,
-and `internal-ultrafast` pairs `fastbrowse-pool` with `jev-ultrafast` at the pinned commit `1231850a`. Measuring
-Browser Use Ultrafast therefore takes an arm added to the arm set and to a group, a patch pin of the revision it
-runs, and a cost meter that adds its browser-hour and proxy GB, so its per-task cost is the same quantity as
-ours. Until that exists the comparison stays unmeasured, and its vendor figures stay labelled as the vendor's.
+and `internal-ultrafast` pairs `fastbrowse-pool` with `jev-ultrafast` at the commit pinned in
+`evals/src/fastbrowse_evals/adapters/arm-pins.json`. Measuring Browser Use Ultrafast therefore takes an arm
+added to the arm set and to a group, a patch pin of the revision it runs, and a cost meter that adds its
+browser-hour and proxy GB, so its per-task cost is the same quantity as ours. Until that exists the comparison stays unmeasured, and its vendor figures stay labelled as the vendor's.
 
 ## What is not claimed here
 

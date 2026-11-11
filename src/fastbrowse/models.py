@@ -86,6 +86,7 @@ class Operation(StrEnum):
     HOVER = "hover"
     DRAG = "drag"
     FILL = "fill"
+    PRESS = "press"
     BLUR = "blur"
     SELECT = "select"
     ENTER = "enter"

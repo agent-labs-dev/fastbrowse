@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import dataclasses
 import json
 import os
@@ -1572,12 +1571,9 @@ async def test_interrupted_judgment_retains_completed_agent_evidence(monkeypatch
     assert retained.seconds == 1
 
 
-def test_oss_and_cua_runners_treat_no_limit_as_no_limit():
+def test_oss_runner_treats_no_limit_as_no_limit():
     oss = runpy.run_path(str(live.OSS_RUNNER))
-    history = SimpleNamespace(is_done=lambda: False, history=[None] * 5)
-    assert oss["ending"](history, None) == "stopped"
-    assert oss["ending"](history, 5) == "budget_exceeded"
-    assert oss["STEP_CEILING"] >= 1_000_000
+    assert oss["STEP_CEILING"] >= 1_000_000 and oss["TIMEOUT_CEILING"] >= 86_400
 
 
 def test_the_ultrafast_runner_lifts_the_packages_demo_budget(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2746,64 +2742,106 @@ def test_a_crash_leaves_its_cost_unknown_for_every_arm(arm: str) -> None:
     assert row.llm_calls_basis == ("physical_requests" if arm == "fastbrowse" else None)
 
 
-def _oss_run(monkeypatch: pytest.MonkeyPatch, answer: Any, *, done: bool = False) -> dict[str, Any]:
-    """The OSS runner over a fake browser-use whose agent sends one model request through the runner's own client."""
+def _oss_runner(
+    monkeypatch: pytest.MonkeyPatch, status: str, error: str | None, seen: dict[str, Any]
+) -> dict[str, Any]:
+    """The OSS runner over a fake browser-use 1.0 whose run ends with `status` and `error`, as its history reports."""
 
     class Agent:
-        def __init__(self, llm: Any, **_: Any) -> None:
-            self.llm = llm
+        def __init__(self, **kwargs: Any) -> None:
+            seen.update(kwargs)
 
-        async def run(self, max_steps: int) -> Any:
-            with contextlib.suppress(httpx.HTTPError):
-                await self.llm.http.post("https://openrouter.ai/api/v1/chat/completions", json={})
+        async def run(self, max_steps: int, timeout: float) -> Any:
+            seen.update(max_steps=max_steps, timeout=timeout)
+            done = status == "completed"
             return SimpleNamespace(
-                is_done=lambda: done,
-                is_successful=lambda: True,
-                history=[],
+                status=status,
+                success=True if done else None,
+                error=error,
+                steps=3,
+                duration_s=2.0,
+                cost_usd=0.1 if done else None,
+                usage={"requests": 3},
+                messages=[],
+                structured_output=None,
                 final_result=lambda: "answer" if done else None,
             )
 
+    class Browser:
+        def __init__(self, **kwargs: Any) -> None:
+            seen["browser_options"] = kwargs
+            self.id, self.live_url, self.cloud_cdp_url = "b1", "https://live.test", "https://b.test"
+
+        async def start(self) -> None:
+            seen.setdefault("calls", []).append("start")
+
+        async def stop(self) -> None:
+            seen.setdefault("calls", []).append("stop")
+            self.id = None
+
+    class ModelServerError(Exception): ...
+
+    class ModelConnectionError(Exception): ...
+
     fake = types.ModuleType("browser_use")
-    fake.Agent, fake.Browser, fake.Tools = Agent, lambda **_: None, lambda **_: None  # ty: ignore[unresolved-attribute]
-    fake.ChatOpenRouter = lambda http_client, **_: SimpleNamespace(http=http_client)  # ty: ignore[unresolved-attribute]
+    fake.Agent, fake.Browser = Agent, Browser  # ty: ignore[unresolved-attribute]
+    loop = types.ModuleType("browser_use.agent.loop")
+    loop.TRANSIENT = (ModelServerError, ModelConnectionError)  # ty: ignore[unresolved-attribute]
     monkeypatch.setitem(sys.modules, "browser_use", fake)
-
-    async def transport(_: Any, request: httpx.Request) -> httpx.Response:
-        return answer(request)
-
-    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", transport)
-    request = {"goal": "g", "cdp_ws": "ws://b", "model": "m", "max_steps": None}
-    return asyncio.run(
-        runpy.run_path(str(live.OSS_RUNNER))["run"]({**request, "retryable_status": sorted(RETRYABLE_STATUS)})
-    )
+    monkeypatch.setitem(sys.modules, "browser_use.agent", types.ModuleType("browser_use.agent"))
+    monkeypatch.setitem(sys.modules, "browser_use.agent.loop", loop)
+    return runpy.run_path(str(live.OSS_RUNNER))
 
 
-def _dropped(_: httpx.Request) -> httpx.Response:
-    raise httpx.ReadError("connection reset")
+def _oss_run(monkeypatch: pytest.MonkeyPatch, status: str, error: str | None = None) -> dict[str, Any]:
+    seen: dict[str, Any] = {}
+    runner = _oss_runner(monkeypatch, status, error, seen)
+    request = {"goal": "g", "max_steps": None, "browser_minutes": 240}
+    browser = SimpleNamespace()
+    result = asyncio.run(runner["run"](request, browser))
+    # 1.0's defaults stand: no model or mode is chosen, and its step and time limits are lifted, not left at 100/1700.
+    assert seen["browser"] is browser
+    assert "llm" not in seen and "mode" not in seen and seen["max_steps"] >= 1_000_000 and seen["timeout"] >= 86_400
+    return result
+
+
+def test_the_oss_runner_owns_its_browser_and_answers_in_order(monkeypatch) -> None:
+    seen: dict[str, Any] = {}
+    runner = _oss_runner(monkeypatch, "completed", None, seen)
+    lines = iter([json.dumps({"goal": "g", "max_steps": None, "browser_minutes": 240}), "{}"])
+    events: list[dict[str, Any]] = []
+
+    async def read() -> str:
+        return next(lines)
+
+    asyncio.run(runner["session"](read, events.append))
+    # 1.0's own cloud browser, its defaults kept but for staying up for the final page and the lifted time cap.
+    assert seen["browser_options"] == {"keep_alive": True, "cloud_timeout": 240}
+    assert seen["calls"] == ["start", "stop"]
+    assert [e["event"] for e in events] == ["ready", "result", "stopped"]
+    assert events[0]["browser_id"] == "b1" and events[0]["cdp_url"] == "https://b.test"
+    assert events[1]["status"] == "done" and "seconds" not in events[1]  # the harness times the run
+    assert events[2] == {"event": "stopped", "browser_id": "b1", "stopped": True}
 
 
 @pytest.mark.parametrize(
-    "answer",
-    [
-        lambda r: httpx.Response(503, request=r, json={}),
-        lambda r: httpx.Response(200, request=r, json={"error": {"code": 502}}),
-        _dropped,
-    ],
+    "error", ["ModelServerError: status_code: 503, model_name: bu-fast, body: {}", "ModelConnectionError: reset"]
 )
-def test_a_provider_outage_is_unavailable_on_the_oss_arm(monkeypatch, answer) -> None:
-    result = _oss_run(monkeypatch, answer)
+def test_a_provider_outage_is_unavailable_on_the_oss_arm(monkeypatch, error) -> None:
+    result = _oss_run(monkeypatch, "error", error)
     assert result["status"] == "unavailable" and "Model" in result["error"]
     assert result["dollars"] is None
 
 
-def test_an_outage_the_oss_agent_outlasted_counts_for_nothing(monkeypatch) -> None:
-    result = _oss_run(monkeypatch, lambda r: httpx.Response(200, request=r, json={"usage": {"cost": 0.1}}), done=True)
-    assert result["status"] == "done" and result["error"] is None and result["dollars"] == 0.1
+def test_a_completed_oss_run_reports_its_answer_and_cost(monkeypatch) -> None:
+    result = _oss_run(monkeypatch, "completed")
+    assert result["status"] == "done" and result["error"] is None and result["answer"] == "answer"
+    assert result["dollars"] == 0.1 and result["steps"] == 3
 
 
-def test_an_oss_agent_that_gave_up_with_the_provider_up_is_its_own_stop(monkeypatch) -> None:
-    result = _oss_run(monkeypatch, lambda r: httpx.Response(400, request=r, json={}))
-    assert result["status"] == "stopped"
+def test_an_oss_run_the_provider_refused_is_its_own_error(monkeypatch) -> None:
+    result = _oss_run(monkeypatch, "error", "ModelHTTPError: status_code: 400, model_name: bu-fast, body: {}")
+    assert result["status"] == "error" and result["error"].startswith("ModelHTTPError")
 
 
 @pytest.mark.parametrize(("cost", "tokens", "price"), [(0.0, None, 1e-7), (0.0, 0, 1e-7), (0.0, 100, 0.0)])
