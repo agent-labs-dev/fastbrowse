@@ -135,6 +135,10 @@ Fetched documents have no pixels, so optional screenshots and step frames are sk
 Browser captures record an icon-only link's destination with nearby container text, passing through empty layout
 wrappers. The search stops at a paragraph even when it is empty, and never uses the page root as nearby text.
 
+Browser captures write each checked checkbox, radio or switch as `Label: checked`, a native one hidden behind a
+visible label included, so text a page re-renders for the option chosen, such as an order total per shipping method,
+is read with the option it belongs to.
+
 Browser and fetch captures write a `time` or custom element's `datetime` in brackets after the text it shows, so a
 relative date such as "3 weeks ago" keeps the exact date the page holds. `ins` and `del` are excluded, and nothing is
 added when the shown text already states the value.
@@ -174,7 +178,9 @@ relevance pass narrows them first. If no value choice fits, a page that fits Jev
 facts for synthesis. Jev's pick stands. Code cut the spans from the capture, so neither Jev nor the LLM
 writes page text. A span Jev picks becomes a fact, and identical values from the same page and frame share one choice
 with all their source contexts. When Jev says the answer must be composed, every nonempty source block is kept as a fact and the
-answer is composed when the run tries to finish, with recovery for a rejected draft.
+answer is composed when the run tries to finish, with recovery for a rejected draft. The recovery decision is told
+which claim failed which check, and a draft rejected for leaving out something the task asks for is shown to it whole,
+since no one claim is to blame and only the draft says what it lacks.
 
 A fresh read, including source quotes kept for synthesis, retires earlier facts from the same address when their
 quotes are no longer shown. The facts stay as history. Quotes still shown and evidence from other addresses remain.

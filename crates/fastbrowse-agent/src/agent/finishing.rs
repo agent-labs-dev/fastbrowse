@@ -543,10 +543,26 @@ fn rejection_reason(rejection: &str) -> String {
     if failed.is_empty() {
         return "The composed answer was rejected against its source quotes or requested coverage. Correct the answer or gather the evidence it needs.".into();
     }
-    format!(
+    let mut reason = format!(
         "The composed answer was rejected: {}. Correct the answer or gather the evidence it needs.",
         failed.join("; ")
-    )
+    );
+    // A coverage check rejects the answer whole, so only the draft says what it lacks. Told only that a value was left
+    // out, the navigator chose done again over a checkout whose draft gave one shipping method's total and "not shown"
+    // for four others; shown that draft, it chose the next method (#897).
+    let feedback: Value = serde_json::from_str(rejection).unwrap_or_default();
+    let coverage = feedback["rejected_checks"].as_array().is_some_and(|checks| checks.iter().any(|c| c == "coverage"));
+    if coverage && let Some(claims) = drafted(rejection).filter(|claims| !claims.is_empty()) {
+        reason += "\nThe rejected answer:";
+        if let Some(columns) = feedback["columns"].as_array().filter(|columns| !columns.is_empty()) {
+            let names: Vec<&str> = columns.iter().filter_map(Value::as_str).collect();
+            reason += &format!("\n{}", names.join(" | "));
+        }
+        for claim in claims {
+            reason += &format!("\n- {claim}");
+        }
+    }
+    reason
 }
 
 /// The claims of a rejected draft that held, under a notice naming what was withheld and why. A run that finished its
@@ -668,5 +684,30 @@ mod tests {
         ] {
             assert!(reason.contains(part), "{reason}");
         }
+    }
+
+    #[test]
+    fn a_draft_rejected_for_coverage_shows_the_navigator_what_it_lacks() {
+        // #897: one shipping method's total was read, and the draft said "not shown" for the others.
+        let draft = |checks: serde_json::Value| {
+            json!({
+                "draft_claims": [
+                    {"text": "UPS Saver | $32.61 | $174.69", "evidence_ids": ["e1"]},
+                    {"text": "DHL Express | $28.40 | not shown for this method", "evidence_ids": ["e2"]},
+                ],
+                "columns": ["Shipping method", "Price", "Grand Total"],
+                "rejected_checks": checks,
+            })
+            .to_string()
+        };
+        let reason = rejection_reason(&draft(json!(["coverage"])));
+        assert!(
+            reason.ends_with(
+                "\nThe rejected answer:\nShipping method | Price | Grand Total\n- UPS Saver | $32.61 | $174.69\n- DHL Express | $28.40 | not shown for this method"
+            ),
+            "{reason}"
+        );
+        // A claim its own check rejected is named already; the draft is shown only for what no one claim is to blame.
+        assert!(!rejection_reason(&draft(json!(["claim1"]))).contains("The rejected answer"));
     }
 }

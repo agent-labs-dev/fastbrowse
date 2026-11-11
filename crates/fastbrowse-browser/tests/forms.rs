@@ -138,6 +138,39 @@ async fn test_capture_preserves_empty_fields_disabled_actions_and_layout() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_capture_says_which_choice_is_checked() {
+    // #897: a checkout's order summary re-rendered in place for each shipping method, and no read could say which
+    // method its totals were for, so the run took one method's totals as covering all five.
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = `
+          <label><input type=radio name=ship style='opacity:0;position:absolute'>DHL Express $28.40</label>
+          <label><input type=radio name=ship checked style='opacity:0;position:absolute'>UPS Saver $32.61</label>
+          <input type=radio name=ship id=fedex hidden><label for=fedex>FedEx Priority $26.95</label>
+          <label><input type=checkbox checked>Gift wrap</label>
+          <label><input type=checkbox>Insurance</label>
+          <div role=radio aria-checked=true tabindex=0>Pickup</div>
+          <p>Grand Total $174.69</p>`",
+    )
+    .await;
+    let capture = h.page.capture().await.expect("capture");
+    for checked in ["UPS Saver $32.61: checked", "Gift wrap: checked", "Pickup: checked"] {
+        assert!(capture.text.contains(checked), "{checked:?} in {}", capture.text);
+    }
+    for unchecked in ["DHL Express $28.40: checked", "Insurance: checked", "FedEx Priority $26.95: checked"] {
+        assert!(!capture.text.contains(unchecked), "{unchecked:?} in {}", capture.text);
+    }
+    // A hidden choice reached through its label still says it is the one chosen.
+    eval_active(&h.page, "document.querySelector('#fedex').checked = true").await;
+    let capture = h.page.capture().await.expect("capture");
+    assert!(capture.text.contains("FedEx Priority $26.95: checked"), "{}", capture.text);
+    assert!(!capture.text.contains("UPS Saver $32.61: checked"), "{}", capture.text);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_capture_reads_shadow_roots() {
     let Some(h) = harness().await else { return };
     h.goto("").await;
