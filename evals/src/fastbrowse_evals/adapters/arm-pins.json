@@ -1,0 +1,22 @@
+{
+  "browser-use": {
+    "registry": "pypi",
+    "version": "1.0.2"
+  },
+  "browser-harness": {
+    "registry": "pypi",
+    "version": "0.1.13"
+  },
+  "cua-driver": {
+    "registry": "pypi",
+    "version": "0.46.1"
+  },
+  "@openai/codex": {
+    "registry": "npm",
+    "version": "0.167.1"
+  },
+  "browser-use/jev-ultrafast": {
+    "registry": "github",
+    "version": "cf3c406f0fc4becff8986ed4d4d37b7b9f102e45"
+  }
+}

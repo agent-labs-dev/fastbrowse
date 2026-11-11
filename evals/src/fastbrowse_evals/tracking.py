@@ -181,7 +181,18 @@ def project(
     if suite == Suite.BU_BENCH:
         raise ValueError("BU Bench requires weighted-score tracking, not a binary evidence projection")
     allowed = (
-        {"core", "dev", "heldout", "stretch-dev", "stretch-heldout", "local", "mock", "mock-completion", "mock-safety"}
+        {
+            "core",
+            "dev",
+            "heldout",
+            "stretch-dev",
+            "stretch-heldout",
+            "local",
+            "mock",
+            "mock-completion",
+            "mock-safety",
+            "sweep",
+        }
         if suite == Suite.INTERNAL
         else {suite.value}
     )

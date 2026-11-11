@@ -175,12 +175,15 @@ in the background, so the pointer and keyboard focus stay where you left them:
 fastbrowse --desktop org.gnome.TextEditor "Write 'hello' in the open document."
 ```
 
-A password field is never read, and `--secret NAME=ENV_VAR@desktop://<class>` types a secret only into the window
-of that app class. `--authorize` and the step and spend ceilings work as for a browser. A combo box is chosen in
-with the keyboard: its list opens as a popup the run cannot click in, so a list the click opens is closed again
-and the arrow keys move the choice. The run stays in the one window: a dialog the app opens as a window of its own, and a menu that opens as a
-popup, are out of its reach. Recipes, `--start` and every browser option are refused. Set
-`FASTBROWSE_DESKPILOT` to run a `deskpilot` that is not on `PATH`.
+A password field is never read, and `--secret NAME=ENV_VAR@desktop://<class>` types a secret only into the window of
+that app class. `--authorize` and the step and spend ceilings work as for a browser. With a deskpilot that clicks
+popup items ([cjber/deskpilot#84](https://github.com/cjber/deskpilot/pull/84)), an open combo box's list and a popup
+menu's entries are controls like any other, and the run clicks the item it wants. With an older deskpilot a popup
+menu is out of reach, and a combo box is chosen in with the keyboard, as choosing one of its options by name always
+is: a list the click opened is closed again and the arrow keys move the choice. Keys and typed or pasted text reach
+a window on a workspace that is not showing whenever deskpilot's tools take `hidden`. The run stays in the one
+window: a dialog the app opens as a window of its own is out of its reach. Recipes, `--start` and every browser
+option are refused. Set `FASTBROWSE_DESKPILOT` to run a `deskpilot` that is not on `PATH`.
 
 ## Models
 

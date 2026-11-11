@@ -1,5 +1,6 @@
 //! A client for `deskpilot mcp`: one child process for the run, spoken to in MCP's JSON-RPC over its stdin and stdout.
 
+use std::collections::HashSet;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -39,6 +40,10 @@ pub struct Deskpilot {
     // Killed with the client: a run that ends or is cancelled leaves no server behind.
     _child: Child,
     pipe: Mutex<Pipe>,
+    /// The tools whose input schema has `hidden`. A deskpilot before cjber/deskpilot#84 has no `hidden` on `key`,
+    /// `type_text` or `paste_text`, and a newer one refuses keys to a window off screen without it, so the server's
+    /// own schema says which calls carry it.
+    hidden: HashSet<String>,
 }
 
 impl Deskpilot {
@@ -57,7 +62,7 @@ impl Deskpilot {
             stdout: BufReader::new(child.stdout.take().expect("stdout is piped")),
             next_id: 0,
         };
-        let client = Deskpilot { _child: child, pipe: Mutex::new(pipe) };
+        let mut client = Deskpilot { _child: child, pipe: Mutex::new(pipe), hidden: HashSet::new() };
         let version = env!("CARGO_PKG_VERSION");
         client
             .request(
@@ -70,7 +75,24 @@ impl Deskpilot {
             )
             .await?;
         client.notify("notifications/initialized").await?;
+        let mut tools = Vec::new();
+        let mut cursor: Option<Value> = None;
+        loop {
+            let params = cursor.map_or_else(|| json!({}), |cursor| json!({"cursor": cursor}));
+            let page = client.request("tools/list", params).await?;
+            tools.extend(page.get("tools").and_then(Value::as_array).cloned().unwrap_or_default());
+            cursor = page.get("nextCursor").filter(|next| !next.is_null()).cloned();
+            if cursor.is_none() {
+                break;
+            }
+        }
+        client.hidden = taking_hidden(&tools);
         Ok(client)
+    }
+
+    /// `arguments` with `"hidden": true` added when `tool`'s schema offers it.
+    pub fn hidden(&self, tool: &str, arguments: Value) -> Value {
+        with_hidden(&self.hidden, tool, arguments)
     }
 
     async fn notify(&self, method: &str) -> Result<(), ToolError> {
@@ -138,6 +160,24 @@ impl Deskpilot {
     }
 }
 
+/// The names of the tools in a `tools/list` result whose input schema has a `hidden` property.
+fn taking_hidden(tools: &[Value]) -> HashSet<String> {
+    tools
+        .iter()
+        .filter(|tool| tool.pointer("/inputSchema/properties/hidden").is_some())
+        .filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_string))
+        .collect()
+}
+
+fn with_hidden(taking: &HashSet<String>, tool: &str, mut arguments: Value) -> Value {
+    if taking.contains(tool)
+        && let Some(object) = arguments.as_object_mut()
+    {
+        object.insert("hidden".into(), Value::Bool(true));
+    }
+    arguments
+}
+
 /// The first text block of a tool result that parses as JSON.
 pub fn json_block(content: &[Value]) -> Option<Value> {
     content
@@ -154,4 +194,29 @@ async fn write_line(stdin: &mut ChildStdin, message: &Value) -> Result<(), ToolE
         .await
         .map_err(|error| ToolError::Transport(format!("writing to deskpilot mcp: {error}")))?;
     stdin.flush().await.map_err(|error| ToolError::Transport(format!("writing to deskpilot mcp: {error}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn tool(name: &str, properties: Value) -> Value {
+        json!({"name": name, "inputSchema": {"type": "object", "properties": properties}})
+    }
+
+    #[test]
+    fn keys_and_text_carry_hidden_only_when_the_schema_offers_it() {
+        let with = ["key", "type_text", "paste_text"]
+            .map(|name| tool(name, json!({"window": {"type": "string"}, "hidden": {"type": "boolean"}})));
+        let without = ["key", "type_text", "paste_text"].map(|name| tool(name, json!({"window": {"type": "string"}})));
+        let (offered, older) = (taking_hidden(&with), taking_hidden(&without));
+        for name in ["key", "type_text", "paste_text"] {
+            let sent = with_hidden(&offered, name, json!({"window": "0x1", "text": "a"}));
+            assert_eq!(sent, json!({"window": "0x1", "text": "a", "hidden": true}), "{name}");
+            let sent = with_hidden(&older, name, json!({"window": "0x1", "text": "a"}));
+            assert_eq!(sent, json!({"window": "0x1", "text": "a"}), "{name}");
+        }
+    }
 }
