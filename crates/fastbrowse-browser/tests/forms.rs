@@ -481,6 +481,28 @@ async fn test_a_combobox_named_by_the_page_keeps_its_name() {
     assert_eq!(control.label, "Categories");
 }
 
+/// react-select under a form library's label, as Wago's addon settings render it: the label's `for` names the wrapper
+/// div, which takes the id, and the combobox input inside has a generated one.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_label_naming_a_widgets_wrapper_names_its_one_field() {
+    let Some(h) = harness().await else { return };
+    let html = "<form><h2>General</h2><label for=categories>Categories</label><div id=categories>\
+                <div><span>Chat &amp; Communication</span>\
+                <div role=button aria-label=\"Remove Chat &amp; Communication\">x</div>\
+                <input id=react-select-2-input role=combobox aria-autocomplete=list aria-expanded=false></div>\
+                <input type=hidden name=categories value=1></div>\
+                <div><input type=checkbox id=is_unlisted><label for=is_unlisted>Unlisted</label></div>\
+                <button>Save changes</button></form>";
+    let control = combobox(&h, html).await;
+    let observation = h.observe().await;
+    h.close().await;
+    assert_eq!(control.label, "Categories");
+    // Tied to a field, the label no longer titles what follows it as a section of its own.
+    for label in ["Unlisted", "Save changes"] {
+        assert_eq!(find(&observation, label).context.as_deref(), Some("General"), "{label}");
+    }
+}
+
 // A control clipped to nothing is not on the page for a person, and a widget that mirrors it is (#838).
 
 /// How Tom Select and select2 hide the original field they keep in place.
