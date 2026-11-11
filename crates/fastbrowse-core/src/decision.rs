@@ -20,6 +20,18 @@ pub const JEV_DOLLARS_PER_INPUT_TOKEN: f64 = 0.042 / 1_000_000.0;
 /// also document as Jev's context on their routes.
 pub const JEV_LONG_CONTEXT_TOKENS: i64 = 262_144;
 
+/// Characters of a decision request counted as one token when a route's larger context is fitted to, where
+/// `JSON_CHARS_PER_TOKEN` is how a request of Jev's ordinary size is estimated.
+///
+/// On its documented 262,144 tokens, `fit` multiplies the budget by `JSON_CHARS_PER_TOKEN` and the state may reach
+/// 393,216 characters. A present-day page's text carries base64 and hex that tokenize far denser than that: measured
+/// against Jev 1.14 on 2026-11-11 through OpenRouter, one request each over states shaped like `policy::state`,
+/// base64 took 1.19 characters a token and hex 1.34, against 2.05 to 2.28 for dense checkout JSON and 2.14 for a cart
+/// summary. A base64 state built to 393,216 characters was refused with `max_tokens_exceeded` — the failure in
+/// [#959](https://github.com/agent-labs-dev/fastbrowse/issues/959) — while the same content at 288,358 was answered.
+/// So a route serving 262k is fitted at 1.1, below every ratio measured, and one serving Jev's ordinary 32k keeps 1.5.
+pub const JEV_LONG_CONTEXT_CHARS_PER_TOKEN: f64 = 1.1;
+
 /// Images a decision request carries, keyed by the reference its state writes in each one's place.
 pub type Images = IndexMap<String, Vec<u8>>;
 /// A request with no images.
@@ -574,8 +586,11 @@ impl DecisionProfile {
         // an LLM prompt keeps the budget as given.
         let scale = self.max_largest_tokens as f64 / DecisionProfile::jev().max_largest_tokens as f64;
         tokens.decision_chars = (scale > 1.0).then(|| {
-            let fitted =
-                |budget: i64, limit: i64| ((budget as f64 * scale).min(limit as f64) * JSON_CHARS_PER_TOKEN) as i64;
+            // A request of the ordinary size keeps the ratio it is estimated at; the longer a route is fitted to, the
+            // denser the content that fills it can be, and past Jev's default context that is what overran the limit.
+            let fitted = |budget: i64, limit: i64| {
+                ((budget as f64 * scale).min(limit as f64) * JEV_LONG_CONTEXT_CHARS_PER_TOKEN) as i64
+            };
             (fitted(given.state_plus_largest_question, largest), fitted(given.state_plus_all_questions, total))
         });
         config
@@ -625,12 +640,12 @@ mod tests {
     fn long_context_fits_a_decision_request_to_it_and_leaves_the_llm_budget() {
         let long = DecisionProfile::jev().long_context();
         let fitted = long.fit(None);
-        assert_eq!(fitted.tokens.decision_chars, Some((393_216, 393_216)));
+        assert_eq!(fitted.tokens.decision_chars, Some((288_358, 288_358)));
         assert_eq!(fitted.tokens, TokenBudget { decision_chars: fitted.tokens.decision_chars, ..Default::default() });
         // A caller's smaller budget stays as much smaller on the longer route.
         let mut given = Config::default();
         given.tokens.state_plus_largest_question = 2500;
-        assert_eq!(long.fit(Some(given)).tokens.decision_chars.unwrap().0, 30_720);
+        assert_eq!(long.fit(Some(given)).tokens.decision_chars.unwrap().0, 22_528);
     }
 
     fn png(width: u32, height: u32) -> Vec<u8> {
