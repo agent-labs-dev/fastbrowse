@@ -442,7 +442,7 @@ timeout if it has one (`MCP_TOOL_TIMEOUT` in Claude Code).
 
 ## Safety model
 
-- **Irreversible actions.** Jev judges each click, Enter press and dialog acceptance. Without authorization, a
+- **Irreversible actions.** Jev judges each click, key chord and dialog acceptance, including Enter presses. Without authorization, a
   irreversible action stops at `needs_confirmation`. This is a
   classifier, not a guarantee: a page can word a harmful control to look harmless.
 - **Secrets.** Models see names only. A value is resolved at the moment it is typed, only on its declared origin,

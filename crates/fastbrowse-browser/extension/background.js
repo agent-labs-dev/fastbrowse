@@ -108,7 +108,7 @@ const ops = {
     };
     runs.set(conn, run);
     updateBadge();
-    // The methods it relays, so a run built to send more fails at once instead of being refused partway.
+    // The methods it relays, so a run that needs one this copy predates fails before it starts instead of mid-task.
     return { protocol: PROTOCOL, methods: [...(await allowedMethods())], ...(await identity()) };
   },
   async ping() {

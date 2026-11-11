@@ -6,9 +6,10 @@ fastbrowse splits a browser agent into three owners:
 - **An LLM helps where nothing can be copied.** With no start page given, it proposes the first address from the task. When Jev says a field takes a value the task asks for without stating it word for word, such as a search query, it writes that value from the task and the field's label, never from the page. When Jev says an answer has to be put together from more than one fact, it writes that answer from the notes. A run given a start page whose values and answers Jev can quote calls no LLM.
 - **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, and budgets. Code does not second-guess a DONE: the run ends `complete` with what Jev read, and a requested record that cannot be filled, a composed claim still unsupported after recovery, or a requested step the page shows the site does not allow ends `unverified`. Once the run has acted, Jev's finish check answers whether every step the task asks for was carried out: `done`, `undone` (the run recovers), or `refused` (the run reads, answers and ends `unverified`).
 
-When a field value is copied, Jev selects its source and first word. If its end needs a separate choice,
+When a field value or key chord is copied, Jev selects its source and first word. If its end needs a separate choice,
 each choice shows the complete text that would be typed from that first word to the candidate end.
-Code copies the selected span unchanged. Earlier typing is shown as history, without assuming
+Code copies the selected span unchanged. A key chord is copied only from the task, never from page text.
+Earlier typing is shown as history, without assuming
 rejection or requiring a different value when the page changed the field.
 
 That loop runs in Rust, in [crates/](../crates): `fastbrowse-agent` holds the run loop, `fastbrowse-browser`
@@ -17,7 +18,7 @@ the page and its indexing, `fastbrowse-clients` the Jev and LLM clients, and `fa
 
 ## Authorization
 
-Jev judges every model-selected click or drag, including links, navigation to a caller-supplied address, every Enter press and acceptance of
+Jev judges every model-selected click, drag or key chord, including links, navigation to a caller-supplied address, every Enter press and acceptance of
 confirm, prompt and before-unload dialogs. Code-selected pagination is exempt. One rule applies: the action
 proceeds when Jev judges it not irreversible, or when the run is authorized and Jev judges the task asked
 for it; otherwise the run stops at `needs_confirmation`. The irreversibility and task-authorization questions receive the action's control context and drag destination, the non-sensitive value submitted with Enter, and non-sensitive values from the submitted form. Sensitive values are excluded.
@@ -30,9 +31,10 @@ that every externally visible change is detected.
 
 These questions are asked with the task and the page's origin only, never the page's content, so a page
 cannot argue an action through. An authorized run also asks, in the same request, whether the task asks for
-the action only in some state of the page or site ("reply if nobody has answered yet"). When it does, and the
-action commits or leaves something the site keeps, a second Jev request asks, as a choice, whether in the
-state the page shows the task says to do it with these values, says not to, or cannot be told. It does not
+the action only in some state of the page or site ("reply if nobody has answered yet"). When it does, or the run
+has already carried out a commit, and the action commits or leaves something the site keeps, a second Jev request
+asks, as a choice, whether in the state the page shows the task says to do it with these values, says not to, has
+been done already by the run's earlier steps and is not asked for again, or cannot be told. It does not
 say the action is conditional, so a step the task asks for outright before a condition on a later one is
 judged as asked. The same request asks which of the task's values the action uses: those to use at first, or
 those the task gives only once something happens ("if the site rejects anything, use SW1A 1AA"). For the later
@@ -157,6 +159,10 @@ Select on a select that allows more than one choice toggles the one option Jev p
 others as they were. Jev is asked which option to toggle and told which are selected now. A change handler that puts the
 selection back fails the step, as on a single select, and the action guard and page fingerprint read every selected
 option, so choosing or removing any one of them is a change.
+
+Press on an editable field sends the key or key chord Jev copied from the task. Its modifiers and DOM key are sent
+as one browser input, and a chord that can submit or save goes through the same irreversibility and authorization gates
+as Enter.
 
 A read offers Jev one bounded choice over the page's quoted spans, with two more answers: the page does not hold the
 answer, or the answer must be composed from more than one fact. On a page with more spans than one choice can offer, a

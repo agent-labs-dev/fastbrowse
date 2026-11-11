@@ -83,9 +83,9 @@ and fastbrowse accepts connections only from the extension's own ID, over a sock
 run's [authorization](#flags) rules still apply: a purchase or a message waits for `--authorize`.
 
 With no browser connected, the run ends `unavailable` before it spends anything; it never falls back to another
-browser. An unpacked extension keeps the files it was loaded from, so after updating fastbrowse, run
-`fastbrowse extension path` and press **Reload** on fastbrowse in `chrome://extensions`; a run on an extension
-that does not relay a command this fastbrowse sends also ends `unavailable` before any spend, naming the commands. With the extension in more than one browser, label each one in its popup and pick one with
+browser. It also ends `unavailable` when the extension is older than fastbrowse and cannot relay a command fastbrowse
+sends, naming the commands: update the extension, or for an unpacked copy run `fastbrowse extension path` and click
+**Reload** on `chrome://extensions`. With the extension in more than one browser, label each one in its popup and pick one with
 `--extension-browser LABEL`. `fastbrowse extension install --policy` (Linux) prints a Chrome policy for you to write
 as root, which installs the extension for every profile with no debugging bar and marks Chrome as managed by your
 organization;

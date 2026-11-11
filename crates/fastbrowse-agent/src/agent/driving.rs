@@ -212,6 +212,16 @@ impl Agent {
             {
                 return Err(failure.stop().into());
             }
+            // Only a commit that was sent counts: one the page redrew, covered or replaced before it went is not one
+            // the run has made. One that opened a dialog is not made yet: accepting the dialog makes it, through its
+            // own gate.
+            if committed
+                && !state.page_failed
+                && observation.dialog.is_none()
+                && state.history.last().is_some_and(|entry| entry.outcome == StepOutcome::Executed)
+            {
+                state.commits += 1;
+            }
             let thresholds = &self.config.thresholds;
             let bot_check = decision.bot_check.unwrap_or(0.0) > thresholds.bot_check_above;
             if bot_check || decision.login_required.unwrap_or(0.0) > thresholds.login_required_above {
@@ -419,6 +429,8 @@ impl Agent {
     pub(super) fn redecide(&self, state: &mut RunState, observation: &Observation) {
         self.event("redecide", || Map::from_iter([("url".into(), observation.url.clone().into())]));
         state.redecided = true;
+        // Nothing was sent, so the commit the gate cleared is not one the run has made.
+        state.committing = false;
     }
 
     /// `work`'s result, or `Redrawn` when the page redrew under it: `target`, or with none any control offered.
