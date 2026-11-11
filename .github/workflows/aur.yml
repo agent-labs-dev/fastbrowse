@@ -6,8 +6,9 @@ name: AUR
 # CI calls this when a change touches the package, and the required `check` waits for it. A release calls it
 # with its version once PyPI holds it: that builds the package the version will be, and then publishes it to
 # the AUR, so a release reaches Arch without anyone copying two files by hand. A weekly schedule builds the
-# committed package between changes, since Arch moves without one, and fails when it is older than the PyPI
-# release in pyproject.toml, which a release that skipped `scripts/aur_package.py --write` leaves behind.
+# committed package between changes, since Arch moves without one, and fails when it, or the package the AUR
+# serves, is older than the PyPI release in pyproject.toml: a release that skipped `scripts/aur_package.py --write`
+# leaves the first behind, and one that did not push to the AUR the second.
 on:
   workflow_call:
     inputs:
@@ -17,7 +18,7 @@ on:
         required: false
     secrets:
       AUR_SSH_PRIVATE_KEY:
-        description: A key the package's AUR maintainer registered with the AUR. Without it nothing is published.
+        description: A key the package's AUR maintainer registered with the AUR. A release without it fails.
         required: false
   workflow_dispatch:
   schedule:
@@ -47,9 +48,18 @@ jobs:
       - name: Check the package is the PyPI release
         if: ${{ !cancelled() && github.event_name == 'schedule' }}
         run: python3 scripts/aur_package.py
+      # What the maintainer pushes to the AUR for this release, when the release moved it. Kept before the
+      # push, so a release whose push fails or is skipped still holds the files to push by hand.
+      - if: inputs.version != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: aur
+          path: |
+            packaging/aur/PKGBUILD
+            packaging/aur/.SRCINFO
+          include-hidden-files: true
       # The release publishes the package it has just built, so nobody copies PKGBUILD and .SRCINFO into the
-      # AUR by hand. AUR commits are made over SSH with a key the package's maintainer registered; with no key
-      # set the step says so and the release keeps its artifact instead.
+      # AUR by hand. AUR commits are made over SSH with a key the package's maintainer registered.
       - name: Publish to the AUR
         if: inputs.version != '' && env.AUR_SSH_PRIVATE_KEY != ''
         env: {VERSION: "${{ inputs.version }}"}
@@ -66,16 +76,11 @@ jobs:
           git config --global user.email "cillian@nebula.gg"
           export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
           python3 scripts/aur_package.py "$VERSION" --publish
-      - name: Say the AUR was not published
+      # A release that did not reach the AUR fails here rather than passing with a warning nobody reads: Arch
+      # users would otherwise keep the previous version while the release shows green. Setting the secret and
+      # rerunning the failed jobs publishes it, and the weekly check fails on the AUR until then.
+      - name: Fail when the AUR was not published
         if: inputs.version != '' && env.AUR_SSH_PRIVATE_KEY == ''
         run: |
-          echo "::warning title=AUR not published::AUR_SSH_PRIVATE_KEY is not set, so this release's package was built and kept as the 'aur' artifact but not pushed to aur.archlinux.org."
-      # What the maintainer pushes to the AUR for this release, when the release moved it.
-      - if: inputs.version != ''
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: aur
-          path: |
-            packaging/aur/PKGBUILD
-            packaging/aur/.SRCINFO
-          include-hidden-files: true
+          echo "::error title=AUR not published::AUR_SSH_PRIVATE_KEY is not set, so this release's package was built and kept as the 'aur' artifact but not pushed to aur.archlinux.org. Set the secret and rerun the failed jobs, or push the artifact as docs/agents/aur.md says."
+          exit 1
