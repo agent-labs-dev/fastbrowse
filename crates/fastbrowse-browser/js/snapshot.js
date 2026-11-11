@@ -404,6 +404,48 @@
   // An svg's <title> never renders, yet it is the graphic's name.
   const shown = e => e.localName === 'title' || e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
   const FIELD_CONTAINERS = new Set(['combobox', 'listbox']);
+  // The one field an element holds, when it holds exactly one. A hidden input or one under `hidden` is no field a
+  // person fills, and an element holding two says nothing about which of them a name on it is for.
+  const soleField = e => {
+    const fields = [...e.querySelectorAll('input:not([type=hidden]),select,textarea')].filter(
+      f => !f.parentElement.closest('[hidden]'),
+    );
+    return fields.length === 1 ? fields[0] : null;
+  };
+  // A label's `for` can name a widget's wrapper rather than its field: a form library's `<label for="categories">`
+  // over react-select points at the wrapper div, which takes the id, while the combobox input inside gets a generated
+  // one. HTML ties a label to no control unless its target is labelable, yet the page has said which element the
+  // label names, and when that element holds exactly one field the label names that field. Without this the
+  // Categories field was offered nameless and named by its chips, and the label, tied to no control, titled the
+  // checkboxes and Save button below it as the Categories section (#838).
+  const labelTarget = memo(label => {
+    if (label.control) return label.control;
+    const id = label.htmlFor;
+    if (!id) return null;
+    const root = label.getRootNode();
+    const target = root.getElementById ? root.getElementById(id) : document.getElementById(id);
+    return target ? soleField(target) : null;
+  });
+  // The fields each tree's wrapper-naming labels name, built from its `label[for]` elements so the cost grows with
+  // the labels, not with every unlabelled field times its id'd ancestors: per-ancestor queries took about a second
+  // per observation on a 2000-row inline-edit grid. Each tree is indexed once and kept for as long as this snapshot's
+  // `registry.guard` is: the redraw watch reads every observed control's guard on each mutation batch, and searching
+  // the labels again there cost a second per batch. The guard then reads the labels this snapshot tied to a field,
+  // so their text or visibility changing still changes it.
+  const borrowedIndex = new WeakMap();
+  const borrowedLabels = root => {
+    if (!borrowedIndex.has(root)) {
+      const byField = new Map();
+      for (const label of root.querySelectorAll('label[for]')) {
+        const field = label.control ? null : labelTarget(label);
+        if (field) byField.set(field, [...(byField.get(field) || []), label]);
+      }
+      borrowedIndex.set(root, byField);
+    }
+    return borrowedIndex.get(root);
+  };
+  const wrapperLabels = e =>
+    e.labels?.length || !e.matches('input,select,textarea') ? [] : borrowedLabels(e.getRootNode()).get(e) || [];
   const labelFrom = (e, seen) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
@@ -419,7 +461,7 @@
       e.getAttribute('aria-label') ||
       // A hidden label names nothing, as accname skips hidden nodes outside aria-labelledby: two tabbed forms reusing
       // one id made the hidden tab's label one of the shown field's `labels`, and the field was named twice (#921).
-      [...(e.labels || [])]
+      [...(e.labels || []), ...wrapperLabels(e)]
         .filter(l => shown(l) || !shown(e))
         .map(l => labelFrom(l, seen))
         .filter(Boolean)
@@ -453,13 +495,8 @@
 
   // An ARIA 1.1 combobox wraps the field it fronts, and the page labels that field rather than the wrapper. A wrapper
   // holding two fields, such as a hidden select beside a search input, says nothing about which one names it.
-  const wrappedField = e => {
-    if (!e || e.matches('input,select,textarea') || !FIELD_CONTAINERS.has(e.getAttribute('role'))) return null;
-    const fields = [...e.querySelectorAll('input:not([type=hidden]),select,textarea')].filter(
-      f => !f.parentElement.closest('[hidden]'),
-    );
-    return fields.length === 1 ? fields[0] : null;
-  };
+  const wrappedField = e =>
+    !e || e.matches('input,select,textarea') || !FIELD_CONTAINERS.has(e.getAttribute('role')) ? null : soleField(e);
   // A name is flattened as accname flattens it, whitespace runs to one space: a template's line breaks and indentation
   // inside a label reached callers as `Username               (required)` (#921).
   const labelOf = memo(e =>
@@ -790,7 +827,7 @@
   const titles = memo(scope =>
     [...scope.querySelectorAll(`${HEADINGS},label`)].filter(
       e =>
-        (e.localName !== 'label' || !e.control) && e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
+        (e.localName !== 'label' || !labelTarget(e)) && e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
     ));
   // A card is an item, a row, or an element the page repeats beside itself with the same tag and class.
   // Each parent's children counted by tag and class once: asking every child about all its siblings is quadratic

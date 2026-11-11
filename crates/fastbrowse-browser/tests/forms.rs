@@ -514,6 +514,64 @@ async fn test_a_combobox_named_by_the_page_keeps_its_name() {
     assert_eq!(control.label, "Categories");
 }
 
+/// react-select under a form library's label, as Wago's addon settings render it: the label's `for` names the wrapper
+/// div, which takes the id, and the combobox input inside has a generated one.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_label_naming_a_widgets_wrapper_names_its_one_field() {
+    let Some(h) = harness().await else { return };
+    let html = "<form><h2>General</h2><label for=categories>Categories</label><div id=categories>\
+                <div><span>Chat &amp; Communication</span>\
+                <div role=button aria-label=\"Remove Chat &amp; Communication\">x</div>\
+                <input id=react-select-2-input role=combobox aria-autocomplete=list aria-expanded=false></div>\
+                <input type=hidden name=categories value=1></div>\
+                <div><input type=checkbox id=is_unlisted><label for=is_unlisted>Unlisted</label></div>\
+                <button>Save changes</button></form>";
+    let control = combobox(&h, html).await;
+    let observation = h.observe().await;
+    h.close().await;
+    assert_eq!(control.label, "Categories");
+    // Tied to a field, the label no longer titles what follows it as a section of its own.
+    for label in ["Unlisted", "Save changes"] {
+        assert_eq!(find(&observation, label).context.as_deref(), Some("General"), "{label}");
+    }
+}
+
+/// The redraw watch reads every observed control's guard on each mutation batch, so a guard must reuse the
+/// snapshot's index of wrapper-naming labels rather than search the page's labels again: on a grid of 2000 unlabelled
+/// inputs that search cost a second per pass.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_guard_reuses_the_snapshots_wrapper_labels() {
+    let Some(h) = harness().await else { return };
+    let html = format!(
+        "<form><label for=categories>Categories</label><div id=categories>\
+         <input id=react-select-2-input role=combobox aria-autocomplete=list aria-expanded=false></div>\
+         {}</form>",
+        "<input>".repeat(200)
+    );
+    combobox(&h, &html).await;
+    let session_id = h.session.active_session_id().unwrap();
+    let guards = h
+        .page
+        .evaluate(
+            &session_id,
+            "(() => { const r = window.__fastbrowse; let searches = 0; \
+             const count = proto => { const native = proto.querySelectorAll; \
+               proto.querySelectorAll = function (s) { if (s === 'label[for]') searches++; return native.call(this, s); }; \
+               return () => { proto.querySelectorAll = native; }; }; \
+             const restore = [count(Document.prototype), count(Element.prototype), count(DocumentFragment.prototype)]; \
+             const changed = [...r.observed].filter(([id, guard]) => r.guardKey(r.nodes.get(id)) !== guard).length; \
+             document.querySelector('label').textContent = 'Tags'; \
+             const field = [...r.observed.keys()].find(id => r.nodes.get(id).id === 'react-select-2-input'); \
+             const renamed = r.guardKey(r.nodes.get(field)) !== r.observed.get(field); \
+             restore.forEach(f => f()); \
+             return { searches, changed, renamed }; })()",
+        )
+        .await
+        .expect("evaluate");
+    h.close().await;
+    assert_eq!(guards, json!({"searches": 0, "changed": 0, "renamed": true}));
+}
+
 // A control clipped to nothing is not on the page for a person, and a widget that mirrors it is (#838).
 
 /// How Tom Select and select2 hide the original field they keep in place.
