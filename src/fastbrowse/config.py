@@ -58,7 +58,8 @@ class Config(Frozen):
     """
     plan_ahead: bool = True
     """Ask with each step's decision which other fields on the page the task needs filled, and fill
-    them in page order without a decision each, back to deciding as soon as the page changes under them.
+    those in the filled field's form in page order without a decision each, back to deciding as soon
+    as the page changes under them.
     """
     max_upload_bytes: int = Field(default=25 * 1024 * 1024, gt=0)
     """Uploads move as bytes over the DevTools socket; larger files return NEEDS_INPUT with a reason."""

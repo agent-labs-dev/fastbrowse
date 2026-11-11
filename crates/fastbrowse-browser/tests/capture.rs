@@ -213,6 +213,29 @@ async fn test_records_keep_single_links_whatever_their_length() {
     }
 }
 
+/// #992: CurseForge renders each comment as an `li` holding its text, its actions and an open replies region with nothing
+/// in it. The comment is a `list_item` read whole, and the capture marks it so; a plain list item is not marked.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_list_item_record_is_marked_whole() {
+    let comment = |name: &str, body: &str| {
+        format!(
+            "<li class='comment'><div class='meta'><a href='/m/{name}'>{name}</a><span>2 minutes ago</span></div>\
+             <div class='body'><p>{body}</p></div><div class='actions'><button>Reply</button></div>\
+             <div class='replies-collapse expanded'><ul class='comments-list'></ul></div></li>"
+        )
+    };
+    let comments = [comment("ada", "it broke"), comment("bob", "thanks"), comment("cy", "nice")].concat();
+    let markup = format!("<ul class='comments-list'>{comments}</ul><ul><li>Plain</li><li>Items</li></ul>");
+    let Some(h) = icons_with(&markup).await else { return };
+    let capture = content_capture(&h.page).await;
+    let marked: Vec<_> =
+        capture.blocks.iter().filter(|b| b.whole_record).map(|b| (b.kind, text_of(&capture, b))).collect();
+    assert_eq!(marked.len(), 3, "{:?}", capture.blocks);
+    assert!(marked.iter().all(|(kind, _)| *kind == BlockKind::ListItem), "{marked:?}");
+    assert!(marked[0].1.ends_with("[replies-collapse expanded: no text]"), "{marked:?}");
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_non_records_fall_back_to_the_walk() {
     let cases = [

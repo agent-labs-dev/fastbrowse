@@ -99,8 +99,8 @@ using the same span choices as a fill value. The page cannot provide the chord. 
 submit or save is sent through the action and authorization checks before the browser receives it.
 
 With `Config(plan_ahead=True)` the request also asks, for each offered field, whether the task needs it filled on
-this page besides the next action. When the chosen action is a fill, code fills the other fields Jev judges more likely
-than not, in page order, each with its value answered ahead and without a decision of its own. Before each it observes
+this page besides the next action. When the chosen action is a fill, code fills the other fields of the chosen field's
+form that Jev judges more likely than not, in page order, each with its value answered ahead and without a decision of its own. Before each it observes
 the page again and returns to deciding when the address, the document or the field is gone, a dialog opened, or the
 value before it was unsure. Presses are never planned: a press changes the page in ways seen only after it, and two
 controls that do the same job would both be judged needed. A request with a screenshot then carries every question
@@ -197,7 +197,7 @@ row is a place fastbrowse keeps Jev out:
 
 | Jev's limit | What fastbrowse does instead |
 |:--|:--|
-| It does not count, and errs more as the list grows | A composed count is one Noul per note read, "does this note hold exactly one record of the kind?", summed in code (`retrieval/tally.rs`). No question asks Jev whether a stated count holds |
+| It does not count, and errs more as the list grows | A composed count is one Noul per note read, "does this note hold exactly one record of the kind?", summed in code (`retrieval/tally.rs`). A counted note read from a screenshot or markup is also asked, as a choice, which record on its page it repeats. No question asks Jev whether a stated count holds |
 | It is not a calculator, and numeric representations underperform | A composed total or extreme takes the number Jev picks in each record, and code adds or compares them. The claim is then asked only whether it states nothing besides the tally and, for an extreme, which record it names, as a choice code compares with the records it found at the extreme |
 | It does not generate | Prose, answers and table rows are the LLM's |
 

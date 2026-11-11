@@ -25,8 +25,10 @@ use super::answers::{context_limit, request_bytes};
 use super::text::{SpanKind, currency, spans};
 use crate::batches::evaluate_batches;
 use crate::error::{AgentError, Result};
-use crate::memory::{Notes, fact_id};
+use crate::memory::{Notes, address, fact_id};
+use crate::pyre::{Pat, digit};
 use crate::support::generate;
+use fastbrowse_core::py::text::is_word;
 
 /// What the support check is shown in place of the value, which it is not asked to judge.
 pub const COMPUTED: &str = "[computed]";
@@ -130,6 +132,10 @@ struct Candidate {
     note: serde_json::Value,
     /// The capture the quote was cut from, and its span there.
     span: (String, i64, i64),
+    /// Whether the quote is the page's own text, rather than a reading of its screenshot or an element's markup.
+    literal: bool,
+    /// The page the note was read from.
+    page: String,
 }
 
 impl Candidate {
@@ -143,6 +149,78 @@ impl Candidate {
 /// The records Jev judged members, less any inside another member: part of a record is not one of its own.
 fn whole(records: Vec<usize>, found: &[Candidate]) -> Vec<usize> {
     records.iter().copied().filter(|&note| !records.iter().any(|&other| found[note].within(&found[other]))).collect()
+}
+
+/// For each record that is not page text, the questions asking which other record on its page it is. A record read
+/// from a screenshot or an element's markup is in the reader's words, so no text match finds it among the notes cut
+/// from its page's text: a book read off a listing's screenshot was counted beside its own text note, and a category of
+/// 11 one-star books was given as 12 (#984). Jev says which record it repeats, and code counts the rest. Offered are
+/// the records cut from its page's text, and those not cut from text that come before it, so of two such readings the
+/// first stays; a page shows only its own records, so no other page's are offered. The offers are split to fit one
+/// choice, with an option kept for none.
+fn repeat_questions(index: usize, records: &[usize], found: &[Candidate], most: usize) -> IndexMap<String, Question> {
+    let mut questions = IndexMap::new();
+    for (at, &note) in records.iter().enumerate() {
+        let reading = &found[note];
+        if reading.literal {
+            continue;
+        }
+        let offered: Vec<usize> = records
+            .iter()
+            .enumerate()
+            .filter(|&(other, &record)| {
+                other != at && found[record].page == reading.page && (found[record].literal || other < at)
+            })
+            .map(|(_, &record)| record)
+            .collect();
+        for (chunk, offer) in offered.chunks(most - 1).enumerate() {
+            let mut criteria: IndexMap<String, serde_json::Value> = offer
+                .iter()
+                .map(|record| {
+                    let note = dumps(&found[*record].note);
+                    (format!("m{record}"), json!(format!("It is the record in this note: {note}")))
+                })
+                .collect();
+            criteria.insert(NO_VALUE.into(), json!("It is a record none of these notes holds."));
+            let question = format!(
+                "{UNTRUSTED}\nThis note was not cut from its page's text: it was read from a screenshot of the page or from an element's markup, so a note cut from the page's text may hold the same record in other words. Which of these notes holds the record this one gives? Note: {}",
+                dumps(&reading.note)
+            );
+            questions
+                .insert(format!("t{index}/s{note}c{chunk}"), Question::Choice(ChoiceQuestion::new(question, criteria)));
+        }
+    }
+    questions
+}
+
+/// `records` less each one Jev said repeats another, or None when Jev left one of those questions unanswered.
+fn distinct(
+    index: usize,
+    records: Vec<usize>,
+    found: &[Candidate],
+    questions: &IndexMap<String, Question>,
+    answered: Option<&IndexMap<String, Answer>>,
+) -> Option<Vec<usize>> {
+    let mut kept = Vec::new();
+    for note in records {
+        let prefix = format!("t{index}/s{note}c");
+        let mut repeats = false;
+        for key in questions.keys().filter(|key| key.starts_with(&prefix)) {
+            let Some(Answer::Choice(answer)) = answered.and_then(|answered| answered.get(key)) else {
+                return None;
+            };
+            let picked = answer.choice.strip_prefix('m').and_then(|n| n.parse::<usize>().ok());
+            match picked.filter(|n| *n < found.len()) {
+                Some(_) => repeats = true,
+                None if answer.choice == NO_VALUE => {}
+                None => return None,
+            }
+        }
+        if !repeats {
+            kept.push(note);
+        }
+    }
+    Some(kept)
 }
 
 /// Every note read, once each: a superseded read is a past state, and a note whose whole text a note before it
@@ -173,7 +251,8 @@ fn candidates(notes: &Notes) -> Vec<Candidate> {
         })
         .map(|(id, evidence)| {
             let span = (evidence.capture_sha256.clone(), evidence.start, evidence.end);
-            Candidate { id, quote: evidence.quote.clone(), note: shown(notes, evidence), span }
+            let (literal, page) = (evidence.rendered_text, address(&evidence.url));
+            Candidate { id, quote: evidence.quote.clone(), note: shown(notes, evidence), span, literal, page }
         })
         .collect()
 }
@@ -464,12 +543,35 @@ async fn narrowed(
     Ok(Narrowed::Offer(numbers))
 }
 
-/// The numbers a note could hold its field as. A comma both groups thousands and separates the cells of a line, as in
-/// a CSV row, and the text alone cannot say which: "INV-01,120.00" reads as 1,120.00 or as 01 and 120.00. Both readings
-/// are offered, and Jev picks the one that is the field.
+/// The values a note could hold its field as: each date it writes, whole and then its year, then its numbers. A comma
+/// both groups thousands and separates the cells of a line, as in a CSV row, and the text alone cannot say which:
+/// "INV-01,120.00" reads as 1,120.00 or as 01 and 120.00. Both readings are offered, and Jev picks the one that is the
+/// field. Asked which number in "Released: May 14, 2026 (2026-05-14T19:25:26+0000)" is the latest release date, Jev
+/// was offered only '2026', '05', '14' and the like, said none, and a correct answer was rejected for a record with no
+/// date (#977); had it picked a day, code would have compared days. So a date's day and month are not offered alone,
+/// since neither orders anything on its own. Its year is: a year orders on its own, and a field such as a founding
+/// year is one, so a record dated "3 March 1998" is compared with another's "2001".
 fn numbers(quote: &str) -> Vec<String> {
-    let cells = quote.lines().flat_map(|line| line.split(','));
-    let mut found: Vec<String> = spans(quote, SpanKind::Number).into_iter().map(|span| span.2).collect();
+    let chars: Vec<char> = quote.chars().collect();
+    let dated = dates(quote);
+    let mut found: Vec<String> = Vec::new();
+    for (start, end, value) in &dated {
+        let date: String = chars[*start..*end].iter().collect();
+        // `dates` values a date as its year times 10,000 plus its month and day, and reads a year of four digits.
+        let year = format!("{:04}", (*value as u32) / 10_000);
+        for each in [date, year] {
+            if !found.contains(&each) {
+                found.push(each);
+            }
+        }
+    }
+    let rest: String = chars
+        .iter()
+        .enumerate()
+        .map(|(at, c)| if dated.iter().any(|(start, end, _)| (*start..*end).contains(&at)) { ' ' } else { *c })
+        .collect();
+    found.extend(spans(&rest, SpanKind::Number).into_iter().map(|span| span.2));
+    let cells = rest.lines().flat_map(|line| line.split(','));
     for number in cells.flat_map(|cell| spans(cell, SpanKind::Number)).map(|span| span.2) {
         if !found.contains(&number) {
             found.push(number);
@@ -478,19 +580,112 @@ fn numbers(quote: &str) -> Vec<String> {
     found
 }
 
-/// A number as written, as code reads it: its value, its decimal places, and the currency sign it carries.
+/// The months as a date writes them, in calendar order: the full name, its first three letters, or "Sept". These are
+/// the calendar's own names, the set a date parser reads in English, not a list fitted to pages; a date written in
+/// another language is read as its numbers.
+const MONTHS: [&str; 12] = [
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+];
+
+/// Every date `text` writes, as code point spans with a value that orders them: an ISO 8601 date such as "2026-05-14",
+/// or a day, month name and year in either order, such as "May 14, 2026" or "6 Dec 2024". A date is its day; a time
+/// beside it is left as numbers, so two records on one day tie.
+fn dates(text: &str) -> Vec<(usize, usize, f64)> {
+    // A day the month does not have, such as 2025-02-31, is no date, so it orders nothing.
+    let ordinal = |year: u32, month: u32, day: u32| {
+        let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+        let days = match month {
+            2 if leap => 29,
+            2 => 28,
+            4 | 6 | 9 | 11 => 30,
+            1..=12 => 31,
+            _ => 0,
+        };
+        (1..=days).contains(&day).then(|| f64::from(year * 10_000 + month * 100 + day))
+    };
+    let number = |digits: &[char]| digits.iter().try_fold(0u32, |value, c| Some(value * 10 + u32::from(digit(*c)?)));
+    let chars: Vec<char> = text.chars().collect();
+    let mut found: Vec<(usize, usize, f64)> = spans(text, SpanKind::Date)
+        .into_iter()
+        .filter_map(|(start, end, _)| {
+            let written = &chars[start..end];
+            let value = ordinal(number(&written[..4])?, number(&written[5..7])?, number(&written[8..10])?)?;
+            Some((start, end, value))
+        })
+        .collect();
+    for (start, end) in prose_date().find_iter(&chars) {
+        let written = &chars[start..end];
+        let name = written.iter().filter(|c| c.is_ascii_alphabetic()).collect::<String>().to_ascii_lowercase();
+        let month =
+            MONTHS.iter().position(|full| name == *full || name == full[..3] || name == "sept" && *full == "september");
+        let runs: Vec<&[char]> = written.split(|c| !c.is_ascii_digit()).filter(|run| !run.is_empty()).collect();
+        let (Some(month), [first, second]) = (month, runs.as_slice()) else { continue };
+        let (day, year) = if first.len() == 4 { (second, first) } else { (first, second) };
+        if let Some(value) = number(year).zip(number(day)).and_then(|(year, day)| ordinal(year, month as u32 + 1, day))
+        {
+            found.push((start, end, value));
+        }
+    }
+    found.sort_by_key(|(start, _, _)| *start);
+    found
+}
+
+/// A day, month name and year, in either order: "May 14, 2026", "Dec. 6 2024" or "6 December, 2024".
+fn prose_date() -> Pat {
+    let gap = || Pat::plus(Pat::class(|c| c == ' ' || c == '\t' || c == '\u{a0}'));
+    let day = || Pat::repeat(Pat::class(|c| c.is_ascii_digit()), 1, 2);
+    let year = || Pat::repeat(Pat::class(|c| c.is_ascii_digit()), 4, 4);
+    let month = || {
+        let names = MONTHS.iter().map(|full| Pat::ilit(full)).chain(std::iter::once(Pat::ilit("sept")));
+        let short = MONTHS.iter().map(|full| Pat::ilit(&full[..3]));
+        Pat::Seq(vec![
+            Pat::alt(names.chain(short).collect()),
+            Pat::opt(Pat::lit(".")),
+            Pat::not_ahead(Pat::class(is_word)),
+        ])
+    };
+    Pat::Seq(vec![
+        Pat::not_behind(is_word),
+        Pat::alt(vec![
+            Pat::Seq(vec![month(), gap(), day(), Pat::opt(Pat::lit(",")), gap(), year()]),
+            Pat::Seq(vec![day(), gap(), month(), Pat::opt(Pat::lit(",")), gap(), year()]),
+        ]),
+        Pat::not_ahead(Pat::class(is_word)),
+    ])
+}
+
+/// A number as written, as code reads it: its value, its decimal places, and the currency sign it carries. A date is
+/// one as well, valued so that a later date is a greater value, and is compared but never added.
 #[derive(Debug, Clone, PartialEq)]
 struct Amount {
     value: f64,
     places: usize,
     sign: Option<char>,
     written: String,
+    date: bool,
 }
 
 /// `written` read as a number: one word of digits, beside at most currency signs and ISO 4217 codes such as "GBP".
 /// Any other word makes it something else, such as a record's name: "Galaxy S20 Ultra" read as 20 had the worked
 /// price written over its model number.
 fn amount(written: &str) -> Option<Amount> {
+    let trimmed = written.trim();
+    if let [(0, end, value)] = dates(trimmed)[..]
+        && end == trimmed.chars().count()
+    {
+        return Some(Amount { value, places: 0, sign: None, written: trimmed.to_string(), date: true });
+    }
     let mut number = None;
     for word in written.split_whitespace() {
         if word.chars().any(|c| c.is_ascii_digit()) {
@@ -507,7 +702,7 @@ fn amount(written: &str) -> Option<Amount> {
     let digits: String = number?.chars().filter(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+')).collect();
     let value = digits.parse::<f64>().ok()?;
     let places = digits.split_once('.').map_or(0, |(_, places)| places.len());
-    Some(Amount { value, places, sign, written: written.trim().to_string() })
+    Some(Amount { value, places, sign, written: trimmed.to_string(), date: false })
 }
 
 /// The total of `amounts` written as they are: their currency sign when they share one, and their most places.
@@ -586,7 +781,7 @@ pub async fn work(
             continue;
         }
         // Code writes a count or total over `written`, so words there would be lost.
-        if matches!(tally.op, Op::Count | Op::Sum) && amount(&tally.written).is_none() {
+        if matches!(tally.op, Op::Count | Op::Sum) && amount(&tally.written).is_none_or(|amount| amount.date) {
             let reason = format!(
                 "Claim {index}'s tally.written {} is not a number, and code writes the worked number in its place. Set \
                  written to the {} as claim {index} writes it, and keep the record's name in the claim's text.",
@@ -623,6 +818,24 @@ pub async fn work(
             _ => None,
         }
     };
+    // Each claim's records Jev judged, whole, before any repeat among them is dropped.
+    let mut judged: HashMap<usize, Option<Vec<usize>>> = HashMap::new();
+    let mut repeats = IndexMap::new();
+    for (index, _, _, _) in claims {
+        if worked.contains_key(index) {
+            continue;
+        }
+        let records = (0..found.len())
+            .map(|note| member(*index, note).map(|is| is.then_some(note)))
+            .collect::<Option<Vec<_>>>()
+            .map(|notes| whole(notes.into_iter().flatten().collect(), &found));
+        if let Some(records) = &records {
+            let asking = led.get(index).copied().unwrap_or(*index);
+            repeats.extend(repeat_questions(asking, records, &found, jev.profile().max_choice_options));
+        }
+        judged.insert(*index, records);
+    }
+    let repeated = ask(jev, &state, &repeats, tokens, ledger).await?;
     let mut pending = Vec::new();
     let mut values = IndexMap::new();
     // The numbers each multi-number note was asked to choose among, after narrowing.
@@ -631,11 +844,10 @@ pub async fn work(
         if worked.contains_key(index) {
             continue;
         }
-        let judged: Option<Vec<usize>> = (0..found.len())
-            .map(|note| member(*index, note).map(|is| is.then_some(note)))
-            .collect::<Option<Vec<_>>>()
-            .map(|notes| notes.into_iter().flatten().collect());
-        let Some(records) = judged.map(|records| whole(records, &found)) else {
+        let asking = led.get(index).copied().unwrap_or(*index);
+        let records = judged.remove(index).flatten();
+        let Some(records) = records.and_then(|records| distinct(asking, records, &found, &repeats, repeated.as_ref()))
+        else {
             worked.insert(*index, Err(Unworked::Unjudged));
             continue;
         };
@@ -727,6 +939,22 @@ pub async fn work(
         if worked.contains_key(&index) {
             continue;
         }
+        // A date is compared, never added, and a date and a number have no order between them.
+        let dated: Vec<&str> =
+            amounts.iter().filter(|(_, amount)| amount.date).map(|(note, _)| found[*note].id.as_str()).collect();
+        if !dated.is_empty() && (tally.op == Op::Sum || dated.len() < amounts.len()) {
+            let field = text::repr(tally.field.as_deref().unwrap_or("value"));
+            let notes = dated.join(", ");
+            let reason = if tally.op == Op::Sum {
+                format!("Notes {notes} give the {field} as a date, which a total cannot add.")
+            } else {
+                format!(
+                    "Notes {notes} give the {field} as a date and other records' notes as a number, which code cannot compare."
+                )
+            };
+            worked.insert(index, Err(Unworked::Draft(reason)));
+            continue;
+        }
         let result = match tally.op {
             Op::Sum => {
                 let all: Vec<&Amount> = amounts.iter().map(|(_, amount)| amount).collect();
@@ -759,7 +987,16 @@ pub async fn work(
                     worked.insert(index, Ok(Worked { value: tally.written.clone(), evidence_ids }));
                     continue;
                 }
-                Worked { value: winners[0].1.written.clone(), evidence_ids }
+                let winner = &winners[0].1;
+                if winner.date {
+                    // A date is written whole, so the claim keeps its own form of the date when it is the one found.
+                    let same =
+                        amount(&tally.written).is_some_and(|claimed| claimed.date && claimed.value == winner.value);
+                    let value = if same { tally.written.clone() } else { winner.written.clone() };
+                    worked.insert(index, Ok(Worked { value, evidence_ids }));
+                    continue;
+                }
+                Worked { value: winner.written.clone(), evidence_ids }
             }
             Op::Count => unreachable!("a count is worked out above"),
         };
@@ -821,6 +1058,21 @@ mod tests {
     }
 
     #[test]
+    fn a_date_is_offered_whole_and_ordered_by_its_day() {
+        let quote = "Released: May 14, 2026 (2026-05-14T19:25:26+0000)";
+        assert_eq!(super::numbers(quote), ["May 14, 2026", "2026", "2026-05-14", "25", "26", "0000"]);
+        assert_eq!(super::numbers("6 Dec. 2024, 3 files"), ["6 Dec. 2024", "2024", "3"]);
+        let [later, earlier] = ["2026-05-14", "December 16, 2024"].map(|date| amount(date).unwrap());
+        assert!(later.date && earlier.date && later.value > earlier.value);
+        assert_eq!(amount("May 14, 2026").unwrap().value, later.value);
+        assert_eq!(amount("2026-13-01"), None, "no thirteenth month");
+        assert!(super::dates("2025-02-31 and February 29, 2025").is_empty(), "no day the month lacks");
+        assert_eq!(super::dates("2024-02-29 and 29 Feb 2000").len(), 2, "a leap year's 29 February");
+        assert!(super::dates("1900-02-29").is_empty(), "a century not divisible by 400 is no leap year");
+        assert_eq!(super::numbers("Mayday 14, 2026"), ["2026", "14"], "a month is a whole word");
+    }
+
+    #[test]
     fn amounts_keep_their_sign_and_places() {
         let found = amount("£10.69").unwrap();
         assert_eq!((found.value, found.places, found.sign), (10.69, 2, Some('£')));
@@ -849,6 +1101,8 @@ mod tests {
             quote: String::new(),
             note: json!({}),
             span: (capture.into(), start, end),
+            literal: true,
+            page: String::new(),
         };
         let found = [note("a", 0, 50), note("a", 0, 20), note("b", 0, 20), note("a", 60, 90)];
         assert_eq!(whole(vec![0, 1, 2, 3], &found), [0, 2, 3], "only the line inside card 0 on its capture goes");
@@ -885,6 +1139,8 @@ mod tests {
             quote: quote.into(),
             note: json!({"quote": quote}),
             span: (String::new(), 0, 0),
+            literal: true,
+            page: String::new(),
         };
         let found = [note("One by Ada"), note("Two by Ada"), note("Three by Bo"), note("Four by Bo")];
         let records = [0, 1, 2, 3];

@@ -545,6 +545,29 @@ async fn test_accepting_a_dialog_that_navigates_is_a_move_the_run_made() {
     h.close().await;
 }
 
+/// A dialog blocks the page, so no fingerprint is read before accepting it, and a settle with none ignored open
+/// requests: the confirm's delete request was still out when the step ended, and the next observation still showed the
+/// draft, so the run asked for another step.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_accepting_a_confirm_settles_after_the_request_it_starts() {
+    let Some(h) = harness().await else { return };
+    h.goto("/").await;
+    let session_id = h.session.active_session_id().unwrap();
+    let form = "<p id=draft>Holiday post</p><button onclick=\"if (confirm('Delete?')) fetch('/slow?ms=1500')\
+                .then(() => document.getElementById('draft').remove())\">Delete</button>";
+    assert_eq!(
+        eval_value(&h.session, &session_id, &format!("document.body.innerHTML = {}; true", js(form))).await,
+        true
+    );
+    let obs = h.observe().await;
+    let clicked = h.page.act(&click(&find(&obs, "Delete").id), &obs).await.expect("act");
+    assert_eq!(clicked.outcome, StepOutcome::Executed);
+    let accepted = accept_dialog(&h).await;
+    assert_eq!(accepted.outcome, StepOutcome::Executed);
+    assert_eq!(eval_value(&h.session, &session_id, "!document.getElementById('draft')").await, true);
+    h.close().await;
+}
+
 /// The page moved its own address on the same document after the run observed it. The dialog the click opened
 /// carried the new address, so a mark taken against the observed one no longer matched and the accepted confirm's
 /// navigation was not reported as the run's move.
