@@ -10,8 +10,8 @@ use fastbrowse_core::decision::{
 };
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{
-    Artifact, Authorization, CostBasis, CostComponent, CostLine, Decider, Event, EventHandler, Evidence, FactReader,
-    LLMPurpose, Limits, Operation, Status, StepOutcome, StepResult,
+    Artifact, Authorization, BudgetResource, BudgetStop, CostBasis, CostComponent, CostLine, Decider, Event,
+    EventHandler, Evidence, FactReader, LLMPurpose, Limits, Operation, Status, StepOutcome, StepResult,
 };
 use fastbrowse_core::page::{
     ActResult, Action, BlockKind, BrowserError, Capture, Control, Media, Observation, Page, PageResult,
@@ -7090,6 +7090,48 @@ impl DecisionClient for Noul {
     fn profile(&self) -> DecisionProfile {
         self.0.profile()
     }
+}
+
+/// The scripted Jev, refusing the step decision the way the real client does when its estimate breaks the run's spend
+/// limit: a `DecisionError::Budget` from the run's own ledger.
+struct OverSpend(ScriptedJev, Arc<Ledger>);
+
+impl DecisionClient for OverSpend {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            if questions.contains_key("operation") {
+                self.1.check_spend(0.001)?;
+            }
+            self.0.evaluate(state, questions).await
+        })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        self.0.profile()
+    }
+}
+
+/// A Jev request refused for spend ended the run `error` with no budget, and a browser run after a fetched attempt
+/// named the remainder it was handed rather than the limit the caller set (#961).
+#[tokio::test]
+async fn test_a_jev_spend_stop_ends_budget_exceeded_naming_the_limit_as_set() {
+    let stated = Limits { max_dollars: Some(0.001), ..Limits::default() };
+    let ledger = Arc::new(Ledger::continuing(stated, Limits { max_dollars: Some(0.00098446), ..Limits::default() }));
+    let jev = OverSpend(ScriptedJev::new(crate::scripted::steps("click One way").unwrap()), ledger.clone());
+    let agent = Agent::new(Arc::new(Picker::new()), Arc::new(jev), Arc::new(ScriptedLLM));
+    let options = super::RunOptions {
+        start: Some("https://shop.test/ticket".into()),
+        ledger: Some(ledger),
+        ..Default::default()
+    };
+    let result = agent.run("Choose One way as the ticket type", options).await.unwrap();
+    assert_eq!(result.status, Status::BudgetExceeded, "{:?}", result.error);
+    assert_eq!(result.budget, Some(BudgetStop { resource: BudgetResource::Dollars, limit: 0.001 }));
+    assert_eq!(result.error.as_deref(), Some("spend limit $0.001 reached"));
 }
 
 /// The scripted Jev, answering the question of what the task asks to be told with `intent`, and counting the reads

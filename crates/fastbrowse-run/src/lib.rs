@@ -936,7 +936,9 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
     }
     let mut browser_cost: Vec<CostLine> = Vec::new();
     // Held here rather than by the agent, so what the browser run spent is still read when it is cancelled.
-    let ledger = Arc::new(Ledger::new(limits.clone().unwrap_or_default()));
+    // The browser run enforces what a fetched attempt left of the caller's limits but names them as set.
+    let ledger =
+        Arc::new(Ledger::continuing(task.limits.clone().unwrap_or_default(), limits.clone().unwrap_or_default()));
     let scratch = Scratch::new()
         .map_err(|error| RunError::Invalid(error.to_string()).after(&told, fetch_spent.clone(), Vec::new()))?;
     let mut session: Option<BrowserSession> = None;
