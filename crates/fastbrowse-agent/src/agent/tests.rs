@@ -2167,6 +2167,59 @@ async fn test_a_value_copied_from_a_wrong_end_is_picked_again_without_it() {
     }
 }
 
+/// Picks a value from the first word to the last, and fails any choice offering more than the provider's `0` options.
+struct WholeSource(usize);
+
+impl DecisionClient for WholeSource {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        let last = (self.0 - 1).to_string();
+        let answers = questions
+            .iter()
+            .map(|(key, question)| {
+                let Question::Choice(question) = question else { panic!("expected a choice") };
+                assert!(question.criteria.len() <= self.0, "{key} offered {} options", question.criteria.len());
+                let options: Vec<&String> = question.criteria.keys().collect();
+                let choice = match key.as_str() {
+                    "source" => "task".to_string(),
+                    "last" | "pick" => last.clone(),
+                    "ends" => options.iter().rev().find(|option| **option != "none").unwrap().to_string(),
+                    _ => options[0].clone(),
+                };
+                let answer =
+                    ChoiceAnswer { kind: Default::default(), choice, probabilities: IndexMap::new(), confidence: 1.0 };
+                (key.clone(), Answer::Choice(answer))
+            })
+            .collect();
+        Box::pin(
+            async move { Ok(Evaluation { model: "test".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile { max_choice_options: self.0, ..DecisionProfile::unknown() }
+    }
+}
+
+/// A source exactly as long as a choice can be keeps a choice free for saying a copy does not run from the end
+/// picked: offering every word and that answer went one over the provider's limit.
+#[tokio::test]
+async fn test_a_source_as_long_as_a_choice_still_fits_the_copies_offered_from_it() {
+    for max in [4, 26, 255] {
+        let agent = Agent::new(Arc::new(NoPage), Arc::new(WholeSource(max)), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.task = (0..max).map(|n| format!("w{n}")).collect::<Vec<_>>().join(" ");
+        let value = agent
+            .text(&mut state, &observation(&[]), &code_decision(Operation::Fill, None), &field("Reference"))
+            .await
+            .expect("a value");
+        assert_eq!(value, state.task, "{max} options");
+    }
+}
+
 /// A reply box that opened holding an @mention lost it to a fill (#857): Jev chose where the value came from without
 /// being told the field held anything, though a fill replaces all of it. A sensitive field's value is never shown.
 #[test]

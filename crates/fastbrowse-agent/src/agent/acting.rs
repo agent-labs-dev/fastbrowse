@@ -1144,14 +1144,15 @@ impl Agent {
             .into());
         }
         // Parts cover the whole source and overlap so a value's end across a cut remains whole. Reserving one choice
-        // for no value lets Jev refuse a source instead of being forced to pick unrelated words.
+        // for no value lets Jev refuse a source instead of being forced to pick unrelated words. The words left keep
+        // one choice free too, for the answer that a copy does not run from the end picked.
         let chars: Vec<char> = task.chars().collect();
         let (mut begins, mut ends) = (group.clone(), group);
-        while begins.len() > max || ends.len() > max {
+        while begins.len() >= max || ends.len() >= max {
             let mut asked = Vec::new();
             let mut cut = Vec::new();
             for (key, group) in [("begins", &begins), ("ends", &ends)] {
-                if group.len() <= max {
+                if group.len() < max {
                     continue;
                 }
                 let step = group.len().div_ceil((max - 1).min(VALUE_SOURCE_PARTS));
