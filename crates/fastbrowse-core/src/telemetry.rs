@@ -64,7 +64,12 @@ pub struct LedgerState {
 
 #[derive(Debug)]
 pub struct Ledger {
+    /// What this ledger may spend.
     pub limits: Limits,
+    /// The limits as the caller set them, which every stop names. A browser run that carries on from a fetched attempt
+    /// may spend only what the attempt left, but a caller who set `--max-dollars 0.001` reads that limit in the stop,
+    /// not the remainder (#961).
+    pub set: Limits,
     /// When the run's clock started; None while it has not, so no call can run over a time limit before the run
     /// takes the ledger over.
     started: Arc<Mutex<Option<Instant>>>,
@@ -73,8 +78,14 @@ pub struct Ledger {
 
 impl Ledger {
     pub fn new(limits: Limits) -> Ledger {
+        Ledger::within(limits.clone(), limits)
+    }
+
+    /// A ledger allowed `allowance` of the limits the caller `set`, such as what an earlier attempt left of them.
+    pub fn within(allowance: Limits, set: Limits) -> Ledger {
         Ledger {
-            limits,
+            limits: allowance,
+            set,
             started: Arc::new(Mutex::new(Some(Instant::now()))),
             state: Arc::new(Mutex::new(LedgerState::default())),
         }
@@ -84,6 +95,7 @@ impl Ledger {
     pub fn for_answer(&self) -> Ledger {
         Ledger {
             limits: Limits { max_steps: None, ..self.limits.clone() },
+            set: self.set.clone(),
             started: self.started.clone(),
             state: self.state.clone(),
         }
@@ -111,30 +123,20 @@ impl Ledger {
         let mut state = self.state();
         match component {
             CostComponent::Jev => {
-                if let Some(max) = self.limits.max_jev_calls.filter(|max| state.jev_calls + calls > *max) {
-                    return Err(BudgetExceeded::new(
-                        format!("Jev call limit {max} reached"),
-                        BudgetResource::JevCalls,
-                        max as f64,
-                    ));
+                if self.limits.max_jev_calls.is_some_and(|max| state.jev_calls + calls > max) {
+                    return Err(self.reached(BudgetResource::JevCalls));
                 }
             }
             CostComponent::Llm => {
-                if let Some(max) = self.limits.max_llm_calls.filter(|max| state.llm_calls + calls > *max) {
-                    return Err(BudgetExceeded::new(
-                        format!("LLM call limit {max} reached"),
-                        BudgetResource::LlmCalls,
-                        max as f64,
-                    ));
+                if self.limits.max_llm_calls.is_some_and(|max| state.llm_calls + calls > max) {
+                    return Err(self.reached(BudgetResource::LlmCalls));
                 }
             }
             CostComponent::Browser | CostComponent::Proxy => {}
         }
         self.check_state(&state, estimate_dollars)?;
-        if let Some(max) = self.limits.max_dollars
-            && breakdown(&state).known_dollars() >= max
-        {
-            return Err(spend_reached(max));
+        if self.limits.max_dollars.is_some_and(|max| breakdown(&state).known_dollars() >= max) {
+            return Err(self.reached(BudgetResource::Dollars));
         }
         // Failed requests still consume a call, including retries after an input-size rejection.
         match component {
@@ -162,22 +164,62 @@ impl Ledger {
         if let Some(max) = limits.max_seconds
             && self.started().is_some_and(|started| started.elapsed().as_secs_f64() > max)
         {
-            return Err(BudgetExceeded::new(
-                format!("time limit {}s reached", float_str(max)),
-                BudgetResource::Seconds,
-                max,
-            ));
+            return Err(self.reached(BudgetResource::Seconds));
         }
-        check_spend(limits, state, extra_dollars)?;
-        if let Some(max) = limits.max_steps.filter(|max| state.steps >= *max) {
-            return Err(BudgetExceeded::new(format!("step limit {max} reached"), BudgetResource::Steps, max as f64));
+        self.check_spend_state(state, extra_dollars)?;
+        if limits.max_steps.is_some_and(|max| state.steps >= max) {
+            return Err(self.reached(BudgetResource::Steps));
         }
         Ok(())
     }
 
     /// Check settled costs without treating a finished step allowance as another operation.
     pub fn check_spend(&self, extra_dollars: f64) -> Result<(), BudgetExceeded> {
-        check_spend(&self.limits, &self.state(), extra_dollars)
+        self.check_spend_state(&self.state(), extra_dollars)
+    }
+
+    fn check_spend_state(&self, state: &LedgerState, extra_dollars: f64) -> Result<(), BudgetExceeded> {
+        if let Some(max) = self.limits.max_dollars {
+            let spent = breakdown(state);
+            // An unpriced call could have spent anything, so a dollar cap cannot be enforced past it.
+            if spent.has_unknown() {
+                let set = self.set_limit(BudgetResource::Dollars);
+                return Err(BudgetExceeded::new(
+                    format!("spend limit ${} cannot be enforced: a call reported no cost", dollars(set)),
+                    BudgetResource::Dollars,
+                    set,
+                ));
+            }
+            if spent.known_dollars() + extra_dollars > max {
+                return Err(self.reached(BudgetResource::Dollars));
+            }
+        }
+        Ok(())
+    }
+
+    /// The stop for `resource`, naming the limit as the caller set it.
+    fn reached(&self, resource: BudgetResource) -> BudgetExceeded {
+        let set = self.set_limit(resource);
+        let reason = match resource {
+            BudgetResource::Dollars => format!("spend limit ${} reached", dollars(set)),
+            BudgetResource::Seconds => format!("time limit {}s reached", float_str(set)),
+            BudgetResource::Steps => format!("step limit {} reached", set as i64),
+            BudgetResource::JevCalls => format!("Jev call limit {} reached", set as i64),
+            BudgetResource::LlmCalls => format!("LLM call limit {} reached", set as i64),
+        };
+        BudgetExceeded::new(reason, resource, set)
+    }
+
+    /// The limit on `resource` as the caller set it.
+    fn set_limit(&self, resource: BudgetResource) -> f64 {
+        let pick = |limits: &Limits| match resource {
+            BudgetResource::Dollars => limits.max_dollars,
+            BudgetResource::Seconds => limits.max_seconds,
+            BudgetResource::Steps => limits.max_steps.map(|max| max as f64),
+            BudgetResource::JevCalls => limits.max_jev_calls.map(|max| max as f64),
+            BudgetResource::LlmCalls => limits.max_llm_calls.map(|max| max as f64),
+        };
+        pick(&self.set).unwrap_or_default()
     }
 
     /// Keep the lines, then check: a receipt that breaks a limit is still recorded, so the result reports it.
@@ -194,28 +236,6 @@ impl Ledger {
 
 fn breakdown(state: &LedgerState) -> CostBreakdown {
     CostBreakdown { lines: state.lines.clone() }
-}
-
-fn spend_reached(max: f64) -> BudgetExceeded {
-    BudgetExceeded::new(format!("spend limit ${} reached", dollars(max)), BudgetResource::Dollars, max)
-}
-
-fn check_spend(limits: &Limits, state: &LedgerState, extra_dollars: f64) -> Result<(), BudgetExceeded> {
-    if let Some(max) = limits.max_dollars {
-        let spent = breakdown(state);
-        // An unpriced call could have spent anything, so a dollar cap cannot be enforced past it.
-        if spent.has_unknown() {
-            return Err(BudgetExceeded::new(
-                format!("spend limit ${} cannot be enforced: a call reported no cost", dollars(max)),
-                BudgetResource::Dollars,
-                max,
-            ));
-        }
-        if spent.known_dollars() + extra_dollars > max {
-            return Err(spend_reached(max));
-        }
-    }
-    Ok(())
 }
 
 /// Seconds since the first trace in this process: the clock `began` and `ended` are read on, as `monotonic()`.
@@ -447,6 +467,48 @@ mod tests {
         );
         assert_eq!(reporting.reserve(CostComponent::Jev, 1.0, 1).unwrap_err().budget.resource, BudgetResource::Dollars);
         assert_eq!(ledger.check(0.0).unwrap_err().budget.resource, BudgetResource::Steps);
+    }
+
+    /// A browser run after a fetched attempt is allowed what the attempt left, and its stop names the limit the caller
+    /// set: `--max-dollars 0.001` reported `spend limit $0.00098446 reached` (#961).
+    #[test]
+    fn a_ledger_within_what_an_attempt_left_names_the_limits_as_set() {
+        let set = Limits {
+            max_dollars: Some(0.001),
+            max_steps: Some(5),
+            max_jev_calls: Some(4),
+            max_llm_calls: Some(3),
+            max_seconds: Some(10.0),
+        };
+        let left = Limits {
+            max_dollars: Some(0.0005),
+            max_steps: Some(3),
+            max_jev_calls: Some(2),
+            max_llm_calls: Some(1),
+            max_seconds: Some(7.0),
+        };
+        let ledger = Ledger::within(left.clone(), set.clone());
+        let error = ledger.record([CostLine::new(CostComponent::Jev, CostBasis::Metered, Some(0.0006))]).unwrap_err();
+        assert_eq!(error.to_string(), "spend limit $0.001 reached");
+        assert_eq!(error.budget, BudgetStop { resource: BudgetResource::Dollars, limit: 0.001 });
+        assert_eq!(ledger.check_spend(0.0).unwrap_err().budget.limit, 0.001);
+
+        let ledger = Ledger::within(Limits { max_dollars: None, ..left.clone() }, set.clone());
+        ledger.reserve(CostComponent::Jev, 0.0, 2).unwrap();
+        assert_eq!(ledger.reserve(CostComponent::Jev, 0.0, 1).unwrap_err().to_string(), "Jev call limit 4 reached");
+        ledger.reserve(CostComponent::Llm, 0.0, 1).unwrap();
+        let error = ledger.reserve(CostComponent::Llm, 0.0, 1).unwrap_err();
+        assert_eq!((error.to_string().as_str(), error.budget.limit), ("LLM call limit 3 reached", 3.0));
+        ledger.state().steps = 3;
+        assert_eq!(ledger.check(0.0).unwrap_err().to_string(), "step limit 5 reached");
+        ledger.state().steps = 0;
+        ledger.set_started(Some(Instant::now() - std::time::Duration::from_secs(8)));
+        let error = ledger.check(0.0).unwrap_err();
+        assert_eq!((error.to_string().as_str(), error.budget.limit), ("time limit 10.0s reached", 10.0));
+
+        let unpriced = Ledger::within(left, set);
+        let error = unpriced.record([CostLine::new(CostComponent::Llm, CostBasis::Unknown, None)]).unwrap_err();
+        assert_eq!(error.to_string(), "spend limit $0.001 cannot be enforced: a call reported no cost");
     }
 
     #[test]
