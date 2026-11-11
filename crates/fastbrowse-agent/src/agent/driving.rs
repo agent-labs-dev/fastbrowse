@@ -779,6 +779,16 @@ impl Agent {
                 result = clicked;
             }
             let executed = result.outcome == StepOutcome::Executed;
+            // A known page can redirect to another address, so the landing page does not identify it: the
+            // navigation's own address does. Marking it reached here keeps it from being offered again, which would
+            // spend the no-progress budget on the same redirect.
+            if executed
+                && action.operation == Operation::Navigate
+                && let Some(url) = action.url.as_ref().filter(|url| state.known_pages.contains(url))
+                && !state.reached_known_pages.contains(url)
+            {
+                state.reached_known_pages.push(url.clone());
+            }
             if let Some(replay) = state.replay.as_mut() {
                 if decision.replayed {
                     replay.settled(executed);
