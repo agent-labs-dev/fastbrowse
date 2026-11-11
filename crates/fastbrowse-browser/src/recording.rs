@@ -3,8 +3,8 @@
 //! The screencast sends a frame only when the page repaints, so a ticker repeats the latest frame at `FPS`; the
 //! video's timing is then the run's real timing. The recording follows tab switches, captions each step from when
 //! its action began, and ends on a card showing the run's outcome, so one file shows both what the agent did and
-//! what it answered. A second ffmpeg pass over a lossless first one writes it twice: with the step captions burned
-//! in, and plain beside it as `<name>.plain.mp4`.
+//! what it answered. Two more ffmpeg passes over a lossless first one write it twice, one encoder at a time: with the
+//! step captions burned in, and plain beside it as `<name>.plain.mp4`.
 //!
 //! A recording shows whatever the page shows. Typed passwords are masked by the page, but an email address, an order
 //! history or an echoed key is not, so check a recording before sharing it.
@@ -334,7 +334,7 @@ impl Recording {
         (!self.session.frames_withheld()).then_some(frame)
     }
 
-    /// Encode the final video twice from the lossless pass: with step captions, and plain.
+    /// Encode the final video twice from the lossless pass, one pass after the other: with step captions, and plain.
     async fn encode_all(&mut self, origin: Instant) {
         let subtitles = self.scratch.join("steps.srt");
         // A run that opens straight onto its answer takes no steps, and has no captions to end.
@@ -432,48 +432,69 @@ impl Recording {
         (width > 0 && height > 0).then_some((width, height))
     }
 
-    /// Write both videos into scratch through `burn` on the captioned one; return ffmpeg's error, if any.
+    /// Write both videos into scratch through `burn` on the captioned one; return ffmpeg's error, if any. Each video is
+    /// its own ffmpeg pass over the lossless one, so a recording holds one x264 encoder's memory at a time; the plain
+    /// pass does not start when the captioned one failed.
     async fn encode(&self, burn: &str) -> Option<String> {
-        // H.264 needs even dimensions, and yuv420p is what phones and social sites play.
-        let graph = if burn.contains("cursor.ass") {
-            format!(
-                "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p,split=2[plain_in][steps_in];[steps_in]{burn}[captioned];[plain_in]subtitles=cursor.ass[plain]"
-            )
-        } else {
-            format!(
-                "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p,split=2[plain][steps];[steps]{burn}[captioned]"
-            )
-        };
-        // Page text is the subject of a shared clip; x264's default quality blurs small type.
-        let encode = ["-c:v", "libx264", "-crf", "18", "-preset", "slow", "-movflags", "+faststart"];
-        let output = Command::new(&self.ffmpeg_path)
-            .args(["-loglevel", "error", "-y", "-i"])
-            .arg(self.scratch.join("uncaptioned.mkv"))
-            .args(["-filter_complex", &graph, "-map", "[captioned]"])
-            .args(encode)
-            .args(["captioned.mp4", "-map", "[plain]"])
-            .args(encode)
-            .arg("plain.mp4")
-            .current_dir(&self.scratch)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .output()
-            .await;
-        match output {
-            Ok(done) if done.status.success() => None,
-            Ok(done) => {
-                let error = String::from_utf8_lossy(&done.stderr).trim().to_owned();
-                Some(if error.is_empty() {
-                    format!("exit status {}", done.status.code().unwrap_or(-1))
-                } else {
-                    cut(&error, 400)
-                })
+        for (output, filter) in encode_passes(burn) {
+            let done = Command::new(&self.ffmpeg_path)
+                .args(encode_args(&filter, output))
+                .current_dir(&self.scratch)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true)
+                .output()
+                .await;
+            match done {
+                Ok(done) if done.status.success() => {}
+                Ok(done) => {
+                    let error = String::from_utf8_lossy(&done.stderr).trim().to_owned();
+                    return Some(if error.is_empty() {
+                        format!("exit status {}", done.status.code().unwrap_or(-1))
+                    } else {
+                        cut(&error, 400)
+                    });
+                }
+                Err(error) => return Some(error.kind().to_string()),
             }
-            Err(error) => Some(error.kind().to_string()),
         }
+        None
     }
+}
+
+/// The two final videos and the filter each is encoded through: the captioned one burns `burn` in, and the plain one
+/// carries only the cursor, when `burn` draws one.
+fn encode_passes(burn: &str) -> [(&'static str, String); 2] {
+    // H.264 needs even dimensions, and yuv420p is what phones and social sites play.
+    let base = "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p";
+    let plain = if burn.contains("cursor.ass") { format!("{base},subtitles=cursor.ass") } else { base.to_owned() };
+    [("captioned.mp4", format!("{base},{burn}")), ("plain.mp4", plain)]
+}
+
+/// One ffmpeg pass from the lossless video in scratch to `output` through `filter`, with one encoder.
+fn encode_args(filter: &str, output: &str) -> Vec<String> {
+    // Page text is the subject of a shared clip; x264's default quality blurs small type.
+    [
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        "uncaptioned.mkv",
+        "-vf",
+        filter,
+        "-c:v",
+        "libx264",
+        "-crf",
+        "18",
+        "-preset",
+        "slow",
+        "-movflags",
+        "+faststart",
+        output,
+    ]
+    .map(str::to_owned)
+    .to_vec()
 }
 
 async fn tick(session: BrowserSession, frames: Arc<Mutex<Frames>>, stdin: Arc<tokio::sync::Mutex<Option<ChildStdin>>>) {
@@ -709,6 +730,30 @@ mod tests {
         assert_eq!(filter_chain(false, false, ""), "null");
         assert_eq!(filter_chain(true, false, "Fontsize=10"), "subtitles=steps.srt:force_style='Fontsize=10'");
         assert_eq!(filter_chain(false, true, ""), "subtitles=cursor.ass");
+    }
+
+    #[test]
+    fn encode_passes_run_one_encoder_each() {
+        let base = "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p";
+        let steps = "subtitles=steps.srt:force_style='Fontsize=10'";
+        let [captioned, plain] = encode_passes(&filter_chain(true, false, "Fontsize=10"));
+        assert_eq!(captioned, ("captioned.mp4", format!("{base},{steps}")));
+        assert_eq!(plain, ("plain.mp4", base.to_owned()));
+
+        let [captioned, plain] = encode_passes(&filter_chain(true, true, "Fontsize=10"));
+        assert_eq!(captioned.1, format!("{base},{steps},subtitles=cursor.ass"));
+        assert_eq!(plain.1, format!("{base},subtitles=cursor.ass"));
+
+        let passes = encode_passes("null");
+        assert!(passes.iter().all(|(_, filter)| !filter.contains("subtitles")));
+
+        for (output, filter) in passes {
+            let args = encode_args(&filter, output);
+            assert_eq!(args.iter().filter(|arg| *arg == "-c:v").count(), 1);
+            assert_eq!(args.iter().filter(|arg| arg.ends_with(".mp4")).collect::<Vec<_>>(), [output]);
+            assert_eq!(args.last().map(String::as_str), Some(output));
+            assert!(!args.iter().any(|arg| arg == "-filter_complex" || arg == "-map" || arg.contains("split")));
+        }
     }
 
     #[test]
