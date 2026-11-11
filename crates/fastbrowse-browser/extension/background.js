@@ -108,7 +108,8 @@ const ops = {
     };
     runs.set(conn, run);
     updateBadge();
-    return { protocol: PROTOCOL, ...(await identity()) };
+    // The methods it relays, so a run built to send more fails at once instead of being refused partway.
+    return { protocol: PROTOCOL, methods: [...(await allowedMethods())], ...(await identity()) };
   },
   async ping() {
     return {};

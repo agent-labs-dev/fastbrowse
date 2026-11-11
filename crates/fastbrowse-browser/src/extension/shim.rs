@@ -16,7 +16,7 @@ use serde_json::{Map, Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
 
-use super::protocol::{EXTENSION_IDS, HostRecord, PROTOCOL};
+use super::protocol::{EXTENSION_IDS, HostRecord, PROTOCOL, allowed_methods};
 use crate::error::BrowserError;
 
 /// Domains the session enables with `<Domain>.enable`, which the extension must relay.
@@ -527,6 +527,9 @@ pub async fn connect(record: &HostRecord, task: &str, trace: Trace) -> Result<En
              {update}"
         )));
     }
+    if let Some(why) = stale_extension(&hello) {
+        return Err(unavailable(&why));
+    }
     let (to_cdp, replies) = mpsc::unbounded_channel();
     let (commands, mut incoming) = mpsc::unbounded_channel::<String>();
     let relay = Arc::new(Relay {
@@ -583,6 +586,29 @@ pub async fn connect(record: &HostRecord, task: &str, trace: Trace) -> Result<En
         }
     });
     Ok(Endpoint { commands, replies, hello })
+}
+
+/// Why an extension that answered hello cannot carry this run: it relays fewer CDP methods than this build sends. An
+/// unpacked extension keeps the files it was loaded from until it is reloaded, so one loaded before a method was added
+/// refuses it. The session goes on past a refusal of some commands, such as file chooser interception, and a
+/// refusal there left every upload button opening a native chooser the run could not see (#979), so the run fails
+/// here, before any spend, naming the fix.
+fn stale_extension(hello: &Value) -> Option<String> {
+    const RELOAD: &str = "run `fastbrowse extension path` and press Reload on fastbrowse in chrome://extensions";
+    let Some(relayed) = hello["methods"].as_array() else {
+        return Some(format!(
+            "the fastbrowse extension in this browser is older than this fastbrowse and does not say which CDP \
+             methods it relays: {RELOAD}"
+        ));
+    };
+    let missing: Vec<String> =
+        allowed_methods().into_iter().filter(|method| !relayed.iter().any(|m| m == method.as_str())).collect();
+    (!missing.is_empty()).then(|| {
+        format!(
+            "the fastbrowse extension in this browser is older than this fastbrowse and does not relay {}: {RELOAD}",
+            missing.join(", ")
+        )
+    })
 }
 
 fn unavailable(message: &str) -> BrowserError {
@@ -682,6 +708,64 @@ mod tests {
         keeping.abort();
         let sent: Value = serde_json::from_str(&sent.expect("an operation sent").unwrap()).unwrap();
         assert_eq!((sent["op"].as_str(), sent["tabId"].as_i64()), (Some("keepTab"), Some(7)));
+    }
+
+    /// A host on `socket` whose extension answers hello with `hello`.
+    #[cfg(unix)]
+    fn serve_hello(socket: &Path, hello: Value) {
+        let listener = tokio::net::UnixListener::bind(socket).unwrap();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = tokio::io::split(stream);
+            let _ = BufReader::new(read).lines().next_line().await;
+            let reply = json!({"id": 0, "result": hello});
+            write.write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+            std::future::pending::<()>().await;
+        });
+    }
+
+    #[cfg(unix)]
+    async fn connect_to(name: &str, hello: Value) -> Result<Endpoint, BrowserError> {
+        let socket = std::env::temp_dir().join(format!("fbx-{name}-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&socket);
+        serve_hello(&socket, hello);
+        let record = HostRecord {
+            browser_id: "id".into(),
+            label: "Chrome".into(),
+            browser: "Chrome".into(),
+            version: "150".into(),
+            protocol: PROTOCOL,
+            pid: std::process::id(),
+            socket: socket.clone(),
+        };
+        let connected = connect(&record, "task", Trace::collecting()).await;
+        let _ = std::fs::remove_file(&socket);
+        connected
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_extension_loaded_before_this_build_fails_the_run_naming_what_it_does_not_relay() {
+        // #979: an unpacked extension loaded before file chooser interception refused Page.setInterceptFileChooserDialog,
+        // which the session goes on without, so every upload button opened a native chooser the run could
+        // not see and --file never attached.
+        let mut methods = allowed_methods();
+        methods.retain(|method| method != "Page.setInterceptFileChooserDialog");
+        let Err(BrowserError::Unavailable(why)) =
+            connect_to("stale", json!({"protocol": PROTOCOL, "methods": methods})).await
+        else {
+            panic!("a stale extension connected");
+        };
+        assert!(
+            why.contains("Page.setInterceptFileChooserDialog") && why.contains("fastbrowse extension path"),
+            "{why}"
+        );
+        // One that predates the list says nothing of what it relays.
+        let Err(BrowserError::Unavailable(why)) = connect_to("unlisted", json!({"protocol": PROTOCOL})).await else {
+            panic!("an extension naming no methods connected");
+        };
+        assert!(why.contains("fastbrowse extension path"), "{why}");
+        assert!(connect_to("current", json!({"protocol": PROTOCOL, "methods": allowed_methods()})).await.is_ok());
     }
 
     #[test]

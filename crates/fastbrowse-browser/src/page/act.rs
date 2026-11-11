@@ -666,7 +666,7 @@ impl CdpPage {
                     "objectId": object,
                     "functionDeclaration": "function (opener) { const registry = window.__fastbrowse; \
                         const node = registry?.nodes.get(opener); \
-                        if (node) registry.chooser = {input: this, opener: node}; }",
+                        if (node) registry.chooser = {input: this, opener: node, connected: this.isConnected}; }",
                     "arguments": [{"value": opener}],
                 }),
                 session_id,
@@ -1163,11 +1163,13 @@ impl CdpPage {
             .iter()
             .map(|f| json!({"name": f.name, "type": f.mime_type, "data": BASE64.encode(&f.content.0)}))
             .collect();
+        // The snapshot's own `sourceOf` names the input a control stands for, so the upload goes to the input the
+        // observation offered, including one a chooser opened that was never on the page.
         let script = format!(
-            "((id, files, allowed) => {{ const node = window.__fastbrowse?.nodes.get(id); \
-             const chooser = window.__fastbrowse?.chooser; \
-             const e = node?.tagName === 'LABEL' ? node.control : chooser?.opener === node ? chooser.input : node; \
-             if (!e?.isConnected || e.type !== 'file' || e.disabled || \
+            "((id, files, allowed) => {{ const registry = window.__fastbrowse; const node = registry?.nodes.get(id); \
+             if (!node?.isConnected || !registry.sourceOf) return null; \
+             const e = registry.sourceOf(node); \
+             if (e?.type !== 'file' || e.disabled || \
              (allowed && !allowed.includes(location.origin))) return null; \
              const dt = new DataTransfer(); \
              for (const f of files) {{ const bin = atob(f.data); \
