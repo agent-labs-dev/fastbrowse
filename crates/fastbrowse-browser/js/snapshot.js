@@ -4,6 +4,10 @@
 // open shadow roots. Runs once per frame session (main frame or an OOPIF); CdpPage merges frames.
 // biome-ignore format: session.rs appends mode arguments to this parenthesized expression.
 ((mode, allowedOrigins = null, own = {}) => {
+  // A caller that keeps reads for a page that has not moved asks for `-reuse`; plain `snapshot` and `glance` always
+  // read the page, so every existing caller sees exactly what it saw before.
+  const reuse = mode.endsWith('-reuse');
+  if (reuse) mode = mode.slice(0, -6);
   // Reading a cross-origin frame's document can throw.
   const childDocument = frame => {
     try {
@@ -41,6 +45,60 @@
   registry.nativeRequestAnimationFrame ||= window.requestAnimationFrame.bind(window);
   // What was offered to be acted on; `ids` also names hover targets and fingerprinted nodes.
   registry.controls ||= new WeakSet();
+  // A change counter, so a read can tell later whether the page it described has moved since. Everything here can
+  // change what a read would report without rewriting a node: pointer entry reveals a `:hover` rule, a font or image
+  // that finishes loading shifts the layout under it, a document observer sees neither a shadow root nor a child
+  // document, and a sheet inserted through the CSSOM changes what is shown with no record to observe.
+  if (!registry.revTracking) {
+    registry.revTracking = true;
+    registry.rev = 0;
+    const bumped = () => registry.rev++;
+    for (const type of [
+      'pointermove',
+      'pointerover',
+      'pointerout',
+      'mouseover',
+      'mouseout',
+      'mouseenter',
+      'mouseleave',
+      'input',
+      'change',
+      'reset',
+      'focusin',
+      'focusout',
+      'scroll',
+      'wheel',
+      'resize',
+      'load',
+      'error',
+      'play',
+      'playing',
+      'pause',
+      'ended',
+      'seeked',
+      'timeupdate',
+      'ratechange',
+      'volumechange',
+    ])
+      addEventListener(type, bumped, true);
+    new MutationObserver(bumped).observe(document, {
+      subtree: true,
+      characterData: true,
+      childList: true,
+      attributes: true,
+    });
+    // A sheet another origin serves is not readable here, and its rules are not what changed ours.
+    registry.sheets = () => {
+      let rules = 0;
+      for (const sheet of document.styleSheets) {
+        rules += 1;
+        try {
+          rules += sheet.cssRules.length;
+        } catch {}
+      }
+      return rules;
+    };
+  }
   const ARIA_ROLES = [
     'button',
     'link',
@@ -178,6 +236,29 @@
     };
   }
   if (!document.body) return null;
+  // A page that has not moved since the read it last gave is not read again: the caller still holds that read, and
+  // deriving it and sending it back is what an observation costs on a dense page. Anything that can change what a
+  // read would say without rewriting a node is asked first, so a reuse is only a page that is provably still.
+  const kept = registry.kept?.[mode];
+  const still =
+    reuse &&
+    kept &&
+    kept.mode === mode &&
+    kept.rev === registry.rev &&
+    kept.sheets === registry.sheets() &&
+    kept.href === location.href &&
+    kept.title === document.title &&
+    kept.scrollX === scrollX &&
+    kept.scrollY === scrollY &&
+    kept.innerWidth === innerWidth &&
+    kept.innerHeight === innerHeight &&
+    kept.hidden === document.hidden &&
+    kept.readyState === document.readyState &&
+    // A transition or animation in flight moves what is on screen between one look and the next, so a read taken
+    // while one runs does not stand.
+    document.getAnimations().length === 0;
+  if (still) return { unchanged: true, url: kept.url, title: kept.title, document_key: kept.document_key, page_key: kept.page_key };
+  const readRev = registry.rev;
   const identity = e => {
     if (!registry.ids.has(e)) registry.ids.set(e, registry.next++);
     const id = registry.ids.get(e);
@@ -609,16 +690,24 @@
 
   // Traverse light DOM plus any open shadow roots, and same-origin same-process nested iframes.
   let inaccessible = 0;
+  // A document observer sees neither a shadow root nor a child document, so a read that went into either cannot be
+  // told later whether it still holds, and is not reused.
+  let deep = false;
   function* walk(root) {
     // A document observer cannot see mutations inside shadow roots or child documents.
     const listed = new Set(root.querySelectorAll(SELECTOR));
     for (const e of root.querySelectorAll('*')) {
       if (listed.has(e) || pressable(e) || focusableText(e)) yield e;
-      if (e.shadowRoot) yield* walk(e.shadowRoot);
+      if (e.shadowRoot) {
+        deep = true;
+        yield* walk(e.shadowRoot);
+      }
       if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
         const inner = childDocument(e);
-        if (inner && inner.body && granted(inner)) yield* walk(inner);
-        else inaccessible++;
+        if (inner && inner.body && granted(inner)) {
+          deep = true;
+          yield* walk(inner);
+        } else inaccessible++;
       }
     }
   }
@@ -1405,6 +1494,27 @@
       .trim();
   const modal = modals.length ? dialogName(modals.at(-1)) : null;
 
+  // What this read reported, kept for the next look. A read that went into a shadow root or a child document is not
+  // kept: a document observer cannot see either, so it could not tell later whether that part still holds.
+  if (!deep) {
+    registry.kept ||= {};
+    registry.kept[mode] = {
+      mode,
+      rev: readRev,
+      sheets: registry.sheets(),
+      href: location.href,
+      title: document.title,
+      scrollX,
+      scrollY,
+      innerWidth,
+      innerHeight,
+      hidden: document.hidden,
+      readyState: document.readyState,
+      url: location.href,
+      document_key: String(performance.timeOrigin),
+      page_key,
+    };
+  }
   const result = {
     url: location.href,
     title: document.title,
