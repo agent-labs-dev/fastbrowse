@@ -41,6 +41,7 @@ use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
 use acting::Carried;
+use finishing::outcome_notes;
 use state::{Flow, RunState, Stop};
 
 use crate::error::AgentError;
@@ -532,6 +533,14 @@ impl Agent {
                     let error = error.or_else(|| state.refused.then(|| self.redact(finishing::REFUSED)));
                     return self.answered(&partial, &notes, Some(state), ledger, stop.status, error, budget);
                 }
+                // A task that only carries something out reports what it read after its last step, as at done, and
+                // whether it is one is asked only when that would leave out an answer read before such a step. Asking
+                // can fail on a spent budget, and the notes then answer as they stand.
+                if state.output_intent == state::OutputIntent::Unknown
+                    && outcome_notes(state).supporting().len() < state.notes.supporting().len()
+                {
+                    let _ = self.output_intent(state).await;
+                }
                 return self.partial_result(&notes, Some(state), ledger, stop.status, error, budget);
             }
             let wall = self.wall(stop);
@@ -639,6 +648,11 @@ impl Agent {
                 return self.answered(partial, &notes, Some(state), ledger, status, error, budget);
             }
         }
+        // A run stuck on a desktop form after choosing Germany cited "United Kingdom", the combo box's value as its
+        // first read saw it, before the choice: a task that only carries something out answers, stopped or not, with
+        // what it read after its last step that changes the site (#989).
+        let outcome = state.filter(|state| state.output_intent == state::OutputIntent::CarriedOut).map(outcome_notes);
+        let notes = outcome.as_ref().unwrap_or(notes);
         if state.is_some_and(|state| state.compose) {
             // A failed compose call cannot promote context into an answer: only facts Jev marked as answering are safe
             // to return, and an empty set must stay an answerless failure rather than become a raw evidence dump.
