@@ -477,6 +477,12 @@ pub fn credential_field(control: &Control) -> Option<CredentialField> {
     tokens.contains(&"webauthn").then_some(CredentialField::Passkey)
 }
 
+/// Whether the page marks this field as where a passkey or security key signs in (`autocomplete=webauthn`), whatever
+/// other role the field has: a conditional-UI username field carries `username webauthn`.
+pub fn offers_passkey(control: &Control) -> bool {
+    autocompletes(control, "webauthn")
+}
+
 /// Whether a field takes an account's credentials: the page's own evidence that it wants a sign-in.
 pub fn asks_for_credentials(control: &Control) -> bool {
     credential_field(control).is_some()
@@ -1287,6 +1293,13 @@ mod tests {
         assert_eq!(field(false, None, Some("current-password")), Some(CredentialField::Password));
         assert_eq!(username, Some(CredentialField::Username));
         assert_eq!(field(false, Some("text"), Some("name")), None);
+        // A conditional-UI username field is a username that also offers a passkey.
+        let mut conditional = Control::new("f", "textbox", "Email", [Operation::Fill]);
+        conditional.autocomplete = Some("username webauthn".into());
+        assert_eq!(credential_field(&conditional), Some(CredentialField::Username));
+        assert!(offers_passkey(&conditional));
+        conditional.autocomplete = Some("username".into());
+        assert!(!offers_passkey(&conditional));
         for (fields, kind) in [
             (vec![code, code], WallKind::OneTimeCode),
             (vec![username, password], WallKind::Password),

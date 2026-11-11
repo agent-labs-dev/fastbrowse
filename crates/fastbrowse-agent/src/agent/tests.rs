@@ -757,6 +757,37 @@ fn test_a_stop_at_a_wall_names_what_the_wall_asks_for() {
     }
 }
 
+/// A page that marks a passkey field (`autocomplete=webauthn`) gets a needs_login reason naming a security key, not
+/// "a password" or "offers only sign-in" (#925).
+#[test]
+fn test_meet_wall_names_a_security_key_when_the_page_marks_a_passkey_field() {
+    let mut email = Control::new("email", "textbox", "Email", [Operation::Fill]);
+    email.autocomplete = Some("username webauthn".into());
+    let mut passkey = Control::new("pk", "textbox", "", [Operation::Fill]);
+    passkey.autocomplete = Some("webauthn".into());
+    let mut password = Control::new("pw", "textbox", "Password", [Operation::Fill]);
+    password.input_type = Some("password".into());
+    for (controls, expected) in [
+        (vec![email], "the page asks for Email, a security key or passkey"),
+        (vec![passkey.clone()], "the page asks for a security key or passkey"),
+        (vec![password], "the page asks for Password"),
+        (vec![button("Sign in")], "Sign in to B offers only sign-in"),
+    ] {
+        let page = Observation { title: "Sign in to B".into(), ..at("https://b.test/login", &controls) };
+        let super::state::Flow::Stop(stop) = agent().meet_wall(&page, &page) else { panic!("no stop") };
+        assert_eq!(stop.status, Status::NeedsLogin);
+        assert_eq!(stop.error.as_deref(), Some(format!("sign-in required at https://b.test: {expected}").as_str()));
+    }
+    // A passkey field the observed page lost is still named from the raw page.
+    let raw = at("https://b.test/login", std::slice::from_ref(&passkey));
+    let seen = at("https://b.test/login", &[]);
+    let super::state::Flow::Stop(stop) = agent().meet_wall(&seen, &raw) else { panic!("no stop") };
+    assert_eq!(
+        stop.error.as_deref(),
+        Some("sign-in required at https://b.test: the page asks for a security key or passkey")
+    );
+}
+
 /// Declares a password for the site and then cannot produce it, as a vault that is locked does.
 struct Unresolved;
 

@@ -82,7 +82,8 @@ what you want, run again with authorization:
 **Common causes.**
 
 - Jev judged a fresh page to be a sign-in wall, and no secret is declared for that page's origin. The error is
-  `sign-in required at <origin>`.
+  `sign-in required at <origin>`. It names the fields the page asks for, and `a security key or passkey`
+  when the page marks a passkey field (`autocomplete="webauthn"`).
 - The run reached a field that takes a secret, such as a password, and none is stored. The error is
   `'<field>' wants a secret and none is stored`.
 - The site answered HTTP 401 and Jev found no way on. The error is
