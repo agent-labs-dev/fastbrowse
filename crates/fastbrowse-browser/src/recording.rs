@@ -378,7 +378,8 @@ impl Recording {
         let style = "Fontsize=10,BorderStyle=3,Outline=6,Shadow=0,OutlineColour=&H50000000,MarginV=16,Alignment=2";
         // libass cannot open an empty subtitle file. The filter names it relative to ffmpeg's working directory: an
         // absolute path's drive colon and backslashes are filter syntax, and a Windows run failed on them.
-        let mut error = self.encode(&filter_chain(!cues.is_empty(), cursor_present, style)).await;
+        let captioned = filter_chain(!cues.is_empty(), cursor_present, style);
+        let mut error = self.encode(&captioned, &filter_chain(false, cursor_present, style)).await;
         if let Some(failure) = &error
             && (!cues.is_empty() || cursor_present)
         {
@@ -387,7 +388,7 @@ impl Recording {
                 "ffmpeg could not caption {}, so it is written without captions: {failure}",
                 self.path.display()
             ));
-            error = self.encode("null").await;
+            error = self.encode("null", "null").await;
         }
         if let Some(failure) = error {
             warn(&format!("ffmpeg could not write {}: {failure}", self.path.display()));
@@ -432,47 +433,34 @@ impl Recording {
         (width > 0 && height > 0).then_some((width, height))
     }
 
-    /// Write both videos into scratch through `burn` on the captioned one; return ffmpeg's error, if any.
-    async fn encode(&self, burn: &str) -> Option<String> {
-        // H.264 needs even dimensions, and yuv420p is what phones and social sites play.
-        let graph = if burn.contains("cursor.ass") {
-            format!(
-                "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p,split=2[plain_in][steps_in];[steps_in]{burn}[captioned];[plain_in]subtitles=cursor.ass[plain]"
-            )
-        } else {
-            format!(
-                "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p,split=2[plain][steps];[steps]{burn}[captioned]"
-            )
-        };
-        // Page text is the subject of a shared clip; x264's default quality blurs small type.
-        let encode = ["-c:v", "libx264", "-crf", "18", "-preset", "slow", "-movflags", "+faststart"];
-        let output = Command::new(&self.ffmpeg_path)
-            .args(["-loglevel", "error", "-y", "-i"])
-            .arg(self.scratch.join("uncaptioned.mkv"))
-            .args(["-filter_complex", &graph, "-map", "[captioned]"])
-            .args(encode)
-            .args(["captioned.mp4", "-map", "[plain]"])
-            .args(encode)
-            .arg("plain.mp4")
-            .current_dir(&self.scratch)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .output()
-            .await;
-        match output {
-            Ok(done) if done.status.success() => None,
-            Ok(done) => {
-                let error = String::from_utf8_lossy(&done.stderr).trim().to_owned();
-                Some(if error.is_empty() {
-                    format!("exit status {}", done.status.code().unwrap_or(-1))
-                } else {
-                    cut(&error, 400)
-                })
+    /// Write both videos into scratch, the captioned one through `captioned` and the plain one through `plain`;
+    /// return ffmpeg's first error, if any. One encode at a time: a single ffmpeg splitting into both encoders held
+    /// both encoders' frame buffers at once, and parallel eval tasks stacked several of those.
+    async fn encode(&self, captioned: &str, plain: &str) -> Option<String> {
+        for (filters, output) in [(captioned, "captioned.mp4"), (plain, "plain.mp4")] {
+            let done = Command::new(&self.ffmpeg_path)
+                .args(encode_args(filters, output))
+                .current_dir(&self.scratch)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true)
+                .output()
+                .await;
+            match done {
+                Ok(done) if done.status.success() => {}
+                Ok(done) => {
+                    let error = String::from_utf8_lossy(&done.stderr).trim().to_owned();
+                    return Some(if error.is_empty() {
+                        format!("exit status {}", done.status.code().unwrap_or(-1))
+                    } else {
+                        cut(&error, 400)
+                    });
+                }
+                Err(error) => return Some(error.kind().to_string()),
             }
-            Err(error) => Some(error.kind().to_string()),
         }
+        None
     }
 }
 
@@ -549,6 +537,20 @@ fn srt_time(seconds: f64) -> String {
 fn ass_time(seconds: f64) -> String {
     let cs = (seconds.max(0.0) * 100.0).round() as u64;
     format!("{}:{:02}:{:02}.{:02}", cs / 360_000, cs / 6_000 % 60, cs / 100 % 60, cs % 100)
+}
+
+/// The ffmpeg arguments that write `output` in scratch from the lossless pass through `filters`.
+fn encode_args(filters: &str, output: &str) -> Vec<String> {
+    // H.264 needs even dimensions, and yuv420p is what phones and social sites play.
+    let chain = format!("scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p,{filters}");
+    // Page text is the subject of a shared clip; x264's default quality blurs small type.
+    let encode = ["-c:v", "libx264", "-crf", "18", "-preset", "slow", "-movflags", "+faststart"];
+    ["-loglevel", "error", "-y", "-i", "uncaptioned.mkv", "-vf", &chain]
+        .into_iter()
+        .chain(encode)
+        .chain([output])
+        .map(str::to_owned)
+        .collect()
 }
 
 fn filter_chain(captions: bool, cursor: bool, style: &str) -> String {
@@ -709,6 +711,17 @@ mod tests {
         assert_eq!(filter_chain(false, false, ""), "null");
         assert_eq!(filter_chain(true, false, "Fontsize=10"), "subtitles=steps.srt:force_style='Fontsize=10'");
         assert_eq!(filter_chain(false, true, ""), "subtitles=cursor.ass");
+    }
+
+    #[test]
+    fn each_video_is_its_own_single_output_encode() {
+        let args = encode_args("subtitles=cursor.ass", "plain.mp4");
+        // One output per ffmpeg: two encoders fed from a split held both encoders' frame buffers at once.
+        assert_eq!(args.iter().filter(|arg| arg.ends_with(".mp4")).count(), 1);
+        assert!(!args.iter().any(|arg| arg == "-filter_complex" || arg.contains("split")));
+        let filters = args.iter().skip_while(|arg| *arg != "-vf").nth(1).unwrap();
+        assert_eq!(filters, "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p,subtitles=cursor.ass");
+        assert_eq!(args.last().unwrap(), "plain.mp4");
     }
 
     #[test]
