@@ -202,7 +202,7 @@ text-fragment deep links; unused facts have no citation. The LLM writes a compos
 each final claim against its original cited quotes, including record identity and values, after any packing rounds.
 A count, total, minimum or maximum, or a place after one such as the second cheapest, is never written or judged as a number. The composer marks it as a tally with
 the kind of record and the field, and Jev answers one question per note read: for a count, whether it holds exactly one
-such record, and for a total or extreme, whether it holds one with its field, then which number in it is the field. A
+such record, and for a total or extreme, whether it holds one with its field, then which number in it is the field. A date, ISO or a day, month name and year, is offered whole with its year beside it, and its day and month are not offered alone, since neither orders anything; code orders dates for an extreme and never adds them. A
 record's name, heading or a link to it holds no value, so it is not counted as a record without one. Code counts, adds
 or compares, writes the value into the claim and cites every record it rests on. For a count per group, such as quotes
 per author, the composer names only the group its claim counts: the run's LLM copies each record's group from its
