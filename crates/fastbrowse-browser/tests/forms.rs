@@ -627,6 +627,48 @@ async fn test_a_button_that_opens_a_hidden_file_input_uploads_through_its_choose
     assert_eq!(name, json!("lid.stl"));
 }
 
+/// #979: an upload dialog's button that makes a file input in script and clicks it, never adding it to the page. Only
+/// the input's own change handler refers to it, so once the click returns nothing in the page holds it; the button
+/// uploads to it all the same.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_button_that_opens_a_file_input_never_on_the_page_uploads_through_its_chooser() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = '<div role=dialog aria-label=\"Add media\"><button>Upload or Drag Image</button></div>'; \
+         document.querySelector('button').onclick = () => { const input = document.createElement('input'); \
+         input.type = 'file'; input.onchange = () => { window.chosen = input.files[0]?.name; }; input.click(); };",
+    )
+    .await;
+    let observation = h.observe().await;
+    let clicked = h
+        .page
+        .act(&action(Operation::Click, find(&observation, "Upload or Drag Image")), &observation)
+        .await
+        .expect("act");
+    assert_eq!(clicked.outcome, StepOutcome::Executed, "{:?}", clicked.detail);
+    // Nothing but the chooser refers to the input now, so a collection before the next observation would take it.
+    let active = h.session.active_session_id().expect("session");
+    h.session.send("HeapProfiler.collectGarbage", json!({}), Some(&active)).await.expect("gc");
+    let observation = h.observe().await;
+    let opener = find(&observation, "Upload or Drag Image");
+    assert_eq!(opener.operations, [Operation::Upload].into(), "{:?}", observation.controls);
+    let upload = Action {
+        files: vec![Attachment {
+            name: "docks.png".into(),
+            mime_type: "image/png".into(),
+            content: Bytes(b"png".to_vec()),
+        }],
+        ..action(Operation::Upload, opener)
+    };
+    let result = h.page.act(&upload, &observation).await.expect("act");
+    let chosen = eval_active(&h.page, "window.chosen ?? null").await;
+    h.close().await;
+    assert_eq!(result.outcome, StepOutcome::Executed, "{:?}", result.detail);
+    assert_eq!(chosen, json!("docks.png"));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_select_clipped_after_it_was_observed_is_stale() {
     let Some(h) = harness().await else { return };
