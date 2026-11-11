@@ -211,7 +211,14 @@ INTERNAL = {
 SLOT_FIELDS = ("status", "passed", "seconds", "dollars", "llm_calls", "llm_calls_basis", "timing_note")
 FASTBROWSE_ARMS = {"fastbrowse", "fastbrowse-pool"}
 """Arms that are fastbrowse itself, whose completion is its own `complete` status."""
-HOSTED_ARMS = ("fastbrowse", "browser-use", "browser-use-ultrafast", "jev-ultrafast", "browser-harness")
+HOSTED_ARMS = (
+    "fastbrowse",
+    "browser-use",
+    "browser-use-ultrafast",
+    "jev-ultrafast",
+    "browser-harness",
+    "browser-use-oss",
+)
 """The arms the hosted head-to-head may measure, in display order: any of them its one invocation ran."""
 COST_NOT_REPORTED: set[str] = set()
 """Arms whose provider does not report what a run cost, so their rows publish the pass rate and seconds with no
@@ -224,6 +231,7 @@ BROWSER_MODES = {
     "browser-use": {"browser-use-hosted"},
     "browser-use-ultrafast": {"browser-use-hosted"},
     "browser-harness": {"browser-use-cloud"},
+    "browser-use-oss": {"browser-use-cloud"},
 }
 """The browser each arm may have driven; which one it was is recorded, checked and published per arm."""
 BROWSER_USE_MODES = {"browser-use-cloud", "browser-use-hosted"}

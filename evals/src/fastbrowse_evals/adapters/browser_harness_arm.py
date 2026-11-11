@@ -22,10 +22,10 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
-from cua_codex_arm import codex_error, strict_schema  # noqa: E402
+from cua_codex_arm import PINS, codex_error, strict_schema  # noqa: E402
 
-HARNESS_VERSION = "0.1.13"
-CODEX_VERSION = "0.163.0"
+HARNESS_VERSION = PINS["browser-harness"]["version"]
+CODEX_VERSION = PINS["@openai/codex"]["version"]
 DAEMON = "parallax-eval"
 """The BU_NAME of the one daemon each attempt owns, inside its own BH_HOME and runtime directory."""
 

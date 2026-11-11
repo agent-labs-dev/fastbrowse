@@ -53,7 +53,13 @@ GroupId = Literal[
     "online-mind2web",
 ]
 Arm = Literal[
-    "fastbrowse", "fastbrowse-pool", "browser-use", "browser-use-ultrafast", "jev-ultrafast", "browser-harness"
+    "fastbrowse",
+    "fastbrowse-pool",
+    "browser-use",
+    "browser-use-ultrafast",
+    "jev-ultrafast",
+    "browser-harness",
+    "browser-use-oss",
 ]
 FASTBROWSE_ARMS: frozenset[Arm] = frozenset({"fastbrowse", "fastbrowse-pool"})
 RESULTS = Path("docs/results")
@@ -232,6 +238,7 @@ HEAD_TO_HEAD: tuple[Arm, ...] = (
     "browser-use-ultrafast",
     "jev-ultrafast",
     "browser-harness",
+    "browser-use-oss",
 )
 OFFICIAL: tuple[Arm, ...] = ("fastbrowse", "browser-use")
 COVERAGE: dict[GroupId, Coverage] = {
@@ -242,7 +249,7 @@ COVERAGE: dict[GroupId, Coverage] = {
         "task-success",
         HEAD_TO_HEAD,
         (),
-        ("browser-use", "browser-use-ultrafast", "jev-ultrafast", "browser-harness"),
+        ("browser-use", "browser-use-ultrafast", "jev-ultrafast", "browser-harness", "browser-use-oss"),
     ),
     "internal-ultrafast": Coverage(frozenset({6, 47}), 3, "task-success", ("fastbrowse-pool", "jev-ultrafast")),
     "internal-backend": Coverage(frozenset({53, 54}), 3, "task-success", ("fastbrowse", "fastbrowse-pool")),
