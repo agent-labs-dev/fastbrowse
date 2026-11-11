@@ -163,8 +163,9 @@ These are the things a change must not quietly break.
 - **Code owns authorization.** Jev classifies clicks, form-submitting Enter and dialog acceptance; code
   refuses an irreversible one unless the run is authorized and Jev judges the task asked for it. Only
   code-selected pagination skips classification. The classifier is not a guarantee against missed changes.
-- **One stall rule.** A step that changes nothing, a read that adds nothing, a refused DONE and a return to a
-  page state already seen with nothing read since are each no progress. `unchanged_actions` of them in a row
+- **One stall rule.** A step that changes nothing, a read that adds nothing, a refused DONE, a return to a
+  page state already seen with nothing read since, and any return after the first one since the last new evidence
+  are each no progress. `unchanged_actions` of them in a row
   ask Jev again without the stalled action. A page state not seen before or new evidence renews that budget. Rewriting a field's current value cannot count as progress even if the page
   changes.
 
