@@ -212,6 +212,7 @@ fn button(label: &str) -> Control {
 pub(super) fn code_decision(operation: Operation, target: Option<Control>) -> Decision {
     Decision {
         replayed: false,
+        plan: Vec::new(),
         by_code: false,
         operation,
         url: None,
@@ -3465,9 +3466,13 @@ impl DecisionClient for ComposeSupport {
     }
 }
 
-struct WrongRecord;
+/// A composer that writes one claim, citing the first note.
+struct WritesRecord(&'static str);
 
-impl LLMClient for WrongRecord {
+#[allow(non_upper_case_globals)]
+const WrongRecord: WritesRecord = WritesRecord("Record A: 99");
+
+impl LLMClient for WritesRecord {
     fn generate_value<'a>(
         &'a self,
         _: LLMPurpose,
@@ -3480,7 +3485,7 @@ impl LLMClient for WrongRecord {
                 ledger.reserve(CostComponent::Llm, 0.0, 1)?;
             }
             let data = schema
-                .validate_json(&json!({"claims": [{"text": "Record A: 99", "evidence_ids": ["e0"]}]}).to_string())
+                .validate_json(&json!({"claims": [{"text": self.0, "evidence_ids": ["e0"]}]}).to_string())
                 .map_err(LLMError::Failed)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
@@ -3507,6 +3512,67 @@ async fn test_rejected_composed_claims_cannot_end_complete() {
     assert_eq!(stopped.error.as_deref(), Some("no_progress (3)"));
     assert!(!stopped.answer.unwrap_or_default().contains("Record A: 99"));
     assert!(!stopped.evidence.is_empty());
+}
+
+/// Supports every claim, and judges the steps the task asks for carried out or not by `carried`.
+struct JudgesCarried(bool);
+
+impl DecisionClient for JudgesCarried {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            let mut evaluation = ComposeSupport(true).evaluate(state, questions).await?;
+            for (key, held) in [("carried", self.0), ("refused", false)] {
+                if let Some(Answer::Noul(answer)) = evaluation.answers.get_mut(key) {
+                    answer.probability = if held { 1.0 } else { 0.0 };
+                }
+            }
+            Ok(evaluation)
+        })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile::jev()
+    }
+}
+
+/// A run that read every page of a list and then went back and forth between them stopped `no_progress`, and its
+/// answer, which passed every claim and coverage check, came back stuck under "Partial evidence only". A stop over
+/// navigation leaves an answer that holds whole when the task asks only to be told.
+#[tokio::test]
+async fn test_a_stuck_run_whose_answer_passes_every_check_answers_the_task() {
+    let stopped = |intent, undone, acted: Option<bool>| async move {
+        let jev = Arc::new(JudgesCarried(acted.unwrap_or(true)));
+        let agent = Agent::new(Arc::new(NoPage), jev, Arc::new(WritesRecord("Record B: 34")));
+        let mut state = run_state();
+        state.output_intent = intent;
+        state.compose = true;
+        state.undone = undone;
+        if acted.is_some() {
+            state.history.push(executed(Some(Operation::Fill), Some("Name"), true));
+            agent.seen().observed = Some(at("https://shop.test/form", &[]));
+        }
+        let page = capture(&[(BlockKind::Paragraph, "Record B: 34")]);
+        state.notes.add(Fact::read("Record B: 34", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
+        let ledger = state.ledger.clone();
+        let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "no_progress (3)"));
+        agent.stopped(stop, Some(&mut state), &ledger).await
+    };
+    let text = super::state::OutputIntent::Text;
+    let told = stopped(text, false, None).await;
+    assert_eq!((told.status, told.error.as_deref()), (Status::Complete, None));
+    assert!(told.answer.unwrap_or_default().starts_with("Record B: 34 [1]"));
+    // A task that asks for something done is not done because what was read holds.
+    let carried = stopped(super::state::OutputIntent::CarriedOut, false, None).await;
+    assert_eq!(carried.status, Status::Stuck);
+    // Nor is a task that asks to be told after a step: a finish check that found a step undone, or a run that acted
+    // and whose steps the finish check's question finds not carried out, stays stuck. Steps judged carried answer.
+    assert_eq!(stopped(text, true, None).await.status, Status::Stuck);
+    assert_eq!(stopped(text, false, Some(false)).await.status, Status::Stuck);
+    assert_eq!(stopped(text, false, Some(true)).await.status, Status::Complete);
 }
 
 #[test]
@@ -6002,6 +6068,69 @@ async fn test_done_on_a_record_page_after_leaving_the_list_returns_to_its_unread
     assert_eq!(state.unread_pager_page(), None);
 }
 
+/// A composer double that proposes `url` as the route around a wall, keeping each request it was sent.
+struct ProposesRoute(Option<&'static str>, std::sync::Mutex<Vec<String>>);
+
+impl LLMClient for ProposesRoute {
+    fn generate_value<'a>(
+        &'a self,
+        _: LLMPurpose,
+        messages: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        assert!(messages[1].content.contains("# Walled addresses\nhttps://pypi.org/search/?q=httpx"));
+        self.1.lock().unwrap().push(messages[1].content.clone());
+        Box::pin(async move {
+            let data = schema.validate_json(&json!({"url": self.0}).to_string()).map_err(LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+        })
+    }
+}
+
+/// PyPI's search met a bot check that did not clear, and the run stopped blocked while hosted agents opened the
+/// project page itself. A wall ends its route: the run opens another proposed route once, and stops only when none is
+/// left (#953).
+#[tokio::test]
+async fn test_a_bot_check_that_does_not_clear_ends_the_route_not_the_run() {
+    let walled = "https://pypi.org/search/?q=httpx";
+    let around = |route| {
+        let page = Arc::new(HungPage::new(0));
+        let jev = Arc::new(Gatekeeper {
+            irreversible: 0.0,
+            requested: 0.0,
+            lasting: 0.0,
+            edits: 0.0,
+            calls: Default::default(),
+            edits_asked: Default::default(),
+        });
+        let llm = Arc::new(ProposesRoute(route, Default::default()));
+        (Agent::new(page, jev, llm.clone()), llm)
+    };
+    let (agent, llm) = around(Some("https://pypi.org/project/httpx/"));
+    let mut state = run_state();
+    let wall = at(walled, &[]);
+    assert!(agent.route_around(&mut state, &wall, walled).await.unwrap());
+    let opened: Vec<_> = state.steps.iter().map(|step| (step.operation, step.outcome)).collect();
+    assert_eq!(opened, [(Operation::Navigate, StepOutcome::Executed)]);
+    // The same route is opened once: met by a wall again, it is not a way around it, with recoveries to spare.
+    state.recoveries = 0;
+    assert!(!agent.route_around(&mut state, &wall, walled).await.unwrap());
+    assert_eq!(state.steps.len(), 1);
+    // Asked again, the proposer is told the route it opened, so it can name what the task still needs: told only the
+    // walls, it named the httpx page again when the task also needed requests.
+    let asked = llm.1.lock().unwrap().clone();
+    assert!(!asked[0].contains("# Opened addresses"));
+    assert!(asked[1].contains("# Opened addresses\nhttps://pypi.org/project/httpx/"), "{}", asked[1]);
+    // No route proposed, or only the walled address, leaves none.
+    let (agent, _) = around(None);
+    assert!(!agent.route_around(&mut run_state(), &wall, walled).await.unwrap());
+    let (agent, _) = around(Some(walled));
+    let mut state = run_state();
+    assert!(!agent.route_around(&mut state, &wall, walled).await.unwrap());
+    assert!(state.steps.is_empty());
+}
+
 #[tokio::test]
 async fn test_done_on_a_task_about_what_one_page_shows_concludes_with_a_next_page_unread() {
     let browser = Arc::new(HungPage::new(0));
@@ -6346,7 +6475,8 @@ fn test_executed_steps_lists_only_acting_steps() {
     // A draft written before a later step is not the answer after it.
     let notes = state.notes_to_compose();
     let id = crate::memory::fact_id(notes.facts()[0]);
-    let draft = crate::retrieval::assemble_answer(&[crate::retrieval::Claim::new("Record B: 34", vec![id])], &notes);
+    let draft =
+        crate::retrieval::assemble_answer(&[crate::retrieval::Claim::new("Record B: 34", vec![id])], &notes, &[]);
     state.composition_partial = Some((draft, RunState::composition_sources(&notes), steps.len()));
     assert!(state.checked_composition(&notes).is_some());
     state.history.push(executed(Some(Operation::Click), Some("Publish"), true));
@@ -6922,4 +7052,104 @@ async fn test_a_task_that_only_carries_something_out_does_not_read_its_start_pag
         reads.push(jev.2.load(std::sync::atomic::Ordering::Relaxed));
     }
     assert_eq!(reads[1] + 1, reads[0], "reads for a text task, then a carried-out one: {reads:?}");
+}
+
+/// A delivery form in the document `document`, its name fields holding `first` and `last`.
+fn delivery(document: &str, first: &str, last: &str) -> Observation {
+    let field = |id: &str, label: &str, value: &str| Control {
+        value: Some(value.into()),
+        ..Control::new(id, "textbox", label, [Operation::Fill])
+    };
+    let controls = [field("first", "First Name", first), field("last", "Last Name", last), button("Continue")];
+    Observation { document_key: document.into(), ..observation(&controls) }
+}
+
+fn planned(page: &Observation, id: &str) -> crate::policy::Planned {
+    let target = page.controls.iter().find(|control| control.id == id).expect("on the form").clone();
+    crate::policy::Planned { target, probability: 0.9, ahead: IndexMap::new() }
+}
+
+#[tokio::test]
+async fn test_a_plan_fills_each_planned_field_as_its_own_step() {
+    let form = delivery("1", "", "");
+    let page = Scripted::new(
+        form.clone(),
+        vec![
+            (Operation::Fill, StepOutcome::Executed, delivery("1", "Ada", "")),
+            (Operation::Fill, StepOutcome::Executed, delivery("1", "Ada", "Ada")),
+        ],
+    );
+    let page = Arc::new(page);
+    let jev = Typist(&[("source", "task"), ("first", "2"), ("last", "2")]);
+    let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Ship to Ada".into();
+    agent.run_plan(&mut state, &form, &[planned(&form, "first"), planned(&form, "last")]).await.expect("planned");
+    assert!(page.acts.lock().unwrap().is_empty(), "both planned fields were filled");
+    let filled: Vec<_> = state.history.iter().filter_map(|entry| entry.target.clone()).collect();
+    assert_eq!(filled.len(), 2, "{filled:?}");
+}
+
+#[tokio::test]
+async fn test_a_plan_stops_when_the_page_becomes_another_document() {
+    // The plan was judged on one document; a fill that loads another leaves the rest to a full decision there.
+    let form = delivery("1", "", "");
+    let page =
+        Arc::new(Scripted::new(form.clone(), vec![(Operation::Fill, StepOutcome::Executed, delivery("2", "", ""))]));
+    let jev = Typist(&[("source", "task"), ("first", "2"), ("last", "2")]);
+    let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Ship to Ada".into();
+    // A second fill would find no scripted act and fail the test.
+    agent.run_plan(&mut state, &form, &[planned(&form, "first"), planned(&form, "last")]).await.expect("planned");
+    assert!(page.acts.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_a_plan_stops_when_its_next_field_is_rewritten_or_a_modal_opens() {
+    // Same document after the first fill, but the field Jev judged is not the one there now, or sits behind a modal.
+    let relabelled = {
+        let mut page = delivery("1", "Ada", "");
+        page.controls[1].label = "Company".into();
+        page
+    };
+    let behind_modal = Observation { modal: Some("Address check".into()), ..delivery("1", "Ada", "") };
+    for after in [relabelled, behind_modal] {
+        let form = delivery("1", "", "");
+        let page = Arc::new(Scripted::new(form.clone(), vec![(Operation::Fill, StepOutcome::Executed, after)]));
+        let jev = Typist(&[("source", "task"), ("first", "2"), ("last", "2")]);
+        let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.task = "Ship to Ada".into();
+        // A second fill would find no scripted act and fail the test.
+        agent.run_plan(&mut state, &form, &[planned(&form, "first"), planned(&form, "last")]).await.expect("planned");
+        assert!(page.acts.lock().unwrap().is_empty());
+        assert_eq!(state.history.iter().filter(|entry| entry.target.is_some()).count(), 1);
+    }
+}
+
+#[tokio::test]
+async fn test_a_secret_a_modal_is_named_with_is_masked() {
+    let page = Observation { modal: Some("Welcome back, hunter2".into()), ..observation(&[button("Continue")]) };
+    let agent =
+        Agent::new(Arc::new(Scripted::new(page, vec![])), Arc::new(ScriptedJev::new(vec![])), Arc::new(ScriptedLLM));
+    agent.redactor().register("password", "hunter2", None);
+    let observed = agent.observe().await.expect("observed");
+    assert_eq!(observed.modal.as_deref(), Some("Welcome back, •••••••"));
+}
+
+#[tokio::test]
+async fn test_a_plan_stops_at_the_step_limit() {
+    // One step allowed and one taken: the planned fill is a step too, so none is taken.
+    let form = delivery("1", "", "");
+    let page = Arc::new(Scripted::new(form.clone(), vec![]));
+    let jev = Typist(&[("source", "task"), ("first", "2"), ("last", "2")]);
+    let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Ship to Ada".into();
+    state.ledger = Arc::new(Ledger::new(Limits { max_steps: Some(1), ..Limits::default() }));
+    state.ledger.state().steps = 1;
+    let stopped = agent.run_plan(&mut state, &form, &[planned(&form, "first")]).await;
+    assert!(stopped.is_err(), "a planned fill went past the step limit");
+    assert!(state.history.is_empty());
 }

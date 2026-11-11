@@ -807,3 +807,20 @@ async def test_a_missing_browser_key_after_a_paid_fetch_keeps_the_configuration_
     assert receipt is not None
     assert receipt.cost.known_dollars > 0
     assert receipt.steps == ()
+
+
+def test_an_observation_with_an_open_modal_validates() -> None:
+    # Rust writes `modal` only while one is open; the Python model must take what Rust writes.
+    from fastbrowse.page import Observation
+
+    page = {
+        "url": "https://shop.test/",
+        "title": "Shop",
+        "page_key": "k",
+        "captured_at": 0,
+        "viewport_text": "",
+        "controls": [],
+        "tabs": [],
+    }
+    assert Observation.model_validate(page).modal is None
+    assert Observation.model_validate({**page, "modal": "Stops"}).modal == "Stops"

@@ -208,7 +208,7 @@ impl LLMClient for FailoverLLMClient {
     fn context_tokens(&self, purpose: LLMPurpose) -> BoxFuture<'_, Option<i64>> {
         Box::pin(async move {
             let (primary, backup) =
-                (self.primary.context_tokens(purpose).await, self.backup.context_tokens(purpose).await);
+                tokio::join!(self.primary.context_tokens(purpose), self.backup.context_tokens(purpose));
             primary.into_iter().chain(backup).min()
         })
     }
