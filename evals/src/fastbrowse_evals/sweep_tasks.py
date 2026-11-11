@@ -37,7 +37,8 @@ async def _curseforge_newest(http: httpx.AsyncClient) -> object:
         key=lambda c: int(c["datePosted"]),
         reverse=True,
     )
-    return [c["author"]["username"] for c in comments[:5]]
+    # The page names a commenter by display name; `username` is the account login behind it.
+    return [c["author"]["displayName"] for c in comments[:5]]
 
 
 def _curseforge_comments(outcome: Outcome, truth: object) -> str | None:

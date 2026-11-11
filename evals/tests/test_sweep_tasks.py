@@ -30,9 +30,16 @@ async def test_the_wago_truth_is_read_from_the_listing_and_its_gallery_pages() -
 
 async def test_the_comment_truth_is_the_newest_unpinned_comments() -> None:
     comments = [
-        {"author": {"username": f"user{n}"}, "datePosted": str(1000 + n), "isPinned": "False"} for n in range(7)
+        {
+            "author": {"username": f"login{n}", "displayName": f"user{n}"},
+            "datePosted": str(1000 + n),
+            "isPinned": "False",
+        }
+        for n in range(7)
     ]
-    comments.append({"author": {"username": "pinned"}, "datePosted": "9999", "isPinned": "True"})
+    comments.append(
+        {"author": {"username": "pinned", "displayName": "pinned"}, "datePosted": "9999", "isPinned": "True"}
+    )
     transport = httpx.MockTransport(lambda _: httpx.Response(200, json={"data": comments}))
     async with httpx.AsyncClient(transport=transport) as http:
         truth = await sweep_tasks._curseforge_newest(http)
