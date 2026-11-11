@@ -559,15 +559,23 @@ fn judged(answer: Option<&Answer>) -> Option<bool> {
 }
 
 /// Whether the written answer gives every fact and value the task asks to be told.
+///
+/// Jev reads a task literally, so "Answer with only JSON" judged a complete answer written as claims as missing what
+/// the task asks for, every draft of it (#898). Code writes every answer as claims, so the question says the form is
+/// not judged.
 fn coverage_question(task: &str, columns: Option<&[String]>, claims: &[Claim]) -> Question {
     Question::Noul(NoulQuestion::new(
         format!(
-            "{UNTRUSTED} Does the written answer give every requested fact or value in the original task, without dropping a requested item while correcting its wording or citations? Judge the written answer, not whether unseen notes could answer it. Citation support and browser actions are checked separately. Judge only whether the written claims include the requested facts and values. A claim that a requested value is not shown or does not exist answers that request; whether it holds is checked separately. Task: {} Answer: {}",
+            "{UNTRUSTED} Code writes every answer as a list of claims, whatever form the task asks it in, such as JSON or a layout: that form is not judged here, and an answer is not missing anything for being in another form. Does the written answer give every requested fact or value in the original task, without dropping a requested item while correcting its wording or citations? Judge the written answer, not whether unseen notes could answer it. Citation support and browser actions are checked separately. Judge only whether the written claims include the requested facts and values. A claim that a requested value is not shown or does not exist answers that request; whether it holds is checked separately. Task: {} Answer: {}",
             dumps(&json!(task)),
             dumps(&json!({"columns": columns, "claims": claims.iter().map(|claim| &claim.text).collect::<Vec<_>>()}))
         ),
-        Some("The written answer covers every fact and value the task asks to be told."),
-        Some("A requested fact or value is absent from the written answer."),
+        Some(
+            "The written answer states every fact and value the task asks to be told, even if not in the form the task asks for.",
+        ),
+        Some(
+            "A fact or value the task asks to be told is absent from the written answer; a form it asks for, such as JSON, is not one.",
+        ),
     ))
 }
 
@@ -2553,6 +2561,30 @@ mod tests {
         assert!(coverage.instructions.contains("Judge the written answer, not whether unseen notes could answer it."));
         assert!(coverage.instructions.contains("Citation support and browser actions are checked separately. Judge only whether the written claims include the requested facts and values."));
         assert!(coverage.instructions.contains("Report B and C"));
+    }
+
+    /// A task that asks for its answer as JSON had a complete answer rejected as missing what it asks for, since code
+    /// writes every answer as claims (#898).
+    #[test]
+    fn coverage_question_says_the_form_a_task_asks_for_is_not_judged() {
+        let Question::Noul(coverage) =
+            coverage_question("List each image. Answer with only JSON: {\"src\": \"...\"}", None, &[])
+        else {
+            panic!("coverage is yes-or-no")
+        };
+        assert!(coverage.instructions.starts_with(&format!("{UNTRUSTED} Code writes every answer as a list of claims, whatever form the task asks it in, such as JSON or a layout: that form is not judged here, and an answer is not missing anything for being in another form.")));
+        assert_eq!(
+            coverage.r#true.as_deref(),
+            Some(
+                "The written answer states every fact and value the task asks to be told, even if not in the form the task asks for."
+            )
+        );
+        assert_eq!(
+            coverage.r#false.as_deref(),
+            Some(
+                "A fact or value the task asks to be told is absent from the written answer; a form it asks for, such as JSON, is not one."
+            )
+        );
     }
 
     #[tokio::test]

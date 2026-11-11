@@ -227,7 +227,8 @@ coverage or step check failed, which fault the claims together; a claim it
 writes again with the same text is kept once. A rewrite that retyped a passed claim could change a copied name and
 fail where the first draft had passed. A corrected draft
 must pass citation checks and cover every requested fact or value. If the combined answer exceeds Jev's input limit for the coverage check, individually supported claims remain available as an unverified partial answer; the result identifies the coverage limit. The coverage check judges the written
-facts and values; citation support and browser actions have separate checks. A whole-answer check beside coverage
+facts and values, not the form the task asks for, such as JSON, since code writes every answer as claims; citation
+support and browser actions have separate checks. A whole-answer check beside coverage
 judges the claims against the steps the run carried out on the page: an answer that says something was not done, or
 already existed, when one of those steps may have done it has every claim withheld, and a run still finishing spends a
 recovery to write it again. Only that rewrite gives the composer the steps, as the run's own record and never as
