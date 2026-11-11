@@ -1392,7 +1392,9 @@ impl CdpPage {
                     _ = self.wait_for_lifecycle(mark, remaining.as_secs_f64()) => continue,
                 }
             }
-            let settled = self.settled_within(remaining.as_secs_f64());
+            // Decorative mutations may never become quiet. Bound this wait like a progress indicator,
+            // then compare the fingerprint while the outer deadline still bounds a stuck renderer.
+            let settled = self.settled_within(remaining.as_secs_f64().min(SETTLE_LOADING_SECONDS));
             tokio::select! {
                 () = &mut dialog => return Ok(true),
                 () = sleep(remaining) => return Ok(!unchanged),
