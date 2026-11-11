@@ -893,7 +893,7 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
     };
     let mut fetch_spent: Vec<CostLine> = Vec::new();
     let chrome = task.chrome.clone().unwrap_or_else(|| settings.local_chrome());
-    let mut limits = task.limits.clone();
+    let mut allowance = task.limits.clone();
     let mut resume = None;
     let told: Told = Arc::default();
     if let Some(window) = task.desktop.clone() {
@@ -910,8 +910,8 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
         if task.fetch || !read.needs_browser {
             return Ok(read.result);
         }
-        limits = match remaining(task.limits.as_ref(), &read.spent, began.elapsed().as_secs_f64()) {
-            Ok(limits) => limits,
+        allowance = match remaining(task.limits.as_ref(), &read.spent, began.elapsed().as_secs_f64()) {
+            Ok(left) => left,
             // The attempt spent what a browser run would have needed, so the run ends on that limit, not the page.
             Err(stop) => return Ok(out_of_budget(read.result, stop)),
         };
@@ -935,8 +935,9 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
         );
     }
     let mut browser_cost: Vec<CostLine> = Vec::new();
-    // Held here rather than by the agent, so what the browser run spent is still read when it is cancelled.
-    let ledger = Arc::new(Ledger::new(limits.clone().unwrap_or_default()));
+    // Held here rather than by the agent, so what the browser run spent is still read when it is cancelled. It may spend
+    // what a fetched attempt left, and names the caller's limits when it stops.
+    let ledger = Arc::new(Ledger::within(allowance.unwrap_or_default(), task.limits.clone().unwrap_or_default()));
     let scratch = Scratch::new()
         .map_err(|error| RunError::Invalid(error.to_string()).after(&told, fetch_spent.clone(), Vec::new()))?;
     let mut session: Option<BrowserSession> = None;

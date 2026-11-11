@@ -10,8 +10,8 @@ use fastbrowse_core::decision::{
 };
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{
-    Artifact, Authorization, CostBasis, CostComponent, CostLine, Decider, Event, EventHandler, Evidence, FactReader,
-    LLMPurpose, Limits, Operation, Status, StepOutcome, StepResult,
+    Artifact, Authorization, BudgetResource, BudgetStop, CostBasis, CostComponent, CostLine, Decider, Event,
+    EventHandler, Evidence, FactReader, LLMPurpose, Limits, Operation, Status, StepOutcome, StepResult,
 };
 use fastbrowse_core::page::{
     ActResult, Action, BlockKind, BrowserError, Capture, Control, Media, Observation, Page, PageResult,
@@ -7338,4 +7338,50 @@ async fn a_known_page_may_be_navigated_to_after_it_was_reached() {
     assert!(action.is_ok(), "{action:?}");
     let elsewhere = Decision { url: Some("https://pypi.org/search/?q=httpx".into()), ..decision };
     assert!(agent.action(&mut state, &home, &elsewhere).await.is_err(), "a guessed address is still refused");
+/// The scripted Jev, billing each request `PRICE` against `ledger` and refusing one the ledger's spend limit cannot
+/// cover, as a priced Jev client refuses it before sending.
+struct Priced(ScriptedJev, Arc<Ledger>);
+
+impl Priced {
+    const PRICE: f64 = 0.0002;
+}
+
+impl DecisionClient for Priced {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            self.1.check_spend(Self::PRICE)?;
+            let mut evaluation = self.0.evaluate(state, questions).await?;
+            evaluation.cost = CostLine::new(CostComponent::Jev, CostBasis::Metered, Some(Self::PRICE));
+            Ok(evaluation)
+        })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        self.0.profile()
+    }
+}
+
+/// A Jev request refused for the spend limit ended the run `error`, exit 1, naming the dollars a fetched attempt left
+/// rather than the limit set: `--max-dollars 0.001` read `spend limit $0.00098446 reached` (#961).
+#[tokio::test]
+async fn test_a_spend_limit_reached_inside_a_jev_request_ends_the_run_over_budget_on_the_limit_set() {
+    let set = Limits { max_dollars: Some(0.001), ..Limits::default() };
+    // What a fetched attempt left of the caller's dollars.
+    let ledger = Arc::new(Ledger::within(Limits { max_dollars: Some(0.0005), ..Limits::default() }, set));
+    let jev = Priced(ScriptedJev::new(crate::scripted::steps("click One way").unwrap()), ledger.clone());
+    let agent = Agent::new(Arc::new(Picker::new()), Arc::new(jev), Arc::new(ScriptedLLM));
+    let options = super::RunOptions {
+        start: Some("https://shop.test/ticket".into()),
+        ledger: Some(ledger.clone()),
+        ..Default::default()
+    };
+    let result = agent.run("Choose One way as the ticket type and tell me the price", options).await.unwrap();
+    assert_eq!(result.status, Status::BudgetExceeded, "{:?}", result.error);
+    assert_eq!(result.error.as_deref(), Some("spend limit $0.001 reached"));
+    assert_eq!(result.budget, Some(BudgetStop { resource: BudgetResource::Dollars, limit: 0.001 }));
+    assert!(result.cost.known_dollars() <= 0.0005, "{:?}", result.cost);
 }

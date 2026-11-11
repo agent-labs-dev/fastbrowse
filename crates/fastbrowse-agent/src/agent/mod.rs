@@ -273,7 +273,7 @@ impl Agent {
             let ended = match outcome {
                 Some(ended) => ended,
                 None => {
-                    let limit = ledger.limits.max_seconds.unwrap_or_default();
+                    let limit = ledger.set.max_seconds.unwrap_or_default();
                     let notes = slot.as_ref().map(|state| state.notes.clone()).unwrap_or_default();
                     let result = self.partial_result(
                         &notes,
@@ -473,7 +473,7 @@ impl Agent {
             let budget = exhausted.or_else(|| {
                 (stop.status == Status::BudgetExceeded).then(|| BudgetStop {
                     resource: BudgetResource::Seconds,
-                    limit: ledger.limits.max_seconds.unwrap_or_default(),
+                    limit: ledger.set.max_seconds.unwrap_or_default(),
                 })
             });
             if state.composition_partial.is_some() {
@@ -1058,7 +1058,7 @@ pub(super) fn out_of_browsing_time(state: &RunState) -> Option<Stop> {
     let limit = state.ledger.limits.max_seconds?;
     let elapsed = state.ledger.started()?.elapsed().as_secs_f64();
     (state.compose && elapsed >= limit - compose_reserve(limit))
-        .then(|| Stop::new(Status::BudgetExceeded, time_limit(limit)))
+        .then(|| Stop::new(Status::BudgetExceeded, time_limit(state.ledger.set.max_seconds.unwrap_or(limit))))
 }
 
 fn time_limit(limit: f64) -> String {

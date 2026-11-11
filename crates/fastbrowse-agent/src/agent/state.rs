@@ -158,7 +158,7 @@ impl From<BudgetExceeded> for Flow {
 
 impl From<DecisionError> for Flow {
     fn from(error: DecisionError) -> Self {
-        Flow::Agent(AgentError::Jev(error))
+        Flow::Agent(error.into())
     }
 }
 
