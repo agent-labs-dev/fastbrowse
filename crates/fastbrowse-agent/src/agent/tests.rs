@@ -7555,6 +7555,8 @@ async fn a_known_page_may_be_navigated_to_after_it_was_reached() {
     assert!(action.is_ok(), "{action:?}");
     let elsewhere = Decision { url: Some("https://pypi.org/search/?q=httpx".into()), ..decision };
     assert!(agent.action(&mut state, &home, &elsewhere).await.is_err(), "a guessed address is still refused");
+}
+
 /// The scripted Jev, billing each request `PRICE` against `ledger` and refusing one the ledger's spend limit cannot
 /// cover, as a priced Jev client refuses it before sending.
 struct Priced(ScriptedJev, Arc<Ledger>);
