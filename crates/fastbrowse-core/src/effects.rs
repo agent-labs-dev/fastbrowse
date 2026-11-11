@@ -248,8 +248,9 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
     // A modal hides the page under it and gives it back on closing, so what went behind one or came back from behind
     // it is counted, not named: the page's controls are the current elements once it closes, and cannot be used while
     // it is open. Named, Google Flights' Stops filter put 145 controls into every later request, and 125 more on closing.
-    let opened = after.modal.as_ref().filter(|_| !replaced && before.modal != after.modal);
-    let closed = before.modal.as_ref().filter(|_| !replaced && before.modal != after.modal);
+    // One modal giving way to another is neither: the page stays behind it, and the controls are named as they change.
+    let opened = after.modal.as_ref().filter(|_| !replaced && before.modal.is_none());
+    let closed = before.modal.as_ref().filter(|_| !replaced && after.modal.is_none());
     if let Some(name) = closed.filter(|_| !shown.is_empty()) {
         parts.push(format!("closed {}; {} came back from behind it", dialog(name), counted(shown.len())));
     } else if !shown.is_empty() {
@@ -389,6 +390,10 @@ mod tests {
         let unnamed = Observation { modal: Some(String::new()), ..observation(dialog) };
         let shown = effect(&observation(vec![control("p0", "Page 0", "link")]), &unnamed, None, false);
         assert!(shown.summary.ends_with("opened a dialog over the page; 1 control went behind it"));
+        // One modal giving way to another opens and closes nothing: the page stayed behind.
+        let sort = vec![control("close", "Close dialog", "button"), control("price", "Price", "radio")];
+        let renamed = effect(&open, &Observation { modal: Some("Sort".into()), ..observation(sort) }, None, false);
+        assert_eq!(renamed.summary, "showed 1 control: Price; removed 1 control: Nonstop only");
     }
 
     #[test]

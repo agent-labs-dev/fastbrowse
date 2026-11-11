@@ -323,8 +323,17 @@ impl Agent {
             let observation = self.observe().await?;
             let same_document = observation.url == decided_on.url
                 && observation.document_key == decided_on.document_key
-                && observation.dialog.is_none();
-            let found = observation.controls.iter().find(|control| control.id == planned.target.id).cloned();
+                && observation.dialog.is_none()
+                && observation.modal == decided_on.modal;
+            // The field Jev judged, still fillable: an id kept by a field the page rewrote is another field.
+            let same_field = |control: &&Control| {
+                let (was, now) = (&planned.target, *control);
+                now.id == was.id
+                    && now.operations.contains(&Operation::Fill)
+                    && (&now.role, &now.label, &now.context, &now.input_name, &now.autocomplete)
+                        == (&was.role, &was.label, &was.context, &was.input_name, &was.autocomplete)
+            };
+            let found = observation.controls.iter().find(same_field).cloned();
             let (true, Some(target)) = (same_document, found) else {
                 break;
             };
@@ -1161,6 +1170,8 @@ impl Agent {
                 default_prompt: mask_opt(&dialog.default_prompt),
                 ..dialog.clone()
             }),
+            // A page can name its modal with what it echoes back, a resolved secret among it.
+            modal: mask_opt(&observation.modal),
             ..observation.clone()
         };
         drop(redactor);

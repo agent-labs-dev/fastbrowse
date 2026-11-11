@@ -7104,3 +7104,36 @@ async fn test_a_plan_stops_when_the_page_becomes_another_document() {
     agent.run_plan(&mut state, &form, &[planned(&form, "first"), planned(&form, "last")]).await.expect("planned");
     assert!(page.acts.lock().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn test_a_plan_stops_when_its_next_field_is_rewritten_or_a_modal_opens() {
+    // Same document after the first fill, but the field Jev judged is not the one there now, or sits behind a modal.
+    let relabelled = {
+        let mut page = delivery("1", "Ada", "");
+        page.controls[1].label = "Company".into();
+        page
+    };
+    let behind_modal = Observation { modal: Some("Address check".into()), ..delivery("1", "Ada", "") };
+    for after in [relabelled, behind_modal] {
+        let form = delivery("1", "", "");
+        let page = Arc::new(Scripted::new(form.clone(), vec![(Operation::Fill, StepOutcome::Executed, after)]));
+        let jev = Typist(&[("source", "task"), ("first", "2"), ("last", "2")]);
+        let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.task = "Ship to Ada".into();
+        // A second fill would find no scripted act and fail the test.
+        agent.run_plan(&mut state, &form, &[planned(&form, "first"), planned(&form, "last")]).await.expect("planned");
+        assert!(page.acts.lock().unwrap().is_empty());
+        assert_eq!(state.history.iter().filter(|entry| entry.target.is_some()).count(), 1);
+    }
+}
+
+#[tokio::test]
+async fn test_a_secret_a_modal_is_named_with_is_masked() {
+    let page = Observation { modal: Some("Welcome back, hunter2".into()), ..observation(&[button("Continue")]) };
+    let agent =
+        Agent::new(Arc::new(Scripted::new(page, vec![])), Arc::new(ScriptedJev::new(vec![])), Arc::new(ScriptedLLM));
+    agent.redactor().register("password", "hunter2", None);
+    let observed = agent.observe().await.expect("observed");
+    assert_eq!(observed.modal.as_deref(), Some("Welcome back, •••••••"));
+}

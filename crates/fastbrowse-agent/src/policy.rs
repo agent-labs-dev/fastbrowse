@@ -335,8 +335,14 @@ const PLAN_PREFIX: &str = "plan:";
 
 fn plan_question(control: &Control) -> Question {
     let context = control.context.as_deref().map(|c| format!(" in {}", text::repr(c))).unwrap_or_default();
+    // A target candidate's state element leaves out its input name and autocomplete, and two fields labelled alike
+    // are told apart by them.
+    let named = [("named", &control.input_name), ("autocomplete", &control.autocomplete)]
+        .into_iter()
+        .filter_map(|(key, value)| value.as_deref().map(|value| format!(", {key} {}", text::repr(value))))
+        .collect::<String>();
     let instructions = format!(
-        "{UNTRUSTED}\nElement {} is a {} labelled {}{context}. Besides the one next action, does what the task still \
+        "{UNTRUSTED}\nElement {} is a {} labelled {}{context}{named}. Besides the one next action, does what the task still \
          needs on this page include that this run fill it, before anything moves on from this page? Yes only when the \
          task itself gives or calls for a value for it now.",
         control.id,
