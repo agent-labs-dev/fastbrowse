@@ -1012,12 +1012,11 @@ pub fn build_request(
             NEXT_ACTION.as_str(),
             offered.iter().map(|op| {
                 // The operation is chosen apart from its target, and a choice of one address is answered without Jev
-                // at all, so the operation names where navigate goes: told only "another address", Jev searched PyPI
-                // for packages whose pages were on offer, with one known page and with two.
+                // at all, so the operation names where navigate goes: told only "another address", Jev searched the
+                // site for the item whose page was on offer, with one known page and with two.
                 let known: Vec<&str> =
                     urls.iter().filter(|url| context.known_pages.contains(url)).map(String::as_str).collect();
-                // Replaying PyPI's first step, naming a known page as one held Jev to it more firmly (0.73) than naming
-                // it as the address (0.66).
+                // Naming a known page as one held keeps Jev to it more firmly than naming it as the address.
                 let label = match (op, urls.as_slice()) {
                     (Operation::Navigate, _) if !known.is_empty() => {
                         format!(
