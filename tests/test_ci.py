@@ -160,6 +160,20 @@ def test_a_campaign_refuses_a_suite_outside_the_catalog(suites: str, passes: boo
     assert (result.returncode == 0) is passes
 
 
+def test_a_failed_langfuse_send_leaves_the_campaign_job_and_reruns_from_its_artifact() -> None:
+    """A network fault at Langfuse fails only the send, which "Re-run failed jobs" repeats from the ledger artifact."""
+    jobs = yaml.safe_load(Path(".github/workflows/benchmark-campaign.yml").read_text())["jobs"]
+    assert not any("track-ledger" in step.get("run", "") for step in jobs["campaign"]["steps"])
+    track = jobs["track"]
+    assert "campaign" in track["needs"]
+    assert "always()" in track["if"]
+    downloads = [step for step in track["steps"] if step.get("uses", "").startswith("actions/download-artifact@")]
+    assert [step["with"]["pattern"] for step in downloads] == ["ledger-${{ matrix.key }}"]
+    assert any('track-ledger "$OUT" --push' in step.get("run", "") for step in track["steps"])
+    assert "track" in jobs["stage"]["needs"]
+    assert "needs.track.result" in jobs["stage"]["if"]
+
+
 def test_registry_parity_takes_a_version_only_from_a_tag_pushed_release() -> None:
     """A dispatched Release rehearsal runs on a branch, and its name is not a version to check against."""
     steps = yaml.safe_load(Path(".github/workflows/registry-parity.yml").read_text())["jobs"]["parity"]["steps"]

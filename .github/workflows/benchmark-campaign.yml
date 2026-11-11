@@ -7,8 +7,9 @@ run-name: Benchmark campaign ${{ inputs.campaign_id || github.event.client_paylo
 # every run drives real browsers and real model calls, so it spends money and is never triggered by a push or a pull
 # request. When every group has run,
 # publish-evals.yml opens a pull request on agent-labs-dev/fastbrowse-site with the candidate and the site's group
-# files; merging that pull request is the approval. Each group's ledger goes to the private Langfuse project as soon as
-# it stops, finished or not, and the candidate requires it there.
+# files; merging that pull request is the approval. Each group's ledger goes to the private Langfuse project from its
+# own job once the group stops, finished or not, and the candidate requires it there. A failed send fails only that
+# job, and "Re-run failed jobs" repeats it from the group's ledger artifact.
 #
 # `official_runs` names finished Official benchmarks runs of the same `fastbrowse_ref` and `harness_sha`. Their public
 # rows join this candidate as the bu-bench and online-mind2web groups: the site reads one candidate, so every group in
@@ -495,9 +496,54 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CAMPAIGN_ID: ${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
         run: python3 ci/scripts/eval_progress.py "$OUT" "$CAMPAIGN_ID / ${{ matrix.label }}" --final
-      - name: Send the ledger to Langfuse
-        # A stopped group is tracked too: every arm's experiment lists what ran.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
+        with:
+          name: ledger-${{ matrix.key }}
+          path: ledgers/
+          if-no-files-found: warn
+          retention-days: 30
+
+  # The send is its own job so a fault at Langfuse fails only the send, not the group that measured, and "Re-run failed
+  # jobs" repeats it from the stored ledger without a paid run. A stopped group is tracked too: every arm's experiment
+  # lists what ran.
+  track:
+    name: Send ${{ matrix.label }} to Langfuse
+    needs: [resolve, campaign]
+    if: ${{ always() && needs.resolve.result == 'success' && needs.campaign.result != 'skipped' }}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions: {contents: read, actions: read}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+    env:
+      OUT: ${{ github.workspace }}/ledgers/${{ matrix.out }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.fastbrowse_sha }}
+          path: fastbrowse
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with: {python-version: "3.13"}
+      - name: Check out the harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.harness_sha }}
+          path: harness
+          persist-credentials: false
+      - name: Install the harness and fastbrowse
+        env:
+          FASTBROWSE_SHA: ${{ needs.resolve.outputs.fastbrowse_sha }}
+        run: |
+          cd harness/evals
+          uv sync --locked --no-install-package fastbrowse
+          uv pip install "fastbrowse @ git+file://$GITHUB_WORKSPACE/fastbrowse@$FASTBROWSE_SHA"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: {path: ledgers, pattern: "ledger-${{ matrix.key }}", merge-multiple: true}
+      - name: Send the ledger to Langfuse
         env:
           LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
@@ -508,22 +554,16 @@ jobs:
           test -s "$OUT" || { echo "::warning::no ledger to track"; exit 0; }
           cd harness/evals
           uv run --no-sync fastbrowse-evals browser track-ledger "$OUT" --push ${{ env.SMOKE == 'true' && '--smoke' || '' }}
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
-        with:
-          name: ledger-${{ matrix.key }}
-          path: ledgers/
-          if-no-files-found: warn
-          retention-days: 30
 
   stage:
     name: Build the candidate
-    needs: [resolve, campaign]
+    needs: [resolve, campaign, track]
     # A smoke builds none. A narrowed rerun, or a candidate_only dispatch that ran nothing, builds it with the
-    # campaign's earlier runs.
+    # campaign's earlier runs. It waits for every group's ledger to reach Langfuse, which the candidate reads back.
     if: >-
       ${{ !cancelled() && needs.resolve.result == 'success'
       && (needs.campaign.result == 'success' || needs.campaign.result == 'skipped')
+      && (needs.track.result == 'success' || needs.track.result == 'skipped')
       && !(inputs.smoke || github.event.client_payload.smoke == true) }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
