@@ -2091,6 +2091,34 @@ async fn test_a_span_end_choice_shows_each_value_that_would_be_typed() {
     assert_eq!(text, "Grace");
 }
 
+/// A reply box that opened holding an @mention lost it to a fill (#857): Jev chose where the value came from without
+/// being told the field held anything, though a fill replaces all of it. A sensitive field's value is never shown.
+#[test]
+fn test_the_value_questions_say_what_a_field_holds_now_unless_it_is_sensitive() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(EndValues), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Reply 'thanks' after the mention".into();
+    let mut reply = Control::new("reply", "textbox", "Reply", [Operation::Fill]);
+    reply.value = Some("@ann ".into());
+    let mut secret = Control::new("secret", "textbox", "Token", [Operation::Fill]);
+    secret.value = Some("@ann ".into());
+    secret.sensitive = true;
+    let asked = agent.ahead(&state, &observation(&[reply, secret]));
+    let shown = |control: &str| {
+        asked
+            .iter()
+            .filter(|ahead| ahead.control == control)
+            .map(|ahead| match &ahead.question {
+                Question::Choice(choice) => choice.instructions.clone(),
+                _ => String::new(),
+            })
+            .collect::<Vec<_>>()
+    };
+    let reply = shown("reply");
+    assert!(!reply.is_empty() && reply.iter().all(|q| q.contains("The field holds '@ann ' now")), "{reply:?}");
+    assert!(shown("secret").iter().all(|q| !q.contains("@ann")), "{:?}", shown("secret"));
+}
+
 #[tokio::test]
 async fn test_only_new_read_evidence_renews_recovery_without_an_explicit_read_step() {
     let field = "Capacity: 12";
@@ -3709,14 +3737,34 @@ fn test_a_composing_run_stops_browsing_in_time_to_write_its_answer() {
 #[tokio::test]
 async fn test_a_run_the_clock_stopped_answers_from_what_it_read() {
     let mut state = clocked(91.0, false);
-    let (pine, _) = capacities();
-    state.notes.add(pine);
+    let (pine, oak) = capacities();
+    state.notes.add(pine.answering());
+    state.notes.add(oak);
     let ledger = state.ledger.clone();
     let stop = super::out_of_browsing_time(&clocked(91.0, true)).unwrap();
     let result = agent().stopped(Flow::Stop(stop), Some(&mut state), &ledger).await;
     assert_eq!(result.status, Status::BudgetExceeded);
-    assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("Pine capacity 10")));
+    let answer = result.answer.as_deref().unwrap_or_default();
+    assert!(answer.contains("Pine capacity 10"), "{answer}");
+    // Context read on the way is not an answer (#857).
+    assert!(!answer.contains("Oak capacity 7"), "{answer}");
     assert_eq!(result.budget.map(|budget| budget.limit), Some(100.0));
+}
+
+/// A write run that read only context, such as the lone `}` lines of a comment's error dump, and then lost its
+/// browser cited those lines as a partial answer (#857). With nothing read as answering, it has no answer.
+#[tokio::test]
+async fn test_a_stopped_run_with_only_context_notes_has_no_answer() {
+    let mut state = clocked(91.0, false);
+    let (pine, oak) = capacities();
+    state.notes.add(pine);
+    state.notes.add(oak);
+    let ledger = state.ledger.clone();
+    let stop = super::out_of_browsing_time(&clocked(91.0, true)).unwrap();
+    let result = agent().stopped(Flow::Stop(stop), Some(&mut state), &ledger).await;
+    assert_eq!(result.status, Status::BudgetExceeded);
+    assert_eq!(result.answer, None);
+    assert!(result.citations.is_empty());
 }
 
 #[tokio::test]

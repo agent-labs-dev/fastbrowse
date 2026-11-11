@@ -640,10 +640,10 @@ impl Agent {
             }
             return self.result(state, ledger, status, Outcome { error, budget, ..Outcome::default() });
         }
-        if notes.facts().is_empty() {
-            return self.result(state, ledger, status, Outcome { error, budget, ..Outcome::default() });
+        match partial_answer(notes) {
+            Some(answer) => self.answered(&answer, notes, state, ledger, status, error, budget),
+            None => self.result(state, ledger, status, Outcome { error, budget, ..Outcome::default() }),
         }
-        self.answered(&partial_answer(notes), notes, state, ledger, status, error, budget)
     }
 
     /// `partial` as the result of a run that ended as `status`, with the evidence it cites.

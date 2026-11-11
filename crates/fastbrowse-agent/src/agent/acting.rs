@@ -137,6 +137,14 @@ fn value_questions<'a>(
             tried.join(", ")
         )
     };
+    // A fill replaces what the field holds, so a value chosen without it dropped the @mention a reply box opened with
+    // when the task said to type after it (#857).
+    let holds = holding(target)
+        .map(|now| format!(" The field holds {now} now, and typing replaces all of it."))
+        .unwrap_or_default();
+    let source_question =
+        if source_question.is_empty() { source_question } else { format!("{source_question}{holds}") };
+    let tried = format!("{tried}{holds}");
     let mut asked = vec![("source", source_question, sources)];
     if !begins.is_empty() && !ends.is_empty() {
         let span = |end: &str| {
@@ -148,6 +156,12 @@ fn value_questions<'a>(
         asked.push(("last", span("ends"), word_options(text, ends)));
     }
     asked
+}
+
+/// What `target` holds now, quoted, unless it is empty or sensitive: a sensitive field's value is masked and never goes
+/// into a request.
+fn holding(target: &Control) -> Option<String> {
+    target.value.as_deref().filter(|value| !target.sensitive && !value.trim().is_empty()).map(text::repr)
 }
 
 /// What was already typed into `target` this run, quoted.
@@ -837,6 +851,7 @@ impl Agent {
                 &label,
                 target.input_type.as_deref(),
                 &typed_into(state, target),
+                holding(target).as_deref(),
                 &crate::dates::dated(observation.captured_at, &state.dates),
                 &state.history.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
                 Some(&state.ledger),
