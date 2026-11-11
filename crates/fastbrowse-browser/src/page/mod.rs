@@ -580,11 +580,10 @@ impl CdpPage {
     /// Wait for the document that replaced the one a read lost to be interactive and quiet, as `navigate` does.
     async fn await_document(&self) -> Result<(), BrowserError> {
         let session_id = self.session.active_session_id()?;
-        let requests = self.session.requests_mark();
         let settle = async {
             if self.ready(&session_id, SETTLE_SECONDS).await? {
                 // Unsettled by the deadline is still a readable page, as after `navigate`.
-                self.changed_since("", requests).await?;
+                self.changed_since("", None).await?;
             }
             Ok::<(), BrowserError>(())
         };
@@ -1131,7 +1130,7 @@ impl CdpPage {
             return Ok(false);
         };
         if truthy(&changed) {
-            let _ = self.changed_since("", self.session.requests_mark()).await;
+            let _ = self.changed_since("", None).await;
             return Ok(true);
         }
         Ok(false)
@@ -1321,7 +1320,6 @@ impl CdpPage {
         // they are shown.
         let mut failure = "NavigationError".to_owned();
         let mut timed_out = false;
-        let requests = self.session.requests_mark();
         for attempt in 0..NAVIGATE_ATTEMPTS {
             if attempt > 0 {
                 sleep(secs(NAVIGATE_RETRY_SECONDS * f64::from(1u32 << (attempt - 1)))).await;
@@ -1350,7 +1348,7 @@ impl CdpPage {
             }
             if self.ready(&session_id, load_timeout_seconds * f64::from(1u32 << attempt)).await? {
                 // Unsettled by the deadline is still a usable page, and a redirect destroys the promise mid-wait.
-                let _ = self.changed_since("", requests).await;
+                let _ = self.changed_since("", None).await;
                 return Ok(());
             }
             failure = "TimeoutError".to_owned();
@@ -1424,9 +1422,12 @@ impl CdpPage {
     /// after its DOM went quiet, and the run took the add for a click that did nothing and added the item again: its
     /// open request is what holds the settle now. A blocking JavaScript dialog freezes the renderer, and a read that fails
     /// mid-navigation is itself evidence of change. `SETTLE_SECONDS` bounds a page that never does any of this.
+    ///
+    /// `requests` is `None` after a load, whose own end is `ready`, so a request that never answers holds nothing. An
+    /// action passes its mark even when it read no `before`: accepting a confirm is one, and the fetch it starts
+    /// holds the settle, or the next observation reads the page before the handler that answers it has run.
     #[doc(hidden)]
-    pub async fn changed_since(&self, before: &str, requests: u64) -> Result<bool, BrowserError> {
-        let acted = !before.is_empty();
+    pub async fn changed_since(&self, before: &str, requests: Option<u64>) -> Result<bool, BrowserError> {
         let deadline = Instant::now() + secs(SETTLE_SECONDS);
         let dialog = self.session.wait_for_dialog();
         tokio::pin!(dialog);
@@ -1462,7 +1463,7 @@ impl CdpPage {
                         let differs = current.as_deref() != Some(before);
                         // A load has its own end in `ready`; a request only holds an action. One that never
                         // answers, as on a page's first load, would otherwise hold every run to the deadline.
-                        if !(acted && self.session.requests_open_since(requests))
+                        if !requests.is_some_and(|mark| self.session.requests_open_since(mark))
                             && !self.session.navigating()
                             && !self.session.frames_loading()
                             && self.lifecycle_mark() == mark

@@ -445,7 +445,7 @@ impl CdpPage {
         {
             self.until_dialog(self.await_popup(&target.0, target.2)).await;
         }
-        let mut changed = self.changed_since(&before_fingerprint, requests).await?;
+        let mut changed = self.changed_since(&before_fingerprint, Some(requests)).await?;
         if matches!(action.operation, Operation::Click | Operation::Enter | Operation::Press)
             && self.session.follow_popup(&popups, opens || self.session.window_opens() != window_opens).await?.is_some()
         {

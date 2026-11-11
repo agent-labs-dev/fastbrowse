@@ -351,7 +351,7 @@ async fn test_a_navigation_that_starts_during_the_settle_wait_is_a_change() {
     eval_active(&h, "fetch('/slow?ms=8000'); setTimeout(() => fetch('/slow?ms=100'), 1000); 0").await;
     wait_until(|| async { h.session.requests_open_since(requests) }).await;
     armed.store(true, Ordering::SeqCst);
-    let changed = h.page.changed_since(&before, requests).await.expect("settled");
+    let changed = h.page.changed_since(&before, Some(requests)).await.expect("settled");
     assert!(reads.load(Ordering::SeqCst) >= 2, "the settle never read the page again");
     assert!(changed);
     h.close().await;
