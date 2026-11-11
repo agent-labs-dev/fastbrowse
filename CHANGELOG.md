@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-11
+
 - **A form is filled with fewer decisions.** Each fill decision now also asks Jev which other fields on the page the task needs filled, and code fills them in page order without a decision each (`Config(plan_ahead=True)`, the default). It returns to deciding when the address or document changes, a dialog or modal opens, a planned field is gone or rewritten, or a value is unsure; presses are never planned. On the 20-task core suite, with the smaller requests below, model spend fell 17% and run time 26% at the same pass count. `plan_ahead=False` decides every field as before.
 - **Each decision request is smaller.** A control offered as a target is described once, in its own question, rather than again in the page state; only the focused control is marked focused; and the sources a read cites are described once per request rather than per question.
 - **An open modal is named, and the page behind it is counted.** An observation reports the open modal dialog's accessible name in `Observation.modal`, and an action that opens or closes one now says so and counts the controls that went behind it or came back, instead of listing each. On Google Flights' Stops filter, that was 145 controls named in every later request.
@@ -1999,7 +2001,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.10.0...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.10.1
 [0.10.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.10.0
 [0.9.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.9.1
 [0.9.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.9.0

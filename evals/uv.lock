@@ -367,7 +367,7 @@ wheels = [
 
 [[package]]
 name = "fastbrowse"
-version = "0.10.0"
+version = "0.10.1"
 source = { directory = "../" }
 dependencies = [
     { name = "httpx", extra = ["http2"] },
