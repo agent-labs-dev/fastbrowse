@@ -424,18 +424,19 @@
     const target = root.getElementById ? root.getElementById(id) : document.getElementById(id);
     return target ? soleField(target) : null;
   });
-  const wrapperLabels = e => {
-    if (e.labels?.length || !e.matches('input,select,textarea')) return [];
-    const root = e.getRootNode();
-    const found = [];
-    for (let a = e.parentElement; a; a = a.parentElement) {
-      if (!a.id) continue;
-      for (const label of root.querySelectorAll(`label[for="${CSS.escape(a.id)}"]`)) {
-        if (labelTarget(label) === e) found.push(label);
-      }
+  // The fields each tree's wrapper-naming labels name, built once per snapshot from its `label[for]` elements so the
+  // cost grows with the labels, not with every unlabelled field times its id'd ancestors: per-ancestor queries took
+  // about a second per observation on a 2000-row inline-edit grid.
+  const borrowedLabels = memo(root => {
+    const byField = new Map();
+    for (const label of root.querySelectorAll('label[for]')) {
+      const field = label.control ? null : labelTarget(label);
+      if (field) byField.set(field, [...(byField.get(field) || []), label]);
     }
-    return found;
-  };
+    return byField;
+  });
+  const wrapperLabels = e =>
+    e.labels?.length || !e.matches('input,select,textarea') ? [] : borrowedLabels(e.getRootNode()).get(e) || [];
   const labelFrom = (e, seen) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
