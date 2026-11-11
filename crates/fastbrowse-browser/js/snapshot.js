@@ -922,6 +922,8 @@
   const offered = new Set(controls.map(c => registry.nodes.get(c.id)));
   // What carries page state in pixels: a chart, a picture, a drawing or a video.
   const VISUAL = 'img,canvas,video,svg,picture,figure,[role="img"]';
+  // A page marks an icon beside a label aria-hidden: it decorates the words and carries no state of its own.
+  const decorative = e => !!e.closest('[aria-hidden="true"],[inert]');
   // Where the pointer can rest: an element with a box inside the viewport's width and no taller than it.
   const pointerBox = e => {
     if (e === e.ownerDocument.body || e === e.ownerDocument.documentElement || !visible(e)) return null;
@@ -992,8 +994,10 @@
   // the card could be acted on and the run reported an image it could see as one it could not find. A card of a
   // list that shows a picture and holds nothing to act on is offered as a hover target, so the pointer can go
   // there and the next observation shows what appeared. A card of text alone, a paragraph or a calendar's
-  // weekday row, is read rather than handled, and offering every one would bury the choice. Only the outermost
-  // such card is offered.
+  // weekday row, is read rather than handled, and offering every one would bury the choice. An icon the page hides
+  // from assistive technology is decoration, not a picture: GitHub's license badge (a law icon beside
+  // "BSD-3-Clause") was offered as a hover target on every repository card, and the run hovered one instead of
+  // opening the repository. Only the outermost such card is offered.
   const holding = new Set();
   for (const e of offered) for (let p = e?.parentElement; p && !holding.has(p); p = p.parentElement) holding.add(p);
   for (const doc of docs) {
@@ -1001,7 +1005,7 @@
     for (const e of doc.body.querySelectorAll('*')) {
       if (host?.contains(e)) continue;
       if (offered.has(e) || holding.has(e) || !isCard(e)) continue;
-      if (!e.querySelector(VISUAL)) continue;
+      if (![...e.querySelectorAll(VISUAL)].some(v => !decorative(v))) continue;
       const y = pointerBox(e);
       if (y === null) continue;
       offerHover(e, y);
@@ -1267,7 +1271,7 @@
   const readVisual = (doc, dx, dy) => {
     if (visual_content) return;
     for (const e of doc.querySelectorAll(VISUAL)) {
-      if (e.closest('[aria-hidden="true"],[inert]') || !visible(e)) continue;
+      if (decorative(e) || !visible(e)) continue;
       const r = e.getBoundingClientRect();
       const top = r.top + dy,
         left = r.left + dx;
