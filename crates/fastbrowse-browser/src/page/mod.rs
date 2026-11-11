@@ -184,6 +184,9 @@ struct Snapshot {
     /// 1 when the viewport shows a picture, chart, drawing or video that no control carries; snapshot.js sends 0/1.
     #[serde(default)]
     visual_content: i64,
+    /// The open modal's name, empty when it has none; null when no modal is open.
+    #[serde(default)]
+    modal: Option<String>,
     #[serde(default)]
     media: Vec<Media>,
     controls: Vec<SnapshotControl>,
@@ -742,6 +745,7 @@ impl CdpPage {
                 offscreen_text: frame_text(&frames, |s| &s.offscreen_text),
                 // Any frame's picture counts: a screenshot spans every frame the observation read.
                 visual_content: frames.iter().any(|(_, f)| f.raw.visual_content != 0),
+                modal: main.and_then(|m| m.raw.modal.clone()),
                 media: frames.iter().flat_map(|(_, f)| f.raw.media.iter().cloned()).collect(),
                 tabs: self.session.tabs(),
                 dialog: self.session.pending_dialog(),
@@ -811,6 +815,7 @@ impl CdpPage {
             viewport_text: String::new(),
             offscreen_text: String::new(),
             visual_content: false,
+            modal: None,
             media: Vec::new(),
             tabs: self.session.tabs(),
             dialog: Some(dialog),

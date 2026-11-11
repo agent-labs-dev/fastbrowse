@@ -92,8 +92,16 @@ fn short(value: &Shown) -> String {
     if squashed.is_empty() { "empty".to_string() } else { squashed }
 }
 
+fn counted(controls: usize) -> String {
+    format!("{controls} control{}", if controls == 1 { "" } else { "s" })
+}
+
+fn dialog(name: &str) -> String {
+    if name.is_empty() { "a dialog".to_string() } else { format!("the dialog {name:?}") }
+}
+
 fn listed(controls: &[&Control]) -> String {
-    let count = format!("{} control{}", controls.len(), if controls.len() == 1 { "" } else { "s" });
+    let count = counted(controls.len());
     let names: Vec<String> = controls.iter().map(|c| short(&Shown::Text(c.label.clone()))).collect();
     format!("{count}: {}", names.join(", "))
 }
@@ -220,14 +228,36 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
     if !changes.is_empty() {
         parts.push(format!("changed {}", changes.join("; ")));
     }
-    let shown: Vec<&Control> = new.iter().filter(|(key, _)| !old.contains_key(*key)).map(|(_, c)| *c).collect();
-    let hidden: Vec<&Control> =
-        before.controls.iter().filter(|c| replaced || !new.contains_key(c.id.as_str())).collect();
+    // A new document starts its control ids again, so it has no control a step showed or lost: every control there is
+    // new, and the next step is shown them all. Listing both pages here put two whole pages, 920 controls on a
+    // Wikipedia article, into every later request of the run.
+    if replaced && !navigated {
+        parts.push("loaded a new document at this address".to_string());
+    }
+    let shown: Vec<&Control> = if replaced {
+        Vec::new()
+    } else {
+        new.iter().filter(|(key, _)| !old.contains_key(*key)).map(|(_, c)| *c).collect()
+    };
+    let hidden: Vec<&Control> = if replaced {
+        Vec::new()
+    } else {
+        before.controls.iter().filter(|c| !new.contains_key(c.id.as_str())).collect()
+    };
     let stayed_whole = !navigated && !replaced && hidden.is_empty();
-    if !shown.is_empty() {
+    // A modal hides the page under it and gives it back on closing, so what went behind one or came back from behind
+    // it is counted, not named: the page's controls are the current elements once it closes, and cannot be used while
+    // it is open. Named, Google Flights' Stops filter put 145 controls into every later request, and 125 more on closing.
+    let opened = after.modal.as_ref().filter(|_| !replaced && before.modal != after.modal);
+    let closed = before.modal.as_ref().filter(|_| !replaced && before.modal != after.modal);
+    if let Some(name) = closed.filter(|_| !shown.is_empty()) {
+        parts.push(format!("closed {}; {} came back from behind it", dialog(name), counted(shown.len())));
+    } else if !shown.is_empty() {
         parts.push(format!("showed {}", listed(&shown)));
     }
-    if !hidden.is_empty() {
+    if let Some(name) = opened.filter(|_| !hidden.is_empty()) {
+        parts.push(format!("opened {} over the page; {} went behind it", dialog(name), counted(hidden.len())));
+    } else if !hidden.is_empty() {
         parts.push(format!("removed {}", listed(&hidden)));
     }
     if let Some(chosen) = chosen.filter(|_| !replaced) {
@@ -290,6 +320,7 @@ mod tests {
             dialog: None,
             inaccessible_frames: 0,
             can_go_back: false,
+            modal: None,
             history_entry: None,
         }
     }
@@ -341,6 +372,26 @@ mod tests {
     }
 
     #[test]
+    fn test_a_modal_counts_the_page_behind_it_and_names_its_own_controls() {
+        let page: Vec<Control> = (0..3).map(|i| control(&format!("p{i}"), &format!("Page {i}"), "link")).collect();
+        let dialog = vec![control("close", "Close dialog", "button"), control("nonstop", "Nonstop only", "radio")];
+        let open = Observation { modal: Some("Stops".into()), ..observation(dialog.clone()) };
+        let opened = effect(&observation(page.clone()), &open, None, false);
+        assert_eq!(
+            opened.summary,
+            "showed 2 controls: Close dialog, Nonstop only; opened the dialog \"Stops\" over the page; 3 controls went behind it"
+        );
+        let closed = effect(&open, &observation(page), None, false);
+        assert_eq!(
+            closed.summary,
+            "closed the dialog \"Stops\"; 3 controls came back from behind it; removed 2 controls: Close dialog, Nonstop only"
+        );
+        let unnamed = Observation { modal: Some(String::new()), ..observation(dialog) };
+        let shown = effect(&observation(vec![control("p0", "Page 0", "link")]), &unnamed, None, false);
+        assert!(shown.summary.ends_with("opened a dialog over the page; 1 control went behind it"));
+    }
+
+    #[test]
     fn test_a_menu_closing_without_a_new_value_set_nothing() {
         let before = observation([vec![trigger()], options()].concat());
         let after = observation(vec![with(&trigger(), |c| c.expanded = Some(false))]);
@@ -374,9 +425,11 @@ mod tests {
         assert!(!done.added);
         assert!(done.changed);
         assert!(!done.summary.contains("changed Ticket type"), "{}", done.summary);
-        assert!(done.summary.contains("showed 1 control: Ticket type"));
-        assert!(done.summary.contains("removed 1 control: Ticket type"));
+        assert_eq!(done.summary, "loaded a new document at this address");
         assert!(!effect(&before, &after, Some(&options()[0]), false).set_something);
+        let mut away = after.clone();
+        away.url = "https://example.test/next".into();
+        assert_eq!(effect(&before, &away, None, false).summary, "went to https://example.test/next");
     }
 
     #[test]

@@ -2356,16 +2356,15 @@ async fn test_an_unchanged_document_is_not_read_for_its_status_again() {
     sent.lock().unwrap().clear();
     // The document is the one just read, so its status is the read already made: no command asks again.
     assert_eq!(h.observe().await.response_status, Some(200));
-    let calls = sent.lock().unwrap();
-    assert!(!calls.iter().any(|(m, _)| m == "Page.getFrameTree" || m == "Page.createIsolatedWorld"), "{calls:?}");
-    assert!(
-        !calls
-            .iter()
-            .any(|(m, p)| m == "Runtime.evaluate"
+    {
+        let calls = sent.lock().unwrap();
+        assert!(!calls.iter().any(|(m, _)| m == "Page.getFrameTree" || m == "Page.createIsolatedWorld"), "{calls:?}");
+        assert!(
+            !calls.iter().any(|(m, p)| m == "Runtime.evaluate"
                 && (p.get("contextId").is_some() || p.get("uniqueContextId").is_some())),
-        "{calls:?}"
-    );
-    drop(calls);
+            "{calls:?}"
+        );
+    }
     // A replaced document is read again, and a client-side route carries no status, as before.
     h.goto("/http-error/404").await;
     assert_eq!(h.observe().await.response_status, Some(404));
