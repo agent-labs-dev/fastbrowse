@@ -371,6 +371,8 @@ public enum LLMPurpose
     Pages,
     [JsonStringEnumMemberName("dates")]
     Dates,
+    [JsonStringEnumMemberName("unobtainable")]
+    Unobtainable,
 }
 
 public sealed record Limits

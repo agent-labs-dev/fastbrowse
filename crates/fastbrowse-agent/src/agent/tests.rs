@@ -228,6 +228,7 @@ pub(super) fn code_decision(operation: Operation, target: Option<Control>) -> De
         bot_check: None,
         shows_answer: None,
         site_failure: None,
+        unobtainable: None,
         destination: None,
         offered: Vec::new(),
         ahead: IndexMap::new(),

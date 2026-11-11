@@ -239,7 +239,7 @@ The exit code is the status. Only `complete` exits 0; configuration refusals exi
 | `stuck` | 9 | the stall budget ran out without reaching a page state the run had not seen |
 | `budget_exceeded` | 7 | a resource limit was reached, or a missing cost prevents enforcing the dollar cap |
 | `observation_limit` | 11 | the page or required evidence cannot fit the configured prompt budget |
-| `unavailable` | 8 | a model or browser provider stayed unavailable through every retry; the same run later may pass |
+| `unavailable` | 8 | a model or browser provider stayed unavailable through every retry, or the page says an item the task requires cannot be bought; the same run later may pass |
 | `cancelled` | 12 | you stopped an `--extension` run in your browser: from its popup, the debugging bar or by closing its tabs |
 | `error` | 1 | a model or browser failure |
 

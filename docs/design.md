@@ -69,6 +69,10 @@ the browser could not open, or a page Jev judges to report that the site failed)
 that choice, so Jev can reload it. Code states the failure and how many steps it has stood in the step state's
 `page_facts`, with the reminder that a failure is not the task's answer; Jev picks the reload, a retry control, or
 another route. A run whose stall budget runs out on such a failure ends `unavailable` with its address.
+On each page state it has not judged yet, Jev is also asked whether the page says an item the task requires
+cannot be bought, such as one marked sold out, with no way on the site to get it. A yes ends the run
+`unavailable` before the step: the run's LLM names the item and the reason from the task and the page text, and
+the page's block holding the words it quotes is the stop's evidence.
 An editable search field can be filled directly, including when focusing it opens an editor. Opening or
 focusing the field does not enter a query.
 

@@ -277,6 +277,11 @@ impl Agent {
                     _ => return Err(self.meet_wall(&observation, &raw)),
                 }
             }
+            // A run that read "Sold out" on its first step spent 74 more steps because nothing asked whether the task
+            // could still be done (#960). Jev judges it from the page and the task; this ends the run on that answer.
+            if decision.unobtainable.is_some_and(|probability| probability >= EVEN_ODDS) {
+                return Err(self.unobtainable(state, &observation).await?.into());
+            }
             if let Some(shows) = Self::reads_before_leaving(state, &observation, &decision)
                 // The page the run began on is read for an answer only for a task that asks to be told something: a
                 // task that only carries something out would otherwise answer with whatever its start page showed.
@@ -369,6 +374,7 @@ impl Agent {
                 bot_check: None,
                 shows_answer: None,
                 site_failure: None,
+                unobtainable: None,
                 destination: None,
                 replayed: false,
                 by_code: false,

@@ -78,6 +78,7 @@ impl Replay {
             bot_check: None,
             shows_answer: None,
             site_failure: None,
+            unobtainable: None,
             destination: None,
             replayed: true,
             by_code: false,
