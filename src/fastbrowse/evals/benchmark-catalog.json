@@ -1069,7 +1069,7 @@
       "default": false
     },
     "jev-ultrafast": {
-      "pin": "jev-ultrafast commit 1231850a0bf1a0c0341fe408ef1668dbbfdfac46",
+      "pin": "jev-ultrafast commit cf3c406f0fc4becff8986ed4d4d37b7b9f102e45",
       "tier": "A",
       "default": true
     },
@@ -1084,17 +1084,17 @@
       "default": true
     },
     "browser-use-oss": {
-      "pin": "browser-use==1.0.0; default model bu-fast, default mode (ultrafast on bu-fast)",
+      "pin": "browser-use==1.0.2; default model bu-fast, default mode (ultrafast on bu-fast)",
       "tier": "A",
       "default": false
     },
     "cua-codex": {
-      "pin": "cua-driver==0.34.0; codex-cli==0.160.1",
+      "pin": "cua-driver==0.46.1; codex-cli==0.167.1",
       "tier": "local",
       "default": false
     },
     "browser-harness": {
-      "pin": "browser-harness==0.1.13; codex-cli==0.163.0; cli+skill",
+      "pin": "browser-harness==0.1.13; codex-cli==0.167.1; cli+skill",
       "tier": "A",
       "default": false
     }

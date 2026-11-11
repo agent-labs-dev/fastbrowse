@@ -72,6 +72,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -99,7 +100,7 @@ from parallax.judging import Judgment
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 from pydantic_core import to_jsonable_python
 
-from fastbrowse_evals import backend, hosted_api
+from fastbrowse_evals import arm_pins, backend, hosted_api
 from fastbrowse_evals.attempt_clock import (
     SESSION_OPEN_SECONDS,
     TIMING_BASIS,
@@ -149,6 +150,7 @@ from fastbrowse_evals.request_session import (
     runtime_identity,
 )
 from fastbrowse_evals.spend import SpendStop
+from fastbrowse_evals.sweep_tasks import SWEEP
 from fastbrowse_evals.versions import load_lock, local_browser_identity, provenance, suite_version, task_version
 
 AGENT_LIMITS = Limits()
@@ -169,7 +171,8 @@ PROVIDER_LIMITS = (
 )
 """Bounds imposed by a provider that no request can lift, recorded with every row rather than hidden."""
 
-ULTRAFAST_COMMIT = "1231850a0bf1a0c0341fe408ef1668dbbfdfac46"
+SDK_VERSION = package_version("browser-use-sdk")
+ULTRAFAST_COMMIT = arm_pins.pinned("browser-use/jev-ultrafast")
 ULTRAFAST = f"jev-ultrafast @ git+https://github.com/browser-use/jev-ultrafast@{ULTRAFAST_COMMIT}"
 ULTRAFAST_PIN = f"jev-ultrafast commit {ULTRAFAST_COMMIT}"
 """The arm's pin as the catalog and a published source record it. The install spec above holds a URL, which public
@@ -1910,7 +1913,7 @@ class ArmSpec(BaseModel):
 
 
 _RUNTIME_ENV = ("PATH", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR")
-OSS_PACKAGE = "browser-use==1.0.0"
+OSS_PACKAGE = f"browser-use=={arm_pins.pinned('browser-use')}"
 OSS_MODEL = "bu-fast"
 """browser-use 1.0's default model (`Agent(llm=None)`), a Browser Use gateway alias at its own reasoning effort."""
 OSS_PIN = f"{OSS_PACKAGE}; default model {OSS_MODEL}, default mode (ultrafast on {OSS_MODEL})"
@@ -1918,10 +1921,11 @@ OSS_COMMAND = ("uv", "run", "--no-project", "--quiet", "--python", "3.12", "--wi
 OSS_RUNNER = ULTRAFAST_RUNNER.with_name("browser_use_oss_arm.py")
 CUA_RUNNER = ULTRAFAST_RUNNER.with_name("cua_codex_arm.py")
 CUA_MODEL = "gpt-6-astra"
-CUA_PIN = "cua-driver==0.34.0; codex-cli==0.160.1"
+CODEX_PIN = f"codex-cli=={arm_pins.pinned('@openai/codex')}"
+CUA_PIN = f"cua-driver=={arm_pins.pinned('cua-driver')}; {CODEX_PIN}"
 HARNESS_RUNNER = ULTRAFAST_RUNNER.with_name("browser_harness_arm.py")
-HARNESS_PACKAGE = "browser-harness==0.1.13"
-HARNESS_PIN = f"{HARNESS_PACKAGE}; codex-cli==0.163.0; cli+skill"
+HARNESS_PACKAGE = f"browser-harness=={arm_pins.pinned('browser-harness')}"
+HARNESS_PIN = f"{HARNESS_PACKAGE}; {CODEX_PIN}; cli+skill"
 HARNESS_COMMAND = (
     "uv",
     "run",
@@ -2636,13 +2640,13 @@ ARMS: dict[str, ArmSpec] = {
     ),
     "browser-use": ArmSpec(
         runner=_run_hosted,
-        pin="browser-use-sdk==3.12.1 API v4; default model, reported per row",
+        pin=f"browser-use-sdk=={SDK_VERSION} API v4; default model, reported per row",
         env_allowlist=(),
         tier="hosted",
     ),
     "browser-use-ultrafast": ArmSpec(
         runner=_run_hosted_ultrafast,
-        pin="browser-use-sdk==3.12.1 API v4; model bu-ultrafast, reported per row",
+        pin=f"browser-use-sdk=={SDK_VERSION} API v4; model bu-ultrafast, reported per row",
         env_allowlist=(),
         tier="hosted",
     ),
@@ -2745,6 +2749,11 @@ SUITES: dict[str, tuple[LiveTask, ...]] = {
 }
 """`core` is the published suite; the others are in `more_tasks`."""
 
+DIAGNOSTIC_SUITES: dict[str, tuple[LiveTask, ...]] = {"sweep": SWEEP}
+"""Suites run to see where agents get stuck, outside the catalog: never versioned, published or gated on. A campaign
+runs them only as a smoke, which publishes nothing."""
+RUNNABLE = {**SUITES, **DIAGNOSTIC_SUITES}
+
 
 def summarize(rows: list[EvalRow], arms: list[str]) -> None:
     for arm in arms:
@@ -2817,7 +2826,7 @@ async def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="fastbrowse-evals browser internal", description=__doc__)
     parser.add_argument("--only", nargs="*", default=[], help="task ids to run; an id the selection lacks is an error")
     parser.add_argument(
-        "--suite", nargs="*", choices=list(SUITES), help="task sets to run (default core, or every suite with --only)"
+        "--suite", nargs="*", choices=list(RUNNABLE), help="task sets to run (default core, or every suite with --only)"
     )
     parser.add_argument("--category", nargs="*", default=[], choices=[c.value for c in Category])
     parser.add_argument(
@@ -2938,7 +2947,7 @@ async def main(argv: list[str]) -> int:
     tasks = [
         t
         for suite in args.suite or (list(SUITES) if args.only else ["core"])
-        for t in SUITES[suite]
+        for t in RUNNABLE[suite]
         if (not args.only or t.id in args.only) and (not args.category or t.category.value in args.category)
     ]
     # A rerun meant to confirm one row must not "pass" by quietly running none of it.
@@ -2956,8 +2965,8 @@ async def main(argv: list[str]) -> int:
     if unsupported := sorted(set(args.only) - {task.id for _, task, _ in planned}):
         parser.error(f"selected tasks are unsupported by the requested arms: {', '.join(unsupported)}")
     lock = load_lock()
-    suite_of = {t.id: name for name, suite_tasks in SUITES.items() for t in suite_tasks}
-    suite_versions = {name: suite_version((t.id for t in suite_tasks), lock) for name, suite_tasks in SUITES.items()}
+    suite_of = {t.id: name for name, suite_tasks in RUNNABLE.items() for t in suite_tasks}
+    suite_versions = {name: suite_version((t.id for t in suite_tasks), lock) for name, suite_tasks in RUNNABLE.items()}
     handler = logging.StreamHandler(sys.stdout)
     handler.addFilter(_NameRun())
     # Traces are collected per run at DEBUG and propagate here; only warnings belong on the console.

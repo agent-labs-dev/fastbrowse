@@ -120,7 +120,7 @@ def test_registry_environment_excludes_unrelated_keys_and_uses_fresh_home() -> N
     }
     assert (
         live.ARMS["browser-use-oss"].pin
-        == "browser-use==1.0.0; default model bu-fast, default mode (ultrafast on bu-fast)"
+        == f"{live.OSS_PACKAGE}; default model bu-fast, default mode (ultrafast on bu-fast)"
     )
     assert live.prompt(live_tasks.TASKS[0]) == f"Start at {live_tasks.TASKS[0].start}. {live_tasks.TASKS[0].task}"
 

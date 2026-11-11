@@ -202,7 +202,9 @@ jobs:
           for suite in "${chosen[@]}"; do
             case "$suite" in
               core|dev|stretch-dev) ;;
-              *) echo "::error::suites must be core, dev or stretch-dev, got '$suite'"; exit 1 ;;
+              # A diagnostic suite is outside the catalog, so only a smoke, which publishes nothing, may run it.
+              sweep) test "$SMOKE" = true || { echo "::error::suite '$suite' is diagnostic and needs smoke"; exit 1; } ;;
+              *) echo "::error::suites must be core, dev, stretch-dev or (smoke only) sweep, got '$suite'"; exit 1 ;;
             esac
           done
           for key in groups suites; do
@@ -409,6 +411,16 @@ jobs:
           # (fastbrowse.evals.versions.provenance); a plain directory install records none and publication refuses it.
           uv pip install "fastbrowse @ git+file://$GITHUB_WORKSPACE/fastbrowse@$FASTBROWSE_SHA"
           uv run --no-sync python -c "import fastbrowse, fastbrowse_evals.live"
+      # A comparison is worth publishing only against what a user installs today, so a competitor pinned behind its
+      # latest release stops the group before its first paid call. The daily Arm pins workflow proposes the bump.
+      - name: Require every competitor at its latest release
+        env:
+          ARMS: ${{ matrix.arms }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          cd harness/evals
+          read -ra arms <<< "$ARMS"
+          uv run --no-sync python -m fastbrowse_evals.arm_pins check --arms "${arms[@]}"
       # The browser-harness arm's agent, at the version the harness checkout pins: the arm checks it before each
       # attempt, and a version written here as well drifted from it, so every attempt failed before it started.
       - name: Install the Codex CLI Browser Harness drives
