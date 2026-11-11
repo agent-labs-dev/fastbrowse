@@ -5247,6 +5247,34 @@ async fn test_a_withheld_claim_is_named_instead_of_calling_the_answer_partial() 
     assert!(answer.contains("Record B: 34"), "{answer}");
 }
 
+/// The answer a stopped run composes says what it leaves out, as one written at done does. It came back under "Partial
+/// evidence only. Remaining coverage is omitted; totals may be incomplete." whenever it did not answer the task, though
+/// its coverage check had passed, or one claim had failed its quotes (#892).
+#[tokio::test]
+async fn test_an_answer_composed_at_a_stop_names_what_it_leaves_out() {
+    let stopped = |jev: Arc<dyn DecisionClient>, llm: Arc<dyn LLMClient>, intent| async move {
+        let agent = Agent::new(Arc::new(NoPage), jev, llm);
+        let mut state = composition_repair_state();
+        state.output_intent = intent;
+        let ledger = state.ledger.clone();
+        let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "no_progress (3)"));
+        agent.stopped(stop, Some(&mut state), &ledger).await
+    };
+    let text = super::state::OutputIntent::Text;
+    let withheld =
+        stopped(Arc::new(RejectsRecordA(ScriptedJev::new(Vec::new()))), Arc::new(TwoClaimComposer), text).await;
+    assert_eq!(withheld.status, Status::Stuck);
+    let answer = withheld.answer.unwrap();
+    assert!(!answer.contains("Partial evidence only"), "{answer}");
+    assert!(answer.starts_with("This answer leaves out what did not pass its checks: 'Record A: 99'"), "{answer}");
+    assert!(answer.contains("Record B: 34"), "{answer}");
+    // A task asking for something done stays stuck, and its answer that held is not called partial.
+    let carried = super::state::OutputIntent::CarriedOut;
+    let held = stopped(Arc::new(JudgesCarried(true)), Arc::new(WritesRecord("Record B: 34")), carried).await;
+    assert_eq!(held.status, Status::Stuck);
+    assert!(held.answer.unwrap().starts_with("Record B: 34 [1]"));
+}
+
 fn repair_jev(checks: Vec<(f64, f64)>) -> Arc<RepairComposeJev> {
     Arc::new(RepairComposeJev { policy: ScriptedJev::new(Vec::new()), checks: std::sync::Mutex::new(checks.into()) })
 }

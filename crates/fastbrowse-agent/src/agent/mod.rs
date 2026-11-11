@@ -46,7 +46,7 @@ use state::{Flow, RunState, Stop};
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
 use crate::policy::{HistoryEntry, StepContext};
-use crate::retrieval::{ComposedAnswer, cited_quote, compose, draft_answer, marked_partial, noticed, partial_answer};
+use crate::retrieval::{ComposedAnswer, cited_quote, compose_reviewed, draft_answer, noticed, partial_answer};
 use crate::verification::RecordSchema;
 
 /// How long a page that has not moved is watched before the run acts on it: a bot check that never clears then ends
@@ -492,10 +492,20 @@ impl Agent {
                 let reporting = ledger.for_answer();
                 let steps = state.executed_steps();
                 if state.compose
-                    && let Ok(composed) =
-                        compose(&*self.jev, &*self.llm, &state.task, &notes, Some(&reporting), &steps).await
-                    && !composed.claims.is_empty()
+                    && let Ok(reviewed) = compose_reviewed(
+                        &*self.jev,
+                        &*self.llm,
+                        &state.task,
+                        &notes,
+                        Some(&reporting),
+                        None,
+                        true,
+                        &steps,
+                    )
+                    .await
+                    && !reviewed.answer.claims.is_empty()
                 {
+                    let composed = &reviewed.answer;
                     // Only a rejected composition stops a run unverified, so one that passes every claim and coverage
                     // check answers what that stop was about, as it would have at done. A run stuck going back and
                     // forth over pages it had read held such an answer too, and came back stuck under "Partial
@@ -523,12 +533,11 @@ impl Agent {
                         };
                     }
                     if answers {
-                        let result =
-                            self.answered(&composed, &notes, Some(state), ledger, Status::Complete, None, None);
+                        let result = self.answered(composed, &notes, Some(state), ledger, Status::Complete, None, None);
                         let requested = state.output_intent == state::OutputIntent::TextAndImage;
                         return self.ending_frame(result, requested).await;
                     }
-                    let partial = marked_partial(composed);
+                    let partial = finishing::left_out(reviewed);
                     let error = error.or_else(|| state.refused.then(|| self.redact(finishing::REFUSED)));
                     return self.answered(&partial, &notes, Some(state), ledger, stop.status, error, budget);
                 }

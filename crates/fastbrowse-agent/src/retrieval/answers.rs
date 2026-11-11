@@ -1160,12 +1160,7 @@ pub fn partial_answer(notes: &Notes) -> ComposedAnswer {
         counted.extend(notes.expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str)));
         claims.push(claim);
     }
-    marked_partial(assemble_answer(&claims, notes, &[]))
-}
-
-/// `result`, stated as what a run that stopped short could say.
-pub fn marked_partial(result: ComposedAnswer) -> ComposedAnswer {
-    noticed(PARTIAL_NOTICE, result)
+    noticed(PARTIAL_NOTICE, assemble_answer(&claims, notes, &[]))
 }
 
 /// `result` under `notice`, which a reader takes in before any claim.

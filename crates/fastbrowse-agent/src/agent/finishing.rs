@@ -12,7 +12,9 @@ use super::recovery::{DONE, Idle};
 use super::state::{Extent, OutputIntent, RunState, Step, Stop};
 use super::{Agent, Outcome};
 use crate::memory::Notes;
-use crate::retrieval::{ComposedAnswer, Draft, compose_reviewed, draft_answer, draft_reviewed, noticed};
+use crate::retrieval::{
+    ComposedAnswer, Draft, ReviewedComposition, compose_reviewed, draft_answer, draft_reviewed, noticed,
+};
 use crate::verification::{ExtractOptions, Extraction, RecordSchema, extract};
 
 impl Agent {
@@ -488,6 +490,19 @@ fn withheld(rejection: &str, held: ComposedAnswer) -> ComposedAnswer {
         )
     };
     noticed(&notice, held)
+}
+
+/// An answer composed when the run stopped, under what it leaves out, as an answer held at done is. It came back under
+/// "Partial evidence only. Remaining coverage is omitted", the notice on notes listed without composing, though its
+/// coverage check had passed or a single claim had failed its quotes (#892). One that held whole needs no notice: the
+/// run's status and error say why it stopped.
+pub(super) fn left_out(reviewed: ReviewedComposition) -> ComposedAnswer {
+    let ReviewedComposition { answer, rejection } = reviewed;
+    match (rejection, answer.problem.clone()) {
+        (Some(rejection), _) => withheld(&rejection, answer),
+        (None, Some(problem)) => noticed(&format!("{problem} Each claim below passed its checks."), answer),
+        (None, None) => answer,
+    }
 }
 
 /// Which claim of a rejected draft failed which check, one sentence part each.
