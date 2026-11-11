@@ -644,7 +644,7 @@ fn drafted(feedback: &str) -> Option<Vec<String>> {
 /// read before it was kept for those steps, such as a value read on one page and entered on another, and answering with
 /// it reported a write task's start page, "Save: disabled", the disabled Save button beside the field it was about to
 /// change (#939).
-fn outcome_notes(state: &RunState) -> Notes {
+pub(super) fn outcome_notes(state: &RunState) -> Notes {
     let taken = state.history.iter().filter(|entry| entry.changed_site()).count();
     let mut outcome = state.notes.clone();
     outcome

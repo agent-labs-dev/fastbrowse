@@ -1964,6 +1964,39 @@ async fn test_a_task_carried_out_answers_only_with_what_it_read_after_its_last_s
     assert!(answers[1].as_deref().is_some_and(|answer| answer.starts_with("Description saved.")), "{answers:?}");
 }
 
+/// A `--desktop` run asked to choose Germany in a form's combo box read the box as "United Kingdom" on its first page,
+/// chose Germany, and ended stuck citing "United Kingdom", which the window no longer showed (#989). A stopped run that
+/// only carries something out answers, as a finished one does, with what it read after its last step.
+#[tokio::test]
+async fn test_a_stopped_task_carried_out_answers_only_with_what_it_read_after_its_last_step() {
+    let form = capture(&[(BlockKind::Paragraph, "United Kingdom")]);
+    let before = Fact::read("United Kingdom", block_evidence(&form, "s0"), FactReader::JevChoice);
+    let mut answers = Vec::new();
+    for intent in ["carried_out", "text"] {
+        let mut state = run_state();
+        state.task = "Choose Germany in the Country box and type 'AbC' into the name field".into();
+        state.notes = Notes::new([before.clone().answering()]);
+        state.notes.remember_capture(&form, 0);
+        state.history.push(crate::policy::HistoryEntry::new(
+            Some(Operation::Click),
+            Some("Germany"),
+            StepOutcome::Executed,
+            true,
+        ));
+        let jev = Arc::new(IntentJev::new(intent));
+        let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+        let ledger = state.ledger.clone();
+        let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "no_progress (3)"));
+        let result = agent.stopped(stop, Some(&mut state), &ledger).await;
+        assert_eq!(result.status, Status::Stuck);
+        assert_eq!(jev.calls.load(std::sync::atomic::Ordering::SeqCst), 1, "the task's output is asked once");
+        answers.push(result.answer);
+    }
+    assert_eq!(answers[0], None, "a task carried out answered with the form read before its choice");
+    // A task that asks to be told keeps what it read: a later step need not change what that read found.
+    assert!(answers[1].as_deref().is_some_and(|answer| answer.contains("United Kingdom")), "{answers:?}");
+}
+
 /// Picks, for every read requirement, the candidate whose value is the field's, and fails if it is not offered; with no
 /// field, it says the page holds nothing for the requirement. It says yes to the actions' context question with the given
 /// probability.
