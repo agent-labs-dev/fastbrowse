@@ -14,7 +14,7 @@ use fastbrowse_core::models::{
     EventHandler, Evidence, FactReader, LLMPurpose, Limits, Operation, Status, StepOutcome, StepResult,
 };
 use fastbrowse_core::page::{
-    ActResult, Action, BlockKind, BrowserError, Capture, Control, Media, Observation, Page, PageResult,
+    ActResult, Action, BlockKind, BrowserError, CaptchaSolve, Capture, Control, Media, Observation, Page, PageResult,
 };
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::telemetry::{Ledger, Trace};
@@ -661,6 +661,156 @@ impl Page for Unfetchable {
     fn wait_for_lifecycle(&self, _: u64, _: f64) -> BoxFuture<'_, bool> {
         Box::pin(async { false })
     }
+}
+
+/// A stuck page and what reports progress on it: the browser's CAPTCHA solver, a document still loading, or neither.
+/// Each signal's end is a lifecycle event, and the page moves on at `moves_at` seconds, if ever.
+struct Stuck {
+    began: tokio::time::Instant,
+    moves_at: f64,
+    /// When the solver finishes and whether it solved the CAPTCHA; `f64::INFINITY` never finishes.
+    solve: Option<(f64, bool)>,
+    loading_until: f64,
+}
+
+impl Stuck {
+    fn new(moves_at: f64, solve: Option<(f64, bool)>, loading_until: f64) -> Self {
+        Stuck { began: tokio::time::Instant::now(), moves_at, solve, loading_until }
+    }
+
+    fn now(&self) -> f64 {
+        self.began.elapsed().as_secs_f64()
+    }
+
+    fn events(&self) -> impl Iterator<Item = f64> {
+        self.solve.map(|(end, _)| end).into_iter().chain([self.loading_until]).filter(|at| at.is_finite() && *at > 0.0)
+    }
+}
+
+impl Page for Stuck {
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        let url = if self.now() >= self.moves_at { "https://shop.test/results" } else { "https://shop.test/check" };
+        Box::pin(async move { Ok(at(url, &[])) })
+    }
+
+    fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(true) })
+    }
+
+    fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        unreachable!("the wait navigates nowhere")
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        unreachable!("the wait reads nothing")
+    }
+
+    fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        unreachable!("the wait acts on nothing")
+    }
+
+    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        unreachable!("the wait takes no screenshot")
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        unreachable!("the wait asks no address")
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        self.events().filter(|at| *at <= self.now()).count() as u64
+    }
+
+    fn wait_for_lifecycle(&self, mark: u64, seconds: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async move {
+            if mark != self.lifecycle_mark() {
+                return true;
+            }
+            let now = self.now();
+            match self.events().filter(|at| *at > now).reduce(f64::min) {
+                Some(next) if next - now <= seconds => {
+                    tokio::time::sleep(std::time::Duration::from_secs_f64(next - now)).await;
+                    true
+                }
+                _ => {
+                    tokio::time::sleep(std::time::Duration::from_secs_f64(seconds)).await;
+                    false
+                }
+            }
+        })
+    }
+
+    fn captcha_solve(&self) -> Option<CaptchaSolve> {
+        let (end, solved) = self.solve?;
+        let working = self.now() < end;
+        (working || !solved).then(|| CaptchaSolve {
+            url: "https://shop.test/check".into(),
+            vendor: "cloudflare".into(),
+            working,
+        })
+    }
+
+    fn loading(&self) -> bool {
+        self.now() < self.loading_until
+    }
+}
+
+fn waiting_on(page: Stuck) -> Agent {
+    Agent::new(Arc::new(page), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM))
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_a_bot_check_is_waited_on_for_as_long_as_the_solver_works_on_it() {
+    let stuck = at("https://shop.test/check", &[]);
+    let began = tokio::time::Instant::now();
+    assert!(waiting_on(Stuck::new(30.0, Some((30.0, true)), 0.0)).outwait(&stuck, None).await.expect("waited"));
+    assert_eq!(began.elapsed().as_secs_f64().round(), 30.0);
+    // One the solver gave up on is not waited on past its end.
+    let began = tokio::time::Instant::now();
+    let agent = waiting_on(Stuck::new(f64::INFINITY, Some((30.0, false)), 0.0));
+    assert!(!agent.outwait(&stuck, None).await.expect("waited"));
+    assert_eq!(began.elapsed().as_secs_f64().round(), 30.0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_a_bot_check_with_no_solver_signal_ends_the_wait_at_once() {
+    let stuck = at("https://shop.test/check", &[]);
+    let began = tokio::time::Instant::now();
+    let until = Some(began + std::time::Duration::from_secs(40));
+    assert!(!waiting_on(Stuck::new(5.0, None, 0.0)).outwait(&stuck, until).await.expect("waited"));
+    assert_eq!(began.elapsed(), std::time::Duration::ZERO);
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_a_bot_check_solver_wait_ends_at_the_run_deadline() {
+    let stuck = at("https://shop.test/check", &[]);
+    let began = tokio::time::Instant::now();
+    let until = Some(began + std::time::Duration::from_secs(40));
+    let agent = waiting_on(Stuck::new(f64::INFINITY, Some((f64::INFINITY, true)), 0.0));
+    assert!(!agent.outwait(&stuck, until).await.expect("waited"));
+    assert_eq!(began.elapsed().as_secs_f64().round(), 40.0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_a_loading_page_is_waited_on_until_it_draws() {
+    let stuck = at("https://shop.test/check", &[]);
+    let began = tokio::time::Instant::now();
+    assert!(waiting_on(Stuck::new(20.0, None, 20.0)).outwait(&stuck, None).await.expect("waited"));
+    assert_eq!(began.elapsed().as_secs_f64().round(), 20.0);
 }
 
 #[tokio::test]

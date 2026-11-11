@@ -30,7 +30,7 @@ impl Agent {
         let mut capture = capture;
         if text::strip(&capture.text).is_empty() {
             // An empty page may still be rendering; only new content warrants a read.
-            if !self.outwait(observation).await? {
+            if !self.outwait(observation, super::browsing_deadline(&state.ledger, state.compose)).await? {
                 state.end_read(observation, false, tries);
                 return Ok(false);
             }

@@ -228,6 +228,19 @@ fn http_status<'de, D: Deserializer<'de>>(d: D) -> Result<Option<i64>, D::Error>
     }
 }
 
+/// A CAPTCHA the browser's own solver took on in the active tab's document, as Browser Use Cloud reports it with its
+/// `BrowserUse.captchaSolverStarted` and `BrowserUse.captchaSolverFinished` events. A solve that succeeded is no
+/// longer held: the page it cleared moves on by itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaptchaSolve {
+    /// The address of the page the CAPTCHA is on.
+    pub url: String,
+    /// The CAPTCHA's provider as the solver names it, such as `cloudflare` or `recaptcha`.
+    pub vendor: String,
+    /// True while the solver works on it, false once it finished without solving it.
+    pub working: bool,
+}
+
 /// One audio or video player's state, read from the element when the page was observed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -574,8 +587,20 @@ pub trait Page: Send + Sync {
     /// The page's current lifecycle generation, for a caller waiting on the next transition.
     fn lifecycle_mark(&self) -> u64;
 
-    /// Wait for a lifecycle event newer than `mark`, returning whether one arrived before `seconds`.
+    /// Wait for a lifecycle event newer than `mark`, returning whether one arrived before `seconds`; with
+    /// `f64::INFINITY` the wait has no bound. A change in [`Page::captcha_solve`] is one.
     fn wait_for_lifecycle(&self, mark: u64, seconds: f64) -> BoxFuture<'_, bool>;
+
+    /// The CAPTCHA the browser's own solver has taken on in the active tab's document, for a browser that reports one.
+    fn captcha_solve(&self) -> Option<CaptchaSolve> {
+        None
+    }
+
+    /// Whether a top-level navigation or a frame's document load is in flight in the active tab: the page is still on
+    /// its way, and the end of that load is a lifecycle event.
+    fn loading(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
