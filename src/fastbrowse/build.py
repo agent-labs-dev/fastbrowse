@@ -7,15 +7,20 @@ to the commit that produced it.
 import json
 import re
 import subprocess
+import sys
 from importlib.metadata import PackageNotFoundError, distribution, version
 from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
 
 
+def _checkout() -> bool:
+    return (ROOT / "src" / "fastbrowse" / "build.py").is_file()
+
+
 def _git(*args: str) -> str | None:
     # An installed package can sit inside another project's checkout, so parent discovery is not build identity.
-    if not (ROOT / "src" / "fastbrowse" / "build.py").is_file():
+    if not _checkout():
         return None
     try:
         done = subprocess.run(
@@ -51,3 +56,17 @@ def identity() -> dict[str, object]:
         if isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit):
             sha, dirty = commit, False
     return {"fastbrowse_version": package, "git_sha": sha, "git_dirty": dirty}
+
+
+def install_facts() -> dict[str, object]:
+    """Where this package is installed, for `fastbrowse self-update` to name the command that upgrades it.
+
+    `prefix` is the environment, `installer` the tool its `INSTALLER` record names (None when the installer
+    wrote none), and `checkout` whether this is the repository's own source tree.
+    """
+    try:
+        record = distribution("fastbrowse").read_text("INSTALLER")
+    except PackageNotFoundError:
+        record = None
+    installer = record.strip() if record else None
+    return {"prefix": sys.prefix, "installer": installer or None, "checkout": _checkout()}

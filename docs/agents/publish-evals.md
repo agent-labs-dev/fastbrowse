@@ -144,9 +144,10 @@ has held the run to every publication rule. Dispatch it first, then dispatch `be
 dispatches the campaign itself once every job has passed, as a release does. The campaign's own stage adds each
 suite as a group; its run facts take each suite's date and judge from those rows.
 
-Both workflows send every result to Langfuse as a step that runs even when the run stopped: `fastbrowse-evals browser
-track-ledger` for each campaign group and `track-official` for each suite. The candidate is refused unless
-Langfuse holds them. An upload to Langfuse does not approve publication.
+Both workflows send every result to Langfuse even when the run stopped. The campaign sends each group's ledger with
+`fastbrowse-evals browser track-ledger` in its own job, which "Re-run failed jobs" repeats from the ledger artifact
+without a paid run; the official workflow sends each suite with `track-official` as a step. The candidate is refused
+unless Langfuse holds them. An upload to Langfuse does not approve publication.
 
 ## Retiring a task or changing the protocol
 

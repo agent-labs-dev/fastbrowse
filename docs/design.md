@@ -69,6 +69,10 @@ the browser could not open, or a page Jev judges to report that the site failed)
 that choice, so Jev can reload it. Code states the failure and how many steps it has stood in the step state's
 `page_facts`, with the reminder that a failure is not the task's answer; Jev picks the reload, a retry control, or
 another route. A run whose stall budget runs out on such a failure ends `unavailable` with its address.
+On each page state it has not judged yet, Jev is also asked whether the page says an item the task requires
+cannot be bought, such as one marked sold out, with no way on the site to get it. A yes ends the run
+`unavailable` before the step: the run's LLM names the item and the reason from the task and the page text, and
+the page's block holding the words it quotes is the stop's evidence.
 An editable search field can be filled directly, including when focusing it opens an editor. Opening or
 focusing the field does not enter a query.
 
@@ -192,7 +196,10 @@ A count, total, minimum or maximum, or a place after one such as the second chea
 the kind of record and the field, and Jev answers one question per note read: for a count, whether it holds exactly one
 such record, and for a total or extreme, whether it holds one with its field, then which number in it is the field. A
 record's name, heading or a link to it holds no value, so it is not counted as a record without one. Code counts, adds
-or compares, writes the value into the claim and cites every record it rests on. A minimum or maximum the claim
+or compares, writes the value into the claim and cites every record it rests on. For a count per group, such as quotes
+per author, the composer names only the group its claim counts: the run's LLM copies each record's group from its
+quote, a read that is not text of that quote leaves the count unstated, and code groups the records, counts each group
+and checks the claim's place among all of them. A minimum or maximum the claim
 answers with its record's name instead keeps that name, and only the record check judges it. Such a claim gets no support question
 over the value: Jev is asked only whether the claim, with `[computed]` in the value's place, states nothing besides the
 tally. For a minimum or maximum both questions are choices: whether the claim states the value, the record holding it,
@@ -357,8 +364,8 @@ To regenerate the schema, run `FASTBROWSE_UPDATE_GOLDEN=1 cargo test -p fastbrow
 
 ## Cursor feedback
 
-The run shows where the agent is about to act, through the Cua Driver's synthetic cursor, whenever its tab is on
-screen: by default it is drawn wherever it can be placed, `--cursor` (`run_task(cursor=True)`) also brings the
+The run shows where the agent is about to act, through the Cua Driver's synthetic cursor on X11 or deskpilot's
+agent cursor on Hyprland, whenever its tab is on screen: by default it is drawn wherever it can be placed, `--cursor` (`run_task(cursor=True)`) also brings the
 window to the front so it always can be, and `--no-cursor` (`cursor=False`) turns it off. A plain `--headed` run
 works in a background tab behind `about:blank`, so the default draws nothing there; nothing of the run is on
 screen to mark. The click itself is still sent over CDP, so the overlay cannot change what an action did and is never
@@ -378,6 +385,17 @@ idle fade off: a navigation, a scroll or a point outside the viewport leaves it 
 hides it as soon as the tab stops showing, the frame can no longer be placed, or another window comes in front. Any
 driver failure turns the feature off for the run.
 
+On a Wayland session the cursor is drawn only under Hyprland, through `deskpilot mcp` (`FASTBROWSE_DESKPILOT` or
+`deskpilot` on `PATH`), since `cua-driver` lists no windows there. Chrome on native Wayland cannot know where its
+window is, so the window is the one listed by deskpilot's `windows` with the browser's pid and the page's
+`outerWidth x outerHeight`, and the point is sent to `move` in that window's pixels. Nothing is drawn when no window
+or more than one matches, the window is on a workspace no monitor shows, or any other window on screen overlaps it:
+Hyprland gives no stacking order, so an overlap cannot be shown to be behind. `move` reports the global point it
+drew at, and a point other than the window's position plus the one sent turns the feature off, since deskpilot
+scales a point by its latest shot of that window when it holds one. deskpilot has no session or hide: its arrow
+fades after eight idle seconds, so an arrow drawn just before another window covers the browser can stay that long.
+`take_pointer`, `show` and `focus` are never sent, so the user's pointer and focus stay where they are.
+
 The driver answers `move_cursor` only once its glide has landed, and at its own pace a glide across the screen takes
 one to three seconds, longer than the half second between quick clicks: each glide was cut off by the next, so the
 arrow landed on nothing, and a glide past the two-second call bound turned the feature off. The run asks
@@ -396,8 +414,9 @@ and ignores the number, so the run asks for `fixed` when it sets a glide and aga
 value is sent with `set_agent_cursor_motion` only when it changes, and a driver without that tool keeps the glide
 it was started with.
 
-Limits: Linux X11 only; native Wayland, macOS and Windows are not verified. It needs `cua-driver`
-0.28.3 or newer with the session cursor tools. Cloud and headless browsers are skipped. The desktop cursor has no
+Limits: Linux only, on X11 or Hyprland; other Wayland compositors, macOS and Windows are not verified. X11
+needs `cua-driver` 0.28.3 or newer with the session cursor tools, and Hyprland needs deskpilot with its plugin
+loaded. Cloud and headless browsers are skipped. The desktop cursor has no
 click pulse through `move_cursor`; recordings add one in the video. A docked DevTools panel or a pinch zoom hides
 the desktop cursor, and a window partly covered by another counts as covered. CDP screenshots do not show the
 desktop cursor.

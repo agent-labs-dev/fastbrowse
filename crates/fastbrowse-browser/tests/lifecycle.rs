@@ -129,6 +129,60 @@ async fn test_a_keeper_that_cannot_attach_leaves_the_tab_to_the_run() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_the_cloud_solver_reports_the_captcha_it_works_on_and_wakes_a_wait() {
+    // Browser Use Cloud sends these on the browser's own connection, as seen live on a Cloudflare challenge.
+    let fake = FakeChrome::start().await;
+    let session = fake.session(fake.connection()).await;
+    let target = session.active_target_id();
+    let url = "https://shop.test/check";
+    let event = |method: &str, extra: Value| {
+        let mut params = json!({"targetId": target, "url": url, "vendor": "cloudflare"});
+        params.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        testing::dispatch(&session, method, params, None);
+    };
+    assert_eq!(session.captcha_solve(), None);
+    let mark = session.lifecycle_mark();
+    event("BrowserUse.captchaSolverStarted", json!({"startedAt": 1}));
+    assert!(session.wait_for_lifecycle(mark, 0.0).await);
+    let solve = session.captcha_solve().expect("a solve");
+    assert!(solve.working && solve.url == url && solve.vendor == "cloudflare");
+    event("BrowserUse.captchaSolverFinished", json!({"success": true, "durationMs": 1419}));
+    assert_eq!(session.captcha_solve(), None);
+    event("BrowserUse.captchaSolverStarted", json!({}));
+    let mark = session.lifecycle_mark();
+    event("BrowserUse.captchaSolverFinished", json!({"success": false}));
+    assert!(session.wait_for_lifecycle(mark, 0.0).await);
+    assert!(!session.captcha_solve().expect("a solve given up on").working);
+    // Another tab's solve is not this one's.
+    testing::dispatch(&session, "BrowserUse.captchaSolverStarted", json!({"targetId": "other", "url": url}), None);
+    assert!(!session.captcha_solve().unwrap().working);
+    // A subframe's navigation leaves the tab's document, and its solve, as they were.
+    let tab = session.active_session_id().unwrap();
+    let frame = |parent: Option<&str>| json!({"frame": {"id": "f", "parentId": parent, "url": url}});
+    testing::dispatch(&session, "Page.frameNavigated", frame(Some("top")), Some(&tab));
+    assert!(session.captcha_solve().is_some());
+    // The tab's next document is not the one the solver gave up on.
+    testing::dispatch(&session, "Page.frameNavigated", json!({"frame": {"id": "top", "url": url}}), Some(&tab));
+    assert_eq!(session.captcha_solve(), None);
+    session.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_on_the_cloud_solver_with_no_bound_waits_for_its_next_event() {
+    let fake = FakeChrome::start().await;
+    let session = fake.session(fake.connection()).await;
+    let mark = session.lifecycle_mark();
+    let waiting = tokio::spawn({
+        let session = session.clone();
+        async move { session.wait_for_lifecycle(mark, f64::INFINITY).await }
+    });
+    let target = session.active_target_id();
+    testing::dispatch(&session, "BrowserUse.captchaSolverStarted", json!({"targetId": target, "url": "u"}), None);
+    assert!(waiting.await.unwrap());
+    session.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_run_nobody_sits_in_front_of_activates_its_target() {
     let fake = FakeChrome::start().await;
     let session = fake.session(fake.connection()).await;

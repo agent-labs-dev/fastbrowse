@@ -34,7 +34,9 @@ among them, raises `pkgrel` by hand in both files.
 
 The AUR workflow also runs weekly. It builds the committed package, since Arch moves between our changes, and
 runs `scripts/aur_package.py` without `--write`, which fails while `packaging/aur` is older than the PyPI
-release in `pyproject.toml`. A release that skipped this step shows there.
+release in `pyproject.toml`. A release that skipped this step shows there. The same run asks the AUR's RPC
+which version it holds and fails while that is not the PyPI release, which a release whose publish step was
+skipped or had no key leaves behind.
 
 ## Publishing it
 

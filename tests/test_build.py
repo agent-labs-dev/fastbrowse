@@ -36,6 +36,17 @@ def test_a_vcs_install_records_the_agent_commit_from_its_install_receipt(monkeyp
     assert run["git_sha"] == commit and run["git_dirty"] is False
 
 
+def test_install_facts_name_the_environment_and_the_installer_it_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(build, "ROOT", tmp_path)
+    records = {"INSTALLER": "uv\n"}
+    monkeypatch.setattr(build, "distribution", lambda _: SimpleNamespace(read_text=records.get))
+    assert build.install_facts() == {"prefix": sys.prefix, "installer": "uv", "checkout": False}
+    records.clear()
+    assert build.install_facts()["installer"] is None
+
+
 def test_the_cli_json_result_validates_as_its_declared_model() -> None:
     argv = ["t", "--start", "https://example.com", "--json", "--secret", "p=FB_TEST_UNSET_VARIABLE"]
     script = f"import sys; sys.argv = ['fastbrowse', *{argv!r}]; from fastbrowse.commands import fastbrowse as f; f()"

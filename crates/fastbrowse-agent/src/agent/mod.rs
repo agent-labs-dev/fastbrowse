@@ -49,10 +49,6 @@ use crate::policy::{HistoryEntry, StepContext};
 use crate::retrieval::{ComposedAnswer, cited_quote, compose, draft_answer, marked_partial, noticed, partial_answer};
 use crate::verification::RecordSchema;
 
-/// How long a page that has not moved is watched before the run acts on it: a bot check that never clears then ends
-/// `blocked`, and any other page goes to the step decision. Fitted to PyPI's script-only browser check, not derived
-/// from anything the run knows; replacing it with a signal is open in #868.
-const INTERSTITIAL_SECONDS: f64 = 12.0;
 /// A fresh observation can wait three seconds for loading, and a background capture needs time to activate.
 const ENDING_FRAME_SECONDS: f64 = 6.0;
 /// Longer than deciding takes: a watch ends with the work it watches, and this only bounds a stuck one.
@@ -273,7 +269,7 @@ impl Agent {
             let ended = match outcome {
                 Some(ended) => ended,
                 None => {
-                    let limit = ledger.limits.max_seconds.unwrap_or_default();
+                    let limit = ledger.stated().max_seconds.unwrap_or_default();
                     let notes = slot.as_ref().map(|state| state.notes.clone()).unwrap_or_default();
                     let result = self.partial_result(
                         &notes,
@@ -406,7 +402,7 @@ impl Agent {
             }
             if let (None, Some(opening)) = (start, &opening) {
                 // The caller gave a goal and no page, so this address was worked out from the task.
-                self.front_page_if_blank(opening).await?;
+                self.front_page_if_blank(opening, browsing_deadline(ledger, false)).await?;
             }
             Ok::<_, Flow>(opening)
         };
@@ -471,7 +467,7 @@ impl Agent {
             let budget = exhausted.or_else(|| {
                 (stop.status == Status::BudgetExceeded).then(|| BudgetStop {
                     resource: BudgetResource::Seconds,
-                    limit: ledger.limits.max_seconds.unwrap_or_default(),
+                    limit: ledger.stated().max_seconds.unwrap_or_default(),
                 })
             });
             if state.composition_partial.is_some() {
@@ -1028,12 +1024,23 @@ fn compose_reserve(limit: f64) -> f64 {
     (limit * 0.1).min(60.0)
 }
 
+/// When the run must stop browsing: its time limit, less the time a run that composes its answer keeps back to write
+/// it. None for a run with no time limit.
+pub(super) fn browsing_deadline(ledger: &Ledger, compose: bool) -> Option<tokio::time::Instant> {
+    let limit = ledger.limits.max_seconds?;
+    let browsing = if compose { limit - compose_reserve(limit) } else { limit };
+    let left = (browsing - ledger.started()?.elapsed().as_secs_f64()).max(0.0);
+    Some(tokio::time::Instant::now() + Duration::from_secs_f64(left))
+}
+
 /// A run that composes its answer has browsed for as long as it can and still write it within its time limit.
 pub(super) fn out_of_browsing_time(state: &RunState) -> Option<Stop> {
-    let limit = state.ledger.limits.max_seconds?;
-    let elapsed = state.ledger.started()?.elapsed().as_secs_f64();
-    (state.compose && elapsed >= limit - compose_reserve(limit))
-        .then(|| Stop::new(Status::BudgetExceeded, time_limit(limit)))
+    if !state.compose {
+        return None;
+    }
+    let deadline = browsing_deadline(&state.ledger, true)?;
+    let stated = state.ledger.stated().max_seconds.or(state.ledger.limits.max_seconds)?;
+    (deadline <= tokio::time::Instant::now()).then(|| Stop::new(Status::BudgetExceeded, time_limit(stated)))
 }
 
 fn time_limit(limit: f64) -> String {

@@ -22,7 +22,7 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 | `--profile DIR` | keep the local Chrome profile in `DIR`, so sign-ins persist (implies `--local`) |
 | `--cloud-profile ID` | run on a signed-in Browser Use Cloud profile |
 | `--fetch` | read pages over HTTP with no browser, for a task that only reads |
-| `--desktop WINDOW` | drive a Linux desktop app window instead of a browser, through [deskpilot](https://github.com/cjber/deskpilot); see [Desktop apps](#desktop-apps) |
+| `--desktop APP` | start a Linux desktop app and drive it instead of a browser, through [deskpilot](https://github.com/cjber/deskpilot); see [Desktop apps](#desktop-apps) |
 | `--browser` | start a browser from the first step, rather than reading over HTTP until the task needs one |
 | `--extension` | run in your own Chrome, signed in as you are, through the fastbrowse extension; see [Your own Chrome](#your-own-chrome) |
 | `--extension-browser LABEL` | with the extension connected in more than one browser, use the one its popup labels `LABEL` (implies `--extension`) |
@@ -44,7 +44,7 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 | `--input NAME=VALUE` | a named value the task refers to ("the person named in input person"), typed into a field by name; a recipe saved with it types the next run's value (repeatable) |
 | `--file PATH` | a local file the run may attach to a file input on the page, offered under its file name, so a task can say "upload shrike_lid.stl"; the file is read when the run starts and sent to the page as bytes, also to a browser on another machine (repeatable) |
 | `--save-recipe FILE` | write the run's steps as a recipe when it ends `complete`; naming the `--recipe` file repairs it after steps the agent had to decide |
-| `--no-cursor` | don't draw the agent's cursor. By default it is drawn with [Cua Driver](https://github.com/trycua/cua) over a Chrome window that shows the run (`--foreground`, or an attached front tab; needs `cua-driver`, and X11 on Linux), and skipped anywhere else |
+| `--no-cursor` | don't draw the agent's cursor. By default it is drawn over a Chrome window that shows the run (`--foreground`, or an attached front tab) with [Cua Driver](https://github.com/trycua/cua) on X11, or with [deskpilot](https://github.com/cjber/deskpilot) on Hyprland, and skipped anywhere else |
 | `--cursor` | also bring the window to the front, so the cursor is always drawn |
 
 ```sh
@@ -116,9 +116,19 @@ fastbrowse "Add a UGREEN USB-A to USB-C cable, 2m, to my cart." \
 On a cloud browser, `--cloud-profile prof_1234` runs as a [Browser Use Cloud](https://cloud.browser-use.com)
 profile someone signed in once. The run inherits its cookies and no model sees a credential.
 
-With the [Bitwarden CLI](https://bitwarden.com/help/cli/) unlocked, `--bitwarden ITEM` types the vault login. The
-item's saved URIs must match `--start`. Models see only `username`, `password` and, when the item holds an
-authenticator key, `one_time_code`, computed as it is typed:
+`--bitwarden ITEM` types a Bitwarden vault login. The item's saved URIs must match `--start`. Models see only
+`username`, `password` and, when the item holds an authenticator key, `one_time_code`, computed as it is typed.
+With [rbw](https://github.com/doy/rbw) installed, fastbrowse reads the item through it, and a locked vault asks
+for your password through rbw's pinentry. rbw reads its local copy of the vault, so run `rbw sync` after adding
+an item, and pass the item's id when its name matches more than one entry:
+
+```sh
+fastbrowse "Add a UGREEN USB-A to USB-C cable, 2m, to my cart." \
+  --start https://www.amazon.com/ --bitwarden Amazon --profile ~/.fastbrowse/amazon
+```
+
+Without rbw, fastbrowse reads the item through the [Bitwarden CLI](https://bitwarden.com/help/cli/), unlocked
+first:
 
 ```sh
 export BW_SESSION="$(bw unlock --raw)"
@@ -166,22 +176,27 @@ restart it without the flag, when you are done.
 
 ## Desktop apps
 
-`--desktop WINDOW` runs the task in a native Wayland app window on a Hyprland desktop, through
-[deskpilot](https://github.com/cjber/deskpilot) 0.5.1 or newer. `WINDOW` is anything `deskpilot` matches: a window
-address, class or title. Jev picks each action from the window's accessibility tree, and deskpilot clicks and types
-in the background, so the pointer and keyboard focus stay where you left them:
+`--desktop APP` starts a native Wayland app on a Hyprland desktop and runs the task in its window, through
+[deskpilot](https://github.com/cjber/deskpilot). `APP` is the command line that starts the app, split into words as a
+POSIX shell splits them, with no shell running it. The run starts it with deskpilot's `launch` as a deskpilot agent of
+its own, so the window opens on that agent's hidden workspace, and the app closes when the run ends. A window that is
+already open is not driven: deskpilot sends input in the background only to an app its agent launched. It needs a
+deskpilot with `launch` ([cjber/deskpilot#86](https://github.com/cjber/deskpilot/pull/86)); with an older one the run
+ends `unavailable`. Jev picks each action from the window's accessibility tree, and deskpilot clicks and types in the
+background, so the pointer and keyboard focus stay where you left them:
 
 ```sh
-fastbrowse --desktop org.gnome.TextEditor "Write 'hello' in the open document."
+fastbrowse --desktop gnome-text-editor "Write 'hello' in a new document."
 ```
 
+An app that runs as one instance, such as one you already have open, may hand its new window to that copy, so
+`launch` sees no window of its own and the run ends with deskpilot's error. Pass the app's flag for a separate
+instance when it has one.
+
 A password field is never read, and `--secret NAME=ENV_VAR@desktop://<class>` types a secret only into the window of
-that app class. `--authorize` and the step and spend ceilings work as for a browser. With a deskpilot that clicks
-popup items ([cjber/deskpilot#84](https://github.com/cjber/deskpilot/pull/84)), an open combo box's list and a popup
-menu's entries are controls like any other, and the run clicks the item it wants. With an older deskpilot a popup
-menu is out of reach, and a combo box is chosen in with the keyboard, as choosing one of its options by name always
-is: a list the click opened is closed again and the arrow keys move the choice. Keys and typed or pasted text reach
-a window on a workspace that is not showing whenever deskpilot's tools take `hidden`. The run stays in the one
+that app class. `--authorize` and the step and spend ceilings work as for a browser. An open combo box's list and a
+popup menu's entries are controls like any other, and the run clicks the item it wants. Choosing a combo box's option
+by name uses the keyboard: a list the click opened is closed again and the arrow keys move the choice. The run stays in the one
 window: a dialog the app opens as a window of its own is out of its reach. Recipes, `--start` and every browser
 option are refused. Set `FASTBROWSE_DESKPILOT` to run a `deskpilot` that is not on `PATH`.
 
@@ -229,7 +244,7 @@ The exit code is the status. Only `complete` exits 0; configuration refusals exi
 | `stuck` | 9 | the stall budget ran out without reaching a page state the run had not seen |
 | `budget_exceeded` | 7 | a resource limit was reached, or a missing cost prevents enforcing the dollar cap |
 | `observation_limit` | 11 | the page or required evidence cannot fit the configured prompt budget |
-| `unavailable` | 8 | a model or browser provider stayed unavailable through every retry; the same run later may pass |
+| `unavailable` | 8 | a model or browser provider stayed unavailable through every retry, or the page says an item the task requires cannot be bought; the same run later may pass |
 | `cancelled` | 12 | you stopped an `--extension` run in your browser: from its popup, the debugging bar or by closing its tabs |
 | `error` | 1 | a model or browser failure |
 
@@ -257,6 +272,23 @@ A run's `proxy` cost line on a Browser Use Cloud browser has the basis `unsettle
 about 30 seconds after a browser stops, and a run returns without waiting, so the figure can read low. An unsettled
 line makes the total incomplete, even when it carries a provisional dollar figure. The
 `browser_id` in the run's browser event reads the settled figure from `GET /browsers/{id}` once that time has passed.
+
+## Updating
+
+`fastbrowse self-update` prints how this copy was installed and the command or link that upgrades it, then exits 0.
+It reads what the installer recorded and makes no network call, and it never replaces the running binary.
+
+| Installed with | It prints |
+| --- | --- |
+| `uv tool install fastbrowse` | `uv tool upgrade fastbrowse` |
+| `uvx fastbrowse` | `uvx fastbrowse@latest` |
+| `uv add` or `uv pip install` | `uv lock --upgrade-package fastbrowse && uv sync`, or `uv pip install --upgrade fastbrowse` |
+| `pip install fastbrowse` | `python -m pip install --upgrade fastbrowse` |
+| `npm install fastbrowse` | `npm install fastbrowse@latest` |
+| A release binary | the latest release link and this platform's `fastbrowse-rust-<target>.tar.gz` |
+| A checkout | `git pull && uv sync --all-extras` |
+
+Another installer, or one that left no record, gets the [PyPI page](https://pypi.org/project/fastbrowse/).
 
 ## Troubleshooting
 
