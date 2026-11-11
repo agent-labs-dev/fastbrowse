@@ -28,7 +28,8 @@ run-name: Benchmark campaign ${{ inputs.campaign_id || github.event.client_paylo
 # `fastbrowse-hosted.jsonl`: publication's internal groups accept a fixed arm set, so its rows must never enter a
 # published ledger. It is a diagnostic - its dollars are the customer charge rather than metered provider cost, and
 # the API returns no copy of the final page, so the page half of a task is ungraded - and no step reads that ledger
-# into a candidate. A group that fails still fails the campaign, so drop it to publish without it.
+# into a candidate. A failure there is reported on the run but does not block publication, so it costs a rerun only
+# if its own rows are wanted; every published group still fails the campaign.
 # The budget gates new attempts; Parallax gives no task time, step or dollar limit to an active arm.
 # Browser Use (its default model and bu-ultrafast) and Browser Harness are not run by default: their figures come from
 # docs/results/competitor-reference.json,
@@ -48,6 +49,8 @@ run-name: Benchmark campaign ${{ inputs.campaign_id || github.event.client_paylo
 #            LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY (each ledger is sent there; the candidate reads them back,
 #            with the fixture run)
 #            BROWSER_USE_API_KEY
+#   secrets when `extra_arms` names fastbrowse-hosted: FASTBROWSE_HOSTED_API_KEY (its own submit would otherwise
+#            fail one attempt at a time, after the paid groups had started)
 #   secrets, optional: FASTBROWSE_SITE_TOKEN (publish-evals.yml checks it when it opens the site pull request;
 #            a campaign measured without it republishes with publish-evals.yml run_id)
 #   vars:    PARALLAX_JUDGE_BASE_URL, PARALLAX_JUDGE_MODELS
