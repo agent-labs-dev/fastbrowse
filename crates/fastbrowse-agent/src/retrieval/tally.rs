@@ -604,7 +604,7 @@ const MONTHS: [&str; 12] = [
 fn dates(text: &str) -> Vec<(usize, usize, f64)> {
     // A day the month does not have, such as 2025-02-31, is no date, so it orders nothing.
     let ordinal = |year: u32, month: u32, day: u32| {
-        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
         let days = match month {
             2 if leap => 29,
             2 => 28,
