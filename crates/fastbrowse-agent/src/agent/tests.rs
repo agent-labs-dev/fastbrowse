@@ -23,7 +23,7 @@ use indexmap::IndexMap;
 use serde_json::json;
 
 use super::Agent;
-use super::acting::Carried;
+use super::acting::{Carried, IN_RECORD};
 use super::driving::edit_progress;
 use super::helpers::{describe, doing, read_sources, unsent_fact};
 use super::state::Written;
@@ -2482,6 +2482,39 @@ fn test_the_value_questions_say_what_a_field_holds_now_unless_it_is_sensitive() 
     assert!(shown("secret").iter().all(|q| !q.contains("@ann")), "{:?}", shown("secret"));
 }
 
+/// Every reply box on a comment page has one label, and a task with a reply for each of three comments had all three
+/// typed into the first box (#879): the value questions say which comment a box sits in, and that its value is the one
+/// the task gives for that comment.
+#[test]
+fn test_the_value_questions_say_which_record_a_field_sits_in() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(EndValues), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "1. Reply to Ann: thanks\n2. Reply to Bo: noted".into();
+    let mut reply = Control::new("reply", "textbox", "Comment text area", [Operation::Fill]);
+    reply.context = Some("Bo".into());
+    let search = Control::new("search", "textbox", "Search", [Operation::Fill]);
+    let asked = agent.ahead(&state, &observation(&[reply, search]));
+    let spans = |control: &str| {
+        asked
+            .iter()
+            .filter(|ahead| ahead.control == control)
+            .filter_map(|ahead| match &ahead.question {
+                Question::Choice(choice) if choice.instructions.contains("which of its words") => {
+                    Some(choice.instructions.clone())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let reply = spans("reply");
+    assert!(!reply.is_empty(), "the beginning and the end are asked");
+    for question in &reply {
+        assert!(question.contains(&format!("The field sits in 'Bo' on the page. {IN_RECORD}")), "{question}");
+        assert!(question.contains("for 'Comment text area', which"), "the label stays the field's own: {question}");
+    }
+    assert!(spans("search").iter().all(|q| !q.contains(IN_RECORD)), "{:?}", spans("search"));
+}
+
 #[tokio::test]
 async fn test_only_new_read_evidence_renews_recovery_without_an_explicit_read_step() {
     let field = "Capacity: 12";
@@ -3465,7 +3498,7 @@ async fn test_a_run_that_gives_up_on_a_drawn_page_it_could_not_read_says_so() {
         }
     };
     let drawn = gives_up(true).await;
-    assert!(drawn.starts_with("no_progress (3) ") && drawn.contains("draws what it shows as a canvas"), "{drawn}");
+    assert!(drawn.starts_with("no_progress (3) ") && drawn.contains("shows a canvas, picture or video"), "{drawn}");
     assert_eq!(gives_up(false).await, "no_progress (3)");
 }
 

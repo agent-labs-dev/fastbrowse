@@ -308,9 +308,10 @@ Both messages end with Chrome's complete diagnostic output, which names the caus
   another page still ends with this error. Check the address, or whether the page is public yet.
 - The site answered an HTTP error that maps to no other status:
   `Could not complete the task after HTTP <status> at <url> in this browser session; the cause is unknown.`
-- The page draws what it shows on a canvas, a picture or a video, and the run could not read it. The error
-  then ends with `This page draws what it shows as a canvas, picture or video that its text and controls do
-  not carry, and its screenshot was not read as answering the task.`
+- The run stopped with a canvas, a picture or a video in view, and reading its screenshot did not answer the
+  task. The error then ends with `This page shows a canvas, picture or video beside its text, and its
+  screenshot was not read as answering the task.` The page may still carry everything in its text: the
+  stall can have another cause.
 
 **Next step.**
 

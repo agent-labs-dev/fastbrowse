@@ -20,8 +20,10 @@ pub(super) type Withheld = Option<(Operation, Option<String>)>;
 /// A refused DONE, withheld from the ask that follows it.
 pub(super) const DONE: Withheld = Some((Operation::Done, None));
 
-/// What a run that gave up on a drawn page says of it.
-pub(super) const DRAWN_UNREAD: &str = "This page draws what it shows as a canvas, picture or video that its text and controls do not carry, and its screenshot was not read as answering the task.";
+/// What a run that gave up with a picture in view says of it: only what it knows. A picture in view does not show that
+/// the page draws what its text leaves out, and saying so had a CurseForge comments page, plain HTML with member
+/// avatars, reported as a canvas the run could not read (#987).
+pub(super) const DRAWN_UNREAD: &str = "This page shows a canvas, picture or video beside its text, and its screenshot was not read as answering the task.";
 
 /// An action the stall rule counted as moving nothing, with the outcome the browser gave it: one it performed, one it
 /// refused because something covered the target, or one whose observed target or page state it could not use.

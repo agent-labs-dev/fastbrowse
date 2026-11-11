@@ -99,8 +99,8 @@ using the same span choices as a fill value. The page cannot provide the chord. 
 submit or save is sent through the action and authorization checks before the browser receives it.
 
 With `Config(plan_ahead=True)` the request also asks, for each offered field, whether the task needs it filled on
-this page besides the next action. When the chosen action is a fill, code fills the other fields Jev judges more likely
-than not, in page order, each with its value answered ahead and without a decision of its own. Before each it observes
+this page besides the next action. When the chosen action is a fill, code fills the other fields of the chosen field's
+form that Jev judges more likely than not, in page order, each with its value answered ahead and without a decision of its own. Before each it observes
 the page again and returns to deciding when the address, the document or the field is gone, a dialog opened, or the
 value before it was unsure. Presses are never planned: a press changes the page in ways seen only after it, and two
 controls that do the same job would both be judged needed. A request with a screenshot then carries every question
