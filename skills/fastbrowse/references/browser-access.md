@@ -25,7 +25,7 @@ uvx --from fastbrowse fastbrowse \
 Use the real site origin and preconfigured variable names. fastbrowse resolves values only when typing them on
 their declared origin; models see secret names. An MCP caller cannot add credentials: its operator declares
 them with server `--secret NAME=ENV_VAR@ORIGIN` or `--bitwarden ITEM`. Use only secrets the server offers.
-The CLI also supports `--bitwarden ITEM` for a user-selected login from an unlocked Bitwarden CLI.
+The CLI also supports `--bitwarden ITEM` for a user-selected login from rbw or an unlocked Bitwarden CLI.
 
 ## The user's own signed-in Chrome
 

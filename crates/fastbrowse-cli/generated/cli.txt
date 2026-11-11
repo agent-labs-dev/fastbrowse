@@ -55,7 +55,7 @@ options:
                         secret from an environment variable, scoped to ORIGIN
                         or the --start origin (repeatable)
   --bitwarden ITEM      type this vault login's username, password and
-                        authenticator code (unlocked bw CLI)
+                        authenticator code (rbw, or an unlocked bw CLI)
   --input NAME=VALUE    a named value the task can refer to, typed into a field
                         by name, so a recipe types the next run's value
                         (repeatable)

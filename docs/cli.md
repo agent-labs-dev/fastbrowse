@@ -116,9 +116,19 @@ fastbrowse "Add a UGREEN USB-A to USB-C cable, 2m, to my cart." \
 On a cloud browser, `--cloud-profile prof_1234` runs as a [Browser Use Cloud](https://cloud.browser-use.com)
 profile someone signed in once. The run inherits its cookies and no model sees a credential.
 
-With the [Bitwarden CLI](https://bitwarden.com/help/cli/) unlocked, `--bitwarden ITEM` types the vault login. The
-item's saved URIs must match `--start`. Models see only `username`, `password` and, when the item holds an
-authenticator key, `one_time_code`, computed as it is typed:
+`--bitwarden ITEM` types a Bitwarden vault login. The item's saved URIs must match `--start`. Models see only
+`username`, `password` and, when the item holds an authenticator key, `one_time_code`, computed as it is typed.
+With [rbw](https://github.com/doy/rbw) installed, fastbrowse reads the item through it, and a locked vault asks
+for your password through rbw's pinentry. rbw reads its local copy of the vault, so run `rbw sync` after adding
+an item, and pass the item's id when its name matches more than one entry:
+
+```sh
+fastbrowse "Add a UGREEN USB-A to USB-C cable, 2m, to my cart." \
+  --start https://www.amazon.com/ --bitwarden Amazon --profile ~/.fastbrowse/amazon
+```
+
+Without rbw, fastbrowse reads the item through the [Bitwarden CLI](https://bitwarden.com/help/cli/), unlocked
+first:
 
 ```sh
 export BW_SESSION="$(bw unlock --raw)"
