@@ -119,7 +119,9 @@ impl Agent {
             }
             // A known page the run is on has been reached, and is not offered again once it is left.
             let here = |url: &&String| fastbrowse_core::navigation::same_address(url, &observation.url);
-            if let Some(url) = state.known_pages.iter().find(here).filter(|url| !state.reached_known_pages.contains(url)) {
+            if let Some(url) =
+                state.known_pages.iter().find(here).filter(|url| !state.reached_known_pages.contains(url))
+            {
                 state.reached_known_pages.push(url.clone());
             }
             let decision = match picked {

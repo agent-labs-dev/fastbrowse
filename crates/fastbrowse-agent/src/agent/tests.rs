@@ -7263,14 +7263,16 @@ fn a_known_page_is_offered_to_navigate_to_until_the_run_is_on_it() {
     there.url = "https://pypi.org/project/httpx/".into();
     let context = agent.context(&state, &there, Vec::new(), false, false).unwrap();
     let request = crate::policy::build_request(&there, &[], &context, &Default::default(), 64);
-    assert!(!request.questions.contains_key("navigate_target"));    // With several, the known ones are named, since the operation is chosen apart from its target.
+    assert!(!request.questions.contains_key("navigate_target")); // With several, the known ones are named, since the operation is chosen apart from its target.
     state.known_pages.push("https://pypi.org/project/requests/".into());
     let context = agent.context(&state, &search, Vec::new(), false, false).unwrap();
     let request = crate::policy::build_request(&search, &[], &context, &Default::default(), 64);
     let Question::Choice(operations) = &request.questions["operation"] else { panic!("an operation choice") };
     let navigate = operations.criteria["navigate"].as_str().unwrap();
     assert!(
-        navigate.ends_with("known to hold an item the task names: https://pypi.org/project/httpx/, https://pypi.org/project/requests/"),
+        navigate.ends_with(
+            "known to hold an item the task names: https://pypi.org/project/httpx/, https://pypi.org/project/requests/"
+        ),
         "{navigate}"
     );
 }

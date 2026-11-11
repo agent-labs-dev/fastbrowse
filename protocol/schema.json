@@ -660,7 +660,8 @@
         "image_read",
         "fill",
         "pages",
-        "dates"
+        "dates",
+        "known_pages"
       ],
       "title": "LLMPurpose",
       "type": "string"

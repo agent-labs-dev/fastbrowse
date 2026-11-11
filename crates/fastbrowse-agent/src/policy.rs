@@ -72,7 +72,9 @@ pub const GROUP: &str = "Too many elements to list at once. Choose the group tha
 
 pub fn operation_label(operation: Operation) -> &'static str {
     match operation {
-        Operation::Navigate => "Open another HTTP(S) address: one the caller supplied for this task, or a page a site the task names is known to serve for an item the task names.",
+        Operation::Navigate => {
+            "Open another HTTP(S) address: one the caller supplied for this task, or a page a site the task names is known to serve for an item the task names."
+        }
         Operation::Click => "Click an element, button, link, menu option, autocomplete suggestion or calendar day.",
         Operation::Hover => "Hover over an element to reveal content the page shows only under the pointer.",
         Operation::Drag => "Drag one element and drop it onto another, to move, reorder or file it.",
@@ -1012,7 +1014,11 @@ pub fn build_request(
                 // it as the address (0.66).
                 let label = match (op, urls.as_slice()) {
                     (Operation::Navigate, _) if !known.is_empty() => {
-                        format!("{} Pages known to hold an item the task names: {}", operation_label(*op), known.join(", "))
+                        format!(
+                            "{} Pages known to hold an item the task names: {}",
+                            operation_label(*op),
+                            known.join(", ")
+                        )
                     }
                     (Operation::Navigate, [only]) => format!("{} The address: {only}", operation_label(*op)),
                     _ => operation_label(*op).to_string(),

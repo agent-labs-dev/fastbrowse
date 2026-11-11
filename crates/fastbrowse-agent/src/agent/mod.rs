@@ -858,7 +858,12 @@ impl Agent {
             secrets,
             start_url: state.caller_start.clone(),
             start_landing_url: state.start_landing_url.clone(),
-            known_pages: state.known_pages.iter().filter(|url| !state.reached_known_pages.contains(url)).cloned().collect(),
+            known_pages: state
+                .known_pages
+                .iter()
+                .filter(|url| !state.reached_known_pages.contains(url))
+                .cloned()
+                .collect(),
             background: state.context.clone(),
             omitted_actions: 0,
             problem: None,

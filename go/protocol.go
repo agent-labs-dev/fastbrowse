@@ -225,12 +225,13 @@ const (
 type LLMPurpose string
 
 const (
-	LLMPurposeStart     LLMPurpose = "start"
-	LLMPurposeCompose   LLMPurpose = "compose"
-	LLMPurposeImageRead LLMPurpose = "image_read"
-	LLMPurposeFill      LLMPurpose = "fill"
-	LLMPurposePages     LLMPurpose = "pages"
-	LLMPurposeDates     LLMPurpose = "dates"
+	LLMPurposeStart      LLMPurpose = "start"
+	LLMPurposeCompose    LLMPurpose = "compose"
+	LLMPurposeImageRead  LLMPurpose = "image_read"
+	LLMPurposeFill       LLMPurpose = "fill"
+	LLMPurposePages      LLMPurpose = "pages"
+	LLMPurposeDates      LLMPurpose = "dates"
+	LLMPurposeKnownPages LLMPurpose = "known_pages"
 )
 
 type Limits struct {
