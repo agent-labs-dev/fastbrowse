@@ -260,6 +260,31 @@ async fn test_an_image_line_names_the_image_and_not_what_it_cannot_show() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_an_image_line_quotes_the_item_it_sits_in() {
+    // A gallery's captions were read as text and its sources as image lines with nothing joining them, so a caption
+    // paired with a source by position failed its support check and the row was left out of the answer (#929).
+    let Some(h) = harness().await else { return };
+    eval_active(
+        &h.session,
+        r#"document.body.innerHTML = '<ul>' +
+          '<li><a class="tile"><span><img alt="thumbnail" src="https://example.test/01.gif"></span><p>Dungeon entrances</p></a></li>' +
+          '<li><a class="tile"><span><img alt="thumbnail" src="https://example.test/map.webp"></span><p>The Eastern Kingdoms</p></a></li>' +
+          '</ul><p><img alt="divider" src="https://example.test/rule.png"></p><img alt="lone" src="https://example.test/lone.png">';"#,
+    )
+    .await;
+    let capture = h.page.capture().await.expect("capture");
+    let images: Vec<&str> =
+        capture.text.lines().filter(|line| line.starts_with("Image element DOM metadata")).collect();
+    assert_eq!(images.len(), 4, "{images:?}");
+    assert!(images[0].contains("01.gif") && images[0].contains(r#""near":"Dungeon entrances""#), "{}", images[0]);
+    assert!(images[1].contains("map.webp") && images[1].contains(r#""near":"The Eastern Kingdoms""#), "{}", images[1]);
+    // An empty paragraph does not borrow its neighbours' text, and an image with no enclosing text names nothing.
+    assert!(images[2].contains(r#""near":null"#), "{}", images[2]);
+    assert!(images[3].contains(r#""near":null"#), "{}", images[3]);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_every_image_is_observed_and_decode_state_is_ignored() {
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");

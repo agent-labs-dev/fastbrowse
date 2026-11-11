@@ -458,13 +458,25 @@
       if (CONTROLS.has(e.tagName) && !UNFILLED.has(e.type) && !fieldValue(e)) push('observation', `${name}: [empty]`);
       if (e.matches(':disabled,[aria-disabled="true"]')) push('observation', `${name}: disabled`);
     }
+    // The text of the nearest enclosing element that has any, naming the item an element with no text of its own sits
+    // in, since its observation is not read where the element stands. An empty image paragraph must not borrow another
+    // paragraph's text from its enclosing article.
+    const near = element => {
+      let row = element.parentElement;
+      while (row && row !== root && row.tagName !== 'P' && !clean(row.innerText ?? '')) row = row.parentElement;
+      return row && row !== root ? textOf(row).replace(/\s+/g, ' ') || null : null;
+    };
     // Images carry no innerText, so a text-only capture cannot distinguish their presence from absence. What it can
     // say is kept as data in the one line: a sentence that pixels are not described was cut as a span and quoted as a
     // fact, so a Street View run answered "Pixels are not described" 33 times over a task about what the view shows.
+    // The line quotes the item the image sits in too: a gallery's captions were read as text and its image sources as
+    // these lines with nothing joining them, so a caption paired with a source by position failed its support check
+    // and the row was left out of the answer (#929).
     for (const image of [...root.querySelectorAll('img')].filter(visible)) {
       // Loading changes without a page edit, so captures report presence rather than transient decode state.
       const metadata = { alt: image.getAttribute('alt') ?? null,
-        src: imageSource(image.getAttribute('src') ?? image.getAttribute('srcset')), pixels_described: false };
+        src: imageSource(image.getAttribute('src') ?? image.getAttribute('srcset')), pixels_described: false,
+        near: near(image) };
       push('observation', `Image element DOM metadata: ${JSON.stringify(metadata)}`);
     }
     // A player's clock and whether it plays are element state, drawn by native controls the text never holds. Each
@@ -508,15 +520,7 @@
       const page = location.href.split('#')[0];
       const fragment = link.getAttribute('href').trim().startsWith('#') || (target.hash && target.href.split('#')[0] === page);
       if (target.protocol === 'javascript:' || fragment) continue;
-      let row = link.parentElement;
-      // An empty image paragraph must not borrow another paragraph's text from its enclosing article.
-      while (row && row !== root && row.tagName !== 'P' && !clean(row.innerText ?? '')) row = row.parentElement;
-      if (row === root) row = null;
-      const metadata = {
-        label: nameOf(link) || drawn(link) || null,
-        href: imageSource(link.href),
-        near: row ? textOf(row).replace(/\s+/g, ' ') || null : null,
-      };
+      const metadata = { label: nameOf(link) || drawn(link) || null, href: imageSource(link.href), near: near(link) };
       // choices.rs (LINK_METADATA) keeps this out of a read's answer candidates by its opening words.
       push('observation', `Link element DOM metadata: ${JSON.stringify(metadata)}. The link has no text.`);
     }
