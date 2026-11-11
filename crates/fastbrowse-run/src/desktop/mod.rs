@@ -181,8 +181,9 @@ impl DeskpilotPage {
         Ok(())
     }
 
+    /// Calls an input tool, in hidden mode wherever the connected deskpilot's schema offers it for that tool.
     async fn tool(&self, name: &str, arguments: Value) -> Result<(), ToolError> {
-        self.client.call(name, arguments).await.map(|_| ())
+        self.client.call(name, self.client.hidden(name, arguments)).await.map(|_| ())
     }
 
     async fn dispatch(&self, action: &Action, observation: &Observation) -> Result<Option<String>, ToolError> {
