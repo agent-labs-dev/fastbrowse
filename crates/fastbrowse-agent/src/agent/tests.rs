@@ -3360,8 +3360,9 @@ async fn test_past_the_recovery_budget_a_select_left_unset_is_named_in_the_error
 }
 
 /// #935: asked to replace a description, three runs reached for blank fields the task never named, such as a wiki
-/// link, and ended `needs_input` asking for them. A field the task asks nothing of is left, and is an input the run
-/// lacks only when the page marks it required.
+/// link, and ended `needs_input` asking for them. A field the task asks nothing of is left, and is no input the run
+/// lacks, unless the page marks it required: then no later step can supply it, so the run ends needing it at once,
+/// as one the task asks for and gives no value for does.
 #[tokio::test]
 async fn test_a_field_the_task_asks_nothing_of_is_no_missing_input_unless_the_page_requires_it() {
     for required in [false, true] {
@@ -3373,16 +3374,23 @@ async fn test_a_field_the_task_asks_nothing_of_is_no_missing_input_unless_the_pa
         wiki.required = required.then_some(true);
         let page = observation(&[wiki.clone(), button("Save changes")]);
         let error = agent.text(&mut state, &page, &code_decision(Operation::Fill, None), &wiki).await.unwrap_err();
-        let expected = if required { Status::NeedsInput } else { Status::Stuck };
-        assert!(matches!(&error, Flow::Unsure(unsure) if unsure.gives_up_as == expected), "{error:?}");
+        if required {
+            assert!(
+                matches!(&error, Flow::Stop(stop) if stop.status == Status::NeedsInput
+                    && stop.error.as_deref() == Some("'Addon Wiki' needs a value the task does not give")),
+                "{error:?}"
+            );
+            continue;
+        }
+        assert!(matches!(&error, Flow::Unsure(unsure) if unsure.gives_up_as == Status::Stuck), "{error:?}");
 
         state.recoveries = agent.config.stall.max_recoveries;
         let decision = code_decision(Operation::Click, Some(button("Save changes")));
         let withheld = super::recovery::withheld(&decision);
         let stop = agent.recover(&mut state, &page, "nothing changed", Status::Stuck, withheld).await.err();
         let Some(Flow::Stop(stop)) = stop else { panic!("{stop:?}") };
-        assert_eq!(stop.status, expected);
-        assert_eq!(stop.error.as_deref().is_some_and(|error| error.contains("'Addon Wiki'")), required, "{stop:?}");
+        assert_eq!(stop.status, Status::Stuck);
+        assert!(!stop.error.as_deref().unwrap_or_default().contains("'Addon Wiki'"), "{stop:?}");
     }
 }
 
@@ -6920,6 +6928,30 @@ async fn test_a_select_the_task_gives_no_option_for_is_a_missing_input() {
         assert!(matches!(&acted, Err(Flow::Unsure(unsure)) if unsure.gives_up_as == gives_up_as), "{wants}: {acted:?}");
         assert_eq!(state.missing.len(), usize::from(kept), "{wants}");
     }
+}
+
+/// #939's profile fixture, as the nightly met it: Jev answered a required Country that the task names no option for
+/// with "the task asks nothing of this field", and the run left the form for the site's Account link and stopped
+/// `needs_login` on a sign-in no task needed. A required select the task asks nothing of is an input no later step can
+/// supply, so the run ends needing it at once, as it does when Jev says nothing given states it.
+#[tokio::test]
+async fn test_a_required_select_the_task_asks_nothing_of_ends_the_run_needing_it() {
+    let select = Control {
+        options: vec!["Choose a country".into(), "France".into(), "Japan".into()],
+        required: Some(true),
+        ..Control::new("c", "combobox", "Country *", [Operation::Select])
+    };
+    let page = observation(std::slice::from_ref(&select));
+    let jev = Arc::new(FirstChoice { wants: Some("asks nothing of this field"), ..Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev, Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.edits_forbidden = Some(false);
+    let acted = agent.action(&mut state, &page, &code_decision(Operation::Select, Some(select))).await;
+    assert!(
+        matches!(&acted, Err(Flow::Stop(stop)) if stop.status == Status::NeedsInput
+            && stop.error.as_deref() == Some("'Country *' needs a value the task does not give")),
+        "{acted:?}"
+    );
 }
 
 /// A select that allows several choices, labelled Topics, with `selected` chosen.
