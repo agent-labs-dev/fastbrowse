@@ -8,8 +8,8 @@ usage: fastbrowse [-h] [--version] [--start START] [--context CONTEXT]
                   [--max-dollars MAX_DOLLARS] [--downloads DOWNLOADS] [--json]
                   [--record FILE] [--recipe FILE] [--save-recipe FILE]
                   [--fetch] [--browser] [--extension]
-                  [--extension-browser LABEL] [--desktop WINDOW]
-                  [--trace FILE] [--cursor | --no-cursor]
+                  [--extension-browser LABEL] [--desktop APP] [--trace FILE]
+                  [--cursor | --no-cursor]
                   task
 
 Run one browser task.
@@ -55,7 +55,7 @@ options:
                         secret from an environment variable, scoped to ORIGIN
                         or the --start origin (repeatable)
   --bitwarden ITEM      type this vault login's username, password and
-                        authenticator code (unlocked bw CLI)
+                        authenticator code (rbw, or an unlocked bw CLI)
   --input NAME=VALUE    a named value the task can refer to, typed into a field
                         by name, so a recipe types the next run's value
                         (repeatable)
@@ -85,10 +85,10 @@ options:
                         which browser to use when the extension is connected
                         in more than one, by the label its popup shows
                         (implies --extension)
-  --desktop WINDOW      drive a native desktop window instead of a browser,
-                        through deskpilot on Hyprland, without moving your
-                        pointer or focus: its address, app class, or a part of
-                        its class or title
+  --desktop APP         start the native desktop app APP (a command line) and
+                        drive it instead of a browser, through deskpilot on
+                        Hyprland, without moving your pointer or focus; it
+                        closes when the run ends
   --trace FILE          append the run's trace to FILE as JSON lines, or - for
                         stderr: every model call with its purpose and timing,
                         which reader answered each read and why, and every
@@ -98,6 +98,9 @@ options:
   --no-cursor           do not draw the agent's cursor (by default it is
                         drawn over a visible Chrome with the Cua Driver on
                         Linux X11, and skipped where unsupported)
+
+Update: fastbrowse self-update names how this copy was installed and the
+command that upgrades it.
 
 Exit codes: 2 usage error; 0 complete; 1 error; 3 needs_confirmation; 4
 needs_login; 5 needs_input; 6 blocked; 7 budget_exceeded; 8 unavailable; 9

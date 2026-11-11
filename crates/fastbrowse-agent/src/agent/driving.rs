@@ -1,7 +1,7 @@
 //! The loop and its step: observe, judge what the last action did, decide, gate and act.
 
 use std::future::Future;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use fastbrowse_core::decision::{EVEN_ODDS, jev_takes_png};
 use fastbrowse_core::effects::{Effect, SETTING_ROLES, Setting, effect, state_key};
@@ -20,7 +20,7 @@ use super::helpers::{decision_label, describe, doing, drew_something, netloc_of,
 use super::recovery::{Idle, leave_out_idle, uncover, withheld};
 use super::state::{FailureCause, Flow, OutputIntent, RunState, SiteFailure, Step, Stop, Unsure, Written, read_key};
 
-use super::{Agent, INTERSTITIAL_SECONDS, REDRAW_WATCH_SECONDS};
+use super::{Agent, REDRAW_WATCH_SECONDS, browsing_deadline};
 use crate::memory::address;
 use crate::policy::{Decision, HistoryEntry, Planned, decide};
 use crate::retrieval::page_quotes;
@@ -83,7 +83,12 @@ impl Agent {
                 );
                 if state.http_seen.insert(document)
                     && matches!(status, 403 | 429 | 503)
-                    && self.outwait(&self.raw().unwrap_or_else(|| observation.clone())).await?
+                    && self
+                        .outwait(
+                            &self.raw().unwrap_or_else(|| observation.clone()),
+                            browsing_deadline(&state.ledger, state.compose),
+                        )
+                        .await?
                 {
                     continue;
                 }
@@ -232,11 +237,11 @@ impl Agent {
             let thresholds = &self.config.thresholds;
             let bot_check = decision.bot_check.unwrap_or(0.0) > thresholds.bot_check_above;
             if bot_check || decision.login_required.unwrap_or(0.0) > thresholds.login_required_above {
-                // A wall offering nothing to act on cannot be signed into. It is a bot check such as PyPI's "Client
-                // Challenge", which clears itself once its script runs, and stopping on it failed five runs in six of
-                // a task hosted agents finish by waiting. A bot check that draws a CAPTCHA has controls, and may still
-                // clear itself before it does.
-                if (bot_check || raw.controls.is_empty()) && self.outwait(&raw).await? {
+                // A wall offering nothing to act on cannot be signed into, so it is waited on as a bot check is: for as
+                // long as the browser's CAPTCHA solver works on it or its document is still loading, and no longer.
+                if (bot_check || raw.controls.is_empty())
+                    && self.outwait(&raw, browsing_deadline(&state.ledger, state.compose)).await?
+                {
                     continue;
                 }
                 if bot_check && raw.controls.is_empty() && self.reload_challenge(state, &raw).await? {
@@ -283,6 +288,11 @@ impl Agent {
                     }
                     _ => return Err(self.meet_wall(&observation, &raw)),
                 }
+            }
+            // A run that read "Sold out" on its first step spent 74 more steps because nothing asked whether the task
+            // could still be done (#960). Jev judges it from the page and the task; this ends the run on that answer.
+            if decision.unobtainable.is_some_and(|probability| probability >= EVEN_ODDS) {
+                return Err(self.unobtainable(state, &observation).await?.into());
             }
             if let Some(shows) = Self::reads_before_leaving(state, &observation, &decision)
                 // The page the run began on is read for an answer only for a task that asks to be told something: a
@@ -376,6 +386,7 @@ impl Agent {
                 bot_check: None,
                 shows_answer: None,
                 site_failure: None,
+                unobtainable: None,
                 destination: None,
                 replayed: false,
                 by_code: false,
@@ -563,7 +574,7 @@ impl Agent {
     /// A start page worked out from the task is a guess at an address, and a guess can name a path the site does not
     /// serve. Only the path was ever in doubt, so the front page of the site already chosen is where to be. A start
     /// page the caller gave is left alone. Returns whether it went there.
-    pub(super) async fn front_page_if_blank(&self, opened: &str) -> Step<bool> {
+    pub(super) async fn front_page_if_blank(&self, opened: &str, until: Option<tokio::time::Instant>) -> Step<bool> {
         if matches!(path_of(opened).as_str(), "" | "/") {
             return Ok(false);
         }
@@ -573,7 +584,7 @@ impl Agent {
         }
         // A page built by script is observable before it draws: navigation returns at `readyState`, and hydration
         // follows, so a deep route that was right is not abandoned for being slow.
-        if self.outwait(&observation).await? && drew_something(&self.observe().await?) {
+        if self.outwait(&observation, until).await? && drew_something(&self.observe().await?) {
             return Ok(false);
         }
         let front = format!("{}://{}", scheme_of(opened), netloc_of(opened));
@@ -598,33 +609,53 @@ impl Agent {
             Err(_) => return Ok(false),
             Ok(()) => {}
         }
-        if self.outwait(challenge).await? {
+        if self.outwait(challenge, browsing_deadline(&state.ledger, state.compose)).await? {
             return Ok(true);
         }
         Ok(self.observe().await?.page_key != challenge.page_key)
     }
 
-    /// Re-observe until the page is no longer `stuck`, returning whether it moved in time.
+    /// Re-observe until the page is no longer `stuck`, returning whether it moved.
     ///
-    /// The wait is on the page's own lifecycle events, not a fixed interval: a document that is navigating or loading
-    /// reports each transition, so a stuck page is re-read the moment it moves. A wait that reports nothing new still
-    /// re-reads once before the deadline, so a client-side move is never missed.
-    pub(super) async fn outwait(&self, stuck: &Observation) -> Step<bool> {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs_f64(INTERSTITIAL_SECONDS);
+    /// The page is waited on only while something says it is still on its way: the browser's CAPTCHA solver is working
+    /// on it, or its document or a frame in it is still loading. Each wait is for the page's next lifecycle event, and
+    /// the run's browsing deadline `until` bounds them all; a run with no time limit waits for the event. With neither
+    /// signal the page is re-read once and the wait ends, and a CAPTCHA the solver gave up on ends it too: nothing
+    /// else will clear it.
+    pub(super) async fn outwait(&self, stuck: &Observation, until: Option<tokio::time::Instant>) -> Step<bool> {
         let mut mark = self.page.lifecycle_mark();
+        let mut solving = false;
         loop {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                return Ok(false);
-            }
-            let moved = self.page.wait_for_lifecycle(mark, remaining.as_secs_f64()).await;
-            mark = self.page.lifecycle_mark();
             if self.observe().await?.page_key != stuck.page_key {
                 return Ok(true);
             }
-            if !moved {
+            match self.page.captcha_solve().filter(|solve| solve.url == stuck.url) {
+                Some(solve) if solve.working => {
+                    if !solving {
+                        self.event("captcha_solving", || {
+                            Map::from_iter([("url".into(), solve.url.into()), ("vendor".into(), solve.vendor.into())])
+                        });
+                    }
+                    solving = true;
+                }
+                Some(solve) => {
+                    self.event("captcha_unsolved", || {
+                        Map::from_iter([("url".into(), solve.url.into()), ("vendor".into(), solve.vendor.into())])
+                    });
+                    return Ok(false);
+                }
+                None if self.page.loading() => {}
+                None => return Ok(false),
+            }
+            let seconds = match until {
+                Some(until) => until.saturating_duration_since(tokio::time::Instant::now()).as_secs_f64(),
+                None => f64::INFINITY,
+            };
+            if seconds <= 0.0 {
                 return Ok(false);
             }
+            self.page.wait_for_lifecycle(mark, seconds).await;
+            mark = self.page.lifecycle_mark();
         }
     }
 
@@ -639,7 +670,7 @@ impl Agent {
         if !state.blank_waited.insert((observation.url.clone(), document.clone())) {
             return Ok(false);
         }
-        if self.outwait(observation).await? {
+        if self.outwait(observation, browsing_deadline(&state.ledger, state.compose)).await? {
             return Ok(true);
         }
         if state.blank_opening_checked || state.history.iter().any(|entry| entry.operation.is_some()) {

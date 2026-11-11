@@ -1,6 +1,6 @@
 //! Turning a decision into an action: the gates code owns and the text a field gets.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionError, EVEN_ODDS, NoulQuestion, Question};
@@ -11,10 +11,10 @@ use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::text;
 use fastbrowse_core::recipe::RecipeText;
 use fastbrowse_core::safety::{
-    DONE, HAPPENED, LATER_VALUES, MET, asks_for_credentials, changes_a_value, changes_credentials,
-    conditional_question, control_action, downloads_question, edits_question, happened_question, irreversible_question,
-    is_password, lasting_question, may_be_irreversible, met_question, origin_of, requested_question, resolve_secret,
-    sets_new_password, starts_download, values_question,
+    CredentialField, DONE, HAPPENED, LATER_VALUES, MET, asks_for_credentials, changes_a_value, changes_credentials,
+    conditional_question, control_action, credential_field, downloads_question, edits_question, happened_question,
+    irreversible_question, is_password, lasting_question, may_be_irreversible, met_question, offers_passkey, origin_of,
+    requested_question, resolve_secret, sets_new_password, starts_download, values_question,
 };
 use indexmap::IndexMap;
 use serde_json::{Map, Value as JsonValue, json};
@@ -1675,31 +1675,53 @@ impl Agent {
     /// The stop at a sign-in wall Jev judged blocks the task, naming the credentials the page asks for.
     pub(super) fn meet_wall(&self, observation: &Observation, raw: &Observation) -> Flow {
         let origin = fastbrowse_core::safety::origin_of(&observation.url);
-        // Which fields ask for credentials is read from the raw page, whose flags masking cannot have changed.
-        let credential: HashSet<&String> =
-            raw.controls.iter().filter(|c| asks_for_credentials(c)).map(|c| &c.id).collect();
-        let asked: Vec<String> = observation
+        // Which fields ask for credentials, and what each takes, is read from the raw page, whose flags masking cannot
+        // have changed.
+        let credential: HashMap<&String, CredentialField> =
+            raw.controls.iter().filter_map(|c| Some((&c.id, credential_field(c)?))).collect();
+        let mut asked: Vec<String> = observation
             .controls
             .iter()
-            .filter(|c| credential.contains(&c.id))
-            .map(|c| {
-                if !c.label.is_empty() {
+            .filter_map(|c| {
+                let field = credential.get(&c.id)?;
+                Some(if !c.label.is_empty() {
                     c.label.clone()
                 } else {
-                    c.input_name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| "a password".into())
-                }
+                    c.input_name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| takes(*field).into())
+                })
             })
             .collect();
-        let evidence = if !asked.is_empty() {
-            format!("the page asks for {}", asked.join(", "))
-        } else if credential.is_empty() {
+        if asked.is_empty() {
+            // The credential fields models saw none of are named by what they take.
+            for field in raw.controls.iter().filter_map(credential_field) {
+                if !asked.iter().any(|a| a == takes(field)) {
+                    asked.push(takes(field).into());
+                }
+            }
+        }
+        if raw.controls.iter().any(offers_passkey) && !asked.iter().any(|a| a == PASSKEY) {
+            asked.push(PASSKEY.into());
+        }
+        let evidence = if asked.is_empty() {
             let page = if observation.title.is_empty() { &observation.url } else { &observation.title };
             format!("{page} offers only sign-in")
         } else {
-            "the page asks for a password".to_string()
+            format!("the page asks for {}", asked.join(", "))
         };
         // The error reaches the caller as it is, so it is built from what models see and redacted as well: a page can
         // echo a typed secret into its title or a field's label.
         Stop::new(Status::NeedsLogin, self.redact(&format!("sign-in required at {origin}: {evidence}"))).into()
+    }
+}
+
+const PASSKEY: &str = "a security key or passkey";
+
+/// What a credential field takes, in the words a needs_login stop names a field with no label or name by.
+fn takes(field: CredentialField) -> &'static str {
+    match field {
+        CredentialField::Password => "a password",
+        CredentialField::OneTimeCode => "a one-time code",
+        CredentialField::Username => "an account name",
+        CredentialField::Passkey => PASSKEY,
     }
 }

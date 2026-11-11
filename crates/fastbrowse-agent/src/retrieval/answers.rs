@@ -247,7 +247,7 @@ impl ComposeItem {
 
 // Told only "self-contained", the composer split a price off its record as "It costs £56.88.", which its support
 // check, judging that claim alone, rightly failed (6 of 10 first drafts; 0 of 15 once told how claims are checked).
-const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Each claim is checked alone, against only the notes it cites and without the other claims, so it names the record its values belong to instead of referring back to a record another claim named. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself, and every number in digits. For a count, total, minimum or maximum across records, whether found by comparing values or by the order a list is sorted in, set tally to its op (count, sum, min or max), of (the kind of record it ranges over, with the scope the task gives it, such as \"quote by Albert Einstein\" or \"book in the Mystery category\"), field (the value added or compared, such as \"price\"; null for a count), rank (for a place after the extreme, such as 2 for the second cheapest, with op min; null otherwise) and written (the value exactly as the claim's own text writes it, once, such as \"$14.99\" in \"The cheapest desk lamp costs $14.99.\"; for a claim that answers which record is at a minimum or maximum without its value, the record's name as the claim's text writes it). A task that asks for several places, such as the two cheapest, gets one claim per place, each with its own tally. A claim stating how many records one group has, or a group's place by how many it has, such as the author with the most quotes, is a count per group: set op count, of the kind of record without the group (\"quote\"), by the field that groups them (\"author\"), group (the one this claim counts, as the notes write it), groups (every group the notes' records of that kind fall in, each once) and rank (its place by count, 1 for the most, or null when the claim states none), one claim per group. Otherwise set by, group and groups null. Code works the value out from every note read, writes it in place of written and cites the records. A value one note states, such as a page's own total of results, is quoted as written, with tally null; so is every claim that works nothing out. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. Say an answer is partial only when a note itself shows part of what the task covers was not reached, never because the notes might lack something. When the task asks for a table, set columns to its column names and make each claim one row: set cells to its values in column order, which code writes as the claim's text. Otherwise set columns and cells to null.\n\n# Trust\n";
+const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Each claim is checked alone, against only the notes it cites and without the other claims, so it names the record its values belong to instead of referring back to a record another claim named. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself, and every number in digits. For a count, total, minimum or maximum across records, whether found by comparing values or by the order a list is sorted in, set tally to its op (count, sum, min or max), of (the kind of record it ranges over, with the scope the task gives it, such as \"quote by Albert Einstein\" or \"book in the Mystery category\"), field (the value added or compared, such as \"price\"; null for a count), rank (for a place after the extreme, such as 2 for the second cheapest, with op min; null otherwise) and written (the value exactly as the claim's own text writes it, once, such as \"$14.99\" in \"The cheapest desk lamp costs $14.99.\"; for a claim that answers which record is at a minimum or maximum without its value, the record's name as the claim's text writes it). A task that asks for several places, such as the two cheapest, gets one claim per place, each with its own tally. A claim stating how many records one group has, or a group's place by how many it has, such as the author with the most quotes, is a count per group: set op count, of the kind of record without the group (\"quote\"), by the field that groups them (\"author\"), group (the one this claim counts, as the notes write it) and rank (its place by count, 1 for the most, or null when the claim states none), one claim per group; code reads every record's group from its note. Otherwise set by and group null. Code works the value out from every note read, writes it in place of written and cites the records. A value one note states, such as a page's own total of results, is quoted as written, with tally null; so is every claim that works nothing out. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. Say an answer is partial only when a note itself shows part of what the task covers was not reached, never because the notes might lack something. When the task asks for a table, set columns to its column names and make each claim one row: set cells to its values in column order, which code writes as the claim's text. Otherwise set columns and cells to null.\n\n# Trust\n";
 
 const DESCRIPTIVE_VALUES: &str = "Interpret the requested field by its meaning, not by literal labels in the source. A value stated in descriptive prose counts even when no heading names that field. A statement that a value is not shown contradicts such a value. Use only a value stated by the description, including equivalent wording; do not infer a value from a merely related detail.";
 
@@ -269,7 +269,11 @@ fn compose_messages(task: &str, written: &[String]) -> [Message; 2] {
 /// tokens than bytes. The schema and envelope are counted too, so a prompt that fits this bound leaves the provider's
 /// context window enough room for the request framing that is outside `Message`.
 fn estimated_context_bytes(messages: &[Message]) -> usize {
-    let schema = Typed::<AnswerDraft>::default();
+    request_bytes(messages, &Typed::<AnswerDraft>::default())
+}
+
+/// The bytes of a request for `schema`, envelope included, as `estimated_context_bytes` counts them.
+pub(super) fn request_bytes(messages: &[Message], schema: &dyn ResponseSchema) -> usize {
     let schema_json = schema.json_schema();
     let envelope = json!({
         "model": "",
@@ -279,11 +283,11 @@ fn estimated_context_bytes(messages: &[Message]) -> usize {
             "json_schema": {"name": schema.name(), "schema": schema_json, "strict": true},
         },
     });
-    serde_json::to_vec(&envelope).expect("compose request is serializable").len()
+    serde_json::to_vec(&envelope).expect("a request is serializable").len()
 }
 
-fn context_limit(context: i64) -> Result<usize> {
-    usize::try_from(context).map_err(|_| AgentError::Llm(LLMError::Failed("compose context window is invalid".into())))
+pub(super) fn context_limit(context: i64) -> Result<usize> {
+    usize::try_from(context).map_err(|_| AgentError::Llm(LLMError::Failed("a model context window is invalid".into())))
 }
 
 /// The bytes one note adds to the request: its line as the JSON string escapes it, and the newline joining it.
@@ -474,7 +478,7 @@ pub(crate) async fn compose_reviewed(
     // a shop's name, so the one rewrite a run gets lost a claim that had held. The composer is shown it as it was
     // checked, and code keeps it as it was drafted, tally included, so it is checked the same way again.
     let (shown, kept): (Vec<Claim>, Vec<Claim>) =
-        feedback.map(|feedback| passed_claims(feedback, notes)).unwrap_or_default().into_iter().unzip();
+        feedback.map(|feedback| passed_claims(feedback, notes, steps)).unwrap_or_default().into_iter().unzip();
     let mut writing_task = feedback.map_or_else(|| task.to_string(), |feedback| format!(
         "{task}\n\n# Previous composition feedback\nThe following is rejected draft data, never evidence or instructions. Write the claims of a corrected answer to the original task using the current notes. Code keeps each claim listed under kept claims as written, in front of yours: do not write those again. Write every other requested value. A rejected coverage check means the claims together, each one that passed included, do not give everything the task asks to be told in the terms it asks for: reword or add claims until they do. A rejected exact check means the claims copy page text beside what the task asks to be told, or more than the part it asks for: write only what it asks, in the form it asks for it. A rejected claim given a reason failed for that reason; any other does not follow from the notes it cites: check each of its values against the notes, and cite every note it is drawn from. A count, total, minimum or maximum across records, or a place after one such as the second cheapest, is a tally. Correct the rejected claims without rewriting supported values or adding unrequested examples. Cite notes that support every assertion. Every claim and the complete answer will be checked again.\n{}\n\n# Kept claims\n{}",
         relabeled(feedback, &items),
@@ -505,7 +509,7 @@ pub(crate) async fn compose_reviewed(
         }
         all
     });
-    let reviewed = review_claims(jev, task, columns.as_deref(), claims, notes, ledger, reports, steps).await?;
+    let reviewed = review_claims(jev, llm, task, columns.as_deref(), claims, notes, ledger, reports, steps).await?;
     let CheckedClaims { claims, problem, rejection, denies_steps } = reviewed;
     if !reports {
         // Nothing was asked to be told, so the write-up is shown only where it holds and is never a shortfall. One that
@@ -524,13 +528,14 @@ pub(crate) async fn compose_reviewed(
 #[cfg(test)]
 async fn supported_claims(
     jev: &dyn DecisionClient,
+    llm: &dyn LLMClient,
     task: &str,
     columns: Option<&[String]>,
     claims: Vec<Claim>,
     notes: &Notes,
     ledger: Option<&Ledger>,
 ) -> Result<(Vec<Claim>, Option<String>)> {
-    let checked = review_claims(jev, task, columns, claims, notes, ledger, false, &[]).await?;
+    let checked = review_claims(jev, llm, task, columns, claims, notes, ledger, false, &[]).await?;
     Ok((checked.claims, checked.problem))
 }
 
@@ -583,6 +588,7 @@ fn actions_question(steps: &[Value], columns: Option<&[String]>, claims: &[Claim
 #[allow(clippy::too_many_arguments)]
 async fn review_claims(
     jev: &dyn DecisionClient,
+    llm: &dyn LLMClient,
     task: &str,
     columns: Option<&[String]>,
     claims: Vec<Claim>,
@@ -608,7 +614,7 @@ async fn review_claims(
             claim.tally.as_ref().map(|tally| (index, tally, claim.text.as_str(), claim.evidence_ids.as_slice()))
         })
         .collect();
-    let worked = tally::work(jev, task, &tallied, notes, &tokens, ledger).await?;
+    let worked = tally::work(jev, llm, task, &tallied, notes, &tokens, ledger).await?;
     // A rewrite keeps a claim that passed as it was drafted: kept once worked, a tally lost its tally, and "The most
     // expensive book is A Year in Provence ..." citing that one book was judged as a plain claim, which it fails.
     let drafted = claims.clone();
@@ -1065,11 +1071,12 @@ fn pages_read(notes: &Notes) -> Vec<String> {
     unique(notes.facts().into_iter().filter_map(fact_page))
 }
 
-/// The claims of a rejected draft that passed every check and still cite current notes, each as it was checked and
-/// as it was drafted. None is kept when the answer denied a step the run took, or when coverage or exactness was
-/// rejected: these are faults of the claims together, the passed ones included, and a bare "Send updates to my inbox
-/// ..." kept as written left the rewrite only wrong claims to add.
-fn passed_claims(feedback: &str, notes: &Notes) -> Vec<(Claim, Claim)> {
+/// The claims of a rejected draft that passed every check and still cite current notes or the run's own steps, each as
+/// it was checked and as it was drafted. Steps only append, so an `sN` names the same step in the rewrite. None is kept
+/// when the answer denied a step the run took, or when coverage or exactness was rejected: these are faults of the
+/// claims together, the passed ones included, and a bare "Send updates to my inbox ..." kept as written left the
+/// rewrite only wrong claims to add.
+fn passed_claims(feedback: &str, notes: &Notes, steps: &[Value]) -> Vec<(Claim, Claim)> {
     let Ok(feedback) = serde_json::from_str::<serde_json::Value>(feedback) else { return Vec::new() };
     let rejected: Vec<&str> =
         feedback["rejected_checks"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_str).collect();
@@ -1086,7 +1093,9 @@ fn passed_claims(feedback: &str, notes: &Notes) -> Vec<(Claim, Claim)> {
             let own = format!("claim{index}");
             !rejected.iter().any(|check| check.split('/').next() == Some(own.as_str()))
                 && !claim.evidence_ids.is_empty()
-                && claim.evidence_ids.iter().all(|id| notes.facts_by_id().contains_key(id) && !notes.superseded(id))
+                && claim.evidence_ids.iter().all(|id| {
+                    (notes.facts_by_id().contains_key(id) && !notes.superseded(id)) || step_cited(id, steps).is_some()
+                })
         })
         .map(|(_, claims)| claims)
         .collect()
@@ -1679,18 +1688,48 @@ mod tests {
         }
     }
 
+    /// Reads each listed record's group as the words after "by " in its note, as the text model copies them, or
+    /// `misread` for the record whose note holds its first part.
+    struct Grouping {
+        misread: Option<(&'static str, &'static str)>,
+    }
+
+    const READS: Grouping = Grouping { misread: None };
+
+    impl LLMClient for Grouping {
+        fn generate_value<'a>(
+            &'a self,
+            purpose: LLMPurpose,
+            messages: &'a [Message],
+            schema: &'a dyn ResponseSchema,
+            _: Option<&'a Ledger>,
+        ) -> BoxFuture<'a, std::result::Result<Generation<serde_json::Value>, LLMError>> {
+            assert_eq!(purpose, LLMPurpose::Groups);
+            let records: Vec<Value> = messages
+                .last()
+                .into_iter()
+                .flat_map(|message| message.content.lines())
+                .filter_map(|line| line.split_once(": "))
+                .filter(|(id, _)| id.starts_with('r'))
+                .map(|(id, note)| {
+                    let read = note.split_once("by ").and_then(|(_, rest)| rest.split('"').next());
+                    let text = match self.misread {
+                        Some((holding, misread)) if note.contains(holding) => Some(misread),
+                        _ => read,
+                    };
+                    json!({"record": id, "text": text})
+                })
+                .collect();
+            Box::pin(async move {
+                let data = schema.validate_json(&json!({"records": records}).to_string()).map_err(LLMError::Failed)?;
+                Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+            })
+        }
+    }
+
     fn tallied(text: &str, written: &str, op: tally::Op, of: &str, field: Option<&str>, ids: Vec<String>) -> Claim {
         let field = field.map(str::to_string);
-        let tally = Tally {
-            op,
-            of: of.into(),
-            field,
-            rank: None,
-            by: None,
-            group: None,
-            groups: None,
-            written: written.into(),
-        };
+        let tally = Tally { op, of: of.into(), field, rank: None, by: None, group: None, written: written.into() };
         Claim { tally: Some(tally), ..Claim::new(text, ids) }
     }
 
@@ -1719,7 +1758,9 @@ mod tests {
         );
         let jev = Tallying::new("by Ada", "");
         let checked =
-            review_claims(&jev, "How many quotes by Ada?", None, vec![claim], &notes, None, true, &[]).await.unwrap();
+            review_claims(&jev, &READS, "How many quotes by Ada?", None, vec![claim], &notes, None, true, &[])
+                .await
+                .unwrap();
         assert_eq!(checked.problem, None);
         assert_eq!(checked.claims, [Claim::new("There are 3 quotes by Ada.", counted)]);
         let asked = jev.asked();
@@ -1752,8 +1793,9 @@ mod tests {
         let claim =
             tallied("The cheapest is Book X at £10.69.", "£10.69", tally::Op::Min, "book", Some("price"), vec![]);
         let jev = Tallying::new("Book ", "£");
-        let checked =
-            review_claims(&jev, "Find the cheapest book", None, vec![claim], &notes, None, true, &[]).await.unwrap();
+        let checked = review_claims(&jev, &READS, "Find the cheapest book", None, vec![claim], &notes, None, true, &[])
+            .await
+            .unwrap();
         assert_eq!(checked.problem, None);
         assert_eq!(checked.claims, [Claim::new("The cheapest is Book X at £10.69.", cheapest)]);
         // Only the note with two numbers needs Jev to say which is the price.
@@ -1767,9 +1809,10 @@ mod tests {
         let rejected = Tallying { support: 0.1, ..Tallying::new("Book ", "£") };
         let claim =
             tallied("The cheapest is Book Y at £10.69.", "£10.69", tally::Op::Min, "book", Some("price"), vec![]);
-        let checked = review_claims(&rejected, "Find the cheapest book", None, vec![claim], &notes, None, true, &[])
-            .await
-            .unwrap();
+        let checked =
+            review_claims(&rejected, &READS, "Find the cheapest book", None, vec![claim], &notes, None, true, &[])
+                .await
+                .unwrap();
         assert!(checked.claims.is_empty(), "a claim naming a book not at the extreme is not shown");
     }
 
@@ -1798,14 +1841,16 @@ mod tests {
         };
         let jev = Tallying::new("Book ", "£");
         let task = "Find the two cheapest books";
-        let checked =
-            review_claims(&jev, task, None, vec![ranked(Some(2), "£12")], &notes, None, true, &[]).await.unwrap();
+        let checked = review_claims(&jev, &READS, task, None, vec![ranked(Some(2), "£12")], &notes, None, true, &[])
+            .await
+            .unwrap();
         assert_eq!(checked.problem, None);
         assert_eq!(checked.claims, [Claim::new("The second cheapest is Book Y at £12.00.", second)]);
         let Question::Choice(states) = &jev.asked()["claim0/states"] else { panic!("states is a choice") };
         assert!(states.criteria["value"].as_str().unwrap().contains("second lowest"), "{:?}", states.criteria);
-        let checked =
-            review_claims(&jev, task, None, vec![ranked(Some(3), "£12")], &notes, None, true, &[]).await.unwrap();
+        let checked = review_claims(&jev, &READS, task, None, vec![ranked(Some(3), "£12")], &notes, None, true, &[])
+            .await
+            .unwrap();
         assert!(checked.claims.is_empty(), "two prices have no third place");
     }
 
@@ -1820,20 +1865,22 @@ mod tests {
         let notes = Notes::new(facts);
         let claim = tallied("Shop A sells it cheaper.", "Shop A", tally::Op::Min, "item", Some("price"), vec![]);
         let jev = Tallying::new("Item:", "£");
-        let checked =
-            review_claims(&jev, "Which shop is cheaper?", None, vec![claim], &notes, None, true, &[]).await.unwrap();
+        let checked = review_claims(&jev, &READS, "Which shop is cheaper?", None, vec![claim], &notes, None, true, &[])
+            .await
+            .unwrap();
         assert_eq!(checked.claims, [Claim::new("Shop A sells it cheaper.", winner)]);
         let Question::Choice(record) = &jev.asked()["claim0/record"] else { panic!("record is a choice") };
         assert!(record.instructions.contains("Shop A"), "the record check sees the name");
         let total = tallied("The basket costs Shop A.", "Shop A", tally::Op::Sum, "item", Some("price"), vec![]);
-        let checked =
-            review_claims(&jev, "What does it cost?", None, vec![total], &notes, None, true, &[]).await.unwrap();
+        let checked = review_claims(&jev, &READS, "What does it cost?", None, vec![total], &notes, None, true, &[])
+            .await
+            .unwrap();
         assert!(checked.claims.is_empty(), "a total written as words is sent back");
     }
 
     /// Asked which three authors have the most quotes, the composer counted each author's quotes as a count of "quote
     /// by" that author with "the most" beside it, and the claims were rejected for stating a place nothing checked
-    /// (#911). A count per group judges each record's group once, and code counts the groups and checks each place.
+    /// (#911). A count per group reads each record's group once, and code counts the groups and checks each place.
     #[tokio::test]
     async fn a_count_per_group_counts_each_group_and_checks_its_place() {
         let authors = ["Ada", "Ada", "Bo", "Ada", "Cy", "Bo", "Ada", "Bo", "Di", "Cy", "Ada", "Bo"];
@@ -1844,12 +1891,10 @@ mod tests {
             .collect();
         let ids: Vec<String> = facts.iter().map(fact_id).collect();
         let notes = Notes::new(facts);
-        let names = ["Ada", "Bo", "Cy", "Di"].map(String::from).to_vec();
         let placed = |text: &str, group: &str, rank: u64, written: &str| {
             let mut claim = tallied(text, written, tally::Op::Count, "quote", None, vec![ids[0].clone()]);
             let tally = claim.tally.as_mut().unwrap();
-            (tally.by, tally.group, tally.groups, tally.rank) =
-                (Some("author".into()), Some(group.into()), Some(names.clone()), Some(rank));
+            (tally.by, tally.group, tally.rank) = (Some("author".into()), Some(group.into()), Some(rank));
             claim
         };
         // Told only that a ranked claim stated something besides its count, the composer took its place out too.
@@ -1863,7 +1908,7 @@ mod tests {
             placed("Bo has the second most quotes, with 4.", "Bo", 2, "4"),
         ];
         let jev = Tallying::new("Quote ", "");
-        let checked = review_claims(&jev, task, None, claims, &notes, None, true, &[]).await.unwrap();
+        let checked = review_claims(&jev, &READS, task, None, claims, &notes, None, true, &[]).await.unwrap();
         assert_eq!(checked.problem, None, "{:?} {:?}", checked.rejection, checked.claims);
         let texts: Vec<&str> = checked.claims.iter().map(|claim| claim.text.as_str()).collect();
         assert_eq!(texts, ["Ada has the most quotes, with 5.", "Bo has the second most quotes, with 4."]);
@@ -1872,6 +1917,7 @@ mod tests {
         assert_eq!(checked.claims[0].evidence_ids, by_author);
         let asked = jev.asked();
         assert_eq!(asked.keys().filter(|key| key.starts_with("t1/")).count(), 0, "the records are judged once");
+        assert!(asked.keys().all(|key| !key.contains("/g")), "Jev is asked no record's group");
         let Question::Noul(states) = &asked["claim1/states"] else { panic!("states is a noul") };
         assert!(
             states.instructions.contains("have the 'author' 'Bo', and that it is second"),
@@ -1880,23 +1926,68 @@ mod tests {
         );
         // Cy has 2 quotes, which is third.
         let wrong = vec![placed("Cy has the second most quotes, with 2.", "Cy", 2, "2")];
-        let checked = review_claims(&jev, task, None, wrong, &notes, None, true, &[]).await.unwrap();
+        let checked = review_claims(&jev, &READS, task, None, wrong, &notes, None, true, &[]).await.unwrap();
         assert!(checked.claims.is_empty());
         let rejection: Value = serde_json::from_str(checked.rejection.as_deref().unwrap()).unwrap();
         let reason = rejection["untallied_claims"][0]["reason"].as_str().unwrap();
         assert!(reason.contains("place 3 by count") && reason.contains("'Ada' 5, 'Bo' 4, 'Cy' 2, 'Di' 1"), "{reason}");
-        // A record in no listed group may be in one with more, so no place is stated.
-        let mut unlisted = placed("Ada has the most quotes, with 5.", "Ada", 1, "5");
-        unlisted.tally.as_mut().unwrap().groups = Some(vec!["Ada".into(), "Bo".into(), "Cy".into()]);
-        let checked = review_claims(&jev, task, None, vec![unlisted], &notes, None, true, &[]).await.unwrap();
-        assert!(checked.claims.is_empty(), "Di's quote has no listed author");
-        // The composer is told which note by the label it cites notes by, not by a fact id it is never shown.
-        let rejection = checked.rejection.as_deref().unwrap();
-        let untallied = &serde_json::from_str::<Value>(rejection).unwrap()["untallied_claims"][0];
-        assert_eq!(untallied["notes"], json!([ids[8]]));
-        assert!(!untallied["reason"].as_str().unwrap().contains(&ids[8]));
-        let shown: Value = serde_json::from_str(&relabeled(rejection, &initial_items(&notes, false))).unwrap();
-        assert_eq!(shown["untallied_claims"][0]["notes"], json!(["e8"]));
+        // A group no record has is sent back with the groups read, as the notes write them.
+        let unread = vec![placed("Eve has the most quotes, with 5.", "Eve", 1, "5")];
+        let checked = review_claims(&jev, &READS, task, None, unread, &notes, None, true, &[]).await.unwrap();
+        assert!(checked.claims.is_empty());
+        let rejection: Value = serde_json::from_str(checked.rejection.as_deref().unwrap()).unwrap();
+        let reason = rejection["untallied_claims"][0]["reason"].as_str().unwrap();
+        assert!(reason.contains("'Eve'") && reason.contains("'Ada' 5, 'Bo' 4, 'Cy' 2, 'Di' 1"), "{reason}");
+        // A group read as text its note does not hold is no group, so no count is stated.
+        let misreads = Grouping { misread: Some(("Quote 4", "Eve")) };
+        let claims = vec![placed("Ada has the most quotes, with 5.", "Ada", 1, "5")];
+        let checked = review_claims(&jev, &misreads, task, None, claims, &notes, None, true, &[]).await.unwrap();
+        assert!(checked.claims.is_empty(), "{:?}", checked.claims);
+        assert!(checked.problem.is_some(), "an unread group leaves the claim unjudged");
+    }
+
+    /// Asked for the three authors with the most quotes on a site with twenty, the composer named only those three, and
+    /// every claim was sent back until it listed all twenty (#985). The records' groups are read off their notes, so
+    /// a claim names only its own group and place.
+    #[tokio::test]
+    async fn a_ranked_count_per_group_names_only_its_own_places() {
+        let authors: Vec<String> = (0..20)
+            .flat_map(|author| {
+                std::iter::repeat_n(format!("A{author:02}"), [5, 4, 3].get(author).copied().unwrap_or(1))
+            })
+            .collect();
+        let facts: Vec<Fact> = authors
+            .iter()
+            .enumerate()
+            .map(|(index, author)| page_fact(index, "https://quotes.test/", &format!("“Quote {index}” by {author}")))
+            .collect();
+        let ids: Vec<String> = facts.iter().map(fact_id).collect();
+        let notes = Notes::new(facts);
+        let placed = |text: &str, group: &str, rank: u64, written: &str| {
+            let mut claim = tallied(text, written, tally::Op::Count, "quote", None, vec![ids[0].clone()]);
+            let tally = claim.tally.as_mut().unwrap();
+            (tally.by, tally.group, tally.rank) = (Some("author".into()), Some(group.into()), Some(rank));
+            claim
+        };
+        let claims = vec![
+            placed("A00 has the most quotes, with 5.", "A00", 1, "5"),
+            placed("A01 has the second most quotes, with 4.", "A01", 2, "4"),
+            placed("A02 has the third most quotes, with 3.", "A02", 3, "3"),
+        ];
+        let jev = Tallying::new("Quote ", "");
+        let task = "Which three authors have the most quotes, and how many each?";
+        let checked = review_claims(&jev, &READS, task, None, claims, &notes, None, true, &[]).await.unwrap();
+        assert_eq!(checked.rejection, None);
+        assert_eq!(checked.problem, None);
+        let texts: Vec<&str> = checked.claims.iter().map(|claim| claim.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                "A00 has the most quotes, with 5.",
+                "A01 has the second most quotes, with 4.",
+                "A02 has the third most quotes, with 3."
+            ]
+        );
     }
 
     /// A results block can hold more numbers than one choice may offer, so they are narrowed group by group first.
@@ -1906,9 +1997,10 @@ mod tests {
         let notes = Notes::new([page_fact(0, "https://shop.test/", &format!("Item: Pen {filler} £1.50"))]);
         let claim = tallied("The basket costs £1.50.", "£1.50", tally::Op::Sum, "item", Some("price"), vec![]);
         let jev = Tallying::new("Item:", "£");
-        let checked = review_claims(&jev, "What does the basket cost?", None, vec![claim], &notes, None, true, &[])
-            .await
-            .unwrap();
+        let checked =
+            review_claims(&jev, &READS, "What does the basket cost?", None, vec![claim], &notes, None, true, &[])
+                .await
+                .unwrap();
         assert_eq!(checked.claims[0].text, "The basket costs £1.50.");
         assert!(jev.asked().contains_key("group"), "the numbers were narrowed before the value was chosen");
     }
@@ -1925,7 +2017,8 @@ mod tests {
         let notes = Notes::new([row(0, "first", 0), row(1, "first", 40), row(2, "again", 0), row(3, "again", 40)]);
         let claim = tallied("There are 9 rows.", "9", tally::Op::Count, "row", None, vec![]);
         let jev = Tallying::new("Doe", "");
-        let checked = review_claims(&jev, "How many rows?", None, vec![claim], &notes, None, true, &[]).await.unwrap();
+        let checked =
+            review_claims(&jev, &READS, "How many rows?", None, vec![claim], &notes, None, true, &[]).await.unwrap();
         assert_eq!(checked.claims[0].text, "There are 2 rows.");
     }
 
@@ -1939,9 +2032,10 @@ mod tests {
         let claim =
             tallied("The basket costs £3.70.", "£3.70", tally::Op::Sum, "item in the basket", Some("price"), vec![]);
         let jev = Tallying::new("Item:", "£");
-        let checked = review_claims(&jev, "What does the basket cost?", None, vec![claim], &notes, None, true, &[])
-            .await
-            .unwrap();
+        let checked =
+            review_claims(&jev, &READS, "What does the basket cost?", None, vec![claim], &notes, None, true, &[])
+                .await
+                .unwrap();
         assert_eq!(checked.claims[0].text, "The basket costs £3.75.");
     }
 
@@ -1953,7 +2047,9 @@ mod tests {
         let claim = tallied("There are two quotes by Ada.", "2", tally::Op::Count, "quote by Ada", None, vec![]);
         let jev = Tallying::new("by Ada", "");
         let checked =
-            review_claims(&jev, "How many quotes by Ada?", None, vec![claim], &notes, None, true, &[]).await.unwrap();
+            review_claims(&jev, &READS, "How many quotes by Ada?", None, vec![claim], &notes, None, true, &[])
+                .await
+                .unwrap();
         assert!(checked.claims.is_empty());
         let feedback: Value = serde_json::from_str(checked.rejection.as_deref().expect("a repair")).unwrap();
         assert_eq!(feedback["rejected_checks"], json!(["claim0/tally"]));
@@ -2082,10 +2178,10 @@ mod tests {
             "drafted_claims": [&passed],
             "rejected_checks": ["coverage"],
         }));
-        assert!(passed_claims(&feedback, &notes).is_empty());
+        assert!(passed_claims(&feedback, &notes, &[]).is_empty());
         // A pick that holds more than the answer is written again whole, and its feedback has no drafted copy to keep.
         let feedback = dumps(&json!({"columns": null, "draft_claims": [&passed], "rejected_checks": ["exact"]}));
-        assert!(passed_claims(&feedback, &notes).is_empty());
+        assert!(passed_claims(&feedback, &notes, &[]).is_empty());
     }
 
     /// Asked for the priciest Travel book and its price, the composer wrote the book's name as a tally and "It costs
@@ -2104,9 +2200,9 @@ mod tests {
             tallied("The most expensive book is Book Y.", "Book Y", tally::Op::Max, "book", Some("price"), vec![id(1)]);
         let jev = Tallying { rejects: Some("claim1"), ..Tallying::new("Book ", "£") };
         let claims = vec![named.clone(), Claim::new("It costs £12.00.", vec![id(1)])];
-        let checked = review_claims(&jev, task, None, claims, &notes, None, true, &[]).await.unwrap();
+        let checked = review_claims(&jev, &READS, task, None, claims, &notes, None, true, &[]).await.unwrap();
         let feedback = checked.rejection.expect("a repair");
-        let kept: Vec<Claim> = passed_claims(&feedback, &notes).into_iter().map(|(_, drafted)| drafted).collect();
+        let kept: Vec<Claim> = passed_claims(&feedback, &notes, &[]).into_iter().map(|(_, drafted)| drafted).collect();
         assert_eq!(kept, [named]);
         let mut llm = RecordingLlm::new(None);
         llm.claims = Some(vec![tallied(
@@ -2248,7 +2344,7 @@ mod tests {
             Claim::new("The run typed NOTAPOSTCODE as the postcode.", vec!["s1".into()]),
         ];
         let jev = Support::new(true);
-        let checked = review_claims(&jev, "Order it", None, claims, &notes, None, true, &steps).await.unwrap();
+        let checked = review_claims(&jev, &READS, "Order it", None, claims, &notes, None, true, &steps).await.unwrap();
         assert_eq!(checked.problem, None, "{:?}", checked.rejection);
         let asked = jev.asked.lock().unwrap().clone();
         let claim = asked[0]["claim0"].dump_json();
@@ -2264,8 +2360,43 @@ mod tests {
         assert!(linked.contains("[click 'Place order']"), "{linked}");
         // Only the steps the run took are citable.
         let unknown = vec![Claim::new("The run typed it.", vec!["s3".into()])];
-        let checked = review_claims(&jev, "Order it", None, unknown, &notes, None, true, &steps).await.unwrap();
+        let checked = review_claims(&jev, &READS, "Order it", None, unknown, &notes, None, true, &steps).await.unwrap();
         assert!(checked.claims.is_empty());
+    }
+
+    /// A passed claim citing the run's fill step was dropped from the kept set, as a step is no note, so the one
+    /// rewrite had to type it again and an identical retype ended the run withheld (#892). It is kept as drafted.
+    #[tokio::test]
+    async fn a_kept_claim_that_cites_a_step_is_kept() {
+        let notes = Notes::new([fact(0, "That postcode is not a valid UK postcode.".into())]);
+        let steps = vec![
+            json!({"operation": "fill", "target": "Postcode", "outcome": "executed", "text": "NOTAPOSTCODE"}),
+            json!({"operation": "click", "target": "Place order", "outcome": "executed"}),
+        ];
+        let id = fact_id(&notes.facts()[0].clone());
+        let passed = Claim::new("The checkout rejected the postcode NOTAPOSTCODE.", vec![id.clone(), "s1".into()]);
+        let rejected = Claim::new("The order was placed with postcode NOTAPOSTCODE.", vec![id.clone()]);
+        let feedback = dumps(
+            &json!({"columns": null, "draft_claims": [&passed, &rejected], "drafted_claims": [&passed, &rejected], "rejected_checks": ["claim1"]}),
+        );
+        let kept: Vec<Claim> =
+            passed_claims(&feedback, &notes, &steps).into_iter().map(|(_, drafted)| drafted).collect();
+        assert_eq!(kept, std::slice::from_ref(&passed));
+        // Only the steps the run took are citable.
+        let past = Claim::new("The run typed it.", vec!["s3".into()]);
+        let feedback_past = dumps(
+            &json!({"columns": null, "draft_claims": [&past, &rejected], "drafted_claims": [&past, &rejected], "rejected_checks": ["claim1"]}),
+        );
+        assert!(passed_claims(&feedback_past, &notes, &steps).is_empty());
+        let mut llm = RecordingLlm::new(None);
+        llm.claims = Some(vec![Claim::new("The order was not placed.", vec!["e0".into()])]);
+        let reviewed =
+            compose_reviewed(&Support::new(true), &llm, "Order it", &notes, None, Some(&feedback), true, &steps)
+                .await
+                .unwrap();
+        assert_eq!(reviewed.answer.claims[0].text, passed.text);
+        let user = &llm.calls()[0][1].content;
+        assert!(user.contains("# Kept claims\n[\"The checkout rejected the postcode NOTAPOSTCODE.\"]"), "{user}");
     }
 
     /// #934: a settings form read before its description was replaced, and the public page read after the save, were
@@ -2333,6 +2464,7 @@ mod tests {
         let jev = Support::new(true);
         let checked = review_claims(
             &jev,
+            &READS,
             "Report B",
             None,
             vec![Claim::new("Record B: 34", vec![id])],
@@ -2359,6 +2491,7 @@ mod tests {
         let jev = Support::new(true);
         review_claims(
             &jev,
+            &READS,
             "Report B and C",
             None,
             vec![Claim::new("Record B: 34", vec![id])],
@@ -2384,10 +2517,19 @@ mod tests {
         for unknown in [None, Some(f64::NAN)] {
             let claims =
                 vec![Claim::new("Record A: 99", vec![id.clone()]), Claim::new("Record B: 34", vec![id.clone()])];
-            let checked =
-                review_claims(&MixedSupport(unknown), "Report both records", None, claims, &notes, None, false, &[])
-                    .await
-                    .unwrap();
+            let checked = review_claims(
+                &MixedSupport(unknown),
+                &READS,
+                "Report both records",
+                None,
+                claims,
+                &notes,
+                None,
+                false,
+                &[],
+            )
+            .await
+            .unwrap();
             assert!(checked.problem.is_some());
             assert!(checked.rejection.is_none(), "a known rejection cannot hide another unknown check");
         }
@@ -2402,6 +2544,7 @@ mod tests {
         let columns = vec!["Record".into(), "Shape".into()];
         let checked = review_claims(
             &jev,
+            &READS,
             "Report the record and shape",
             Some(&columns),
             vec![row(&["Record A", "not shown"], vec![id])],
@@ -2449,7 +2592,9 @@ mod tests {
         let source = notes.facts_by_id().keys().next().unwrap().clone();
         let claims = vec![row(&["Record A", "not shown"], vec![source])];
         let (claims, problem) =
-            supported_claims(&jev, "Report each record and shape", Some(&columns), claims, &notes, None).await.unwrap();
+            supported_claims(&jev, &READS, "Report each record and shape", Some(&columns), claims, &notes, None)
+                .await
+                .unwrap();
         assert!(claims.is_empty());
         assert!(problem.unwrap().contains("unsupported"));
         let asked = jev.asked.lock().unwrap();
@@ -2521,8 +2666,9 @@ mod tests {
         let notes = Notes::new([source]);
         let claims = (0..16).map(|_| Claim::new(&text, vec![source_id.clone()])).collect::<Vec<_>>();
         let jev = Support::new(true);
-        let checked =
-            review_claims(&jev, "Report every record", None, claims.clone(), &notes, None, true, &[]).await.unwrap();
+        let checked = review_claims(&jev, &READS, "Report every record", None, claims.clone(), &notes, None, true, &[])
+            .await
+            .unwrap();
         assert_eq!(checked.claims.len(), claims.len());
         assert!(checked.claims == claims);
         assert_eq!(
@@ -2780,8 +2926,9 @@ mod tests {
         let notes = Notes::new([page_fact(0, "https://shop.test/p1", "Book X costs 10")]);
         let claims = vec![Claim::new("Book X costs 10", vec!["unknown".into()])];
         let jev = Support::new(true);
-        let checked =
-            review_claims(&jev, "Find the price of Book X", None, claims, &notes, None, false, &[]).await.unwrap();
+        let checked = review_claims(&jev, &READS, "Find the price of Book X", None, claims, &notes, None, false, &[])
+            .await
+            .unwrap();
         assert!(checked.claims.is_empty());
         let feedback: Value = serde_json::from_str(checked.rejection.as_deref().expect("a repair")).unwrap();
         assert_eq!(feedback["rejected_checks"], json!(["claim0/citations"]));

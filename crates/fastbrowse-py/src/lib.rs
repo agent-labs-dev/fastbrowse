@@ -391,16 +391,24 @@ fn artifact_argument(
 
 /// Run the `fastbrowse` command (or `fastbrowse-mcp`, by `program`'s name) with `args` and return its exit code. The
 /// command writes to this process's own stdout and stderr and reads its stdin, as the binary does.
+/// `prefix`, `installer` and `checkout` describe the environment the package is installed in, for `self-update`.
 #[pyfunction]
+#[pyo3(signature = (program, args, git_sha, git_dirty, prefix=None, installer=None, checkout=false))]
+#[allow(clippy::too_many_arguments)]
 fn cli_main(
     py: Python<'_>,
     program: String,
     args: Vec<String>,
     git_sha: Option<String>,
     git_dirty: Option<bool>,
+    prefix: Option<std::path::PathBuf>,
+    installer: Option<String>,
+    checkout: bool,
 ) -> i32 {
+    let wheel = prefix.map(|prefix| fastbrowse_cli::update::Wheel { prefix, installer, checkout });
     py.detach(move || {
-        let code = fastbrowse_cli::entry::main(&program, &args, fastbrowse_cli::cli::Build { git_sha, git_dirty });
+        let build = fastbrowse_cli::cli::Build { git_sha, git_dirty, wheel };
+        let code = fastbrowse_cli::entry::main(&program, &args, build);
         // The binary's `process::exit` flushes what it printed; Python exits without asking this side to.
         let _ = std::io::Write::flush(&mut std::io::stdout());
         code

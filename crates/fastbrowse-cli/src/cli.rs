@@ -84,6 +84,8 @@ pub struct Context {
 pub struct Build {
     pub git_sha: Option<String>,
     pub git_dirty: Option<bool>,
+    /// The environment the Python package was installed into, which `self-update` names; None for the binary.
+    pub wheel: Option<crate::update::Wheel>,
 }
 
 impl Build {
@@ -191,7 +193,7 @@ pub struct Args {
     pub extension: bool,
     /// Which browser the extension is connected in, by its label; implies `extension`.
     pub extension_browser: Option<String>,
-    /// The desktop window to drive through deskpilot instead of a browser.
+    /// The desktop app to start and drive through deskpilot instead of a browser, as a command line.
     pub desktop: Option<String>,
     /// Where the run's trace is appended as JSON lines, or `-` for stderr.
     pub trace: Option<String>,

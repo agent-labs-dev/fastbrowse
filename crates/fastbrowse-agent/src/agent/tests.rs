@@ -10,11 +10,11 @@ use fastbrowse_core::decision::{
 };
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{
-    Artifact, Authorization, CostBasis, CostComponent, CostLine, Decider, Event, EventHandler, Evidence, FactReader,
-    LLMPurpose, Limits, Operation, Status, StepOutcome, StepResult,
+    Artifact, Authorization, BudgetResource, BudgetStop, CostBasis, CostComponent, CostLine, Decider, Event,
+    EventHandler, Evidence, FactReader, LLMPurpose, Limits, Operation, Status, StepOutcome, StepResult,
 };
 use fastbrowse_core::page::{
-    ActResult, Action, BlockKind, BrowserError, Capture, Control, Media, Observation, Page, PageResult,
+    ActResult, Action, BlockKind, BrowserError, CaptchaSolve, Capture, Control, Media, Observation, Page, PageResult,
 };
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::telemetry::{Ledger, Trace};
@@ -228,6 +228,7 @@ pub(super) fn code_decision(operation: Operation, target: Option<Control>) -> De
         bot_check: None,
         shows_answer: None,
         site_failure: None,
+        unobtainable: None,
         destination: None,
         offered: Vec::new(),
         ahead: IndexMap::new(),
@@ -662,6 +663,156 @@ impl Page for Unfetchable {
     }
 }
 
+/// A stuck page and what reports progress on it: the browser's CAPTCHA solver, a document still loading, or neither.
+/// Each signal's end is a lifecycle event, and the page moves on at `moves_at` seconds, if ever.
+struct Stuck {
+    began: tokio::time::Instant,
+    moves_at: f64,
+    /// When the solver finishes and whether it solved the CAPTCHA; `f64::INFINITY` never finishes.
+    solve: Option<(f64, bool)>,
+    loading_until: f64,
+}
+
+impl Stuck {
+    fn new(moves_at: f64, solve: Option<(f64, bool)>, loading_until: f64) -> Self {
+        Stuck { began: tokio::time::Instant::now(), moves_at, solve, loading_until }
+    }
+
+    fn now(&self) -> f64 {
+        self.began.elapsed().as_secs_f64()
+    }
+
+    fn events(&self) -> impl Iterator<Item = f64> {
+        self.solve.map(|(end, _)| end).into_iter().chain([self.loading_until]).filter(|at| at.is_finite() && *at > 0.0)
+    }
+}
+
+impl Page for Stuck {
+    fn artifacts(&self) -> Vec<Artifact> {
+        Vec::new()
+    }
+
+    fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        let url = if self.now() >= self.moves_at { "https://shop.test/results" } else { "https://shop.test/check" };
+        Box::pin(async move { Ok(at(url, &[])) })
+    }
+
+    fn document_changed<'a>(&'a self, _: &'a Observation) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(true) })
+    }
+
+    fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
+        unreachable!("the wait navigates nowhere")
+    }
+
+    fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        unreachable!("the wait reads nothing")
+    }
+
+    fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        unreachable!("the wait acts on nothing")
+    }
+
+    fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
+        unreachable!("the wait takes no screenshot")
+    }
+
+    fn withhold_frames(&self, _: bool) {}
+
+    fn address(&self) -> BoxFuture<'_, PageResult<String>> {
+        unreachable!("the wait asks no address")
+    }
+
+    fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn lifecycle_mark(&self) -> u64 {
+        self.events().filter(|at| *at <= self.now()).count() as u64
+    }
+
+    fn wait_for_lifecycle(&self, mark: u64, seconds: f64) -> BoxFuture<'_, bool> {
+        Box::pin(async move {
+            if mark != self.lifecycle_mark() {
+                return true;
+            }
+            let now = self.now();
+            match self.events().filter(|at| *at > now).reduce(f64::min) {
+                Some(next) if next - now <= seconds => {
+                    tokio::time::sleep(std::time::Duration::from_secs_f64(next - now)).await;
+                    true
+                }
+                _ => {
+                    tokio::time::sleep(std::time::Duration::from_secs_f64(seconds)).await;
+                    false
+                }
+            }
+        })
+    }
+
+    fn captcha_solve(&self) -> Option<CaptchaSolve> {
+        let (end, solved) = self.solve?;
+        let working = self.now() < end;
+        (working || !solved).then(|| CaptchaSolve {
+            url: "https://shop.test/check".into(),
+            vendor: "cloudflare".into(),
+            working,
+        })
+    }
+
+    fn loading(&self) -> bool {
+        self.now() < self.loading_until
+    }
+}
+
+fn waiting_on(page: Stuck) -> Agent {
+    Agent::new(Arc::new(page), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM))
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_a_bot_check_is_waited_on_for_as_long_as_the_solver_works_on_it() {
+    let stuck = at("https://shop.test/check", &[]);
+    let began = tokio::time::Instant::now();
+    assert!(waiting_on(Stuck::new(30.0, Some((30.0, true)), 0.0)).outwait(&stuck, None).await.expect("waited"));
+    assert_eq!(began.elapsed().as_secs_f64().round(), 30.0);
+    // One the solver gave up on is not waited on past its end.
+    let began = tokio::time::Instant::now();
+    let agent = waiting_on(Stuck::new(f64::INFINITY, Some((30.0, false)), 0.0));
+    assert!(!agent.outwait(&stuck, None).await.expect("waited"));
+    assert_eq!(began.elapsed().as_secs_f64().round(), 30.0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_a_bot_check_with_no_solver_signal_ends_the_wait_at_once() {
+    let stuck = at("https://shop.test/check", &[]);
+    let began = tokio::time::Instant::now();
+    let until = Some(began + std::time::Duration::from_secs(40));
+    assert!(!waiting_on(Stuck::new(5.0, None, 0.0)).outwait(&stuck, until).await.expect("waited"));
+    assert_eq!(began.elapsed(), std::time::Duration::ZERO);
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_a_bot_check_solver_wait_ends_at_the_run_deadline() {
+    let stuck = at("https://shop.test/check", &[]);
+    let began = tokio::time::Instant::now();
+    let until = Some(began + std::time::Duration::from_secs(40));
+    let agent = waiting_on(Stuck::new(f64::INFINITY, Some((f64::INFINITY, true)), 0.0));
+    assert!(!agent.outwait(&stuck, until).await.expect("waited"));
+    assert_eq!(began.elapsed().as_secs_f64().round(), 40.0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_a_loading_page_is_waited_on_until_it_draws() {
+    let stuck = at("https://shop.test/check", &[]);
+    let began = tokio::time::Instant::now();
+    assert!(waiting_on(Stuck::new(20.0, None, 20.0)).outwait(&stuck, None).await.expect("waited"));
+    assert_eq!(began.elapsed().as_secs_f64().round(), 20.0);
+}
+
 #[tokio::test]
 async fn test_a_page_that_needs_a_browser_ends_the_run_blocked_with_its_reason() {
     let agent = Agent::new(
@@ -755,6 +906,37 @@ fn test_a_stop_at_a_wall_names_what_the_wall_asks_for() {
         };
         assert_eq!(wall.fields, fields);
     }
+}
+
+/// A page that marks a passkey field (`autocomplete=webauthn`) gets a needs_login reason naming a security key, not
+/// "a password" or "offers only sign-in" (#925).
+#[test]
+fn test_meet_wall_names_a_security_key_when_the_page_marks_a_passkey_field() {
+    let mut email = Control::new("email", "textbox", "Email", [Operation::Fill]);
+    email.autocomplete = Some("username webauthn".into());
+    let mut passkey = Control::new("pk", "textbox", "", [Operation::Fill]);
+    passkey.autocomplete = Some("webauthn".into());
+    let mut password = Control::new("pw", "textbox", "Password", [Operation::Fill]);
+    password.input_type = Some("password".into());
+    for (controls, expected) in [
+        (vec![email], "the page asks for Email, a security key or passkey"),
+        (vec![passkey.clone()], "the page asks for a security key or passkey"),
+        (vec![password], "the page asks for Password"),
+        (vec![button("Sign in")], "Sign in to B offers only sign-in"),
+    ] {
+        let page = Observation { title: "Sign in to B".into(), ..at("https://b.test/login", &controls) };
+        let super::state::Flow::Stop(stop) = agent().meet_wall(&page, &page) else { panic!("no stop") };
+        assert_eq!(stop.status, Status::NeedsLogin);
+        assert_eq!(stop.error.as_deref(), Some(format!("sign-in required at https://b.test: {expected}").as_str()));
+    }
+    // A passkey field the observed page lost is still named from the raw page.
+    let raw = at("https://b.test/login", std::slice::from_ref(&passkey));
+    let seen = at("https://b.test/login", &[]);
+    let super::state::Flow::Stop(stop) = agent().meet_wall(&seen, &raw) else { panic!("no stop") };
+    assert_eq!(
+        stop.error.as_deref(),
+        Some("sign-in required at https://b.test: the page asks for a security key or passkey")
+    );
 }
 
 /// Declares a password for the site and then cannot produce it, as a vault that is locked does.
@@ -7090,6 +7272,48 @@ impl DecisionClient for Noul {
     fn profile(&self) -> DecisionProfile {
         self.0.profile()
     }
+}
+
+/// The scripted Jev, refusing the step decision the way the real client does when its estimate breaks the run's spend
+/// limit: a `DecisionError::Budget` from the run's own ledger.
+struct OverSpend(ScriptedJev, Arc<Ledger>);
+
+impl DecisionClient for OverSpend {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            if questions.contains_key("operation") {
+                self.1.check_spend(0.001)?;
+            }
+            self.0.evaluate(state, questions).await
+        })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        self.0.profile()
+    }
+}
+
+/// A Jev request refused for spend ended the run `error` with no budget, and a browser run after a fetched attempt
+/// named the remainder it was handed rather than the limit the caller set (#961).
+#[tokio::test]
+async fn test_a_jev_spend_stop_ends_budget_exceeded_naming_the_limit_as_set() {
+    let stated = Limits { max_dollars: Some(0.001), ..Limits::default() };
+    let ledger = Arc::new(Ledger::continuing(stated, Limits { max_dollars: Some(0.00098446), ..Limits::default() }));
+    let jev = OverSpend(ScriptedJev::new(crate::scripted::steps("click One way").unwrap()), ledger.clone());
+    let agent = Agent::new(Arc::new(Picker::new()), Arc::new(jev), Arc::new(ScriptedLLM));
+    let options = super::RunOptions {
+        start: Some("https://shop.test/ticket".into()),
+        ledger: Some(ledger),
+        ..Default::default()
+    };
+    let result = agent.run("Choose One way as the ticket type", options).await.unwrap();
+    assert_eq!(result.status, Status::BudgetExceeded, "{:?}", result.error);
+    assert_eq!(result.budget, Some(BudgetStop { resource: BudgetResource::Dollars, limit: 0.001 }));
+    assert_eq!(result.error.as_deref(), Some("spend limit $0.001 reached"));
 }
 
 /// The scripted Jev, answering the question of what the task asks to be told with `intent`, and counting the reads

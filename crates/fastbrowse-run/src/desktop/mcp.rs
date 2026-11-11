@@ -44,13 +44,17 @@ pub struct Deskpilot {
     /// `type_text` or `paste_text`, and a newer one refuses keys to a window off screen without it, so the server's
     /// own schema says which calls carry it.
     hidden: HashSet<String>,
+    /// Every tool the server offers, so a page can tell a deskpilot that lacks one it needs.
+    tools: HashSet<String>,
 }
 
 impl Deskpilot {
-    /// Starts `program mcp` and completes MCP's handshake with it.
-    pub async fn start(program: &str) -> Result<Deskpilot, ToolError> {
+    /// Starts `program mcp` as the deskpilot agent named `agent` and completes MCP's handshake with it. The server
+    /// owns the apps it launches for that agent, so they close when it is killed with the client.
+    pub async fn start(program: &str, agent: &str) -> Result<Deskpilot, ToolError> {
         let mut child = Command::new(program)
             .arg("mcp")
+            .env("DESKPILOT_AGENT", agent)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -62,7 +66,8 @@ impl Deskpilot {
             stdout: BufReader::new(child.stdout.take().expect("stdout is piped")),
             next_id: 0,
         };
-        let mut client = Deskpilot { _child: child, pipe: Mutex::new(pipe), hidden: HashSet::new() };
+        let mut client =
+            Deskpilot { _child: child, pipe: Mutex::new(pipe), hidden: HashSet::new(), tools: HashSet::new() };
         let version = env!("CARGO_PKG_VERSION");
         client
             .request(
@@ -87,7 +92,14 @@ impl Deskpilot {
             }
         }
         client.hidden = taking_hidden(&tools);
+        client.tools =
+            tools.iter().filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_string)).collect();
         Ok(client)
+    }
+
+    /// Whether the server offers `tool`.
+    pub fn offers(&self, tool: &str) -> bool {
+        self.tools.contains(tool)
     }
 
     /// `arguments` with `"hidden": true` added when `tool`'s schema offers it.

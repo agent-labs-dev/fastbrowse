@@ -19,6 +19,7 @@ pub mod runner;
 pub mod scripted;
 pub mod serve;
 pub mod totp;
+pub mod update;
 
 /// Logging as the entry points configure it: warnings and worse on stderr, named by whose they are.
 pub mod log {

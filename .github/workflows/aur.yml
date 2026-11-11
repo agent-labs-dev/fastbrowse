@@ -6,8 +6,9 @@ name: AUR
 # CI calls this when a change touches the package, and the required `check` waits for it. A release calls it
 # with its version once PyPI holds it: that builds the package the version will be, and then publishes it to
 # the AUR, so a release reaches Arch without anyone copying two files by hand. A weekly schedule builds the
-# committed package between changes, since Arch moves without one, and fails when it is older than the PyPI
-# release in pyproject.toml, which a release that skipped `scripts/aur_package.py --write` leaves behind.
+# committed package between changes, since Arch moves without one, and fails when it or the AUR itself is older
+# than the PyPI release in pyproject.toml, which a release that skipped `scripts/aur_package.py --write` or its
+# publish step leaves behind.
 on:
   workflow_call:
     inputs:
@@ -44,7 +45,7 @@ jobs:
       - name: Build, install and run in a clean Arch container
         run: docker run --rm -v "$PWD:/repo:ro" archlinux:base-devel bash /repo/packaging/aur/build.sh
       # Checked after the build, and even when it fails, so one run reports both an Arch break and a missed bump.
-      - name: Check the package is the PyPI release
+      - name: Check packaging/aur and the AUR are the PyPI release
         if: ${{ !cancelled() && github.event_name == 'schedule' }}
         run: python3 scripts/aur_package.py
       # The release publishes the package it has just built, so nobody copies PKGBUILD and .SRCINFO into the

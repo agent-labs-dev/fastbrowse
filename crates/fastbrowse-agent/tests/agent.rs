@@ -315,13 +315,14 @@ fn scripted_jev(script: &Value, state: &Value, questions: &Value, log: &[Value])
     for (key, question) in questions.as_object().unwrap() {
         if question["type"] == "noul" {
             // A case's answer is the one it expects to stand, so the checks of that answer pass unless it scripts them.
-            let default = if matches!(key.as_str(), "login_required" | "bot_check" | "site_failure" | "dates") {
-                0.0
-            } else if matches!(key.as_str(), "coverage" | "exact" | "carried") || key.starts_with("claim") {
-                1.0
-            } else {
-                script["noul"].as_f64().unwrap_or(0.0)
-            };
+            let default =
+                if matches!(key.as_str(), "login_required" | "bot_check" | "site_failure" | "unobtainable" | "dates") {
+                    0.0
+                } else if matches!(key.as_str(), "coverage" | "exact" | "carried") || key.starts_with("claim") {
+                    1.0
+                } else {
+                    script["noul"].as_f64().unwrap_or(0.0)
+                };
             let probability = nth(&script["nouls"][key], answered(key)).and_then(Value::as_f64).unwrap_or(default);
             answers.insert(key.clone(), serde_json::json!({"type": "noul", "probability": probability}));
             continue;
@@ -596,6 +597,53 @@ async fn a_blank_navigation_waits_for_its_content_before_asking_jev() {
         }
     }
     assert_eq!(outcome["steps"][1]["target"], "Next");
+}
+
+/// A product page saying the task's item is sold out, for a task that needs it in a basket.
+fn sold_out_case(quote: &str) -> Value {
+    let mut case = cases().into_iter().find(|case| case["name"] == "a step limit ends budget_exceeded").unwrap();
+    case["name"] = "a page saying the task's item is sold out".into();
+    case["task"] = "Add a Raspberry Pi Pico 2 W to the basket".into();
+    case["calls"] = serde_json::json!([]);
+    case["limits"]["max_steps"] = 5.into();
+    case["jev"]["pick"] = serde_json::json!({"operation": "click"});
+    case["jev"]["nouls"]["unobtainable"] = 0.97.into();
+    case["llm"]["UnobtainableItem"] =
+        serde_json::json!({"item": "Raspberry Pi Pico 2 W", "reason": "it is marked sold out", "quote": quote});
+    let text = "Raspberry Pi Pico 2 W\n\nSold out";
+    let home = &mut case["site"]["screens"]["home"];
+    home["observation"]["url"] = "https://shop.test/pico-2-w".into();
+    home["observation"]["viewport_text"] = text.into();
+    home["observation"]["controls"] = serde_json::json!([
+        {"id": "home", "frame_id": null, "role": "link", "label": "Home", "operations": ["click"]}
+    ]);
+    home["capture"]["url"] = "https://shop.test/pico-2-w".into();
+    home["capture"]["text"] = text.into();
+    home["capture"]["blocks"][1]["end"] = 31.into();
+    home["capture"]["blocks"][0]["end"] = 21.into();
+    home["capture"]["blocks"][1]["start"] = 23.into();
+    case["site"]["urls"] = serde_json::json!({"https://shop.test/pico-2-w": "home"});
+    case["start"] = "https://shop.test/pico-2-w".into();
+    case
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_page_saying_the_tasks_item_is_sold_out_ends_the_run_unavailable_naming_it() {
+    // #960: a run that read "Sold out" on its first step spent 74 more steps because nothing asked whether the task
+    // could still be done.
+    let (outcome, _) = play(&sold_out_case("Sold out"), Some(Arc::default())).await;
+    assert_eq!(outcome["status"], "unavailable", "{outcome}");
+    assert!(outcome["steps"].as_array().unwrap().is_empty(), "{outcome}");
+    let error = outcome["error"].as_str().unwrap();
+    assert!(error.contains("Raspberry Pi Pico 2 W") && error.contains("sold out"), "{error}");
+    assert_eq!(outcome["evidence"][0]["quote"], "Sold out", "{outcome}");
+    // A quote the page does not hold cites nothing and leaves the model's item and reason unsupported, so the stop
+    // names neither, and the run still ends as Jev judged it.
+    let (outcome, _) = play(&sold_out_case("Out of stock"), Some(Arc::default())).await;
+    assert_eq!(outcome["status"], "unavailable", "{outcome}");
+    let error = "https://shop.test/pico-2-w says an item the task requires cannot be bought.";
+    assert_eq!(outcome["error"], error, "{outcome}");
+    assert_eq!(outcome["evidence"], serde_json::json!([]), "{outcome}");
 }
 
 #[tokio::test(start_paused = true)]

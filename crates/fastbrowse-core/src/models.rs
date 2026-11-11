@@ -477,6 +477,8 @@ str_enum! {
         Pages = "pages",
         Dates = "dates",
         KnownPages = "known_pages",
+        Unobtainable = "unobtainable",
+        Groups = "groups",
     }
 }
 

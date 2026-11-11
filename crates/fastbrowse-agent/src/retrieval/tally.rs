@@ -4,13 +4,15 @@
 //! used"), and a composer that writes a count in prose miscounts. So the composer declares what a claim tallies and the
 //! value as its text writes it, and code writes the value it works out in that value's place. Jev answers one question
 //! per note read, whether it is one record of that kind, and for a total or an extreme which number in it is the
-//! field; code counts, adds and compares those answers.
+//! field; code counts, adds and compares those answers. For a count per group the text model copies each record's
+//! group from its note, since Jev can choose only among names it is given, and code groups and counts the records.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionClient, NoulQuestion, Question};
-use fastbrowse_core::models::{JevPurpose, UNTRUSTED};
+use fastbrowse_core::llm::{LLMClient, Message, Typed};
+use fastbrowse_core::models::{JevPurpose, LLMPurpose, UNTRUSTED};
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::text;
 use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
@@ -19,10 +21,12 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use super::answers::{context_limit, request_bytes};
 use super::text::{SpanKind, currency, spans};
 use crate::batches::evaluate_batches;
 use crate::error::{AgentError, Result};
 use crate::memory::{Notes, fact_id};
+use crate::support::generate;
 
 /// What the support check is shown in place of the value, which it is not asked to judge.
 pub const COMPUTED: &str = "[computed]";
@@ -49,16 +53,16 @@ pub struct Tally {
     /// for a place among all of them and was rejected. None is the extreme itself.
     #[serde(default)]
     pub rank: Option<u64>,
-    /// For a count per group, such as quotes per author: the field that groups the records, the group this claim
-    /// counts, and every group the records fall in. A count per group with a rank is a place among the groups by their
-    /// counts, such as the author with the second most quotes: written as a count of "quote by Albert Einstein" with
-    /// "the most" beside it, the place was not checked, and the claim was rejected for stating it (#911).
+    /// For a count per group, such as quotes per author: the field that groups the records and the group this claim
+    /// counts. Code reads every record's group off its note, so a claim names only its own: asked to list every group,
+    /// the composer named the three authors it ranked and never the other seventeen, and each draft was sent back until
+    /// the run timed out (#985). A count per group with a rank is a place among the groups by their counts, such as the
+    /// author with the second most quotes: written as a count of "quote by Albert Einstein" with "the most" beside it,
+    /// the place was not checked, and the claim was rejected for stating it (#911).
     #[serde(default)]
     pub by: Option<String>,
     #[serde(default)]
     pub group: Option<String>,
-    #[serde(default)]
-    pub groups: Option<Vec<String>>,
     pub written: String,
 }
 
@@ -92,7 +96,6 @@ impl Schema for Tally {
                 Field::default("rank", Ty::optional(Ty::Int), serde_json::Value::Null),
                 Field::default("by", Ty::optional(Ty::Str), serde_json::Value::Null),
                 Field::default("group", Ty::optional(Ty::Str), serde_json::Value::Null),
-                Field::default("groups", Ty::optional(Ty::list(Ty::Str)), serde_json::Value::Null),
                 Field::required("written", Ty::Str),
             ],
         )
@@ -249,81 +252,150 @@ fn value_question(tally: &Tally, note: &serde_json::Value, numbers: &[String]) -
     ))
 }
 
-/// Which listed group one record belongs to. Jev judges the record's group, and code counts and ranks them.
-fn group_question(tally: &Tally, by: &str, names: &[String], note: &serde_json::Value) -> Question {
-    let (of, by) = (text::repr(&tally.of), text::repr(by));
-    let mut criteria: IndexMap<String, serde_json::Value> = names
-        .iter()
-        .enumerate()
-        .map(|(index, name)| (format!("g{index}"), json!(format!("Its {by} is {}.", text::repr(name)))))
-        .collect();
-    criteria.insert(NO_VALUE.into(), json!(format!("Its {by} is none of these.")));
-    Question::Choice(ChoiceQuestion::new(
-        format!("{UNTRUSTED}\nWhich {by} does this {of} have? Note: {}", dumps(note)),
-        criteria,
-    ))
+const RECORD: &str = "The record's id, such as r0.";
+const GROUP_TEXT: &str = "The record's value for the field named, copied character for character from its quote. Null when its quote does not state one.";
+
+/// One record's group as its note writes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordGroup {
+    pub record: String,
+    pub text: Option<String>,
+}
+
+impl Schema for RecordGroup {
+    fn ty() -> Ty {
+        let fields = vec![
+            Field::required("record", Ty::Str).doc(RECORD),
+            Field::required("text", Ty::optional(Ty::Str)).doc(GROUP_TEXT),
+        ];
+        ModelTy::frozen("RecordGroup", fields).ty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordGroups {
+    pub records: Vec<RecordGroup>,
+}
+
+impl Schema for RecordGroups {
+    fn ty() -> Ty {
+        let field = Field::required("records", Ty::list(RecordGroup::ty())).doc("Every record listed, once each.");
+        ModelTy::frozen("RecordGroups", vec![field]).ty()
+    }
+}
+
+const GROUPS_INSTRUCTIONS: &str = "# Groups\nEach record below is one note a browser agent read, listed by its id. For every record, copy the value of the field named from the record's quote, exactly as the quote writes it, or give null when its quote does not state one. Code groups and counts the records by these values, so give each record's own value as written, never one taken from another record, corrected or shortened.\n\n# Trust\n";
+
+/// The groups of a count per group: each group's text as first read, and its records in reading order, keyed by the
+/// text with its whitespace squashed.
+type Groups = IndexMap<String, (String, Vec<usize>)>;
+
+fn groups_messages(by: &str, of: &str, lines: &[String]) -> [Message; 2] {
+    let field =
+        format!("# Field\nThe {} of each {}\n\n# Records\n{}", text::repr(by), text::repr(of), lines.join("\n"));
+    [Message::system(format!("{GROUPS_INSTRUCTIONS}{UNTRUSTED}")), Message::user(field)]
+}
+
+/// Each record's `by` read by the text model, which can copy a name Jev could only choose from a list. A read is kept
+/// only when it is text of the record's own quote, as a claim's value must be, so a group is never one the model
+/// supplied. None when a record was left unread, read twice, read as text its quote does not hold or read as stating
+/// no group, so no count rests on a record whose group is unknown.
+async fn read_groups(
+    llm: &dyn LLMClient,
+    by: &str,
+    of: &str,
+    records: &[usize],
+    found: &[Candidate],
+    ledger: Option<&Ledger>,
+) -> Result<Option<Groups>> {
+    let lines: Vec<String> = records.iter().map(|note| format!("r{note}: {}", dumps(&found[*note].note))).collect();
+    // The records go in as few requests as fit the model's context, which is the provider's limit.
+    let schema = Typed::<RecordGroups>::default();
+    let limit = match llm.context_tokens(LLMPurpose::Groups).await {
+        Some(context) => Some(context_limit(context)?),
+        None => None,
+    };
+    let fits =
+        |lines: &[String]| limit.is_none_or(|limit| request_bytes(&groups_messages(by, of, lines), &schema) <= limit);
+    let mut parts: Vec<Vec<String>> = Vec::new();
+    for line in lines {
+        match parts.last_mut() {
+            Some(part) if fits(&[part.as_slice(), std::slice::from_ref(&line)].concat()) => part.push(line),
+            _ if fits(std::slice::from_ref(&line)) => parts.push(vec![line]),
+            // A record too long for any request cannot be read, so its group is not known.
+            _ => return Ok(None),
+        }
+    }
+    let mut read: HashMap<usize, Option<String>> = HashMap::new();
+    for part in parts {
+        let messages = groups_messages(by, of, &part);
+        let generated = generate::<RecordGroups>(llm, LLMPurpose::Groups, &messages, ledger).await?;
+        for answer in generated.data.records {
+            let note = answer.record.strip_prefix('r').and_then(|n| n.parse::<usize>().ok());
+            let Some(note) = note.filter(|note| records.contains(note)) else { return Ok(None) };
+            let quoted = answer.text.as_deref().map(text::squash);
+            if quoted.as_deref().is_some_and(|text| text.is_empty() || !text::squash(&found[note].quote).contains(text))
+            {
+                return Ok(None);
+            }
+            if read.insert(note, answer.text).is_some() {
+                return Ok(None);
+            }
+        }
+    }
+    let mut groups = Groups::new();
+    for note in records {
+        // A record whose note does not state its group is of unknown group, so it is not left out of the counts.
+        let Some(Some(text)) = read.remove(note) else { return Ok(None) };
+        groups.entry(text::squash(&text)).or_insert_with(|| (text.trim().to_string(), Vec::new())).1.push(*note);
+    }
+    Ok(Some(groups))
 }
 
 /// A count per group from each record's group: the group's count, and with a rank, its place among every group by
-/// count, ties sharing a place as at an extreme. A record in no listed group may be in one with more records, so a
-/// place is stated only when every record's group is listed.
-#[allow(clippy::too_many_arguments)]
+/// count, ties sharing a place as at an extreme.
 fn per_group(
     tally: &Tally,
     by: &str,
     group: &str,
-    names: &[String],
-    records: &[usize],
+    groups: &Groups,
     found: &[Candidate],
-    picked: Option<&IndexMap<String, Answer>>,
-    leader: usize,
 ) -> std::result::Result<Worked, Unworked> {
-    let mut members: Vec<Vec<usize>> = vec![Vec::new(); names.len()];
-    let mut unlisted = Vec::new();
-    for &note in records {
-        let Some(Answer::Choice(answer)) = picked.and_then(|picked| picked.get(&format!("t{leader}/g{note}"))) else {
-            return Err(Unworked::Unjudged);
-        };
-        match answer.choice.strip_prefix('g').and_then(|n| n.parse::<usize>().ok()).filter(|n| *n < names.len()) {
-            Some(listed) => members[listed].push(note),
-            None if answer.choice == NO_VALUE => unlisted.push(note),
-            None => return Err(Unworked::Unjudged),
-        }
-    }
     let (of, by_repr) = (text::repr(&tally.of), text::repr(by));
-    if tally.rank.is_some() && !unlisted.is_empty() {
-        return Err(Unworked::Notes {
-            reason: format!(
-                "These {} notes are each one {of} whose {by_repr} is not in tally.groups, so a {by_repr} with more of \
-                 them may be missing from the places. Add the {by_repr} of each, as its note writes it, to tally.groups.",
-                unlisted.len()
-            ),
-            notes: unlisted.iter().map(|note| found[*note].id.clone()).collect(),
-        });
-    }
-    let at = names.iter().position(|name| name == group).expect("a claim's group is among its kind's groups");
-    let count = members[at].len();
+    let mut order: Vec<(usize, &String)> = groups.values().map(|(name, members)| (members.len(), name)).collect();
+    order.sort_by_key(|(count, _)| std::cmp::Reverse(*count));
+    let listed = order.iter().map(|(n, name)| format!("{} {n}", text::repr(name))).collect::<Vec<_>>().join(", ");
+    let Some(at) = groups.get_index_of(&text::squash(group)) else {
+        let read = if listed.is_empty() {
+            format!("No {of} read states its {by_repr}.")
+        } else {
+            format!("The {by_repr} of each {of} read, as the notes write it, with its count, most first: {listed}.")
+        };
+        return Err(Unworked::Draft(format!(
+            "No {of} read has the {by_repr} {}. {read} Set tally.group to one of these as written.",
+            text::repr(group)
+        )));
+    };
+    let count = groups[at].1.len();
     // A place among the groups rests on every group's count, so a ranked claim cites every grouped record, its own
     // group's first; a plain count rests on its group's records alone.
-    let cited = match tally.rank {
-        Some(_) => std::iter::once(at).chain((0..names.len()).filter(|other| *other != at)).collect(),
+    let cited: Vec<usize> = match tally.rank {
+        Some(_) => std::iter::once(at).chain((0..groups.len()).filter(|other| *other != at)).collect(),
         None => vec![at],
     };
-    let evidence_ids = cited.iter().flat_map(|group| &members[*group]).map(|note| found[*note].id.clone()).collect();
+    let evidence_ids = cited.iter().flat_map(|group| &groups[*group].1).map(|note| found[*note].id.clone()).collect();
     if let Some(rank) = tally.rank {
-        let mut counts: Vec<usize> = members.iter().map(Vec::len).collect();
+        let mut counts: Vec<usize> = groups.values().map(|(_, members)| members.len()).collect();
         counts.sort_unstable_by(|a, b| b.cmp(a));
         counts.dedup();
         let place = counts.iter().position(|&each| each == count).map_or(0, |at| at as u64 + 1);
         if place != rank {
-            let mut order: Vec<(usize, &String)> = members.iter().map(Vec::len).zip(names).collect();
-            order.sort_by_key(|(count, _)| std::cmp::Reverse(*count));
-            let listed = order.iter().map(|(n, name)| format!("{} {n}", text::repr(name))).collect::<Vec<_>>();
             return Err(Unworked::Draft(format!(
                 "The claim's tally places {} at {rank}, but its {count} {of} put it at place {place} by count. The \
-                 count of each {by_repr}, most first: {}.",
+                 count of each {by_repr}, most first: {listed}.",
                 text::repr(group),
-                listed.join(", ")
             )));
         }
     }
@@ -452,6 +524,7 @@ fn total(amounts: &[&Amount]) -> String {
 /// still counted.
 pub async fn work(
     jev: &dyn DecisionClient,
+    llm: &dyn LLMClient,
     task: &str,
     claims: &[(usize, &Tally, &str, &[String])],
     notes: &Notes,
@@ -462,12 +535,11 @@ pub async fn work(
     let found = candidates(notes);
     let state = json!({"task": task});
     let mut members = IndexMap::new();
-    // Each count per group's first claim of its kind and grouping field, the claims it leads, and the groups named.
+    // Each count per group's first claim of its kind and grouping field, and the claims it leads.
     let mut leaders: HashMap<(String, String), usize> = HashMap::new();
     let mut led: HashMap<usize, usize> = HashMap::new();
-    let mut groups: HashMap<(String, String), Vec<String>> = HashMap::new();
-    // The records of each count per group, by the claim leading it.
-    let mut grouping: IndexMap<usize, Vec<usize>> = IndexMap::new();
+    // The groups of each count per group, by the claim leading it, or None when a record's group was left unread.
+    let mut grouping: IndexMap<usize, Option<Groups>> = IndexMap::new();
     for (index, tally, text, cited) in claims {
         let times = if tally.written.trim().is_empty() { 0 } else { text.matches(tally.written.as_str()).count() };
         if times != 1 {
@@ -494,11 +566,11 @@ pub async fn work(
             worked.insert(*index, Err(Unworked::Draft(reason)));
             continue;
         }
-        let grouped = tally.by.is_some() || tally.group.is_some() || tally.groups.is_some();
+        let grouped = tally.by.is_some() || tally.group.is_some();
         if grouped && (tally.op != Op::Count || tally.grouped().is_none()) {
             let reason = "The claim's tally groups records but is not a count with both by and group: a count per \
-                          group sets op count, by to the field that groups the records, group to the one this claim \
-                          counts, and groups to every group the records fall in."
+                          group sets op count, by to the field that groups the records, and group to the one this \
+                          claim counts."
                 .to_string();
             worked.insert(*index, Err(Unworked::Draft(reason)));
             continue;
@@ -529,17 +601,10 @@ pub async fn work(
             worked.insert(*index, Err(Unworked::Draft(reason)));
             continue;
         }
-        // The counts of one kind of record per group are worked out together: each record is judged and grouped
-        // once, and every group named across them is offered.
-        if let Some((by, group)) = tally.grouped() {
-            let family = (tally.of.clone(), by.to_string());
-            let leader = *leaders.entry(family.clone()).or_insert(*index);
-            let names = groups.entry(family).or_default();
-            for name in std::iter::once(group).chain(tally.groups.iter().flatten().map(String::as_str)) {
-                if !names.iter().any(|known| known == name) {
-                    names.push(name.to_string());
-                }
-            }
+        // The counts of one kind of record per group are worked out together: each record is judged and its group
+        // read once.
+        if let Some((by, _)) = tally.grouped() {
+            let leader = *leaders.entry((tally.of.clone(), by.to_string())).or_insert(*index);
             led.insert(*index, leader);
             if leader != *index {
                 continue;
@@ -577,20 +642,7 @@ pub async fn work(
         if let Some((by, _)) = tally.grouped() {
             let leader = led[index];
             if leader == *index {
-                let names = &groups[&(tally.of.clone(), by.to_string())];
-                if names.len() >= jev.profile().max_choice_options {
-                    let reason = format!(
-                        "The claim's tally lists {} groups, more than the {} one judgment can offer.",
-                        names.len(),
-                        jev.profile().max_choice_options - 1
-                    );
-                    worked.insert(*index, Err(Unworked::Draft(reason)));
-                    continue;
-                }
-                for note in &records {
-                    values.insert(format!("t{index}/g{note}"), group_question(tally, by, names, &found[*note].note));
-                }
-                grouping.insert(*index, records);
+                grouping.insert(*index, read_groups(llm, by, &tally.of, &records, &found, ledger).await?);
             }
             continue;
         }
@@ -636,16 +688,13 @@ pub async fn work(
             continue;
         }
         let leader = led[index];
-        let Some(records) = grouping.get(&leader) else {
+        let result = match grouping.get(&leader) {
+            Some(Some(groups)) => per_group(tally, by, group, groups, &found),
+            Some(None) => Err(Unworked::Unjudged),
             // The claim leading its kind was sent back, so no record of it was grouped.
-            worked.insert(
-                *index,
-                Err(Unworked::Draft(format!("Claim {leader} counts the same records and was rejected."))),
-            );
-            continue;
+            None => Err(Unworked::Draft(format!("Claim {leader} counts the same records and was rejected."))),
         };
-        let names = &groups[&(tally.of.clone(), by.to_string())];
-        worked.insert(*index, per_group(tally, by, group, names, records, &found, picked.as_ref(), leader));
+        worked.insert(*index, result);
     }
     for (index, tally, records) in pending {
         let mut amounts = Vec::new();
@@ -758,6 +807,10 @@ async fn ask(
 
 #[cfg(test)]
 mod tests {
+    use fastbrowse_core::BoxFuture;
+    use fastbrowse_core::llm::{Generation, LLMError, ResponseSchema};
+    use fastbrowse_core::models::{CostBasis, CostComponent, CostLine};
+
     use super::*;
 
     #[test]
@@ -800,5 +853,46 @@ mod tests {
         let found = [note("a", 0, 50), note("a", 0, 20), note("b", 0, 20), note("a", 60, 90)];
         assert_eq!(whole(vec![0, 1, 2, 3], &found), [0, 2, 3], "only the line inside card 0 on its capture goes");
         assert_eq!(whole(vec![1, 3], &found), [1, 3], "a line whose card is not a member still counts");
+    }
+
+    /// Reads every listed record's group as `reads` gives it by the record's id.
+    struct ReadsGroups(&'static [(&'static str, Option<&'static str>)]);
+
+    impl LLMClient for ReadsGroups {
+        fn generate_value<'a>(
+            &'a self,
+            purpose: LLMPurpose,
+            _: &'a [Message],
+            schema: &'a dyn ResponseSchema,
+            _: Option<&'a Ledger>,
+        ) -> BoxFuture<'a, std::result::Result<Generation<serde_json::Value>, LLMError>> {
+            assert_eq!(purpose, LLMPurpose::Groups);
+            let records: Vec<serde_json::Value> =
+                self.0.iter().map(|(record, text)| json!({"record": record, "text": text})).collect();
+            Box::pin(async move {
+                let data = schema.validate_json(&json!({"records": records}).to_string()).map_err(LLMError::Failed)?;
+                Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+            })
+        }
+    }
+
+    /// A member whose note does not state its group is a record of unknown group, so no count per group rests on the
+    /// others alone: with Bo's second quote unread for its author, Ada's two would lead a count that Bo ties.
+    #[tokio::test]
+    async fn a_member_whose_group_is_unstated_leaves_the_tally_unworked() {
+        let note = |quote: &str| Candidate {
+            id: String::new(),
+            quote: quote.into(),
+            note: json!({"quote": quote}),
+            span: (String::new(), 0, 0),
+        };
+        let found = [note("One by Ada"), note("Two by Ada"), note("Three by Bo"), note("Four by Bo")];
+        let records = [0, 1, 2, 3];
+        let stated = ReadsGroups(&[("r0", Some("Ada")), ("r1", Some("Ada")), ("r2", Some("Bo")), ("r3", Some("Bo"))]);
+        let groups = read_groups(&stated, "author", "quote", &records, &found, None).await.unwrap();
+        assert!(groups.is_some(), "every member's group is read");
+        let unstated = ReadsGroups(&[("r0", Some("Ada")), ("r1", Some("Ada")), ("r2", Some("Bo")), ("r3", None)]);
+        let groups = read_groups(&unstated, "author", "quote", &records, &found, None).await.unwrap();
+        assert!(groups.is_none(), "a member of unknown group leaves the tally unworked");
     }
 }

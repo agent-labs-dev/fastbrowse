@@ -276,9 +276,9 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
             return refuse(format!("fetch starts no browser, so it cannot be combined with {}", browser.join(", ")));
         }
     }
-    if let Some(window) = &task.desktop {
-        if window.trim().is_empty() {
-            return refuse("desktop must name a window".into());
+    if let Some(app) = &task.desktop {
+        if shlex::split(app).is_none_or(|words| words.is_empty()) {
+            return refuse("desktop must name an app to start, as a command line".into());
         }
         // A desktop run opens no browser and no address. Recipes key their steps by web address, so a desktop run
         // neither records one nor replays one yet.
@@ -307,7 +307,7 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
             ("allowed_origins", task.allowed_origins.is_some()),
         ]);
         if !browser.is_empty() {
-            return refuse(format!("desktop drives a window, not a browser, so drop {}", browser.join(", ")));
+            return refuse(format!("desktop drives an app, not a browser, so drop {}", browser.join(", ")));
         }
     }
     if task.cdp_url.is_some() && task.cdp_port.is_some() {
@@ -896,9 +896,9 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
     let mut limits = task.limits.clone();
     let mut resume = None;
     let told: Told = Arc::default();
-    if let Some(window) = task.desktop.clone() {
+    if let Some(app) = task.desktop.clone() {
         let on_event = noting(host.on_event.clone(), &told);
-        return desktop(&task, &window, &host, schema, &config, &http, (jev, llm), on_event, &told).await;
+        return desktop(&task, &app, &host, schema, &config, &http, (jev, llm), on_event, &told).await;
     }
     if task.recipe.is_none() && task.save_recipe.is_none() && reads_first(&task, &chrome) {
         let on_event = noting(host.on_event.clone(), &told);
@@ -936,7 +936,9 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
     }
     let mut browser_cost: Vec<CostLine> = Vec::new();
     // Held here rather than by the agent, so what the browser run spent is still read when it is cancelled.
-    let ledger = Arc::new(Ledger::new(limits.clone().unwrap_or_default()));
+    // The browser run enforces what a fetched attempt left of the caller's limits but names them as set.
+    let ledger =
+        Arc::new(Ledger::continuing(task.limits.clone().unwrap_or_default(), limits.clone().unwrap_or_default()));
     let scratch = Scratch::new()
         .map_err(|error| RunError::Invalid(error.to_string()).after(&told, fetch_spent.clone(), Vec::new()))?;
     let mut session: Option<BrowserSession> = None;
@@ -1276,12 +1278,12 @@ async fn fetched(
     Ok(Read { result, needs_browser, spent, resume: agent.resume() })
 }
 
-/// A run on a desktop window: the same agent, with deskpilot as its page. There is no address to start from, so the
-/// run begins on the window as it is.
+/// A run on a desktop app the run starts: the same agent, with deskpilot as its page. There is no address to start
+/// from, so the run begins on the app's window as it opens.
 #[allow(clippy::too_many_arguments)]
 async fn desktop(
     task: &RunTask,
-    window: &str,
+    app: &str,
     host: &Host,
     schema: Option<Arc<RecordSchema>>,
     config: &Config,
@@ -1293,7 +1295,9 @@ async fn desktop(
     let program = std::env::var("FASTBROWSE_DESKPILOT").unwrap_or_else(|_| "deskpilot".into());
     let ledger = Arc::new(Ledger::new(task.limits.clone().unwrap_or_default()));
     let run = async {
-        let page = match desktop::DeskpilotPage::open(&program, window).await {
+        // `check` refused a command line that does not split into words.
+        let command = shlex::split(app).unwrap_or_default();
+        let page = match desktop::DeskpilotPage::open(&program, &command).await {
             Ok(page) => page,
             Err(desktop::OpenError::Invalid(message)) => return Err(RunError::Invalid(message)),
             // A deskpilot that cannot start or answer is an outage, as a cloud browser that cannot start is.

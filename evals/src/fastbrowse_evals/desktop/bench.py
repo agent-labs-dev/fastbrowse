@@ -1,7 +1,8 @@
 """`fastbrowse --desktop` against Claude driving deskpilot itself, on one GTK order form: `fastbrowse-evals desktop`.
 
-Each task starts a fresh order form (`order_form.py`) on a hidden special workspace, so nothing shows on the user's
-own, and each arm drives it through deskpilot in hidden mode. The form writes its whole state to a JSON file on every
+Each arm starts a fresh order form (`order_form.py`) itself with deskpilot's `launch`, as a deskpilot agent of its
+own, so the form opens on that agent's hidden workspace and nothing shows on the user's, and drives it through
+deskpilot in hidden mode. The form writes its whole state to a JSON file on every
 change, and a task is graded on that file: the order the form submitted, or that it submitted none, field by field.
 No judge reads an answer, except a read-only task's, which must contain the expected words.
 
@@ -16,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -29,7 +31,6 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 FORM = Path(__file__).with_name("order_form.py")
-WORKSPACE = "special:fastbrowse-evals"
 # How long a timed-out run gets to stop after SIGTERM before it is killed.
 CLEANUP_GRACE = 15.0
 ARMS = ("fastbrowse", "claude")
@@ -122,9 +123,9 @@ TASKS = (
 
 
 CLAUDE_PROMPT = """\
-Do this task in the desktop window with address {address}, using only the deskpilot tools. \
-The window is on a hidden workspace: pass hidden=true to every tool that takes it, never pass take_focus or show, \
-and never focus the window or use a tool on any other window. Read the window with elements, act on element ids \
+Start the app with the deskpilot launch tool, command {command}, and do this task in the window it returns, using \
+only the deskpilot tools. The window is on a hidden workspace: pass hidden=true to every tool that takes it, never \
+pass take_focus or show, and never focus the window or use a tool on any other window. Read the window with elements, act on element ids \
 from its latest snapshot, and read it again to check what changed.
 {gate}
 Task: {task}
@@ -177,11 +178,6 @@ def hyprctl(*arguments: str) -> str:
     return subprocess.run(["hyprctl", *arguments], capture_output=True, text=True, check=True).stdout
 
 
-def window_of(app_id: str) -> str | None:
-    clients = json.loads(hyprctl("clients", "-j"))
-    return next((client["address"] for client in clients if client["class"] == app_id), None)
-
-
 def until_idle(timeout: float = 300.0) -> None:
     """Wait until no other program is using deskpilot's plugin, so this run's input is not queued behind theirs."""
     deadline = time.monotonic() + timeout
@@ -195,10 +191,10 @@ def until_idle(timeout: float = 300.0) -> None:
 
 
 class FocusWatch:
-    """Samples the focused window until stopped, and remembers whether it was ever `address`."""
+    """Samples the focused window until stopped, and remembers whether it was ever one of class `app_id`."""
 
-    def __init__(self, address: str) -> None:
-        self.address = address
+    def __init__(self, app_id: str) -> None:
+        self.app_id = app_id
         self.taken = False
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._watch, daemon=True)
@@ -206,7 +202,7 @@ class FocusWatch:
     def _watch(self) -> None:
         while not self._stop.wait(0.2):
             active = json.loads(hyprctl("activewindow", "-j") or "{}")
-            if active.get("address") == self.address:
+            if active.get("class") == self.app_id:
                 self.taken = True
 
     def __enter__(self) -> FocusWatch:
@@ -219,30 +215,18 @@ class FocusWatch:
 
 
 class Form:
-    """A fresh order form on the hidden workspace, closed and its process ended on the way out."""
+    """A fresh order form for an arm to launch, its state file cleared first and its process ended on the way out."""
 
     def __init__(self, out: Path, layout: str, python: str) -> None:
-        # The system's Python, which has PyGObject; the harness's own environment does not.
-        self.python = python
         self.state = out / "state.json"
+        # The class the form's window takes, which no other window has.
         self.app_id = f"fastbrowse-evals-{uuid.uuid4().hex[:8]}"
-        self.layout = layout
-        self.address = ""
-        self.process: subprocess.Popen[bytes] | None = None
+        # The system's Python, which has PyGObject; the harness's own environment does not.
+        self.argv = [python, str(FORM), str(self.state), self.app_id, "--layout", layout]
+        self.command = shlex.join(self.argv)
 
     def __enter__(self) -> Form:
         self.state.unlink(missing_ok=True)
-        command = [self.python, str(FORM), str(self.state), self.app_id, "--layout", self.layout]
-        # Started by the compositor so it opens on the hidden workspace without taking focus; its pid is found by
-        # its class, which no other window has.
-        line = " ".join(command)
-        hyprctl("dispatch", f"hl.dsp.exec_cmd('{line}', {{workspace='{WORKSPACE} silent', no_initial_focus=true}})")
-        deadline = time.monotonic() + 15
-        while not (address := window_of(self.app_id)):
-            if time.monotonic() >= deadline:
-                raise RuntimeError(f"the order form {self.app_id} did not open")
-            time.sleep(0.2)
-        self.address = address
         return self
 
     def saved(self) -> dict[str, Any] | None:
@@ -252,10 +236,8 @@ class Form:
             return None
 
     def __exit__(self, *_: object) -> None:
-        if window_of(self.app_id):
-            hyprctl("dispatch", f"hl.dsp.window.close({{window='address:{self.address}'}})")
-            time.sleep(0.5)
-        # A form with a popup open does not close with its window.
+        # The arm's deskpilot closes the form it launched when it exits; one with a popup open, or an arm killed at
+        # its timeout before deskpilot could, leaves the process behind.
         subprocess.run(["pkill", "-f", f"order_form.py .* {self.app_id} "], check=False)
 
 
@@ -283,10 +265,10 @@ def spawn(argv: list[str], out: Path, arm: str, timeout: float, env: dict[str, s
     return time.monotonic() - began
 
 
-def fastbrowse_arm(binary: str, task: DesktopTask, address: str, out: Path, timeout: float) -> dict[str, Any]:
+def fastbrowse_arm(binary: str, task: DesktopTask, form: Form, out: Path, timeout: float) -> dict[str, Any]:
     trace = out / "fastbrowse.jsonl"
     trace.unlink(missing_ok=True)
-    argv = [binary, "--desktop", address, "--json", "--trace", str(trace)]
+    argv = [binary, "--desktop", form.command, "--json", "--trace", str(trace)]
     if task.authorize:
         argv.append("--authorize")
     wall = spawn([*argv, task.task], out, "fastbrowse", timeout)
@@ -310,10 +292,13 @@ def fastbrowse_arm(binary: str, task: DesktopTask, address: str, out: Path, time
     }
 
 
-def claude_arm(model: str, task: DesktopTask, address: str, out: Path, timeout: float) -> dict[str, Any]:
+def claude_arm(model: str, task: DesktopTask, form: Form, out: Path, timeout: float) -> dict[str, Any]:
     config = out / "mcp.json"
-    config.write_text(json.dumps({"mcpServers": {"deskpilot": {"command": "deskpilot", "args": ["mcp"]}}}))
-    prompt = CLAUDE_PROMPT.format(address=address, gate=GATE[0 if task.authorize else 1], task=task.task)
+    # deskpilot sends hidden input only to an app its named agent launched.
+    server = {"command": "deskpilot", "args": ["mcp"], "env": {"DESKPILOT_AGENT": form.app_id}}
+    config.write_text(json.dumps({"mcpServers": {"deskpilot": server}}))
+    command = json.dumps(form.argv)
+    prompt = CLAUDE_PROMPT.format(command=command, gate=GATE[0 if task.authorize else 1], task=task.task)
     argv = [
         "claude",
         "-p",
@@ -349,11 +334,11 @@ def claude_arm(model: str, task: DesktopTask, address: str, out: Path, timeout: 
 
 def run(task: DesktopTask, arm: str, out: Path, args: argparse.Namespace) -> Measured:
     until_idle()
-    with Form(out, task.layout, args.python) as form, FocusWatch(form.address) as watch:
+    with Form(out, task.layout, args.python) as form, FocusWatch(form.app_id) as watch:
         if arm == "fastbrowse":
-            ran = fastbrowse_arm(args.fastbrowse, task, form.address, out, args.timeout)
+            ran = fastbrowse_arm(args.fastbrowse, task, form, out, args.timeout)
         else:
-            ran = claude_arm(args.claude_model, task, form.address, out, args.timeout)
+            ran = claude_arm(args.claude_model, task, form, out, args.timeout)
         state = form.saved()
     (out / f"{arm}.state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n")
     why = grade(task, state, ran["answer"], ran["status"])

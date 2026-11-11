@@ -43,6 +43,7 @@ pub(crate) mod keys {
     pub const LOGIN_REQUIRED: &str = "login_required";
     pub const BOT_CHECK: &str = "bot_check";
     pub const SHOWS_ANSWER: &str = "shows_answer";
+    pub const UNOBTAINABLE: &str = "unobtainable";
 
     /// The question that picks `operation`'s target.
     pub fn target(operation: Operation) -> String {
@@ -385,6 +386,9 @@ pub struct Decision {
     /// Jev's probability that the page reports the site failed to deliver what was asked.
     #[serde(default)]
     pub site_failure: Option<f64>,
+    /// Jev's probability that the page says an item the task requires cannot be bought, with no way here to get it.
+    #[serde(default)]
+    pub unobtainable: Option<f64>,
     /// Drop target of a drag: the control the element Jev chose to drag is released onto.
     #[serde(default)]
     pub destination: Option<Control>,
@@ -1112,6 +1116,16 @@ pub fn build_request(
                 "The page is a sign-in form or an ordinary page.",
             ),
         );
+        // Asked once per page state, as the bot check is: a run that read "Sold out" on its first step otherwise kept
+        // looking for 74 more (#960).
+        questions.insert(
+            keys::UNOBTAINABLE.into(),
+            noul(
+                "Does this page say that an item the task requires buying, ordering or adding to a basket cannot be bought, such as an item marked sold out or no longer sold, with no way offered on this site to get it?",
+                "The page says an item the task requires cannot be bought here, and offers no way to get it.",
+                "The page says no such thing, or the task does not require buying anything.",
+            ),
+        );
     }
     if context.plan_ahead {
         for control in controls {
@@ -1316,6 +1330,7 @@ async fn evaluate(
         bot_check: noul_probability(&evaluation, keys::BOT_CHECK),
         shows_answer: noul_probability(&evaluation, keys::SHOWS_ANSWER),
         site_failure: noul_probability(&evaluation, "site_failure"),
+        unobtainable: noul_probability(&evaluation, keys::UNOBTAINABLE),
         destination,
         replayed: false,
         by_code: false,
@@ -1753,6 +1768,22 @@ mod tests {
         let planned = build_request(&page, &controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
         let asked: Vec<_> = planned.questions.keys().filter(|key| key.starts_with(PLAN_PREFIX)).collect();
         assert_eq!(asked, ["plan:name"]);
+    }
+
+    #[test]
+    fn test_unobtainable_is_asked_on_a_fresh_page_and_read_into_the_decision() {
+        let page = observation(vec![button(1)]);
+        let task = "Add a Raspberry Pi Pico 2 W to the basket";
+        let repeat =
+            build_request(&page, &page.controls, &StepContext::new(task), &Config::default(), MAX_CHOICE_OPTIONS);
+        assert!(!repeat.questions.contains_key(keys::UNOBTAINABLE), "a page state already judged is not asked again");
+        let context = StepContext { check_bot: true, ..StepContext::new(task) };
+        let fresh = build_request(&page, &page.controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
+        assert!(fresh.questions.contains_key(keys::UNOBTAINABLE));
+        let jev = fake(&[("operation", "click"), ("click_target", "b1"), (keys::UNOBTAINABLE, "yes")], "");
+        let decision =
+            block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        assert_eq!(decision.unobtainable, Some(0.9));
     }
 
     #[test]
