@@ -902,8 +902,8 @@ impl Agent {
     }
 
     /// The one stall rule: `stall.unchanged_actions` steps in a row that moved nothing ask Jev again with the stalled
-    /// action left out. A step moves the run on when it gathers evidence, writes a new value, or reaches a page state
-    /// not seen since the last evidence.
+    /// action left out. A step moves the run on when it gathers evidence, writes a new value, reaches a page state never
+    /// seen, or makes the first return since the last evidence to a page state seen before it.
     pub(super) async fn count_progress(
         &self,
         state: &mut RunState,

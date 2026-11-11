@@ -307,8 +307,8 @@ pub(crate) struct RunState {
     /// evidence in turn, so one read on Google Flights renewed progress four times while it cleared and reapplied a
     /// filter the site failed on (#976).
     pub returned_at: usize,
-    /// The action whose page change the next observation judges: a new page state, or one revisited after new
-    /// evidence, is progress.
+    /// The action whose page change the next observation judges: a new page state, or the first return after new
+    /// evidence to one seen before it, is progress.
     pub landing: Option<Withheld>,
     /// The actions that moved nothing since the last one that did. Done again they do the same, so asks leave them out;
     /// one the browser refused as covered is left out only until a performed action changes the page.
