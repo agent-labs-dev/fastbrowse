@@ -4,7 +4,7 @@ description: "Three ways to let a fastbrowse run act in your account: a signed-i
 topic: Browsers and logins
 published: 2026-11-01
 updated: 2026-11-10
-verifiedAgainst: v0.10.1
+verifiedAgainst: v0.11.0
 verifiedOn: 2026-11-10
 ---
 

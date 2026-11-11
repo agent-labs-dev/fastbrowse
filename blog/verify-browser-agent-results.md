@@ -4,7 +4,7 @@ description: What each fastbrowse run status and exit code means, how citations 
 topic: Results and cost
 published: 2026-10-31
 updated: 2026-11-11
-verifiedAgainst: v0.10.1
+verifiedAgainst: v0.11.0
 verifiedOn: 2026-11-11
 ---
 

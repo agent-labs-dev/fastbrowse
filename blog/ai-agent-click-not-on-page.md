@@ -4,7 +4,7 @@ description: An agent that clicks screen coordinates can hit a control that is n
 topic: How the agent acts
 published: 2026-10-31
 updated: 2026-11-11
-verifiedAgainst: v0.10.1
+verifiedAgainst: v0.11.0
 verifiedOn: 2026-11-11
 ---
 
