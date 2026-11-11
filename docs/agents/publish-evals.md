@@ -146,7 +146,8 @@ suite as a group; its run facts take each suite's date and judge from those rows
 
 Both workflows send every result to Langfuse as a step that runs even when the run stopped: `fastbrowse-evals browser
 track-ledger` for each campaign group and `track-official` for each suite. The candidate is refused unless
-Langfuse holds them. An upload to Langfuse does not approve publication.
+Langfuse holds them. A campaign group keeps its ledger artifact before the send, and a failed send there only warns:
+the candidate job sends the run's ledgers again, and a smoke's is resent from its artifact with `track-ledger --push`. An upload to Langfuse does not approve publication.
 
 ## Retiring a task or changing the protocol
 
