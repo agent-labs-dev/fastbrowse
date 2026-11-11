@@ -212,7 +212,12 @@ impl Agent {
             {
                 return Err(failure.stop().into());
             }
-            if committed && !state.page_failed {
+            // Only a commit that was sent counts: one the page redrew, covered or replaced before it went is not one
+            // the run has made.
+            if committed
+                && !state.page_failed
+                && state.history.last().is_some_and(|entry| entry.outcome == StepOutcome::Executed)
+            {
                 state.commits += 1;
             }
             let thresholds = &self.config.thresholds;
@@ -342,6 +347,8 @@ impl Agent {
     pub(super) fn redecide(&self, state: &mut RunState, observation: &Observation) {
         self.event("redecide", || Map::from_iter([("url".into(), observation.url.clone().into())]));
         state.redecided = true;
+        // Nothing was sent, so the commit the gate cleared is not one the run has made.
+        state.committing = false;
     }
 
     /// `work`'s result, or `Redrawn` when the page redrew under it: `target`, or with none any control offered.

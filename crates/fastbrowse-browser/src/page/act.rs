@@ -52,8 +52,9 @@ pub(crate) enum Point {
     Gone,
 }
 
-/// The W3C UI Events named key values (https://www.w3.org/TR/uievents-key/) a task can name in a chord. A published
-/// standard, so the list is the design and not a heuristic.
+/// The named key values of W3C UI Events (https://www.w3.org/TR/uievents-key/) a chord can name: the whitespace,
+/// navigation, editing, lock and function keys a field takes. The names come from the standard, not from the pages
+/// seen. A named key outside this set, such as Copy or PrintScreen, is refused by name rather than guessed at.
 const NAMED_KEYS: &[&str] = &[
     "Enter",
     "Escape",
@@ -139,7 +140,7 @@ impl Key {
             } else if key
                 .replace(
                     Self::standard_key(part)
-                        .ok_or_else(|| BrowserError::Failed(format!("{part:?} is not a W3C UI Events key value")))?
+                        .ok_or_else(|| BrowserError::Failed(format!("{part:?} is not a key fastbrowse presses: a single character, or a W3C UI Events named key of a field")))?
                         .to_string(),
                 )
                 .is_some()

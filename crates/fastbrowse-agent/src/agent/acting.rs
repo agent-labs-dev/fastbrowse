@@ -304,6 +304,7 @@ impl Agent {
                     let reason = format!("{} can only receive a key press in a browser", text::repr(&target.label));
                     return Err(self.page.needs_browser(reason).into());
                 }
+                self.gate_edit(state, observation, decision, target).await?;
                 let chord = self.text_with_scope(state, observation, decision, target, true).await?;
                 self.gate_irreversible(state, observation, decision).await?;
                 Ok(Action { target_id: Some(target.id.clone()), text: Some(chord), ..Action::new(Operation::Press) })
@@ -826,6 +827,9 @@ impl Agent {
             .replayed
             .then(|| state.replay.as_ref().and_then(|replay| replay.text_for(target, missing)).cloned())
             .flatten();
+        // A key chord comes from the task alone, so a recipe gives one only as the literal it recorded: a secret or an
+        // input in its place would be pressed without the handling a secret's fill gets.
+        let recorded = recorded.filter(|source| !task_only || matches!(source, RecipeText::Literal(_)));
         if let Some(source) = recorded {
             match source {
                 RecipeText::Literal(text) => {

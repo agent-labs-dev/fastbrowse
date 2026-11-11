@@ -86,7 +86,9 @@ fn describe_control(
     {
         instructions.push_str(&format!("The target currently holds {}.\n", text::repr(value)));
     }
-    let submits = operation == Operation::Enter || (operation == Operation::Click && control.role == "button");
+    // A key chord such as ctrl+Enter can submit the form its field is in, as Enter does.
+    let submits = matches!(operation, Operation::Enter | Operation::Press)
+        || (operation == Operation::Click && control.role == "button");
     if submits && control.form_id.is_some() {
         let held: Vec<String> = controls
             .iter()
@@ -369,10 +371,11 @@ pub fn edits_question(task: &str) -> NoulQuestion {
 /// Whether `operation` on `control` changes a value the page holds: typing into or choosing in a field, or clicking a
 /// setting. A search box is how a read-only task finds things, so typing into one changes nothing it keeps.
 ///
-/// Drag is asked about as a commit, Enter is left to the irreversible gate, and an upload needs the caller's files.
+/// Drag is asked about as a commit, Enter is left to the irreversible gate, and an upload needs the caller's files. A key
+/// chord pressed in a field can type into it or delete from it, so it changes a value as a fill does.
 pub fn changes_a_value(operation: Operation, control: &Control) -> bool {
     match operation {
-        Operation::Fill | Operation::Select => {
+        Operation::Fill | Operation::Press | Operation::Select => {
             control.role != "searchbox" && control.input_type.as_deref() != Some("search")
         }
         Operation::Click => SETTING_ROLES.contains(&control.role.as_str()) || control.checked.is_some(),
@@ -1021,6 +1024,8 @@ mod tests {
             (Operation::Click, pressed, true),
             (Operation::Click, button("Next"), false),
             (Operation::Fill, Control::new("t", "textbox", "Name", [Operation::Fill]), true),
+            // A key pressed in a field can type into it or delete from it (#937).
+            (Operation::Press, Control::new("t", "textbox", "Name", [Operation::Fill]), true),
             (Operation::Select, Control::new("x", "combobox", "Size", [Operation::Select]), true),
             (Operation::Fill, Control::new("q", "searchbox", "Search", [Operation::Fill]), false),
             (Operation::Fill, typed_search, false),
