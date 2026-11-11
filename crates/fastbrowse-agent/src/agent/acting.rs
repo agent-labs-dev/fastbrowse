@@ -1531,19 +1531,33 @@ impl Agent {
                 ),
             ),
         ]);
-        let picks = self
-            .ask_choices(
-                state,
-                None,
-                vec![
-                    // Asked what output the task wants, Jev named the page a task to open ends on as its output, and
-                    // "Open the httpx repository." was answered with composed text it never asked for (#910).
-                    ("pick", "Does the task ask to be told something, and in what form?".into(), criteria),
-                    ("evidence", "Where can what the task asks about be seen?".into(), evidence),
-                    ("extent", "How much of a list does the task cover?".into(), extent),
-                ],
-            )
-            .await?;
+        let mut asked = vec![
+            // Asked what output the task wants, Jev named the page a task to open ends on as its output, and
+            // "Open the httpx repository." was answered with composed text it never asked for (#910).
+            ("pick", "Does the task ask to be told something, and in what form?".into(), criteria),
+            ("evidence", "Where can what the task asks about be seen?".into(), evidence),
+            ("extent", "How much of a list does the task cover?".into(), extent),
+        ];
+        // Over HTTP, also asked of the task alone: whether it asks for any step a served page cannot take. The output
+        // does not say so: a task to post a reply and report whether the page confirms it wants text, and its read
+        // found a success message the page's stylesheet hides until a reply is sent (#894).
+        if self.page.over_http() {
+            let steps = IndexMap::from([
+                (
+                    "acts".to_string(),
+                    JsonValue::from(
+                        "The task asks for a step besides opening pages and finding, reading or reporting something, such as typing, choosing, submitting or signing in, even if only under some condition.",
+                    ),
+                ),
+                (
+                    "reads".to_string(),
+                    JsonValue::from("The task asks only to open pages and find, read or report something."),
+                ),
+            ]);
+            asked.push(("steps", "What does the task ask to be done on a page?".into(), steps));
+        }
+        let picks = self.ask_choices(state, None, asked).await?;
+        state.asks_steps = picks.get("steps").is_some_and(|steps| steps == "acts");
         state.appearance = picks["evidence"] == "appearance";
         state.extent = match picks["extent"].as_str() {
             "every_page" => Extent::EveryPage,

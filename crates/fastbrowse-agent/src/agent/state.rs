@@ -350,6 +350,8 @@ pub(crate) struct RunState {
     pub read_whole: Vec<Capture>,
     /// A DONE was refused because the task is something to carry out, not to be told.
     pub to_carry_out: bool,
+    /// Over HTTP, the task asks for a step besides opening and reading pages, whatever it wants reported.
+    pub asks_steps: bool,
     /// The latest finish check found a step the task asks for that the site does not allow.
     pub refused: bool,
     /// The latest finish check found this step the task asks to be carried out not yet done.
@@ -762,6 +764,7 @@ impl RunState {
             schema_partial: None,
             read_whole: Vec::new(),
             to_carry_out: false,
+            asks_steps: false,
             refused: false,
             undone: None,
             output_intent: OutputIntent::Unknown,
