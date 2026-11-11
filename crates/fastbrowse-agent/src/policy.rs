@@ -12,8 +12,8 @@ use std::sync::{LazyLock, Mutex, MutexGuard};
 use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::{
-    Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, Evaluation, Images, NoulAnswer, NoulQuestion,
-    Question,
+    Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, EVEN_ODDS, Evaluation, Images, NoulAnswer,
+    NoulQuestion, Question,
 };
 use fastbrowse_core::effects::leavable;
 use fastbrowse_core::models::{CostComponent, CostLine, JevPurpose, Operation, StepOutcome, TARGETED, UNTRUSTED};
@@ -258,6 +258,10 @@ pub struct StepContext {
     /// in one request stay follow-ups.
     #[serde(skip)]
     pub ahead: Vec<Ahead>,
+    /// Ask Jev, beside the next action, which other controls the task needs used on this page, so they run without a
+    /// decision of their own while the page stays as it was.
+    #[serde(skip)]
+    pub plan_ahead: bool,
     /// Earlier actions left out of `history` to fit Jev's input limit; the state tells Jev how many.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub omitted_actions: usize,
@@ -294,6 +298,7 @@ impl StepContext {
             reload: None,
             screenshot: None,
             ahead: Vec::new(),
+            plan_ahead: false,
         }
     }
 }
@@ -312,6 +317,44 @@ impl Ahead {
     fn key(&self) -> String {
         format!("{}:{}:{}", self.operation, self.control, self.name)
     }
+}
+
+/// A field Jev said the task needs filled on this page besides the chosen fill, filled after it while the page stays as
+/// it was. Only fills are planned: a fill sets one field to a value judged now and stands whatever the chosen action
+/// is, while a press changes the page in ways known only after it, and a second control doing the same job undoes the
+/// first (#902).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Planned {
+    pub target: Control,
+    /// Jev's probability that the task needs it.
+    pub probability: f64,
+    /// Jev's answers to the questions asked ahead about this action, by what the follow-up calls them.
+    pub ahead: IndexMap<String, Answer>,
+}
+
+const PLAN_PREFIX: &str = "plan:";
+
+fn plan_question(control: &Control) -> Question {
+    let context = control.context.as_deref().map(|c| format!(" in {}", text::repr(c))).unwrap_or_default();
+    // A target candidate's state element leaves out its input name and autocomplete, and two fields labelled alike
+    // are told apart by them.
+    let named = [("named", &control.input_name), ("autocomplete", &control.autocomplete)]
+        .into_iter()
+        .filter_map(|(key, value)| value.as_deref().map(|value| format!(", {key} {}", text::repr(value))))
+        .collect::<String>();
+    let instructions = format!(
+        "{UNTRUSTED}\nElement {} is a {} labelled {}{context}{named}. Besides the one next action, does what the task still \
+         needs on this page include that this run fill it, before anything moves on from this page? Yes only when the \
+         task itself gives or calls for a value for it now.",
+        control.id,
+        control.role,
+        text::repr(&control.label),
+    );
+    noul(
+        &instructions,
+        "The task needs this field filled here, and it does not hold that value yet.",
+        "It is not needed, already holds the value, or belongs to another page, view or step.",
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -351,6 +394,9 @@ pub struct Decision {
     /// Jev's answers to the questions asked ahead about this action, by what the follow-up calls them.
     #[serde(skip)]
     pub ahead: IndexMap<String, Answer>,
+    /// Other controls to use on this page after this action, in page order, while the page stays as it was.
+    #[serde(skip)]
+    pub plan: Vec<Planned>,
 }
 
 impl Decision {
@@ -1036,8 +1082,24 @@ pub fn build_request(
             ),
         );
     }
-    let state = state(observation, controls, context);
-    if context.screenshot.is_none() {
+    if context.plan_ahead {
+        for control in controls {
+            if offered.contains(&Operation::Fill) && control.operations.contains(&Operation::Fill) {
+                questions.insert(format!("{PLAN_PREFIX}{}", control.id), plan_question(control));
+            }
+        }
+    }
+    let described: HashSet<&str> = targets.values().flatten().map(|control| control.id.as_str()).collect();
+    let state = state(observation, controls, context, &described);
+    if context.screenshot.is_some() && context.plan_ahead {
+        // An image puts the request in long-context mode already, so the questions asked ahead cost no mode switch and
+        // save the round trip each would otherwise take after the decision.
+        for ahead in &context.ahead {
+            if offered.contains(&ahead.operation) && controls.iter().any(|control| control.id == ahead.control) {
+                questions.insert(ahead.key(), ahead.question.clone());
+            }
+        }
+    } else if context.screenshot.is_none() {
         let written: usize = questions.iter().map(|(key, question)| key.len() + question.dump_json().len()).sum();
         let mut room = LONG_CONTEXT_BYTES.saturating_sub(dumps(&state).len() + written);
         let mut ahead: Vec<(usize, &Ahead)> = context
@@ -1188,7 +1250,27 @@ async fn evaluate(
             asked.filter_map(|key| Some((key[prefix.len()..].to_string(), evaluation.answers.get(key)?.clone())))
         })
         .collect();
+    let chosen = target.as_ref().map(|target| target.id.clone());
+    // A plan follows a chosen fill only: after a press the fields may be gone, or filled after what they belong before.
+    let plan: Vec<Planned> = controls
+        .iter()
+        .filter(|_| operation == Operation::Fill)
+        .filter(|control| Some(&control.id) != chosen.as_ref())
+        .filter_map(|control| {
+            let probability = noul_probability(&evaluation, &format!("{PLAN_PREFIX}{}", control.id))?;
+            (probability >= EVEN_ODDS).then(|| {
+                let prefix = format!("{}:{}:", Operation::Fill, control.id);
+                let ahead = evaluation
+                    .answers
+                    .iter()
+                    .filter_map(|(key, answer)| Some((key.strip_prefix(prefix.as_str())?.to_string(), answer.clone())))
+                    .collect();
+                Planned { target: control.clone(), probability, ahead }
+            })
+        })
+        .collect();
     Ok(Decision {
+        plan,
         operation,
         url,
         target,
@@ -1222,7 +1304,7 @@ fn group_index(choice: &str, count: usize) -> Result<usize> {
         .ok_or_else(|| AgentError::Invalid("list index out of range".into()))
 }
 
-fn state(observation: &Observation, controls: &[Control], context: &StepContext) -> Value {
+fn state(observation: &Observation, controls: &[Control], context: &StepContext, described: &HashSet<&str>) -> Value {
     let mut state = Map::new();
     state.insert("task".into(), context.task.clone().into());
     // "Next month" and "the next Monday" are relative to today: shown only which month a date picker was on, Jev
@@ -1250,7 +1332,19 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext)
     if context.omitted_actions > 0 {
         state.insert("omitted_actions".into(), context.omitted_actions.into());
     }
-    state.insert("elements".into(), Value::Array(controls.iter().map(|c| Value::Object(element(c))).collect()));
+    // A target question in this request already carries each of its candidates whole, and only the target choice
+    // weighs where an element sits or what else it takes; the operation choice keeps where links lead and each
+    // element's state. Sent in both, Google Flights' controls were a third of every request.
+    let elements = controls.iter().map(|control| {
+        let mut shown = element(control);
+        if described.contains(control.id.as_str()) {
+            for key in ["context", "operations", "input_name", "autocomplete"] {
+                shown.remove(key);
+            }
+        }
+        Value::Object(shown)
+    });
+    state.insert("elements".into(), Value::Array(elements.collect()));
     if let Some(background) = context.background.as_deref().map(text::strip).filter(|b| !b.is_empty()) {
         state.insert("background".into(), background.into());
     }
@@ -1337,7 +1431,8 @@ pub fn element(control: &Control) -> Map<String, Value> {
     let optional = [
         ("context", context_of(control).map(Value::from)),
         ("value", control.value.clone().map(Value::from)),
-        ("focused", control.focused.map(Value::from)),
+        // An unfocused control offers nothing an unknown one does not, and every control but one is unfocused.
+        ("focused", control.focused.filter(|focused| *focused).map(Value::from)),
         ("href", control.href.clone().map(Value::from)),
         ("next_page", pager_link(control).then_some(true.into())),
         ("already_read", control.already_read.filter(|read| *read).map(Value::from)),
@@ -1567,7 +1662,10 @@ mod tests {
                             }
                             Question::Noul(question) => {
                                 let label = format!("\"{}\"", self.relevant);
-                                let yes = relevance && question.instructions.contains(&label);
+                                let yes = match self.pick.get(key.as_str()) {
+                                    Some(picked) => picked == "yes",
+                                    None => relevance && question.instructions.contains(&label),
+                                };
                                 Answer::Noul(NoulAnswer { kind: NoulTag, probability: if yes { 0.9 } else { 0.1 } })
                             }
                             Question::Score(_) | Question::Box(_) => unreachable!("the policy asks no score or box"),
@@ -1589,6 +1687,78 @@ mod tests {
     fn relevance_requests(jev: &Fake) -> Vec<IndexMap<String, Question>> {
         let scored = |key: &String| key.strip_prefix('r').is_some_and(|i| i.parse::<usize>().is_ok());
         jev.requests.lock().unwrap().iter().filter(|q| q.keys().all(scored)).cloned().collect()
+    }
+
+    fn link(id: &str) -> Control {
+        Control { href: Some(format!("/{id}")), ..Control::new(id, "link", id, [Operation::Click]) }
+    }
+
+    #[test]
+    fn test_a_target_candidate_is_described_whole_once() {
+        let carded = |i| Control { context: Some(format!("Card {i}")), ..button(i) };
+        let controls: Vec<Control> = (1..=3).map(carded).chain([link("away")]).collect();
+        let page = observation(controls.clone());
+        let context = StepContext::new("t");
+        let targeted = build_request(&page, &controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
+        let criteria: Value = serde_json::from_str(&targeted.questions["click_target"].dump_json()).unwrap();
+        assert_eq!(criteria["criteria"]["b1"]["context"], "Card 1");
+        let shown = &targeted.state["elements"][0];
+        assert!(shown.get("context").is_none() && shown.get("operations").is_none());
+        assert_eq!(targeted.state["elements"][3]["href"], "/away");
+        // Grouped, no question carries the candidates whole, so the state keeps all of each.
+        let grouped = build_request(&page, &controls, &context, &Config::default(), 2);
+        assert!(!grouped.questions.contains_key("click_target"));
+        assert_eq!(grouped.state["elements"][0]["context"], "Card 1");
+        assert_eq!(grouped.state["elements"][0]["operations"], json!(["click"]));
+    }
+
+    #[test]
+    fn test_a_plan_is_asked_only_when_wanted_and_only_of_fields() {
+        let controls = vec![field("name", None), button(1), link("away")];
+        let page = observation(controls.clone());
+        let plain = build_request(&page, &controls, &StepContext::new("t"), &Config::default(), MAX_CHOICE_OPTIONS);
+        assert!(!plain.questions.keys().any(|key| key.starts_with(PLAN_PREFIX)));
+        let context = StepContext { plan_ahead: true, ..StepContext::new("t") };
+        let planned = build_request(&page, &controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
+        let asked: Vec<_> = planned.questions.keys().filter(|key| key.starts_with(PLAN_PREFIX)).collect();
+        assert_eq!(asked, ["plan:name"]);
+    }
+
+    #[test]
+    fn test_the_plan_keeps_page_order_and_leaves_out_the_chosen_field() {
+        let answers = |operation: &'static str, target: (&'static str, &'static str)| {
+            fake(
+                &[
+                    ("operation", operation),
+                    target,
+                    ("plan:first", "yes"),
+                    ("plan:middle", "no"),
+                    ("plan:last", "yes"),
+                    ("plan:zip", "yes"),
+                ],
+                "",
+            )
+        };
+        let page = observation(vec![
+            field("first", None),
+            field("middle", None),
+            field("last", None),
+            field("zip", None),
+            button(1),
+        ]);
+        let context = StepContext { plan_ahead: true, ..StepContext::new("check out as Ada Lovelace, 12345") };
+        let jev = answers("fill", ("fill_target", "first"));
+        let decision =
+            block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        assert_eq!(decision.target.map(|t| t.id), Some("first".into()));
+        let plan: Vec<_> = decision.plan.iter().map(|p| p.target.id.as_str()).collect();
+        assert_eq!(plan, ["last", "zip"]);
+        assert_eq!(jev.requests.lock().unwrap().len(), 1, "the plan is asked in the decision's own request");
+
+        let jev = answers("click", ("click_target", "b1"));
+        let decision =
+            block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        assert!(decision.plan.is_empty(), "fields are never filled after a press");
     }
 
     #[test]
@@ -1659,12 +1829,10 @@ mod tests {
     }
 
     #[test]
-    fn test_the_decision_sees_both_focused_and_blurred_controls() {
-        let mut control = field("reference", None);
-        assert!(!element(&control).contains_key("focused"));
-        for focused in [true, false] {
-            control.focused = Some(focused);
-            assert_eq!(element(&control)["focused"], json!(focused));
+    fn test_the_decision_sees_the_focused_control_and_no_unfocused_one() {
+        assert_eq!(element(&field("reference", Some(true)))["focused"], json!(true));
+        for unfocused in [None, Some(false)] {
+            assert!(!element(&field("reference", unfocused)).contains_key("focused"));
         }
     }
 

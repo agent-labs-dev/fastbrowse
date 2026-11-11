@@ -428,6 +428,7 @@ impl Page for FetchedPage {
                 dialog: None,
                 inaccessible_frames: capture.inaccessible_frames,
                 can_go_back: false,
+                modal: None,
                 history_entry: Some(capture.url),
             })
         })

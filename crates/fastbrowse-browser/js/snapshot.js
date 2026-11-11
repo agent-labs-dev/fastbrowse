@@ -1343,6 +1343,25 @@
     media.map(({ elapsed_seconds, ...m }) => m),
   ]));
 
+  // The open modal the rest of the page sits behind. A page marks what is under one aria-hidden or inert, so those
+  // controls leave the observation while staying in the document: Google Flights' Stops filter took 145 controls
+  // out and put them back on closing, and a run told each by name in every later step.
+  const modals = [...document.querySelectorAll('dialog:modal,[aria-modal="true"]')].filter(
+    e => !e.closest('[aria-hidden="true"],[inert]') && e.checkVisibility({ checkVisibilityCSS: true }),
+  );
+  // A dialog is named by aria-label or aria-labelledby, never by its content.
+  const dialogName = e =>
+    (
+      e.getAttribute('aria-label') ||
+      (e.getAttribute('aria-labelledby') || '')
+        .split(/\s+/)
+        .map(id => (id && e.ownerDocument.getElementById(id)?.innerText) || '')
+        .join(' ')
+    )
+      .replace(/\s+/g, ' ')
+      .trim();
+  const modal = modals.length ? dialogName(modals.at(-1)) : null;
+
   const result = {
     url: location.href,
     title: document.title,
@@ -1357,5 +1376,7 @@
     retarget_keys,
     inaccessible_frames: inaccessible,
   };
+  // Absent unless one is open, as on most pages: an unnamed modal is the empty string, not null.
+  if (modal !== null) result.modal = modal;
   return result;
 })
