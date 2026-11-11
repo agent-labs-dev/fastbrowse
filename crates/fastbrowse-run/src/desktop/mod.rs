@@ -1,9 +1,11 @@
-//! A native desktop window as a `Page`, driven through deskpilot (<https://github.com/cjber/deskpilot>).
+//! A native desktop app as a `Page`, driven through deskpilot (<https://github.com/cjber/deskpilot>).
 //!
-//! deskpilot reads the window's accessibility tree and sends its input in hidden mode: to the window wherever it is,
-//! on screen or not, without moving the user's pointer or keyboard focus. Each observation is one deskpilot snapshot,
-//! whose element ids deskpilot itself refuses once a newer snapshot replaces it or the element changed, so `act`
-//! needs no guard of its own beyond naming the snapshot it was offered.
+//! The run starts the app itself with deskpilot's `launch`, as a deskpilot agent of its own, so the window opens on
+//! that agent's hidden workspace and closes when the run's `deskpilot mcp` ends. deskpilot reads the window's
+//! accessibility tree and sends its input in hidden mode, which it allows only on a window its agent launched: to the
+//! window wherever it is, without moving the user's pointer or keyboard focus. Each observation is one deskpilot
+//! snapshot, whose element ids deskpilot itself refuses once a newer snapshot replaces it or the element changed, so
+//! `act` needs no guard of its own beyond naming the snapshot it was offered.
 
 mod mcp;
 pub mod tree;
@@ -38,7 +40,7 @@ struct Shot {
     height: f64,
 }
 
-/// Why a desktop page could not be opened: a window argument the caller has to fix, or a deskpilot that cannot run.
+/// Why a desktop page could not be opened: an app the caller has to fix, or a deskpilot that cannot run.
 #[derive(Debug)]
 pub enum OpenError {
     Invalid(String),
@@ -64,15 +66,28 @@ fn read_window(value: &Value) -> Option<Window> {
 }
 
 impl DeskpilotPage {
-    /// Starts deskpilot and pins the one window `query` names (an address, a class, or a substring of a class or
-    /// title, as deskpilot reads it): a query that matches no window or several is refused here, before any step.
-    pub async fn open(program: &str, query: &str) -> Result<DeskpilotPage, OpenError> {
-        let client = Deskpilot::start(program).await.map_err(|error| OpenError::Unavailable(error.message().into()))?;
-        let found = client.call_json("wait_for", json!({"window": query, "timeout": 5})).await.map_err(|error| {
-            let message = format!("no desktop window to drive for {query:?}: {}", error.message());
+    /// Starts deskpilot as an agent of this page's own and launches `command` (a program and its arguments, run
+    /// without a shell) through it, driving the window `launch` returns. A command deskpilot cannot start, that exits
+    /// before it opens a window, or opens none in time is refused here, before any step.
+    pub async fn open(program: &str, command: &[String]) -> Result<DeskpilotPage, OpenError> {
+        // An agent of its own, so two runs in one `fastbrowse serve` never share a hidden workspace or a cursor.
+        let agent = fastbrowse_browser::cursor::deskpilot_agent();
+        let client =
+            Deskpilot::start(program, &agent).await.map_err(|error| OpenError::Unavailable(error.message().into()))?;
+        if !client.offers("launch") {
+            return Err(OpenError::Unavailable(
+                "this deskpilot has no launch tool; a desktop run needs a deskpilot with launch \
+                 (https://github.com/cjber/deskpilot/pull/86)"
+                    .into(),
+            ));
+        }
+        let shown = command.join(" ");
+        let found = client.call_json("launch", json!({"command": command})).await.map_err(|error| {
+            let message = format!("could not start {shown}: {}", error.message());
             match error {
-                // deskpilot's codes for a query that names no window, several, or is malformed: the caller's to fix.
-                ToolError::Refused { code, .. } if matches!(code.as_str(), "timeout" | "ambiguous" | "invalid") => {
+                // deskpilot's codes for a command it cannot start, that exits before a window, or opens none in time:
+                // the caller's to fix.
+                ToolError::Refused { code, .. } if matches!(code.as_str(), "invalid" | "refused" | "timeout") => {
                     OpenError::Invalid(message)
                 }
                 _ => OpenError::Unavailable(message),
@@ -80,12 +95,13 @@ impl DeskpilotPage {
         })?;
         if found.get("xwayland").and_then(Value::as_bool) == Some(true) {
             return Err(OpenError::Invalid(format!(
-                "{query:?} is an XWayland window; fastbrowse drives desktop windows in deskpilot's hidden mode, which \
-                 needs a native Wayland window"
+                "{shown} opened an XWayland window; fastbrowse drives desktop windows in deskpilot's hidden mode, \
+                 which needs a native Wayland window"
             )));
         }
-        let window = read_window(&found)
-            .ok_or_else(|| OpenError::Unavailable(format!("deskpilot described {query:?} without an address")))?;
+        let window = read_window(&found).ok_or_else(|| {
+            OpenError::Unavailable(format!("deskpilot described the window of {shown} without an address"))
+        })?;
         Ok(DeskpilotPage {
             client,
             window: Mutex::new(window),

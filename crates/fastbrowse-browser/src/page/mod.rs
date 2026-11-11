@@ -21,7 +21,7 @@ use fastbrowse_core::decision::JEV_IMAGE_SIDE;
 use fastbrowse_core::models::{Artifact, ArtifactKind, Link, Operation, SourceControl};
 use fastbrowse_core::origins::origin_of;
 use fastbrowse_core::page::{
-    ActResult, Action, Block, BlockKind, Capture, Control, Dialog, Media, Observation, Page, PageResult,
+    ActResult, Action, Block, BlockKind, CaptchaSolve, Capture, Control, Dialog, Media, Observation, Page, PageResult,
 };
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::text;
@@ -1786,6 +1786,14 @@ impl Page for CdpPage {
 
     fn wait_for_lifecycle(&self, mark: u64, seconds: f64) -> BoxFuture<'_, bool> {
         Box::pin(CdpPage::wait_for_lifecycle(self, mark, seconds))
+    }
+
+    fn captcha_solve(&self) -> Option<CaptchaSolve> {
+        self.session.captcha_solve()
+    }
+
+    fn loading(&self) -> bool {
+        self.session.navigating() || self.session.frames_loading()
     }
 }
 

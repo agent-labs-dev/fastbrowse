@@ -37,5 +37,5 @@ pub async fn cursor_geometry(
 /// `CursorFeedback` on the `cua-driver` at `binary`, after its handshake; None when the handshake fails.
 #[cfg(feature = "cursor")]
 pub async fn open_cursor(binary: &std::path::Path) -> Option<crate::cursor::CursorFeedback> {
-    crate::cursor::open(binary).await
+    crate::cursor::open_cua(binary).await
 }

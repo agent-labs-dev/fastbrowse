@@ -236,6 +236,8 @@ class LLMPurpose(StrEnum):
     FILL = "fill"
     PAGES = "pages"
     DATES = "dates"
+    UNOBTAINABLE = "unobtainable"
+    GROUPS = "groups"
 
 
 class JevPurpose(StrEnum):

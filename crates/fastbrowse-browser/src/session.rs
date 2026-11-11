@@ -14,7 +14,7 @@ use data_encoding::BASE64;
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::{Artifact, ArtifactKind, ArtifactSink, BrowserConnection, FrameHandler};
 use fastbrowse_core::origins::OriginGrant;
-use fastbrowse_core::page::{Dialog, Tab};
+use fastbrowse_core::page::{CaptchaSolve, Dialog, Tab};
 use fastbrowse_core::telemetry::Trace;
 use futures_util::future::{BoxFuture as FBoxFuture, try_join_all};
 use serde_json::{Value, json};
@@ -335,6 +335,8 @@ pub(crate) struct State {
     pub(crate) frames_loading: HashSet<(String, String)>,
     /// Frames with a parent.
     pub(crate) subframes: HashSet<String>,
+    /// The CAPTCHA each target's solver has taken on in its current document and not solved, by target id.
+    pub(crate) captcha_solves: HashMap<String, CaptchaSolve>,
     /// Frames Chrome's own ad tagging marks as ads or inside one, which a look does not read: once cross-origin frames
     /// were read, a page's ad slots reached every step as its content, and a run answered with an ad's text.
     pub(crate) ad_frames: HashSet<String>,
@@ -452,6 +454,9 @@ impl BrowserSession {
         }
         if seconds <= 0.0 {
             return false;
+        }
+        if seconds.is_infinite() {
+            return generation.changed().await.is_ok();
         }
         matches!(timeout(secs(seconds), generation.changed()).await, Ok(Ok(())))
     }
@@ -770,6 +775,12 @@ impl BrowserSession {
             .frames_loading
             .iter()
             .any(|(session, _)| *session == active || frames.iter().any(|(_, frame_session)| frame_session == session))
+    }
+
+    /// The CAPTCHA the browser's solver has taken on in the active tab's document and not solved.
+    pub fn captcha_solve(&self) -> Option<CaptchaSolve> {
+        let state = self.0.state.lock().unwrap();
+        state.captcha_solves.get(&state.active_target_id).cloned()
     }
 
     /// Whether a fetch, XHR or script request started after `mark` is still waiting for its response.
@@ -1458,7 +1469,21 @@ impl Shared {
             "Page.frameAttached" => {
                 self.state.lock().unwrap().subframes.insert(str_of(&params["frameId"]));
             }
-            "Page.frameNavigated" => self.tag_ad_frame(&params["frame"]),
+            "Page.frameNavigated" => {
+                // A tab's new document is not the one its solver worked on, so a solve given up on there never
+                // speaks for it.
+                if params["frame"]["parentId"].is_null()
+                    && let Some(session) = session
+                {
+                    let mut state = self.state.lock().unwrap();
+                    if let Some(target) =
+                        state.tabs.iter().find(|tab| tab.session_id == session).map(|tab| tab.target_id.clone())
+                    {
+                        state.captcha_solves.remove(&target);
+                    }
+                }
+                self.tag_ad_frame(&params["frame"]);
+            }
             "Page.frameRequestedNavigation" | "Page.frameStartedLoading" => {
                 if let Some(session) = session {
                     let frame = str_of(&params["frameId"]);
@@ -1529,6 +1554,28 @@ impl Shared {
                     }
                 }
             }
+            // Browser Use Cloud's solver reports each CAPTCHA it takes on, on the browser's own connection: browser-use
+            // waits on the same two events (browser_use/repl/captcha.py). A solved one is dropped, and the page it
+            // cleared moves on.
+            "BrowserUse.captchaSolverStarted" | "BrowserUse.captchaSolverFinished" => {
+                let target = str_of(&params["targetId"]);
+                let started = event.method == "BrowserUse.captchaSolverStarted";
+                {
+                    let mut state = self.state.lock().unwrap();
+                    if started || params["success"] != true {
+                        let solve = CaptchaSolve {
+                            url: str_of(&params["url"]),
+                            vendor: str_of(&params["vendor"]),
+                            working: started,
+                        };
+                        state.captcha_solves.insert(target, solve);
+                    } else {
+                        state.captcha_solves.remove(&target);
+                    }
+                }
+                // Wakes a wait on the page to look at the solve again.
+                self.lifecycle.send_modify(|generation| *generation += 1);
+            }
             "Target.attachedToTarget" => self.on_attached(params, session),
             "Target.detachedFromTarget" => {
                 let child = str_of(&params["sessionId"]);
@@ -1563,6 +1610,7 @@ impl Shared {
                         state.tabs.iter().position(|t| t.target_id == target_id).map(|at| state.tabs.remove(at));
                     state.keepers.remove(&target_id);
                     state.owned.remove(&target_id);
+                    state.captcha_solves.remove(&target_id);
                     state.activated.retain(|t| *t != target_id);
                     (target_id == state.active_target_id).then(|| state.successor(closed.as_ref()))
                 };
