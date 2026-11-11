@@ -544,7 +544,7 @@ impl CdpPage {
     // -- observe / capture ----------------------------------------------------------------------------------
 
     pub async fn observe(&self) -> Result<Observation, BrowserError> {
-        self.adopt_choosers().await;
+        self.session.choosers_pinned().await;
         self.reread(|| self.observe_once(0, true)).await
     }
 
