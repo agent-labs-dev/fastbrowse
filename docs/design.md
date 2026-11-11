@@ -30,9 +30,10 @@ that every externally visible change is detected.
 
 These questions are asked with the task and the page's origin only, never the page's content, so a page
 cannot argue an action through. An authorized run also asks, in the same request, whether the task asks for
-the action only in some state of the page or site ("reply if nobody has answered yet"). When it does, and the
-action commits or leaves something the site keeps, a second Jev request asks, as a choice, whether in the
-state the page shows the task says to do it with these values, says not to, or cannot be told. It does not
+the action only in some state of the page or site ("reply if nobody has answered yet"). When it does, or the run
+has already carried out a commit, and the action commits or leaves something the site keeps, a second Jev request
+asks, as a choice, whether in the state the page shows the task says to do it with these values, says not to, has
+been done already by the run's earlier steps and is not asked for again, or cannot be told. It does not
 say the action is conditional, so a step the task asks for outright before a condition on a later one is
 judged as asked. The same request asks which of the task's values the action uses: those to use at first, or
 those the task gives only once something happens ("if the site rejects anything, use SW1A 1AA"). For the later

@@ -1116,6 +1116,14 @@ async fn gate_conditional_post_choosing(
     answers: &[(&'static str, f64)],
     chosen: &[(&'static str, &'static str)],
 ) -> (Result<(), Flow>, Arc<Conditioned>, RunState) {
+    gate_post_after_commits(0, answers, chosen).await
+}
+
+async fn gate_post_after_commits(
+    commits: usize,
+    answers: &[(&'static str, f64)],
+    chosen: &[(&'static str, &'static str)],
+) -> (Result<(), Flow>, Arc<Conditioned>, RunState) {
     let mut given = IndexMap::from([("irreversible", 0.95), ("requested", 0.97), ("lasting", 0.95)]);
     given.extend(answers.iter().copied());
     let chosen = chosen.iter().copied().collect();
@@ -1125,6 +1133,7 @@ async fn gate_conditional_post_choosing(
     let mut state = run_state();
     state.task = "Open the newest review. If nobody has answered it yet, write 'Thank you' and post it.".into();
     state.authorization = Authorization { irreversible_actions: true };
+    state.commits = commits;
     let post = button("Post");
     let mut page = observation(std::slice::from_ref(&post));
     page.viewport_text = "Newest review: great product. Signed in with hunter2.".into();
@@ -1164,6 +1173,28 @@ async fn test_a_commit_the_task_makes_conditional_proceeds_only_when_the_page_sh
             let Flow::Unsure(unsure) = flow else { panic!("{case}: refused for another step, not stopped") };
             assert!(unsure.reason.contains("depends on a condition the task sets"), "{case}: {}", unsure.reason);
             assert_eq!(state.steps.last().map(|step| step.outcome), Some(StepOutcome::Failed), "{case}");
+        }
+    }
+}
+
+/// An authorized one-reply run posted the same reply three times (#882): Jev rated the task unconditional, so only
+/// `requested`, which reads the task alone, was asked before each Post. Once the run has committed, every later commit
+/// is checked against the page and the run's own steps, and one they show already done is refused once.
+#[tokio::test]
+async fn test_a_commit_after_the_runs_first_is_checked_against_the_steps_already_taken() {
+    // (commits, met, acts, Jev calls)
+    for (commits, met, acts, calls) in
+        [(0, None, true, 1), (1, Some("done"), false, 2), (1, Some("asked"), true, 2), (2, Some("unclear"), false, 2)]
+    {
+        let chosen: Vec<_> =
+            [("values", Some("first")), ("met", met)].into_iter().filter_map(|(k, v)| Some((k, v?))).collect();
+        let (gated, jev, _) = gate_post_after_commits(commits, &[("conditional", 0.1)], &chosen).await;
+        let case = format!("commits {commits}, met {met:?}");
+        assert_eq!(jev.asked.lock().unwrap().len(), calls, "{case}");
+        assert_eq!(gated.is_ok(), acts, "{case}");
+        if met == Some("done") {
+            let Err(Flow::Unsure(unsure)) = gated else { panic!("{case}: not refused once") };
+            assert!(unsure.reason.contains("already been done by this run"), "{case}: {}", unsure.reason);
         }
     }
 }

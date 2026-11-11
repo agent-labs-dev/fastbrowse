@@ -212,6 +212,9 @@ impl Agent {
             {
                 return Err(failure.stop().into());
             }
+            if committed && !state.page_failed {
+                state.commits += 1;
+            }
             let thresholds = &self.config.thresholds;
             let bot_check = decision.bot_check.unwrap_or(0.0) > thresholds.bot_check_above;
             if bot_check || decision.login_required.unwrap_or(0.0) > thresholds.login_required_above {

@@ -11,9 +11,9 @@ use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::text;
 use fastbrowse_core::recipe::RecipeText;
 use fastbrowse_core::safety::{
-    HAPPENED, LATER_VALUES, MET, asks_for_credentials, changes_a_value, changes_credentials, conditional_question,
-    control_action, downloads_question, edits_question, happened_question, irreversible_question, is_password,
-    lasting_question, may_be_irreversible, met_question, origin_of, requested_question, resolve_secret,
+    DONE, HAPPENED, LATER_VALUES, MET, asks_for_credentials, changes_a_value, changes_credentials,
+    conditional_question, control_action, downloads_question, edits_question, happened_question, irreversible_question,
+    is_password, lasting_question, may_be_irreversible, met_question, origin_of, requested_question, resolve_secret,
     sets_new_password, starts_download, values_question,
 };
 use indexmap::IndexMap;
@@ -563,7 +563,9 @@ impl Agent {
     /// `action` is what the agent is about to do, as [`control_action`] writes it for a control. `lasting` asks, in an
     /// authorized run, whether a reversible action still leaves something the site keeps: one the task did not ask for
     /// is refused once, so the run can pick again rather than stop (#743). A commit the task asks for only in some state
-    /// of the page goes ahead only once the page is judged not to show the state the task rules it out in (#848).
+    /// of the page goes ahead only once the page is judged not to show the state the task rules it out in (#848), and so
+    /// does every commit after the run's first: `requested` reads the task alone, and still judged a reply the task asks
+    /// for once asked for after the run had posted it twice (#882).
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn gate_question(
         &self,
@@ -623,7 +625,7 @@ impl Agent {
             }
             // Asked unanswered, the condition is checked as if the task set one: the check costs a call, a missed
             // condition an irreversible commit.
-            let conditional = conditional.is_none_or(|p| p > EVEN_ODDS);
+            let conditional = conditional.is_none_or(|p| p > EVEN_ODDS) || state.commits > 0;
             if wanted
                 && (!reversible || keeps)
                 && conditional
@@ -725,6 +727,10 @@ impl Agent {
                 "depends on a condition the task sets: it uses values the task gives only for once something \
                  happens, and the page does not show that it happened. Do what the task asks first, with the values \
                  it gives first, before using these",
+            )
+        } else if met.as_deref() == Some(DONE) {
+            Some(
+                "has already been done by this run, and the task does not ask for it again: check the page shows it, or finish",
             )
         } else if met.as_deref() != Some(MET) || (waits && !happened) {
             Some(UNSHOWN_CONDITION)

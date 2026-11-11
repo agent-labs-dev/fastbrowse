@@ -207,11 +207,16 @@ pub fn conditional_question(action: &str) -> NoulQuestion {
 /// The one [`met_question`] option that lets a conditional commit go ahead.
 pub const MET: &str = "asked";
 
+/// The [`met_question`] option for a step the run's own steps show already done, which the task does not ask for
+/// again (#882).
+pub const DONE: &str = "done";
+
 /// Whether the task says to take this step, with these values, in the state the page shows, asked with the page once
 /// [`conditional_question`] says the task sets a condition. A choice that does not tell Jev the step is conditional:
 /// told so, it read a step the task asks for outright before a condition on a later one ("place the order using
 /// NOTAPOSTCODE; if the site rejects it, ...") as waiting on that condition, at even odds. Only [`MET`] lets the
-/// commit go ahead, so the page can take authorization away and never give it.
+/// commit go ahead, so the page can take authorization away and never give it. It is also asked before every commit
+/// after a run's first, where [`DONE`] names a repeat of a step the task asks for once.
 pub fn met_question(action: &str) -> ChoiceQuestion {
     ChoiceQuestion::new(
         format!(
@@ -232,6 +237,12 @@ pub fn met_question(action: &str) -> ChoiceQuestion {
                 Value::from(
                     "No: the page shows a state in which the task says not to do this, or says to do something \
                      else first.",
+                ),
+            ),
+            (
+                DONE.to_string(),
+                Value::from(
+                    "No: the steps taken so far already did this, and the task does not ask for it to be done again.",
                 ),
             ),
             ("unclear".to_string(), Value::from("The page does not show enough to tell.")),
