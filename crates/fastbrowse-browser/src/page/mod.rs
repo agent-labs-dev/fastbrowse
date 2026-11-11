@@ -167,7 +167,7 @@ pub(crate) struct DocumentResponse {
     document_key: String,
 }
 
-/// A document's response read, kept with the tab and lifecycle generation it was read at.
+/// A document's response read, kept with the tab and the document mark it was read at.
 ///
 /// The status of a document is fixed once it is served, and the read costs an isolated-world evaluate on every
 /// observation. An observation whose document is the one already read keeps that read; a document the read does not
@@ -175,7 +175,7 @@ pub(crate) struct DocumentResponse {
 #[derive(Debug, Clone)]
 pub(crate) struct KeptDocument {
     pub(crate) session_id: String,
-    pub(crate) generation: u64,
+    pub(crate) mark: u64,
     pub(crate) document: DocumentResponse,
 }
 
@@ -605,17 +605,17 @@ impl CdpPage {
             }
             // The status read is a command of its own, and it answers the same for as long as the document is: an
             // observation of a document already read keeps that read instead of asking the browser again. The
-            // generation is taken before the read, so a navigation during it leaves the kept copy naming an older
-            // generation and the next observation reads the new document.
+            // document mark is taken before the read, so a navigation during it leaves the kept copy naming an older
+            // mark and the next observation reads the new document.
             let session_id = self.session.active_session_id()?;
-            let generation = self.session.lifecycle_mark();
+            let mark = self.session.document_mark(&session_id);
             let kept = self
                 .state
                 .lock()
                 .unwrap()
                 .document
                 .clone()
-                .filter(|kept| kept.session_id == session_id && kept.generation == generation);
+                .filter(|kept| kept.session_id == session_id && kept.mark == mark);
             // A timer can open a dialog while the snapshot evaluates, and the dialog blocks that
             // evaluate until the 120s command deadline.
             let read = async {
@@ -651,7 +651,7 @@ impl CdpPage {
             let document = match read_document {
                 Some(document) => document,
                 // A kept read names the document it was made in. One that names another document was replaced
-                // without the generation moving, so its status is read now rather than carried over.
+                // without the mark moving, so its status is read now rather than carried over.
                 None => match kept
                     .filter(|kept| main.is_some_and(|main| main.raw.document_key == kept.document.document_key))
                 {
@@ -661,7 +661,7 @@ impl CdpPage {
             };
             if main.is_some_and(|main| main.raw.document_key == document.document_key) {
                 self.state.lock().unwrap().document =
-                    Some(KeptDocument { session_id, generation, document: document.clone() });
+                    Some(KeptDocument { session_id, mark, document: document.clone() });
             }
             let mut kept: Vec<Control> = vec![];
             let mut control_state: HashMap<String, Target> = HashMap::new();

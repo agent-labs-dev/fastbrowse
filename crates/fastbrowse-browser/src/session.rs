@@ -340,6 +340,8 @@ pub(crate) struct State {
     /// Frames Chrome's own ad tagging marks as ads or inside one, which a look does not read: once cross-origin frames
     /// were read, a page's ad slots reached every step as its content, and a run answered with an ad's text.
     pub(crate) ad_frames: HashSet<String>,
+    /// session -> how many documents its top frame has committed, for `document_mark`.
+    pub(crate) documents: HashMap<String, u64>,
     /// Document requests the grant refused, so a navigation that was cut short is told from one that failed.
     pub(crate) denials: u32,
     /// Requests paused and not yet released, so closing can release what a stopped task left paused.
@@ -908,6 +910,15 @@ impl BrowserSession {
     /// How many navigations to another document the run's own input has begun, on any page, so far.
     pub fn input_navigations(&self) -> u32 {
         self.0.state.lock().unwrap().input_navigations
+    }
+
+    /// Which document `session_id`'s top frame holds, as a count of the documents it has committed.
+    ///
+    /// The mark moves when, and only when, a navigation commits a new document there (a back-forward cache restore
+    /// included), so a read kept with it holds for as long as its document does. The lifecycle generation is no
+    /// such mark: every request that finishes and every frame's lifecycle event moves it, on an unchanged document.
+    pub fn document_mark(&self, session_id: &str) -> u64 {
+        self.0.state.lock().unwrap().documents.get(session_id).copied().unwrap_or_default()
     }
 
     /// The unique id of the status world `context_id` names on `session_id`, once, if Chrome reported it.
@@ -1483,6 +1494,12 @@ impl Shared {
                     }
                 }
                 self.tag_ad_frame(&params["frame"]);
+                // Only a top frame's commit replaces the document a tab's observation reads; a frame inside it does not.
+                if let Some(session) = session
+                    && params["frame"]["parentId"].is_null()
+                {
+                    *self.state.lock().unwrap().documents.entry(session.to_owned()).or_default() += 1;
+                }
             }
             "Page.frameRequestedNavigation" | "Page.frameStartedLoading" => {
                 if let Some(session) = session {
@@ -1585,6 +1602,7 @@ impl Shared {
                 // A target that went away answers nothing more.
                 state.requests_open.retain(|(sid, _), _| *sid != child);
                 state.request_bytes_due.retain(|(sid, _), _| *sid != child);
+                state.documents.remove(&child);
                 state.navigating.retain(|(sid, _)| *sid != child);
                 state.frames_loading.retain(|(sid, _)| *sid != child);
                 state.choosers.remove(&child);
