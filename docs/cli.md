@@ -22,7 +22,7 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 | `--profile DIR` | keep the local Chrome profile in `DIR`, so sign-ins persist (implies `--local`) |
 | `--cloud-profile ID` | run on a signed-in Browser Use Cloud profile |
 | `--fetch` | read pages over HTTP with no browser, for a task that only reads |
-| `--desktop WINDOW` | drive a Linux desktop app window instead of a browser, through [deskpilot](https://github.com/cjber/deskpilot); see [Desktop apps](#desktop-apps) |
+| `--desktop APP` | start a Linux desktop app and drive it instead of a browser, through [deskpilot](https://github.com/cjber/deskpilot); see [Desktop apps](#desktop-apps) |
 | `--browser` | start a browser from the first step, rather than reading over HTTP until the task needs one |
 | `--extension` | run in your own Chrome, signed in as you are, through the fastbrowse extension; see [Your own Chrome](#your-own-chrome) |
 | `--extension-browser LABEL` | with the extension connected in more than one browser, use the one its popup labels `LABEL` (implies `--extension`) |
@@ -176,22 +176,27 @@ restart it without the flag, when you are done.
 
 ## Desktop apps
 
-`--desktop WINDOW` runs the task in a native Wayland app window on a Hyprland desktop, through
-[deskpilot](https://github.com/cjber/deskpilot) 0.5.1 or newer. `WINDOW` is anything `deskpilot` matches: a window
-address, class or title. Jev picks each action from the window's accessibility tree, and deskpilot clicks and types
-in the background, so the pointer and keyboard focus stay where you left them:
+`--desktop APP` starts a native Wayland app on a Hyprland desktop and runs the task in its window, through
+[deskpilot](https://github.com/cjber/deskpilot). `APP` is the command line that starts the app, split into words as a
+POSIX shell splits them, with no shell running it. The run starts it with deskpilot's `launch` as a deskpilot agent of
+its own, so the window opens on that agent's hidden workspace, and the app closes when the run ends. A window that is
+already open is not driven: deskpilot sends input in the background only to an app its agent launched. It needs a
+deskpilot with `launch` ([cjber/deskpilot#86](https://github.com/cjber/deskpilot/pull/86)); with an older one the run
+ends `unavailable`. Jev picks each action from the window's accessibility tree, and deskpilot clicks and types in the
+background, so the pointer and keyboard focus stay where you left them:
 
 ```sh
-fastbrowse --desktop org.gnome.TextEditor "Write 'hello' in the open document."
+fastbrowse --desktop gnome-text-editor "Write 'hello' in a new document."
 ```
 
+An app that runs as one instance, such as one you already have open, may hand its new window to that copy, so
+`launch` sees no window of its own and the run ends with deskpilot's error. Pass the app's flag for a separate
+instance when it has one.
+
 A password field is never read, and `--secret NAME=ENV_VAR@desktop://<class>` types a secret only into the window of
-that app class. `--authorize` and the step and spend ceilings work as for a browser. With a deskpilot that clicks
-popup items ([cjber/deskpilot#84](https://github.com/cjber/deskpilot/pull/84)), an open combo box's list and a popup
-menu's entries are controls like any other, and the run clicks the item it wants. With an older deskpilot a popup
-menu is out of reach, and a combo box is chosen in with the keyboard, as choosing one of its options by name always
-is: a list the click opened is closed again and the arrow keys move the choice. Keys and typed or pasted text reach
-a window on a workspace that is not showing whenever deskpilot's tools take `hidden`. The run stays in the one
+that app class. `--authorize` and the step and spend ceilings work as for a browser. An open combo box's list and a
+popup menu's entries are controls like any other, and the run clicks the item it wants. Choosing a combo box's option
+by name uses the keyboard: a list the click opened is closed again and the arrow keys move the choice. The run stays in the one
 window: a dialog the app opens as a window of its own is out of its reach. Recipes, `--start` and every browser
 option are refused. Set `FASTBROWSE_DESKPILOT` to run a `deskpilot` that is not on `PATH`.
 

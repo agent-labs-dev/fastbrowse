@@ -24,6 +24,8 @@ indexmap = "2.14.2"
 percent-encoding = "2.3.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
+# `desktop` takes the app to start as one command line, split into words as a POSIX shell splits them.
+shlex = "2.0.1"
 # `desktop` speaks to `deskpilot mcp` over its stdin and stdout.
 tokio = { version = "1.54.1", features = ["rt", "time", "macros", "sync", "fs", "process", "io-util"] }
 url = "2.5.8"

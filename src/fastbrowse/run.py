@@ -236,11 +236,12 @@ async def run_task(
     then ends `cancelled`. It cannot be combined with `allowed_origins`: a popup's first request can leave before
     the extension reaches it, so it could not be refused first.
 
-    `desktop` drives a native desktop window instead of a browser, through deskpilot on Hyprland
-    (https://github.com/cjber/deskpilot): its address, its app class, or a part of its class or title that names exactly
-    one window. Input reaches the window wherever it is, without moving the user's pointer or keyboard focus. It
-    opens no browser, so it cannot be combined with a start address or any browser option, and it records and replays
-    no recipe.
+    `desktop` drives a native desktop app instead of a browser, through deskpilot on Hyprland
+    (https://github.com/cjber/deskpilot): the command line that starts it, such as `"gnome-text-editor --new-window"`,
+    split as a POSIX shell splits words. The run starts the app on deskpilot's hidden workspace with `launch`, drives it
+    without moving the user's pointer or keyboard focus, and closes it when the run ends; a window that is already open
+    is not driven. It opens no browser, so it cannot be combined with a start address or any browser option, and it
+    records and replays no recipe.
 
     `context` is background the run may use but never reads as the task: where the request came from, what the
     caller already knows. Jev sees it as `background`.

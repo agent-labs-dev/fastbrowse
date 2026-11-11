@@ -211,8 +211,9 @@ class RunParams(Params):
     """Which browser the extension is connected in, by the label its popup shows, when there is more than one.
     Implies `extension`."""
     desktop: str | None = None
-    """Drive a native desktop window instead of a browser, through deskpilot on Hyprland: its address, its app
-    class, or a substring of its class or title that names exactly one window."""
+    """Drive a native desktop app instead of a browser, through deskpilot on Hyprland: the command line that starts
+    it, split as a POSIX shell splits words. The run starts the app on deskpilot's hidden workspace and closes it
+    when the run ends."""
 
 
 class RunCancelParams(Params):
