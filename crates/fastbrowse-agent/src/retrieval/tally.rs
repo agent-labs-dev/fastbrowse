@@ -1127,6 +1127,8 @@ mod tests {
             quote: quote.into(),
             note: json!({"quote": quote}),
             span: (String::new(), 0, 0),
+            literal: true,
+            page: String::new(),
         };
         let found = [note("One by Ada"), note("Two by Ada"), note("Three by Bo"), note("Four by Bo")];
         let records = [0, 1, 2, 3];

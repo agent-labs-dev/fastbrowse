@@ -1938,7 +1938,7 @@ mod tests {
             tallied("requests released last.", "requests", tally::Op::Max, "package", Some("release date"), vec![]);
         // The fake picks the offered value with a hyphen in it, the ISO date.
         let jev = Tallying::new("Released:", "-");
-        let checked = review_claims(&jev, task, None, vec![named], &notes, None, true, &[]).await.unwrap();
+        let checked = review_claims(&jev, &READS, task, None, vec![named], &notes, None, true, &[]).await.unwrap();
         assert_eq!(checked.problem, None);
         assert_eq!(checked.claims, [Claim::new("requests released last.", latest.clone())]);
         let Question::Choice(value) = &jev.asked()["t0/v0"] else { panic!("value is a choice") };
@@ -1951,11 +1951,13 @@ mod tests {
             let text = format!("The latest release was on {written}.");
             tallied(&text, written, tally::Op::Max, "package", Some("release date"), vec![])
         };
-        let checked =
-            review_claims(&jev, task, None, vec![dated("May 14, 2026")], &notes, None, true, &[]).await.unwrap();
+        let checked = review_claims(&jev, &READS, task, None, vec![dated("May 14, 2026")], &notes, None, true, &[])
+            .await
+            .unwrap();
         assert_eq!(checked.claims, [Claim::new("The latest release was on May 14, 2026.", latest.clone())]);
-        let checked =
-            review_claims(&jev, task, None, vec![dated("Dec 16, 2024")], &notes, None, true, &[]).await.unwrap();
+        let checked = review_claims(&jev, &READS, task, None, vec![dated("Dec 16, 2024")], &notes, None, true, &[])
+            .await
+            .unwrap();
         assert_eq!(checked.claims, [Claim::new("The latest release was on 2026-05-14.", latest)]);
     }
 
@@ -1973,7 +1975,7 @@ mod tests {
         let task = "Which was founded earliest, A or B?";
         let claim = tallied("A was founded earliest.", "A", tally::Op::Min, "company", Some("founding year"), vec![]);
         let jev = Tallying::new("Founded", "'1998'");
-        let checked = review_claims(&jev, task, None, vec![claim], &notes, None, true, &[]).await.unwrap();
+        let checked = review_claims(&jev, &READS, task, None, vec![claim], &notes, None, true, &[]).await.unwrap();
         assert_eq!(checked.problem, None);
         assert_eq!(checked.claims, [Claim::new("A was founded earliest.", earliest)]);
     }
@@ -2126,7 +2128,8 @@ mod tests {
             |text: &str| tallied(text, "9", tally::Op::Count, "one-star book", None, vec![fact_id(&facts[0])]);
         let task = "How many one-star books are there?";
         let jev = Tallying { same: Some("Cinder"), ..Tallying::new("star", "") };
-        let checked = review_claims(&jev, task, None, vec![counted("There are 9.")], &notes, None, true, &[]).await;
+        let checked =
+            review_claims(&jev, &READS, task, None, vec![counted("There are 9.")], &notes, None, true, &[]).await;
         let checked = checked.unwrap();
         assert_eq!(checked.problem, None, "{:?}", checked.rejection);
         assert_eq!(checked.claims[0].text, "There are 3.");
@@ -2138,7 +2141,8 @@ mod tests {
         let Question::Choice(repeat) = &asked["t0/s2c0"] else { panic!("a repeat is a choice") };
         assert_eq!(repeat.criteria.keys().collect::<Vec<_>>(), ["m0", "m1", "none"], "the notes on its page");
         let unmatched = Tallying::new("star", "");
-        let checked = review_claims(&unmatched, task, None, vec![counted("There are 9.")], &notes, None, true, &[]);
+        let checked =
+            review_claims(&unmatched, &READS, task, None, vec![counted("There are 9.")], &notes, None, true, &[]);
         assert_eq!(checked.await.unwrap().claims[0].text, "There are 4.", "a record only the screenshot holds counts");
     }
 
@@ -2568,7 +2572,7 @@ mod tests {
         ];
         let jev = Support::new(true);
         let task = "List the newest comment and whether the author replied";
-        review_claims(&jev, task, None, claims, &notes, None, false, &[]).await.unwrap();
+        review_claims(&jev, &READS, task, None, claims, &notes, None, false, &[]).await.unwrap();
         let asked = jev.asked.lock().unwrap();
         let question = |key: &str| asked[0][key].dump_json();
         let rule = "A quote marked whole_record holds all the text the page renders for one item it repeats";
