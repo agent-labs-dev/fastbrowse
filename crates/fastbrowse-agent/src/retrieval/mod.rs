@@ -5,7 +5,7 @@
 //! extraction and `answers` the answer built from what Jev read.
 
 mod answers;
-pub(crate) use answers::{Draft, compose_reviewed, draft_reviewed, noticed};
+pub(crate) use answers::{Draft, ReviewedComposition, compose_reviewed, draft_reviewed, noticed};
 mod choices;
 mod chunks;
 mod fields;
@@ -14,7 +14,7 @@ mod tally;
 pub(crate) mod text;
 
 pub(crate) use answers::cited_quote;
-pub use answers::{Claim, ComposedAnswer, assemble_answer, compose, draft_answer, marked_partial, partial_answer};
+pub use answers::{Claim, ComposedAnswer, assemble_answer, compose, draft_answer, partial_answer};
 pub use choices::read_candidates;
 pub(crate) use choices::{PageRead, read_page, whole_page_facts};
 pub use chunks::page_quotes;

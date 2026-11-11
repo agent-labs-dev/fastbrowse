@@ -1145,12 +1145,7 @@ const PARTIAL_NOTICE: &str = "Partial evidence only. Remaining coverage is omitt
 /// draws on, without another model call, or `None` when it read none. Context it collected on the way is not an
 /// answer: a write run that lost its browser cited six lone `}` lines of a comment's error dump as its answer (#857).
 pub fn partial_answer(notes: &Notes) -> Option<ComposedAnswer> {
-    draft_answer(notes).map(marked_partial)
-}
-
-/// `result`, stated as what a run that stopped short could say.
-pub fn marked_partial(result: ComposedAnswer) -> ComposedAnswer {
-    noticed(PARTIAL_NOTICE, result)
+    draft_answer(notes).map(|result| noticed(PARTIAL_NOTICE, result))
 }
 
 /// `result` under `notice`, which a reader takes in before any claim.
