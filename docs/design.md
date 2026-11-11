@@ -196,7 +196,10 @@ A count, total, minimum or maximum, or a place after one such as the second chea
 the kind of record and the field, and Jev answers one question per note read: for a count, whether it holds exactly one
 such record, and for a total or extreme, whether it holds one with its field, then which number in it is the field. A
 record's name, heading or a link to it holds no value, so it is not counted as a record without one. Code counts, adds
-or compares, writes the value into the claim and cites every record it rests on. A minimum or maximum the claim
+or compares, writes the value into the claim and cites every record it rests on. For a count per group, such as quotes
+per author, the composer names only the group its claim counts: the run's LLM copies each record's group from its
+quote, a read that is not text of that quote leaves the count unstated, and code groups the records, counts each group
+and checks the claim's place among all of them. A minimum or maximum the claim
 answers with its record's name instead keeps that name, and only the record check judges it. Such a claim gets no support question
 over the value: Jev is asked only whether the claim, with `[computed]` in the value's place, states nothing besides the
 tally. For a minimum or maximum both questions are choices: whether the claim states the value, the record holding it,

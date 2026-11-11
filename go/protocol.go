@@ -232,6 +232,7 @@ const (
 	LLMPurposePages        LLMPurpose = "pages"
 	LLMPurposeDates        LLMPurpose = "dates"
 	LLMPurposeUnobtainable LLMPurpose = "unobtainable"
+	LLMPurposeGroups       LLMPurpose = "groups"
 )
 
 type Limits struct {

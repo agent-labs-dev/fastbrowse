@@ -18,5 +18,7 @@ public enum LLMPurpose {
     @JsonProperty("dates")
     DATES,
     @JsonProperty("unobtainable")
-    UNOBTAINABLE
+    UNOBTAINABLE,
+    @JsonProperty("groups")
+    GROUPS
 }

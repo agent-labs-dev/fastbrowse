@@ -661,7 +661,8 @@
         "fill",
         "pages",
         "dates",
-        "unobtainable"
+        "unobtainable",
+        "groups"
       ],
       "title": "LLMPurpose",
       "type": "string"
