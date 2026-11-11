@@ -53,6 +53,9 @@ const LEAVE: &str = "leave";
 const NO_VALUE_SAID: &str = "The task asks for this field's value, and nothing given states it.";
 const LEAVE_SAID: &str = "The task asks nothing of this field, so it is left as it is.";
 
+/// The answer to a choice among copies of a value that says the value does not run from the end they share.
+const ELSEWHERE: &str = "elsewhere";
+
 /// What a choice among a field's options settled on: one of them, or the key of an answer offered instead.
 enum Chosen {
     Option(String),
@@ -128,6 +131,29 @@ fn value_questions<'a>(
     if begins.is_empty() || ends.is_empty() {
         sources.shift_remove(IN_TASK);
     }
+    let holds = holding(target)
+        .map(|now| format!(" The field holds {now} now, and typing replaces all of it."))
+        .unwrap_or_default();
+    let source_question =
+        if source_question.is_empty() { source_question } else { format!("{source_question}{holds}") };
+    let tried = field_history(state, target);
+    let mut asked = vec![("source", source_question, sources)];
+    if !begins.is_empty() && !ends.is_empty() {
+        asked.push(("first", word_question(holder, label, "begins", &tried), word_options(text, begins)));
+        asked.push(("last", word_question(holder, label, "ends", &tried), word_options(text, ends)));
+    }
+    asked
+}
+
+/// Which of `holder`'s words `end` the value for `label`, with what `tried` says the field already had.
+fn word_question(holder: &str, label: &str, end: &str, tried: &str) -> String {
+    format!(
+        "If {holder} states the value for {label}, which of its words {end} the value? When it gives this field several values, {FIRST_VALUE} A search takes what is looked for, not the request around it.{tried}"
+    )
+}
+
+/// What a field already had, as the question of where its value begins or ends says it.
+fn field_history(state: &RunState, target: &Control) -> String {
     let tried = typed_into(state, target);
     let tried = if tried.is_empty() {
         String::new()
@@ -142,20 +168,7 @@ fn value_questions<'a>(
     let holds = holding(target)
         .map(|now| format!(" The field holds {now} now, and typing replaces all of it."))
         .unwrap_or_default();
-    let source_question =
-        if source_question.is_empty() { source_question } else { format!("{source_question}{holds}") };
-    let tried = format!("{tried}{holds}");
-    let mut asked = vec![("source", source_question, sources)];
-    if !begins.is_empty() && !ends.is_empty() {
-        let span = |end: &str| {
-            format!(
-                "If {holder} states the value for {label}, which of its words {end} the value? When it gives this field several values, {FIRST_VALUE} A search takes what is looked for, not the request around it.{tried}"
-            )
-        };
-        asked.push(("first", span("begins"), word_options(text, begins)));
-        asked.push(("last", span("ends"), word_options(text, ends)));
-    }
-    asked
+    format!("{tried}{holds}")
 }
 
 /// What `target` holds now, quoted, unless it is empty or sensitive: a sensitive field's value is masked and never goes
@@ -950,43 +963,78 @@ impl Agent {
                 let copied = |from: &Word, to: &Word| chars[from.start..to.end].iter().collect::<String>();
                 let holder = if source == IN_READ { "what was read" } else { "the task" };
                 let run_task = state.task.clone();
-                let exact = |bound: &str, options: &[(String, String)]| {
+                let exact = |bound: &str, options: &[(String, String)], elsewhere: &str| {
                     let question = format!(
                         "Which exact text belongs in {label}? Each choice is the complete value that would be copied from {holder}, {bound}. Choose only the field's value, without surrounding task instructions. When {holder} gives this field several values, {FIRST_VALUE}"
                     );
-                    self.offered_copies(&run_task, question, options)
+                    let (question, mut options) = self.offered_copies(&run_task, question, options);
+                    options.insert(ELSEWHERE.into(), JsonValue::from(elsewhere));
+                    (question, options)
                 };
-                let ending: Vec<_> = ends
-                    .iter()
-                    .filter(|word| word.index >= first.index)
-                    .map(|word| (word.index.to_string(), copied(first, word)))
-                    .collect();
-                // The end was picked among words where the value may end; when none of them comes after the
-                // beginning, the value is the one word it begins at, as a crossed pick is.
-                let last = if first.index == last.index || ending.is_empty() {
-                    if ending.is_empty() { first } else { last }
-                } else {
-                    let (question, options) = exact("beginning at the selected word", &ending);
-                    let picked = self.ask_choice(state, observation, &question, options).await?;
-                    ends.iter()
-                        .find(|word| word.index >= first.index && word.index.to_string() == picked)
-                        .unwrap_or(first)
-                };
-                let first = if first.index >= last.index {
-                    first
-                } else {
+                let tried = field_history(state, target);
+                let (mut first, mut last, mut begins, mut ends) = (first.clone(), last.clone(), begins.clone(), ends);
+                // Each copy offered for one end runs from the other end as picked, so when that end is wrong every
+                // copy is: on a chat box told "Reply with only the word pong. Then send it. ...", a beginning picked
+                // at "Reply" offered only copies starting "Reply", and the end then picked among them ran on to the
+                // task's last word. Jev can say the value does not run from there, and that end is picked again
+                // without the word, so each round drops a word and the rounds end.
+                let (first, last) = loop {
+                    let ending: Vec<_> = ends
+                        .iter()
+                        .filter(|word| word.index >= first.index)
+                        .map(|word| (word.index.to_string(), copied(&first, word)))
+                        .collect();
+                    // The end was picked among words where the value may end; when none of them comes after the
+                    // beginning, the value is the one word it begins at, as a crossed pick is.
+                    if ending.is_empty() {
+                        last = first.clone();
+                    } else if first.index != last.index {
+                        let (question, options) = exact(
+                            "beginning at the selected word",
+                            &ending,
+                            "None of these: the value does not begin at the selected word.",
+                        );
+                        let picked = self.ask_choice(state, observation, &question, options).await?;
+                        if picked == ELSEWHERE {
+                            begins.retain(|word| word.index != first.index);
+                            first = self
+                                .repick(state, observation, target, (&task, holder, &label, &tried), &begins)
+                                .await?;
+                            continue;
+                        }
+                        last = ends
+                            .iter()
+                            .find(|word| word.index >= first.index && word.index.to_string() == picked)
+                            .unwrap_or(&first)
+                            .clone();
+                    }
+                    if first.index >= last.index {
+                        break (first, last);
+                    }
                     let starting: Vec<_> = begins
                         .iter()
                         .filter(|word| word.index <= last.index)
-                        .map(|word| (word.index.to_string(), copied(word, last)))
+                        .map(|word| (word.index.to_string(), copied(word, &last)))
                         .collect();
-                    let (question, options) = exact("ending where the value ends", &starting);
+                    let (question, options) = exact(
+                        "ending where the value ends",
+                        &starting,
+                        "None of these: the value does not end where these end.",
+                    );
                     let picks = self.ask_choices(state, Some(observation), vec![("start", question, options)]).await?;
-                    begins
+                    // The end was the one picked from this beginning, so it is picked again from there without it.
+                    if picks.get("start").map(String::as_str) == Some(ELSEWHERE) {
+                        ends.retain(|word| word.index != last.index);
+                        continue;
+                    }
+                    let start = begins
                         .iter()
                         .find(|word| word.index <= last.index && Some(&word.index.to_string()) == picks.get("start"))
-                        .unwrap_or(first)
+                        .unwrap_or(&first)
+                        .clone();
+                    break (start, last);
                 };
+                let (first, last) = (&first, &last);
                 // Words keep only their letters and digits, so punctuation the value starts or ends with, such as
                 // a handle's sign or a sentence's stop, is offered as part of it for Jev to keep or leave.
                 let max = self.jev.profile().max_choice_options;
@@ -1011,6 +1059,30 @@ impl Agent {
             (NO_VALUE, ..) => Err(self.unsupplied(state, observation, target)),
             _ => Err(self.missing(state, observation, target)),
         }
+    }
+
+    /// The word among `words` where the value begins, asked again once Jev said it does not begin at the word picked
+    /// before. With no word left, the source does not state the value.
+    async fn repick(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        target: &Control,
+        (text, holder, label, tried): (&str, &str, &str, &str),
+        words: &[Word],
+    ) -> Step<Word> {
+        if words.is_empty() {
+            return Err(self.missing(state, observation, target));
+        }
+        let question = word_question(holder, label, "begins", tried);
+        let picks =
+            self.ask_choices(state, Some(observation), vec![("first", question, word_options(text, words))]).await?;
+        let picked = picks.get("first").and_then(|index| index.parse::<usize>().ok());
+        words
+            .iter()
+            .find(|word| Some(word.index) == picked)
+            .cloned()
+            .ok_or_else(|| DecisionError::Failed("expected a word of the source".into()).into())
     }
 
     /// How many punctuation characters the beginning and the end of a value keep, as Jev picks among `edges`.
@@ -1073,14 +1145,15 @@ impl Agent {
             .into());
         }
         // Parts cover the whole source and overlap so a value's end across a cut remains whole. Reserving one choice
-        // for no value lets Jev refuse a source instead of being forced to pick unrelated words.
+        // for no value lets Jev refuse a source instead of being forced to pick unrelated words. The words left keep
+        // one choice free too, for the answer that a copy does not run from the end picked.
         let chars: Vec<char> = task.chars().collect();
         let (mut begins, mut ends) = (group.clone(), group);
-        while begins.len() > max || ends.len() > max {
+        while begins.len() >= max || ends.len() >= max {
             let mut asked = Vec::new();
             let mut cut = Vec::new();
             for (key, group) in [("begins", &begins), ("ends", &ends)] {
-                if group.len() <= max {
+                if group.len() < max {
                     continue;
                 }
                 let step = group.len().div_ceil((max - 1).min(VALUE_SOURCE_PARTS));
