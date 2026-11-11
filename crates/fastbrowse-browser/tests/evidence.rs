@@ -269,18 +269,36 @@ async fn test_an_image_line_quotes_the_item_it_sits_in() {
         r#"document.body.innerHTML = '<ul>' +
           '<li><a class="tile"><span><img alt="thumbnail" src="https://example.test/01.gif"></span><p>Dungeon entrances</p></a></li>' +
           '<li><a class="tile"><span><img alt="thumbnail" src="https://example.test/map.webp"></span><p>The Eastern Kingdoms</p></a></li>' +
-          '</ul><p><img alt="divider" src="https://example.test/rule.png"></p><img alt="lone" src="https://example.test/lone.png">';"#,
+          '</ul><p><img alt="divider" src="https://example.test/rule.png"></p><img alt="lone" src="https://example.test/lone.png">' +
+          '<div class="card"><img src="https://example.test/a.png"><p>Card A</p></div>' +
+          '<div class="card"><img src="https://example.test/b.png"><p>Card B</p></div>' +
+          '<div class="card"><img src="https://example.test/c.png"><p>Card C</p></div>' +
+          '<figure><img src="https://example.test/fig.png"><figcaption>A captioned figure</figcaption></figure>' +
+          '<header><img alt="logo" src="https://example.test/logo.png"><nav>Home About Contact</nav></header>' +
+          '<article><h1>Title</h1><p>First paragraph.</p><img src="https://example.test/inline.png"><p>Second.</p></article>' +
+          '<section><div><div><img src="https://example.test/wrapped.png"></div></div><p>One.</p><p>Two.</p></section>';"#,
     )
     .await;
     let capture = h.page.capture().await.expect("capture");
     let images: Vec<&str> =
         capture.text.lines().filter(|line| line.starts_with("Image element DOM metadata")).collect();
-    assert_eq!(images.len(), 4, "{images:?}");
-    assert!(images[0].contains("01.gif") && images[0].contains(r#""near":"Dungeon entrances""#), "{}", images[0]);
-    assert!(images[1].contains("map.webp") && images[1].contains(r#""near":"The Eastern Kingdoms""#), "{}", images[1]);
-    // An empty paragraph does not borrow its neighbours' text, and an image with no enclosing text names nothing.
-    assert!(images[2].contains(r#""near":null"#), "{}", images[2]);
-    assert!(images[3].contains(r#""near":null"#), "{}", images[3]);
+    assert_eq!(images.len(), 11, "{images:?}");
+    let near = |source: &str| {
+        let line = images.iter().find(|line| line.contains(source)).expect(source);
+        let metadata: serde_json::Value =
+            serde_json::from_str(line.trim_start_matches("Image element DOM metadata: ")).expect("metadata");
+        metadata["near"].as_str().map(str::to_string)
+    };
+    // A list item, a repeated record and a figure are each one item, and quote their own text.
+    assert_eq!(near("01.gif").as_deref(), Some("Dungeon entrances"));
+    assert_eq!(near("map.webp").as_deref(), Some("The Eastern Kingdoms"));
+    assert_eq!(near("b.png").as_deref(), Some("Card B"));
+    assert_eq!(near("fig.png").as_deref(), Some("A captioned figure"));
+    // An image in no item quotes nothing: not an empty paragraph's neighbours, a menu beside a logo, an article it is
+    // placed in, nor the section around empty wrappers.
+    for source in ["rule.png", "lone.png", "logo.png", "inline.png", "wrapped.png"] {
+        assert_eq!(near(source), None, "{source}");
+    }
     h.close().await;
 }
 
