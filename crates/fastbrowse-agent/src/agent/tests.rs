@@ -7501,6 +7501,9 @@ async fn test_a_plan_stops_at_the_step_limit() {
 
 #[test]
 fn a_known_page_is_offered_to_navigate_to_until_the_run_is_on_it() {
+    // In a recorded first step on a package index, told only "another address" Jev searched the site for the item
+    // whose page was on offer, with one known page and with two. Naming a known page as one held read 0.73, against
+    // 0.66 for naming it as the address.
     let agent = agent();
     let mut state = run_state();
     state.task = "Open the project page of the httpx package.".into();
@@ -7566,4 +7569,25 @@ async fn a_known_page_may_be_navigated_to_after_it_was_reached() {
     assert!(action.is_ok(), "{action:?}");
     let elsewhere = Decision { url: Some("https://pypi.org/search/?q=httpx".into()), ..decision };
     assert!(agent.action(&mut state, &home, &elsewhere).await.is_err(), "a guessed address is still refused");
+}
+
+#[tokio::test]
+async fn a_known_page_that_redirects_is_reached_by_the_address_it_was_opened_at() {
+    // A known page can redirect, an http address to https or a path to its canonical one, so the landing address is
+    // not the one offered. The navigation's own address marks it reached, ending the offer instead of spending the
+    // no-progress budget on the same redirect again.
+    let agent = Agent::new(Arc::new(HungPage::new(0)), authorized_jev(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Open the item page the task names.".into();
+    state.authorization = Authorization { irreversible_actions: true };
+    let known = "http://shop.test/item/1".to_string();
+    state.known_pages = vec![known.clone()];
+    let home = at("https://shop.test/", &[]);
+    let decision = Decision { url: Some(known.clone()), ..code_decision(Operation::Navigate, None) };
+    agent.step(&mut state, &home, &decision).await.expect("the known page opens");
+    let recorded = state.steps.last().expect("the navigation is recorded");
+    assert_eq!(recorded.outcome, StepOutcome::Executed);
+    assert_eq!(state.reached_known_pages, vec![known.clone()]);
+    let context = agent.context(&state, &home, Vec::new(), false, false).unwrap();
+    assert!(!context.known_pages.contains(&known), "a redirected known page is not offered again");
 }
