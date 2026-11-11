@@ -481,3 +481,139 @@ async fn test_a_settle_of_an_idle_page_pays_no_quiet_window() {
     assert_eq!(settle_reads_since(&proxy, start), 1, "the settle re-read the page");
     h.close().await;
 }
+
+// -- an unchanged frame is served from the read it kept, and never serves a page that has moved ---------------
+
+/// Wrap the installed snapshot function so a test can count the reads the page makes and how many of them the page
+/// answered from the read it kept. `CdpPage` looks the function up in that slot on every read, so the wrapper sees them
+/// all. Called after an observation, which is what installs the script in the document.
+async fn count_reads(h: &Harness) {
+    common::eval_active(
+        &h.session,
+        "(() => { const scripts = globalThis.__fastbrowseScripts; const key = Object.keys(scripts)[0]; \
+         const installed = scripts[key]; globalThis.__fbReads = { total: 0, unchanged: 0 }; \
+         scripts[key] = mode => { const read = installed(mode); globalThis.__fbReads.total++; \
+         if (read && read.unchanged) globalThis.__fbReads.unchanged++; return read; }; })()",
+    )
+    .await;
+}
+
+/// How many reads the main frame has made, and how many it answered from the read it kept.
+async fn reads(h: &Harness) -> (i64, i64) {
+    let value = common::eval_active(&h.session, "globalThis.__fbReads").await;
+    (value["total"].as_i64().unwrap_or(-1), value["unchanged"].as_i64().unwrap_or(-1))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_unchanged_page_is_served_from_the_read_it_kept() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    // A read that went into a shadow root or a child document is not kept, since a document observer sees neither, so
+    // this page has only what the observer covers.
+    common::eval_active(&h.session, "document.body.innerHTML = '<button>One</button><button>Two</button>';").await;
+    let first = h.observe().await;
+    count_reads(&h).await;
+
+    let second = h.observe().await;
+    let (total, unchanged) = reads(&h).await;
+    assert_eq!(total, 1, "one frame was read");
+    assert_eq!(unchanged, 1, "the second observation of an unchanged page was read again: {:?}", reads(&h).await);
+    // What a reuse answers with is the read it kept, so the two observations say the same thing.
+    assert_eq!(
+        first.controls.iter().map(|c| (c.label.clone(), c.id.clone())).collect::<Vec<_>>(),
+        second.controls.iter().map(|c| (c.label.clone(), c.id.clone())).collect::<Vec<_>>()
+    );
+    assert_eq!(first.page_key, second.page_key);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_change_the_dom_observer_sees_is_not_served_from_a_kept_read() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    // A change the page makes itself, of each kind a document observer reports.
+    for (kind, script) in [
+        ("text", "document.querySelector('button').textContent = 'After';"),
+        ("child", "const b = document.createElement('button'); b.textContent = 'Added'; document.body.append(b);"),
+        ("attribute", "document.querySelector('button').setAttribute('aria-expanded', 'true');"),
+    ] {
+        common::eval_active(&h.session, "document.body.innerHTML = '<button>Before</button>';").await;
+        let before_obs = h.observe().await;
+        count_reads(&h).await;
+        common::eval_active(&h.session, script).await;
+        let (_, unchanged_before) = reads(&h).await;
+        let obs = h.observe().await;
+        let (total, unchanged) = reads(&h).await;
+        assert!(total >= 1, "{kind}: the page was not read");
+        assert_eq!(unchanged, unchanged_before, "{kind}: a changed page was served from the read it kept");
+        // The change is in the observation, which a read served from the kept one would have missed.
+        assert_ne!(before_obs.page_key, obs.page_key, "{kind}: the observation changed");
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_scroll_or_a_pointer_move_is_not_served_from_a_kept_read() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    common::eval_active(
+        &h.session,
+        "document.body.innerHTML = '<div style=\"height:4000px\"><button>Top</button></div>';",
+    )
+    .await;
+    let top = h.observe().await;
+    count_reads(&h).await;
+    // Scrolling moves what is on screen and what an observation calls offscreen, with no node rewritten.
+    common::eval_active(&h.session, "window.scrollTo(0, 2500);").await;
+    sleep(Duration::from_millis(100)).await;
+    let scrolled = h.observe().await;
+    let (_, unchanged) = reads(&h).await;
+    assert_eq!(unchanged, 0, "a scrolled page was served from the read it kept");
+    assert!(
+        scrolled.controls.iter().all(|c| c.offscreen),
+        "scrolling past the only control should leave it offscreen: {:?}",
+        scrolled.controls.iter().map(|c| (&c.label, c.offscreen)).collect::<Vec<_>>()
+    );
+    assert!(top.controls.iter().any(|c| !c.offscreen), "it was on screen before the scroll");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_frame_whose_kept_read_is_missing_is_read_again() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    common::eval_active(&h.session, "document.body.innerHTML = '<button>Kept</button>';").await;
+    h.observe().await;
+    // A page keeps its own read; a second page on the same session keeps none, so an "unchanged" answer names a read
+    // this side does not have and the frame is read again rather than answered from nothing.
+    let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
+    let obs = other.observe().await.expect("observe");
+    assert!(
+        obs.controls.iter().any(|c| c.label == "Kept"),
+        "{:?}",
+        obs.controls.iter().map(|c| &c.label).collect::<Vec<_>>()
+    );
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_selected_value_is_not_served_from_a_kept_read() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(
+        &h.session,
+        r#"document.body.innerHTML = '<select aria-label="Topic"><option>General</option><option>Damaged item</option></select>';"#,
+    ).await;
+    let before = h.observe().await;
+    let action = Action {
+        target_id: Some(find(&before, "Topic").id.clone()),
+        text: Some("Damaged item".into()),
+        ..Action::new(Operation::Select)
+    };
+    let result = h.page.act(&action, &before).await.expect("select");
+    let after = h.observe().await;
+    h.close().await;
+    assert_eq!(result.outcome, StepOutcome::Executed);
+    assert_eq!(find(&after, "Topic").value.as_deref(), Some("Damaged item"));
+    assert_ne!(before.page_key, after.page_key);
+}
