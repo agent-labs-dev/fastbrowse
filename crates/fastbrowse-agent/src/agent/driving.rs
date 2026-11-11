@@ -213,9 +213,11 @@ impl Agent {
                 return Err(failure.stop().into());
             }
             // Only a commit that was sent counts: one the page redrew, covered or replaced before it went is not one
-            // the run has made.
+            // the run has made. One that opened a dialog is not made yet: accepting the dialog makes it, through its
+            // own gate.
             if committed
                 && !state.page_failed
+                && observation.dialog.is_none()
                 && state.history.last().is_some_and(|entry| entry.outcome == StepOutcome::Executed)
             {
                 state.commits += 1;

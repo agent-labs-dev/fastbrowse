@@ -30,35 +30,7 @@ PASSING = (
 )
 # Cassettes the agent's requests have moved past, each waiting on a paid `bench fill --only TASK` a maintainer starts.
 # Strict, so the replay job lists them on every run and fails once the fill lands until the entry is removed.
-PRESS_AND_DONE = "the step request offers press, and the authorization gate asks after a commit (#937, #882)"
-STALE: dict[str, str] = {
-    "confirm-dialog": PRESS_AND_DONE,
-    "contact-form": PRESS_AND_DONE,
-    "contact-needs-confirmation": PRESS_AND_DONE,
-    "login-wall": PRESS_AND_DONE,
-    "mock-basket": PRESS_AND_DONE,
-    "mock-book-table": PRESS_AND_DONE,
-    "mock-cold-sign-in": PRESS_AND_DONE,
-    "mock-false-success": PRESS_AND_DONE,
-    "mock-iframe-note": PRESS_AND_DONE,
-    "mock-invoice-export": PRESS_AND_DONE,
-    "mock-long-description": PRESS_AND_DONE,
-    "mock-newsletter-gate": PRESS_AND_DONE,
-    "mock-order-pause": PRESS_AND_DONE,
-    "mock-order-validation": PRESS_AND_DONE,
-    "mock-password-change": PRESS_AND_DONE,
-    "mock-password-pause": PRESS_AND_DONE,
-    "mock-shadow-dom": PRESS_AND_DONE,
-    "mock-sign-in": PRESS_AND_DONE,
-    "mock-sign-in-code-given": PRESS_AND_DONE,
-    "mock-sign-in-per-digit": PRESS_AND_DONE,
-    "mock-sign-in-two-step": PRESS_AND_DONE,
-    "mock-sign-out": PRESS_AND_DONE,
-    "mock-supplied-sign-in-route": PRESS_AND_DONE,
-    "mock-support-portal": PRESS_AND_DONE,
-    "mock-unfinished-write": PRESS_AND_DONE,
-    "search-price": PRESS_AND_DONE,
-}
+STALE: dict[str, str] = {}
 
 
 def recorded_tasks() -> list[Any]:
