@@ -2353,6 +2353,12 @@ async fn test_an_unchanged_document_is_not_read_for_its_status_again() {
     let Some(h) = proxied(connection, recording(sent.clone())).await else { return };
     h.goto("").await;
     assert_eq!(h.observe().await.response_status, Some(200));
+    // A request finishing moves the lifecycle generation, as a late networkIdle or a frame's load does, on the same
+    // document: what the page does after it is read is not a new document.
+    let mark = h.page.lifecycle_mark();
+    eval_active(&h, "fetch(location.href).then(r => r.text()); true").await;
+    let hr = &h;
+    wait_until(move || async move { hr.page.lifecycle_mark() != mark }).await;
     sent.lock().unwrap().clear();
     // The document is the one just read, so its status is the read already made: no command asks again.
     assert_eq!(h.observe().await.response_status, Some(200));
