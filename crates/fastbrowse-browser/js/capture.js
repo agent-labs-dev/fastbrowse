@@ -323,7 +323,9 @@
   }
 
   // A record can state a value only by drawing it: a row of identical icons a class colours has no text, and a capture
-  // of the text reads every record as alike. The page's own label or class names it, verbatim, for the reader to judge.
+  // of the text reads every record as alike. The page's own label or class names it, verbatim, for the reader to judge,
+  // with what code knows of it: it shows no text. Named alone, an open replies region with nothing in it read as a
+  // label, and "the author has not replied" citing that comment was judged unsupported (#992).
   const LEAVES_OF_THEIR_OWN = 'a,button,img,input,select,textarea,svg';
   function drawnFacts(descendants) {
     const facts = [];
@@ -332,7 +334,7 @@
       if (e.matches(LEAVES_OF_THEIR_OWN) || e.querySelector(LEAVES_OF_THEIR_OWN)) continue;
       if (descendants.includes(e.parentElement) && !textOf(e.parentElement)) continue;
       const name = e.getAttribute('aria-label') || e.getAttribute('title') || [...e.classList].join(' ');
-      if (clean(name)) facts.push(`[${clean(name)}]`);
+      if (clean(name)) facts.push(`[${clean(name)}: no text]`);
     }
     return facts;
   }
@@ -408,7 +410,13 @@
       push(
         el.tagName === 'LI' ? 'list_item' : 'record',
         record ?? textOf(el),
-        { ...(links.length === 1 ? { href: hrefOf(links[0]) } : {}), links: linksIn([el]) },
+        {
+          ...(links.length === 1 ? { href: hrefOf(links[0]) } : {}),
+          links: linksIn([el]),
+          // All an item the page repeats renders, its textless parts named: what it does not show, it does not show.
+          // A comment is often an `li`, so its kind does not say this (#992).
+          ...(record !== null ? { whole_record: true } : {}),
+        },
         [el],
       );
       for (const field of fields(el)) push('paragraph', field);
