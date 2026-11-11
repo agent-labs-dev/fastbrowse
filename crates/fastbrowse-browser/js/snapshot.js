@@ -424,17 +424,24 @@
     const target = root.getElementById ? root.getElementById(id) : document.getElementById(id);
     return target ? soleField(target) : null;
   });
-  // The fields each tree's wrapper-naming labels name, built once per snapshot from its `label[for]` elements so the
-  // cost grows with the labels, not with every unlabelled field times its id'd ancestors: per-ancestor queries took
-  // about a second per observation on a 2000-row inline-edit grid.
-  const borrowedLabels = memo(root => {
-    const byField = new Map();
-    for (const label of root.querySelectorAll('label[for]')) {
-      const field = label.control ? null : labelTarget(label);
-      if (field) byField.set(field, [...(byField.get(field) || []), label]);
+  // The fields each tree's wrapper-naming labels name, built from its `label[for]` elements so the cost grows with
+  // the labels, not with every unlabelled field times its id'd ancestors: per-ancestor queries took about a second
+  // per observation on a 2000-row inline-edit grid. Each tree is indexed once and kept for as long as this snapshot's
+  // `registry.guard` is: the redraw watch reads every observed control's guard on each mutation batch, and searching
+  // the labels again there cost a second per batch. The guard then reads the labels this snapshot tied to a field,
+  // so their text or visibility changing still changes it.
+  const borrowedIndex = new WeakMap();
+  const borrowedLabels = root => {
+    if (!borrowedIndex.has(root)) {
+      const byField = new Map();
+      for (const label of root.querySelectorAll('label[for]')) {
+        const field = label.control ? null : labelTarget(label);
+        if (field) byField.set(field, [...(byField.get(field) || []), label]);
+      }
+      borrowedIndex.set(root, byField);
     }
-    return byField;
-  });
+    return borrowedIndex.get(root);
+  };
   const wrapperLabels = e =>
     e.labels?.length || !e.matches('input,select,textarea') ? [] : borrowedLabels(e.getRootNode()).get(e) || [];
   const labelFrom = (e, seen) => {

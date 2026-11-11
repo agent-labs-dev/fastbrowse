@@ -503,6 +503,42 @@ async fn test_a_label_naming_a_widgets_wrapper_names_its_one_field() {
     }
 }
 
+/// The redraw watch reads every observed control's guard on each mutation batch, so a guard must reuse the
+/// snapshot's index of wrapper-naming labels rather than search the page's labels again: on a grid of 2000 unlabelled
+/// inputs that search cost a second per pass.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_guard_reuses_the_snapshots_wrapper_labels() {
+    let Some(h) = harness().await else { return };
+    let html = format!(
+        "<form><label for=categories>Categories</label><div id=categories>\
+         <input id=react-select-2-input role=combobox aria-autocomplete=list aria-expanded=false></div>\
+         {}</form>",
+        "<input>".repeat(200)
+    );
+    combobox(&h, &html).await;
+    let session_id = h.session.active_session_id().unwrap();
+    let guards = h
+        .page
+        .evaluate(
+            &session_id,
+            "(() => { const r = window.__fastbrowse; let searches = 0; \
+             const count = proto => { const native = proto.querySelectorAll; \
+               proto.querySelectorAll = function (s) { if (s === 'label[for]') searches++; return native.call(this, s); }; \
+               return () => { proto.querySelectorAll = native; }; }; \
+             const restore = [count(Document.prototype), count(Element.prototype), count(DocumentFragment.prototype)]; \
+             const changed = [...r.observed].filter(([id, guard]) => r.guardKey(r.nodes.get(id)) !== guard).length; \
+             document.querySelector('label').textContent = 'Tags'; \
+             const field = [...r.observed.keys()].find(id => r.nodes.get(id).id === 'react-select-2-input'); \
+             const renamed = r.guardKey(r.nodes.get(field)) !== r.observed.get(field); \
+             restore.forEach(f => f()); \
+             return { searches, changed, renamed }; })()",
+        )
+        .await
+        .expect("evaluate");
+    h.close().await;
+    assert_eq!(guards, json!({"searches": 0, "changed": 0, "renamed": true}));
+}
+
 // A control clipped to nothing is not on the page for a person, and a widget that mirrors it is (#838).
 
 /// How Tom Select and select2 hide the original field they keep in place.
