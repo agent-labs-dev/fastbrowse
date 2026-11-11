@@ -458,6 +458,17 @@
       if (CONTROLS.has(e.tagName) && !UNFILLED.has(e.type) && !fieldValue(e)) push('observation', `${name}: [empty]`);
       if (e.matches(':disabled,[aria-disabled="true"]')) push('observation', `${name}: disabled`);
     }
+    // Which option is chosen is element state no text node carries, and a page often shows what follows from it in
+    // place: a checkout re-rendered one order total per shipping method, and the read could not say which method the
+    // total it quoted was for. A choice a kit hides is shown by its label, so either being visible counts.
+    const CHOICES = 'input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"],[role="switch"]';
+    for (const e of root.querySelectorAll(CHOICES)) {
+      const native = e.tagName === 'INPUT';
+      if (!(native ? e.checked : e.getAttribute('aria-checked') === 'true')) continue;
+      if (!visible(e) && ![...(e.labels || [])].some(visible)) continue;
+      const name = nameOf(e);
+      if (name) push('observation', `${name}: checked`);
+    }
     // Images carry no innerText, so a text-only capture cannot distinguish their presence from absence. What it can
     // say is kept as data in the one line: a sentence that pixels are not described was cut as a span and quoted as a
     // fact, so a Street View run answered "Pixels are not described" 33 times over a task about what the view shows.
