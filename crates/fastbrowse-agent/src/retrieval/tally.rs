@@ -602,8 +602,17 @@ const MONTHS: [&str; 12] = [
 /// or a day, month name and year in either order, such as "May 14, 2026" or "6 Dec 2024". A date is its day; a time
 /// beside it is left as numbers, so two records on one day tie.
 fn dates(text: &str) -> Vec<(usize, usize, f64)> {
+    // A day the month does not have, such as 2025-02-31, is no date, so it orders nothing.
     let ordinal = |year: u32, month: u32, day: u32| {
-        ((1..=12).contains(&month) && (1..=31).contains(&day)).then(|| f64::from(year * 10_000 + month * 100 + day))
+        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let days = match month {
+            2 if leap => 29,
+            2 => 28,
+            4 | 6 | 9 | 11 => 30,
+            1..=12 => 31,
+            _ => 0,
+        };
+        (1..=days).contains(&day).then(|| f64::from(year * 10_000 + month * 100 + day))
     };
     let number = |digits: &[char]| digits.iter().try_fold(0u32, |value, c| Some(value * 10 + u32::from(digit(*c)?)));
     let chars: Vec<char> = text.chars().collect();
@@ -1057,6 +1066,9 @@ mod tests {
         assert!(later.date && earlier.date && later.value > earlier.value);
         assert_eq!(amount("May 14, 2026").unwrap().value, later.value);
         assert_eq!(amount("2026-13-01"), None, "no thirteenth month");
+        assert!(super::dates("2025-02-31 and February 29, 2025").is_empty(), "no day the month lacks");
+        assert_eq!(super::dates("2024-02-29 and 29 Feb 2000").len(), 2, "a leap year's 29 February");
+        assert!(super::dates("1900-02-29").is_empty(), "a century not divisible by 400 is no leap year");
         assert_eq!(super::numbers("Mayday 14, 2026"), ["2026", "14"], "a month is a whole word");
     }
 
