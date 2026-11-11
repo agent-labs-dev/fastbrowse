@@ -11,7 +11,7 @@ use serde_json::{Map, json};
 use super::Agent;
 use super::helpers::{decision_label, describe};
 use super::state::{RunState, Step, Stop};
-use crate::policy::{Decision, StepContext, decide};
+use crate::policy::{Decision, StepContext, decide, takes};
 use crate::start::{accept_start, propose_route};
 
 /// The action a stall is about, which the next ask leaves out: its operation, and the control it acted on by label.
@@ -71,6 +71,10 @@ pub(super) fn withhold(offered: &mut Observation, context: &mut StepContext, pro
             Some(label) => {
                 for control in offered.controls.iter_mut().filter(|control| describe(control) == *label) {
                     if operation == Operation::Blur && leavable(control) {
+                        context.withheld_targets.push((operation, control.id.clone()));
+                        left_out = true;
+                    }
+                    if operation == Operation::Press && takes(control, operation) {
                         context.withheld_targets.push((operation, control.id.clone()));
                         left_out = true;
                     }
