@@ -36,8 +36,10 @@ fn focus_rules() -> String {
     )
 }
 
-/// How capture.js begins the observation it writes for a link with no text.
-const LINK_METADATA: &str = "Link element DOM metadata:";
+/// How capture.js begins the observation it writes for a link with no text, and the fields that are the link's own.
+const LINK_METADATA: (&str, [&str; 2]) = ("Link element DOM metadata:", ["label", "href"]);
+/// How capture.js begins the observation it writes for an image, and the fields that are the image's own.
+const IMAGE_METADATA: (&str, [&str; 2]) = ("Image element DOM metadata:", ["alt", "src"]);
 
 fn iter_read_candidates(page: &Page<'_>, blocks: &[&Block], limit: Option<usize>) -> Vec<Candidate> {
     let mut candidates = Vec::new();
@@ -45,20 +47,18 @@ fn iter_read_candidates(page: &Page<'_>, blocks: &[&Block], limit: Option<usize>
         let value = page.slice(block.start, block.end);
         // A downloaded CSV's row is a table block with no cells to split.
         let found = match cells(value) {
-            // A textless link's metadata quotes the row it sits in, to say which link it is. That quote is the row's
-            // own text again, and offered as a value it won over the row: a top story was answered with a JSON scrap
-            // of the upvote link's `near` (#823). Its label and destination are the link's own, and stay candidates.
-            _ if block.kind == BlockKind::Observation && value.starts_with(LINK_METADATA) => link_fields(value),
-            cells if block.kind == BlockKind::Table && !cells.is_empty() => cells,
-            _ => {
-                let mut found = spans(value, SpanKind::Str);
-                // A sentence of a longer passage reads as the whole of it: a two sentence quote was answered with its
-                // first. The passage stands beside its sentences.
-                if found.len() > 1 && block.kind != BlockKind::Record {
-                    found.insert(0, (0, text::len(value), value.to_string()));
+            // A textless link's or an image's metadata quotes the item it sits in, to say which one it is. That quote
+            // is the item's own text again, and offered as a value it won over the item: a top story was answered with
+            // a JSON scrap of the upvote link's `near` (#823). The element's own fields stay candidates, and the whole
+            // line stays their context.
+            _ if block.kind == BlockKind::Observation => {
+                match [LINK_METADATA, IMAGE_METADATA].into_iter().find(|(opening, _)| value.starts_with(opening)) {
+                    Some((_, keys)) => metadata_fields(value, keys),
+                    None => sentences(value, block),
                 }
-                found
             }
+            cells if block.kind == BlockKind::Table && !cells.is_empty() => cells,
+            _ => sentences(value, block),
         };
         for (start, end, raw) in found {
             if text::strip(&raw).is_empty() {
@@ -84,12 +84,24 @@ fn iter_read_candidates(page: &Page<'_>, blocks: &[&Block], limit: Option<usize>
     candidates
 }
 
-/// The `label` and `href` string values of a textless link's metadata, by code point, as `spans` gives them.
-fn link_fields(value: &str) -> Vec<(usize, usize, String)> {
-    ["\"label\":\"", "\"href\":\""]
-        .into_iter()
+/// A block's string spans, as `spans` gives them, with the whole passage beside its sentences.
+fn sentences(value: &str, block: &Block) -> Vec<(usize, usize, String)> {
+    let mut found = spans(value, SpanKind::Str);
+    // A sentence of a longer passage reads as the whole of it: a two sentence quote was answered with its first. The
+    // passage stands beside its sentences.
+    if found.len() > 1 && block.kind != BlockKind::Record {
+        found.insert(0, (0, text::len(value), value.to_string()));
+    }
+    found
+}
+
+/// The string values of `keys` in an element's metadata line, by code point, as `spans` gives them. A key whose value is
+/// null gives none.
+fn metadata_fields(value: &str, keys: [&str; 2]) -> Vec<(usize, usize, String)> {
+    keys.into_iter()
         .filter_map(|key| {
-            let start = value.find(key)? + key.len();
+            let key = format!("\"{key}\":\"");
+            let start = value.find(&key)? + key.len();
             let mut escaped = false;
             let length = value[start..].find(|c: char| {
                 let close = c == '"' && !escaped;
@@ -792,8 +804,44 @@ mod tests {
 
         // The link's own label and destination answer a question about the link; its row's text is already offered.
         assert_eq!(values, ["A story title", "upvote", "https://example.test/vote"]);
-        // What an image or a field shows is still an answer.
-        let captured = capture(&[(BlockKind::Observation, r#"Image element DOM metadata: {"alt":"A red bicycle"}"#)]);
+        // What a field shows is still an answer.
+        let captured = capture(&[(BlockKind::Observation, "Email: [empty]")]);
         assert_eq!(read_candidates(&captured, None).len(), 1);
+    }
+
+    #[test]
+    fn image_metadata_offers_the_image_but_not_its_item_text() {
+        let line = r#"Image element DOM metadata: {"alt":"A red bicycle","src":"https://example.test/bike.png","pixels_described":false,"near":"Bikes. A red bicycle on sale."}"#;
+        let captured =
+            capture(&[(BlockKind::Paragraph, "Bikes. A red bicycle on sale."), (BlockKind::Observation, line)]);
+
+        let candidates = read_candidates(&captured, None);
+        let values: Vec<String> = candidates.iter().map(|candidate| candidate.value.to_str()).collect();
+
+        // The item's text is offered once, as the page reads it; the image line offers what the image says, with the
+        // whole line as its context.
+        assert_eq!(
+            values,
+            [
+                "Bikes. A red bicycle on sale.",
+                "Bikes.",
+                "A red bicycle on sale.",
+                "A red bicycle",
+                "https://example.test/bike.png"
+            ]
+        );
+        assert!(
+            candidates[3].context.contains(r#""near":"Bikes. A red bicycle on sale.""#),
+            "{}",
+            candidates[3].context
+        );
+        // An image with no alt offers its source alone.
+        let captured = capture(&[(
+            BlockKind::Observation,
+            r#"Image element DOM metadata: {"alt":null,"src":"https://example.test/x.png","near":null}"#,
+        )]);
+        let values: Vec<String> =
+            read_candidates(&captured, None).into_iter().map(|candidate| candidate.value.to_str()).collect();
+        assert_eq!(values, ["https://example.test/x.png"]);
     }
 }
