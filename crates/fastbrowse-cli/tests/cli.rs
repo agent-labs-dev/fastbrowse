@@ -81,7 +81,7 @@ async fn cli(argv: &[&str]) -> Ran {
 #[tokio::test]
 async fn test_the_version_and_the_json_result_name_the_commit_that_ran() {
     let sha = "e1d478b".to_string() + &"0".repeat(33);
-    let built = Build { git_sha: Some(sha.clone()), git_dirty: Some(true) };
+    let built = Build { git_sha: Some(sha.clone()), git_dirty: Some(true), ..Default::default() };
     let answer = || RunResult { answer: Some("ok".into()), ..result(Status::Complete) };
     let version = cli_built(&["--version"], model_settings(), &[], answer(), built.clone()).await;
     assert_eq!(version.out, format!("fastbrowse {} (e1d478b, dirty)\n", env!("CARGO_PKG_VERSION")));
@@ -422,4 +422,16 @@ fn test_the_trace_names_the_build_before_the_run() {
     assert_eq!(first["event"], "build");
     assert_eq!(first["fastbrowse_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(first["git_sha"], Value::Null);
+}
+
+#[test]
+fn test_self_update_names_a_release_binary_and_its_upgrade_without_starting_a_run() {
+    let output = isolated_binary().arg("self-update").output().unwrap();
+    let out = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(out.starts_with(&format!("fastbrowse {} is a release binary at ", env!("CARGO_PKG_VERSION"))), "{out}");
+    assert!(out.contains("https://github.com/agent-labs-dev/fastbrowse/releases/latest"), "{out}");
+    let extra = isolated_binary().args(["self-update", "now"]).output().unwrap();
+    assert_eq!(extra.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&extra.stderr).starts_with("usage: fastbrowse self-update"));
 }

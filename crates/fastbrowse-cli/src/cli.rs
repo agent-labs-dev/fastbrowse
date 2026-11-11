@@ -84,6 +84,8 @@ pub struct Context {
 pub struct Build {
     pub git_sha: Option<String>,
     pub git_dirty: Option<bool>,
+    /// The environment the Python package was installed into, which `self-update` names; None for the binary.
+    pub wheel: Option<crate::update::Wheel>,
 }
 
 impl Build {

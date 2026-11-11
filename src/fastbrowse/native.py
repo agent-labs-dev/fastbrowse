@@ -654,4 +654,4 @@ def command(program: str) -> NoReturn:
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     sys.stdout.flush()
     commit = build.identity()
-    sys.exit(core.cli_main(program, sys.argv[1:], commit["git_sha"], commit["git_dirty"]))
+    sys.exit(core.cli_main(program, sys.argv[1:], commit["git_sha"], commit["git_dirty"], **build.install_facts()))

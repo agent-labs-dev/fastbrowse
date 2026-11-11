@@ -99,6 +99,9 @@ options:
                         drawn over a visible Chrome with the Cua Driver on
                         Linux X11, and skipped where unsupported)
 
+Update: fastbrowse self-update names how this copy was installed and the
+command that upgrades it.
+
 Exit codes: 2 usage error; 0 complete; 1 error; 3 needs_confirmation; 4
 needs_login; 5 needs_input; 6 blocked; 7 budget_exceeded; 8 unavailable; 9
 stuck; 10 unverified; 11 observation_limit

@@ -66,7 +66,7 @@ Jev can also run through the gateway as a last resort, or another decision host 
 Keys can live in a `.env` file in the working directory ([`.env.example`](.env.example) lists every setting), but
 values named by `--secret` must be in the process environment. `uv tool install fastbrowse` keeps the command on
 your PATH, `uv add fastbrowse` adds it to a project, and `npm install fastbrowse` gives Node.js the same agent with
-no Python.
+no Python. `fastbrowse self-update` names how a copy was installed and prints the command that upgrades it.
 
 To work on fastbrowse itself:
 

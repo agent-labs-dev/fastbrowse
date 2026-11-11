@@ -258,6 +258,23 @@ about 30 seconds after a browser stops, and a run returns without waiting, so th
 line makes the total incomplete, even when it carries a provisional dollar figure. The
 `browser_id` in the run's browser event reads the settled figure from `GET /browsers/{id}` once that time has passed.
 
+## Updating
+
+`fastbrowse self-update` prints how this copy was installed and the command or link that upgrades it, then exits 0.
+It reads what the installer recorded and makes no network call, and it never replaces the running binary.
+
+| Installed with | It prints |
+| --- | --- |
+| `uv tool install fastbrowse` | `uv tool upgrade fastbrowse` |
+| `uvx fastbrowse` | `uvx fastbrowse@latest` |
+| `uv add` or `uv pip install` | `uv lock --upgrade-package fastbrowse && uv sync`, or `uv pip install --upgrade fastbrowse` |
+| `pip install fastbrowse` | `python -m pip install --upgrade fastbrowse` |
+| `npm install fastbrowse` | `npm install fastbrowse@latest` |
+| A release binary | the latest release link and this platform's `fastbrowse-rust-<target>.tar.gz` |
+| A checkout | `git pull && uv sync --all-extras` |
+
+Another installer, or one that left no record, gets the [PyPI page](https://pypi.org/project/fastbrowse/).
+
 ## Troubleshooting
 
 [Troubleshooting](troubleshooting.md) covers each status: what it means, common causes and the next step.

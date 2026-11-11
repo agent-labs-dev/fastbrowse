@@ -154,6 +154,14 @@ pub fn main(program: &str, args: &[String], build: Build) -> i32 {
             eprint!("{text}");
         }
         code
+    } else if args.first().is_some_and(|arg| arg == "self-update") {
+        let (text, code) = crate::update::command(&args[1..], &build);
+        if code == 0 {
+            print!("{text}");
+        } else {
+            eprint!("{text}");
+        }
+        code
     } else if args.first().is_some_and(|arg| arg == "serve") {
         // Only as the first argument, so a task that mentions the word, or `--local serve`, is still a task.
         serve_command(&args[1..])
