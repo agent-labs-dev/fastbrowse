@@ -191,7 +191,9 @@ each final claim against its original cited quotes, including record identity an
 A count, total, minimum or maximum, or a place after one such as the second cheapest, is never written or judged as a number. The composer marks it as a tally with
 the kind of record and the field, and Jev answers one question per note read: for a count, whether it holds exactly one
 such record, and for a total or extreme, whether it holds one with its field, then which number in it is the field. A
-record's name, heading or a link to it holds no value, so it is not counted as a record without one. Code counts, adds
+record's name, heading or a link to it holds no value, so it is not counted as a record without one. A record read
+from a screenshot or an element's markup is in the reader's words, so Jev is also asked which record on the same page
+it repeats, if any, and a repeat is not counted again. Code counts, adds
 or compares, writes the value into the claim and cites every record it rests on. A minimum or maximum the claim
 answers with its record's name instead keeps that name, and only the record check judges it. Such a claim gets no support question
 over the value: Jev is asked only whether the claim, with `[computed]` in the value's place, states nothing besides the
