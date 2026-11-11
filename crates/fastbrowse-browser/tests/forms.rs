@@ -594,8 +594,9 @@ async fn test_a_button_that_opens_a_hidden_file_input_uploads_through_its_choose
     assert_eq!(name, json!("lid.stl"));
 }
 
-/// #979: an upload dialog's button that makes a file input in script and clicks it, never adding it to the page. The
-/// page holds the input by reference and reads its files on change, so the button uploads to it all the same.
+/// #979: an upload dialog's button that makes a file input in script and clicks it, never adding it to the page. Only
+/// the input's own change handler refers to it, so once the click returns nothing in the page holds it; the button
+/// uploads to it all the same.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_button_that_opens_a_file_input_never_on_the_page_uploads_through_its_chooser() {
     let Some(h) = harness().await else { return };
@@ -614,6 +615,9 @@ async fn test_a_button_that_opens_a_file_input_never_on_the_page_uploads_through
         .await
         .expect("act");
     assert_eq!(clicked.outcome, StepOutcome::Executed, "{:?}", clicked.detail);
+    // Nothing but the chooser refers to the input now, so a collection before the next observation would take it.
+    let active = h.session.active_session_id().expect("session");
+    h.session.send("HeapProfiler.collectGarbage", json!({}), Some(&active)).await.expect("gc");
     let observation = h.observe().await;
     let opener = find(&observation, "Upload or Drag Image");
     assert_eq!(opener.operations, [Operation::Upload].into(), "{:?}", observation.controls);

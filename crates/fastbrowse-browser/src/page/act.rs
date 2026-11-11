@@ -794,38 +794,6 @@ impl CdpPage {
         self.click_point(target, (x, y), false, drawn).await
     }
 
-    /// Tie each file input whose chooser a click opened to the control clicked, so the observation offers that control
-    /// as the upload, as a label is offered for its input. An input or page gone since is skipped: nothing to offer.
-    pub(crate) async fn adopt_choosers(&self) {
-        for (session, input, opener) in self.session.take_choosers() {
-            self.adopt_chooser(&session, input, opener).await;
-        }
-    }
-
-    async fn adopt_chooser(&self, session: &str, input: i64, opener: i64) {
-        let session_id = Some(session);
-        let Ok(resolved) = self.session.send("DOM.resolveNode", json!({"backendNodeId": input}), session_id).await
-        else {
-            return;
-        };
-        let Some(object) = resolved["object"]["objectId"].as_str() else { return };
-        let _ = self
-            .session
-            .send(
-                "Runtime.callFunctionOn",
-                json!({
-                    "objectId": object,
-                    "functionDeclaration": "function (opener) { const registry = window.__fastbrowse; \
-                        const node = registry?.nodes.get(opener); \
-                        if (node) registry.chooser = {input: this, opener: node, connected: this.isConnected}; }",
-                    "arguments": [{"value": opener}],
-                }),
-                session_id,
-            )
-            .await;
-        let _ = self.session.send("Runtime.releaseObject", json!({"objectId": object}), session_id).await;
-    }
-
     /// Activate a control from the keyboard: focus it and press the key its semantics answer to.
     async fn press(&self, target: &Target) -> Result<Outcome, BrowserError> {
         let (session_id, local_id) = (&target.0, target.2);
@@ -844,6 +812,7 @@ impl CdpPage {
             return Ok(refusal);
         }
         self.press_key(session_id, key).await?;
+        self.session.choosers_pinned().await;
         Ok((StepOutcome::Executed, Some("Pressed from the keyboard: a band fixed to the window covers it.".into())))
     }
 
@@ -1374,6 +1343,7 @@ impl CdpPage {
             self.input(self.session.send("Input.dispatchMouseEvent", params, Some(&target.0)))
         };
         tokio::try_join!(mouse("mousePressed"), mouse("mouseReleased"))?;
+        self.session.choosers_pinned().await;
         Ok((StepOutcome::Executed, None))
     }
 

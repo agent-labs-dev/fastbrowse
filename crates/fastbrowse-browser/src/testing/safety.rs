@@ -72,6 +72,7 @@ pub async fn upload(
         client: Mutex::new(shared.client.lock().unwrap().clone()),
         state: Mutex::new(state),
         dialog_opened: watch::channel(0).0,
+        chooser_pins: watch::channel(0).0,
         lifecycle: watch::channel(0).0,
         snapshot,
         popup_signal: watch::channel(0).0,
