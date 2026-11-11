@@ -214,7 +214,7 @@ jobs:
       # The suites are where this job's time goes: measured on four cores over the same 985 tests, `cargo test
       # --workspace` spent 382 s running them and `cargo nextest run --workspace` 161 s, because nextest
       # schedules every test binary at once instead of one after another. It runs the same binaries.
-      - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
+      - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
         with: {tool: nextest@0.9.150}
       # Branded Chrome ignores --load-extension, so the extension backend's end-to-end test needs Chrome for Testing;
       # without one it skips.
@@ -243,7 +243,7 @@ jobs:
       - run: test -z "$(gofmt -l go)" && go -C go vet ./...
       - run: FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" go -C go test -race ./...
       # The Java client against the same binary. Its types are written from protocol/schema.json and committed too.
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with: {distribution: temurin, java-version: "17"}
       - run: python3 scripts/java_types.py && git diff --exit-code -- java && test -z "$(git status --porcelain -- java)"
       - run: FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" mvn -B -f java/pom.xml verify
