@@ -158,6 +158,10 @@ class Block(Frozen):
     links: tuple[Link, ...] = Field(default=(), exclude_if=lambda links: not links)
     """The links inside this block, with their text's place in `Capture.text`: a link's text alone does not say where
     it leads, nor where a value the page set apart as its own element ends."""
+    whole_record: bool = Field(default=False, exclude_if=lambda whole: not whole)
+    """This block is all the text the page renders for one item it repeats, such as a comment, card or list row, with
+    each part of it that shows no text named in square brackets. A record can be a `list_item` as well as a `record`,
+    so its kind does not say this."""
 
 
 class Capture(Frozen):

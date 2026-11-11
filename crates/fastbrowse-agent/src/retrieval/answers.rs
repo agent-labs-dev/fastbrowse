@@ -696,6 +696,7 @@ async fn review_claims(
             }
             continue;
         }
+        let records_rule = if sources.iter().any(|quote| quote["whole_record"] == true) { RECORDS } else { "" };
         let mut cited = json!({"columns": columns, "claim": shown.text, "quotes": sources});
         if !acts.is_empty() {
             cited["steps"] = json!(acts);
@@ -711,7 +712,7 @@ async fn review_claims(
         for (key, focus) in checks {
             let question = NoulQuestion::new(
                 format!(
-                    "{UNTRUSTED}\n{focus} Does it follow from its cited quotes, preserving which record each value belongs to and every stated value? A cell marked unavailable is supported only when these quotes give no value for that field of the same record. {SCOPE}\n{cited} {DESCRIPTIVE_VALUES} {SOURCE_STATE}{steps_rule}"
+                    "{UNTRUSTED}\n{focus} Does it follow from its cited quotes, preserving which record each value belongs to and every stated value? A cell marked unavailable is supported only when these quotes give no value for that field of the same record. {SCOPE}{records_rule}\n{cited} {DESCRIPTIVE_VALUES} {SOURCE_STATE}{steps_rule}"
                 ),
                 Some("Every assertion being judged is supported by these quotes."),
                 Some(
@@ -853,6 +854,12 @@ const OTHER: &str = "other";
 
 /// The scope rule for a claim whose values the composer wrote.
 const SCOPE: &str = "Judge the scope as well as each value. A statement about every member or an absent value across a whole set needs evidence about that whole set; quotes about some members support only those members. A counter on the page supports what it says about its source, such as how many items the source holds or shows. It does not support how many items this answer extracted or lists.";
+
+/// What a quote marked as a whole record shows, said only when one is cited. Three comments' notes each held an open
+/// replies region with nothing in it, and "the author has not replied" citing them was held in 1 of 9 replays; told
+/// each quote is all its comment renders, Jev held all 9, and still rejected "the author replied" and "it has 2
+/// replies" over the same notes (#992).
+const RECORDS: &str = " A quote marked whole_record holds all the text the page renders for one item it repeats, such as a comment, card or row. Words in square brackets in it name a part of that item that holds no text, by the page's own label or class.";
 
 /// A place written as a word, as a task writes it: "second", "third", "21st".
 fn ordinal(place: u64) -> String {
@@ -1030,7 +1037,8 @@ fn cited_quotes(claim: &Claim, notes: &Notes, steps: bool) -> Vec<serde_json::Va
         .filter_map(|fact| {
             fact.evidence.as_ref().map(|quote| {
                 let after_step = notes.steps_taken(quote).filter(|_| steps);
-                json!(QuoteState { quote, superseded: notes.superseded(&fact_id(fact)), after_step })
+                let whole_record = notes.whole_record(quote);
+                json!(QuoteState { quote, superseded: notes.superseded(&fact_id(fact)), after_step, whole_record })
             })
         })
         .collect()
@@ -1043,6 +1051,8 @@ struct QuoteState<'a> {
     superseded: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     after_step: Option<usize>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    whole_record: bool,
 }
 
 fn note_text(
@@ -2506,6 +2516,49 @@ mod tests {
         assert_eq!(reviewed.answer.claims[0].text, passed.text);
         let user = &llm.calls()[0][1].content;
         assert!(user.contains("# Kept claims\n[\"The checkout rejected the postcode NOTAPOSTCODE.\"]"), "{user}");
+    }
+
+    /// #992: "the author has not replied" cited a comment's whole record, its open replies region empty, and was judged
+    /// unsupported: the check was not told the quote was everything the comment rendered.
+    #[tokio::test]
+    async fn a_quote_of_a_whole_record_is_judged_as_one() {
+        use fastbrowse_core::page::BlockKind;
+
+        use crate::retrieval::chunks::evidence;
+        use crate::retrieval::testing::capture;
+        use crate::retrieval::text::Page;
+
+        // CurseForge renders each comment as an `li`, so the capture marks the block rather than its kind saying so.
+        let mut captured = capture(&[
+            (BlockKind::ListItem, "ada\n30 minutes ago\n\nit stopped working\n\nReply [replies expanded: no text]"),
+            (BlockKind::ListItem, "186 comments"),
+        ]);
+        captured.blocks[0].whole_record = true;
+        let page = Page::new(&captured);
+        let (comment, count) = (&captured.blocks[0], &captured.blocks[1]);
+        let whole =
+            Fact::read("ada's comment", evidence(&page, comment, comment.start, comment.end), FactReader::JevChoice);
+        let part = Fact::read("ada", evidence(&page, comment, comment.start, comment.start + 3), FactReader::JevChoice);
+        let other = Fact::read("186 comments", evidence(&page, count, count.start, count.end), FactReader::JevChoice);
+        let mut notes = Notes::new([whole, part, other]);
+        notes.remember_capture(&captured, 0);
+        let ids: Vec<String> = notes.facts_by_id().keys().cloned().collect();
+        let claims = vec![
+            Claim::new("ada: it stopped working. The author has not replied.", vec![ids[0].clone()]),
+            Claim::new("The commenter is ada.", vec![ids[1].clone()]),
+            Claim::new("The page has 186 comments.", vec![ids[2].clone()]),
+        ];
+        let jev = Support::new(true);
+        let task = "List the newest comment and whether the author replied";
+        review_claims(&jev, task, None, claims, &notes, None, false, &[]).await.unwrap();
+        let asked = jev.asked.lock().unwrap();
+        let question = |key: &str| asked[0][key].dump_json();
+        let rule = "A quote marked whole_record holds all the text the page renders for one item it repeats";
+        assert!(question("claim0").contains(r#"\"whole_record\":true"#), "{}", question("claim0"));
+        assert!(question("claim0").contains(rule));
+        for key in ["claim1", "claim2"] {
+            assert!(!question(key).contains("whole_record"), "{}", question(key));
+        }
     }
 
     /// #934: a settings form read before its description was replaced, and the public page read after the save, were
