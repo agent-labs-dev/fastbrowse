@@ -361,6 +361,10 @@ fn scripted_llm(case: &Value, purpose: &str, schema_name: &str, log: &[Value]) -
         }
         return serde_json::json!({"data": data, "cost": cost});
     }
+    // A case recorded before the run asked for known pages (#983) knows of none.
+    if schema_name == "KnownPages" && case["llm"].get(schema_name).is_none() {
+        return serde_json::json!({"data": {"urls": []}, "cost": cost});
+    }
     let calls = case["calls"].as_array().unwrap();
     let recorded = calls.iter().rev().find(|call| call["llm"]["schema_name"] == schema_name);
     recorded

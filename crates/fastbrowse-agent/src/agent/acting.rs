@@ -279,6 +279,7 @@ impl Agent {
                         || state.reload_target(&observation.url).as_ref() == Some(url)
                         || state.pager_followed.contains(url)
                         || state.routes.contains(url)
+                        || state.known_pages.contains(url)
                 }) else {
                     return Err(Stop::new(Status::Stuck, "navigation address was not supplied by the caller").into());
                 };

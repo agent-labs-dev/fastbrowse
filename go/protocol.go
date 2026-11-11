@@ -231,6 +231,7 @@ const (
 	LLMPurposeFill         LLMPurpose = "fill"
 	LLMPurposePages        LLMPurpose = "pages"
 	LLMPurposeDates        LLMPurpose = "dates"
+	LLMPurposeKnownPages   LLMPurpose = "known_pages"
 	LLMPurposeUnobtainable LLMPurpose = "unobtainable"
 	LLMPurposeGroups       LLMPurpose = "groups"
 )
