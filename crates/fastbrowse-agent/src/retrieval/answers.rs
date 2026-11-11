@@ -634,6 +634,10 @@ async fn review_claims(
                 untallied.push(json!({"claim": index, "reason": reason}));
                 claim
             }
+            Some(Err(Unworked::Notes { reason, notes })) => {
+                untallied.push(json!({"claim": index, "reason": reason, "notes": notes}));
+                claim
+            }
             Some(Err(Unworked::Unjudged)) => {
                 unjudged_tally = true;
                 claim
@@ -746,7 +750,7 @@ async fn review_claims(
     let holds = |key: &str| {
         if let Some(index) = key.strip_prefix("claim").and_then(|rest| rest.strip_suffix("/tally")) {
             return index.parse::<usize>().ok().and_then(|index| match worked.get(&index) {
-                Some(Err(Unworked::Draft(_))) => Some(false),
+                Some(Err(Unworked::Draft(_) | Unworked::Notes { .. })) => Some(false),
                 _ => None,
             });
         }
@@ -860,14 +864,9 @@ fn ordinal(place: u64) -> String {
 fn tally_checks(tally: &Tally, text: &str, winners: &[serde_json::Value]) -> Vec<(&'static str, Question, String)> {
     let (of, field) = (text::repr(&tally.of), text::repr(tally.field.as_deref().unwrap_or("value")));
     let claim = text::repr(text);
-    let states = |kind: &str| {
-        format!(
-            "it states something besides its {kind}, which is not checked there: give each other value a claim of its own, citing the notes it is drawn from"
-        )
-    };
     let side = match tally.op {
         Op::Count | Op::Sum => {
-            let (kind, what) = match (tally.op, tally.grouped()) {
+            let what = match (tally.op, tally.grouped()) {
                 // Code worked out the group's count and checked its place, so both are the claim's to state.
                 (Op::Count, Some((by, group))) => {
                     let (by, group) = (text::repr(by), text::repr(group));
@@ -876,18 +875,24 @@ fn tally_checks(tally: &Tally, text: &str, winners: &[serde_json::Value]) -> Vec
                         Some(rank) => format!(", and that it is {} by that count among every {by}", ordinal(rank)),
                         None => String::new(),
                     };
-                    ("count", format!("how many {of} have the {by} {group}{place}"))
+                    format!("how many {of} have the {by} {group}{place}")
                 }
-                (Op::Count, None) => ("count", format!("how many {of} there are")),
+                (Op::Count, None) => format!("how many {of} there are"),
                 // "Of the" record kind reads as one record, so a total over all of them would not be "only" it.
-                _ => ("total", format!("the total {field} of every {of}")),
+                _ => format!("the total {field} of every {of}"),
             };
             let question = NoulQuestion::new(
                 format!("{UNTRUSTED}\nDoes this claim state only {what}? Claim: {claim}"),
                 Some(&format!("The claim states only {what}.")),
                 Some("The claim also states something else."),
             );
-            return vec![("states", Question::Noul(question), states(kind))];
+            // Told only that it stated something besides its count, the composer took the place out of a ranked claim
+            // as well, and the claim then failed for not stating it: the reason names all the claim is to state.
+            let reason = format!(
+                "it states something besides {what}, which is not checked there: this claim keeps its tally and states \
+                 {what}, and nothing else; give each other value a claim of its own, citing the notes it is drawn from"
+            );
+            return vec![("states", Question::Noul(question), reason)];
         }
         Op::Min => "lowest",
         Op::Max => "highest",
@@ -1087,8 +1092,9 @@ fn passed_claims(feedback: &str, notes: &Notes) -> Vec<(Claim, Claim)> {
         .collect()
 }
 
-/// Composition feedback with each draft claim's evidence ids written as the labels of the notes they name, so the
-/// composer can tell which notes a rejected claim cited. A rejected draft keeps fact ids, which name no note it is shown.
+/// Composition feedback with each draft claim's evidence ids, and the notes each untallied claim's reason is about,
+/// written as the labels of the notes they name, so the composer can tell which notes are meant. A rejected draft keeps
+/// fact ids, which name no note it is shown.
 fn relabeled(feedback: &str, items: &[ComposeItem]) -> String {
     let Ok(mut value) = serde_json::from_str::<serde_json::Value>(feedback) else { return feedback.to_string() };
     // The claims as drafted are for code to keep; the composer is shown them as they were checked.
@@ -1097,8 +1103,10 @@ fn relabeled(feedback: &str, items: &[ComposeItem]) -> String {
     }
     let label =
         |id: &str| items.iter().find(|item| item.sources.iter().any(|source| source == id)).map(|item| &item.label);
-    for claim in value.get_mut("draft_claims").and_then(serde_json::Value::as_array_mut).into_iter().flatten() {
-        for id in claim.get_mut("evidence_ids").and_then(serde_json::Value::as_array_mut).into_iter().flatten() {
+    let named = [("draft_claims", "evidence_ids"), ("untallied_claims", "notes")];
+    for (list, ids) in named {
+        let entries = value.get_mut(list).and_then(serde_json::Value::as_array_mut).into_iter().flatten();
+        for id in entries.flat_map(|entry| entry.get_mut(ids).and_then(serde_json::Value::as_array_mut)).flatten() {
             if let Some(label) = id.as_str().and_then(label) {
                 *id = serde_json::Value::from(label.as_str());
             }
@@ -1866,6 +1874,11 @@ mod tests {
                 (Some("author".into()), Some(group.into()), Some(names.clone()), Some(rank));
             claim
         };
+        // Told only that a ranked claim stated something besides its count, the composer took its place out too.
+        let bo = placed("Bo has the second most quotes, with 4.", "Bo", 2, "4");
+        let checks = tally_checks(bo.tally.as_ref().unwrap(), &bo.text, &[]);
+        let (_, _, reason) = checks.iter().find(|(key, _, _)| *key == "states").unwrap();
+        assert!(reason.contains("states how many 'quote' have the 'author' 'Bo', and that it is second"), "{reason}");
         let task = "Which two authors have the most quotes, and how many each?";
         let claims = vec![
             placed("Ada has the most quotes, with 4.", "Ada", 1, "4"),
@@ -1899,6 +1912,13 @@ mod tests {
         unlisted.tally.as_mut().unwrap().groups = Some(vec!["Ada".into(), "Bo".into(), "Cy".into()]);
         let checked = review_claims(&jev, task, None, vec![unlisted], &notes, None, true, &[]).await.unwrap();
         assert!(checked.claims.is_empty(), "Di's quote has no listed author");
+        // The composer is told which note by the label it cites notes by, not by a fact id it is never shown.
+        let rejection = checked.rejection.as_deref().unwrap();
+        let untallied = &serde_json::from_str::<Value>(rejection).unwrap()["untallied_claims"][0];
+        assert_eq!(untallied["notes"], json!([ids[8]]));
+        assert!(!untallied["reason"].as_str().unwrap().contains(&ids[8]));
+        let shown: Value = serde_json::from_str(&relabeled(rejection, &initial_items(&notes, false))).unwrap();
+        assert_eq!(shown["untallied_claims"][0]["notes"], json!(["e8"]));
     }
 
     /// A results block can hold more numbers than one choice may offer, so they are narrowed group by group first.

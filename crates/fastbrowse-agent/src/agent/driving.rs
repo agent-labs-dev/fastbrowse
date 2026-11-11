@@ -117,6 +117,11 @@ impl Agent {
             {
                 replay.replaced();
             }
+            // A known page the run is on has been reached, and is not offered again once it is left.
+            let here = |url: &&String| fastbrowse_core::navigation::same_address(url, &observation.url);
+            if let Some(url) = state.known_pages.iter().find(here).filter(|url| !state.reached_known_pages.contains(url)) {
+                state.reached_known_pages.push(url.clone());
+            }
             let decision = match picked {
                 Some(picked) => picked,
                 None => {
@@ -468,6 +473,27 @@ impl Agent {
         Ok(opening)
     }
 
+    /// The pages the site is known to serve for the items the task names, asked while the first page opens (#983).
+    pub(super) async fn known_pages(
+        &self,
+        task: &str,
+        start: Option<&str>,
+        ledger: &fastbrowse_core::telemetry::Ledger,
+    ) -> Step<Vec<String>> {
+        let proposal = crate::start::known_pages(&*self.llm, task, start, Some(ledger)).await?;
+        ledger.record([proposal.cost])?;
+        let mut known: Vec<String> = Vec::new();
+        for url in proposal.data.urls.iter().filter_map(|url| crate::start::accept_start(Some(url))) {
+            if !known.contains(&url) {
+                known.push(url);
+            }
+        }
+        if !known.is_empty() {
+            self.event("known_pages", || Map::from_iter([("urls".into(), known.clone().into())]));
+        }
+        Ok(known)
+    }
+
     /// The dates the task names, as the parts it states. Jev first judges from the task alone whether it names any, so
     /// a task without one costs no extraction; the run asks this while its first page opens.
     pub(super) async fn task_dates(
@@ -640,9 +666,10 @@ impl Agent {
         let frame: Option<Vec<u8>>;
         if decision.operation == Operation::Read {
             frame = if frames { self.frame().await? } else { None };
+            let shows = Self::page_shows(state, observation, decision);
             let capture = self.capture().await?;
             let read_progress =
-                self.trace.phase("read", Box::pin(self.read(state, capture, observation, false))).await?;
+                self.trace.phase("read", Box::pin(self.read(state, capture, observation, shows))).await?;
             progressed = Some(read_progress);
             changed = false;
             let text = state.read_note();

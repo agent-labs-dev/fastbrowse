@@ -474,6 +474,7 @@ str_enum! {
         Fill = "fill",
         Pages = "pages",
         Dates = "dates",
+        KnownPages = "known_pages",
     }
 }
 

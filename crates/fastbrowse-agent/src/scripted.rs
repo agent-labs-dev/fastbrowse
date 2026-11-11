@@ -181,6 +181,7 @@ impl ScriptedLLM {
             LLMPurpose::Fill => Some(json!({"value": null})),
             LLMPurpose::Pages => Some(json!({"first": null, "last": null})),
             LLMPurpose::Dates => Some(json!({"dates": []})),
+            LLMPurpose::KnownPages => Some(json!({"urls": []})),
         }
     }
 }
