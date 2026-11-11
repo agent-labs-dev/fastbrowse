@@ -34,7 +34,8 @@ among them, raises `pkgrel` by hand in both files.
 
 The AUR workflow also runs weekly. It builds the committed package, since Arch moves between our changes, and
 runs `scripts/aur_package.py` without `--write`, which fails while `packaging/aur` is older than the PyPI
-release in `pyproject.toml`. A release that skipped this step shows there.
+release in `pyproject.toml`, or while the AUR's RPC reports no `fastbrowse` at that release. A release that
+skipped this step, or one that never reached the AUR, shows there.
 
 ## Publishing it
 
@@ -44,15 +45,19 @@ copies `PKGBUILD` and `.SRCINFO`, and commits only the files whose bytes differ,
 never a new AUR revision that changes nothing.
 
 Two repository secrets make that automatic. Without either, a release still builds and smoke-tests the package and
-keeps its `aur` artifact, and the run says in a warning what did not happen:
+keeps its `aur` artifact:
 
 - `AUR_SSH_PRIVATE_KEY`: a private key whose public half is registered to the AUR account that owns
   `fastbrowse`. This is the one step of a release that cannot run without a secret, because the AUR authenticates
-  the maintainer and not the repository.
+  the maintainer and not the repository. A release without it fails its `aur` job with an `AUR not published`
+  error, after keeping the artifact, since a green release that Arch users never receive is the failure this job
+  exists to catch. Adding the key is the one manual step: generate an SSH key pair, add the public half under
+  *My Account* on aur.archlinux.org for the account that owns `fastbrowse`, store the private half as the
+  repository secret, then rerun the failed jobs.
 - `AUR_SYNC_TOKEN`: a token that may push and open pull requests here. The `aur-sync` job regenerates
   `packaging/aur` from the PyPI release and opens the PR that puts those bytes on `main`; the token is needed
   because a PR opened with the run's own token starts no checks, and the required `check` could never report on
-  it. When it is unset the job says so and `main` keeps the previous package.
+  it. When it is unset the job says so in a warning and `main` keeps the previous package.
 
 Rerunning `aur-sync` reuses its release PR branch and preserves the rendered package files across the branch switch.
 

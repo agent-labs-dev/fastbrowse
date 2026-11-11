@@ -1,6 +1,6 @@
 """Check that the AUR package is the PyPI release, or with `--write` make it.
 
-    uv run python scripts/aur_package.py           # exit 1 when packaging/aur is not this version's release
+    uv run python scripts/aur_package.py           # exit 1 when packaging/aur or the AUR is not this release
     uv run python scripts/aur_package.py --write   # after the version is on PyPI
 
     uv run python scripts/aur_package.py --publish   # after the package has built, put it on the AUR
@@ -39,6 +39,8 @@ FILES = ("PKGBUILD", ".SRCINFO")
 # The AUR's git endpoint for the package. Pushing needs a key the package maintainer registered with the AUR;
 # nothing else here talks to it.
 AUR_REMOTE = "ssh://aur@aur.archlinux.org/fastbrowse.git"
+# What the AUR serves for the package, read without a key, so the check sees whether a release reached it.
+AUR_RPC = "https://aur.archlinux.org/rpc/v5/info?arg[]=fastbrowse"
 
 
 PKGBUILD = """\
@@ -217,6 +219,39 @@ def published(version: str, wait: float = 0) -> Release:
     return release
 
 
+def _aur() -> dict:
+    """The AUR's record of the fastbrowse package, from its RPC, as it serves it."""
+    with urllib.request.urlopen(AUR_RPC, timeout=30) as response:
+        return json.load(response)
+
+
+def aur_version(record: dict) -> str | None:
+    """The fastbrowse version the AUR serves, given its RPC answer, or None when it has no such package.
+
+    The RPC reports `pkgver-pkgrel`; only `pkgver` names the PyPI release, since a `pkgrel` raised by hand is a
+    rebuild of the same one.
+    """
+    for result in record["results"]:
+        if result["Name"] == "fastbrowse":
+            return result["Version"].rsplit("-", 1)[0]
+    return None
+
+
+def check(old: Release, new: Release, aur: str | None) -> list[str]:
+    """What is behind PyPI's `new`: the committed package `old`, and the AUR serving version `aur`.
+
+    Both are checked because they fail apart. A release regenerates the committed package without publishing,
+    when the AUR key is missing or its push fails, and the AUR then lacks a release the checkout already pins.
+    """
+    problems = []
+    if old != new:
+        problems.append(f"packaging/aur is fastbrowse {old.version}, and PyPI has {new.version}")
+    if aur != new.version:
+        held = "no fastbrowse" if aur is None else f"fastbrowse {aur}"
+        problems.append(f"the AUR has {held}, and PyPI has {new.version}")
+    return problems
+
+
 def changed(current: dict[str, str], wanted: dict[str, str]) -> list[str]:
     """The files whose bytes differ from what the AUR holds, in `FILES` order.
 
@@ -280,13 +315,22 @@ def main() -> int:
             raise SystemExit(f"packaging/aur pins {old.version}, and --publish was asked for {version}")
         return publish(directory, old)
     new = published(version, args.wait)
+    if not args.write:
+        aur = aur_version(_aur())
+        problems = check(old, new, aur)
+        for problem in problems:
+            print(problem, file=sys.stderr)
+        if old != new:
+            print("run scripts/aur_package.py --write", file=sys.stderr)
+        if aur != new.version:
+            print("publish it as docs/agents/aur.md says, which needs the AUR maintainer's key", file=sys.stderr)
+        if problems:
+            return 1
+        print(f"packaging/aur and the AUR are fastbrowse {new.version}")
+        return 0
     if old == new:
         print(f"the AUR package is fastbrowse {new.version}")
         return 0
-    if not args.write:
-        print(f"packaging/aur is fastbrowse {old.version}, and PyPI has {new.version}", file=sys.stderr)
-        print("run scripts/aur_package.py --write", file=sys.stderr)
-        return 1
     for name, text in render(new).items():
         (directory / name).write_text(text, encoding="utf-8")
     print(f"the AUR package is now fastbrowse {new.version}")

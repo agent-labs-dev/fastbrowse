@@ -97,3 +97,20 @@ def test_aur_sync_keeps_the_rendered_package(tmp_path: Path, existing_branch: bo
     assert {
         name: run_remote("show", f"{remote_head}:packaging/aur/{name}", preserve_newline=True) for name in rendered
     } == rendered
+
+
+def test_a_release_without_the_aur_key_fails_after_keeping_its_package() -> None:
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("the release shell regression needs Bash")
+    steps = yaml.safe_load((REPO / ".github/workflows/aur.yml").read_text())["jobs"]["package"]["steps"]
+    names = [step.get("name") or step.get("uses", "") for step in steps]
+    unpublished = next(step for step in steps if step.get("name") == "Fail when the AUR was not published")
+    upload = next(index for index, name in enumerate(names) if name.startswith("actions/upload-artifact@"))
+
+    assert unpublished["if"] == "inputs.version != '' && env.AUR_SSH_PRIVATE_KEY == ''"
+    # The artifact is the package to push by hand, so it is kept before either AUR step can end the job.
+    assert upload < names.index("Publish to the AUR") < names.index("Fail when the AUR was not published")
+    completed = subprocess.run([bash, "-c", unpublished["run"]], capture_output=True, text=True)
+    assert completed.returncode != 0
+    assert "::error title=AUR not published::" in completed.stdout
