@@ -15,13 +15,15 @@ use fastbrowse_browser::page::CdpPage;
 use fastbrowse_browser::session::{BrowserSession, SessionOptions};
 use fastbrowse_core::artifacts::DirectorySink;
 use fastbrowse_core::config::Config;
-use fastbrowse_core::models::{BrowserConnection, Operation};
+use fastbrowse_core::models::{Attachment, BrowserConnection, Bytes, Operation};
 use fastbrowse_core::page::{Action, Observation};
 use serde_json::json;
 
 const FORM: &str = r#"<!doctype html><title>Form</title>
 <label>Name <input id="name"></label>
-<button onclick="document.title = 'Sent ' + document.getElementById('name').value">Send</button>"#;
+<button onclick="document.title = 'Sent ' + document.getElementById('name').value">Send</button>
+<input id="attachment" type="file" hidden>
+<button onclick="document.getElementById('attachment').click()">Attach file</button>"#;
 
 /// Chrome for Testing: `FASTBROWSE_TEST_EXTENSION_CHROME`, else the newest Playwright download.
 fn chrome_for_testing() -> Option<PathBuf> {
@@ -77,7 +79,7 @@ impl Drop for Browser {
 }
 
 impl Browser {
-    fn launch(chrome: &Path, root: &Path) -> Browser {
+    fn launch(chrome: &Path, root: &Path, extension: &Path) -> Browser {
         let profile = root.join("profile");
         // A socket path has a 108-byte limit, which a target directory can pass: the host listens somewhere short.
         let hosts = std::env::temp_dir().join(format!("fbx-{}", std::process::id()));
@@ -104,7 +106,6 @@ impl Browser {
             "allowed_origins": [format!("chrome-extension://{}/", EXTENSION_IDS[0])],
         });
         std::fs::write(manifests.join("dev.fastbrowse.host.json"), manifest.to_string()).expect("manifest");
-        let extension = Path::new(env!("CARGO_MANIFEST_DIR")).join("../fastbrowse-browser/extension");
         let child = Command::new(chrome)
             .args([
                 "--headless=new",
@@ -229,13 +230,34 @@ async fn a_run_drives_a_tab_through_the_extension() {
     let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("extension-backend-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("root");
-    let browser = Browser::launch(&chrome, &root);
+    let extension = Path::new(env!("CARGO_MANIFEST_DIR")).join("../fastbrowse-browser/extension");
+    let browser = Browser::launch(&chrome, &root, &extension);
     let record = browser.record().await;
     let url = format!("http://127.0.0.1:{}/form", serve_form());
 
     // One run, then two at once, each in its own tabs.
     let (session, page) = open(&record, "first run", &root.join("a1")).await;
     fill_and_send(&page, &session, &url, "Ada").await;
+    let observation = page.observe().await.expect("observe");
+    let opener = control(&observation, "Attach file");
+    let click = Action { target_id: Some(opener.id.clone()), ..Action::new(Operation::Click) };
+    page.act(&click, &observation).await.expect("open chooser");
+    let observation = page.observe().await.expect("observe intercepted chooser");
+    let opener = control(&observation, "Attach file");
+    assert!(opener.operations.contains(&Operation::Upload));
+    let upload = Action {
+        target_id: Some(opener.id.clone()),
+        files: vec![Attachment {
+            name: "receipt.txt".into(),
+            mime_type: "text/plain".into(),
+            content: Bytes(b"receipt".to_vec()),
+        }],
+        ..Action::new(Operation::Upload)
+    };
+    page.act(&upload, &observation).await.expect("attach");
+    let active = session.active_session_id().expect("active session");
+    let filename = page.evaluate(&active, "document.querySelector('#attachment').files[0]?.name").await.expect("file");
+    assert_eq!(filename, json!("receipt.txt"));
     session.close().await.expect("close");
 
     let (b1, b2) = (root.join("b1"), root.join("b2"));
@@ -266,6 +288,30 @@ async fn a_run_drives_a_tab_through_the_extension() {
     assert_eq!(stopped.lock().unwrap().as_deref(), Some("the run was stopped because its last tab was closed"));
     assert!(page.observe().await.is_err(), "a stopped run's browser still answers");
     let _ = session.close().await;
+    drop(browser);
+
+    // An older installed extension rejects the interception command even when the CLI has it.
+    let stale_extension = root.join("stale-extension");
+    std::fs::create_dir(&stale_extension).expect("extension folder");
+    for entry in std::fs::read_dir(extension).expect("extension files").flatten() {
+        if entry.path().is_file() {
+            std::fs::copy(entry.path(), stale_extension.join(entry.file_name())).expect("copy extension file");
+        }
+    }
+    let allowed = stale_extension.join("allowed-methods.json");
+    let mut methods: Vec<String> =
+        serde_json::from_slice(&std::fs::read(&allowed).expect("allowlist")).expect("decode allowlist");
+    methods.retain(|method| method != "Page.setInterceptFileChooserDialog");
+    std::fs::write(allowed, serde_json::to_vec(&methods).expect("encode allowlist")).expect("stale allowlist");
+    let stale_root = root.join("stale");
+    let browser = Browser::launch(&chrome, &stale_root, &stale_extension);
+    let record = browser.record().await;
+    let connection = BrowserConnection::new(format!("{SCHEME}{}#file run", record.display()), false);
+    let sink = Arc::new(DirectorySink::new(root.join("files")).expect("sink"));
+    let options = SessionOptions { has_attachments: true, ..SessionOptions::default() };
+    let session = BrowserSession::new(connection, sink, options);
+    let error = session.open().await.expect_err("a file run must stop without interception");
+    assert!(error.to_string().contains("fastbrowse extension path"), "{error}");
     drop(browser);
     let _ = std::fs::remove_dir_all(&root);
 }

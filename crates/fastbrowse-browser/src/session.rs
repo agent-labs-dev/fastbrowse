@@ -179,6 +179,7 @@ pub type OnStop = Arc<dyn Fn(&str) + Send + Sync>;
 pub struct SessionOptions {
     pub max_download_bytes: usize,
     pub refuse_cookie_banners: bool,
+    pub has_attachments: bool,
     pub on_frame: Option<FrameHandler>,
     pub check_access: Option<CheckAccess>,
     pub viewport: Option<(u32, u32)>,
@@ -193,6 +194,7 @@ impl Default for SessionOptions {
         Self {
             max_download_bytes: MAX_DOWNLOAD_BYTES,
             refuse_cookie_banners: true,
+            has_attachments: false,
             on_frame: None,
             check_access: None,
             viewport: None,
@@ -356,6 +358,7 @@ pub(crate) struct Shared {
     pub(crate) artifact_sink: Arc<dyn ArtifactSink>,
     pub(crate) max_download_bytes: usize,
     pub(crate) new_document_scripts: Vec<String>,
+    pub(crate) require_chooser_interception: bool,
     pub(crate) on_frame: Option<FrameHandler>,
     pub(crate) on_stop: Option<OnStop>,
     pub(crate) trace: Trace,
@@ -412,6 +415,8 @@ impl BrowserSession {
         // it is can trail the screen, so no ordering of events makes a delivered frame provably in the grant.
         let on_frame = if grant.is_some() { None } else { options.on_frame };
         Self(Arc::new(Shared {
+            require_chooser_interception: options.has_attachments
+                && connection.cdp_url.starts_with(crate::extension::SCHEME),
             connection,
             check_access: options.check_access,
             grant,
@@ -1242,12 +1247,17 @@ impl BrowserSession {
         for (method, params) in sends {
             commands.push(Box::pin(async move { self.send(method, params, s).await.map(drop) }));
         }
-        // A file input opened from a script then draws no native chooser and is named in `Page.fileChooserOpened`
-        // instead, so a page whose only way to a hidden, unlabelled input is a button can still be given a file. A
-        // browser that refuses it still opens its own chooser and still takes files through inputs and their labels,
-        // so the run goes on without it.
+        // An old extension can refuse interception even when the CLI supports it. A run with files must stop
+        // before it can open a native picker in the person's browser.
         commands.push(Box::pin(async move {
-            let _ = self.send("Page.setInterceptFileChooserDialog", json!({"enabled": true}), s).await;
+            if let Err(error) = self.send("Page.setInterceptFileChooserDialog", json!({"enabled": true}), s).await
+                && self.0.require_chooser_interception
+            {
+                return Err(BrowserError::Unavailable(format!(
+                    "The fastbrowse extension could not intercept the file chooser: {error}. Update the extension, \
+                     or run `fastbrowse extension path` and reload the unpacked extension in your browser."
+                )));
+            }
             Ok(())
         }));
         // A page behind another tab is hidden and unfocused, so it paints nothing, takes no typing and leaves input

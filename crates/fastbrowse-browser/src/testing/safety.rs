@@ -65,6 +65,7 @@ pub async fn upload(
         artifact_sink: shared.artifact_sink.clone(),
         max_download_bytes: shared.max_download_bytes,
         new_document_scripts: vec![],
+        require_chooser_interception: false,
         on_frame: None,
         on_stop: None,
         trace: fastbrowse_core::telemetry::Trace::disabled(),

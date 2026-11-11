@@ -981,6 +981,7 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
             SessionOptions {
                 max_download_bytes: config.max_download_bytes as usize,
                 refuse_cookie_banners: config.refuse_cookie_banners && !answers_consent,
+                has_attachments: !task.attachments.is_empty(),
                 on_frame: host.on_frame.clone(),
                 check_access: host.check_access.clone(),
                 viewport: matches!(owned.as_ref(), Some(Owned::Local(_))).then_some(task.viewport).flatten(),
