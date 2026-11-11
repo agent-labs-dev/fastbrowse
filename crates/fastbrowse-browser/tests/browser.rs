@@ -882,8 +882,8 @@ async fn test_a_record_keeps_a_value_it_only_draws() {
     let html = [card("One", "First"), card("Five", "Second"), card("One", "Third")].concat();
     eval_active(&h, &format!("document.body.innerHTML = {}", json!(html))).await;
     let capture = h.page.capture().await.expect("capture");
-    assert!(capture.text.contains("First") && capture.text.contains("[rating One]"), "{}", capture.text);
-    assert!(capture.text.contains("[rating Five]"), "{}", capture.text);
+    assert!(capture.text.contains("First") && capture.text.contains("[rating One: no text]"), "{}", capture.text);
+    assert!(capture.text.contains("[rating Five: no text]"), "{}", capture.text);
     h.close().await;
 }
 

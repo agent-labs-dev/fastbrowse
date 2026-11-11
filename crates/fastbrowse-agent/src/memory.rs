@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use fastbrowse_core::citations::{TableBlock, table_blocks};
 use fastbrowse_core::models::{Evidence, FactReader};
-use fastbrowse_core::page::Capture;
+use fastbrowse_core::page::{BlockKind, Capture};
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{dumped_len, dumps, write_string};
@@ -266,6 +266,9 @@ pub struct Notes {
     steps_taken: HashMap<(String, String, DateTime), usize>,
     /// Each remembered capture's table blocks by its hash, so a citation can show a quote as the page shows it.
     tables: HashMap<String, Arc<[TableBlock]>>,
+    /// Each remembered capture's record blocks, as its hash, the block's source id and its span, so a quote of a whole
+    /// record says so.
+    records: HashSet<(String, String, i64, i64)>,
 }
 
 impl fmt::Debug for Notes {
@@ -293,6 +296,20 @@ impl Notes {
             .entry(key)
             .or_insert_with(|| CapturedPage { url: capture.url.clone(), title: capture.title.clone() });
         self.tables.entry(capture.sha256.clone()).or_insert_with(|| table_blocks(capture).into());
+        self.records.extend(
+            capture
+                .blocks
+                .iter()
+                .filter(|block| block.kind == BlockKind::Record)
+                .map(|block| (capture.sha256.clone(), block.source_id.clone(), block.start, block.end)),
+        );
+    }
+
+    /// Whether `evidence` quotes one whole record block of a remembered capture: every part of a card or comment the
+    /// page rendered, so what it does not show, that record does not show on the page.
+    pub fn whole_record(&self, evidence: &Evidence) -> bool {
+        let span = (evidence.capture_sha256.clone(), evidence.source_id.clone(), evidence.start, evidence.end);
+        self.records.contains(&span)
     }
 
     /// The table blocks of the capture `evidence` was cut from; none when that capture was never remembered.

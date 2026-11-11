@@ -511,7 +511,8 @@ impl Tree {
     }
 
     /// The facts a card states only by drawing them, as a row of identical icons a class colours: each element with
-    /// no text that its label or class names, written as the page names it.
+    /// no text that its label or class names, written as the page names it and said to show no text, as `capture.js`
+    /// writes it (#992).
     fn drawn_facts(&self, i: usize, holds: &[Holds]) -> String {
         let mut facts = String::new();
         let descendants = i + 1..=self.elements[i].last;
@@ -525,7 +526,7 @@ impl Tree {
             }
             let name = clean(&element.label.clone().unwrap_or_else(|| element.classes.join(" ")));
             if !name.is_empty() {
-                facts.push_str(&format!(" [{name}]"));
+                facts.push_str(&format!(" [{name}: no text]"));
             }
         }
         facts
@@ -1509,7 +1510,9 @@ mod tests {
         let cards: Vec<_> = found.iter().filter(|b| b.kind == BlockKind::ListItem).collect();
         assert_eq!(
             cards.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(),
-            (1..=3).map(|n| format!("Title {n}\n\n\u{a3}51.7{n}\n\nIn stock [star-rating Three]")).collect::<Vec<_>>(),
+            (1..=3)
+                .map(|n| format!("Title {n}\n\n\u{a3}51.7{n}\n\nIn stock [star-rating Three: no text]"))
+                .collect::<Vec<_>>(),
         );
         assert_eq!(cards[0].href.as_deref(), Some("https://a.example/book/1"));
         assert_eq!(cards[0].heading_path, ["Books"], "the card's own heading names nothing after it");
