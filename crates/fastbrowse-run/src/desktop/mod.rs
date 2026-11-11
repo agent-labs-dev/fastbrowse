@@ -11,7 +11,7 @@ mod mcp;
 pub mod tree;
 
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -39,10 +39,6 @@ struct Shot {
     width: f64,
     height: f64,
 }
-
-/// Pages opened by this process, numbering each one's deskpilot agent so two runs in one `fastbrowse serve` never
-/// share a hidden workspace.
-static AGENTS: AtomicU32 = AtomicU32::new(0);
 
 /// Why a desktop page could not be opened: an app the caller has to fix, or a deskpilot that cannot run.
 #[derive(Debug)]
@@ -74,9 +70,8 @@ impl DeskpilotPage {
     /// without a shell) through it, driving the window `launch` returns. A command deskpilot cannot start, that exits
     /// before it opens a window, or opens none in time is refused here, before any step.
     pub async fn open(program: &str, command: &[String]) -> Result<DeskpilotPage, OpenError> {
-        // deskpilot takes an agent name of up to 32 letters, digits, `-`, `_` or `.`: "fastbrowse-", a u32 process
-        // id and a u32 count fit it.
-        let agent = format!("fastbrowse-{}-{}", std::process::id(), AGENTS.fetch_add(1, Ordering::Relaxed));
+        // An agent of its own, so two runs in one `fastbrowse serve` never share a hidden workspace or a cursor.
+        let agent = fastbrowse_browser::cursor::deskpilot_agent();
         let client =
             Deskpilot::start(program, &agent).await.map_err(|error| OpenError::Unavailable(error.message().into()))?;
         if !client.offers("launch") {

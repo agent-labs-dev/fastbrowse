@@ -364,8 +364,8 @@ To regenerate the schema, run `FASTBROWSE_UPDATE_GOLDEN=1 cargo test -p fastbrow
 
 ## Cursor feedback
 
-The run shows where the agent is about to act, through the Cua Driver's synthetic cursor, whenever its tab is on
-screen: by default it is drawn wherever it can be placed, `--cursor` (`run_task(cursor=True)`) also brings the
+The run shows where the agent is about to act, through the Cua Driver's synthetic cursor on X11 or deskpilot's
+agent cursor on Hyprland, whenever its tab is on screen: by default it is drawn wherever it can be placed, `--cursor` (`run_task(cursor=True)`) also brings the
 window to the front so it always can be, and `--no-cursor` (`cursor=False`) turns it off. A plain `--headed` run
 works in a background tab behind `about:blank`, so the default draws nothing there; nothing of the run is on
 screen to mark. The click itself is still sent over CDP, so the overlay cannot change what an action did and is never
@@ -385,6 +385,17 @@ idle fade off: a navigation, a scroll or a point outside the viewport leaves it 
 hides it as soon as the tab stops showing, the frame can no longer be placed, or another window comes in front. Any
 driver failure turns the feature off for the run.
 
+On a Wayland session the cursor is drawn only under Hyprland, through `deskpilot mcp` (`FASTBROWSE_DESKPILOT` or
+`deskpilot` on `PATH`), since `cua-driver` lists no windows there. Chrome on native Wayland cannot know where its
+window is, so the window is the one listed by deskpilot's `windows` with the browser's pid and the page's
+`outerWidth x outerHeight`, and the point is sent to `move` in that window's pixels. Nothing is drawn when no window
+or more than one matches, the window is on a workspace no monitor shows, or any other window on screen overlaps it:
+Hyprland gives no stacking order, so an overlap cannot be shown to be behind. `move` reports the global point it
+drew at, and a point other than the window's position plus the one sent turns the feature off, since deskpilot
+scales a point by its latest shot of that window when it holds one. deskpilot has no session or hide: its arrow
+fades after eight idle seconds, so an arrow drawn just before another window covers the browser can stay that long.
+`take_pointer`, `show` and `focus` are never sent, so the user's pointer and focus stay where they are.
+
 The driver answers `move_cursor` only once its glide has landed, and at its own pace a glide across the screen takes
 one to three seconds, longer than the half second between quick clicks: each glide was cut off by the next, so the
 arrow landed on nothing, and a glide past the two-second call bound turned the feature off. The run asks
@@ -403,8 +414,9 @@ and ignores the number, so the run asks for `fixed` when it sets a glide and aga
 value is sent with `set_agent_cursor_motion` only when it changes, and a driver without that tool keeps the glide
 it was started with.
 
-Limits: Linux X11 only; native Wayland, macOS and Windows are not verified. It needs `cua-driver`
-0.28.3 or newer with the session cursor tools. Cloud and headless browsers are skipped. The desktop cursor has no
+Limits: Linux only, on X11 or Hyprland; other Wayland compositors, macOS and Windows are not verified. X11
+needs `cua-driver` 0.28.3 or newer with the session cursor tools, and Hyprland needs deskpilot with its plugin
+loaded. Cloud and headless browsers are skipped. The desktop cursor has no
 click pulse through `move_cursor`; recordings add one in the video. A docked DevTools panel or a pinch zoom hides
 the desktop cursor, and a window partly covered by another counts as covered. CDP screenshots do not show the
 desktop cursor.
