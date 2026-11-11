@@ -7,7 +7,9 @@ fastbrowse splits a browser agent into three owners:
 - **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, and budgets. Code does not second-guess a DONE: the run ends `complete` with what Jev read, and a requested record that cannot be filled, a composed claim still unsupported after recovery, or a requested step the page shows the site does not allow ends `unverified`. Once the run has acted, Jev's finish check answers whether every step the task asks for was carried out: `done`, `undone` (the run recovers), or `refused` (the run reads, answers and ends `unverified`).
 
 When a field value or key chord is copied, Jev selects its source and first word. If its end needs a separate choice,
-each choice shows the complete text that would be typed from that first word to the candidate end.
+each choice shows the complete text that would be typed from that first word to the candidate end, with one more
+answer: the value does not begin at that word. Jev then picks the first word again without it. The beginning is checked
+the same way against copies that end where the value ends, and an end Jev rejects there is picked again.
 Code copies the selected span unchanged. A key chord is copied only from the task, never from page text.
 Earlier typing is shown as history, without assuming
 rejection or requiring a different value when the page changed the field.

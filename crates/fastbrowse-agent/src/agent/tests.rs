@@ -2284,6 +2284,124 @@ async fn test_a_span_end_choice_shows_each_value_that_would_be_typed() {
     assert_eq!(text, "Grace");
 }
 
+/// Jev as it answered on a chat box (#933), picking the task's last word as where the value ends, and with `reply`
+/// "Reply" as where it begins. Offered only copies that start at "Reply", it ended the value at the last word, as
+/// replayed Jev did once in three; it said the value does not begin there each time that was offered. Without `reply`
+/// it begins at "pong", ends a copy from there at the last word, and says the value does not end there when it may.
+struct ChatReply {
+    reply: bool,
+}
+
+impl DecisionClient for ChatReply {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        let offered = |key: &str, option: &str| match questions.get(key) {
+            Some(Question::Choice(question)) => question.criteria.contains_key(option),
+            _ => false,
+        };
+        let begins = if self.reply && offered("first", "0") { "0" } else { "5" };
+        let from_reply = matches!(questions.get("pick"), Some(Question::Choice(q)) if q.criteria["5"] != json!("pong"));
+        let end = match (from_reply, offered("pick", "elsewhere"), offered("pick", "24")) {
+            (true, true, _) => "elsewhere",
+            (false, _, false) => "5",
+            _ => "24",
+        };
+        let start = if offered("start", "elsewhere") { "elsewhere" } else { "5" };
+        let picks =
+            [("source", "task"), ("first", begins), ("last", "24"), ("pick", end), ("start", start), ("trail", "0")];
+        let answers = questions
+            .keys()
+            .filter_map(|key| picks.iter().find(|(asked, _)| asked == key).map(|(_, pick)| (key, pick)))
+            .map(|(key, pick)| {
+                let answer = ChoiceAnswer {
+                    kind: Default::default(),
+                    choice: (*pick).into(),
+                    probabilities: IndexMap::new(),
+                    confidence: 1.0,
+                };
+                (key.clone(), Answer::Choice(answer))
+            })
+            .collect();
+        Box::pin(
+            async move { Ok(Evaluation { model: "jev".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        ScriptedJev::new(Vec::new()).profile()
+    }
+}
+
+#[tokio::test]
+async fn test_a_value_copied_from_a_wrong_end_is_picked_again_without_it() {
+    for reply in [true, false] {
+        let agent = Agent::new(Arc::new(NoPage), Arc::new(ChatReply { reply }), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.task = "Reply with only the word pong. Then send it. Wait until a reply from Nebula appears in the conversation, then report the reply text verbatim".into();
+        let text = agent
+            .text(&mut state, &observation(&[]), &code_decision(Operation::Fill, None), &field("Message Nebula…"))
+            .await
+            .unwrap();
+        assert_eq!(text, "pong", "begins at Reply: {reply}");
+    }
+}
+
+/// Picks a value from the first word to the last, and fails any choice offering more than the provider's `0` options.
+struct WholeSource(usize);
+
+impl DecisionClient for WholeSource {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        let last = (self.0 - 1).to_string();
+        let answers = questions
+            .iter()
+            .map(|(key, question)| {
+                let Question::Choice(question) = question else { panic!("expected a choice") };
+                assert!(question.criteria.len() <= self.0, "{key} offered {} options", question.criteria.len());
+                let options: Vec<&String> = question.criteria.keys().collect();
+                let choice = match key.as_str() {
+                    "source" => "task".to_string(),
+                    "last" | "pick" => last.clone(),
+                    "ends" => options.iter().rev().find(|option| **option != "none").unwrap().to_string(),
+                    _ => options[0].clone(),
+                };
+                let answer =
+                    ChoiceAnswer { kind: Default::default(), choice, probabilities: IndexMap::new(), confidence: 1.0 };
+                (key.clone(), Answer::Choice(answer))
+            })
+            .collect();
+        Box::pin(
+            async move { Ok(Evaluation { model: "test".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile { max_choice_options: self.0, ..DecisionProfile::unknown() }
+    }
+}
+
+/// A source exactly as long as a choice can be keeps a choice free for saying a copy does not run from the end
+/// picked: offering every word and that answer went one over the provider's limit.
+#[tokio::test]
+async fn test_a_source_as_long_as_a_choice_still_fits_the_copies_offered_from_it() {
+    for max in [4, 26, 255] {
+        let agent = Agent::new(Arc::new(NoPage), Arc::new(WholeSource(max)), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.task = (0..max).map(|n| format!("w{n}")).collect::<Vec<_>>().join(" ");
+        let value = agent
+            .text(&mut state, &observation(&[]), &code_decision(Operation::Fill, None), &field("Reference"))
+            .await
+            .expect("a value");
+        assert_eq!(value, state.task, "{max} options");
+    }
+}
+
 /// A reply box that opened holding an @mention lost it to a fill (#857): Jev chose where the value came from without
 /// being told the field held anything, though a fill replaces all of it. A sensitive field's value is never shown.
 #[test]
