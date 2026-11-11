@@ -52,6 +52,59 @@ pub(crate) enum Point {
     Gone,
 }
 
+/// The W3C UI Events named key values (https://www.w3.org/TR/uievents-key/) a task can name in a chord. A published
+/// standard, so the list is the design and not a heuristic.
+const NAMED_KEYS: &[&str] = &[
+    "Enter",
+    "Escape",
+    "Backspace",
+    "Tab",
+    "Delete",
+    "End",
+    "Home",
+    "Insert",
+    "PageDown",
+    "PageUp",
+    "ArrowDown",
+    "ArrowLeft",
+    "ArrowRight",
+    "ArrowUp",
+    "CapsLock",
+    "Clear",
+    "ContextMenu",
+    "NumLock",
+    "Pause",
+    "ScrollLock",
+    "Select",
+    "AltGraph",
+    "Dead",
+    "Unidentified",
+    "F1",
+    "F2",
+    "F3",
+    "F4",
+    "F5",
+    "F6",
+    "F7",
+    "F8",
+    "F9",
+    "F10",
+    "F11",
+    "F12",
+    "F13",
+    "F14",
+    "F15",
+    "F16",
+    "F17",
+    "F18",
+    "F19",
+    "F20",
+    "F21",
+    "F22",
+    "F23",
+    "F24",
+];
+
 /// A key an action presses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Key {
@@ -98,61 +151,15 @@ impl Key {
         Ok(Self::Chord { modifiers, key })
     }
 
+    /// The W3C UI Events named key `value` spells in any case, or a single character as given.
     fn standard_key(value: &str) -> Option<&str> {
-        let canonical = match value.to_ascii_lowercase().as_str() {
-            "space" => " ",
-            "enter" => "Enter",
-            "escape" => "Escape",
-            "backspace" => "Backspace",
-            "tab" => "Tab",
-            "delete" => "Delete",
-            "end" => "End",
-            "home" => "Home",
-            "insert" => "Insert",
-            "pagedown" => "PageDown",
-            "pageup" => "PageUp",
-            "arrowdown" => "ArrowDown",
-            "arrowleft" => "ArrowLeft",
-            "arrowright" => "ArrowRight",
-            "arrowup" => "ArrowUp",
-            "capslock" => "CapsLock",
-            "clear" => "Clear",
-            "contextmenu" => "ContextMenu",
-            "numlock" => "NumLock",
-            "pause" => "Pause",
-            "scrolllock" => "ScrollLock",
-            "select" => "Select",
-            "f1" => "F1",
-            "f2" => "F2",
-            "f3" => "F3",
-            "f4" => "F4",
-            "f5" => "F5",
-            "f6" => "F6",
-            "f7" => "F7",
-            "f8" => "F8",
-            "f9" => "F9",
-            "f10" => "F10",
-            "f11" => "F11",
-            "f12" => "F12",
-            "f13" => "F13",
-            "f14" => "F14",
-            "f15" => "F15",
-            "f16" => "F16",
-            "f17" => "F17",
-            "f18" => "F18",
-            "f19" => "F19",
-            "f20" => "F20",
-            "f21" => "F21",
-            "f22" => "F22",
-            "f23" => "F23",
-            "f24" => "F24",
-            "altgraph" => "AltGraph",
-            "dead" => "Dead",
-            "unidentified" => "Unidentified",
-            _ if value.chars().count() == 1 => value,
-            _ => return None,
-        };
-        Some(canonical)
+        if value.eq_ignore_ascii_case("space") {
+            return Some(" ");
+        }
+        if let Some(named) = NAMED_KEYS.iter().find(|key| key.eq_ignore_ascii_case(value)) {
+            return Some(named);
+        }
+        (value.chars().count() == 1).then_some(value)
     }
 
     /// Its DOM key, code, text and optional Windows virtual key code, plus the CDP modifier bitmask.

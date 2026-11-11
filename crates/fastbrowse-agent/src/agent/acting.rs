@@ -304,7 +304,7 @@ impl Agent {
                     let reason = format!("{} can only receive a key press in a browser", text::repr(&target.label));
                     return Err(self.page.needs_browser(reason).into());
                 }
-                let chord = self.task_text(state, observation, decision, target).await?;
+                let chord = self.text_with_scope(state, observation, decision, target, true).await?;
                 self.gate_irreversible(state, observation, decision).await?;
                 Ok(Action { target_id: Some(target.id.clone()), text: Some(chord), ..Action::new(Operation::Press) })
             }
@@ -809,17 +809,8 @@ impl Agent {
         self.text_with_scope(state, observation, decision, target, false).await
     }
 
-    /// A key chord is copied only from the task, using the same source and word selections as a field value.
-    async fn task_text(
-        &self,
-        state: &mut RunState,
-        observation: &Observation,
-        decision: &Decision,
-        target: &Control,
-    ) -> Step<String> {
-        self.text_with_scope(state, observation, decision, target, true).await
-    }
-
+    /// The text `text` gives, or with `task_only` words copied from the task alone: a key chord, which neither a secret
+    /// nor what was read can give.
     async fn text_with_scope(
         &self,
         state: &mut RunState,
