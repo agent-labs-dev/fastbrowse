@@ -130,12 +130,12 @@ turn totals, so these bounds cover only recorded tokens, not the complete run. T
 ## Desktop apps
 
 `fastbrowse-evals desktop OUT` (in `evals/`) measures `fastbrowse --desktop` against Claude driving
-[deskpilot](https://github.com/cjber/deskpilot)'s MCP tools itself, on a GTK order form. Each task starts a fresh
-form on a hidden special workspace and grades the form's own saved state: the order it placed, field by field, or
-that it placed none. A read-only task's answer must name the value. A run also fails if the form's window ever takes
-keyboard focus. It needs a Hyprland session with deskpilot's plugin loaded, PyGObject with GTK 3 for the form
-(`--python`), `OPENROUTER_API_KEY` for fastbrowse and a signed-in `claude` for the baseline; `--arm` and `--task`
-narrow a run. Recipes are not measured, since `--desktop` refuses them.
+[deskpilot](https://github.com/cjber/deskpilot)'s MCP tools itself, on a GTK order form. Each arm starts a fresh form
+with deskpilot's `launch`, on its own agent's hidden workspace, and each task grades the form's own saved state: the
+order it placed, field by field, or that it placed none. A read-only task's answer must name the value. A run also fails
+if the form's window ever takes keyboard focus. It needs a Hyprland session with a deskpilot that has `launch` and its
+plugin loaded, PyGObject with GTK 3 for the form (`--python`), `OPENROUTER_API_KEY` for fastbrowse and a signed-in
+`claude` for the baseline; `--arm` and `--task` narrow a run. Recipes are not measured, since `--desktop` refuses them.
 
 ## Timing
 

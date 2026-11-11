@@ -420,14 +420,16 @@ fn a_viewport_is_local_or_cloud_and_rejects_handed_browsers() {
 
 #[test]
 fn a_desktop_run_refuses_browser_options_and_recipes() {
-    let desktop =
-        |window: &str| RunTask { task: "fill the form".into(), desktop: Some(window.into()), ..RunTask::default() };
-    assert!(fastbrowse_run::check(&desktop("org.gnome.TextEditor")).is_ok());
-    assert!(fastbrowse_run::check(&desktop(" ")).unwrap_err().to_string().contains("must name a window"));
+    let desktop = |app: &str| RunTask { task: "fill the form".into(), desktop: Some(app.into()), ..RunTask::default() };
+    assert!(fastbrowse_run::check(&desktop("gnome-text-editor --new-window")).is_ok());
+    for app in [" ", "gedit 'unclosed"] {
+        let error = fastbrowse_run::check(&desktop(app)).unwrap_err().to_string();
+        assert!(error.contains("must name an app to start"), "{app:?}: {error}");
+    }
     let error = fastbrowse_run::check(&RunTask {
         start: Some("https://example.com".into()),
         recipe: Some("steps.json".into()),
-        ..desktop("org.gnome.TextEditor")
+        ..desktop("gnome-text-editor")
     })
     .unwrap_err()
     .to_string();

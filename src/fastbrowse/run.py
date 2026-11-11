@@ -204,11 +204,11 @@ async def run_task(
     Live frames and recordings are held back while a resolved secret shows on the page, as PNG step frames are.
     No handler means no live capture.
 
-    The agent's cursor is drawn by default over a visible local or attached Chrome through the Cua Driver, on
-    Linux with X11, whenever that window is in front; it never moves the real pointer or changes focus, and does
-    nothing where it cannot place the cursor exactly, including with no `cua-driver` installed, no display, a
-    headless or cloud browser. `cursor=True` also implies `foreground`, so the window is brought to the front and
-    the cursor is always drawn; `cursor=False` turns it off.
+    The agent's cursor is drawn by default over a visible local or attached Chrome, through the Cua Driver on
+    Linux with X11 or deskpilot on Hyprland, whenever that window is uncovered; it never moves the real pointer or
+    changes focus, and does nothing where it cannot place the cursor exactly, including with no `cua-driver` or
+    `deskpilot` installed, no display, a headless or cloud browser. `cursor=True` also implies `foreground`, so the
+    window is brought to the front and the cursor is always drawn; `cursor=False` turns it off.
 
     `fetch` reads every page over HTTP and starts no browser at all, for a task that only has to read: the
     document becomes the same `Capture` blocks a browser capture produces, so reads, quotes and citations
@@ -236,11 +236,12 @@ async def run_task(
     then ends `cancelled`. It cannot be combined with `allowed_origins`: a popup's first request can leave before
     the extension reaches it, so it could not be refused first.
 
-    `desktop` drives a native desktop window instead of a browser, through deskpilot on Hyprland
-    (https://github.com/cjber/deskpilot): its address, its app class, or a part of its class or title that names exactly
-    one window. Input reaches the window wherever it is, without moving the user's pointer or keyboard focus. It
-    opens no browser, so it cannot be combined with a start address or any browser option, and it records and replays
-    no recipe.
+    `desktop` drives a native desktop app instead of a browser, through deskpilot on Hyprland
+    (https://github.com/cjber/deskpilot): the command line that starts it, such as `"gnome-text-editor --new-window"`,
+    split as a POSIX shell splits words. The run starts the app on deskpilot's hidden workspace with `launch`, drives it
+    without moving the user's pointer or keyboard focus, and closes it when the run ends; a window that is already open
+    is not driven. It opens no browser, so it cannot be combined with a start address or any browser option, and it
+    records and replays no recipe.
 
     `context` is background the run may use but never reads as the task: where the request came from, what the
     caller already knows. Jev sees it as `background`.
