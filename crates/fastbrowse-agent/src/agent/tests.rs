@@ -7137,3 +7137,19 @@ async fn test_a_secret_a_modal_is_named_with_is_masked() {
     let observed = agent.observe().await.expect("observed");
     assert_eq!(observed.modal.as_deref(), Some("Welcome back, •••••••"));
 }
+
+#[tokio::test]
+async fn test_a_plan_stops_at_the_step_limit() {
+    // One step allowed and one taken: the planned fill is a step too, so none is taken.
+    let form = delivery("1", "", "");
+    let page = Arc::new(Scripted::new(form.clone(), vec![]));
+    let jev = Typist(&[("source", "task"), ("first", "2"), ("last", "2")]);
+    let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Ship to Ada".into();
+    state.ledger = Arc::new(Ledger::new(Limits { max_steps: Some(1), ..Limits::default() }));
+    state.ledger.state().steps = 1;
+    let stopped = agent.run_plan(&mut state, &form, &[planned(&form, "first")]).await;
+    assert!(stopped.is_err(), "a planned fill went past the step limit");
+    assert!(state.history.is_empty());
+}

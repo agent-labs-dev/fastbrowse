@@ -320,6 +320,11 @@ impl Agent {
             if state.redecided || state.picked.is_some() {
                 break;
             }
+            // Each planned fill is a step, and the run's step, time and spend limits bound it as they bound a decided one.
+            state.ledger.check(0.0)?;
+            if let Some(stop) = super::out_of_browsing_time(state) {
+                return Err(Flow::Stop(stop));
+            }
             let observation = self.observe().await?;
             let same_document = observation.url == decided_on.url
                 && observation.document_key == decided_on.document_key

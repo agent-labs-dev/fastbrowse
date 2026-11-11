@@ -15,7 +15,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value, json};
 
 use super::chunks::evidence;
-use super::text::{Page, SpanKind, cells, currency, lines_of, spans, table_header_from_text};
+use super::text::{Page, SpanKind, Word, cells, currency, lines_of, spans, table_header_from_text};
 use crate::error::{AgentError, Result};
 use crate::memory::Notes;
 use crate::pyre::digit;
@@ -654,7 +654,6 @@ pub async fn choose_candidate(
     }
     let chars: Vec<char> = evidence.quote.chars().collect();
     let copy = |from: usize, to: usize| chars[from..to].iter().collect::<String>();
-    let (first, last) = (&words[0], &words[words.len() - 1]);
     let label = text::repr(field_label(field, Some(name)));
     let ask_edge = |edge: &str, criteria: IndexMap<String, Value>| {
         let instructions = format!(
@@ -664,26 +663,48 @@ pub async fn choose_candidate(
         );
         Question::from(ChoiceQuestion::new(instructions, criteria))
     };
-    let begins = words.iter().map(|word| (word.index.to_string(), copy(word.start, last.end).into())).collect();
-    let ends = words.iter().map(|word| (word.index.to_string(), copy(first.start, word.end).into())).collect();
+    // A word with punctuation at its edge is offered both ways: a value can be `.NET` or `C++`, or end before a comma.
+    // A key ending in `p` takes the punctuation.
+    let edges = |at: fn(&Word) -> (usize, usize), text: &dyn Fn(usize) -> String| {
+        let mut offered = IndexMap::new();
+        for word in &words {
+            let (trimmed, outer) = at(word);
+            offered.insert(word.index.to_string(), Value::from(text(trimmed)));
+            if outer != trimmed {
+                offered.insert(format!("{}p", word.index), Value::from(text(outer)));
+            }
+        }
+        offered
+    };
+    let whole = chars.len();
+    let begins = edges(|word| (word.start, word.outer_start), &|at| copy(at, whole));
+    let ends = edges(|word| (word.end, word.outer_end), &|at| copy(0, at));
     let (begin_key, end_key) = (format!("{name}_begins"), format!("{name}_ends"));
     let questions =
         IndexMap::from([(begin_key.clone(), ask_edge("begin", begins)), (end_key.clone(), ask_edge("end", ends))]);
     let picks = ask(jev, state, questions, ledger).await?;
     let picked = |key: &str| match picks.get(key) {
-        Some(Answer::Choice(answer)) => words.iter().find(|word| word.index.to_string() == answer.choice),
+        Some(Answer::Choice(answer)) => {
+            let (index, outer) = match answer.choice.strip_suffix('p') {
+                Some(index) => (index, true),
+                None => (answer.choice.as_str(), false),
+            };
+            words.iter().find(|word| word.index.to_string() == index).map(|word| (word, outer))
+        }
         _ => None,
     };
-    let (Some(first), Some(last)) = (picked(&begin_key), picked(&end_key)) else {
+    let (Some((first, outer_first)), Some((last, outer_last))) = (picked(&begin_key), picked(&end_key)) else {
         return Ok(Some((value, evidence)));
     };
     // Ends picked apart can cross; the value then is the word it begins at.
-    let last = if last.index < first.index { first } else { last };
-    let quote = copy(first.start, last.end);
+    let (last, outer_last) = if last.index < first.index { (first, outer_first) } else { (last, outer_last) };
+    let from = if outer_first { first.outer_start } else { first.start };
+    let to = if outer_last { last.outer_end } else { last.end };
+    let quote = copy(from, to);
     let Some(narrowed) = scalar_candidate(field, &quote) else {
         return Ok(Some((value, evidence)));
     };
-    let (start, end) = (evidence.start + first.start as i64, evidence.start + last.end as i64);
+    let (start, end) = (evidence.start + from as i64, evidence.start + to as i64);
     let links = Link::within(&evidence.links, start, end);
     let complete_source = evidence.complete_source && quote == evidence.quote;
     Ok(Some((narrowed, Evidence { start, end, quote, links, complete_source, ..evidence })))
@@ -827,7 +848,15 @@ mod narrowing_tests {
     }
 
     async fn pick(name: &'static str, script: &'static [(&'static str, &'static str)]) -> (String, String, usize) {
-        let page = capture(&[(BlockKind::Heading, "httpx 0.28.1")]);
+        pick_in("httpx 0.28.1", name, script).await
+    }
+
+    async fn pick_in(
+        heading: &str,
+        name: &'static str,
+        script: &'static [(&'static str, &'static str)],
+    ) -> (String, String, usize) {
+        let page = capture(&[(BlockKind::Heading, heading)]);
         let field = ScalarField::new(Annotation::Str);
         let candidates = field_candidates(&page, &field).unwrap();
         let jev = Picker(script, Default::default());
@@ -852,5 +881,13 @@ mod narrowing_tests {
         assert_eq!(pick("package", package).await, ("httpx".into(), "httpx".into(), 2));
         let version = &[("version", "c0"), ("version_begins", "0.28.1"), ("version_ends", "httpx 0.28.1")];
         assert_eq!(pick("version", version).await, ("0.28.1".into(), "0.28.1".into(), 2));
+    }
+
+    #[tokio::test]
+    async fn a_value_keeps_the_punctuation_at_its_edge() {
+        let framework = &[("package", "c0"), ("package_begins", ".NET 8 (LTS)"), ("package_ends", ".NET 8")];
+        assert_eq!(pick_in(".NET 8 (LTS)", "package", framework).await, (".NET 8".into(), ".NET 8".into(), 2));
+        let language = &[("package", "c0"), ("package_begins", "C++ 23"), ("package_ends", "C++")];
+        assert_eq!(pick_in("C++ 23", "package", language).await, ("C++".into(), "C++".into(), 2));
     }
 }

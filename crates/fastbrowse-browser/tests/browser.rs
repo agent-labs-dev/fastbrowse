@@ -2459,6 +2459,8 @@ async fn test_the_kept_status_world_is_addressed_only_by_its_unique_id() {
          responseStatus: 401}]; true",
     )
     .await;
+    // The document's status is kept once read; dropped, it is read again in the kept world.
+    testing::forget_document(&h.page);
     sent.lock().unwrap().clear();
     assert_eq!(h.observe().await.response_status, Some(200));
     let addressed: Vec<Value> = sent
