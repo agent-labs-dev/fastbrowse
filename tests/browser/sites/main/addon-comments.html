@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Comments - Shortest Path Forever - World of Warcraft Addons</title>
+<!-- The DOM a CurseForge comments tab renders, rebuilt from its own components: one form per editor (the page's
+     top-level box and a reply box opened inside a comment's list item), both textareas labelled "Comment text area",
+     buttons of type "button", member avatars and a linked banner. -->
+<style>
+  body { font-family: sans-serif; margin: 0; }
+  .top-banner img { display: block; width: 728px; height: 90px; }
+  main { max-width: 860px; margin: 0 auto; padding: 0 16px; }
+  .comments-list { list-style: none; padding: 0; }
+  .comments-list .comments-list { padding-left: 40px; }
+  li > div:first-child { display: flex; gap: 12px; margin: 16px 0; }
+  .avatar-image { width: 32px; height: 32px; border-radius: 50%; }
+  .comment-rich-text--collapsed { max-height: 3em; overflow: hidden; }
+  .post-comment-box { display: flex; gap: 12px; margin: 12px 0; }
+  .post-comment-box textarea { width: 560px; }
+  .notification { position: fixed; bottom: 16px; right: 16px; background: #222; color: #fff; padding: 12px; }
+  .btn-primary.disabled { opacity: 0.5; }
+</style>
+</head>
+<body>
+<div class="top-banner"><a class="top-banner-link" href="#promotion" aria-label="promotional banner"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='728' height='90'%3E%3Crect width='728' height='90' fill='%23d64'/%3E%3C/svg%3E" alt="promotional banner"></a></div>
+<main>
+  <h1>Shortest Path Forever</h1>
+  <ul class="tabs"><li><a href="#description">Description</a></li><li><a class="current" href="#comments">Comments (6)</a></li></ul>
+  <section class="comments" id="comments">
+    <ul class="comments-list" id="thread"></ul>
+  </section>
+</main>
+<script>
+  const AVATAR = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Ccircle cx='16' cy='16' r='16' fill='%2399c'/%3E%3C/svg%3E";
+  const comments = [
+    { id: 8688520, author: 'IronmanBG', when: '7 hours ago', text: 'Is there a way to stop the arrow from pointing through walls in Blackrock Depths?', replies: [] },
+    { id: 8687397, author: 'Nivlemoth_Nathrezim', when: '7 hours ago', text: 'The route sends me over the mountain in Alterac instead of through the tunnel. Can it prefer roads?', replies: [] },
+    { id: 8685241, author: 'tgkGate', when: '1 day ago', text: 'Love it. Could the map pin show the next waypoint too, not just the final one? I keep losing the pin when the path bends.', replies: [{ author: 'cjber', when: '1 day ago', text: 'Thanks, noted for the next release.' }] },
+    { id: 8684002, author: 'Serzath', when: '2 days ago', text: 'Works great with Questie.', replies: [] },
+  ];
+  const el = (tag, props = {}, ...children) => {
+    const e = Object.assign(document.createElement(tag), props);
+    for (const c of children) if (c) e.append(c);
+    return e;
+  };
+  let notice = null;
+  const notify = message => {
+    notice?.remove();
+    notice = el('div', { className: 'notification', role: 'status' }, el('span', { textContent: message }),
+      el('button', { type: 'button', ariaLabel: 'Close Notification', textContent: 'x', onclick: () => notice.remove() }));
+    document.body.append(notice);
+  };
+  // The page's editor: a form with the user's avatar, a textarea, the terms line and its actions. Post is styled
+  // disabled while the box is empty and posts whatever the box holds.
+  const editor = (prefill, onPost, onCancel) => {
+    const area = el('textarea', { id: 'post-comment-text', rows: 1, placeholder: 'Add a comment', value: prefill });
+    area.setAttribute('aria-label', 'Comment text area');
+    const post = el('button', { type: 'button', textContent: 'Post' });
+    const shade = () => post.className = 'btn-primary' + (area.value.length ? '' : ' disabled');
+    area.addEventListener('input', shade);
+    shade();
+    post.onclick = () => {
+      if (area.value.trim()) onPost(area.value);
+    };
+    const terms = el('p');
+    terms.innerHTML = 'Please be sure your post does not violate our <a href="#terms">Terms of Service</a>';
+    const actions = el('div', { className: 'actions' },
+      onCancel && el('button', { type: 'button', className: 'btn-lined', textContent: 'Cancel', onclick: onCancel }), post);
+    const form = el('form', { className: 'post-comment-box' + (onCancel ? ' reply' : '') },
+      el('div', { className: 'user-avatar-col' }, el('img', { src: AVATAR, alt: 'user avatar', className: 'avatar-image', width: 40, height: 40 })),
+      el('div', { className: 'post-comment-body' }, el('div', { className: 'comment-content' }, area),
+        el('div', { className: 'post-comment-footer' }, terms, actions)));
+    return [form, area];
+  };
+  const item = (comment, reply) => {
+    const rich = el('div', { className: 'comment-rich-text' + (comment.text.length > 90 ? ' comment-rich-text--collapsed' : '') },
+      el('p', { textContent: comment.text }));
+    const text = el('div', { className: 'text' }, rich);
+    if (comment.text.length > 90) {
+      const more = el('button', { className: 'read-more-button', textContent: 'Read more' });
+      more.onclick = () => {
+        const open = rich.classList.toggle('comment-rich-text--collapsed');
+        more.textContent = open ? 'Read more' : 'Read less';
+      };
+      text.append(more);
+    }
+    const replies = el('ul', { className: 'comments-list' });
+    const li = el('li', {},
+      el('div', {},
+        el('div', { className: 'comment-avatar-col' }, el('img', { src: AVATAR, alt: `${comment.author} member profile picture`, className: 'avatar-image', width: 32, height: 32 })),
+        el('div', { className: 'comment-body' },
+          el('div', { className: 'user-meta' },
+            el('div', { className: 'user-meta-header' }, el('div', { className: 'user-container' }, el('a', { className: "user", href: "#member", textContent: comment.author }))),
+            el('div', { className: 'comment-meta' }, el('div', { className: 'date', textContent: comment.when }))),
+          text,
+          !reply && el('div', { className: 'actions' },
+            el('button', { className: 'reply-button', textContent: 'Reply', onclick: () => openReply(li, comment, replies) }),
+            el('button', { className: 'quote-button', textContent: 'Quote' })))),
+      el('div', { className: 'replies-collapse expanded' }, replies));
+    for (const r of comment.replies || []) replies.append(item(r, true));
+    return li;
+  };
+  const openReply = (li, comment, replies) => {
+    li.querySelector('form.reply')?.remove();
+    const [form, area] = editor(`@${comment.author} `, value => {
+      form.remove();
+      replies.append(item({ author: 'cjber', when: 'just now', text: value }, true));
+      notify('Your reply was posted.');
+    }, () => form.remove());
+    li.append(form);
+    area.focus();
+    area.setSelectionRange(area.value.length, area.value.length);
+    area.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+  const thread = document.getElementById('thread');
+  const [pageBox] = editor('', value => {
+    thread.prepend(item({ author: 'cjber', when: 'just now', text: value, replies: [] }));
+    notify('Your comment was posted.');
+  });
+  thread.before(pageBox);
+  for (const c of comments) thread.append(item(c));
+</script>
+</body>
+</html>

@@ -37,6 +37,13 @@ const UNSHOWN_CONDITION: &str = "depends on a condition the task sets, and the p
 /// "NOTAPOSTCODE. If the site rejects anything, ... SW1A 1AA", it picked the second postcode's end 9 times in 10 before
 /// any rejection, and the first postcode 10 times in 10 with it.
 const FIRST_VALUE: &str = "the first comes first, unless the task says when to use another and that has happened.";
+/// Which value a field in one of several alike records takes, said after where the field sits. CurseForge opens a reply
+/// box labelled "Comment text area" under the comment replied to, and given only that label, Jev copied all three
+/// replies a task gave into the first box, since nothing said which reply was its own (#879). With the comment in the
+/// field's name instead, Jev began a one-reply task's value at the commenter's name, which the task gives to say which
+/// reply is meant, 2 times in 8. Said here, after where the field sits, a recorded three-reply fill ended the first box's
+/// value at its own reply 10 times in 10 (4 in 10 before), and the one-reply fill began at its reply 10 times in 10.
+pub(super) const IN_RECORD: &str = "When the task gives values for several things the page shows, this field takes only the one the task gives for what the field is in; that thing's name says which value is meant and is not part of it.";
 
 /// The field's value is words of the task, which Jev marks.
 const IN_TASK: &str = "task";
@@ -101,6 +108,16 @@ fn word_options(task: &str, shown: &[Word]) -> IndexMap<String, JsonValue> {
         .collect()
 }
 
+/// Which of several values `target` takes: the first, or for a field in one of several records, its record's own.
+fn several_values(target: &Control) -> String {
+    match target.context.as_deref() {
+        Some(context) if !context.is_empty() => {
+            format!("{FIRST_VALUE} The field sits in {} on the page. {IN_RECORD}", text::repr(context))
+        }
+        _ => FIRST_VALUE.to_string(),
+    }
+}
+
 /// What a field's value is picked from.
 pub(super) struct Value {
     /// The task.
@@ -139,16 +156,18 @@ fn value_questions<'a>(
     let tried = field_history(state, target);
     let mut asked = vec![("source", source_question, sources)];
     if !begins.is_empty() && !ends.is_empty() {
-        asked.push(("first", word_question(holder, label, "begins", &tried), word_options(text, begins)));
-        asked.push(("last", word_question(holder, label, "ends", &tried), word_options(text, ends)));
+        let several = several_values(target);
+        asked.push(("first", word_question((holder, label), "begins", &several, &tried), word_options(text, begins)));
+        asked.push(("last", word_question((holder, label), "ends", &several, &tried), word_options(text, ends)));
     }
     asked
 }
 
-/// Which of `holder`'s words `end` the value for `label`, with what `tried` says the field already had.
-fn word_question(holder: &str, label: &str, end: &str, tried: &str) -> String {
+/// Which of `holder`'s words `end` the value for `label`, with which of several values it takes, as `several_values`
+/// says, and what `tried` says the field already had.
+fn word_question((holder, label): (&str, &str), end: &str, several: &str, tried: &str) -> String {
     format!(
-        "If {holder} states the value for {label}, which of its words {end} the value? When it gives this field several values, {FIRST_VALUE} A search takes what is looked for, not the request around it.{tried}"
+        "If {holder} states the value for {label}, which of its words {end} the value? When it gives this field several values, {several} A search takes what is looked for, not the request around it.{tried}"
     )
 }
 
@@ -963,9 +982,10 @@ impl Agent {
                 let copied = |from: &Word, to: &Word| chars[from.start..to.end].iter().collect::<String>();
                 let holder = if source == IN_READ { "what was read" } else { "the task" };
                 let run_task = state.task.clone();
+                let several = several_values(target);
                 let exact = |bound: &str, options: &[(String, String)], elsewhere: &str| {
                     let question = format!(
-                        "Which exact text belongs in {label}? Each choice is the complete value that would be copied from {holder}, {bound}. Choose only the field's value, without surrounding task instructions. When {holder} gives this field several values, {FIRST_VALUE}"
+                        "Which exact text belongs in {label}? Each choice is the complete value that would be copied from {holder}, {bound}. Choose only the field's value, without surrounding task instructions. When {holder} gives this field several values, {several}"
                     );
                     let (question, mut options) = self.offered_copies(&run_task, question, options);
                     options.insert(ELSEWHERE.into(), JsonValue::from(elsewhere));
@@ -1074,7 +1094,7 @@ impl Agent {
         if words.is_empty() {
             return Err(self.missing(state, observation, target));
         }
-        let question = word_question(holder, label, "begins", tried);
+        let question = word_question((holder, label), "begins", &several_values(target), tried);
         let picks =
             self.ask_choices(state, Some(observation), vec![("first", question, word_options(text, words))]).await?;
         let picked = picks.get("first").and_then(|index| index.parse::<usize>().ok());

@@ -1285,10 +1285,14 @@ async fn evaluate(
         .collect();
     let chosen = target.as_ref().map(|target| target.id.clone());
     // A plan follows a chosen fill only: after a press the fields may be gone, or filled after what they belong before.
+    // It fills the rest of the chosen field's form, which one submit sends: a field of another form is sent by that
+    // form's own submit. On CurseForge a reply box's fill planned the page's top-level comment box with the same reply,
+    // and that box's Post put it on the page as a new comment (#881).
+    let form = target.as_ref().map(|target| &target.form_id);
     let plan: Vec<Planned> = controls
         .iter()
         .filter(|_| operation == Operation::Fill)
-        .filter(|control| Some(&control.id) != chosen.as_ref())
+        .filter(|control| Some(&control.id) != chosen.as_ref() && Some(&control.form_id) == form)
         .filter_map(|control| {
             let probability = noul_probability(&evaluation, &format!("{PLAN_PREFIX}{}", control.id))?;
             (probability >= EVEN_ODDS).then(|| {
@@ -1792,6 +1796,27 @@ mod tests {
         let decision =
             block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
         assert!(decision.plan.is_empty(), "fields are never filled after a press");
+    }
+
+    #[test]
+    fn test_the_plan_fills_only_the_chosen_fields_form() {
+        // A comment page's own box and a reply box opened under one comment are two forms, each with its own Post.
+        let in_form = |id: &str, form: &str| Control { form_id: Some(form.into()), ..field(id, None) };
+        let page = observation(vec![in_form("page_box", "top"), in_form("reply_box", "reply"), field("search", None)]);
+        let jev = fake(
+            &[
+                ("operation", "fill"),
+                ("fill_target", "reply_box"),
+                ("plan:page_box", "yes"),
+                ("plan:reply_box", "yes"),
+                ("plan:search", "yes"),
+            ],
+            "",
+        );
+        let context = StepContext { plan_ahead: true, ..StepContext::new("reply to Ada: thanks") };
+        let decision =
+            block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        assert!(decision.plan.is_empty(), "{:?}", decision.plan);
     }
 
     #[test]
