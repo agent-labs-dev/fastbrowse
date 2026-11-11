@@ -4078,6 +4078,40 @@ async fn test_a_stopped_run_with_only_context_notes_has_no_answer() {
     assert!(result.citations.is_empty());
 }
 
+/// A run that lost its browser or failed answers from what it read as answering, said to be partial whether or not it
+/// was composing: a composing run's answering facts came back unmarked, read as the answer to a task it never finished
+/// (#962), and context such as an ad frame's text or a search box echoing the query is no answer (#967).
+#[tokio::test]
+async fn test_a_failed_or_unavailable_run_answers_partially_from_answering_notes_only() {
+    use crate::AgentError;
+    let flows: [fn() -> Flow; 2] = [
+        || Flow::Browser(BrowserError::Unavailable("browser gone".into())),
+        || Flow::Agent(AgentError::Invalid("Jev input too large".into())),
+    ];
+    for compose in [false, true] {
+        for flow in flows {
+            let mut state = RunState { compose, ..run_state() };
+            let (pine, oak) = capacities();
+            state.notes.add(pine.answering());
+            state.notes.add(oak);
+            let ledger = state.ledger.clone();
+            let result = agent().stopped(flow(), Some(&mut state), &ledger).await;
+            assert!(matches!(result.status, Status::Unavailable | Status::Error), "{:?}", result.status);
+            let answer = result.answer.unwrap_or_default();
+            assert!(answer.starts_with("Partial evidence only."), "compose {compose}: {answer}");
+            assert!(answer.contains("Pine capacity 10"), "{answer}");
+            assert!(!answer.contains("Oak capacity 7"), "{answer}");
+            let mut state = RunState { compose, ..run_state() };
+            let (pine, oak) = capacities();
+            state.notes.add(pine);
+            state.notes.add(oak);
+            let result = agent().stopped(flow(), Some(&mut state), &ledger).await;
+            assert_eq!(result.answer, None);
+            assert!(result.citations.is_empty());
+        }
+    }
+}
+
 #[tokio::test]
 async fn test_a_step_limited_composing_run_reports_what_it_read() {
     let agent = Agent::new(Arc::new(NoPage), Arc::new(ComposeSupport(true)), Arc::new(WrongRecord));
