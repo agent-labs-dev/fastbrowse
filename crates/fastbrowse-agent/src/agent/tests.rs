@@ -212,6 +212,7 @@ fn button(label: &str) -> Control {
 pub(super) fn code_decision(operation: Operation, target: Option<Control>) -> Decision {
     Decision {
         replayed: false,
+        plan: Vec::new(),
         by_code: false,
         operation,
         url: None,
@@ -6922,4 +6923,55 @@ async fn test_a_task_that_only_carries_something_out_does_not_read_its_start_pag
         reads.push(jev.2.load(std::sync::atomic::Ordering::Relaxed));
     }
     assert_eq!(reads[1] + 1, reads[0], "reads for a text task, then a carried-out one: {reads:?}");
+}
+
+/// A delivery form in the document `document`, its name fields holding `first` and `last`.
+fn delivery(document: &str, first: &str, last: &str) -> Observation {
+    let field = |id: &str, label: &str, value: &str| Control {
+        value: Some(value.into()),
+        ..Control::new(id, "textbox", label, [Operation::Fill])
+    };
+    let controls = [field("first", "First Name", first), field("last", "Last Name", last), button("Continue")];
+    Observation { document_key: document.into(), ..observation(&controls) }
+}
+
+fn planned(page: &Observation, id: &str) -> crate::policy::Planned {
+    let target = page.controls.iter().find(|control| control.id == id).expect("on the form").clone();
+    crate::policy::Planned { target, probability: 0.9, ahead: IndexMap::new() }
+}
+
+#[tokio::test]
+async fn test_a_plan_fills_each_planned_field_as_its_own_step() {
+    let form = delivery("1", "", "");
+    let page = Scripted::new(
+        form.clone(),
+        vec![
+            (Operation::Fill, StepOutcome::Executed, delivery("1", "Ada", "")),
+            (Operation::Fill, StepOutcome::Executed, delivery("1", "Ada", "Ada")),
+        ],
+    );
+    let page = Arc::new(page);
+    let jev = Typist(&[("source", "task"), ("first", "2"), ("last", "2")]);
+    let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Ship to Ada".into();
+    agent.run_plan(&mut state, &form, &[planned(&form, "first"), planned(&form, "last")]).await.expect("planned");
+    assert!(page.acts.lock().unwrap().is_empty(), "both planned fields were filled");
+    let filled: Vec<_> = state.history.iter().filter_map(|entry| entry.target.clone()).collect();
+    assert_eq!(filled.len(), 2, "{filled:?}");
+}
+
+#[tokio::test]
+async fn test_a_plan_stops_when_the_page_becomes_another_document() {
+    // The plan was judged on one document; a fill that loads another leaves the rest to a full decision there.
+    let form = delivery("1", "", "");
+    let page =
+        Arc::new(Scripted::new(form.clone(), vec![(Operation::Fill, StepOutcome::Executed, delivery("2", "", ""))]));
+    let jev = Typist(&[("source", "task"), ("first", "2"), ("last", "2")]);
+    let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Ship to Ada".into();
+    // A second fill would find no scripted act and fail the test.
+    agent.run_plan(&mut state, &form, &[planned(&form, "first"), planned(&form, "last")]).await.expect("planned");
+    assert!(page.acts.lock().unwrap().is_empty());
 }

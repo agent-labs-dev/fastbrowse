@@ -276,6 +276,8 @@ pub(crate) struct RunState {
     /// Jev's pick when asked again after a stall, by the page state it was asked on, taken as the
     /// next decision there.
     pub picked: Option<(String, Decision)>,
+    /// The action the next step carries out, built while the page was read.
+    pub(super) built: Option<Step<super::driving::Watched<fastbrowse_core::page::Action>>>,
     pub unchanged: i64,
     /// What a fill or select has written, by page address, so only a field's first new value counts as progress by
     /// itself. A submit that loads the same address again is still the same form: a new document there does not make
@@ -665,6 +667,7 @@ impl RunState {
             ledger,
             fetched: self.read_urls.clone(),
             picked: None,
+            built: None,
             landing: None,
             idle: Vec::new(),
             acted_from: None,
@@ -708,6 +711,7 @@ impl RunState {
             http_seen: HashSet::new(),
             hint: None,
             picked: None,
+            built: None,
             unchanged: 0,
             written: HashMap::new(),
             recoveries: 0,

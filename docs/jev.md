@@ -94,6 +94,14 @@ address and the page's title: the page's own text is what would argue a harmful 
 request stays under the 32,000 bytes where OpenRouter switches to long-context mode, and none go with a screenshot,
 which is in that mode already. Those left out stay follow-ups.
 
+With `Config(plan_ahead=True)` the request also asks, for each offered field, whether the task needs it filled on
+this page besides the next action. When the chosen action is a fill, code fills the other fields Jev judges more likely
+than not, in page order, each with its value answered ahead and without a decision of its own. Before each it observes
+the page again and returns to deciding when the address, the document or the field is gone, a dialog opened, or the
+value before it was unsure. Presses are never planned: a press changes the page in ways seen only after it, and two
+controls that do the same job would both be judged needed. A request with a screenshot then carries every question
+asked ahead too, since the image already put it in long-context mode.
+
 ## Provider failover
 
 Provider selection is **ours**: a supplied `OPENROUTER_API_KEY` is primary for Jev, the recommended route.
