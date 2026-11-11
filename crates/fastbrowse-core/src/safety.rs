@@ -18,7 +18,7 @@ use crate::page::Control;
 use crate::py::json::write_string;
 use crate::py::text;
 
-/// Whether Jev is asked before this dispatches: every click, drag and Enter.
+/// Whether Jev is asked before this dispatches: every click, drag, Enter and key chord.
 ///
 /// Whether a click commits is a judgment about the page, so Jev makes it rather than a word list. A list of committing
 /// labels is never complete ("Place your order", "Yes, I'm sure"), and a link commits as easily as a button: a
@@ -27,8 +27,8 @@ pub fn may_be_irreversible(operation: Operation) -> bool {
     match operation {
         Operation::Click | Operation::Drag => true,
         // Not only a form's Enter: a chat, comment or DM box sends on Enter through its own script, with no form for
-        // the page to describe.
-        Operation::Enter => true,
+        // the page to describe, and a key chord can trigger the same opaque handler without a reliable chord list.
+        Operation::Enter | Operation::Press => true,
         // A dialog's accept and a caller's address are asked about where they are handled; the rest change nothing
         // off the page. A blur is classified as the fill it follows is: both run only the page's own field handlers,
         // and the page text cannot say which of those handlers sends something.
@@ -69,7 +69,8 @@ fn describe_control(
         }
     }
     if let Some(semantics) = control.submit_semantics.as_deref().filter(|s| !s.is_empty())
-        && (operation == Operation::Enter || (operation == Operation::Click && control.role == "button"))
+        && (matches!(operation, Operation::Enter | Operation::Press)
+            || (operation == Operation::Click && control.role == "button"))
     {
         instructions.push_str(&format!("The action submits this form: {semantics}\n"));
     }
@@ -79,13 +80,15 @@ fn describe_control(
     {
         instructions.push_str(&format!("It is a link to {href}\n"));
     }
-    if operation == Operation::Enter
+    if matches!(operation, Operation::Enter | Operation::Press)
         && !control.sensitive
         && let Some(value) = control.value.as_deref().filter(|value| !value.is_empty())
     {
         instructions.push_str(&format!("The target currently holds {}.\n", text::repr(value)));
     }
-    let submits = operation == Operation::Enter || (operation == Operation::Click && control.role == "button");
+    // A key chord such as ctrl+Enter can submit the form its field is in, as Enter does.
+    let submits = matches!(operation, Operation::Enter | Operation::Press)
+        || (operation == Operation::Click && control.role == "button");
     if submits && control.form_id.is_some() {
         let held: Vec<String> = controls
             .iter()
@@ -207,11 +210,16 @@ pub fn conditional_question(action: &str) -> NoulQuestion {
 /// The one [`met_question`] option that lets a conditional commit go ahead.
 pub const MET: &str = "asked";
 
+/// The [`met_question`] option for a step the run's own steps show already done, which the task does not ask for
+/// again (#882).
+pub const DONE: &str = "done";
+
 /// Whether the task says to take this step, with these values, in the state the page shows, asked with the page once
 /// [`conditional_question`] says the task sets a condition. A choice that does not tell Jev the step is conditional:
 /// told so, it read a step the task asks for outright before a condition on a later one ("place the order using
 /// NOTAPOSTCODE; if the site rejects it, ...") as waiting on that condition, at even odds. Only [`MET`] lets the
-/// commit go ahead, so the page can take authorization away and never give it.
+/// commit go ahead, so the page can take authorization away and never give it. It is also asked before every commit
+/// after a run's first, where [`DONE`] names a repeat of a step the task asks for once.
 pub fn met_question(action: &str) -> ChoiceQuestion {
     ChoiceQuestion::new(
         format!(
@@ -232,6 +240,12 @@ pub fn met_question(action: &str) -> ChoiceQuestion {
                 Value::from(
                     "No: the page shows a state in which the task says not to do this, or says to do something \
                      else first.",
+                ),
+            ),
+            (
+                DONE.to_string(),
+                Value::from(
+                    "No: the steps taken so far already did this, and the task does not ask for it to be done again.",
                 ),
             ),
             ("unclear".to_string(), Value::from("The page does not show enough to tell.")),
@@ -357,10 +371,11 @@ pub fn edits_question(task: &str) -> NoulQuestion {
 /// Whether `operation` on `control` changes a value the page holds: typing into or choosing in a field, or clicking a
 /// setting. A search box is how a read-only task finds things, so typing into one changes nothing it keeps.
 ///
-/// Drag is asked about as a commit, Enter is left to the irreversible gate, and an upload needs the caller's files.
+/// Drag is asked about as a commit, Enter is left to the irreversible gate, and an upload needs the caller's files. A key
+/// chord pressed in a field can type into it or delete from it, so it changes a value as a fill does.
 pub fn changes_a_value(operation: Operation, control: &Control) -> bool {
     match operation {
-        Operation::Fill | Operation::Select => {
+        Operation::Fill | Operation::Press | Operation::Select => {
             control.role != "searchbox" && control.input_type.as_deref() != Some("search")
         }
         Operation::Click => SETTING_ROLES.contains(&control.role.as_str()) || control.checked.is_some(),
@@ -420,7 +435,7 @@ pub fn sets_new_password(controls: &[Control], field: &Control) -> Option<bool> 
 /// more than one password field. A link or a field's focus never is.
 pub fn changes_credentials(controls: &[Control], target: &Control, operation: Operation) -> bool {
     let submits = match operation {
-        Operation::Enter => true,
+        Operation::Enter | Operation::Press => true,
         Operation::Click => target.role == "button" && target.href.as_deref().is_none_or(str::is_empty),
         _ => false,
     };
@@ -801,6 +816,7 @@ mod tests {
         assert!(may_be_irreversible(Operation::Drag));
         // A message box with no form sends on Enter through the page's own script.
         assert!(may_be_irreversible(Operation::Enter));
+        assert!(may_be_irreversible(Operation::Press));
         assert!(!may_be_irreversible(Operation::Fill));
         assert!(!may_be_irreversible(Operation::Navigate));
     }
@@ -1008,6 +1024,8 @@ mod tests {
             (Operation::Click, pressed, true),
             (Operation::Click, button("Next"), false),
             (Operation::Fill, Control::new("t", "textbox", "Name", [Operation::Fill]), true),
+            // A key pressed in a field can type into it or delete from it (#937).
+            (Operation::Press, Control::new("t", "textbox", "Name", [Operation::Fill]), true),
             (Operation::Select, Control::new("x", "combobox", "Size", [Operation::Select]), true),
             (Operation::Fill, Control::new("q", "searchbox", "Search", [Operation::Fill]), false),
             (Operation::Fill, typed_search, false),

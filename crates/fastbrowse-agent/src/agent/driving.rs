@@ -22,7 +22,7 @@ use super::state::{FailureCause, Flow, OutputIntent, RunState, SiteFailure, Step
 
 use super::{Agent, INTERSTITIAL_SECONDS, REDRAW_WATCH_SECONDS};
 use crate::memory::address;
-use crate::policy::{Decision, HistoryEntry, decide};
+use crate::policy::{Decision, HistoryEntry, Planned, decide};
 use crate::retrieval::page_quotes;
 use crate::start::{accept_start, propose_start};
 use crate::verification::RecordSchema;
@@ -212,6 +212,16 @@ impl Agent {
             {
                 return Err(failure.stop().into());
             }
+            // Only a commit that was sent counts: one the page redrew, covered or replaced before it went is not one
+            // the run has made. One that opened a dialog is not made yet: accepting the dialog makes it, through its
+            // own gate.
+            if committed
+                && !state.page_failed
+                && observation.dialog.is_none()
+                && state.history.last().is_some_and(|entry| entry.outcome == StepOutcome::Executed)
+            {
+                state.commits += 1;
+            }
             let thresholds = &self.config.thresholds;
             let bot_check = decision.bot_check.unwrap_or(0.0) > thresholds.bot_check_above;
             if bot_check || decision.login_required.unwrap_or(0.0) > thresholds.login_required_above {
@@ -273,7 +283,21 @@ impl Agent {
                 && (shows || self.output_intent(state).await? != OutputIntent::CarriedOut)
             {
                 let capture = self.capture().await?;
-                self.trace.phase("read", self.read(state, capture, &observation, shows)).await?;
+                // A click's action is only its gates, which see the task, the origin and the history but never the
+                // notes, so it is built while the page is read.
+                let beside = matches!(decision.operation, Operation::Click | Operation::Enter);
+                let built = if beside {
+                    let building = async |state: &mut RunState| self.build(state, &observation, &decision).await;
+                    self.read_beside(state, capture.clone(), &observation, shows, building).await?
+                } else {
+                    None
+                };
+                match built {
+                    Some(built) => state.built = Some(built),
+                    None => {
+                        self.trace.phase("read", self.read(state, capture, &observation, shows)).await?;
+                    }
+                }
             }
             if decision.operation == Operation::Done {
                 if let Some(result) =
@@ -290,9 +314,75 @@ impl Agent {
                         Box::pin(self.recover(state, &observation, &unsure.reason, unsure.gives_up_as, left_out));
                     self.trace.phase("recover", recovering).await?;
                 }
+                Ok(()) if !decision.plan.is_empty() => {
+                    self.trace.phase("plan", Box::pin(self.run_plan(state, &observation, &decision.plan))).await?;
+                }
                 other => other?,
             }
         }
+    }
+
+    /// Fills the rest of a step's planned fields, each as its own step, while the page stays the document it was made
+    /// on and the field is still there. Anything else, or a value the step builder is unsure of, hands the page back to
+    /// a full decision.
+    pub(super) async fn run_plan(&self, state: &mut RunState, decided_on: &Observation, plan: &[Planned]) -> Step {
+        for planned in plan {
+            if state.redecided || state.picked.is_some() {
+                break;
+            }
+            // Each planned fill is a step, and the run's step, time and spend limits bound it as they bound a decided one.
+            state.ledger.check(0.0)?;
+            if let Some(stop) = super::out_of_browsing_time(state) {
+                return Err(Flow::Stop(stop));
+            }
+            let observation = self.observe().await?;
+            let same_document = observation.url == decided_on.url
+                && observation.document_key == decided_on.document_key
+                && observation.dialog.is_none()
+                && observation.modal == decided_on.modal;
+            // The field Jev judged, still fillable: an id kept by a field the page rewrote is another field.
+            let same_field = |control: &&Control| {
+                let (was, now) = (&planned.target, *control);
+                now.id == was.id
+                    && now.operations.contains(&Operation::Fill)
+                    && (&now.role, &now.label, &now.context, &now.input_name, &now.autocomplete)
+                        == (&was.role, &was.label, &was.context, &was.input_name, &was.autocomplete)
+            };
+            let found = observation.controls.iter().find(same_field).cloned();
+            let (true, Some(target)) = (same_document, found) else {
+                break;
+            };
+            self.note_effect(state, &observation);
+            self.settle(state, &observation).await?;
+            let decision = Decision {
+                operation: Operation::Fill,
+                url: None,
+                target: Some(target),
+                tab_id: None,
+                operation_confidence: planned.probability,
+                target_confidence: Some(planned.probability),
+                login_required: None,
+                offered_controls: 0,
+                reduction: crate::policy::Reduction::None,
+                cost: Vec::new(),
+                input_tokens: 0,
+                bot_check: None,
+                shows_answer: None,
+                site_failure: None,
+                destination: None,
+                replayed: false,
+                by_code: false,
+                offered: Vec::new(),
+                ahead: planned.ahead.clone(),
+                plan: Vec::new(),
+            };
+            self.event("plan_step", || Map::from_iter([("target".into(), self.redact(&planned.target.label).into())]));
+            match Box::pin(self.step(state, &observation, &decision)).await {
+                Err(Flow::Unsure(_)) => break,
+                other => other?,
+            }
+        }
+        Ok(())
     }
 
     /// Jev's offered controls as a step reports them. Their labels come from the masked observation already, and are
@@ -339,6 +429,8 @@ impl Agent {
     pub(super) fn redecide(&self, state: &mut RunState, observation: &Observation) {
         self.event("redecide", || Map::from_iter([("url".into(), observation.url.clone().into())]));
         state.redecided = true;
+        // Nothing was sent, so the commit the gate cleared is not one the run has made.
+        state.committing = false;
     }
 
     /// `work`'s result, or `Redrawn` when the page redrew under it: `target`, or with none any control offered.
@@ -530,6 +622,19 @@ impl Agent {
         Ok(true)
     }
 
+    /// The decision's action, dropped when the page redraws its target while it is built.
+    async fn build(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        decision: &Decision,
+    ) -> Step<Watched<Action>> {
+        let redecided = state.redecided;
+        let target = decision.target.as_ref().map(|target| target.id.as_str());
+        let building = self.trace.phase("build_action", self.action(state, observation, decision));
+        self.unless_redrawn(redecided, building, observation, target).await
+    }
+
     /// Take one step and judge whether it moved the run on, which the one stall rule counts.
     pub(super) async fn step(&self, state: &mut RunState, observation: &Observation, decision: &Decision) -> Step {
         let started = Instant::now();
@@ -557,10 +662,11 @@ impl Agent {
             effect_now = Some(text.clone());
             act = ActResult { outcome: StepOutcome::Executed, page_changed: false, detail: Some(text), moved: false };
         } else {
-            let redecided = state.redecided;
-            let target = decision.target.as_ref().map(|target| target.id.clone());
-            let building = self.trace.phase("build_action", self.action(state, observation, decision));
-            let action = match self.unless_redrawn(redecided, building, observation, target.as_deref()).await? {
+            let built = match state.built.take() {
+                Some(built) => built?,
+                None => self.build(state, observation, decision).await?,
+            };
+            let action = match built {
                 Watched::Done(action) => action,
                 Watched::Redrawn => {
                     self.redecide(state, observation);
@@ -1081,6 +1187,8 @@ impl Agent {
                 default_prompt: mask_opt(&dialog.default_prompt),
                 ..dialog.clone()
             }),
+            // A page can name its modal with what it echoes back, a resolved secret among it.
+            modal: mask_opt(&observation.modal),
             ..observation.clone()
         };
         drop(redactor);
@@ -1169,12 +1277,13 @@ impl Agent {
         if self.seen().secret_on_screen {
             return Ok(Vec::new());
         }
-        // A delayed page update can reveal a secret after the decision's observation.
-        let now = self.trace.phase("screenshot", self.page.glance()).await?;
-        if self.reveals(&now) {
+        // A delayed page update can reveal a secret after the decision's observation. The glance and the image are
+        // taken together, and the image is dropped unseen when the glance shows a secret.
+        let (now, image) = tokio::join!(self.trace.phase("screenshot", self.page.glance()), self.page.screenshot());
+        if self.reveals(&now?) {
             return Ok(Vec::new());
         }
-        match self.trace.phase("screenshot", self.page.screenshot()).await {
+        match image {
             Ok(image) => Ok(vec![image]),
             Err(BrowserError::ScreenshotsUnavailable(_)) => Ok(Vec::new()),
             Err(error) => Err(error.into()),

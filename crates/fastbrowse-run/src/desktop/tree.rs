@@ -293,6 +293,7 @@ pub fn observation(window: &Window, root: &Element) -> Observation {
         viewport_text,
         offscreen_text,
         visual_content: false,
+        modal: None,
         media: Vec::new(),
         tabs: vec![Tab { id: window.address.clone(), url, title: window.title.clone(), active: true, opener_id: None }],
         dialog: None,

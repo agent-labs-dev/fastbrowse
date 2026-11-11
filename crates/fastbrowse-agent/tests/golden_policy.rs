@@ -11,8 +11,13 @@ use fastbrowse_core::py::json::{Style, write};
 use fastbrowse_core::telemetry::Trace;
 use serde_json::{Map, Value, json};
 
+/// Both tests read and re-record policy.json whole, so under `FASTBROWSE_UPDATE_GOLDEN=1` one running beside the other
+/// would save over its update.
+static POLICY_FILE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn decisions_ask_and_choose_as_python_does() {
+    let _file = POLICY_FILE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut golden = golden("policy.json");
     let updating = capture::updating();
     let cases = golden["cases"].as_array_mut().unwrap();
@@ -62,6 +67,7 @@ fn decisions_ask_and_choose_as_python_does() {
 
 #[test]
 fn requests_are_built_as_python_builds_them() {
+    let _file = POLICY_FILE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut golden = golden("policy.json");
     let updating = capture::updating();
     for case in golden["build_request"].as_array_mut().unwrap() {

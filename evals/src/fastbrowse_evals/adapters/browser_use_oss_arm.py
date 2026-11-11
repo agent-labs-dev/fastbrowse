@@ -1,7 +1,18 @@
-"""Optional browser-use OSS arm: one JSON request on stdin, one result on stdout.
+"""Optional browser-use OSS arm, run as a conversation of JSON lines with the harness.
 
-The caller owns the CDP browser and observes it after this process exits. Install only on explicit selection,
-using the exact package pin in the live arm registry.
+browser-use 1.0 as a user of it runs it: its default model (`bu-fast` on the Browser Use gateway, read with the
+Browser Use key) in its default mode (`ultrafast` on bu-fast), on the Browser Use Cloud browser its own `Browser()`
+creates, so every feature 1.0 gives its own cloud browser is on. The conversation lets the harness time the run on its
+own clock and read the final page before the browser stops:
+
+    harness -> {request}                     this process starts its browser
+    harness <- {"event": "ready", ...}       the browser is up: the harness's clock starts
+    harness <- {"event": "result", ...}      the agent answered: the clock stops, the harness reads the final page
+    harness -> {}                            this process stops its browser
+    harness <- {"event": "stopped", ...}
+
+A line from the harness that never comes (it exited) stops the browser too. Install only on explicit selection, using
+the exact package pin in the live arm registry.
 """
 
 import asyncio
@@ -9,53 +20,69 @@ import contextlib
 import json
 import sys
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 STEP_CEILING = 1_000_000
 """What browser-use's `Agent.run(max_steps: int)` receives when the request has no limit (`max_steps: null`, which the
-live harness always sends). Its loop is `for step in range(max_steps)` and accepts no None, so an integer no run can
-reach stands in for "no limit"; it is reported back as `step_ceiling` and recorded with the row."""
+live harness always sends). 1.0 defaults to 100 steps and takes no None, so an integer no run can reach stands in for
+"no limit"; it is reported back as `step_ceiling` and recorded with the row."""
+TIMEOUT_CEILING = 86_400.0
+"""What `Agent.run(timeout: float)` receives in place of no limit. 1.0 defaults to 1700 s and takes no None; a day is
+far past any run, so it overrides the default without ever being reached, and is recorded with the row."""
+OBSERVATION_CHARS = 2000
 
 
-def step_log(history: Any) -> list[dict[str, Any]]:
-    """What each step did and saw, from browser-use's own history; its screenshots stay on disk."""
+def ending(result: Any, outage: str | None) -> str:
+    """How the run ended. 1.0 delivers once more at its step or time limit and still says `completed`, with the agent's
+    own verdict in `success`: None when it gave none, which 1.0 says to read as 0.x's default of success. A run the
+    model provider's outage ended is `unavailable`, by the rule every arm's provider failures follow."""
+    if result.status == "completed":
+        return "stopped" if result.success is False else "done"
+    if result.status in {"max_steps", "timeout"}:
+        return "budget_exceeded"
+    return "unavailable" if outage is not None else "error"
+
+
+def provider_outage(error: str | None, transient: frozenset[str]) -> str | None:
+    """Why the error that ended the run says the model provider is out, or None. 1.0 hands that error back only as
+    text, written `<ExceptionType>: <message>` (its `described()`), and names the provider failures it treats as
+    transient in `browser_use.agent.loop.TRANSIENT` (rate limited, unavailable, server error, connection failed). It
+    has already retried such an error once, so this one outlasted its own retry."""
+    if error is None:
+        return None
+    kind = error.partition(":")[0]
+    return f"Model provider failed ({kind})" if kind in transient else None
+
+
+def step_log(messages: list[Any]) -> list[dict[str, Any]]:
+    """What each cell ran and what it printed, from the run's transcript (Pydantic AI messages); screenshots stay out."""
+    returns = {
+        part.tool_call_id: part.content
+        for message in messages
+        for part in getattr(message, "parts", ())
+        if getattr(part, "part_kind", None) == "tool-return"
+    }
     steps = []
-    for index, item in enumerate(history.history):
-        output = item.model_output
-        steps.append(
-            {
-                "index": index,
-                "operation": "reason",
-                "target": [action.model_dump(exclude_none=True, mode="json") for action in output.action]
-                if output
-                else None,
-                "url": item.state.url,
-                "observation": "\n".join(
-                    str(text) for result in item.result for text in (result.extracted_content, result.error) if text
-                ),
-            }
-        )
+    for message in messages:
+        for part in getattr(message, "parts", ()):
+            if getattr(part, "part_kind", None) != "tool-call":
+                continue
+            seen = returns.get(part.tool_call_id)
+            steps.append(
+                {
+                    "index": len(steps),
+                    "operation": part.tool_name,
+                    "target": part.args if isinstance(part.args, (str, dict)) else str(part.args),
+                    "url": None,
+                    "observation": (seen if isinstance(seen, str) else json.dumps(seen, default=str))[
+                        :OBSERVATION_CHARS
+                    ]
+                    if seen is not None
+                    else "",
+                }
+            )
     return steps
-
-
-def ending(history: Any, max_steps: int | None, outage: str | None = None) -> str:
-    """How the run ended. A run the model provider's outage ended is `unavailable`, by the rule every arm's provider
-    failures follow, so the harness runs it again rather than counting it against the agent."""
-    if history.is_done():
-        return "done" if history.is_successful() is True else "stopped"
-    if outage is not None:
-        return "unavailable"
-    return "budget_exceeded" if max_steps is not None and len(history.history) >= max_steps else "stopped"
-
-
-def provider_outage(status: int, body: object, retryable: frozenset[int]) -> str | None:
-    """Why a model response says the provider is out, or None. OpenRouter can hold a request open, then send its error
-    in a 200."""
-    if status in retryable:
-        return f"Model provider returned HTTP {status}"
-    error = body.get("error") if isinstance(body, dict) else None
-    code = error.get("code") if isinstance(error, dict) else None
-    return f"Model provider returned error {code} in HTTP {status}" if code in retryable else None
 
 
 def output_model(schema: dict[str, Any] | None) -> Any:
@@ -72,93 +99,85 @@ def output_model(schema: dict[str, Any] | None) -> Any:
     return create_model(schema.get("title", "Answer"), **fields)
 
 
-async def run(request: dict[str, Any]) -> dict[str, Any]:
-    import httpx
-    from browser_use import Agent, Browser, ChatOpenRouter, Tools
+def failed(exc: Exception) -> dict[str, Any]:
+    return {"status": "error", "error": f"{type(exc).__name__}: {exc}", "steps": 0, "dollars": None}
 
-    started = time.monotonic()
-    costs: list[float] = []
-    unknown = False
-    # What the last model request met, if the provider was out. Each answer replaces it, so an outage the agent's own
-    # retries outlasted ends nothing.
-    outage: str | None = None
-    retryable = frozenset(request["retryable_status"])
 
-    class Monitored(httpx.AsyncHTTPTransport):
-        async def handle_async_request(self, sent: httpx.Request) -> httpx.Response:
-            nonlocal outage, unknown
-            try:
-                return await super().handle_async_request(sent)
-            except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError, httpx.ProxyError) as error:
-                # No answer means no receipt, and the provider may still have charged the request.
-                outage, unknown = f"Model connection failed ({type(error).__name__})", True
-                raise
+async def run(request: dict[str, Any], browser: Any) -> dict[str, Any]:
+    """One agent run on a started browser; the harness times it, so no seconds are reported."""
+    from browser_use import Agent
+    from browser_use.agent.loop import TRANSIENT
 
-    async def meter(response: httpx.Response) -> None:
-        nonlocal outage, unknown
-        if not response.request.url.path.endswith("/chat/completions"):
-            return
-        try:
-            await response.aread()
-        except httpx.TransportError as error:
-            outage, unknown = f"Model connection failed ({type(error).__name__})", True
-            raise
-        body = response.json() if response.is_success else None
-        outage = provider_outage(response.status_code, body, retryable)
-        if response.is_success:
-            cost = (body.get("usage") or {}).get("cost")
-            if cost is None:
-                unknown = True
-            else:
-                costs.append(float(cost))
-
-    agent = None
     try:
-        schema = output_model(request.get("output_schema"))
-        async with httpx.AsyncClient(transport=Monitored(), event_hooks={"response": [meter]}) as http:
-            llm = ChatOpenRouter(model=request["model"], temperature=0, http_client=http)
-            agent = Agent(
-                task=request["goal"],
-                browser=Browser(cdp_url=request["cdp_ws"], keep_alive=True),
-                llm=llm,
-                tools=Tools(output_model=schema),
-                sensitive_data=request.get("secrets") or None,
-                calculate_cost=True,
-                directly_open_url=True,
-            )
-            ceiling = STEP_CEILING if request["max_steps"] is None else request["max_steps"]
-            at = time.time()
-            history = await agent.run(max_steps=ceiling)
-            # browser-use connects and opens the start page before its first step, so that step's own start ends setup.
-            first = next((item.metadata for item in history.history if item.metadata is not None), None)
-            setup = 0.0 if first is None else max(0.0, first.step_start_time - at)
-            answer = history.final_result()
-            data = schema.model_validate_json(answer).model_dump() if schema is not None and answer else None
-            return {
-                "status": ending(history, request["max_steps"], outage),
-                "error": outage,
-                "answer": answer,
-                "data": data,
-                "steps": len(history.history),
-                "step_log": step_log(history),
-                "seconds": time.monotonic() - started - setup,
-                "setup_seconds": round(setup, 2),
-                "dollars": sum(costs) if costs and not unknown else None,
-                "step_ceiling": ceiling,
-            }
+        agent = Agent(
+            task=request["goal"],
+            browser=browser,
+            output_model_schema=output_model(request.get("output_schema")),
+        )
+        ceiling = STEP_CEILING if request["max_steps"] is None else request["max_steps"]
+        result = await agent.run(max_steps=ceiling, timeout=TIMEOUT_CEILING)
     except Exception as exc:
-        return {
-            "status": "unavailable" if outage else "error",
-            "error": outage or type(exc).__name__,
-            "steps": 0 if agent is None else len(agent.history.history),
-            "seconds": time.monotonic() - started,
-            "dollars": None,
-        }
+        return failed(exc)
+    outage = provider_outage(result.error, frozenset(kind.__name__ for kind in TRANSIENT))
+    structured = result.structured_output
+    return {
+        "status": ending(result, outage),
+        "error": outage or result.error,
+        "answer": result.final_result(),
+        "data": structured.model_dump() if structured is not None and hasattr(structured, "model_dump") else None,
+        "steps": result.steps,
+        "step_log": step_log(result.messages),
+        "dollars": result.cost_usd,
+        "step_ceiling": ceiling,
+        "timeout_ceiling": TIMEOUT_CEILING,
+        "usage": dict(result.usage),
+    }
+
+
+async def session(read: Callable[[], Awaitable[str]], emit: Callable[[dict[str, Any]], None]) -> None:
+    from browser_use import Browser
+
+    request = json.loads(await read())
+    # 1.0's default browser in every respect but two: it stays up after the run so the harness can read the final
+    # page, and it lives for the provider's maximum instead of its 60 minute default, a time cap the protocol lifts.
+    browser = Browser(keep_alive=True, cloud_timeout=request["browser_minutes"])
+    try:
+        began = time.monotonic()
+        try:
+            await browser.start()
+        except Exception as exc:
+            emit({"event": "result", **failed(exc)})
+            return
+        emit(
+            {
+                "event": "ready",
+                "cdp_url": browser.cloud_cdp_url,
+                "live_url": browser.live_url,
+                "browser_id": browser.id,
+                "open_seconds": round(time.monotonic() - began, 2),
+            }
+        )
+        emit({"event": "result", **await run(request, browser)})
+        await read()
+    finally:
+        browser_id = browser.id
+        stopped = True
+        try:
+            await browser.stop()
+        except Exception:
+            stopped = False
+        emit({"event": "stopped", "browser_id": browser_id, "stopped": stopped})
 
 
 if __name__ == "__main__":
-    request = json.load(sys.stdin)
+    out = sys.stdout
+
+    def emit(message: dict[str, Any]) -> None:
+        print(json.dumps(message, default=str), file=out, flush=True)
+
+    async def read() -> str:
+        return await asyncio.to_thread(sys.stdin.readline)
+
     # Framework banners must not corrupt the caller's JSON protocol.
     with contextlib.redirect_stdout(sys.stderr):
-        result = asyncio.run(run(request))
-    print(json.dumps(result))
+        asyncio.run(session(read, emit))

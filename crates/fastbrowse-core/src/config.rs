@@ -139,6 +139,10 @@ pub struct Config {
     /// 160 controls, and a caller that is not debugging a run would carry them on every step for nothing.
     #[serde(deserialize_with = "lax::boolean")]
     pub step_choices: bool,
+    /// Ask with each step's decision which other fields on the page the task needs filled, and fill
+    /// them in page order without a decision each, back to deciding as soon as the page changes under them.
+    #[serde(deserialize_with = "lax::boolean")]
+    pub plan_ahead: bool,
     /// Uploads move as bytes over the DevTools socket; larger files return NEEDS_INPUT with a reason.
     #[serde(deserialize_with = "lax::int_gt0")]
     pub max_upload_bytes: i64,
@@ -158,6 +162,7 @@ impl Default for Config {
             refuse_cookie_banners: true,
             step_frames: false,
             step_choices: false,
+            plan_ahead: true,
             max_upload_bytes: 25 * 1024 * 1024,
             max_download_bytes: 512 * 1024 * 1024,
         }

@@ -279,6 +279,8 @@ pub(crate) struct RunState {
     /// Jev's pick when asked again after a stall, by the page state it was asked on, taken as the
     /// next decision there.
     pub picked: Option<(String, Decision)>,
+    /// The action the next step carries out, built while the page was read.
+    pub(super) built: Option<Step<super::driving::Watched<fastbrowse_core::page::Action>>>,
     pub unchanged: i64,
     /// What a fill or select has written, by page address, so only a field's first new value counts as progress by
     /// itself. A submit that loads the same address again is still the same form: a new document there does not make
@@ -340,8 +342,8 @@ pub(crate) struct RunState {
     pub to_carry_out: bool,
     /// The latest finish check found a step the task asks for that the site does not allow.
     pub refused: bool,
-    /// The latest finish check found a step the task asks to be carried out not yet done.
-    pub undone: bool,
+    /// The latest finish check found this step the task asks to be carried out not yet done.
+    pub undone: Option<String>,
     pub output_intent: OutputIntent,
     /// What the task says about signing in, asked of the task alone at the first sign-in wall. None until then, and
     /// when Jev gave no answer.
@@ -367,6 +369,9 @@ pub(crate) struct RunState {
     pub fetched: HashSet<String>,
     /// The action being taken commits, by Jev's judgement, so a failure it lands on must not be retried.
     pub committing: bool,
+    /// Commits this run has carried out, each counted once the page after it did not fail. A later commit is checked
+    /// against the page and the run's own steps, so one the task asks for once is not sent again (#882).
+    pub commits: usize,
     /// Pages read, by content: a document can show several steps of one flow.
     pub read_pages: HashSet<String>,
     /// The addresses of pages read, so Jev can be told which links lead back to one.
@@ -668,6 +673,7 @@ impl RunState {
             ledger,
             fetched: self.read_urls.clone(),
             picked: None,
+            built: None,
             landing: None,
             idle: Vec::new(),
             acted_from: None,
@@ -675,6 +681,7 @@ impl RunState {
             changed_page: None,
             unchanged: 0,
             committing: false,
+            commits: 0,
             redecided: false,
             last_page: None,
             navigation_from: None,
@@ -713,6 +720,7 @@ impl RunState {
             http_seen: HashSet::new(),
             hint: None,
             picked: None,
+            built: None,
             unchanged: 0,
             written: HashMap::new(),
             recoveries: 0,
@@ -742,7 +750,7 @@ impl RunState {
             read_whole: Vec::new(),
             to_carry_out: false,
             refused: false,
-            undone: false,
+            undone: None,
             output_intent: OutputIntent::Unknown,
             sign_in: None,
             dates: Vec::new(),
@@ -754,6 +762,7 @@ impl RunState {
             pager_followed: HashSet::new(),
             fetched: HashSet::new(),
             committing: false,
+            commits: 0,
             read_pages: HashSet::new(),
             read_urls: HashSet::new(),
             followed: None,

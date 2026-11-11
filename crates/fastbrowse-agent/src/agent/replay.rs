@@ -8,7 +8,7 @@ use fastbrowse_core::page::{Action, Control};
 use fastbrowse_core::recipe::{self, Recipe, RecipePage, RecipeStep, RecipeTarget, RecipeText};
 use fastbrowse_core::safety::is_password;
 
-use crate::policy::Decision;
+use crate::policy::{Decision, takes};
 
 /// A live Jev decision may match a later saved step when the current page needs a different order.
 pub(crate) struct Replay {
@@ -48,7 +48,7 @@ impl Replay {
         let target = match &step.target {
             Some(target) => {
                 let control = recipe::find(target, offered, url)?;
-                if !control.operations.contains(&step.operation) {
+                if !takes(control, step.operation) {
                     return None;
                 }
                 Some(control.clone())
@@ -57,7 +57,7 @@ impl Replay {
             None => None,
         };
         self.pending = Some(index);
-        if step.operation == Operation::Fill
+        if matches!(step.operation, Operation::Fill | Operation::Press)
             && target.as_ref().and_then(|target| self.text_for(target, missing(target))).is_none()
         {
             self.pending.take();
@@ -82,6 +82,7 @@ impl Replay {
             replayed: true,
             by_code: false,
             offered: Vec::new(),
+            plan: Vec::new(),
             ahead: Default::default(),
         })
     }
@@ -92,7 +93,7 @@ impl Replay {
             return;
         }
         if self.matching_step(url, offered, decision).is_some() {
-            if decision.operation == Operation::Fill
+            if matches!(decision.operation, Operation::Fill | Operation::Press)
                 && decision.target.as_ref().and_then(|target| self.text_for(target, missing)).is_none()
             {
                 self.pending.take();
@@ -120,7 +121,7 @@ impl Replay {
             }
             let target = match &step.target {
                 Some(target) => match recipe::find(target, offered, url) {
-                    Some(control) if control.operations.contains(&step.operation) => Some(control),
+                    Some(control) if takes(control, step.operation) => Some(control),
                     Some(_) => continue,
                     None => continue,
                 },
@@ -260,6 +261,15 @@ pub(crate) fn step_of(
                 }
             }
         },
+        Operation::Press => {
+            let typed = action.text.as_deref().unwrap_or_default();
+            if reveals(typed) {
+                replay = false;
+                None
+            } else {
+                Some(RecipeText::Literal(typed.to_string()))
+            }
+        }
         _ => None,
     };
     Some(RecipeStep {
@@ -377,6 +387,29 @@ mod tests {
         assert!(replay(vec![saved.clone()]).ahead(URL, std::slice::from_ref(&email), |_| true).is_none());
         let live = RecipeStep { text: Some(RecipeText::Live), ..saved };
         assert!(replay(vec![live]).ahead(URL, &[email], |_| false).is_none());
+    }
+
+    #[test]
+    fn a_saved_key_press_replays_on_a_field_that_takes_a_fill() {
+        let reply = Control::new("reply", "textbox", "Reply", [Operation::Fill]);
+        let saved = RecipeStep {
+            operation: Operation::Press,
+            page: RecipePage::of(URL).unwrap(),
+            target: Some(RecipeTarget::of(&reply, URL)),
+            text: Some(RecipeText::Literal("Control+End".into())),
+            option: None,
+            read_first: false,
+            replay: true,
+        };
+        let mut ahead = replay(vec![saved.clone()]);
+        assert_eq!(
+            ahead.ahead(URL, std::slice::from_ref(&reply), |_| false).map(|d| d.operation),
+            Some(Operation::Press)
+        );
+        let mut live = replay(vec![saved]);
+        let mut press = code_decision(Operation::Press, Some(reply.clone()));
+        live.confirm(URL, &[reply], &mut press, false);
+        assert!(press.replayed);
     }
 
     #[test]

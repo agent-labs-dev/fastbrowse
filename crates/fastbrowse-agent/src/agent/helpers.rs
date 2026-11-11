@@ -81,6 +81,7 @@ pub(crate) fn doing(operation: Operation, target: Option<&str>) -> String {
         Operation::Hover => "hovering over",
         Operation::Drag => "dragging",
         Operation::Fill => "typing in",
+        Operation::Press => "pressing a key in",
         Operation::Blur => "leaving",
         Operation::Select => "choosing in",
         Operation::Enter => "pressing Enter in",

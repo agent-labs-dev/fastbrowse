@@ -92,9 +92,9 @@ shape, not a model defect.
 
 A diagnostic arm, not one of the three comparisons.
 
-The internal comparison catalog includes the opt-in `cua-codex` arm, using Codex CLI 0.160.1
-and Cua Driver 0.34.0. Parallax runs it through browser MCP tools on a private Linux desktop,
-with the existing source task graders. Credential and safe-stop tasks are excluded.
+The internal comparison catalog includes the opt-in `cua-codex` arm, using the Codex CLI and Cua Driver
+releases pinned in `evals/src/fastbrowse_evals/adapters/arm-pins.json`. Parallax runs it through
+browser MCP tools on a private Linux desktop, with the existing source task graders. Credential and safe-stop tasks are excluded.
 
 Rows record the local browser environment, and billed spend remains unknown. Local timings
 are not a controlled comparison with cloud arms. The recorded-results view shows each campaign separately. Source grades, completion,

@@ -144,6 +144,7 @@ ARM_BROWSERS = {
     "fastbrowse-pool": ("fastbrowse-pool",),
     "jev-ultrafast": ("browser-use-cloud",),
     "browser-harness": ("browser-use-cloud",),
+    "browser-use-oss": ("browser-use-cloud",),
     "browser-use": ("browser-use-hosted",),
     "browser-use-ultrafast": ("browser-use-hosted",),
 }

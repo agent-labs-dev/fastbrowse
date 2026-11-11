@@ -56,6 +56,10 @@ class Config(Frozen):
     Off by default: a dense page offers 160 controls, and a caller that is not debugging a run would carry them
     on every step for nothing. Labels are masked as everything Jev reads is.
     """
+    plan_ahead: bool = True
+    """Ask with each step's decision which other fields on the page the task needs filled, and fill
+    them in page order without a decision each, back to deciding as soon as the page changes under them.
+    """
     max_upload_bytes: int = Field(default=25 * 1024 * 1024, gt=0)
     """Uploads move as bytes over the DevTools socket; larger files return NEEDS_INPUT with a reason."""
     max_download_bytes: int = Field(default=512 * 1024 * 1024, gt=0)
