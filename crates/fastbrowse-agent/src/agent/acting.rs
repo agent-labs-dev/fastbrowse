@@ -1408,7 +1408,7 @@ impl Agent {
             (
                 "text".to_string(),
                 JsonValue::from(
-                    "The task asks to be told text, such as a value, a name or a list, and does not ask for an image.",
+                    "The task asks to be told text, such as a value, a name or a list, or asks to find something out, and does not ask for an image.",
                 ),
             ),
             ("image".to_string(), JsonValue::from("The task asks only for an image or screenshot as its report.")),
@@ -1463,7 +1463,9 @@ impl Agent {
                 state,
                 None,
                 vec![
-                    ("pick", "What output does the task want at its end?".into(), criteria),
+                    // Asked what output the task wants, Jev named the page a task to open ends on as its output, and
+                    // "Open the httpx repository." was answered with composed text it never asked for (#910).
+                    ("pick", "Does the task ask to be told something, and in what form?".into(), criteria),
                     ("evidence", "Where can what the task asks about be seen?".into(), evidence),
                     ("extent", "How much of a list does the task cover?".into(), extent),
                 ],
