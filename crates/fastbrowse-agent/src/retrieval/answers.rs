@@ -1844,8 +1844,9 @@ mod tests {
         assert_eq!(checked.claims, [Claim::new("requests released last.", latest.clone())]);
         let Question::Choice(value) = &jev.asked()["t0/v0"] else { panic!("value is a choice") };
         let offered: Vec<&str> = value.criteria.values().filter_map(|c| c.as_str()).collect();
-        assert!(offered[0].starts_with("'May 14, 2026'") && offered[1].starts_with("'2026-05-14'"), "{offered:?}");
-        assert!(!offered.iter().any(|c| c.starts_with("'14'") || c.starts_with("'2026' ")), "{offered:?}");
+        assert!(offered[0].starts_with("'May 14, 2026'") && offered[2].starts_with("'2026-05-14'"), "{offered:?}");
+        assert!(offered[1].starts_with("'2026' "), "a date's year is offered, as a year orders: {offered:?}");
+        assert!(!offered.iter().any(|c| c.starts_with("'14'") || c.starts_with("'05'")), "{offered:?}");
         // A claim writing the date keeps its own form of it, and a wrong date is replaced by the latest one found.
         let dated = |written: &str| {
             let text = format!("The latest release was on {written}.");
@@ -1857,6 +1858,25 @@ mod tests {
         let checked =
             review_claims(&jev, task, None, vec![dated("Dec 16, 2024")], &notes, None, true, &[]).await.unwrap();
         assert_eq!(checked.claims, [Claim::new("The latest release was on 2026-05-14.", latest)]);
+    }
+
+    /// A record dated in full on one page and by its year alone on another is compared by year: a date's year is
+    /// offered beside the whole date, so the founding year of a record "Founded: 3 March 1998" is 1998, and code orders
+    /// it with another record's "Founded 2001".
+    #[tokio::test]
+    async fn an_extreme_compares_a_dates_year_with_a_year() {
+        let facts = vec![
+            page_fact(0, "https://example.com/a", "Founded: 3 March 1998"),
+            page_fact(1, "https://example.com/b", "Founded 2001"),
+        ];
+        let earliest = vec![fact_id(&facts[0])];
+        let notes = Notes::new(facts);
+        let task = "Which was founded earliest, A or B?";
+        let claim = tallied("A was founded earliest.", "A", tally::Op::Min, "company", Some("founding year"), vec![]);
+        let jev = Tallying::new("Founded", "'1998'");
+        let checked = review_claims(&jev, task, None, vec![claim], &notes, None, true, &[]).await.unwrap();
+        assert_eq!(checked.problem, None);
+        assert_eq!(checked.claims, [Claim::new("A was founded earliest.", earliest)]);
     }
 
     /// Asked which three authors have the most quotes, the composer counted each author's quotes as a count of "quote

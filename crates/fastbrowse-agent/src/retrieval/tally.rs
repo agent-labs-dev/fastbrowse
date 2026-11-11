@@ -387,20 +387,26 @@ async fn narrowed(
     Ok(Narrowed::Offer(numbers))
 }
 
-/// The values a note could hold its field as: each date it writes, whole, then its numbers. A comma both groups
-/// thousands and separates the cells of a line, as in a CSV row, and the text alone cannot say which: "INV-01,120.00"
-/// reads as 1,120.00 or as 01 and 120.00. Both readings are offered, and Jev picks the one that is the field. A date's
-/// day and year are not offered on their own: asked which number in "Released: May 14, 2026 (2026-05-14T19:25:26+0000)"
-/// is the latest release date, Jev was offered only '2026', '05', '14' and the like, said none, and a correct answer
-/// was rejected for a record with no date (#977); had it picked a day, code would have compared days.
+/// The values a note could hold its field as: each date it writes, whole and then its year, then its numbers. A comma
+/// both groups thousands and separates the cells of a line, as in a CSV row, and the text alone cannot say which:
+/// "INV-01,120.00" reads as 1,120.00 or as 01 and 120.00. Both readings are offered, and Jev picks the one that is the
+/// field. Asked which number in "Released: May 14, 2026 (2026-05-14T19:25:26+0000)" is the latest release date, Jev
+/// was offered only '2026', '05', '14' and the like, said none, and a correct answer was rejected for a record with no
+/// date (#977); had it picked a day, code would have compared days. So a date's day and month are not offered alone,
+/// since neither orders anything on its own. Its year is: a year orders on its own, and a field such as a founding
+/// year is one, so a record dated "3 March 1998" is compared with another's "2001".
 fn numbers(quote: &str) -> Vec<String> {
     let chars: Vec<char> = quote.chars().collect();
     let dated = dates(quote);
     let mut found: Vec<String> = Vec::new();
-    for (start, end, _) in &dated {
+    for (start, end, value) in &dated {
         let date: String = chars[*start..*end].iter().collect();
-        if !found.contains(&date) {
-            found.push(date);
+        // `dates` values a date as its year times 10,000 plus its month and day, and reads a year of four digits.
+        let year = format!("{:04}", (*value as u32) / 10_000);
+        for each in [date, year] {
+            if !found.contains(&each) {
+                found.push(each);
+            }
         }
     }
     let rest: String = chars
@@ -891,8 +897,8 @@ mod tests {
     #[test]
     fn a_date_is_offered_whole_and_ordered_by_its_day() {
         let quote = "Released: May 14, 2026 (2026-05-14T19:25:26+0000)";
-        assert_eq!(super::numbers(quote), ["May 14, 2026", "2026-05-14", "25", "26", "0000"]);
-        assert_eq!(super::numbers("6 Dec. 2024, 3 files"), ["6 Dec. 2024", "3"]);
+        assert_eq!(super::numbers(quote), ["May 14, 2026", "2026", "2026-05-14", "25", "26", "0000"]);
+        assert_eq!(super::numbers("6 Dec. 2024, 3 files"), ["6 Dec. 2024", "2024", "3"]);
         let [later, earlier] = ["2026-05-14", "December 16, 2024"].map(|date| amount(date).unwrap());
         assert!(later.date && earlier.date && later.value > earlier.value);
         assert_eq!(amount("May 14, 2026").unwrap().value, later.value);
