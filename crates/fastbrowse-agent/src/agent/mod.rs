@@ -410,6 +410,13 @@ impl Agent {
             }
             Ok::<_, Flow>(opening)
         };
+        // The composer's context window is looked up from the provider's listing and kept by the client. Asked only
+        // when the answer is written, the lookup held every run's last step for 0.5 to 2.7 s; asked now, it is known
+        // by then, and the run never waits on it here.
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let llm = self.llm.clone();
+            runtime.spawn(async move { llm.context_tokens(fastbrowse_core::models::LLMPurpose::Compose).await });
+        }
         let given = state::with_inputs(task, &options.inputs);
         let (opening, dates) = tokio::join!(open, self.task_dates(&given, ledger));
         let (opening, dates) = (opening?, dates?);
@@ -865,6 +872,7 @@ impl Agent {
             reload: state.reload_target(&observation.url),
             screenshot: None,
             ahead: self.ahead(state, observation),
+            plan_ahead: self.config.plan_ahead,
         })
     }
 

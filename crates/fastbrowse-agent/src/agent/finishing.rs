@@ -183,6 +183,7 @@ impl Agent {
             replayed: false,
             by_code: true,
             offered: Vec::new(),
+            plan: Vec::new(),
             ahead: IndexMap::new(),
         };
         match Box::pin(self.step(state, observation, &decision)).await {

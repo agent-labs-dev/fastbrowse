@@ -275,6 +275,10 @@ pub struct Observation {
     /// for it. snapshot.js reads it from the viewport, so page text and the control list cannot stand in for it.
     #[serde(default, deserialize_with = "lax::boolean")]
     pub visual_content: bool,
+    /// The name of the open modal the rest of the page sits behind, empty when it has none. The page hides what is
+    /// under a modal from assistive technology, so those controls leave the observation without leaving the document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modal: Option<String>,
     /// Every audio and video player on the page, shown or not: their state lives in the element, not the page text.
     #[serde(default)]
     pub media: Vec<Media>,

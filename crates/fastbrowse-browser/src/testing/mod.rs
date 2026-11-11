@@ -141,6 +141,11 @@ pub fn status_worlds(page: &CdpPage) -> Vec<(String, String)> {
     page.state.lock().unwrap().status_worlds.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
 }
 
+/// Drop the kept document read, so the next observation reads the status again through the kept world.
+pub fn forget_document(page: &CdpPage) {
+    page.state.lock().unwrap().document = None;
+}
+
 /// The running test binary as a PDF helper: it runs the test `test_name` alone, which serves the request.
 pub fn test_binary_helper(test_name: &str) -> crate::helper::HelperCommand {
     let exe = std::env::current_exe().expect("the test binary's path");

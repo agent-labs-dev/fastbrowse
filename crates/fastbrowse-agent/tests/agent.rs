@@ -503,6 +503,11 @@ async fn play(case: &Value, log: Option<Arc<Mutex<Vec<Value>>>>) -> (Value, Vec<
         config = serde_json::json!({});
     }
     config["step_frames"] = case["step_frames"].as_bool().unwrap_or(false).into();
+    // The recorded loops predate the plan asked with each decision, so they replay without it; the plan has its own
+    // tests in `policy.rs`.
+    if config.get("plan_ahead").is_none() {
+        config["plan_ahead"] = false.into();
+    }
     let config: Config = serde_json::from_value(config).expect("config");
     let agent = Agent::new(page, jev.clone(), llm.clone())
         .with_config(config)

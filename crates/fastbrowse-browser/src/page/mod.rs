@@ -161,10 +161,22 @@ pub(crate) trait FrameText: DeserializeOwned {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct DocumentResponse {
+pub(crate) struct DocumentResponse {
     url: String,
     response_status: Option<i64>,
     document_key: String,
+}
+
+/// A document's response read, kept with the tab and lifecycle generation it was read at.
+///
+/// The status of a document is fixed once it is served, and the read costs an isolated-world evaluate on every
+/// observation. An observation whose document is the one already read keeps that read; a document the read does not
+/// name is read again rather than assumed.
+#[derive(Debug, Clone)]
+pub(crate) struct KeptDocument {
+    pub(crate) session_id: String,
+    pub(crate) generation: u64,
+    pub(crate) document: DocumentResponse,
 }
 
 /// snapshot.js output for one frame.
@@ -183,6 +195,9 @@ struct Snapshot {
     /// 1 when the viewport shows a picture, chart, drawing or video that no control carries; snapshot.js sends 0/1.
     #[serde(default)]
     visual_content: i64,
+    /// The open modal's name, empty when it has none; null when no modal is open.
+    #[serde(default)]
+    modal: Option<String>,
     #[serde(default)]
     media: Vec<Media>,
     controls: Vec<SnapshotControl>,
@@ -295,6 +310,8 @@ pub(crate) struct PageState {
     pub(crate) unanswered: HashMap<String, Instant>,
     /// Tab session -> the unique id of the isolated world its HTTP status is read in.
     pub(crate) status_worlds: HashMap<String, String>,
+    /// The last document response read, so an observation of the same document sends no status read.
+    pub(crate) document: Option<KeptDocument>,
     /// Frame session, when it was read, and the viewport size that pre-action measurement already returned. The wheel
     /// and the pointer marks both need it, and asking again was a command of its own on every action.
     pub(crate) viewport: Option<(String, Instant, (f64, f64))>,
@@ -586,11 +603,31 @@ impl CdpPage {
                 // A JavaScript dialog blocks the renderer, so any page evaluate would hang until it is handled.
                 return Ok(self.dialog_observation(dialog, bind));
             }
+            // The status read is a command of its own, and it answers the same for as long as the document is: an
+            // observation of a document already read keeps that read instead of asking the browser again. The
+            // generation is taken before the read, so a navigation during it leaves the kept copy naming an older
+            // generation and the next observation reads the new document.
+            let session_id = self.session.active_session_id()?;
+            let generation = self.session.lifecycle_mark();
+            let kept = self
+                .state
+                .lock()
+                .unwrap()
+                .document
+                .clone()
+                .filter(|kept| kept.session_id == session_id && kept.generation == generation);
             // A timer can open a dialog while the snapshot evaluates, and the dialog blocks that
             // evaluate until the 120s command deadline.
             let read = async {
                 let history = async { Ok::<_, BrowserError>(self.history().await) };
-                tokio::try_join!(history, self.snapshot_all_frames(bind), self.document_response())
+                if kept.is_some() {
+                    let (history, snapshot) = tokio::try_join!(history, self.snapshot_all_frames(bind))?;
+                    Ok((history, snapshot, None))
+                } else {
+                    let (history, snapshot, document) =
+                        tokio::try_join!(history, self.snapshot_all_frames(bind), self.document_response())?;
+                    Ok((history, snapshot, Some(document)))
+                }
             };
             let Some(read) = self.until_dialog(read).await else {
                 return match self.session.pending_dialog() {
@@ -598,7 +635,7 @@ impl CdpPage {
                     None => self.observe_once(attempt, bind).await,
                 };
             };
-            let ((can_go_back, mut history_entry, entry_url), (frames, inaccessible), document) = read?;
+            let ((can_go_back, mut history_entry, entry_url), (frames, inaccessible), read_document) = read?;
             let main = frames.iter().find(|(key, _)| key == MAIN).map(|(_, f)| f);
             // History and the snapshot are read at once, so a pushState between them paired the new page with the
             // old entry, whose lineage the new page then overwrote. Both are read again until they name one address;
@@ -610,6 +647,21 @@ impl CdpPage {
                     return self.observe_once(attempt + 1, bind).await;
                 }
                 history_entry = None;
+            }
+            let document = match read_document {
+                Some(document) => document,
+                // A kept read names the document it was made in. One that names another document was replaced
+                // without the generation moving, so its status is read now rather than carried over.
+                None => match kept
+                    .filter(|kept| main.is_some_and(|main| main.raw.document_key == kept.document.document_key))
+                {
+                    Some(kept) => kept.document,
+                    None => self.document_response().await?,
+                },
+            };
+            if main.is_some_and(|main| main.raw.document_key == document.document_key) {
+                self.state.lock().unwrap().document =
+                    Some(KeptDocument { session_id, generation, document: document.clone() });
             }
             let mut kept: Vec<Control> = vec![];
             let mut control_state: HashMap<String, Target> = HashMap::new();
@@ -708,6 +760,7 @@ impl CdpPage {
                 offscreen_text: frame_text(&frames, |s| &s.offscreen_text),
                 // Any frame's picture counts: a screenshot spans every frame the observation read.
                 visual_content: frames.iter().any(|(_, f)| f.raw.visual_content != 0),
+                modal: main.and_then(|m| m.raw.modal.clone()),
                 media: frames.iter().flat_map(|(_, f)| f.raw.media.iter().cloned()).collect(),
                 tabs: self.session.tabs(),
                 dialog: self.session.pending_dialog(),
@@ -777,6 +830,7 @@ impl CdpPage {
             viewport_text: String::new(),
             offscreen_text: String::new(),
             visual_content: false,
+            modal: None,
             media: Vec::new(),
             tabs: self.session.tabs(),
             dialog: Some(dialog),

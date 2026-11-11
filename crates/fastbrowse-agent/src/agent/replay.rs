@@ -82,6 +82,7 @@ impl Replay {
             replayed: true,
             by_code: false,
             offered: Vec::new(),
+            plan: Vec::new(),
             ahead: Default::default(),
         })
     }
