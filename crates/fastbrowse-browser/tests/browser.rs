@@ -1400,6 +1400,29 @@ async fn test_controls_a_script_adds_under_the_pointer_are_reached_by_hovering_t
     h.close().await;
 }
 
+/// GitHub's repository list draws each card's license as a law icon beside "BSD-3-Clause" in a row of twin spans.
+/// The icon is aria-hidden decoration, yet the badge was offered as a hover target on every card, and a run asked
+/// for httpx's license hovered one instead of opening the repository.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_label_beside_a_decorative_icon_is_not_a_hover_target() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        r##"const icon = '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16"><path d="M2 2h12v12H2z"/></svg>';
+        document.body.innerHTML = '<ul>' + ['httpx', 'httpcore'].map(name => `<li><h3><a href="#${name}">${name}</a></h3>
+          <div><span class="mr-3">Python</span><a class="mr-3 Link" href="#${name}-stars">${icon}15</a>
+          <span class="mr-3">${icon}BSD-3-Clause</span></div></li>`).join('') + '</ul>';"##,
+    )
+    .await;
+    let obs = h.observe().await;
+    let hovers: Vec<&Control> = obs.controls.iter().filter(|c| c.operations.contains(&Operation::Hover)).collect();
+    assert!(hovers.is_empty(), "decorative icons offered hover targets: {hovers:?}");
+    find(&obs, "httpx");
+    h.close().await;
+}
+
 /// A gallery's buttons faded in on hover from opacity 0, so the observation taken right after the hover saw only the
 /// transition's starting value and offered none of them.
 #[tokio::test(flavor = "multi_thread")]
