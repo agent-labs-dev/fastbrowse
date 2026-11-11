@@ -86,6 +86,38 @@ async fn test_a_drawing_in_the_viewport_is_visual_content() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_an_open_modal_is_named_and_the_page_behind_it_leaves() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = '<main><a href="/a">Alpha</a><a href="/b">Beta</a></main>' +
+          '<div role="dialog" aria-modal="true" aria-labelledby="t"><h2 id="t">Stops</h2><button>Close dialog</button></div>';
+        document.querySelector('main').setAttribute('aria-hidden', 'true');
+        "#,
+    )
+    .await;
+    let open = h.observe().await;
+    assert_eq!(open.modal.as_deref(), Some("Stops"));
+    let labels: Vec<&str> = open.controls.iter().map(|c| c.label.as_str()).collect();
+    assert_eq!(labels, ["Close dialog"]);
+    eval_active(
+        &h.session,
+        "document.querySelector('[role=dialog]').remove(); document.querySelector('main').removeAttribute('aria-hidden')",
+    )
+    .await;
+    assert_eq!(h.observe().await.modal, None);
+    eval_active(
+        &h.session,
+        "document.body.insertAdjacentHTML('beforeend', '<dialog><button>OK</button></dialog>'); document.querySelector('dialog').showModal()",
+    )
+    .await;
+    assert_eq!(h.observe().await.modal.as_deref(), Some(""));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_drawing_below_the_fold_does_not_ask_for_a_screenshot() {
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");

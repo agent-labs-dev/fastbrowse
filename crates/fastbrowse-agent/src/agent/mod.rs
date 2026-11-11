@@ -410,6 +410,13 @@ impl Agent {
             }
             Ok::<_, Flow>(opening)
         };
+        // The composer's context window is looked up from the provider's listing and kept by the client. Asked only
+        // when the answer is written, the lookup held every run's last step for 0.5 to 2.7 s; asked now, it is known
+        // by then, and the run never waits on it here.
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let llm = self.llm.clone();
+            runtime.spawn(async move { llm.context_tokens(fastbrowse_core::models::LLMPurpose::Compose).await });
+        }
         let given = state::with_inputs(task, &options.inputs);
         let (opening, dates) = tokio::join!(open, self.task_dates(&given, ledger));
         let (opening, dates) = (opening?, dates?);
@@ -505,7 +512,7 @@ impl Agent {
                         _ => false,
                     } && composed.problem.is_none()
                         && !state.refused
-                        && !state.undone;
+                        && state.undone.is_none();
                     // A task asking to be told can also ask for steps, such as setting a field and then reporting it,
                     // and a run stuck before any finish check judged its steps may have left one undone: that check's
                     // own question decides, asked of the last page.
@@ -640,10 +647,10 @@ impl Agent {
             }
             return self.result(state, ledger, status, Outcome { error, budget, ..Outcome::default() });
         }
-        if notes.facts().is_empty() {
-            return self.result(state, ledger, status, Outcome { error, budget, ..Outcome::default() });
+        match partial_answer(notes) {
+            Some(answer) => self.answered(&answer, notes, state, ledger, status, error, budget),
+            None => self.result(state, ledger, status, Outcome { error, budget, ..Outcome::default() }),
         }
-        self.answered(&partial_answer(notes), notes, state, ledger, status, error, budget)
     }
 
     /// `partial` as the result of a run that ended as `status`, with the evidence it cites.
@@ -658,8 +665,13 @@ impl Agent {
         error: Option<String>,
         budget: Option<BudgetStop>,
     ) -> RunResult {
-        let undone = (status != Status::Complete && state.is_some_and(|state| state.undone))
-            .then(|| noticed(finishing::UNDONE, partial.clone()));
+        let undone = (status != Status::Complete)
+            .then(|| {
+                state
+                    .and_then(|state| state.undone.as_deref())
+                    .map(|step| noticed(&finishing::undone_notice(step), partial.clone()))
+            })
+            .flatten();
         let partial = undone.as_ref().unwrap_or(partial);
         let cited =
             notes.expand_evidence_ids(partial.claims.iter().flat_map(|c| c.evidence_ids.iter().map(String::as_str)));
@@ -865,6 +877,7 @@ impl Agent {
             reload: state.reload_target(&observation.url),
             screenshot: None,
             ahead: self.ahead(state, observation),
+            plan_ahead: self.config.plan_ahead,
         })
     }
 

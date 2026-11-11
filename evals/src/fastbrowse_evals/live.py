@@ -1,8 +1,8 @@
 """Head-to-head on live sites, for exactly three comparisons, each run as its own invocation with its two arms:
 agent against agent (fastbrowse against the hosted Browser Use agent on API V4: browser-use on its default model and
-browser-use-ultrafast on bu-ultrafast, plus jev-ultrafast and browser-harness), backend against backend (fastbrowse on
-the Browser Use Cloud browser against fastbrowse-pool), and fastbrowse on its own backend against Jev Ultrafast
-(fastbrowse-pool against jev-ultrafast). Pass each comparison's two arms with --arms;
+browser-use-ultrafast on bu-ultrafast, plus jev-ultrafast, browser-harness and browser-use-oss, the open-source
+browser-use 1.0 on its defaults), backend against backend (fastbrowse on the Browser Use Cloud browser against
+fastbrowse-pool), and fastbrowse on its own backend against Jev Ultrafast (fastbrowse-pool against jev-ultrafast). Pass each comparison's two arms with --arms;
 fastbrowse-pool needs the pool credentials, so it is opt-in like browser-use-oss, cua-codex and
 browser-harness (Codex with Browser Harness, fastbrowse_evals/adapters/browser_harness_arm.py).
 
@@ -72,6 +72,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -99,7 +100,7 @@ from parallax.judging import Judgment
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 from pydantic_core import to_jsonable_python
 
-from fastbrowse_evals import backend, hosted_api
+from fastbrowse_evals import arm_pins, backend, hosted_api
 from fastbrowse_evals.attempt_clock import (
     SESSION_OPEN_SECONDS,
     TIMING_BASIS,
@@ -123,6 +124,8 @@ from fastbrowse_evals.browsers import (
     cloud_browser,
     devtools_websocket,
     local_browser,
+    metered_cost,
+    stop_cloud_browser,
 )
 from fastbrowse_evals.budget import POLICY, BudgetStop, CampaignBudget
 from fastbrowse_evals.evidence import parts, run_evidence, shared_step
@@ -147,6 +150,7 @@ from fastbrowse_evals.request_session import (
     runtime_identity,
 )
 from fastbrowse_evals.spend import SpendStop
+from fastbrowse_evals.sweep_tasks import SWEEP
 from fastbrowse_evals.versions import load_lock, local_browser_identity, provenance, suite_version, task_version
 
 AGENT_LIMITS = Limits()
@@ -167,7 +171,8 @@ PROVIDER_LIMITS = (
 )
 """Bounds imposed by a provider that no request can lift, recorded with every row rather than hidden."""
 
-ULTRAFAST_COMMIT = "1231850a0bf1a0c0341fe408ef1668dbbfdfac46"
+SDK_VERSION = package_version("browser-use-sdk")
+ULTRAFAST_COMMIT = arm_pins.pinned("browser-use/jev-ultrafast")
 ULTRAFAST = f"jev-ultrafast @ git+https://github.com/browser-use/jev-ultrafast@{ULTRAFAST_COMMIT}"
 ULTRAFAST_PIN = f"jev-ultrafast commit {ULTRAFAST_COMMIT}"
 """The arm's pin as the catalog and a published source record it. The install spec above holds a URL, which public
@@ -1908,16 +1913,19 @@ class ArmSpec(BaseModel):
 
 
 _RUNTIME_ENV = ("PATH", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR")
-OSS_PIN = "browser-use==0.13.10"
-OSS_COMMAND = ("uv", "run", "--no-project", "--quiet", "--with", OSS_PIN, "python")
+OSS_PACKAGE = f"browser-use=={arm_pins.pinned('browser-use')}"
+OSS_MODEL = "bu-fast"
+"""browser-use 1.0's default model (`Agent(llm=None)`), a Browser Use gateway alias at its own reasoning effort."""
+OSS_PIN = f"{OSS_PACKAGE}; default model {OSS_MODEL}, default mode (ultrafast on {OSS_MODEL})"
+OSS_COMMAND = ("uv", "run", "--no-project", "--quiet", "--python", "3.12", "--with", OSS_PACKAGE, "python")
 OSS_RUNNER = ULTRAFAST_RUNNER.with_name("browser_use_oss_arm.py")
-OSS_MODEL = "google/gemini-3.8-flash"
 CUA_RUNNER = ULTRAFAST_RUNNER.with_name("cua_codex_arm.py")
 CUA_MODEL = "gpt-6-astra"
-CUA_PIN = "cua-driver==0.34.0; codex-cli==0.160.1"
+CODEX_PIN = f"codex-cli=={arm_pins.pinned('@openai/codex')}"
+CUA_PIN = f"cua-driver=={arm_pins.pinned('cua-driver')}; {CODEX_PIN}"
 HARNESS_RUNNER = ULTRAFAST_RUNNER.with_name("browser_harness_arm.py")
-HARNESS_PACKAGE = "browser-harness==0.1.13"
-HARNESS_PIN = f"{HARNESS_PACKAGE}; codex-cli==0.163.0; cli+skill"
+HARNESS_PACKAGE = f"browser-harness=={arm_pins.pinned('browser-harness')}"
+HARNESS_PIN = f"{HARNESS_PACKAGE}; {CODEX_PIN}; cli+skill"
 HARNESS_COMMAND = (
     "uv",
     "run",
@@ -2013,6 +2021,8 @@ class _OssReport(BaseModel):
     error: str | None = None
     step_ceiling: int | None = None
     """The integer browser-use's `Agent.run` was handed in place of no limit (see browser_use_oss_arm.py)."""
+    timeout_ceiling: float | None = None
+    """The seconds browser-use's `Agent.run` was handed in place of no time limit."""
 
 
 class _HarnessReport(BaseModel):
@@ -2038,38 +2048,155 @@ class _CuaReport(_OssReport):
     session_close_seconds: float | None = None
 
 
+class _OssReady(BaseModel):
+    cdp_url: str
+    live_url: str | None = None
+    browser_id: str
+    open_seconds: float
+
+
+class _OssResult(BaseModel):
+    status: str
+    answer: str | None = None
+    data: JsonValue = None
+    steps: int
+    step_log: list[JsonValue] = []
+    dollars: float | None = None
+    error: str | None = None
+    step_ceiling: int | None = None
+    """The integer browser-use's `Agent.run` was handed in place of no limit (see browser_use_oss_arm.py)."""
+    timeout_ceiling: float | None = None
+    """The seconds browser-use's `Agent.run` was handed in place of no time limit."""
+
+
+class _OssStopped(BaseModel):
+    browser_id: str | None = None
+    stopped: bool
+
+
+OSS_SETUP = "the agent starts the Python worker that drives the browser, and checks its model gateway, inside its run"
+OSS_LLM_COST = (
+    "the Browser Use gateway's own charge for each model response, as browser-use sums it; Browser Use reports no "
+    "billed total per run, so a request cut off before its charge came back would be missing"
+)
+
+
+@asynccontextmanager
+async def _conversation(
+    command: tuple[str, ...], script: Path, env: dict[str, str], cwd: str
+) -> AsyncIterator[
+    tuple[Callable[[Mapping[str, object]], Awaitable[None]], Callable[[str], Awaitable[dict[str, Any]]]]
+]:
+    """A runner that answers in JSON lines while it works: `send` writes one line to it, `receive(event)` reads its
+    next line, which must be that event. On any way out the runner is ended: asked by closing its input, then
+    terminated, which a runner owning a cloud browser answers by stopping it."""
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        str(script),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        env=env,
+        cwd=cwd,
+        start_new_session=True,
+        limit=64 * 1024 * 1024,  # a result line carries the whole step log
+    )
+    assert process.stdin is not None and process.stdout is not None
+    stdin, stdout = process.stdin, process.stdout
+
+    async def send(message: Mapping[str, object]) -> None:
+        stdin.write(json.dumps(message).encode() + b"\n")
+        await stdin.drain()
+
+    async def receive(event: str) -> dict[str, Any]:
+        line = await stdout.readline()
+        if not line:
+            await process.wait()
+            raise RuntimeError(f"{script.name} exited {process.returncode} before its {event}")
+        message = json.loads(line)
+        if message.get("event") != event:
+            raise _OssEvent(message)
+        return message
+
+    async def end(asked: bool) -> None:
+        if asked:
+            with suppress(OSError):
+                stdin.close()
+            with suppress(TimeoutError):
+                async with asyncio.timeout(60):
+                    await process.wait()
+        if process.returncode is None:
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGTERM)
+            try:
+                async with asyncio.timeout(60):
+                    await process.wait()
+            except TimeoutError:
+                process.kill()
+                await process.wait()
+
+    try:
+        yield send, receive
+    except BaseException:
+        await asyncio.shield(end(asked=False))
+        raise
+    await end(asked=True)
+
+
+class _OssEvent(Exception):
+    """The runner sent another event than the one expected: its result before its browser was ready."""
+
+    def __init__(self, message: dict[str, Any]) -> None:
+        super().__init__(message.get("event"))
+        self.message = message
+
+
 async def oss_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | None) -> tuple[Outcome, ArmReport]:
+    """browser-use 1.0 on its own default Browser Use Cloud browser (see browser_use_oss_arm.py). It starts and stops
+    that browser itself; the harness times the run on its own clock from the browser being ready to the answer, reads
+    the final page before the stop, and reads the browser's cost as Browser Use metered it."""
     if record is not None:
         raise ValueError("browser-use-oss recording is not supported by this adapter")
-    async with cloud_browser(http, screen=_screen(task)) as cloud:
-        session_ready()
-        _watch("browser-use-oss", task, cloud.live_url)
-        request: dict[str, object] = {
-            "start": task.start,
-            "goal": prompt(task),
-            "cdp_ws": cloud.cdp_url,
-            # Uncapped; the runner substitutes browser-use's own integer seam (OSS_STEP_CEILING) and reports it.
-            "max_steps": None,
-            "record": None,
-            "model": OSS_MODEL,
-            "secrets": dict(task.secrets),
-            "output_schema": task.output_schema.model_json_schema() if task.output_schema else None,
-            "retryable_status": sorted(RETRYABLE_STATUS),
-        }
+    request: dict[str, object] = {
+        "goal": prompt(task),
+        # Uncapped; the runner substitutes browser-use's own integer seams (STEP_CEILING, TIMEOUT_CEILING) and
+        # reports them.
+        "max_steps": None,
+        "browser_minutes": CLOUD_BROWSER_MINUTES,
+        "output_schema": task.output_schema.model_json_schema() if task.output_schema else None,
+    }
+    ready: _OssReady | None = None
+    stopped = _OssStopped(stopped=False)
+    try:
         with tempfile.TemporaryDirectory(prefix="bu-oss-") as runtime:
             env = arm_environment("browser-use-oss", runtime)
-            env["OPENROUTER_API_KEY"] = backend.openrouter_key()
-            ran = _OssReport.model_validate_json(await _invoke(OSS_COMMAND, OSS_RUNNER, request, env, runtime))
-        session_answered()
-        final = await observe_browser(cloud.cdp_url)
-    browser, unpriced = _browser_dollars(cloud.cost)
+            # 1.0's default model and browser are both Browser Use's, read with the Browser Use key.
+            env["BROWSER_USE_API_KEY"] = backend.browser_key()
+            async with _conversation(OSS_COMMAND, OSS_RUNNER, env, runtime) as (send, receive):
+                await send(request)
+                try:
+                    ready = _OssReady.model_validate(await receive("ready"))
+                except _OssEvent as early:
+                    raise NotStarted(f"browser-use did not start its browser: {early.message.get('error')}") from None
+                began = session_ready()
+                _watch("browser-use-oss", task, ready.live_url)
+                ran = _OssResult.model_validate(await receive("result"))
+                seconds = session_answered() - began
+                final = await observe_browser(await devtools_websocket(http, ready.cdp_url))
+                closing = time.monotonic()
+                await send({})
+                stopped = _OssStopped.model_validate(await receive("stopped"))
+                close_seconds = round(time.monotonic() - closing, 2)
+    finally:
+        if ready is not None and not stopped.stopped:
+            await asyncio.shield(stop_cloud_browser(ready.browser_id))
+    browser, unpriced = _browser_dollars(await metered_cost(ready.browser_id))
     unknown = ran.dollars is None or unpriced
     return Outcome(ran.answer, ran.data, final.url, None, final.controls, *_page_of(final)), ArmReport(
         status=ran.status,
-        # Timed inside the runner as jev-ultrafast is, so neither arm is charged for resolving and importing itself.
-        seconds=round(ran.seconds, 2),
-        session_open_seconds=round((cloud.open_seconds or 0.0) + ran.setup_seconds, 2),
-        session_close_seconds=cloud.close_seconds,
+        seconds=round(seconds, 2),
+        session_open_seconds=ready.open_seconds,
+        session_close_seconds=close_seconds,
+        timing_note=OSS_SETUP,
         dollars=None if unknown else ran.dollars + browser,
         unknown_cost=unknown,
         steps=ran.steps,
@@ -2077,9 +2204,11 @@ async def oss_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | Non
         error=ran.error,
         model=OSS_MODEL,
         observe_error=final.error,
-        provenance={} if ran.step_ceiling is None else {"upstream_max_steps": ran.step_ceiling},
-        cost_by_component=({} if unpriced else {"browser": browser})
-        | ({} if ran.dollars is None else {"llm": ran.dollars}),
+        provenance={"llm_cost_basis": OSS_LLM_COST}
+        | ({} if ran.step_ceiling is None else {"upstream_max_steps": ran.step_ceiling})
+        | ({} if ran.timeout_ceiling is None else {"upstream_timeout_seconds": ran.timeout_ceiling}),
+        cost_by_component=({} if unpriced else {"browser": round(browser, 5)})
+        | ({} if ran.dollars is None else {"llm": round(ran.dollars, 5)}),
     )
 
 
@@ -2511,13 +2640,13 @@ ARMS: dict[str, ArmSpec] = {
     ),
     "browser-use": ArmSpec(
         runner=_run_hosted,
-        pin="browser-use-sdk==3.12.1 API v4; default model, reported per row",
+        pin=f"browser-use-sdk=={SDK_VERSION} API v4; default model, reported per row",
         env_allowlist=(),
         tier="hosted",
     ),
     "browser-use-ultrafast": ArmSpec(
         runner=_run_hosted_ultrafast,
-        pin="browser-use-sdk==3.12.1 API v4; model bu-ultrafast, reported per row",
+        pin=f"browser-use-sdk=={SDK_VERSION} API v4; model bu-ultrafast, reported per row",
         env_allowlist=(),
         tier="hosted",
     ),
@@ -2538,7 +2667,14 @@ ARMS: dict[str, ArmSpec] = {
 }
 
 
-HEAD_TO_HEAD_ARMS = ("fastbrowse", "browser-use", "browser-use-ultrafast", "jev-ultrafast", "browser-harness")
+HEAD_TO_HEAD_ARMS = (
+    "fastbrowse",
+    "browser-use",
+    "browser-use-ultrafast",
+    "jev-ultrafast",
+    "browser-harness",
+    "browser-use-oss",
+)
 """The arms compared head to head, each of which runs every task it can grade on equal terms (`eligible`); the catalog
 records why it skips any other (`excluded_because`)."""
 
@@ -2564,13 +2700,18 @@ def excluded_because(arm: str, task: LiveTask) -> str | None:
         return "the task needs login credentials, and it has no way to be given any"
     if arm == "jev-ultrafast":
         return "the task asks for an answer, and it returns none: it only ends done or blocked"
-    if arm == "browser-harness" and task.expect is not Status.COMPLETE:
+    if arm in {"browser-harness", "browser-use-oss"} and task.expect is not Status.COMPLETE:
         return (
             "the task passes only by stopping before an irreversible step it does not authorize, and it takes no "
             "authorization setting and has no way to pause"
         )
     if arm == "browser-harness":
         return "the task needs login credentials, and we give it none, because it would hold them in its own shell"
+    if arm == "browser-use-oss":
+        return (
+            "the task needs login credentials, and we give it none, because the code its model writes can read "
+            "any it is given"
+        )
     raise ValueError(f"{task.id}: {arm} is excluded without a stated reason")
 
 
@@ -2593,10 +2734,12 @@ def eligible(arm: str, task: LiveTask) -> bool:
         # It ends only DONE or BLOCKED and returns no answer, so it runs only the tasks graded on the page it ends on,
         # which name it in their own `arms`.
         return arm in task.arms
-    if arm in {"cua-codex", "browser-harness"}:
+    if arm in {"cua-codex", "browser-harness", "browser-use-oss"}:
         # Agents that take no credentials and no authorization setting: completion tasks without credentials.
+        # browser-use 1.0 does take `sensitive_data`, but says it is no sandbox: the Python its model writes can read
+        # the values, so a login would be handed to the model.
         return task.expect == Status.COMPLETE and not task.secrets and task.bitwarden_item is None
-    return arm in task.arms or (arm == "browser-use-oss" and task.expect == Status.COMPLETE)
+    return arm in task.arms
 
 
 SUITES: dict[str, tuple[LiveTask, ...]] = {
@@ -2605,6 +2748,11 @@ SUITES: dict[str, tuple[LiveTask, ...]] = {
     "stretch-dev": STRETCH_DEV,
 }
 """`core` is the published suite; the others are in `more_tasks`."""
+
+DIAGNOSTIC_SUITES: dict[str, tuple[LiveTask, ...]] = {"sweep": SWEEP}
+"""Suites run to see where agents get stuck, outside the catalog: never versioned, published or gated on. A campaign
+runs them only as a smoke, which publishes nothing."""
+RUNNABLE = {**SUITES, **DIAGNOSTIC_SUITES}
 
 
 def summarize(rows: list[EvalRow], arms: list[str]) -> None:
@@ -2678,7 +2826,7 @@ async def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="fastbrowse-evals browser internal", description=__doc__)
     parser.add_argument("--only", nargs="*", default=[], help="task ids to run; an id the selection lacks is an error")
     parser.add_argument(
-        "--suite", nargs="*", choices=list(SUITES), help="task sets to run (default core, or every suite with --only)"
+        "--suite", nargs="*", choices=list(RUNNABLE), help="task sets to run (default core, or every suite with --only)"
     )
     parser.add_argument("--category", nargs="*", default=[], choices=[c.value for c in Category])
     parser.add_argument(
@@ -2799,7 +2947,7 @@ async def main(argv: list[str]) -> int:
     tasks = [
         t
         for suite in args.suite or (list(SUITES) if args.only else ["core"])
-        for t in SUITES[suite]
+        for t in RUNNABLE[suite]
         if (not args.only or t.id in args.only) and (not args.category or t.category.value in args.category)
     ]
     # A rerun meant to confirm one row must not "pass" by quietly running none of it.
@@ -2817,8 +2965,8 @@ async def main(argv: list[str]) -> int:
     if unsupported := sorted(set(args.only) - {task.id for _, task, _ in planned}):
         parser.error(f"selected tasks are unsupported by the requested arms: {', '.join(unsupported)}")
     lock = load_lock()
-    suite_of = {t.id: name for name, suite_tasks in SUITES.items() for t in suite_tasks}
-    suite_versions = {name: suite_version((t.id for t in suite_tasks), lock) for name, suite_tasks in SUITES.items()}
+    suite_of = {t.id: name for name, suite_tasks in RUNNABLE.items() for t in suite_tasks}
+    suite_versions = {name: suite_version((t.id for t in suite_tasks), lock) for name, suite_tasks in RUNNABLE.items()}
     handler = logging.StreamHandler(sys.stdout)
     handler.addFilter(_NameRun())
     # Traces are collected per run at DEBUG and propagate here; only warnings belong on the console.

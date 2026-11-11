@@ -88,11 +88,23 @@ runs on that click as on any other.
 ## One request a step
 
 All questions in a request see the same state, so what the agent would otherwise ask after a decision goes with it:
-for each offered control, which words a text field takes. Only the chosen target's answers are used. Whether a press
+for each offered control, which words a text field takes or which task text supplies a key chord. Only the chosen target's answers are used. Whether a press
 commits anything, and whether the task asked for that on an authorized run, stay follow-ups that see only the task, the
 address and the page's title: the page's own text is what would argue a harmful action is harmless. The smallest go first, and only while the
 request stays under the 32,000 bytes where OpenRouter switches to long-context mode, and none go with a screenshot,
 which is in that mode already. Those left out stay follow-ups.
+
+An editable field can offer `press` beside `fill`. Jev chooses the source and first word of a chord from the task,
+using the same span choices as a fill value. The page cannot provide the chord. A chord that includes Enter or can
+submit or save is sent through the action and authorization checks before the browser receives it.
+
+With `Config(plan_ahead=True)` the request also asks, for each offered field, whether the task needs it filled on
+this page besides the next action. When the chosen action is a fill, code fills the other fields Jev judges more likely
+than not, in page order, each with its value answered ahead and without a decision of its own. Before each it observes
+the page again and returns to deciding when the address, the document or the field is gone, a dialog opened, or the
+value before it was unsure. Presses are never planned: a press changes the page in ways seen only after it, and two
+controls that do the same job would both be judged needed. A request with a screenshot then carries every question
+asked ahead too, since the image already put it in long-context mode.
 
 ## Provider failover
 

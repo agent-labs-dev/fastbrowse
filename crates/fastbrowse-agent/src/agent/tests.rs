@@ -212,6 +212,7 @@ fn button(label: &str) -> Control {
 pub(super) fn code_decision(operation: Operation, target: Option<Control>) -> Decision {
     Decision {
         replayed: false,
+        plan: Vec::new(),
         by_code: false,
         operation,
         url: None,
@@ -1116,6 +1117,14 @@ async fn gate_conditional_post_choosing(
     answers: &[(&'static str, f64)],
     chosen: &[(&'static str, &'static str)],
 ) -> (Result<(), Flow>, Arc<Conditioned>, RunState) {
+    gate_post_after_commits(0, answers, chosen).await
+}
+
+async fn gate_post_after_commits(
+    commits: usize,
+    answers: &[(&'static str, f64)],
+    chosen: &[(&'static str, &'static str)],
+) -> (Result<(), Flow>, Arc<Conditioned>, RunState) {
     let mut given = IndexMap::from([("irreversible", 0.95), ("requested", 0.97), ("lasting", 0.95)]);
     given.extend(answers.iter().copied());
     let chosen = chosen.iter().copied().collect();
@@ -1125,6 +1134,7 @@ async fn gate_conditional_post_choosing(
     let mut state = run_state();
     state.task = "Open the newest review. If nobody has answered it yet, write 'Thank you' and post it.".into();
     state.authorization = Authorization { irreversible_actions: true };
+    state.commits = commits;
     let post = button("Post");
     let mut page = observation(std::slice::from_ref(&post));
     page.viewport_text = "Newest review: great product. Signed in with hunter2.".into();
@@ -1164,6 +1174,28 @@ async fn test_a_commit_the_task_makes_conditional_proceeds_only_when_the_page_sh
             let Flow::Unsure(unsure) = flow else { panic!("{case}: refused for another step, not stopped") };
             assert!(unsure.reason.contains("depends on a condition the task sets"), "{case}: {}", unsure.reason);
             assert_eq!(state.steps.last().map(|step| step.outcome), Some(StepOutcome::Failed), "{case}");
+        }
+    }
+}
+
+/// An authorized one-reply run posted the same reply three times (#882): Jev rated the task unconditional, so only
+/// `requested`, which reads the task alone, was asked before each Post. Once the run has committed, every later commit
+/// is checked against the page and the run's own steps, and one they show already done is refused once.
+#[tokio::test]
+async fn test_a_commit_after_the_runs_first_is_checked_against_the_steps_already_taken() {
+    // (commits, met, acts, Jev calls)
+    for (commits, met, acts, calls) in
+        [(0, None, true, 1), (1, Some("done"), false, 2), (1, Some("asked"), true, 2), (2, Some("unclear"), false, 2)]
+    {
+        let chosen: Vec<_> =
+            [("values", Some("first")), ("met", met)].into_iter().filter_map(|(k, v)| Some((k, v?))).collect();
+        let (gated, jev, _) = gate_post_after_commits(commits, &[("conditional", 0.1)], &chosen).await;
+        let case = format!("commits {commits}, met {met:?}");
+        assert_eq!(jev.asked.lock().unwrap().len(), calls, "{case}");
+        assert_eq!(gated.is_ok(), acts, "{case}");
+        if met == Some("done") {
+            let Err(Flow::Unsure(unsure)) = gated else { panic!("{case}: not refused once") };
+            assert!(unsure.reason.contains("already been done by this run"), "{case}: {}", unsure.reason);
         }
     }
 }
@@ -1507,7 +1539,7 @@ async fn test_a_done_with_a_step_of_the_task_undone_is_not_complete() {
 
     let result = agent.finish(&mut state, &observation(&[]), None, None).await;
     assert!(
-        matches!(&result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("has not been done")))
+        matches!(&result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("enter the code the Phone page shows")))
     );
     {
         let asked = jev.3.lock().unwrap();
@@ -1517,7 +1549,11 @@ async fn test_a_done_with_a_step_of_the_task_undone_is_not_complete() {
     let ledger = state.ledger.clone();
     let stopped = agent.stopped(result.unwrap_err(), Some(&mut state), &ledger).await;
     let answer = stopped.answer.expect("what was read is answered");
-    assert!(answer.starts_with(super::finishing::UNDONE) && answer.contains("katherine@example.com"), "{answer}");
+    assert!(
+        answer.contains("Sign in, enter the code the Phone page shows, then tell me your account email.")
+            && answer.contains("katherine@example.com"),
+        "{answer}"
+    );
 }
 
 /// Asked to start a demo and report the text it loads, a run's click on Start was covered, and it read the page's
@@ -1544,7 +1580,7 @@ async fn test_a_done_after_a_step_that_was_not_carried_out_checks_the_task_steps
 
     let result = agent.finish(&mut state, &observation(&[]), None, None).await;
     assert!(
-        matches!(&result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("has not been done"))),
+        matches!(&result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("task step"))),
         "{result:?}"
     );
 }
@@ -1585,8 +1621,13 @@ async fn test_the_done_check_asks_no_choice() {
         let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, pick));
         let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev.clone(), Arc::new(ScriptedLLM));
         let answer = agent.actions_done(&mut state, &page).await.unwrap();
-        assert_eq!(format!("{answer:?}"), carried);
-        assert!(jev.4.lock().unwrap().is_empty());
+        let debug = format!("{answer:?}");
+        assert!(debug == carried || (pick == "undone" && debug.starts_with("Undone(")), "{debug}");
+        if pick == "undone" {
+            assert_eq!(jev.4.lock().unwrap().len(), 1);
+        } else {
+            assert!(jev.4.lock().unwrap().is_empty());
+        }
     }
 }
 
@@ -1598,19 +1639,20 @@ async fn test_the_done_check_is_told_what_was_typed_and_never_sent() {
     state.history.push(typed_into("Reference"));
     let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "undone"));
     let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev.clone(), Arc::new(ScriptedLLM));
-    assert!(matches!(agent.actions_done(&mut state, &page).await.unwrap(), Carried::Undone));
+    assert!(matches!(agent.actions_done(&mut state, &page).await.unwrap(), Carried::Undone(_)));
     let facts = jev.3.lock().unwrap()[0]["page_facts"].to_string();
     assert!(facts.contains("No action has sent what was typed"), "{facts}");
     // A field left empty is named only once the run stalled on a task to carry out, as the step decision names it:
     // a run that did act is not told an unrelated empty search box is unfinished work.
     let page = observation(&[holding("Reference", "REF-1"), holding("Note", "")]);
     state.output_intent = super::state::OutputIntent::CarriedOut;
-    assert!(matches!(agent.actions_done(&mut state, &page).await.unwrap(), Carried::Undone));
+    assert!(matches!(agent.actions_done(&mut state, &page).await.unwrap(), Carried::Undone(_)));
     state.to_carry_out = true;
-    assert!(matches!(agent.actions_done(&mut state, &page).await.unwrap(), Carried::Undone));
+    assert!(matches!(agent.actions_done(&mut state, &page).await.unwrap(), Carried::Undone(_)));
     let asked = jev.3.lock().unwrap();
     assert!(!asked[1]["page_facts"].to_string().contains("'Note'"), "{}", asked[1]);
-    assert!(asked[2]["page_facts"].to_string().contains("'Note'"), "{}", asked[2]);
+    assert!(!asked[2]["page_facts"].to_string().contains("'Note'"), "{}", asked[2]);
+    assert!(asked[4]["page_facts"].to_string().contains("'Note'"), "{}", asked[4]);
 }
 
 /// `DoneCheckJev`, judging that no answer gives every requested fact.
@@ -2058,6 +2100,34 @@ async fn test_a_span_end_choice_shows_each_value_that_would_be_typed() {
         .await
         .unwrap();
     assert_eq!(text, "Grace");
+}
+
+/// A reply box that opened holding an @mention lost it to a fill (#857): Jev chose where the value came from without
+/// being told the field held anything, though a fill replaces all of it. A sensitive field's value is never shown.
+#[test]
+fn test_the_value_questions_say_what_a_field_holds_now_unless_it_is_sensitive() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(EndValues), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Reply 'thanks' after the mention".into();
+    let mut reply = Control::new("reply", "textbox", "Reply", [Operation::Fill]);
+    reply.value = Some("@ann ".into());
+    let mut secret = Control::new("secret", "textbox", "Token", [Operation::Fill]);
+    secret.value = Some("@ann ".into());
+    secret.sensitive = true;
+    let asked = agent.ahead(&state, &observation(&[reply, secret]));
+    let shown = |control: &str| {
+        asked
+            .iter()
+            .filter(|ahead| ahead.control == control)
+            .map(|ahead| match &ahead.question {
+                Question::Choice(choice) => choice.instructions.clone(),
+                _ => String::new(),
+            })
+            .collect::<Vec<_>>()
+    };
+    let reply = shown("reply");
+    assert!(!reply.is_empty() && reply.iter().all(|q| q.contains("The field holds '@ann ' now")), "{reply:?}");
+    assert!(shown("secret").iter().all(|q| !q.contains("@ann")), "{:?}", shown("secret"));
 }
 
 #[tokio::test]
@@ -3543,7 +3613,7 @@ impl DecisionClient for JudgesCarried {
 /// navigation leaves an answer that holds whole when the task asks only to be told.
 #[tokio::test]
 async fn test_a_stuck_run_whose_answer_passes_every_check_answers_the_task() {
-    let stopped = |intent, undone, acted: Option<bool>| async move {
+    let stopped = |intent, undone: Option<String>, acted: Option<bool>| async move {
         let jev = Arc::new(JudgesCarried(acted.unwrap_or(true)));
         let agent = Agent::new(Arc::new(NoPage), jev, Arc::new(WritesRecord("Record B: 34")));
         let mut state = run_state();
@@ -3561,17 +3631,17 @@ async fn test_a_stuck_run_whose_answer_passes_every_check_answers_the_task() {
         agent.stopped(stop, Some(&mut state), &ledger).await
     };
     let text = super::state::OutputIntent::Text;
-    let told = stopped(text, false, None).await;
+    let told = stopped(text, None, None).await;
     assert_eq!((told.status, told.error.as_deref()), (Status::Complete, None));
     assert!(told.answer.unwrap_or_default().starts_with("Record B: 34 [1]"));
     // A task that asks for something done is not done because what was read holds.
-    let carried = stopped(super::state::OutputIntent::CarriedOut, false, None).await;
+    let carried = stopped(super::state::OutputIntent::CarriedOut, None, None).await;
     assert_eq!(carried.status, Status::Stuck);
     // Nor is a task that asks to be told after a step: a finish check that found a step undone, or a run that acted
     // and whose steps the finish check's question finds not carried out, stays stuck. Steps judged carried answer.
-    assert_eq!(stopped(text, true, None).await.status, Status::Stuck);
-    assert_eq!(stopped(text, false, Some(false)).await.status, Status::Stuck);
-    assert_eq!(stopped(text, false, Some(true)).await.status, Status::Complete);
+    assert_eq!(stopped(text, Some("Submit the form.".into()), None).await.status, Status::Stuck);
+    assert_eq!(stopped(text, None, Some(false)).await.status, Status::Stuck);
+    assert_eq!(stopped(text, None, Some(true)).await.status, Status::Complete);
 }
 
 #[test]
@@ -3678,14 +3748,34 @@ fn test_a_composing_run_stops_browsing_in_time_to_write_its_answer() {
 #[tokio::test]
 async fn test_a_run_the_clock_stopped_answers_from_what_it_read() {
     let mut state = clocked(91.0, false);
-    let (pine, _) = capacities();
-    state.notes.add(pine);
+    let (pine, oak) = capacities();
+    state.notes.add(pine.answering());
+    state.notes.add(oak);
     let ledger = state.ledger.clone();
     let stop = super::out_of_browsing_time(&clocked(91.0, true)).unwrap();
     let result = agent().stopped(Flow::Stop(stop), Some(&mut state), &ledger).await;
     assert_eq!(result.status, Status::BudgetExceeded);
-    assert!(result.answer.as_deref().is_some_and(|answer| answer.contains("Pine capacity 10")));
+    let answer = result.answer.as_deref().unwrap_or_default();
+    assert!(answer.contains("Pine capacity 10"), "{answer}");
+    // Context read on the way is not an answer (#857).
+    assert!(!answer.contains("Oak capacity 7"), "{answer}");
     assert_eq!(result.budget.map(|budget| budget.limit), Some(100.0));
+}
+
+/// A write run that read only context, such as the lone `}` lines of a comment's error dump, and then lost its
+/// browser cited those lines as a partial answer (#857). With nothing read as answering, it has no answer.
+#[tokio::test]
+async fn test_a_stopped_run_with_only_context_notes_has_no_answer() {
+    let mut state = clocked(91.0, false);
+    let (pine, oak) = capacities();
+    state.notes.add(pine);
+    state.notes.add(oak);
+    let ledger = state.ledger.clone();
+    let stop = super::out_of_browsing_time(&clocked(91.0, true)).unwrap();
+    let result = agent().stopped(Flow::Stop(stop), Some(&mut state), &ledger).await;
+    assert_eq!(result.status, Status::BudgetExceeded);
+    assert_eq!(result.answer, None);
+    assert!(result.citations.is_empty());
 }
 
 #[tokio::test]
@@ -7051,4 +7141,104 @@ async fn test_a_task_that_only_carries_something_out_does_not_read_its_start_pag
         reads.push(jev.2.load(std::sync::atomic::Ordering::Relaxed));
     }
     assert_eq!(reads[1] + 1, reads[0], "reads for a text task, then a carried-out one: {reads:?}");
+}
+
+/// A delivery form in the document `document`, its name fields holding `first` and `last`.
+fn delivery(document: &str, first: &str, last: &str) -> Observation {
+    let field = |id: &str, label: &str, value: &str| Control {
+        value: Some(value.into()),
+        ..Control::new(id, "textbox", label, [Operation::Fill])
+    };
+    let controls = [field("first", "First Name", first), field("last", "Last Name", last), button("Continue")];
+    Observation { document_key: document.into(), ..observation(&controls) }
+}
+
+fn planned(page: &Observation, id: &str) -> crate::policy::Planned {
+    let target = page.controls.iter().find(|control| control.id == id).expect("on the form").clone();
+    crate::policy::Planned { target, probability: 0.9, ahead: IndexMap::new() }
+}
+
+#[tokio::test]
+async fn test_a_plan_fills_each_planned_field_as_its_own_step() {
+    let form = delivery("1", "", "");
+    let page = Scripted::new(
+        form.clone(),
+        vec![
+            (Operation::Fill, StepOutcome::Executed, delivery("1", "Ada", "")),
+            (Operation::Fill, StepOutcome::Executed, delivery("1", "Ada", "Ada")),
+        ],
+    );
+    let page = Arc::new(page);
+    let jev = Typist(&[("source", "task"), ("first", "2"), ("last", "2")]);
+    let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Ship to Ada".into();
+    agent.run_plan(&mut state, &form, &[planned(&form, "first"), planned(&form, "last")]).await.expect("planned");
+    assert!(page.acts.lock().unwrap().is_empty(), "both planned fields were filled");
+    let filled: Vec<_> = state.history.iter().filter_map(|entry| entry.target.clone()).collect();
+    assert_eq!(filled.len(), 2, "{filled:?}");
+}
+
+#[tokio::test]
+async fn test_a_plan_stops_when_the_page_becomes_another_document() {
+    // The plan was judged on one document; a fill that loads another leaves the rest to a full decision there.
+    let form = delivery("1", "", "");
+    let page =
+        Arc::new(Scripted::new(form.clone(), vec![(Operation::Fill, StepOutcome::Executed, delivery("2", "", ""))]));
+    let jev = Typist(&[("source", "task"), ("first", "2"), ("last", "2")]);
+    let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Ship to Ada".into();
+    // A second fill would find no scripted act and fail the test.
+    agent.run_plan(&mut state, &form, &[planned(&form, "first"), planned(&form, "last")]).await.expect("planned");
+    assert!(page.acts.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_a_plan_stops_when_its_next_field_is_rewritten_or_a_modal_opens() {
+    // Same document after the first fill, but the field Jev judged is not the one there now, or sits behind a modal.
+    let relabelled = {
+        let mut page = delivery("1", "Ada", "");
+        page.controls[1].label = "Company".into();
+        page
+    };
+    let behind_modal = Observation { modal: Some("Address check".into()), ..delivery("1", "Ada", "") };
+    for after in [relabelled, behind_modal] {
+        let form = delivery("1", "", "");
+        let page = Arc::new(Scripted::new(form.clone(), vec![(Operation::Fill, StepOutcome::Executed, after)]));
+        let jev = Typist(&[("source", "task"), ("first", "2"), ("last", "2")]);
+        let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.task = "Ship to Ada".into();
+        // A second fill would find no scripted act and fail the test.
+        agent.run_plan(&mut state, &form, &[planned(&form, "first"), planned(&form, "last")]).await.expect("planned");
+        assert!(page.acts.lock().unwrap().is_empty());
+        assert_eq!(state.history.iter().filter(|entry| entry.target.is_some()).count(), 1);
+    }
+}
+
+#[tokio::test]
+async fn test_a_secret_a_modal_is_named_with_is_masked() {
+    let page = Observation { modal: Some("Welcome back, hunter2".into()), ..observation(&[button("Continue")]) };
+    let agent =
+        Agent::new(Arc::new(Scripted::new(page, vec![])), Arc::new(ScriptedJev::new(vec![])), Arc::new(ScriptedLLM));
+    agent.redactor().register("password", "hunter2", None);
+    let observed = agent.observe().await.expect("observed");
+    assert_eq!(observed.modal.as_deref(), Some("Welcome back, •••••••"));
+}
+
+#[tokio::test]
+async fn test_a_plan_stops_at_the_step_limit() {
+    // One step allowed and one taken: the planned fill is a step too, so none is taken.
+    let form = delivery("1", "", "");
+    let page = Arc::new(Scripted::new(form.clone(), vec![]));
+    let jev = Typist(&[("source", "task"), ("first", "2"), ("last", "2")]);
+    let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Ship to Ada".into();
+    state.ledger = Arc::new(Ledger::new(Limits { max_steps: Some(1), ..Limits::default() }));
+    state.ledger.state().steps = 1;
+    let stopped = agent.run_plan(&mut state, &form, &[planned(&form, "first")]).await;
+    assert!(stopped.is_err(), "a planned fill went past the step limit");
+    assert!(state.history.is_empty());
 }

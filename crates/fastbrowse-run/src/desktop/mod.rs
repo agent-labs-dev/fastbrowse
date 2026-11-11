@@ -181,8 +181,9 @@ impl DeskpilotPage {
         Ok(())
     }
 
+    /// Calls an input tool, in hidden mode wherever the connected deskpilot's schema offers it for that tool.
     async fn tool(&self, name: &str, arguments: Value) -> Result<(), ToolError> {
-        self.client.call(name, arguments).await.map(|_| ())
+        self.client.call(name, self.client.hidden(name, arguments)).await.map(|_| ())
     }
 
     async fn dispatch(&self, action: &Action, observation: &Observation) -> Result<Option<String>, ToolError> {
@@ -233,6 +234,19 @@ impl DeskpilotPage {
                     self.tool("click", json!({"window": window, "element": target, "hidden": true})).await?;
                 }
                 self.tool("key", json!({"combo": "Return", "window": window})).await?;
+            }
+            Operation::Press => {
+                let focused = observation
+                    .controls
+                    .iter()
+                    .any(|c| Some(c.id.as_str()) == action.target_id.as_deref() && c.focused == Some(true));
+                if target.is_some() && !focused {
+                    self.tool("click", json!({"window": window, "element": target, "hidden": true})).await?;
+                }
+                let Some(combo) = action.text.as_deref().filter(|combo| !combo.is_empty()) else {
+                    return Ok(Some("press needs a key or key chord".into()));
+                };
+                self.tool("key", json!({"combo": combo, "window": window})).await?;
             }
             Operation::Escape => self.tool("key", json!({"combo": "Escape", "window": window})).await?,
             Operation::Scroll | Operation::ScrollUp => {

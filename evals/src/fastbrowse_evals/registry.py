@@ -38,6 +38,7 @@ BENCHMARKS = {
             "jev-ultrafast",
             "cua-codex",
             "browser-harness",
+            "browser-use-oss",
         ),
         upstream=None,
     ),

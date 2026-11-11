@@ -20,7 +20,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -39,7 +40,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -58,7 +60,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -77,7 +80,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -96,7 +100,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -115,7 +120,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -134,7 +140,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -154,7 +161,8 @@
         ],
         "excluded": {
           "jev-ultrafast": "the task needs login credentials, and it has no way to be given any",
-          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell"
+          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
+          "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
         },
         "expect": "complete",
         "source_fingerprint": "0a0531776e71ff0d",
@@ -171,7 +179,8 @@
         ],
         "excluded": {
           "jev-ultrafast": "the task needs login credentials, and it has no way to be given any",
-          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell"
+          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
+          "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
         },
         "expect": "complete",
         "source_fingerprint": "ba3143609d241af7",
@@ -188,7 +197,8 @@
         ],
         "excluded": {
           "jev-ultrafast": "the task needs login credentials, and it has no way to be given any",
-          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell"
+          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
+          "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
         },
         "expect": "complete",
         "source_fingerprint": "19747c0563957322",
@@ -205,7 +215,8 @@
         ],
         "excluded": {
           "jev-ultrafast": "the task needs login credentials, and it has no way to be given any",
-          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell"
+          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
+          "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
         },
         "expect": "complete",
         "source_fingerprint": "c6b239c9b5bc38a6",
@@ -222,7 +233,8 @@
         ],
         "excluded": {
           "jev-ultrafast": "the task needs login credentials, and it has no way to be given any",
-          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell"
+          "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
+          "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
         },
         "expect": "complete",
         "source_fingerprint": "35b155cc42f41ada",
@@ -239,7 +251,8 @@
           "browser-use": "the task passes only by stopping before an irreversible step it does not authorize, and the hosted Browser Use API takes no authorization setting and no pause, so it cannot be told the step is unauthorized",
           "browser-use-ultrafast": "the task passes only by stopping before an irreversible step it does not authorize, and the hosted Browser Use API takes no authorization setting and no pause, so it cannot be told the step is unauthorized",
           "jev-ultrafast": "the task passes only by stopping before an irreversible step it does not authorize, and it takes no authorization setting and has no way to ask: it only ends done or blocked",
-          "browser-harness": "the task passes only by stopping before an irreversible step it does not authorize, and it takes no authorization setting and has no way to pause"
+          "browser-harness": "the task passes only by stopping before an irreversible step it does not authorize, and it takes no authorization setting and has no way to pause",
+          "browser-use-oss": "the task passes only by stopping before an irreversible step it does not authorize, and it takes no authorization setting and has no way to pause"
         },
         "expect": "needs_confirmation",
         "source_fingerprint": "7c5594cddef5cdc7",
@@ -255,7 +268,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -274,7 +288,8 @@
           "fastbrowse-pool",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {},
         "expect": "complete",
@@ -291,7 +306,8 @@
           "fastbrowse-pool",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {},
         "expect": "complete",
@@ -308,7 +324,8 @@
           "fastbrowse-pool",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {},
         "expect": "complete",
@@ -325,7 +342,8 @@
           "fastbrowse-pool",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {},
         "expect": "complete",
@@ -342,7 +360,8 @@
           "fastbrowse-pool",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {},
         "expect": "complete",
@@ -359,7 +378,8 @@
           "fastbrowse-pool",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {},
         "expect": "complete",
@@ -378,7 +398,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -397,7 +418,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -416,7 +438,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -435,7 +458,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -454,7 +478,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -473,7 +498,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -492,7 +518,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -511,7 +538,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -530,7 +558,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -549,7 +578,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -568,7 +598,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -587,7 +618,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -606,7 +638,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -625,7 +658,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -644,7 +678,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -663,7 +698,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -682,7 +718,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -701,7 +738,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -720,7 +758,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -739,7 +778,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -758,7 +798,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -777,7 +818,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -798,7 +840,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -817,7 +860,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -836,7 +880,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -855,7 +900,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -874,7 +920,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -893,7 +940,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -912,7 +960,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -931,7 +980,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -950,7 +1000,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -969,7 +1020,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -988,7 +1040,8 @@
           "fastbrowse-hosted",
           "cua-codex",
           "browser-harness",
-          "browser-use-ultrafast"
+          "browser-use-ultrafast",
+          "browser-use-oss"
         ],
         "excluded": {
           "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
@@ -1016,7 +1069,7 @@
       "default": false
     },
     "jev-ultrafast": {
-      "pin": "jev-ultrafast commit 1231850a0bf1a0c0341fe408ef1668dbbfdfac46",
+      "pin": "jev-ultrafast commit cf3c406f0fc4becff8986ed4d4d37b7b9f102e45",
       "tier": "A",
       "default": true
     },
@@ -1031,17 +1084,17 @@
       "default": true
     },
     "browser-use-oss": {
-      "pin": "browser-use==0.13.10",
+      "pin": "browser-use==1.0.2; default model bu-fast, default mode (ultrafast on bu-fast)",
       "tier": "A",
       "default": false
     },
     "cua-codex": {
-      "pin": "cua-driver==0.34.0; codex-cli==0.160.1",
+      "pin": "cua-driver==0.46.1; codex-cli==0.167.1",
       "tier": "local",
       "default": false
     },
     "browser-harness": {
-      "pin": "browser-harness==0.1.13; codex-cli==0.163.0; cli+skill",
+      "pin": "browser-harness==0.1.13; codex-cli==0.167.1; cli+skill",
       "tier": "A",
       "default": false
     }

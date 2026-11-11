@@ -108,7 +108,8 @@ const ops = {
     };
     runs.set(conn, run);
     updateBadge();
-    return { protocol: PROTOCOL, ...(await identity()) };
+    // The methods it relays, so a run that needs one this copy predates fails before it starts instead of mid-task.
+    return { protocol: PROTOCOL, methods: [...(await allowedMethods())], ...(await identity()) };
   },
   async ping() {
     return {};
