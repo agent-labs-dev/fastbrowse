@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -193,3 +194,20 @@ async def test_official_failed_open_is_retried_never_an_agent_failure(
 def test_agent_seconds_leave_out_browser_calls_and_stay_unmeasured_without_them() -> None:
     assert live.agent_seconds(7.7, 5.02) == 2.68
     assert live.agent_seconds(7.7, None) is None
+
+
+async def test_teardown_after_the_run_phase_is_off_the_agents_clock() -> None:
+    """Encoding a recording runs inside `run_task` after the agent answered (#951): the clock stops where the trace's
+    run phase ended, not when `run_task` returned."""
+    async with AttemptClock(bounded=False) as clock:
+        began = session_ready()
+        await asyncio.sleep(0.02)
+        events: list[object] = [
+            {"event": "phase", "phase": "open", "began": began, "ended": began + 0.005},
+            {"event": "phase", "phase": "run", "began": began, "ended": time.monotonic()},
+        ]
+        await asyncio.sleep(0.05)  # the encode
+        ended = session_answered(live.run_ended_at(events))
+    assert clock.seconds() == pytest.approx(ended - began)
+    assert clock.seconds() < 0.045
+    assert live.run_ended_at([{"event": "phase", "phase": "open", "ended": 1.0}]) is None

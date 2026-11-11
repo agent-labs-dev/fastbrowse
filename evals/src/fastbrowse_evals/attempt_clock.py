@@ -150,9 +150,10 @@ def setup_seconds() -> float:
     return 0.0 if clock is None else clock.opened
 
 
-def session_answered() -> float:
-    """Mark the attempt's final answer in, and return the moment."""
-    at = time.monotonic()
+def session_answered(at: float | None = None) -> float:
+    """Mark the attempt's final answer in, at `at` on `time.monotonic()` when the agent reported when it answered, or
+    now, and return the moment."""
+    at = time.monotonic() if at is None else at
     if (clock := _current.get()) is not None:
         clock.answered(at)
     return at
