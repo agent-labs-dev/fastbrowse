@@ -1029,6 +1029,36 @@ async fn test_a_field_under_a_band_is_filled_and_submitted_from_the_keyboard() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_key_chord_dispatches_its_modifier_and_dom_key() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = '<textarea aria-label=Editor>one</textarea>'; const editor = document.querySelector('textarea'); \
+         window.keys = []; editor.addEventListener('keydown', e => window.keys.push({key:e.key, code:e.code, ctrl:e.ctrlKey}), true); true",
+    )
+    .await;
+    let before = h.observe().await;
+    let editor = find(&before, "Editor");
+    let press =
+        Action { target_id: Some(editor.id.clone()), text: Some("ctrl+End".into()), ..Action::new(Operation::Press) };
+    let result = h.page.act(&press, &before).await.expect("press");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+    let after = h.observe().await;
+    let enter = h.page.act(&action(Operation::Enter, find(&after, "Editor")), &after).await.expect("enter");
+    assert_eq!(enter.outcome, StepOutcome::Executed, "{enter:?}");
+    assert_eq!(
+        eval_active(&h.page, "window.keys").await,
+        json!([
+            {"key":"End","code":"End","ctrl":true},
+            {"key":"Enter","code":"Enter","ctrl":false}
+        ])
+    );
+    assert_eq!(eval_active(&h.page, "document.querySelector('textarea').value").await, json!("one\n"));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_fixed_cover_the_page_means_to_be_answered_is_still_reported() {
     // Only a band floating over the page is routed around. A dialog asks its question first, an open menu or
     // popover is the page's to close, and a cover over the whole window shows something other than the control, so

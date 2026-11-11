@@ -88,11 +88,15 @@ runs on that click as on any other.
 ## One request a step
 
 All questions in a request see the same state, so what the agent would otherwise ask after a decision goes with it:
-for each offered control, which words a text field takes. Only the chosen target's answers are used. Whether a press
+for each offered control, which words a text field takes or which task text supplies a key chord. Only the chosen target's answers are used. Whether a press
 commits anything, and whether the task asked for that on an authorized run, stay follow-ups that see only the task, the
 address and the page's title: the page's own text is what would argue a harmful action is harmless. The smallest go first, and only while the
 request stays under the 32,000 bytes where OpenRouter switches to long-context mode, and none go with a screenshot,
 which is in that mode already. Those left out stay follow-ups.
+
+An editable field can offer `press` beside `fill`. Jev chooses the source and first word of a chord from the task,
+using the same span choices as a fill value. The page cannot provide the chord. A chord that includes Enter or can
+submit or save is sent through the action and authorization checks before the browser receives it.
 
 ## Provider failover
 

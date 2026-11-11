@@ -57,7 +57,7 @@ impl Replay {
             None => None,
         };
         self.pending = Some(index);
-        if step.operation == Operation::Fill
+        if matches!(step.operation, Operation::Fill | Operation::Press)
             && target.as_ref().and_then(|target| self.text_for(target, missing(target))).is_none()
         {
             self.pending.take();
@@ -92,7 +92,7 @@ impl Replay {
             return;
         }
         if self.matching_step(url, offered, decision).is_some() {
-            if decision.operation == Operation::Fill
+            if matches!(decision.operation, Operation::Fill | Operation::Press)
                 && decision.target.as_ref().and_then(|target| self.text_for(target, missing)).is_none()
             {
                 self.pending.take();
@@ -260,6 +260,15 @@ pub(crate) fn step_of(
                 }
             }
         },
+        Operation::Press => {
+            let typed = action.text.as_deref().unwrap_or_default();
+            if reveals(typed) {
+                replay = false;
+                None
+            } else {
+                Some(RecipeText::Literal(typed.to_string()))
+            }
+        }
         _ => None,
     };
     Some(RecipeStep {

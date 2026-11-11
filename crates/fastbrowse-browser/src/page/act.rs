@@ -53,21 +53,164 @@ pub(crate) enum Point {
 }
 
 /// A key an action presses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Key {
     Enter,
     Escape,
     Space,
+    Chord { modifiers: i64, key: String },
 }
 
 impl Key {
-    /// Its CDP key name, its code, the text it types and its Windows virtual key code.
-    fn cdp(self) -> (&'static str, &'static str, &'static str, i64) {
-        match self {
-            Self::Enter => ("Enter", "Enter", "\r", 13),
-            Self::Escape => ("Escape", "Escape", "", 27),
-            Self::Space => (" ", "Space", " ", 32),
+    /// Parse the modifier and key values published by W3C UI Events, which browsers expose as DOM keyboard events.
+    fn chord(value: &str) -> Result<Self, BrowserError> {
+        let mut modifiers = 0;
+        let mut key = None;
+        for part in value.split('+').map(str::trim) {
+            if part.is_empty() {
+                return Err(BrowserError::Failed("a key chord contains an empty part".into()));
+            }
+            let lower = part.to_ascii_lowercase();
+            let bit = match lower.as_str() {
+                "alt" => Some(1),
+                "ctrl" | "control" => Some(2),
+                "meta" | "cmd" | "command" => Some(4),
+                "shift" => Some(8),
+                _ => None,
+            };
+            if let Some(bit) = bit {
+                if modifiers & bit != 0 {
+                    return Err(BrowserError::Failed("a key chord repeats a modifier".into()));
+                }
+                modifiers |= bit;
+            } else if key
+                .replace(
+                    Self::standard_key(part)
+                        .ok_or_else(|| BrowserError::Failed(format!("{part:?} is not a W3C UI Events key value")))?
+                        .to_string(),
+                )
+                .is_some()
+            {
+                return Err(BrowserError::Failed("a key chord has more than one non-modifier key".into()));
+            }
         }
+        let Some(key) = key else { return Err(BrowserError::Failed("a key chord has no key".into())) };
+        Ok(Self::Chord { modifiers, key })
+    }
+
+    fn standard_key(value: &str) -> Option<&str> {
+        let canonical = match value.to_ascii_lowercase().as_str() {
+            "space" => " ",
+            "enter" => "Enter",
+            "escape" => "Escape",
+            "backspace" => "Backspace",
+            "tab" => "Tab",
+            "delete" => "Delete",
+            "end" => "End",
+            "home" => "Home",
+            "insert" => "Insert",
+            "pagedown" => "PageDown",
+            "pageup" => "PageUp",
+            "arrowdown" => "ArrowDown",
+            "arrowleft" => "ArrowLeft",
+            "arrowright" => "ArrowRight",
+            "arrowup" => "ArrowUp",
+            "capslock" => "CapsLock",
+            "clear" => "Clear",
+            "contextmenu" => "ContextMenu",
+            "numlock" => "NumLock",
+            "pause" => "Pause",
+            "scrolllock" => "ScrollLock",
+            "select" => "Select",
+            "f1" => "F1",
+            "f2" => "F2",
+            "f3" => "F3",
+            "f4" => "F4",
+            "f5" => "F5",
+            "f6" => "F6",
+            "f7" => "F7",
+            "f8" => "F8",
+            "f9" => "F9",
+            "f10" => "F10",
+            "f11" => "F11",
+            "f12" => "F12",
+            "f13" => "F13",
+            "f14" => "F14",
+            "f15" => "F15",
+            "f16" => "F16",
+            "f17" => "F17",
+            "f18" => "F18",
+            "f19" => "F19",
+            "f20" => "F20",
+            "f21" => "F21",
+            "f22" => "F22",
+            "f23" => "F23",
+            "f24" => "F24",
+            "altgraph" => "AltGraph",
+            "dead" => "Dead",
+            "unidentified" => "Unidentified",
+            _ if value.chars().count() == 1 => value,
+            _ => return None,
+        };
+        Some(canonical)
+    }
+
+    /// Its DOM key, code, text and optional Windows virtual key code, plus the CDP modifier bitmask.
+    fn cdp(&self) -> (String, String, String, Option<i64>, i64) {
+        let (key, modifiers) = match self {
+            Self::Enter => ("Enter", 0),
+            Self::Escape => ("Escape", 0),
+            Self::Space => (" ", 0),
+            Self::Chord { modifiers, key } => (key.as_str(), *modifiers),
+        };
+        let (code, virtual_key) = match key {
+            "Enter" => ("Enter", Some(13)),
+            "Escape" => ("Escape", Some(27)),
+            " " => ("Space", Some(32)),
+            "Backspace" => ("Backspace", Some(8)),
+            "Tab" => ("Tab", Some(9)),
+            "Delete" => ("Delete", Some(46)),
+            "End" => ("End", Some(35)),
+            "Home" => ("Home", Some(36)),
+            "Insert" => ("Insert", Some(45)),
+            "PageDown" => ("PageDown", Some(34)),
+            "PageUp" => ("PageUp", Some(33)),
+            "ArrowDown" => ("ArrowDown", Some(40)),
+            "ArrowLeft" => ("ArrowLeft", Some(37)),
+            "ArrowRight" => ("ArrowRight", Some(39)),
+            "ArrowUp" => ("ArrowUp", Some(38)),
+            value if value.len() == 1 && value.as_bytes()[0].is_ascii_alphabetic() => {
+                let upper = value.to_ascii_uppercase();
+                return (
+                    key.to_string(),
+                    format!("Key{upper}"),
+                    if modifiers == 0 { key.to_string() } else { String::new() },
+                    Some(value.to_ascii_uppercase().as_bytes()[0] as i64),
+                    modifiers,
+                );
+            }
+            value if value.len() == 1 && value.as_bytes()[0].is_ascii_digit() => {
+                return (
+                    key.to_string(),
+                    format!("Digit{value}"),
+                    if modifiers == 0 { key.to_string() } else { String::new() },
+                    Some(value.as_bytes()[0] as i64),
+                    modifiers,
+                );
+            }
+            value => (value, None),
+        };
+        let text = if modifiers != 0 {
+            String::new()
+        } else {
+            match key {
+                "Enter" => "\r".into(),
+                " " => " ".into(),
+                value if value.chars().count() == 1 => value.to_string(),
+                _ => String::new(),
+            }
+        };
+        (key.to_string(), code.to_string(), text, virtual_key, modifiers)
     }
 }
 
@@ -296,7 +439,7 @@ impl CdpPage {
             self.until_dialog(self.await_popup(&target.0, target.2)).await;
         }
         let mut changed = self.changed_since(&before_fingerprint, requests).await?;
-        if matches!(action.operation, Operation::Click | Operation::Enter)
+        if matches!(action.operation, Operation::Click | Operation::Enter | Operation::Press)
             && self.session.follow_popup(&popups, opens || self.session.window_opens() != window_opens).await?.is_some()
         {
             return Ok(ActResult {
@@ -460,6 +603,7 @@ impl CdpPage {
             }
             Operation::Select => self.select(target, text, point).await,
             Operation::Enter => self.key(target, Key::Enter, point).await,
+            Operation::Press => self.key(target, Key::chord(text)?, point).await,
             Operation::Drag => self.drag(target, point, action.destination_id.as_deref()).await,
             Operation::Escape => self.key(None, Key::Escape, Point::Gone).await,
             Operation::Scroll | Operation::ScrollUp => {
@@ -1068,11 +1212,16 @@ impl CdpPage {
     }
 
     async fn press_key(&self, session_id: &str, key: Key) -> Result<(), BrowserError> {
-        let (key, code, text, virtual_key) = key.cdp();
-        let down =
-            json!({"type": "keyDown", "key": key, "code": code, "text": text, "windowsVirtualKeyCode": virtual_key});
+        let (key, code, text, virtual_key, modifiers) = key.cdp();
+        let mut down = json!({"type": "keyDown", "key": key, "code": code, "text": text, "modifiers": modifiers});
+        if let Some(virtual_key) = virtual_key {
+            down["windowsVirtualKeyCode"] = virtual_key.into();
+        }
         self.input(self.session.send("Input.dispatchKeyEvent", down, Some(session_id))).await?;
-        let up = json!({"type": "keyUp", "key": key, "code": code, "windowsVirtualKeyCode": virtual_key});
+        let mut up = json!({"type": "keyUp", "key": key, "code": code, "modifiers": modifiers});
+        if let Some(virtual_key) = virtual_key {
+            up["windowsVirtualKeyCode"] = virtual_key.into();
+        }
         self.input(self.session.send("Input.dispatchKeyEvent", up, Some(session_id))).await
     }
 

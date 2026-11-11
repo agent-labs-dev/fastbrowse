@@ -21,6 +21,7 @@ pub const REPLAYABLE: &[Operation] = &[
     Operation::Click,
     Operation::Enter,
     Operation::Fill,
+    Operation::Press,
     Operation::Hover,
     Operation::Scroll,
     Operation::ScrollUp,
@@ -66,7 +67,7 @@ pub struct RecipeTarget {
     pub frame_origin: Option<String>,
 }
 
-/// Where a fill's text comes from: typed as written, a caller input by name, or a stored secret by name.
+/// Where a fill or press value comes from: typed as written, a caller input by name, or a stored secret by name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum RecipeText {
@@ -227,7 +228,7 @@ impl RecipeStep {
         self.replay
             && REPLAYABLE.contains(&self.operation)
             && (!self.operation.is_targeted() || self.target.is_some())
-            && (self.operation != Operation::Fill
+            && (!matches!(self.operation, Operation::Fill | Operation::Press)
                 || self.text.as_ref().is_some_and(|text| !matches!(text, RecipeText::Live)))
     }
 }

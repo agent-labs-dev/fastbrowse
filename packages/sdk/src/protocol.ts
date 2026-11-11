@@ -11,6 +11,7 @@ export type Operation =
   | 'hover'
   | 'drag'
   | 'fill'
+  | 'press'
   | 'blur'
   | 'select'
   | 'enter'

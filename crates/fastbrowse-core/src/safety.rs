@@ -18,7 +18,7 @@ use crate::page::Control;
 use crate::py::json::write_string;
 use crate::py::text;
 
-/// Whether Jev is asked before this dispatches: every click, drag and Enter.
+/// Whether Jev is asked before this dispatches: every click, drag, Enter and key chord.
 ///
 /// Whether a click commits is a judgment about the page, so Jev makes it rather than a word list. A list of committing
 /// labels is never complete ("Place your order", "Yes, I'm sure"), and a link commits as easily as a button: a
@@ -27,8 +27,8 @@ pub fn may_be_irreversible(operation: Operation) -> bool {
     match operation {
         Operation::Click | Operation::Drag => true,
         // Not only a form's Enter: a chat, comment or DM box sends on Enter through its own script, with no form for
-        // the page to describe.
-        Operation::Enter => true,
+        // the page to describe, and a key chord can trigger the same opaque handler without a reliable chord list.
+        Operation::Enter | Operation::Press => true,
         // A dialog's accept and a caller's address are asked about where they are handled; the rest change nothing
         // off the page. A blur is classified as the fill it follows is: both run only the page's own field handlers,
         // and the page text cannot say which of those handlers sends something.
@@ -69,7 +69,8 @@ fn describe_control(
         }
     }
     if let Some(semantics) = control.submit_semantics.as_deref().filter(|s| !s.is_empty())
-        && (operation == Operation::Enter || (operation == Operation::Click && control.role == "button"))
+        && (matches!(operation, Operation::Enter | Operation::Press)
+            || (operation == Operation::Click && control.role == "button"))
     {
         instructions.push_str(&format!("The action submits this form: {semantics}\n"));
     }
@@ -79,7 +80,7 @@ fn describe_control(
     {
         instructions.push_str(&format!("It is a link to {href}\n"));
     }
-    if operation == Operation::Enter
+    if matches!(operation, Operation::Enter | Operation::Press)
         && !control.sensitive
         && let Some(value) = control.value.as_deref().filter(|value| !value.is_empty())
     {
@@ -431,7 +432,7 @@ pub fn sets_new_password(controls: &[Control], field: &Control) -> Option<bool> 
 /// more than one password field. A link or a field's focus never is.
 pub fn changes_credentials(controls: &[Control], target: &Control, operation: Operation) -> bool {
     let submits = match operation {
-        Operation::Enter => true,
+        Operation::Enter | Operation::Press => true,
         Operation::Click => target.role == "button" && target.href.as_deref().is_none_or(str::is_empty),
         _ => false,
     };
@@ -812,6 +813,7 @@ mod tests {
         assert!(may_be_irreversible(Operation::Drag));
         // A message box with no form sends on Enter through the page's own script.
         assert!(may_be_irreversible(Operation::Enter));
+        assert!(may_be_irreversible(Operation::Press));
         assert!(!may_be_irreversible(Operation::Fill));
         assert!(!may_be_irreversible(Operation::Navigate));
     }

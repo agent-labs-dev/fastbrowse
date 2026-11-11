@@ -77,6 +77,7 @@ pub fn operation_label(operation: Operation) -> &'static str {
         Operation::Hover => "Hover over an element to reveal content the page shows only under the pointer.",
         Operation::Drag => "Drag one element and drop it onto another, to move, reorder or file it.",
         Operation::Fill => "Put the value the task needs into an editable field, typing or replacing its text.",
+        Operation::Press => "Press the key or key chord the task gives in an editable field.",
         Operation::Blur => {
             "Move keyboard focus out of the focused editable field without activating or submitting anything, so the page runs what it does when a field is left."
         }
@@ -855,6 +856,14 @@ fn index_controls(controls: &[Control], context: &StepContext) -> IndexMap<Opera
         {
             indexed.entry(Operation::Blur).or_default().push(control.clone());
         }
+        if control.operations.contains(&Operation::Fill)
+            && !context
+                .withheld_targets
+                .iter()
+                .any(|(operation, id)| *operation == Operation::Press && id == &control.id)
+        {
+            indexed.entry(Operation::Press).or_default().push(control.clone());
+        }
     }
     indexed
 }
@@ -880,6 +889,7 @@ fn offered_operations(
             | Operation::Blur
             | Operation::Select
             | Operation::Enter
+            | Operation::Press
             | Operation::Drag => indexed.contains_key(operation),
             Operation::Upload => context.has_attachments && indexed.contains_key(operation),
             Operation::SwitchTab => observation.tabs.len() > 1,
@@ -1391,6 +1401,9 @@ fn target_element(control: &Control, operation: Operation) -> Map<String, Value>
             }
             Operation::Enter => {
                 element.insert("label".into(), format!("Press Enter in {label}").into());
+            }
+            Operation::Press => {
+                element.insert("label".into(), format!("Press a task-supplied key in {label}").into());
             }
             _ => {}
         }

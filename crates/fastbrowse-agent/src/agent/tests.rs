@@ -1538,7 +1538,7 @@ async fn test_a_done_with_a_step_of_the_task_undone_is_not_complete() {
 
     let result = agent.finish(&mut state, &observation(&[]), None, None).await;
     assert!(
-        matches!(&result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("has not been done")))
+        matches!(&result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("enter the code the Phone page shows")))
     );
     {
         let asked = jev.3.lock().unwrap();
@@ -1548,7 +1548,11 @@ async fn test_a_done_with_a_step_of_the_task_undone_is_not_complete() {
     let ledger = state.ledger.clone();
     let stopped = agent.stopped(result.unwrap_err(), Some(&mut state), &ledger).await;
     let answer = stopped.answer.expect("what was read is answered");
-    assert!(answer.starts_with(super::finishing::UNDONE) && answer.contains("katherine@example.com"), "{answer}");
+    assert!(
+        answer.contains("Sign in, enter the code the Phone page shows, then tell me your account email.")
+            && answer.contains("katherine@example.com"),
+        "{answer}"
+    );
 }
 
 /// Asked to start a demo and report the text it loads, a run's click on Start was covered, and it read the page's
@@ -1575,7 +1579,7 @@ async fn test_a_done_after_a_step_that_was_not_carried_out_checks_the_task_steps
 
     let result = agent.finish(&mut state, &observation(&[]), None, None).await;
     assert!(
-        matches!(&result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("has not been done"))),
+        matches!(&result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("task step"))),
         "{result:?}"
     );
 }
@@ -1616,8 +1620,13 @@ async fn test_the_done_check_asks_no_choice() {
         let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, pick));
         let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev.clone(), Arc::new(ScriptedLLM));
         let answer = agent.actions_done(&mut state, &page).await.unwrap();
-        assert_eq!(format!("{answer:?}"), carried);
-        assert!(jev.4.lock().unwrap().is_empty());
+        let debug = format!("{answer:?}");
+        assert!(debug == carried || (pick == "undone" && debug.starts_with("Undone(")), "{debug}");
+        if pick == "undone" {
+            assert_eq!(jev.4.lock().unwrap().len(), 1);
+        } else {
+            assert!(jev.4.lock().unwrap().is_empty());
+        }
     }
 }
 
@@ -1629,19 +1638,20 @@ async fn test_the_done_check_is_told_what_was_typed_and_never_sent() {
     state.history.push(typed_into("Reference"));
     let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "undone"));
     let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev.clone(), Arc::new(ScriptedLLM));
-    assert!(matches!(agent.actions_done(&mut state, &page).await.unwrap(), Carried::Undone));
+    assert!(matches!(agent.actions_done(&mut state, &page).await.unwrap(), Carried::Undone(_)));
     let facts = jev.3.lock().unwrap()[0]["page_facts"].to_string();
     assert!(facts.contains("No action has sent what was typed"), "{facts}");
     // A field left empty is named only once the run stalled on a task to carry out, as the step decision names it:
     // a run that did act is not told an unrelated empty search box is unfinished work.
     let page = observation(&[holding("Reference", "REF-1"), holding("Note", "")]);
     state.output_intent = super::state::OutputIntent::CarriedOut;
-    assert!(matches!(agent.actions_done(&mut state, &page).await.unwrap(), Carried::Undone));
+    assert!(matches!(agent.actions_done(&mut state, &page).await.unwrap(), Carried::Undone(_)));
     state.to_carry_out = true;
-    assert!(matches!(agent.actions_done(&mut state, &page).await.unwrap(), Carried::Undone));
+    assert!(matches!(agent.actions_done(&mut state, &page).await.unwrap(), Carried::Undone(_)));
     let asked = jev.3.lock().unwrap();
     assert!(!asked[1]["page_facts"].to_string().contains("'Note'"), "{}", asked[1]);
-    assert!(asked[2]["page_facts"].to_string().contains("'Note'"), "{}", asked[2]);
+    assert!(!asked[2]["page_facts"].to_string().contains("'Note'"), "{}", asked[2]);
+    assert!(asked[4]["page_facts"].to_string().contains("'Note'"), "{}", asked[4]);
 }
 
 /// `DoneCheckJev`, judging that no answer gives every requested fact.
@@ -3602,7 +3612,7 @@ impl DecisionClient for JudgesCarried {
 /// navigation leaves an answer that holds whole when the task asks only to be told.
 #[tokio::test]
 async fn test_a_stuck_run_whose_answer_passes_every_check_answers_the_task() {
-    let stopped = |intent, undone, acted: Option<bool>| async move {
+    let stopped = |intent, undone: Option<String>, acted: Option<bool>| async move {
         let jev = Arc::new(JudgesCarried(acted.unwrap_or(true)));
         let agent = Agent::new(Arc::new(NoPage), jev, Arc::new(WritesRecord("Record B: 34")));
         let mut state = run_state();
@@ -3620,17 +3630,17 @@ async fn test_a_stuck_run_whose_answer_passes_every_check_answers_the_task() {
         agent.stopped(stop, Some(&mut state), &ledger).await
     };
     let text = super::state::OutputIntent::Text;
-    let told = stopped(text, false, None).await;
+    let told = stopped(text, None, None).await;
     assert_eq!((told.status, told.error.as_deref()), (Status::Complete, None));
     assert!(told.answer.unwrap_or_default().starts_with("Record B: 34 [1]"));
     // A task that asks for something done is not done because what was read holds.
-    let carried = stopped(super::state::OutputIntent::CarriedOut, false, None).await;
+    let carried = stopped(super::state::OutputIntent::CarriedOut, None, None).await;
     assert_eq!(carried.status, Status::Stuck);
     // Nor is a task that asks to be told after a step: a finish check that found a step undone, or a run that acted
     // and whose steps the finish check's question finds not carried out, stays stuck. Steps judged carried answer.
-    assert_eq!(stopped(text, true, None).await.status, Status::Stuck);
-    assert_eq!(stopped(text, false, Some(false)).await.status, Status::Stuck);
-    assert_eq!(stopped(text, false, Some(true)).await.status, Status::Complete);
+    assert_eq!(stopped(text, Some("Submit the form.".into()), None).await.status, Status::Stuck);
+    assert_eq!(stopped(text, None, Some(false)).await.status, Status::Stuck);
+    assert_eq!(stopped(text, None, Some(true)).await.status, Status::Complete);
 }
 
 #[test]

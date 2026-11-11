@@ -234,6 +234,19 @@ impl DeskpilotPage {
                 }
                 self.tool("key", json!({"combo": "Return", "window": window})).await?;
             }
+            Operation::Press => {
+                let focused = observation
+                    .controls
+                    .iter()
+                    .any(|c| Some(c.id.as_str()) == action.target_id.as_deref() && c.focused == Some(true));
+                if target.is_some() && !focused {
+                    self.tool("click", json!({"window": window, "element": target, "hidden": true})).await?;
+                }
+                let Some(combo) = action.text.as_deref().filter(|combo| !combo.is_empty()) else {
+                    return Ok(Some("press needs a key or key chord".into()));
+                };
+                self.tool("key", json!({"combo": combo, "window": window})).await?;
+            }
             Operation::Escape => self.tool("key", json!({"combo": "Escape", "window": window})).await?,
             Operation::Scroll | Operation::ScrollUp => {
                 // The root is the window itself, so with no target the scroll lands in its middle.

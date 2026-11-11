@@ -74,6 +74,10 @@ pub(super) fn withhold(offered: &mut Observation, context: &mut StepContext, pro
                         context.withheld_targets.push((operation, control.id.clone()));
                         left_out = true;
                     }
+                    if operation == Operation::Press && control.operations.contains(&Operation::Fill) {
+                        context.withheld_targets.push((operation, control.id.clone()));
+                        left_out = true;
+                    }
                     left_out |= control.operations.remove(&operation);
                 }
                 offered.controls.retain(|control| !control.operations.is_empty());

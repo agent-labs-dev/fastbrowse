@@ -25,7 +25,7 @@ use super::helpers::{caller_link, describe, dialog_question, empty_fields_fact, 
 use super::state::{Extent, Flow, OutputIntent, RunState, SignInNeeds, Step, Stop, Unsure};
 use crate::memory::Notes;
 use crate::policy::{Ahead, Decision, HistoryEntry};
-use crate::retrieval::text::{Word, edge_options, words};
+use crate::retrieval::text::{SpanKind, Word, edge_options, spans, words};
 use crate::verification::page_state;
 use crate::writing::write_value;
 
@@ -226,10 +226,10 @@ fn gate_questions(
 }
 
 /// The finish check's answer about the steps the task asks to be carried out.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Carried {
     Done,
-    Undone,
+    Undone(String),
     /// Not carried out, and the page or the recent actions show the site does not allow it.
     Refused,
 }
@@ -297,6 +297,16 @@ impl Agent {
                 }
                 self.gate_irreversible(state, observation, decision).await?;
                 Ok(Action { target_id: target.map(|t| t.id.clone()), ..Action::new(decision.operation) })
+            }
+            Operation::Press => {
+                let target = require(target)?;
+                if self.page.over_http() {
+                    let reason = format!("{} can only receive a key press in a browser", text::repr(&target.label));
+                    return Err(self.page.needs_browser(reason).into());
+                }
+                let chord = self.task_text(state, observation, decision, target).await?;
+                self.gate_irreversible(state, observation, decision).await?;
+                Ok(Action { target_id: Some(target.id.clone()), text: Some(chord), ..Action::new(Operation::Press) })
             }
             Operation::Drag => {
                 let Some(destination) = &decision.destination else {
@@ -796,6 +806,28 @@ impl Agent {
         decision: &Decision,
         target: &Control,
     ) -> Step<String> {
+        self.text_with_scope(state, observation, decision, target, false).await
+    }
+
+    /// A key chord is copied only from the task, using the same source and word selections as a field value.
+    async fn task_text(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        decision: &Decision,
+        target: &Control,
+    ) -> Step<String> {
+        self.text_with_scope(state, observation, decision, target, true).await
+    }
+
+    async fn text_with_scope(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        decision: &Decision,
+        target: &Control,
+        task_only: bool,
+    ) -> Step<String> {
         let origin = self.target_origin(target);
         state.text_source = Some(RecipeText::Live);
         let missing = state.missing.contains(&(observation.url.clone(), target.label.clone(), target.context.clone()));
@@ -828,11 +860,14 @@ impl Agent {
                 RecipeText::Live => {}
             }
         }
-        if is_password(target) {
+        if is_password(target) && !task_only {
             let secrets = self.secret_names(&origin);
             return self.sensitive_text(state, observation, target, secrets, &origin).await;
         }
-        let Value { mut task, read, label, group, sources, source_question } = self.value(state, target);
+        let Value { mut task, read, label, group, mut sources, source_question } = self.value(state, target);
+        if task_only {
+            sources.retain(|source, _| source == IN_TASK);
+        }
         let (mut begins, mut ends) = self.located(state, observation, &task, &label, group).await?;
         let asked =
             value_questions(state, target, (&task, "the task"), &label, (&begins, &ends), source_question, sources);
@@ -1551,7 +1586,26 @@ impl Agent {
         } else if holds("refused")? {
             Carried::Refused
         } else {
-            Carried::Undone
+            let steps = spans(&state.task, SpanKind::Str);
+            let criteria = steps
+                .iter()
+                .enumerate()
+                .map(|(index, (_, _, step))| (index.to_string(), JsonValue::from(step.clone())))
+                .collect();
+            let picked = self
+                .ask_choice(
+                    state,
+                    observation,
+                    "Which sentence or clause of the task has not been carried out? Choose the task's own wording.",
+                    criteria,
+                )
+                .await?;
+            let index =
+                picked.parse::<usize>().map_err(|_| DecisionError::Failed("expected an undone task step".into()))?;
+            let Some((_, _, step)) = steps.get(index) else {
+                return Err(DecisionError::Failed("expected an undone task step".into()).into());
+            };
+            Carried::Undone(step.clone())
         })
     }
 

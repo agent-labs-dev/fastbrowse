@@ -505,7 +505,7 @@ impl Agent {
                         _ => false,
                     } && composed.problem.is_none()
                         && !state.refused
-                        && !state.undone;
+                        && state.undone.is_none();
                     // A task asking to be told can also ask for steps, such as setting a field and then reporting it,
                     // and a run stuck before any finish check judged its steps may have left one undone: that check's
                     // own question decides, asked of the last page.
@@ -658,8 +658,13 @@ impl Agent {
         error: Option<String>,
         budget: Option<BudgetStop>,
     ) -> RunResult {
-        let undone = (status != Status::Complete && state.is_some_and(|state| state.undone))
-            .then(|| noticed(finishing::UNDONE, partial.clone()));
+        let undone = (status != Status::Complete)
+            .then(|| {
+                state
+                    .and_then(|state| state.undone.as_deref())
+                    .map(|step| noticed(&finishing::undone_notice(step), partial.clone()))
+            })
+            .flatten();
         let partial = undone.as_ref().unwrap_or(partial);
         let cited =
             notes.expand_evidence_ids(partial.claims.iter().flat_map(|c| c.evidence_ids.iter().map(String::as_str)));
