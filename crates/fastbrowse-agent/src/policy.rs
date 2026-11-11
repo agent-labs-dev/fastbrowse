@@ -840,6 +840,13 @@ async fn shortlist(
     Ok(Some((kept(low), paid, used)))
 }
 
+/// Whether `control` takes `operation`. A field that takes a fill also takes a key press: observation lists only fill,
+/// and the key a press sends is copied from the task.
+pub fn takes(control: &Control, operation: Operation) -> bool {
+    control.operations.contains(&operation)
+        || (operation == Operation::Press && control.operations.contains(&Operation::Fill))
+}
+
 /// The controls each operation can target. Leaving a field is offered from what the browser reports, never from a
 /// control's own list.
 fn index_controls(controls: &[Control], context: &StepContext) -> IndexMap<Operation, Vec<Control>> {
@@ -856,7 +863,7 @@ fn index_controls(controls: &[Control], context: &StepContext) -> IndexMap<Opera
         {
             indexed.entry(Operation::Blur).or_default().push(control.clone());
         }
-        if control.operations.contains(&Operation::Fill)
+        if takes(control, Operation::Press)
             && !context
                 .withheld_targets
                 .iter()

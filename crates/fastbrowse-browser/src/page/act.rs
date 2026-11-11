@@ -116,40 +116,39 @@ enum Key {
 }
 
 impl Key {
-    /// Parse the modifier and key values published by W3C UI Events, which browsers expose as DOM keyboard events.
+    /// Parse the modifier and key values published by W3C UI Events, which browsers expose as DOM keyboard events. A
+    /// chord is any modifiers, each followed by `+`, then one key, so the key itself may be `+`.
     fn chord(value: &str) -> Result<Self, BrowserError> {
         let mut modifiers = 0;
-        let mut key = None;
-        for part in value.split('+').map(str::trim) {
-            if part.is_empty() {
-                return Err(BrowserError::Failed("a key chord contains an empty part".into()));
+        let mut rest = value.trim();
+        while let Some((head, tail)) = rest.split_once('+')
+            && !tail.trim().is_empty()
+            && let Some(bit) = Self::modifier(head.trim())
+        {
+            if modifiers & bit != 0 {
+                return Err(BrowserError::Failed("a key chord repeats a modifier".into()));
             }
-            let lower = part.to_ascii_lowercase();
-            let bit = match lower.as_str() {
-                "alt" => Some(1),
-                "ctrl" | "control" => Some(2),
-                "meta" | "cmd" | "command" => Some(4),
-                "shift" => Some(8),
-                _ => None,
-            };
-            if let Some(bit) = bit {
-                if modifiers & bit != 0 {
-                    return Err(BrowserError::Failed("a key chord repeats a modifier".into()));
-                }
-                modifiers |= bit;
-            } else if key
-                .replace(
-                    Self::standard_key(part)
-                        .ok_or_else(|| BrowserError::Failed(format!("{part:?} is not a key fastbrowse presses: a single character, or a W3C UI Events named key of a field")))?
-                        .to_string(),
-                )
-                .is_some()
-            {
-                return Err(BrowserError::Failed("a key chord has more than one non-modifier key".into()));
-            }
+            modifiers |= bit;
+            rest = tail.trim();
         }
-        let Some(key) = key else { return Err(BrowserError::Failed("a key chord has no key".into())) };
-        Ok(Self::Chord { modifiers, key })
+        let key = Self::standard_key(rest).ok_or_else(|| {
+            BrowserError::Failed(format!(
+                "{rest:?} is not a key fastbrowse presses: a single character, or a W3C UI Events named key of a field, \
+                 after any of Alt, Ctrl, Meta and Shift joined by +"
+            ))
+        })?;
+        Ok(Self::Chord { modifiers, key: key.to_string() })
+    }
+
+    /// The CDP modifier bit of a W3C UI Events modifier key, in any case.
+    fn modifier(value: &str) -> Option<i64> {
+        match value.to_ascii_lowercase().as_str() {
+            "alt" => Some(1),
+            "ctrl" | "control" => Some(2),
+            "meta" | "cmd" | "command" => Some(4),
+            "shift" => Some(8),
+            _ => None,
+        }
     }
 
     /// The W3C UI Events named key `value` spells in any case, or a single character as given.
@@ -1793,6 +1792,17 @@ fn focus_script(prepare_fill: bool, secret: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_chord_may_press_the_plus_key() {
+        let chord = |value| Key::chord(value).unwrap();
+        assert_eq!(chord("+"), Key::Chord { modifiers: 0, key: "+".into() });
+        assert_eq!(chord("Ctrl++"), Key::Chord { modifiers: 2, key: "+".into() });
+        assert_eq!(chord("ctrl + shift + end"), Key::Chord { modifiers: 10, key: "End".into() });
+        assert!(Key::chord("Ctrl+Ctrl+a").is_err());
+        assert!(Key::chord("Ctrl+").is_err());
+        assert!(Key::chord("a+b").is_err());
+    }
 
     #[test]
     fn points_parse_as_the_type_adapters_do() {
