@@ -117,7 +117,7 @@ async fn test_only_a_route_that_takes_images_is_sent_them() {
                     json!({"shot-1": {"type": "image", "format": "png", "data_base64": "cG5nIGJ5dGVz"}})
                 );
                 let expected = if route == "decider" {
-                    json!([{"page": "text", "viewport_screenshot": "the image item after this object is viewport_screenshot"}, "shot-1"])
+                    json!([{"page": "text", "viewport_screenshot": "image item 1 after this object"}, "shot-1"])
                 } else {
                     json!({"page": "text", "viewport_screenshot": "shot-1"})
                 };
