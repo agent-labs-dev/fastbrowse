@@ -305,8 +305,8 @@ An empty observation waits on loading events before action history and progress 
 The same blank state is waited out once until a readable page appears, so a later navigation gets its own wait.
 Reloading remains restricted to an untouched opening page, since retrying a later page could repeat a submission.
 `StallRules` has one stall rule: a step that
-changes nothing, a read that adds nothing, or a return to a page state already seen with nothing read since is no
-progress, and `unchanged_actions` such steps in a row ask Jev again. A page state not seen before or a read that adds
+changes nothing, a read that adds nothing, a return to a page state already seen with nothing read since, or a
+further return after one return has already counted for the same evidence is no progress, since one read buys one return. `unchanged_actions` such steps in a row ask Jev again. A page state not seen before or a read that adds
 evidence resets the count and renews the `max_recoveries` budget. The new ask names what failed and leaves the stalled
 action out of its options, and Jev's pick is the next decision on that page. Past `max_recoveries` the run ends
 `stuck`, or `unverified` for a rejected composition, unless an unfilled field requires `needs_input` or a site

@@ -8,6 +8,7 @@ use fastbrowse_core::decision::{
     Answer, BoxAnswer, ChoiceAnswer, DecisionClient, DecisionError, DecisionProfile, Edges, Evaluation, Images,
     NoulAnswer, Question,
 };
+use fastbrowse_core::effects::state_key;
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{
     Artifact, Authorization, BudgetResource, BudgetStop, CostBasis, CostComponent, CostLine, Decider, Event,
@@ -594,6 +595,24 @@ async fn test_going_back_to_a_page_state_after_new_evidence_is_progress() {
     state.landing = Some(Some((Operation::Click, Some("Back to files".into()))));
     agent.settle(&mut state, &buttons_at(FILES, &["Files", "v1.14.1"])).await.expect("settled");
     assert_eq!(state.unchanged, 0);
+}
+
+/// #976: one read bought progress on every state of a cycle in turn, so clearing and reapplying a filter the site
+/// failed on never stalled. After the first return, going on to another state seen before the read is going round.
+#[tokio::test]
+async fn test_one_read_buys_one_return_to_a_page_state_already_reached() {
+    let (agent, mut state) = left_the_list().await;
+    state.landing = Some(Some((Operation::Click, Some("Notes".into()))));
+    let notes = buttons_at("https://addons.example.test/project/notes", &["Back"]);
+    agent.settle(&mut state, &notes).await.expect("settled");
+    state.evidence_reads += 1;
+    state.reached.insert(state_key(&notes), state.evidence_reads);
+    state.landing = Some(Some((Operation::Click, Some("Back".into()))));
+    agent.settle(&mut state, &buttons_at(DOWNLOAD, &["Back to files"])).await.expect("settled");
+    assert_eq!(state.unchanged, 0, "the first return after the read is progress");
+    state.landing = Some(Some((Operation::Click, Some("Back to files".into()))));
+    agent.settle(&mut state, &buttons_at(FILES, &["Files", "v1.14.1"])).await.expect("settled");
+    assert_eq!(state.unchanged, 1, "a second return on the same read is going round");
 }
 
 /// A page with no browser behind it, which cannot open the address it is given.
