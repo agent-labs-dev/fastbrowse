@@ -82,6 +82,10 @@ The extension relays only page-level commands. It cannot read cookies, saved pas
 and fastbrowse accepts connections only from the extension's own ID, over a socket only your user can open. The
 run's [authorization](#flags) rules still apply: a purchase or a message waits for `--authorize`.
 
+A run with `--file` needs an extension that can intercept the browser's file chooser. If the run reports that
+interception failed, update the extension. For an unpacked extension, run `fastbrowse extension path` with the
+current CLI and click **Reload** on the extension's card in `chrome://extensions`.
+
 With no browser connected, the run ends `unavailable` before it spends anything; it never falls back to another
 browser. With the extension in more than one browser, label each one in its popup and pick one with
 `--extension-browser LABEL`. `fastbrowse extension install --policy` (Linux) prints a Chrome policy for you to write
