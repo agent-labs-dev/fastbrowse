@@ -99,8 +99,10 @@ pub fn operation_label(operation: Operation) -> &'static str {
         Operation::Read => {
             "Read this page's content, the whole page including text outside the viewport, to extract information the task needs."
         }
+        // Defined only for a written answer, done lost to a link on the very page a task asked to open: on PyPI's
+        // httpx page Jev split 0.51 done against 0.42 for the Homepage link and sometimes left for GitHub (#964).
         Operation::Done => {
-            "The task is done: what it asks is carried out. When it asks for a written answer, notes.selected_answer gives every requested fact and value, with no unrelated text or unresolved requirement; a value present only in retained_notes is not in that answer. When composition_pending or structured_output_pending is true, the retained sources cover every requested item and the answer or structured result will be generated and checked before delivery."
+            "The task is done: what it asks is carried out. A task that only asks to open or reach a page is carried out once the current page is that page. When it asks for a written answer, notes.selected_answer gives every requested fact and value, with no unrelated text or unresolved requirement; a value present only in retained_notes is not in that answer. When composition_pending or structured_output_pending is true, the retained sources cover every requested item and the answer or structured result will be generated and checked before delivery."
         }
     }
 }
@@ -2063,6 +2065,15 @@ mod tests {
         let states = jev.states.lock().unwrap();
         assert_eq!(states[0]["page"]["offscreen_text"], "Mongolia");
         assert!(operation_label(Operation::Read).contains("the whole page including text outside the viewport"));
+    }
+
+    /// On the httpx page a task asked it to open, Jev clicked on to GitHub about half the time, told what done means
+    /// only for a written answer (#964).
+    #[test]
+    fn test_done_says_a_task_to_open_a_page_is_carried_out_on_that_page() {
+        assert!(operation_label(Operation::Done).contains(
+            "A task that only asks to open or reach a page is carried out once the current page is that page."
+        ));
     }
 
     /// A media QA run pressed Play and Pause to its step limit, shown no player's state; a page without one adds nothing.
