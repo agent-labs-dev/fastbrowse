@@ -477,13 +477,37 @@
       const name = nameOf(e);
       if (name) push('observation', `${name}: checked`);
     }
+    // The text of the nearest enclosing element that has any, naming the row a textless link sits in, since its
+    // observation is not read where the link stands. An empty image paragraph must not borrow another paragraph's text
+    // from its enclosing article.
+    const near = element => {
+      let row = element.parentElement;
+      while (row && row !== root && row.tagName !== 'P' && !clean(row.innerText ?? '')) row = row.parentElement;
+      return row && row !== root ? textOf(row).replace(/\s+/g, ' ') || null : null;
+    };
     // Images carry no innerText, so a text-only capture cannot distinguish their presence from absence. What it can
     // say is kept as data in the one line: a sentence that pixels are not described was cut as a span and quoted as a
     // fact, so a Street View run answered "Pixels are not described" 33 times over a task about what the view shows.
+    // The line quotes the item the image sits in too: a gallery's captions were read as text and its image sources as
+    // these lines with nothing joining them, so a caption paired with a source by position failed its support check
+    // and the row was left out of the answer (#929). The item is what this capture reads as one: a list item, a
+    // record, or a figure, whose caption HTML defines as its content's. Any nearer ancestor with text would do for a
+    // gallery, but an image placed in an article or beside a menu then quoted the whole article or the menu, once
+    // per image, for an item it is not part of. A list item counts only when block() reads it as one, a leaf: one
+    // holding blocks is read as those blocks, and quoting it tied each of its images to every caption inside. An image
+    // in no item quotes nothing.
+    const isItem = e => (e.tagName === 'LI' && leaf(e)) || e.tagName === 'FIGURE' || recordText(e) !== null;
+    const item = element => {
+      let e = element.parentElement;
+      while (e && e !== root && !isItem(e)) e = e.parentElement;
+      if (!e || e === root) return null;
+      return (recordText(e) ?? textOf(e)).replace(/\s+/g, ' ') || null;
+    };
     for (const image of [...root.querySelectorAll('img')].filter(visible)) {
       // Loading changes without a page edit, so captures report presence rather than transient decode state.
       const metadata = { alt: image.getAttribute('alt') ?? null,
-        src: imageSource(image.getAttribute('src') ?? image.getAttribute('srcset')), pixels_described: false };
+        src: imageSource(image.getAttribute('src') ?? image.getAttribute('srcset')), pixels_described: false,
+        near: item(image) };
       push('observation', `Image element DOM metadata: ${JSON.stringify(metadata)}`);
     }
     // A player's clock and whether it plays are element state, drawn by native controls the text never holds. Each
@@ -527,16 +551,8 @@
       const page = location.href.split('#')[0];
       const fragment = link.getAttribute('href').trim().startsWith('#') || (target.hash && target.href.split('#')[0] === page);
       if (target.protocol === 'javascript:' || fragment) continue;
-      let row = link.parentElement;
-      // An empty image paragraph must not borrow another paragraph's text from its enclosing article.
-      while (row && row !== root && row.tagName !== 'P' && !clean(row.innerText ?? '')) row = row.parentElement;
-      if (row === root) row = null;
-      const metadata = {
-        label: nameOf(link) || drawn(link) || null,
-        href: imageSource(link.href),
-        near: row ? textOf(row).replace(/\s+/g, ' ') || null : null,
-      };
-      // choices.rs (LINK_METADATA) keeps this out of a read's answer candidates by its opening words.
+      const metadata = { label: nameOf(link) || drawn(link) || null, href: imageSource(link.href), near: near(link) };
+      // choices.rs (LINK_METADATA) keeps `near` out of a read's answer candidates by the line's opening words.
       push('observation', `Link element DOM metadata: ${JSON.stringify(metadata)}. The link has no text.`);
     }
     if (root === document.body) {

@@ -153,6 +153,9 @@ struct AnswerDraft {
     claims: Vec<Claim>,
     /// The column names of the table the task asks for, each claim then being one of its rows.
     columns: Option<Vec<String>>,
+    /// The task asks for a numbered list, which code numbers in the order the claims are written.
+    #[serde(default)]
+    numbered: bool,
 }
 
 impl Schema for AnswerDraft {
@@ -162,14 +165,28 @@ impl Schema for AnswerDraft {
             vec![
                 Field::required("claims", Ty::list(Claim::ty())),
                 Field::default("columns", Ty::optional(Ty::list(Ty::Str)), serde_json::Value::Null),
+                Field::default("numbered", Ty::Bool, false),
             ],
         )
         .ty()
     }
 }
 
-/// What the composer wrote: its claims, and the columns when the task asks for a table.
-type Drafted = (Option<Vec<String>>, Vec<Claim>);
+/// What the composer wrote: the columns when the task asks for a table, whether it asks for a numbered list, and the
+/// claims.
+type Drafted = (Option<Vec<String>>, bool, Vec<Claim>);
+
+/// The claims numbered in the order written. A list number is a claim's place among the others, which none of its own
+/// quotes can show, and each claim's support is judged alone: written by the composer into each row of a gallery
+/// asked for as a numbered list, "3." failed the check of a row whose quotes held its caption and image, and the row
+/// was left out of the answer (#929).
+fn numbered(claims: Vec<Claim>) -> Vec<Claim> {
+    claims
+        .into_iter()
+        .enumerate()
+        .map(|(index, claim)| Claim { text: format!("{}. {}", index + 1, claim.text), ..claim })
+        .collect()
+}
 
 const CELL: &str = " | ";
 
@@ -247,7 +264,7 @@ impl ComposeItem {
 
 // Told only "self-contained", the composer split a price off its record as "It costs £56.88.", which its support
 // check, judging that claim alone, rightly failed (6 of 10 first drafts; 0 of 15 once told how claims are checked).
-const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Each claim is checked alone, against only the notes it cites and without the other claims, so it names the record its values belong to instead of referring back to a record another claim named. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself, and every number in digits. For a count, total, minimum or maximum across records, whether found by comparing values or by the order a list is sorted in, set tally to its op (count, sum, min or max), of (the kind of record it ranges over, with the scope the task gives it, such as \"quote by Albert Einstein\" or \"book in the Mystery category\"), field (the value added or compared, such as \"price\"; null for a count), rank (for a place after the extreme, such as 2 for the second cheapest, with op min; null otherwise) and written (the value exactly as the claim's own text writes it, once, such as \"$14.99\" in \"The cheapest desk lamp costs $14.99.\"; for a claim that answers which record is at a minimum or maximum without its value, the record's name as the claim's text writes it). A task that asks for several places, such as the two cheapest, gets one claim per place, each with its own tally. A claim stating how many records one group has, or a group's place by how many it has, such as the author with the most quotes, is a count per group: set op count, of the kind of record without the group (\"quote\"), by the field that groups them (\"author\"), group (the one this claim counts, as the notes write it), groups (every group the notes' records of that kind fall in, each once) and rank (its place by count, 1 for the most, or null when the claim states none), one claim per group. Otherwise set by, group and groups null. Code works the value out from every note read, writes it in place of written and cites the records. A value one note states, such as a page's own total of results, is quoted as written, with tally null; so is every claim that works nothing out. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. Say an answer is partial only when a note itself shows part of what the task covers was not reached, never because the notes might lack something. When the task asks for a table, set columns to its column names and make each claim one row: set cells to its values in column order, which code writes as the claim's text. Otherwise set columns and cells to null.\n\n# Trust\n";
+const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Each claim is checked alone, against only the notes it cites and without the other claims, so it names the record its values belong to instead of referring back to a record another claim named. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself, and every number in digits. For a count, total, minimum or maximum across records, whether found by comparing values or by the order a list is sorted in, set tally to its op (count, sum, min or max), of (the kind of record it ranges over, with the scope the task gives it, such as \"quote by Albert Einstein\" or \"book in the Mystery category\"), field (the value added or compared, such as \"price\"; null for a count), rank (for a place after the extreme, such as 2 for the second cheapest, with op min; null otherwise) and written (the value exactly as the claim's own text writes it, once, such as \"$14.99\" in \"The cheapest desk lamp costs $14.99.\"; for a claim that answers which record is at a minimum or maximum without its value, the record's name as the claim's text writes it). A task that asks for several places, such as the two cheapest, gets one claim per place, each with its own tally. A claim stating how many records one group has, or a group's place by how many it has, such as the author with the most quotes, is a count per group: set op count, of the kind of record without the group (\"quote\"), by the field that groups them (\"author\"), group (the one this claim counts, as the notes write it), groups (every group the notes' records of that kind fall in, each once) and rank (its place by count, 1 for the most, or null when the claim states none), one claim per group. Otherwise set by, group and groups null. Code works the value out from every note read, writes it in place of written and cites the records. A value one note states, such as a page's own total of results, is quoted as written, with tally null; so is every claim that works nothing out. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. Say an answer is partial only when a note itself shows part of what the task covers was not reached, never because the notes might lack something. When the task asks for a table, set columns to its column names and make each claim one row: set cells to its values in column order, which code writes as the claim's text. Otherwise set columns and cells to null. When the task asks for a numbered list, set numbered and write no number in any claim: a claim's place among the others is not in the notes it cites, so code numbers the claims in the order written. Otherwise set numbered to false.\n\n# Trust\n";
 
 const DESCRIPTIVE_VALUES: &str = "Interpret the requested field by its meaning, not by literal labels in the source. A value stated in descriptive prose counts even when no heading names that field. A statement that a value is not shown contradicts such a value. Use only a value stated by the description, including equivalent wording; do not infer a value from a merely related detail.";
 
@@ -369,7 +386,7 @@ async fn compose_part(
             Claim { evidence_ids: cited, text, ..claim }
         })
         .collect();
-    Ok((columns, claims))
+    Ok((columns, draft.data.numbered, claims))
 }
 
 /// How much composing a packing still needs: its requests, then the bytes of the notes they carry. A round may shorten
@@ -392,22 +409,24 @@ async fn compose_packed(
     items: Vec<ComposeItem>,
     limit: usize,
     ledger: Option<&Ledger>,
-) -> Result<(Option<Vec<String>>, Vec<Claim>, bool)> {
+) -> Result<(Drafted, bool)> {
     let mut parts = pack_items(task, &items, limit)?;
     loop {
         let mut claims = Vec::new();
         let mut columns = None;
+        let mut numbered = false;
         for part in &parts {
-            let (part_columns, part_claims) = compose_part(llm, task, part, ledger).await?;
+            let (part_columns, part_numbered, part_claims) = compose_part(llm, task, part, ledger).await?;
             columns = columns.or(part_columns);
+            numbered |= part_numbered;
             claims.extend(part_claims);
         }
         if parts.len() == 1 {
-            return Ok((columns, claims, true));
+            return Ok(((columns, numbered, claims), true));
         }
         // Rewording a lone claim cannot recover the notes other requests omitted.
         if claims.len() <= 1 {
-            return Ok((columns, claims, false));
+            return Ok(((columns, numbered, claims), false));
         }
         let items: Vec<ComposeItem> = claims
             .iter()
@@ -430,7 +449,7 @@ async fn compose_packed(
             .collect();
         let next = pack_items(task, &items, limit)?;
         if packed_size(&next) >= packed_size(&parts) {
-            return Ok((columns, claims, false));
+            return Ok(((columns, numbered, claims), false));
         }
         parts = next;
     }
@@ -490,14 +509,11 @@ pub(crate) async fn compose_reviewed(
     let writing_task = writing_task.as_str();
     let written: Vec<String> = items.iter().map(ComposeItem::written).collect();
     let messages = compose_messages(writing_task, &written);
-    let (columns, claims, reduced) = match llm.context_tokens(LLMPurpose::Compose).await {
+    let ((columns, numbers, claims), reduced) = match llm.context_tokens(LLMPurpose::Compose).await {
         Some(context) if estimated_context_bytes(&messages) > context_limit(context)? => {
             compose_packed(llm, writing_task, items, context_limit(context)?, ledger).await?
         }
-        _ => {
-            let (columns, claims) = compose_part(llm, writing_task, &items, ledger).await?;
-            (columns, claims, true)
-        }
+        _ => (compose_part(llm, writing_task, &items, ledger).await?, true),
     };
     let claims = kept.into_iter().chain(claims).fold(Vec::<Claim>::new(), |mut all, claim| {
         if !all.iter().any(|other| other.text == claim.text) {
@@ -507,6 +523,7 @@ pub(crate) async fn compose_reviewed(
     });
     let reviewed = review_claims(jev, task, columns.as_deref(), claims, notes, ledger, reports, steps).await?;
     let CheckedClaims { claims, problem, rejection, denies_steps } = reviewed;
+    let claims = if numbers { numbered(claims) } else { claims };
     if !reports {
         // Nothing was asked to be told, so the write-up is shown only where it holds and is never a shortfall. One that
         // denies what the run did is still written again, rather than the run ending on nothing.
@@ -1318,11 +1335,12 @@ mod tests {
         calls: Mutex<Vec<Vec<Message>>>,
         claims: Option<Vec<Claim>>,
         columns: Option<Vec<String>>,
+        numbered: bool,
     }
 
     impl RecordingLlm {
         fn new(context: Option<i64>) -> RecordingLlm {
-            RecordingLlm { context, calls: Mutex::new(Vec::new()), claims: None, columns: None }
+            RecordingLlm { context, calls: Mutex::new(Vec::new()), claims: None, columns: None, numbered: false }
         }
 
         fn calls(&self) -> Vec<Vec<Message>> {
@@ -1346,11 +1364,11 @@ mod tests {
                 .filter_map(|line| line.split_once(": ").map(|(id, _)| id.to_string()))
                 .filter(|id| id.starts_with('e') || id.starts_with('c'))
                 .collect();
-            let (reply, columns) = (self.claims.clone(), self.columns.clone());
+            let (reply, columns, numbered) = (self.claims.clone(), self.columns.clone(), self.numbered);
             Box::pin(async move {
                 let claims =
                     reply.unwrap_or_else(|| ids.into_iter().map(|id| Claim::new(&id, vec![id.clone()])).collect());
-                let draft = json!({"claims": claims, "columns": columns});
+                let draft = json!({"claims": claims, "columns": columns, "numbered": numbered});
                 let data = schema.validate_json(&draft.to_string()).map_err(LLMError::Failed)?;
                 Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
             })
@@ -2325,7 +2343,7 @@ mod tests {
         let notes = Notes::new([fact(0, "Record B: 34".into())]);
         let mut llm = RecordingLlm::new(None);
         llm.columns = Some(vec![]);
-        let (columns, _) = compose_part(&llm, "Report B", &initial_items(&notes, false), None).await.unwrap();
+        let (columns, _, _) = compose_part(&llm, "Report B", &initial_items(&notes, false), None).await.unwrap();
         assert_eq!(columns, None);
     }
 
@@ -2649,6 +2667,33 @@ mod tests {
         assert!(messages[0].content.contains("Interpret the requested field by its meaning"));
         assert!(messages[0].content.contains("A value stated in descriptive prose counts"));
         assert!(messages[0].content.contains("do not infer a value from a merely related detail"));
+    }
+
+    /// A list number is a claim's place among the others, which no claim's quotes show: written into each row by the
+    /// composer, it failed the support check of a gallery row whose quotes held every value (#929). Code numbers the
+    /// claims after they are judged, so each is judged without its number and the answer still reads as a numbered list.
+    #[tokio::test]
+    async fn a_numbered_list_is_judged_without_its_numbers_and_numbered_by_code() {
+        let notes = Notes::new([fact(0, "Dungeon entrances".into()), fact(1, "The Eastern Kingdoms".into())]);
+        let ids: Vec<String> = notes.facts_by_id().keys().cloned().collect();
+        let llm = RecordingLlm {
+            claims: Some(
+                ids.iter()
+                    .zip(["Dungeon entrances", "The Eastern Kingdoms"])
+                    .map(|(id, text)| Claim::new(text, vec![id.clone()]))
+                    .collect(),
+            ),
+            numbered: true,
+            ..RecordingLlm::new(None)
+        };
+        let jev = Support::new(true);
+        let task = "List the gallery's captions as a numbered list";
+        let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, None, true, &[]).await.unwrap();
+        assert_eq!(reviewed.answer.answer, "1. Dungeon entrances\n\n2. The Eastern Kingdoms");
+        let asked = jev.asked.lock().unwrap();
+        let Question::Noul(second) = &asked[0]["claim1"] else { panic!("support is yes-or-no") };
+        assert!(second.instructions.contains(r#""claim":"The Eastern Kingdoms""#), "{}", second.instructions);
+        assert!(llm.calls()[0][0].content.contains("When the task asks for a numbered list, set numbered"));
     }
 
     #[tokio::test]
