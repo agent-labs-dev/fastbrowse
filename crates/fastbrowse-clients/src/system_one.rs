@@ -227,16 +227,16 @@ fn reads_references_in_place(model: &str) -> bool {
 }
 
 /// The state with each top-level image reference moved out into an item of its own after it, its key left naming that
-/// image, so a model given images only as items still knows what each one shows.
+/// image by position, so a model given images only as items still knows what each one shows.
 fn media_as_items(state: &Value, images: &Images) -> Value {
     let Value::Object(object) = state else { return state.clone() };
     let mut object = object.clone();
     let mut items = Vec::new();
-    for (key, value) in object.iter_mut() {
+    for value in object.values_mut() {
         if let Value::String(reference) = value
             && images.contains_key(reference.as_str())
         {
-            let pointer = format!("the image item after this object is {key}");
+            let pointer = format!("image item {} after this object", items.len() + 1);
             items.push(Value::String(std::mem::replace(reference, pointer)));
         }
     }

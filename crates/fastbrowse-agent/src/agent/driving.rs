@@ -494,7 +494,16 @@ impl Agent {
         start: Option<&str>,
         ledger: &fastbrowse_core::telemetry::Ledger,
     ) -> Step<Vec<String>> {
-        let proposal = crate::start::known_pages(&*self.llm, task, start, Some(ledger)).await?;
+        // As with the task's dates, a run whose known pages could not be asked for runs on without them: a provider
+        // error on this hint ended a run before its first page was read. Only the budget stops the run here.
+        let proposal = match crate::start::known_pages(&*self.llm, task, start, Some(ledger)).await {
+            Ok(proposal) => proposal,
+            Err(crate::error::AgentError::Budget(budget)) => return Err(budget.into()),
+            Err(error) => {
+                self.event("known_pages_failed", || Map::from_iter([("error".into(), error.to_string().into())]));
+                return Ok(Vec::new());
+            }
+        };
         ledger.record([proposal.cost])?;
         let mut known: Vec<String> = Vec::new();
         for url in proposal.data.urls.iter().filter_map(|url| crate::start::accept_start(Some(url))) {
