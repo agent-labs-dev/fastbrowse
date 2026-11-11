@@ -54,14 +54,17 @@ impl Agent {
         // as a scroll shows what is below: a run that hovered an image whose delete button it never reached had deleted
         // nothing.
         let acted = state.history.iter().any(crate::policy::HistoryEntry::acted);
+        let reason = "The task asks for something to be carried out, and no step has done it.";
+        // Served markup is not the page a browser shows: it holds what a stylesheet hides and lacks what scripts build,
+        // such as a success message kept hidden until a form is sent (#894). A task with a step to take, whatever it
+        // wants reported, is finished in a browser, as it is in a run that never fetched.
+        if !acted && self.page.over_http() && (state.asks_steps || intent == OutputIntent::CarriedOut) {
+            return Err(self.page.needs_browser(reason.into()).into());
+        }
         if !acted && output_schema.is_none() && matches!(intent, OutputIntent::CarriedOut) {
             // What was read did not do it, so it answers nothing yet.
             state.notes = Notes::default();
             state.to_carry_out = true;
-            let reason = "The task asks for something to be carried out, and no step has done it.";
-            if self.page.over_http() {
-                return Err(self.page.needs_browser(reason.into()).into());
-            }
             self.recover(state, observation, reason, Status::Stuck, Some((Operation::Done, None))).await?;
             return Ok(None);
         }

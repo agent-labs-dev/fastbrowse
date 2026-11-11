@@ -3189,6 +3189,19 @@ async fn test_an_http_image_request_escalates_before_reading_or_capturing() {
     assert!(format!("{failure:?}").contains("screenshot of the rendered page"));
 }
 
+/// A task to post a reply and report whether the page confirms it wants text, and over HTTP its read found the success
+/// message a stylesheet hides until a reply is sent. A served page takes no step, so a browser finishes it (#894).
+#[tokio::test]
+async fn test_an_http_task_with_a_step_to_take_escalates_whatever_it_reports() {
+    let jev = IntentJev { evidence: "acts", ..IntentJev::new("text") };
+    let agent = Agent::new(Arc::new(Unfetchable { opens: false }), Arc::new(jev), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Reply to the comment, then report whether the page confirms the reply was posted.".into();
+    let failure = agent.finish(&mut state, &observation(&[]), None, None).await.expect_err("a browser is needed");
+    assert!(format!("{failure:?}").contains("no step has done it"), "{failure:?}");
+    assert!(state.asks_steps);
+}
+
 #[tokio::test]
 async fn test_text_and_image_cannot_finish_without_text_evidence() {
     let page = Screenshots(Default::default(), false, Default::default(), true);

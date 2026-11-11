@@ -131,7 +131,10 @@ Fetch reads the same way: by default a run reads pages over HTTP and follows lin
 offered as what it has. A disabled control (`disabled`, `aria-disabled="true"` or `inert` on the element) is not
 offered, as a browser capture leaves it out, so a disabled next link is no next page. A step only a browser can
 take starts one on the same page, and the run carries on with
-what it knows. `fetch` forbids the browser, and `browser` starts one from the first step.
+what it knows. A served page is not the page a browser shows: it holds text a stylesheet hides and lacks what scripts
+build. So a run over HTTP that took no step cannot finish a task that asks for one, whatever it asks to be told: a
+browser does it.
+`fetch` forbids the browser, and `browser` starts one from the first step.
 Fetched documents have no pixels, so optional screenshots and step frames are skipped.
 
 Browser captures record an icon-only link's destination with nearby container text, passing through empty layout
