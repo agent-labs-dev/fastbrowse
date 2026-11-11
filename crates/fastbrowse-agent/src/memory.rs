@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use fastbrowse_core::citations::{TableBlock, table_blocks};
 use fastbrowse_core::models::{Evidence, FactReader};
-use fastbrowse_core::page::{BlockKind, Capture};
+use fastbrowse_core::page::Capture;
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{dumped_len, dumps, write_string};
@@ -266,8 +266,8 @@ pub struct Notes {
     steps_taken: HashMap<(String, String, DateTime), usize>,
     /// Each remembered capture's table blocks by its hash, so a citation can show a quote as the page shows it.
     tables: HashMap<String, Arc<[TableBlock]>>,
-    /// Each remembered capture's record blocks, as its hash, the block's source id and its span, so a quote of a whole
-    /// record says so.
+    /// Each remembered capture's blocks the capture marked `whole_record`, as its hash, the block's source id and its
+    /// span, so a quote of a whole record says so.
     records: HashSet<(String, String, i64, i64)>,
 }
 
@@ -300,7 +300,7 @@ impl Notes {
             capture
                 .blocks
                 .iter()
-                .filter(|block| block.kind == BlockKind::Record)
+                .filter(|block| block.whole_record)
                 .map(|block| (capture.sha256.clone(), block.source_id.clone(), block.start, block.end)),
         );
     }

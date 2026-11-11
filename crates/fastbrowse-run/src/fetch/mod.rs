@@ -86,6 +86,7 @@ fn capture(url: &str, title: String, found: Vec<Found>, unread_frames: usize) ->
             control_context: None,
             href: block.href,
             links: Link::locate(&block.text, start as i64, &block.links),
+            whole_record: block.whole_record,
         });
         offset += 2;
     }
@@ -293,6 +294,7 @@ async fn serve(http: &Http, url: &str, allowed_origins: Option<&[String]>, secon
             href: None,
             links: Vec::new(),
             frame_id: None,
+            whole_record: false,
         };
         return Ok(Served {
             url: final_url,

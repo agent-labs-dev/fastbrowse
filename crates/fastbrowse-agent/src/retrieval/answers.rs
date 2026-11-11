@@ -838,9 +838,9 @@ const OTHER: &str = "other";
 const SCOPE: &str = "Judge the scope as well as each value. A statement about every member or an absent value across a whole set needs evidence about that whole set; quotes about some members support only those members. A counter on the page supports what it says about its source, such as how many items the source holds or shows. It does not support how many items this answer extracted or lists.";
 
 /// What a quote marked as a whole record shows, said only when one is cited. Three comments' notes each held an open
-/// replies region with nothing in it, and "the author has not replied" citing them was judged unsupported in 9 of 9
-/// replays; told each quote is all its comment renders, Jev held all 9, and still rejected "the author replied" and
-/// "it has 2 replies" over the same notes (#992).
+/// replies region with nothing in it, and "the author has not replied" citing them was held in 1 of 9 replays; told
+/// each quote is all its comment renders, Jev held all 9, and still rejected "the author replied" and "it has 2
+/// replies" over the same notes (#992).
 const RECORDS: &str = " A quote marked whole_record holds all the text the page renders for one item it repeats, such as a comment, card or row. Words in square brackets in it name a part of that item that holds no text, by the page's own label or class.";
 
 /// A place written as a word, as a task writes it: "second", "third", "21st".
@@ -2268,10 +2268,12 @@ mod tests {
         use crate::retrieval::testing::capture;
         use crate::retrieval::text::Page;
 
-        let captured = capture(&[
-            (BlockKind::Record, "ada\n30 minutes ago\n\nit stopped working\n\nReply [replies expanded: no text]"),
-            (BlockKind::Paragraph, "186 comments"),
+        // CurseForge renders each comment as an `li`, so the capture marks the block rather than its kind saying so.
+        let mut captured = capture(&[
+            (BlockKind::ListItem, "ada\n30 minutes ago\n\nit stopped working\n\nReply [replies expanded: no text]"),
+            (BlockKind::ListItem, "186 comments"),
         ]);
+        captured.blocks[0].whole_record = true;
         let page = Page::new(&captured);
         let (comment, count) = (&captured.blocks[0], &captured.blocks[1]);
         let whole =

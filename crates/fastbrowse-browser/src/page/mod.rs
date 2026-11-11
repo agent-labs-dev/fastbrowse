@@ -233,6 +233,9 @@ struct SnapshotBlock {
     /// Each link's text and address, in the order the block shows them.
     #[serde(default)]
     links: Vec<SnapshotLink>,
+    /// The block is a record's whole text, its textless parts named.
+    #[serde(default)]
+    whole_record: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1017,6 +1020,7 @@ impl CdpPage {
                     control_context: block.control_context.clone(),
                     href: block.href.clone(),
                     links,
+                    whole_record: block.whole_record,
                 });
             }
         }
@@ -1056,6 +1060,7 @@ impl CdpPage {
                     control_context: None,
                     href: None,
                     links: Vec::new(),
+                    whole_record: false,
                 });
                 text.push_str("\n\n");
                 offset += 2;

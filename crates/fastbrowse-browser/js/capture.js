@@ -410,7 +410,13 @@
       push(
         el.tagName === 'LI' ? 'list_item' : 'record',
         record ?? textOf(el),
-        { ...(links.length === 1 ? { href: hrefOf(links[0]) } : {}), links: linksIn([el]) },
+        {
+          ...(links.length === 1 ? { href: hrefOf(links[0]) } : {}),
+          links: linksIn([el]),
+          // All an item the page repeats renders, its textless parts named: what it does not show, it does not show.
+          // A comment is often an `li`, so its kind does not say this (#992).
+          ...(record !== null ? { whole_record: true } : {}),
+        },
         [el],
       );
       for (const field of fields(el)) push('paragraph', field);

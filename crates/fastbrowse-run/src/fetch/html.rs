@@ -633,6 +633,8 @@ pub struct Found {
     pub links: Vec<(String, String)>,
     /// The frame a block was read from, when its frame's document is read into the page's.
     pub frame_id: Option<String>,
+    /// The block is a card's whole text, what it only draws named after it, as `capture.js` marks a record.
+    pub whole_record: bool,
 }
 
 /// A rendered frame: the document it shows, the number of blocks read before it, which is where its own go, and the
@@ -1112,7 +1114,11 @@ impl<'a> Reader<'a> {
         let Some(record) = self.record.take() else { return };
         self.buffer.truncate(self.buffer.trim_end_matches(|c: char| c.is_ascii_whitespace()).len());
         self.buffer.push_str(&record.facts);
+        let before = self.blocks.len();
         self.flush(Some(record.kind), record.href, false);
+        if let Some(block) = self.blocks.get_mut(before) {
+            block.whole_record = true;
+        }
     }
 
     fn table_start(&mut self, tag: &str, alt: &str) {
@@ -1171,6 +1177,7 @@ impl<'a> Reader<'a> {
                 href: None,
                 links: links.next().unwrap_or_default(),
                 frame_id: None,
+                whole_record: false,
             });
         }
         self.row = None;
@@ -1203,7 +1210,15 @@ impl<'a> Reader<'a> {
             return;
         }
         let kind = kind.unwrap_or(self.kind);
-        self.blocks.push(Found { kind, text: text.clone(), heading_path: self.path(), href, links, frame_id: None });
+        self.blocks.push(Found {
+            kind,
+            text: text.clone(),
+            heading_path: self.path(),
+            href,
+            links,
+            frame_id: None,
+            whole_record: false,
+        });
         if closing_heading && let Some(level) = self.heading {
             // A heading names what follows it, never itself, and a lower heading ends every higher one.
             self.headings.retain(|(higher, _)| *higher < level);
@@ -1515,6 +1530,8 @@ mod tests {
                 .collect::<Vec<_>>(),
         );
         assert_eq!(cards[0].href.as_deref(), Some("https://a.example/book/1"));
+        // A card that is an `li` is still the whole card, as `capture.js` marks it (#992); the paragraph after is not.
+        assert!(cards.iter().all(|b| b.whole_record) && !found.last().unwrap().whole_record, "{found:?}");
         assert_eq!(cards[0].heading_path, ["Books"], "the card's own heading names nothing after it");
         assert_eq!(
             found.last().map(|b| (b.text.as_str(), b.heading_path.clone())),
