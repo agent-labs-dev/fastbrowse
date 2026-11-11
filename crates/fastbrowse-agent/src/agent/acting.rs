@@ -1304,11 +1304,13 @@ impl Agent {
         self.missing(state, observation, target)
     }
 
-    /// A field the task asks nothing of is a wrong pick, left out of what is offered here as a missing one is. It is an
-    /// input the run lacks only when the page marks it required.
+    /// A field the task asks nothing of is a wrong pick, left out of what is offered here as a missing one is. One the
+    /// page marks required is an input no further step can supply, exactly as one the task asks for and gives no value
+    /// for is: given another try, a profile form's required Country was left for the site's Account link and the run
+    /// ended `needs_login` on a sign-in it never needed. Any other is left, and is no input the run lacks.
     fn untouched(&self, state: &mut RunState, observation: &Observation, target: &Control) -> Flow {
         if target.required == Some(true) {
-            return self.missing(state, observation, target);
+            return self.unsupplied(state, observation, target);
         }
         let key = (observation.url.clone(), target.label.clone(), target.context.clone());
         state.missing.insert(key.clone());
