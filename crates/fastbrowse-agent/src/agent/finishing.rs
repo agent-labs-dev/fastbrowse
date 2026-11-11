@@ -158,6 +158,12 @@ impl Agent {
     ) -> Step<Option<RunResult>> {
         state.pager_followed.insert(next.clone());
         self.event("unread_next_page", || serde_json::Map::from_iter([("url".into(), next.clone().into())]));
+        self.open_by_code(state, observation, next).await?;
+        Ok(None)
+    }
+
+    /// Open `url` as a step the run's code chose.
+    pub(super) async fn open_by_code(&self, state: &mut RunState, observation: &Observation, next: String) -> Step {
         let decision = crate::policy::Decision {
             operation: Operation::Navigate,
             url: Some(next),
@@ -186,7 +192,7 @@ impl Agent {
             }
             other => other?,
         }
-        Ok(None)
+        Ok(())
     }
 
     /// Read a drawn page's screenshot into the notes when nothing read answers the task.

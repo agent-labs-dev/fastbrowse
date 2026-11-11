@@ -210,6 +210,9 @@ class RunParams(Params):
     extension_browser: str | None = None
     """Which browser the extension is connected in, by the label its popup shows, when there is more than one.
     Implies `extension`."""
+    desktop: str | None = None
+    """Drive a native desktop window instead of a browser, through deskpilot on Hyprland: its address, its app
+    class, or a substring of its class or title that names exactly one window."""
 
 
 class RunCancelParams(Params):

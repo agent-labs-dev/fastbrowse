@@ -301,6 +301,9 @@ pub(crate) struct PageState {
     pub(crate) status_worlds: HashMap<String, String>,
     /// The last document response read, so an observation of the same document sends no status read.
     pub(crate) document: Option<KeptDocument>,
+    /// Frame session, when it was read, and the viewport size that pre-action measurement already returned. The wheel
+    /// and the pointer marks both need it, and asking again was a command of its own on every action.
+    pub(crate) viewport: Option<(String, Instant, (f64, f64))>,
 }
 
 pub struct CdpPage {
@@ -527,6 +530,7 @@ impl CdpPage {
     // -- observe / capture ----------------------------------------------------------------------------------
 
     pub async fn observe(&self) -> Result<Observation, BrowserError> {
+        self.adopt_choosers().await;
         self.reread(|| self.observe_once(0, true)).await
     }
 

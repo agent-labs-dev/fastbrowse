@@ -291,7 +291,13 @@
   registry.visible = visible;
   // Styled checkboxes and radios often hide the native input. Its visible label is the click
   // target, but the input still owns the checked/disabled state and must participate in freshness.
-  const sourceOf = e => (e.tagName === 'LABEL' && ['checkbox', 'radio', 'file'].includes(e.control?.type) ? e.control : e);
+  // A control whose click opened a file chooser stands for the file input behind it, which can be hidden and unlabelled.
+  const sourceOf = e =>
+    registry.chooser?.opener === e && registry.chooser.input.isConnected
+      ? registry.chooser.input
+      : e.tagName === 'LABEL' && ['checkbox', 'radio', 'file'].includes(e.control?.type)
+        ? e.control
+        : e;
 
   // Their text is code, not a name: Amazon nests a <style> inside a result card's link.
   const CODE = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
@@ -1348,7 +1354,6 @@
     viewport_text,
     offscreen_text,
     visual_content,
-    modal,
     media,
     document_key: String(performance.timeOrigin),
     controls: semantics,
@@ -1357,5 +1362,7 @@
     retarget_keys,
     inaccessible_frames: inaccessible,
   };
+  // Absent unless one is open, as on most pages: an unnamed modal is the empty string, not null.
+  if (modal !== null) result.modal = modal;
   return result;
 })

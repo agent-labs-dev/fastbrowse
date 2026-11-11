@@ -133,6 +133,7 @@ async def run_task(
     browser: bool = False,
     extension: bool = False,
     extension_browser: str | None = None,
+    desktop: str | None = None,
     open_browser: Callable[[], Awaitable[str]] | None = None,
     page_ready: Callable[[], Awaitable[None]] | None = None,
     settings: Mapping[str, str] | None = None,
@@ -234,6 +235,12 @@ async def run_task(
     stops it from the extension's popup, the browser's debugging bar, or by closing the run's tabs, and the run
     then ends `cancelled`. It cannot be combined with `allowed_origins`: a popup's first request can leave before
     the extension reaches it, so it could not be refused first.
+
+    `desktop` drives a native desktop window instead of a browser, through deskpilot on Hyprland
+    (https://github.com/cjber/deskpilot): its address, its app class, or a part of its class or title that names exactly
+    one window. Input reaches the window wherever it is, without moving the user's pointer or keyboard focus. It
+    opens no browser, so it cannot be combined with a start address or any browser option, and it records and replays
+    no recipe.
 
     `context` is background the run may use but never reads as the task: where the request came from, what the
     caller already knows. Jev sees it as `background`.

@@ -97,6 +97,7 @@ _PLAIN = (
     "browser",
     "extension",
     "extension_browser",
+    "desktop",
 )
 """`run_task` arguments that are JSON already and belong to the run itself."""
 
