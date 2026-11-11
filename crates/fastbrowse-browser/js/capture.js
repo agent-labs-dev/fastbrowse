@@ -474,11 +474,13 @@
     // and the row was left out of the answer (#929). The item is what this capture reads as one: a list item, a
     // record, or a figure, whose caption HTML defines as its content's. Any nearer ancestor with text would do for a
     // gallery, but an image placed in an article or beside a menu then quoted the whole article or the menu, once
-    // per image, for an item it is not part of. An image in no item quotes nothing.
+    // per image, for an item it is not part of. A list item counts only when block() reads it as one, a leaf: one
+    // holding blocks is read as those blocks, and quoting it tied each of its images to every caption inside. An image
+    // in no item quotes nothing.
+    const isItem = e => (e.tagName === 'LI' && leaf(e)) || e.tagName === 'FIGURE' || recordText(e) !== null;
     const item = element => {
       let e = element.parentElement;
-      while (e && e !== root && e.tagName !== 'LI' && e.tagName !== 'FIGURE' && recordText(e) === null)
-        e = e.parentElement;
+      while (e && e !== root && !isItem(e)) e = e.parentElement;
       if (!e || e === root) return null;
       return (recordText(e) ?? textOf(e)).replace(/\s+/g, ' ') || null;
     };

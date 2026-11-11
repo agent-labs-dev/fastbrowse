@@ -276,13 +276,16 @@ async fn test_an_image_line_quotes_the_item_it_sits_in() {
           '<figure><img src="https://example.test/fig.png"><figcaption>A captioned figure</figcaption></figure>' +
           '<header><img alt="logo" src="https://example.test/logo.png"><nav>Home About Contact</nav></header>' +
           '<article><h1>Title</h1><p>First paragraph.</p><img src="https://example.test/inline.png"><p>Second.</p></article>' +
-          '<section><div><div><img src="https://example.test/wrapped.png"></div></div><p>One.</p><p>Two.</p></section>';"#,
+          '<section><div><div><img src="https://example.test/wrapped.png"></div></div><p>One.</p><p>Two.</p></section>' +
+          '<ul><li><h2>Gallery</h2><div><img src="https://example.test/ga.png"><p>Caption A</p></div>' +
+          '<div><img src="https://example.test/gb.png"><p>Caption B</p></div>' +
+          '<div><img src="https://example.test/gc.png"><p>Caption C</p></div></li><li>Other</li></ul>';"#,
     )
     .await;
     let capture = h.page.capture().await.expect("capture");
     let images: Vec<&str> =
         capture.text.lines().filter(|line| line.starts_with("Image element DOM metadata")).collect();
-    assert_eq!(images.len(), 11, "{images:?}");
+    assert_eq!(images.len(), 14, "{images:?}");
     let near = |source: &str| {
         let line = images.iter().find(|line| line.contains(source)).expect(source);
         let metadata: serde_json::Value =
@@ -295,8 +298,9 @@ async fn test_an_image_line_quotes_the_item_it_sits_in() {
     assert_eq!(near("b.png").as_deref(), Some("Card B"));
     assert_eq!(near("fig.png").as_deref(), Some("A captioned figure"));
     // An image in no item quotes nothing: not an empty paragraph's neighbours, a menu beside a logo, an article it is
-    // placed in, nor the section around empty wrappers.
-    for source in ["rule.png", "lone.png", "logo.png", "inline.png", "wrapped.png"] {
+    // placed in, nor the section around empty wrappers. A list item holding blocks is read as those blocks, not as one
+    // item, so it does not tie each of its images to every caption in it.
+    for source in ["rule.png", "lone.png", "logo.png", "inline.png", "wrapped.png", "ga.png", "gb.png", "gc.png"] {
         assert_eq!(near(source), None, "{source}");
     }
     h.close().await;
