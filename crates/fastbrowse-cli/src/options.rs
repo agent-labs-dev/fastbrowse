@@ -30,6 +30,11 @@ pub fn environment(task: &RunTask, settings: &Settings) -> Result<Option<String>
     if task.record.is_some() && which("ffmpeg").is_none() {
         return refuse("record needs ffmpeg on PATH");
     }
+    if task.desktop.is_some() {
+        // A desktop run drives a window through deskpilot: no Chrome to find and no browser key to hold.
+        check_model_keys(settings)?;
+        return Ok(None);
+    }
     let cloud = on_cloud(task);
     let handed = task.cdp_url.is_some() || task.cdp_port.is_some();
     let binary = task.chrome.as_ref().and_then(|chrome| chrome.binary.as_deref());
@@ -78,7 +83,8 @@ pub fn scoped_secret(value: &str) -> Result<(String, String, Option<String>), St
     let (name, variable) = env_secret(&format!("{named}{equals}{variable}"))?;
     let Some(origin) = origin else { return Ok((name, variable, None)) };
     let parts = SplitUrl::of(origin);
-    if !matches!(parts.scheme.as_str(), "http" | "https") || parts.hostname().is_empty() {
+    // A desktop window's origin is its app, `desktop://<app class>`, as a `--desktop` run reports it.
+    if !matches!(parts.scheme.as_str(), "http" | "https" | "desktop") || parts.hostname().is_empty() {
         return Err(format!("expected NAME=ENV_VAR@https://host, got {}", text::repr(value)));
     }
     if !matches!(parts.path, "" | "/") || !parts.query.is_empty() || !parts.fragment.is_empty() {
@@ -288,5 +294,9 @@ mod tests {
             "'https://a.example/login' is not an origin: drop everything after the host"
         );
         assert_eq!(scoped_secret("p=V@ftp://a").unwrap_err(), "expected NAME=ENV_VAR@https://host, got 'p=V@ftp://a'");
+        assert_eq!(
+            scoped_secret("p=V@desktop://org.gnome.Fractal").unwrap(),
+            ("p".into(), "V".into(), Some("desktop://org.gnome.Fractal".into()))
+        );
     }
 }

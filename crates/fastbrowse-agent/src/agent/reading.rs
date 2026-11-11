@@ -42,9 +42,47 @@ impl Agent {
         }
         let known = read_sources(&state.notes);
         let (tokens, ledger) = (&self.config.tokens, state.ledger.clone());
-        let PageRead { facts, compose, finished } =
+        let read =
             read_page(&*self.jev, &capture, &state.task, &state.dates, tokens, Some(&ledger), &self.trace, shows)
                 .await?;
+        Ok(self.end_read(state, capture, observation, tries, known, read))
+    }
+
+    /// A read whose Jev call runs beside `work`, which must not depend on the notes the read adds: a click's gates see
+    /// only the task, the origin and the history. The read's result is applied before `work`'s is returned, so what
+    /// follows sees the page as read, as it would after a read made first. None when the read needs the browser
+    /// again (an empty capture waits for the page) or would not run, and the caller reads first instead.
+    pub(super) async fn read_beside<T>(
+        &self,
+        state: &mut RunState,
+        capture: Capture,
+        observation: &Observation,
+        shows: bool,
+        work: impl AsyncFnOnce(&mut RunState) -> T,
+    ) -> Step<Option<T>> {
+        if state.page_failed || text::strip(&capture.text).is_empty() {
+            return Ok(None);
+        }
+        let tries = state.begin_read(observation);
+        let known = read_sources(&state.notes);
+        let (task, dates, ledger) = (state.task.clone(), state.dates.clone(), state.ledger.clone());
+        let tokens = &self.config.tokens;
+        let reading = read_page(&*self.jev, &capture, &task, &dates, tokens, Some(&ledger), &self.trace, shows);
+        let (read, done) = tokio::join!(self.trace.phase("read", reading), work(state));
+        self.end_read(state, capture, observation, tries, known, read?);
+        Ok(Some(done))
+    }
+
+    fn end_read(
+        &self,
+        state: &mut RunState,
+        capture: Capture,
+        observation: &Observation,
+        tries: u8,
+        known: std::collections::BTreeSet<(String, Option<String>, String)>,
+        read: PageRead,
+    ) -> bool {
+        let PageRead { facts, compose, finished } = read;
         state.end_read(observation, finished, tries);
         let added = facts.len();
         // Jev's latest word on a read stands: one fact that alone answers the task needs nothing written around it.
@@ -91,6 +129,6 @@ impl Agent {
             state.unchanged = 0;
             state.recoveries = 0;
         }
-        Ok(progressed)
+        progressed
     }
 }

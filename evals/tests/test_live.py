@@ -1408,6 +1408,37 @@ async def test_fast_report_records_no_step_cap(monkeypatch, tmp_path):
     assert report.step_cap_unit == "steps"
 
 
+async def test_a_fast_row_on_a_cloud_browser_names_its_session_and_live_link(monkeypatch, tmp_path):
+    """A failed hosted run can be watched from its row, as a Browser Use V4 row can."""
+
+    async def run(*_args, **_kwargs):
+        return (
+            Outcome(None, None, None),
+            live.RunResult(
+                status=live.Status.STUCK,
+                answer=None,
+                data=None,
+                evidence=(),
+                steps=(),
+                cost=CostBreakdown(),
+                artifacts=(),
+            ),
+            live._Observed(
+                final=FinalPage(),
+                began=time.monotonic(),
+                ended=time.monotonic(),
+                live_url="https://live.browser-use.com/?wss=x",
+                browser_session_id="b-1",
+            ),
+        )
+
+    monkeypatch.setattr(live, "fast_arm", run)
+    async with httpx.AsyncClient() as http:
+        _, report = await live._fast_report(task("wiki-open"), http, tmp_path, record=None)
+    assert report.provenance["browser_session_id"] == "b-1"
+    assert report.provenance["live_url"] == "https://live.browser-use.com/?wss=x"
+
+
 @pytest.mark.parametrize("arm", list(live.ARMS))
 async def test_every_arm_runs_uncapped_under_a_budget(arm, monkeypatch, tmp_path):
     """Budgeted or not, every arm's agent gets the same limits, and the run records them on every row."""

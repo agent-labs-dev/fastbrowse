@@ -42,6 +42,17 @@ use crate::urlsplit::urlsplit;
 use scripts::py_float;
 
 pub(crate) const SETTLE_SECONDS: f64 = 5.0;
+/// How long the document must have gone without a mutation or input before a settle reports it quiet. This is the
+/// page's own event stream answering, not a poll: snapshot.js stamps `registry.lastMutation` from its mutation
+/// observer and input listeners, so a settle waits on one promise instead of being sent again until two reads agree.
+/// A click that mutates settles `SETTLE_QUIET_SECONDS` after its last write; a page that never mutates after the
+/// action has no such wait at all.
+pub(crate) const SETTLE_QUIET_SECONDS: f64 = 0.2;
+/// How long a visible progress indicator outranks a quiet DOM, inside `SETTLE_SECONDS`. A spinner settles the
+/// fingerprint while the page it waits for does not exist yet, but a page that spins forever must not pay the whole
+/// settle budget on every action, so past this quiet decides alone. Only `aria-busy`, a progressbar role and a
+/// `progress` element are read: #501 removed the guessed class and id names, which matched content.
+pub(crate) const SETTLE_LOADING_SECONDS: f64 = 1.5;
 /// A document can replace itself while its snapshot is being read. Restart that read after the replacement settles,
 /// and report failure if replacement continues. Run steps, time and spend are counted separately.
 pub(crate) const REREADS: u32 = 10;
@@ -150,10 +161,22 @@ pub(crate) trait FrameText: DeserializeOwned {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct DocumentResponse {
+pub(crate) struct DocumentResponse {
     url: String,
     response_status: Option<i64>,
     document_key: String,
+}
+
+/// A document's response read, kept with the tab and lifecycle generation it was read at.
+///
+/// The status of a document is fixed once it is served, and the read costs an isolated-world evaluate on every
+/// observation. An observation whose document is the one already read keeps that read; a document the read does not
+/// name is read again rather than assumed.
+#[derive(Debug, Clone)]
+pub(crate) struct KeptDocument {
+    pub(crate) session_id: String,
+    pub(crate) generation: u64,
+    pub(crate) document: DocumentResponse,
 }
 
 /// snapshot.js output for one frame.
@@ -172,6 +195,9 @@ struct Snapshot {
     /// 1 when the viewport shows a picture, chart, drawing or video that no control carries; snapshot.js sends 0/1.
     #[serde(default)]
     visual_content: i64,
+    /// The open modal's name, empty when it has none; null when no modal is open.
+    #[serde(default)]
+    modal: Option<String>,
     #[serde(default)]
     media: Vec<Media>,
     controls: Vec<SnapshotControl>,
@@ -284,6 +310,11 @@ pub(crate) struct PageState {
     pub(crate) unanswered: HashMap<String, Instant>,
     /// Tab session -> the unique id of the isolated world its HTTP status is read in.
     pub(crate) status_worlds: HashMap<String, String>,
+    /// The last document response read, so an observation of the same document sends no status read.
+    pub(crate) document: Option<KeptDocument>,
+    /// Frame session, when it was read, and the viewport size that pre-action measurement already returned. The wheel
+    /// and the pointer marks both need it, and asking again was a command of its own on every action.
+    pub(crate) viewport: Option<(String, Instant, (f64, f64))>,
 }
 
 pub struct CdpPage {
@@ -510,6 +541,7 @@ impl CdpPage {
     // -- observe / capture ----------------------------------------------------------------------------------
 
     pub async fn observe(&self) -> Result<Observation, BrowserError> {
+        self.adopt_choosers().await;
         self.reread(|| self.observe_once(0, true)).await
     }
 
@@ -571,11 +603,31 @@ impl CdpPage {
                 // A JavaScript dialog blocks the renderer, so any page evaluate would hang until it is handled.
                 return Ok(self.dialog_observation(dialog, bind));
             }
+            // The status read is a command of its own, and it answers the same for as long as the document is: an
+            // observation of a document already read keeps that read instead of asking the browser again. The
+            // generation is taken before the read, so a navigation during it leaves the kept copy naming an older
+            // generation and the next observation reads the new document.
+            let session_id = self.session.active_session_id()?;
+            let generation = self.session.lifecycle_mark();
+            let kept = self
+                .state
+                .lock()
+                .unwrap()
+                .document
+                .clone()
+                .filter(|kept| kept.session_id == session_id && kept.generation == generation);
             // A timer can open a dialog while the snapshot evaluates, and the dialog blocks that
             // evaluate until the 120s command deadline.
             let read = async {
                 let history = async { Ok::<_, BrowserError>(self.history().await) };
-                tokio::try_join!(history, self.snapshot_all_frames(bind), self.document_response())
+                if kept.is_some() {
+                    let (history, snapshot) = tokio::try_join!(history, self.snapshot_all_frames(bind))?;
+                    Ok((history, snapshot, None))
+                } else {
+                    let (history, snapshot, document) =
+                        tokio::try_join!(history, self.snapshot_all_frames(bind), self.document_response())?;
+                    Ok((history, snapshot, Some(document)))
+                }
             };
             let Some(read) = self.until_dialog(read).await else {
                 return match self.session.pending_dialog() {
@@ -583,7 +635,7 @@ impl CdpPage {
                     None => self.observe_once(attempt, bind).await,
                 };
             };
-            let ((can_go_back, mut history_entry, entry_url), (frames, inaccessible), document) = read?;
+            let ((can_go_back, mut history_entry, entry_url), (frames, inaccessible), read_document) = read?;
             let main = frames.iter().find(|(key, _)| key == MAIN).map(|(_, f)| f);
             // History and the snapshot are read at once, so a pushState between them paired the new page with the
             // old entry, whose lineage the new page then overwrote. Both are read again until they name one address;
@@ -595,6 +647,21 @@ impl CdpPage {
                     return self.observe_once(attempt + 1, bind).await;
                 }
                 history_entry = None;
+            }
+            let document = match read_document {
+                Some(document) => document,
+                // A kept read names the document it was made in. One that names another document was replaced
+                // without the generation moving, so its status is read now rather than carried over.
+                None => match kept
+                    .filter(|kept| main.is_some_and(|main| main.raw.document_key == kept.document.document_key))
+                {
+                    Some(kept) => kept.document,
+                    None => self.document_response().await?,
+                },
+            };
+            if main.is_some_and(|main| main.raw.document_key == document.document_key) {
+                self.state.lock().unwrap().document =
+                    Some(KeptDocument { session_id, generation, document: document.clone() });
             }
             let mut kept: Vec<Control> = vec![];
             let mut control_state: HashMap<String, Target> = HashMap::new();
@@ -693,6 +760,7 @@ impl CdpPage {
                 offscreen_text: frame_text(&frames, |s| &s.offscreen_text),
                 // Any frame's picture counts: a screenshot spans every frame the observation read.
                 visual_content: frames.iter().any(|(_, f)| f.raw.visual_content != 0),
+                modal: main.and_then(|m| m.raw.modal.clone()),
                 media: frames.iter().flat_map(|(_, f)| f.raw.media.iter().cloned()).collect(),
                 tabs: self.session.tabs(),
                 dialog: self.session.pending_dialog(),
@@ -762,6 +830,7 @@ impl CdpPage {
             viewport_text: String::new(),
             offscreen_text: String::new(),
             visual_content: false,
+            modal: None,
             media: Vec::new(),
             tabs: self.session.tabs(),
             dialog: Some(dialog),
@@ -1377,7 +1446,9 @@ impl CdpPage {
                     _ = self.wait_for_lifecycle(mark, remaining.as_secs_f64()) => continue,
                 }
             }
-            let settled = self.settled_fingerprint();
+            // Decorative mutations may never become quiet. Bound this wait like a progress indicator,
+            // then compare the fingerprint while the outer deadline still bounds a stuck renderer.
+            let settled = self.settled_within(remaining.as_secs_f64().min(SETTLE_LOADING_SECONDS));
             tokio::select! {
                 () = &mut dialog => return Ok(true),
                 () = sleep(remaining) => return Ok(!unchanged),
@@ -1418,14 +1489,23 @@ impl CdpPage {
 
     #[doc(hidden)]
     pub async fn settled_fingerprint(&self) -> Result<(bool, Option<String>), BrowserError> {
-        // A message comes back after the tasks queued before it, so what the action queued has run. It needs no frame
-        // and no timer: a cloud browser that draws nothing holds both back.
-        let script = format!(
-            "new Promise(resolve => {{ const sample = {page_js}; const {{port1, port2}} = new MessageChannel(); \
-             port1.onmessage = () => {{ const state = sample('fingerprint'); port1.close(); \
-             resolve([state.ready, state.ready ? state.fingerprint : null]); }}; port2.postMessage(0); }})",
-            page_js = self.page_js,
-        );
+        self.settled_within(SETTLE_SECONDS).await
+    }
+
+    /// One settle: a promise the page resolves once its own event stream says it has gone quiet, sampled for the
+    /// fingerprint in the same evaluation.
+    ///
+    /// Waiting in the page is the whole change (#946). The document's mutation observer and input listeners stamp
+    /// `registry.lastMutation`, so a page still writing resolves the promise later, on its own schedule, instead of
+    /// this sending another read to find out whether the previous one is stale. A page that settles 30 ms after a
+    /// click therefore costs one evaluation rather than one per sample, and the fingerprint walk that follows runs on
+    /// a page that has stopped moving, so it is not repeated.
+    ///
+    /// `seconds` is the caller's remaining settle budget, and the promise answers at it with whatever state the page
+    /// is in: an unsettled page is still a readable page. A hidden tab draws no frames, so it answers from one sample,
+    /// as the poll it replaces did.
+    pub async fn settled_within(&self, seconds: f64) -> Result<(bool, Option<String>), BrowserError> {
+        let script = self.settle_script(seconds);
         let result = self.evaluate(&self.session.active_session_id()?, &script).await?;
         match result.as_array().map(Vec::as_slice) {
             Some([Value::Bool(stable), fingerprint]) if fingerprint.is_string() || fingerprint.is_null() => {
@@ -1433,6 +1513,43 @@ impl CdpPage {
             }
             _ => Err(BrowserError::Failed("page script returned an unexpected tuple[bool, str | None]".into())),
         }
+    }
+
+    /// The page script for one settle: a promise the page resolves on its own frame and mutation events once the
+    /// document is interactive, has not mutated for `SETTLE_QUIET_SECONDS`, and shows no progress indicator (or has
+    /// shown one for `SETTLE_LOADING_SECONDS`), then samples the fingerprint in the same call. `seconds` bounds it.
+    ///
+    /// The `fastbrowse:settle` marker is what the integration test matches to count settle reads.
+    fn settle_script(&self, seconds: f64) -> String {
+        format!(
+            "/* fastbrowse:settle */ new Promise(resolve => {{ const r = window.__fastbrowse; \
+             const sample = {page_js}; \
+             const finish = () => {{ const s = sample('fingerprint'); \
+             resolve([Boolean(s && s.ready), s && s.ready ? s.fingerprint : null]); }}; \
+             if (!r || document.hidden) {{ finish(); return; }} \
+             const started = performance.now(); const deadline = started + {deadline}; \
+             const quiet = {quiet}; const loading = {loading}; \
+             let settled = false, frameAt = 0; \
+             const done = () => {{ if (settled) return; settled = true; r.nativeClearTimeout(timer); finish(); }}; \
+             const busy = () => {{ \
+               for (const e of document.querySelectorAll('[aria-busy=\"true\"],[role=\"progressbar\"],progress')) {{ \
+                 try {{ if (e.checkVisibility({{checkOpacity: true, checkVisibilityCSS: true}})) return true; }} catch {{}} \
+               }} return false; }}; \
+             const check = () => {{ \
+               if (settled) return; const now = performance.now(); \
+               const ready = document.readyState !== 'loading'; const held = busy(); \
+               const last = r.lastMutation || 0; \
+               const moved = last >= (r.lastInput || 0); \
+               if (ready && !held && (!moved || now - last >= quiet) && frameAt >= last) return done(); \
+               if (now >= deadline || (held && now - started >= loading)) return done(); \
+               r.nativeRequestAnimationFrame(t => {{ frameAt = t; check(); }}); }}; \
+             const timer = r.nativeSetTimeout(done, {deadline}); \
+             r.nativeRequestAnimationFrame(t => {{ frameAt = t; check(); }}); }})",
+            page_js = self.page_js,
+            deadline = py_float(seconds.max(0.0) * 1000.0),
+            quiet = py_float(SETTLE_QUIET_SECONDS * 1000.0),
+            loading = py_float(SETTLE_LOADING_SECONDS * 1000.0),
+        )
     }
 
     // -- evaluation -------------------------------------------------------------------------------------------

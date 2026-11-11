@@ -94,18 +94,32 @@
     registry.selfUpdating = new Set();
     registry.changed = new Set();
     registry.quiet = false;
-    const input = () => (registry.quiet = false);
+    // When the document last moved and when the run last touched it, as `performance.now()` reads them. A settle
+    // resolves from these rather than from re-reading the page: the observer is the page's own report that it is still
+    // writing, so one evaluation waits on it instead of being sent again until two reads agree. The action's own input
+    // is stamped apart from its mutations, so an action that changes nothing is not charged a quiet window it has no
+    // reason to wait out.
+    registry.lastMutation = performance.now();
+    registry.lastInput = 0;
+    const input = () => {
+      registry.quiet = false;
+      registry.lastInput = performance.now();
+    };
     for (const type of ['pointerdown', 'mousedown', 'keydown', 'input', 'change', 'wheel', 'scroll']) {
       addEventListener(type, input, true);
     }
     new MutationObserver(records => {
+      registry.lastMutation = performance.now();
       for (const r of records) {
+        // An attribute change moves the page but rewrites no text, so it stamps the clock above and is not a changed
+        // text node.
+        if (r.type === 'attributes') continue;
         const textOnly =
           r.type === 'characterData' || [...r.addedNodes, ...r.removedNodes].every(n => n.nodeType === Node.TEXT_NODE);
         const element = r.type === 'characterData' ? r.target.parentElement : r.target;
         if (textOnly && element) registry.changed.add(element);
       }
-    }).observe(document, { subtree: true, characterData: true, childList: true });
+    }).observe(document, { subtree: true, characterData: true, childList: true, attributes: true });
   }
   if (mode !== 'glance') {
     if (registry.quiet) for (const e of registry.changed) registry.selfUpdating.add(e);
@@ -291,7 +305,13 @@
   registry.visible = visible;
   // Styled checkboxes and radios often hide the native input. Its visible label is the click
   // target, but the input still owns the checked/disabled state and must participate in freshness.
-  const sourceOf = e => (e.tagName === 'LABEL' && ['checkbox', 'radio', 'file'].includes(e.control?.type) ? e.control : e);
+  // A control whose click opened a file chooser stands for the file input behind it, which can be hidden and unlabelled.
+  const sourceOf = e =>
+    registry.chooser?.opener === e && registry.chooser.input.isConnected
+      ? registry.chooser.input
+      : e.tagName === 'LABEL' && ['checkbox', 'radio', 'file'].includes(e.control?.type)
+        ? e.control
+        : e;
 
   // Their text is code, not a name: Amazon nests a <style> inside a result card's link.
   const CODE = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
@@ -1323,6 +1343,25 @@
     media.map(({ elapsed_seconds, ...m }) => m),
   ]));
 
+  // The open modal the rest of the page sits behind. A page marks what is under one aria-hidden or inert, so those
+  // controls leave the observation while staying in the document: Google Flights' Stops filter took 145 controls
+  // out and put them back on closing, and a run told each by name in every later step.
+  const modals = [...document.querySelectorAll('dialog:modal,[aria-modal="true"]')].filter(
+    e => !e.closest('[aria-hidden="true"],[inert]') && e.checkVisibility({ checkVisibilityCSS: true }),
+  );
+  // A dialog is named by aria-label or aria-labelledby, never by its content.
+  const dialogName = e =>
+    (
+      e.getAttribute('aria-label') ||
+      (e.getAttribute('aria-labelledby') || '')
+        .split(/\s+/)
+        .map(id => (id && e.ownerDocument.getElementById(id)?.innerText) || '')
+        .join(' ')
+    )
+      .replace(/\s+/g, ' ')
+      .trim();
+  const modal = modals.length ? dialogName(modals.at(-1)) : null;
+
   const result = {
     url: location.href,
     title: document.title,
@@ -1337,5 +1376,7 @@
     retarget_keys,
     inaccessible_frames: inaccessible,
   };
+  // Absent unless one is open, as on most pages: an unnamed modal is the empty string, not null.
+  if (modal !== null) result.modal = modal;
   return result;
 })

@@ -261,6 +261,9 @@ pub(crate) struct RunState {
     pub notes: Notes,
     /// Bot-check documents this run has already reloaded once, so a challenge that survives is reported.
     pub challenge_reloads: HashSet<String>,
+    /// Addresses where a bot check did not clear, and the routes proposed around them, each opened once.
+    pub walled: Vec<String>,
+    pub routes: HashSet<String>,
     pub relevance_cache: RelevanceCache,
     pub steps: Vec<StepResult>,
     /// What Jev was offered for the latest decision, for the next step recorded, which is the one that decision led to.
@@ -276,6 +279,8 @@ pub(crate) struct RunState {
     /// Jev's pick when asked again after a stall, by the page state it was asked on, taken as the
     /// next decision there.
     pub picked: Option<(String, Decision)>,
+    /// The action the next step carries out, built while the page was read.
+    pub(super) built: Option<Step<super::driving::Watched<fastbrowse_core::page::Action>>>,
     pub unchanged: i64,
     /// What a fill or select has written, by page address, so only a field's first new value counts as progress by
     /// itself. A submit that loads the same address again is still the same form: a new document there does not make
@@ -665,6 +670,7 @@ impl RunState {
             ledger,
             fetched: self.read_urls.clone(),
             picked: None,
+            built: None,
             landing: None,
             idle: Vec::new(),
             acted_from: None,
@@ -699,6 +705,8 @@ impl RunState {
             ledger,
             notes: Notes::default(),
             challenge_reloads: HashSet::new(),
+            walled: Vec::new(),
+            routes: HashSet::new(),
             relevance_cache: RelevanceCache::default(),
             steps: Vec::new(),
             choices: Vec::new(),
@@ -708,6 +716,7 @@ impl RunState {
             http_seen: HashSet::new(),
             hint: None,
             picked: None,
+            built: None,
             unchanged: 0,
             written: HashMap::new(),
             recoveries: 0,

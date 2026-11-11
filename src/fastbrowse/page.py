@@ -114,6 +114,9 @@ class Observation(Frozen):
     visual_content: bool = False
     """A visible image, canvas, drawing or video carries state the text and the controls do not, so the verifier
     needs the screenshot even on a text-rich page whose state is the picture itself."""
+    modal: str | None = None
+    """The accessible name of the open modal dialog the rest of the page sits behind, empty when it has none; None
+    when no modal is open. Controls behind an open modal are left out of `controls`."""
     media: tuple[Media, ...] = ()
     """Every audio and video player on the page, shown or not: their state lives in the element, not the page text."""
     tabs: tuple[Tab, ...]

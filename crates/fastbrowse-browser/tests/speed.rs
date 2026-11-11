@@ -419,3 +419,65 @@ async fn test_an_endless_animation_a_click_starts_does_not_hold_the_action() {
     assert!(started.elapsed().as_secs_f64() < 2.0, "{:?}", started.elapsed());
     h.close().await;
 }
+
+/// Settle reads the page's own events: a read sent to the page resolves when the page itself reports going quiet.
+fn settle_reads_since(proxy: &CdpProxy, start: usize) -> usize {
+    proxy
+        .sent_since(start, "Runtime.evaluate")
+        .iter()
+        .filter(|m| m["params"]["expression"].as_str().is_some_and(|e| e.contains("fastbrowse:settle")))
+        .count()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_settle_does_not_re_read_for_each_of_the_pages_writes() {
+    let _turn = turn().await;
+    // #946: settlement is the page's event stream, not a sample repeated until two reads agree. A page that writes
+    // twenty times over 300ms after the click costs one wait in the page, whatever its write count; the poll this
+    // replaces read once per sample, so a longer write burst cost more reads than a short one.
+    let Some((h, proxy)) = proxied().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        "document.body.innerHTML = '<button>Write</button>'; \
+         document.querySelector('button').onclick = () => { \
+           for (let i = 1; i <= 20; i++) \
+             setTimeout(() => { document.querySelector('button').textContent = 'Wrote ' + i; }, i * 15); };",
+    )
+    .await;
+    let obs = h.observe().await;
+    let start = proxy.len();
+    let begun = Instant::now();
+    let result = h.page.act(&targeted(Operation::Click, &find(&obs, "Write").id), &obs).await.expect("act");
+    let elapsed = begun.elapsed().as_secs_f64();
+    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+    assert!(result.page_changed, "{result:?}");
+    // The last write was 300ms after the click, and the quiet window runs from it.
+    assert!(elapsed >= 0.3, "settled before the page's last write: {elapsed}");
+    assert!(elapsed < 2.0, "{elapsed}");
+    // A lifecycle event can wake the loop once more; what must not happen is a read per write.
+    let reads = settle_reads_since(&proxy, start);
+    assert!(reads <= 2, "the settle re-read the page {reads} times for 20 writes");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_settle_of_an_idle_page_pays_no_quiet_window() {
+    let _turn = turn().await;
+    // A page that was already quiet before the click has nothing to wait for, so the settle answers at once rather
+    // than charging every action a fixed quiet window.
+    let Some((h, proxy)) = proxied().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(&h.session, "document.body.innerHTML = '<button>Idle</button>'").await;
+    let obs = h.observe().await;
+    sleep(Duration::from_millis(300)).await;
+    let start = proxy.len();
+    let begun = Instant::now();
+    let result = h.page.act(&targeted(Operation::Click, &find(&obs, "Idle").id), &obs).await.expect("act");
+    let elapsed = begun.elapsed().as_secs_f64();
+    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+    assert!(!result.page_changed, "{result:?}");
+    assert!(elapsed < 0.25, "an idle page paid a quiet window: {elapsed}");
+    assert_eq!(settle_reads_since(&proxy, start), 1, "the settle re-read the page");
+    h.close().await;
+}

@@ -541,6 +541,7 @@ class _Observed:
     browser: tuple[CostLine, ...] = ()
     """The cost of the cloud browser the harness started for the run; empty for the pool or a local browser."""
     live_url: str | None = None
+    browser_session_id: str | None = None
     open_seconds: float | None = None
     close_seconds: float | None = None
 
@@ -850,6 +851,7 @@ async def fast_arm(
         ended=ended,
         browser=() if browser is None else browser.cost,
         live_url=None if browser is None else browser.live_url,
+        browser_session_id=None if browser is None else browser.session_id,
         open_seconds=None if browser is None else round(opening, 2),
         close_seconds=None if browser is None else browser.close_seconds,
     )
@@ -1829,7 +1831,12 @@ async def _fast_report(
         **efficiency(cost),
         model=backend.providers(),
         text_model=llm_models(route),
-        provenance={"providers": route},
+        # A hosted run can be watched and replayed from its row, as a Browser Use V4 row can.
+        provenance={
+            "providers": route,
+            **({} if seen.browser_session_id is None else {"browser_session_id": seen.browser_session_id}),
+            **({} if seen.live_url is None else {"live_url": seen.live_url}),
+        },
         cost_by_component=_known_components(cost.lines),
     )
 
