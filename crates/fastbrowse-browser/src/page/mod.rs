@@ -157,6 +157,14 @@ pub(crate) trait FrameText: DeserializeOwned {
     const SHAPE: &'static str;
     fn url(&self) -> &str;
     fn title(&self) -> &str;
+    /// Whether this read is kept, so a frame that answers "unchanged" is answered from it instead of read again.
+    fn keeps_reads() -> bool {
+        false
+    }
+    /// The number the page gave this read when it kept it; none when the page keeps no read to answer "unchanged" from.
+    fn read(&self) -> Option<u64> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -206,11 +214,20 @@ struct Snapshot {
     guards: HashMap<String, Option<String>>,
     /// Digest of the guard without the node ids at its ends, which a redraw changes.
     retarget_keys: HashMap<String, Option<String>>,
+    /// The page's number for this read when it kept it; null for a read it did not keep.
+    #[serde(default)]
+    read: Option<u64>,
 }
 
 impl FrameText for Snapshot {
     fn title(&self) -> &str {
         &self.title
+    }
+    fn keeps_reads() -> bool {
+        true
+    }
+    fn read(&self) -> Option<u64> {
+        self.read
     }
     const SHAPE: &'static str = "_Snapshot";
     fn url(&self) -> &str {
@@ -318,6 +335,9 @@ pub(crate) struct PageState {
     /// Frame session, when it was read, and the viewport size that pre-action measurement already returned. The wheel
     /// and the pointer marks both need it, and asking again was a command of its own on every action.
     pub(crate) viewport: Option<(String, Instant, (f64, f64))>,
+    /// `<shape>|<slot>|<frame>` -> the read last kept for that frame. A frame answers "unchanged" only about the
+    /// read it kept, so this is what such an answer is served from.
+    pub(crate) kept: HashMap<String, Value>,
 }
 
 pub struct CdpPage {
@@ -847,8 +867,11 @@ impl CdpPage {
         bind: bool,
     ) -> Result<(Vec<(String, FrameObservation<Snapshot>)>, usize), BrowserError> {
         let mode = if bind { "snapshot" } else { "glance" };
-        let script = format!("{}('{mode}')", self.page_js);
-        let result = self.read_frames::<Snapshot>(&script).await?;
+        // `-reuse` lets a frame that has not moved answer from the read it kept. The plain mode is what reads the
+        // frame again in full, for a frame whose kept read this side does not have.
+        let script = format!("{}('{mode}-reuse')", self.page_js);
+        let full = format!("{}('{mode}')", self.page_js);
+        let result = self.read_frames::<Snapshot>(&script, Some((mode, full.as_str()))).await?;
         let coverage: Vec<(String, usize)> =
             result.iter().map(|(_, f)| (f.session_id.clone(), f.raw.inaccessible_frames)).collect();
         let inaccessible = self.inaccessible_frames(&coverage)?;
@@ -856,9 +879,13 @@ impl CdpPage {
     }
 
     /// Read every frame of the active tab with `expression`.
+    ///
+    /// `retry`, when a read is one this side keeps, names the slot it is kept under and the expression that reads the
+    /// frame again in full, for the frame that answers "unchanged" when no read is kept for it.
     async fn read_frames<T: FrameText>(
         &self,
         expression: &str,
+        retry: Option<(&str, &str)>,
     ) -> Result<Vec<(String, FrameObservation<T>)>, BrowserError> {
         let main_session = self.session.active_session_id()?;
         let target_id = self.session.active_target_id();
@@ -867,7 +894,7 @@ impl CdpPage {
         sources.extend(self.session.frame_sessions().into_iter().filter(|(frame, _)| !self.session.ad_frame(frame)));
         let mut result: Vec<(String, FrameObservation<T>)> = vec![];
         // Preserve source order regardless of completion order so capture offsets and hashes stay stable.
-        let reads = sources.iter().map(|(key, sid)| self.read_frame::<T>(key, sid, expression));
+        let reads = sources.iter().map(|(key, sid)| self.read_frame::<T>(key, sid, expression, retry));
         let frames = futures_util::future::try_join_all(reads).await?;
         for ((key, _), frame) in sources.into_iter().zip(frames) {
             if let Some(frame) = frame {
@@ -891,14 +918,10 @@ impl CdpPage {
         frame_key: &str,
         session_id: &str,
         expression: &str,
+        retry: Option<(&str, &str)>,
     ) -> Result<Option<FrameObservation<T>>, BrowserError> {
         let is_main = frame_key == MAIN;
-        let read = if is_main {
-            self.evaluate(session_id, expression).await
-        } else {
-            self.frame_evaluate(session_id, expression).await
-        };
-        let raw = match read {
+        let mut raw = match self.read_frame_value(is_main, session_id, expression).await {
             Ok(raw) => raw,
             Err(_) if !is_main => return Ok(None),
             Err(error) => return Err(error),
@@ -906,7 +929,55 @@ impl CdpPage {
         if raw.is_null() {
             return Ok(None);
         }
-        let parsed: T = parse(raw, T::SHAPE)?;
+        // The page answers "unchanged" only about the read it kept, so that answer is the kept read, sent back as the
+        // reference it is rather than derived and transferred again. A frame whose kept read this side does not have
+        // is read again in full: the page's copy and this side's are kept together, but a reused page must never be
+        // assumed to agree with a read it does not name.
+        let mut served = false;
+        if let Some((slot, full)) = retry
+            && truthy(&raw)
+            && raw.get("unchanged").is_some_and(truthy)
+        {
+            let key = format!("{}|{slot}|{frame_key}", T::SHAPE);
+            // Another page on the same session can have replaced the page's kept read since this side took its own,
+            // so the answer is served only when it names the very read held here, by its document and its number.
+            fn names(value: &Value) -> (Option<&str>, Option<u64>) {
+                (value.get("document_key").and_then(Value::as_str), value.get("read").and_then(Value::as_u64))
+            }
+            let kept = self.state.lock().unwrap().kept.get(&key).cloned();
+            match kept {
+                Some(kept) if matches!(names(&raw), (Some(_), Some(_))) && names(&kept) == names(&raw) => {
+                    raw = kept;
+                    served = true;
+                }
+                // The page has a read this side did not keep: read the frame again rather than answer from nothing.
+                _ => {
+                    raw = match self.read_frame_value(is_main, session_id, full).await {
+                        Ok(raw) => raw,
+                        Err(_) if !is_main => return Ok(None),
+                        Err(error) => return Err(error),
+                    };
+                    if raw.is_null() {
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+        let parsed: T = parse(raw.clone(), T::SHAPE)?;
+        // A read this side can serve later is kept as it arrived, under the document and number it names. A read the
+        // page did not keep replaces nothing to serve: the page will not answer "unchanged" about it.
+        if let Some((slot, _)) = retry
+            && !served
+            && T::keeps_reads()
+        {
+            let key = format!("{}|{slot}|{frame_key}", T::SHAPE);
+            let mut state = self.state.lock().unwrap();
+            if parsed.read().is_some() {
+                state.kept.insert(key, raw);
+            } else {
+                state.kept.remove(&key);
+            }
+        }
         // The text and the address it came from were read in one evaluation, so this cannot be raced.
         if let Some(grant) = self.session.grant()
             && !grant.allows(parsed.url())
@@ -921,6 +992,15 @@ impl CdpPage {
             session_id: session_id.to_owned(),
             raw: parsed,
         }))
+    }
+
+    /// Read one frame, in the main frame or a child's own session.
+    async fn read_frame_value(&self, is_main: bool, session_id: &str, expression: &str) -> Result<Value, BrowserError> {
+        if is_main {
+            self.evaluate(session_id, expression).await
+        } else {
+            self.frame_evaluate(session_id, expression).await
+        }
     }
 
     /// Evaluate in a child frame within its deadline; past it, the frame reads as unreadable (`Null`).
@@ -965,7 +1045,7 @@ impl CdpPage {
     async fn capture_once(&self) -> Result<Capture, BrowserError> {
         self.session.assert_clear().await?;
         // A JavaScript dialog blocks the renderer, so the page reads as nothing until it is answered, as it observes.
-        let Some(frames) = self.until_dialog(self.read_frames::<CaptureSnapshot>(&self.capture_js)).await else {
+        let Some(frames) = self.until_dialog(self.read_frames::<CaptureSnapshot>(&self.capture_js, None)).await else {
             let (url, title) = self.active_tab_page();
             return Ok(Capture {
                 url,
