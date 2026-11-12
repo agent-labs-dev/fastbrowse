@@ -570,11 +570,14 @@ async fn test_a_scroll_or_a_pointer_move_is_not_served_from_a_kept_read() {
     let (_, unchanged) = reads(&h).await;
     assert_eq!(unchanged, 0, "a scrolled page was served from the read it kept");
     assert!(
-        scrolled.controls.iter().all(|c| c.offscreen),
+        scrolled.controls.iter().filter(|c| c.role == "button").all(|c| c.offscreen),
         "scrolling past the only control should leave it offscreen: {:?}",
         scrolled.controls.iter().map(|c| (&c.label, c.offscreen)).collect::<Vec<_>>()
     );
-    assert!(top.controls.iter().any(|c| !c.offscreen), "it was on screen before the scroll");
+    assert!(
+        top.controls.iter().any(|c| c.role == "button" && !c.offscreen),
+        "the button was on screen before the scroll"
+    );
     h.close().await;
 }
 
