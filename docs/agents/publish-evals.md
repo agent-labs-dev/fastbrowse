@@ -26,23 +26,6 @@ the changed writer through both readers.
 
 ## Schemas
 
-## What may be published
-
-- Only a figure we measured, on the build the candidate names. A vendor's own figure appears only as a
-  reference, labelled vendor-published with its source, never beside ours as if measured the same way.
-- Claude Opus 5.5 through OpenRouter is the one judge model behind published figures: Parallax's LLM fallback
-  (`PARALLAX_JUDGE_MODELS`) and the official suites' judges (`PARALLAX_BU_BENCH_JUDGE`,
-  `PARALLAX_MIND2WEB_JUDGE`) all name it, and a group judged by any other model is not published.
-
-## The candidate contract
-
-Three programs share the candidate's schema: `fastbrowse-evals browser publish-candidate` writes it,
-`fastbrowse.evals.benchmarks` validates and installs it, and `agent-labs-dev/fastbrowse-site` parses it
-(`src/lib/benchmark-feed.ts`). A schema change lands in all three. Before any of them merges, run one candidate written by
-the changed writer through both readers.
-
-## Schemas
-
 Schema 1 requires all four original groups. Schema 2 accepts nonempty subsets of those four groups.
 Schema 3 also supports `internal-fastbrowse`: every supported internal task in the current catalog (53 since
 `stretch-wizard-correction` was retired; figures approved earlier ran 54), three repeats each, with
@@ -68,18 +51,18 @@ them is published.
 
 `internal-hosted` is the head-to-head over the 53 tasks fastbrowse runs; figures approved at 46, 47 or 52 tasks still
 read. A campaign runs `fastbrowse` and `jev-ultrafast` live in one harness invocation, on Browser Use Cloud browsers
-with the same settings. Each arm runs every repeat of every task it can attempt: `browser-use` skips the task that
+with the same settings. A competitor refresh adds `browser-use`, `browser-use-ultrafast` and `browser-harness`. Both hosted Browser Use models return answers. Each arm runs every repeat of every task it can attempt: `browser-use` and `browser-use-ultrafast` skip the task that
 passes only by stopping before an unauthorized step, and `browser-harness` also skips the login tasks, so it runs 47.
-Ultrafast returns no answer, only DONE or BLOCKED, so it runs only the six navigation tasks, which are graded on the
+`jev-ultrafast` returns no answer, only DONE or BLOCKED, so it runs only the six navigation tasks, which are graded on the
 page a run ends on. The catalog states each reason and the site shows those tasks as not run. An arm that did not run has no rows and the site shows it as not measured. An arm
 that reports neither its model nor its spend carries `"dollars": null` and the site shows its pass rate and seconds with
 "cost not reported". Fastbrowse receipts retain known dollar figures, but an unknown or unsettled line marks
 the total incomplete. A provisional figure is a lower bound, not a settled bill. Hosted session usage also remains provisional after its browser stops: the provider can report delayed charges and supplies no billing-finalized marker. The private `provisional_hosted_cost` receipt preserves the exact amount strings and host query time; `dollars` remains null and `unknown_cost` true. A later read is a separate usage observation, never a replacement for the original receipt. Publication requires complete costs and rejects these provisional totals.
 
-`browser-use` and `browser-harness` rows come from `docs/results/competitor-reference.json`, which only
+`browser-use`, `browser-use-ultrafast` and `browser-harness` rows come from `docs/results/competitor-reference.json`, which only
 `publish-candidate` reads. It holds their public rows with the vendor, date, version, browser and campaign of the one
 run that measured them, and the site labels them as measured once on that date, not on this release. A dispatch with
-`refresh_competitors` runs both live on a full head-to-head and leaves `competitor-reference.json` in the candidate
+`refresh_competitors` runs all three live on a full head-to-head and leaves `competitor-reference.json` in the candidate
 artifact; commit that file to `docs/results/` for later campaigns. Publication refuses the head-to-head, naming each
 stale task, when the reference is missing, is graded under another policy, or no longer matches the catalog.
 
