@@ -196,7 +196,7 @@ async fn an_initial_http_failure_keeps_task_judgments_when_the_browser_opens() {
 }
 
 /// Answers whether the task answers a consent banner itself with the given probability, and everything else as the
-/// script `wait` says, keeping each page it is shown.
+/// script `wait` says until the post-refusal page is recorded.
 struct ConsentDecision(f64, Arc<Mutex<Vec<Value>>>, fastbrowse_agent::scripted::ScriptedJev);
 
 impl DecisionClient for ConsentDecision {
@@ -211,11 +211,15 @@ impl DecisionClient for ConsentDecision {
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         Box::pin(async move {
             if !questions.contains_key("consent") {
-                let first = {
+                let (first, recorded) = {
                     let mut seen = self.1.lock().unwrap();
                     seen.push(state.clone());
-                    seen.len() == 1
+                    (seen.len() == 1, seen.iter().filter(|state| state.pointer("/page/text").is_some()).count() == 2)
                 };
+                // The assertion needs this observation, not an unlimited wait on the static banner that follows it.
+                if recorded {
+                    return Err(DecisionError::Failed("consent observation recorded".into()));
+                }
                 if first {
                     // Time for the browser to refuse the banner before the next page is read.
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -304,7 +308,9 @@ async fn page_after_refusal(start: &str, task: &str, answers_it: f64) -> String 
     };
     let task =
         RunTask { task: task.into(), start: Some(start.into()), launch: true, browser: true, ..RunTask::default() };
-    run_task(task, host).await.expect("run returns a result");
+    let result = run_task(task, host).await.expect("run returns a result");
+    assert_eq!(result.status, Status::Error);
+    assert!(result.error.as_deref().is_some_and(|error| error.contains("consent observation recorded")), "{result:?}");
     let states = seen.lock().unwrap();
     let pages: Vec<&str> = states.iter().filter_map(|state| state.pointer("/page/text")?.as_str()).collect();
     pages.get(1).copied().unwrap_or_default().to_string()
