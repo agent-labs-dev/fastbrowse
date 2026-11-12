@@ -43,6 +43,7 @@ export type LLMPurpose =
   | 'pages'
   | 'dates'
   | 'known_pages'
+  | 'recovery_pages'
   | 'search'
   | 'unobtainable'
   | 'groups';

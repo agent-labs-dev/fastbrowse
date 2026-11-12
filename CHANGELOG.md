@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A stalled run can try a fresh known route before stopping.** The route proposer sees the current page, collected evidence and previous actions, so it can use facts learned during the run. Previously offered, opened and walled routes are excluded, and Jev chooses whether to navigate ([#1037](https://github.com/agent-labs-dev/fastbrowse/issues/1037)).
+
 - **Web search can run without a browser.** With `EXA_API_KEY`, Jev picks LLM-proposed queries and opens links from Exa results. Returned fields remain citable, existing browsers stay open, and each search has a cost receipt checked against the run budget ([#986](https://github.com/agent-labs-dev/fastbrowse/issues/986)).
 
 - **Local runs use the browser attached through the extension.** `--local` now selects the extension; `--launch` opens a separate local Chrome. An explicit headed mode or profile also selects launched Chrome. A missing extension stops the run before model calls ([#1005](https://github.com/agent-labs-dev/fastbrowse/issues/1005)).
