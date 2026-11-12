@@ -606,6 +606,8 @@ async fn test_a_gateway_response_without_cost_or_receipt_is_bounded() {
 async fn test_a_price_overridden_for_part_of_the_week_is_bounded_by_its_dearest() {
     // OpenRouter lists DeepSeek's weekend and off-peak prices as `overrides`, each a price set with the window it
     // holds in. Read as one price, the list failed the whole lookup, so compose sent 8.44 MB unpacked (#760).
+    // A long-prompt set names its threshold as `min_prompt_tokens`; read as a price, 272000 dollars a token bounded
+    // one unanswered call at $299,880,000,000.
     let http = answering(move |request| {
         if request.url.ends_with("/endpoints") {
             return ok(Response::json(
@@ -616,6 +618,7 @@ async fn test_a_price_overridden_for_part_of_the_week_is_bounded_by_its_dearest(
                         "overrides": [
                             {"utc_days": ["saturday", "sunday"], "prompt": "0.00000015", "completion": "0.0000006"},
                             {"utc_start": 0, "utc_end": 100, "prompt": "0.000001", "completion": "0.000004"},
+                            {"min_prompt_tokens": 272000, "prompt": "0.0000006", "completion": "0.000003"},
                         ]}},
                 ]}}),
             ));

@@ -253,12 +253,13 @@ fn ceiling(payload: &Map<String, Value>) -> Result<Option<Ceiling>, String> {
                     }
                 }
                 "peak_pricing" => peak = peak.max(dollars(object_value(Some(value))?.get("multiplier"))?),
-                // Each override is a whole price set for the window it names, such as weekends or a band of hours.
+                // Each override is a whole price set for the condition it names: a window, such as weekends or a band
+                // of hours, or a prompt length from `min_prompt_tokens` up.
                 "overrides" => {
                     for set in value.as_array().ok_or("expected a list of price overrides")? {
                         for (key, price) in object_value(Some(set))? {
                             match key.as_str() {
-                                "utc_days" | "utc_start" | "utc_end" => {}
+                                "utc_days" | "utc_start" | "utc_end" | "min_prompt_tokens" => {}
                                 key if PER_REQUEST_PRICES.contains(&key) => {
                                     request = request.max(dollars(Some(price))?)
                                 }
