@@ -229,7 +229,8 @@ async fn the_extension_reports_its_manifest_version_and_supported_commands() {
     };
     let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("extension-hello-{}", std::process::id()));
     std::fs::create_dir_all(&root).expect("root");
-    let browser = Browser::launch(&chrome, &root);
+    let extension = Path::new(env!("CARGO_MANIFEST_DIR")).join("../fastbrowse-browser/extension");
+    let browser = Browser::launch(&chrome, &root, &extension);
     let record: fastbrowse_browser::extension::protocol::HostRecord =
         serde_json::from_slice(&std::fs::read(browser.record().await).expect("record")).expect("host record");
     let endpoint = fastbrowse_browser::extension::shim::connect(&record, "handshake", Default::default())
