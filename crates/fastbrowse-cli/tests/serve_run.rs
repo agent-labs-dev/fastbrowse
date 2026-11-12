@@ -399,7 +399,7 @@ async fn test_a_configuration_error_is_refused_before_run_task_is_called() {
         (no_model_keys, json!({}), "OPENROUTER_API_KEY"),
         (no_model_keys, json!({"local": true}), "OPENROUTER_API_KEY"),
         (|s| s.browser_use_api_key = None, json!({}), "BROWSER_USE_API_KEY"),
-        (|s| s.chrome = Some("not-installed-anywhere".into()), json!({"local": true}), "Chrome was not found"),
+        (|s| s.chrome = Some("not-installed-anywhere".into()), json!({"launch": true}), "Chrome was not found"),
     ];
     for (change, fields, named) in cases {
         let recorder = Recorder::default();

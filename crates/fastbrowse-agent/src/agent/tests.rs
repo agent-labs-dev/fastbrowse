@@ -7923,3 +7923,18 @@ async fn test_a_read_only_task_can_press_a_navigation_key_but_not_change_a_value
         );
     }
 }
+
+#[tokio::test]
+async fn test_search_entry_groups_more_choices_than_the_provider_accepts() {
+    let jev = Arc::new(FirstChoice { wants: Some("query 599"), ..Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let state = run_state();
+    let options = (0..600).map(|i| (i.to_string(), serde_json::json!(format!("query {i}")))).collect();
+    assert_eq!(agent.choose_entry("Find a source", &state.ledger, options).await.unwrap(), "599");
+    assert_eq!(jev.asked.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn test_a_search_does_not_count_as_a_site_mutation() {
+    assert!(!executed(Some(Operation::Search), None, true).changed_site());
+}
