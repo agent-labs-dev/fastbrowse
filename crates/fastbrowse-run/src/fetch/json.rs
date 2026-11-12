@@ -5,6 +5,11 @@
 //! an HTML page is: each object key is a heading and each scalar its own block under the path of keys and array
 //! indices that leads to it, so a value is quoted, cited and told apart by where it sits.
 //!
+//! An object that is an item of an array is one item the document repeats, as a list row is on a page: it is one
+//! record block under its path, with a line for each value in it, written as the keys and indices that lead to it from
+//! the item, a colon and the value. Read leaf by leaf, PyPI's release files were thousands of notes, and a comparison
+//! across them could not be judged.
+//!
 //! A string reads as its decoded text, a number as it is written, so no digit of a large or exponent number is lost,
 //! and `true`, `false` and `null` as those words. An empty object or array reads as `{}` or `[]`. Members keep their
 //! order and a repeated key keeps every value. A document that is not entirely valid JSON is no structure, and its
@@ -23,6 +28,8 @@ pub fn blocks(body: &str) -> Option<Vec<Found>> {
     // The containers open around the next value, with the index of an array's current item. Kept as a list rather
     // than a call stack, so a deeply nested document cannot overflow one.
     let mut open: Vec<Option<usize>> = Vec::new();
+    // The array item being read as a record: the containers open around its members, its path, and its lines.
+    let mut record: Option<(usize, Vec<String>, Vec<String>)> = None;
     'value: loop {
         reader.space();
         let leaf = match reader.peek()? {
@@ -32,8 +39,11 @@ pub fn blocks(body: &str) -> Option<Vec<Found>> {
                 if reader.eat(b'}') {
                     "{}".to_string()
                 } else {
+                    if record.is_none() && matches!(open.last(), Some(Some(_))) {
+                        record = Some((open.len() + 1, path.clone(), Vec::new()));
+                    }
                     open.push(None);
-                    reader.key(&mut path, &mut found)?;
+                    reader.key(&mut path, &mut found, record.is_none())?;
                     continue 'value;
                 }
             }
@@ -54,7 +64,17 @@ pub fn blocks(body: &str) -> Option<Vec<Found>> {
             b'n' => reader.word("null")?,
             _ => reader.number()?,
         };
-        push(&mut found, BlockKind::Paragraph, leaf, &path);
+        match &mut record {
+            Some((_, at, lines)) => {
+                let within = path[at.len()..].join(".");
+                lines.push(if text::strip(&leaf).is_empty() {
+                    format!("[{within}: no text]")
+                } else {
+                    format!("{within}: {leaf}")
+                });
+            }
+            None => push(&mut found, BlockKind::Paragraph, leaf, &path),
+        }
         // The value is done: close every container it ends, then move to the next member or item.
         loop {
             reader.space();
@@ -64,7 +84,7 @@ pub fn blocks(body: &str) -> Option<Vec<Found>> {
             path.pop();
             match (reader.next()?, container) {
                 (b',', None) => {
-                    reader.key(&mut path, &mut found)?;
+                    reader.key(&mut path, &mut found, record.is_none())?;
                     continue 'value;
                 }
                 (b',', Some(index)) => {
@@ -74,6 +94,10 @@ pub fn blocks(body: &str) -> Option<Vec<Found>> {
                 }
                 (b'}', None) | (b']', Some(_)) => {
                     open.pop();
+                    if record.as_ref().is_some_and(|(depth, _, _)| *depth == open.len() + 1) {
+                        let (_, at, lines) = record.take().expect("a record is open");
+                        found.push(Found { whole_record: true, ..block(BlockKind::Record, lines.join("\n"), &at) });
+                    }
                 }
                 _ => return None,
             }
@@ -83,10 +107,13 @@ pub fn blocks(body: &str) -> Option<Vec<Found>> {
 
 /// A block of `text` under `path`. Text with nothing but space in it is no block, as an empty element is none.
 fn push(found: &mut Vec<Found>, kind: BlockKind, text: String, path: &[String]) {
-    if text::strip(&text).is_empty() {
-        return;
+    if !text::strip(&text).is_empty() {
+        found.push(block(kind, text, path));
     }
-    found.push(Found {
+}
+
+fn block(kind: BlockKind, text: String, path: &[String]) -> Found {
+    Found {
         kind,
         text,
         heading_path: path.to_vec(),
@@ -94,7 +121,7 @@ fn push(found: &mut Vec<Found>, kind: BlockKind, text: String, path: &[String]) 
         links: Vec::new(),
         frame_id: None,
         whole_record: false,
-    });
+    }
 }
 
 struct Reader<'a> {
@@ -126,9 +153,9 @@ impl Reader<'_> {
         }
     }
 
-    /// An object member's key and its colon: the key is a heading under the object's path, and the path then leads
-    /// through it to the member's value.
-    fn key(&mut self, path: &mut Vec<String>, found: &mut Vec<Found>) -> Option<()> {
+    /// An object member's key and its colon: the key is a heading under the object's path, unless a record's line
+    /// names it, and the path then leads through it to the member's value.
+    fn key(&mut self, path: &mut Vec<String>, found: &mut Vec<Found>, heading: bool) -> Option<()> {
         self.space();
         if self.peek()? != b'"' {
             return None;
@@ -138,7 +165,9 @@ impl Reader<'_> {
         if !self.eat(b':') {
             return None;
         }
-        push(found, BlockKind::Heading, key.clone(), path);
+        if heading {
+            push(found, BlockKind::Heading, key.clone(), path);
+        }
         path.push(key);
         Some(())
     }
@@ -270,12 +299,28 @@ mod tests {
                 (h, "enabled".into(), path(&["info"])),
                 (p, "true".into(), path(&["info", "enabled"])),
                 (h, "releases".into(), path(&[])),
-                (h, "name".into(), path(&["releases", "0"])),
-                (p, "beta".into(), path(&["releases", "0", "name"])),
+                (BlockKind::Record, "name: beta".into(), path(&["releases", "0"])),
                 (p, "7".into(), path(&["releases", "1"])),
                 (p, "null".into(), path(&["releases", "2"])),
             ]
         );
+    }
+
+    #[test]
+    fn an_array_item_object_is_one_whole_record_of_every_value_in_it() {
+        let body = r#"{"releases":{"0.1":[{"filename":"a.tar.gz","digests":{"md5":"x"},"tags":["py3",{"abi":"none"}],"note":"","o":{}}]}}"#;
+        let found = blocks(body).expect("valid JSON");
+        let record: Vec<_> = found.iter().filter(|b| b.kind == BlockKind::Record).collect();
+        assert_eq!(record.len(), 1);
+        assert!(record[0].whole_record);
+        assert_eq!(record[0].heading_path, path(&["releases", "0.1", "0"]));
+        assert_eq!(
+            record[0].text,
+            "filename: a.tar.gz\ndigests.md5: x\ntags.0: py3\ntags.1.abi: none\n[note: no text]\no: {}"
+        );
+        let headings: Vec<&str> =
+            found.iter().filter(|b| b.kind == BlockKind::Heading).map(|b| b.text.as_str()).collect();
+        assert_eq!(headings, ["releases", "0.1"]);
     }
 
     #[test]

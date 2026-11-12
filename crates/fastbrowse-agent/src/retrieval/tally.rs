@@ -14,6 +14,7 @@ use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionClient, NoulQues
 use fastbrowse_core::llm::{LLMClient, Message, Typed};
 use fastbrowse_core::models::{JevPurpose, LLMPurpose, UNTRUSTED};
 use fastbrowse_core::page::BlockKind;
+use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::text;
 use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
@@ -30,6 +31,7 @@ use crate::error::{AgentError, Result};
 use crate::memory::{Notes, address, fact_id};
 use crate::pyre::{Pat, digit};
 use crate::support::generate;
+use crate::support::try_join_all;
 use fastbrowse_core::py::text::is_word;
 
 /// What the support check is shown in place of the value, which it is not asked to judge.
@@ -126,6 +128,8 @@ pub enum Unworked {
     Notes { reason: String, notes: Vec<String> },
     /// Jev left a question unanswered, so no value can be stated.
     Unjudged,
+    /// A record's page holds more context than one decision request accepts, so its membership was not asked.
+    Oversized,
 }
 
 /// One note a tally may count: the first note read with its text, so a record read twice is one record.
@@ -291,17 +295,56 @@ fn shown(notes: &Notes, evidence: &fastbrowse_core::models::Evidence) -> serde_j
     note
 }
 
-fn membership_state(task: &str, notes: &Notes) -> serde_json::Value {
+/// What a membership question on `page` is asked beside: the task and the page's current notes.
+fn membership_state(task: &str, notes: &Notes, page: &str) -> serde_json::Value {
     // A date note alone does not show the separate label that makes it the current record. Keep source context
     // before candidate deduplication, since identical labels on different pages still describe different records.
+    // A label qualifies the records of its own page, and a whole record is all its item shows, judged in a question
+    // of its own: sent every page's notes, records included, two PyPI responses were 800,000 characters of context
+    // per question, and no question was sent.
     let context: Vec<_> = notes
         .facts()
         .into_iter()
         .filter(|fact| !notes.superseded(&fact_id(fact)))
         .filter_map(|fact| fact.evidence.as_ref())
+        .filter(|evidence| address(&evidence.url) == page && !notes.whole_record(evidence))
         .map(|evidence| shown(notes, evidence))
         .collect();
     json!({"task": task, "notes": context})
+}
+
+type Answers = IndexMap<String, Answer>;
+
+/// Jev's answers to questions about notes on several pages, each page's asked beside its own context, and the keys of
+/// those whose page's context leaves no room for them. None when no page's were answered.
+async fn by_page(
+    jev: &dyn DecisionClient,
+    states: &HashMap<String, serde_json::Value>,
+    questions: IndexMap<String, (String, Question)>,
+    tokens: &TokenBudget,
+    ledger: Option<&Ledger>,
+) -> Result<(Option<Answers>, HashSet<String>)> {
+    let mut pages: IndexMap<String, IndexMap<String, Question>> = IndexMap::new();
+    let mut oversized = HashSet::new();
+    for (key, (page, question)) in questions {
+        let chars = text::len(&dumps(&states[&page])) as i64;
+        if chars > tokens.input_chars(&[question.dump_json()]) {
+            oversized.insert(key);
+        } else {
+            pages.entry(page).or_default().insert(key, question);
+        }
+    }
+    let asked = pages
+        .iter()
+        .map(|(page, questions)| -> fastbrowse_core::BoxFuture<'_, Result<Option<Answers>>> {
+            Box::pin(ask(jev, &states[page], questions, tokens, ledger))
+        })
+        .collect();
+    let answered = try_join_all(asked).await?.into_iter().flatten().reduce(|mut all, answers| {
+        all.extend(answers);
+        all
+    });
+    Ok((answered, oversized))
 }
 
 /// The first note a claim cites, as a membership question shows it: the composer's own example of the record it
@@ -359,7 +402,12 @@ fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], gr
     criteria.insert(NO_RECORD.into(), json!(format!(
         "The note is not one whole {of} and does not give the {field} of one. A name, label, heading, link or unrelated field alone is not a whole record. Several records, and a value stated across records such as a total or a starting price, are not one record. A note whose source_kind is heading or link and gives no quoted field value is a fragment naming the record, not a record with a missing field."
     )));
-    criteria.insert(NO_VALUE.into(), json!(format!("The note gives one whole {of}, but does not state its {field}. A name, label, heading, link or part alone is not a whole record.")));
+    // A heading or link names its record and is never the whole of it, so it cannot be one shown missing the field:
+    // offered that, Jev split 51 to 49 on whether the heading "Clerkenwell Coffee" was a shop with no price, and a
+    // correct cheapest shop was rejected for it.
+    if !fragment(note) {
+        criteria.insert(NO_VALUE.into(), json!(format!("The note gives one whole {of}, but does not state its {field}. A name, label, heading, link or part alone is not a whole record.")));
+    }
     Question::Choice(ChoiceQuestion::new(
         format!(
             "{UNTRUSTED}\nDoes this note give exactly one whole record among {of}, or its {field}? If it does, which quoted value is that record's {field}? source_kind is the captured block type. When it is heading or link, the quote is that heading or link, not the whole record it names. A field absent from a heading or link is not thereby absent from its record. whole_record true proves that this quote contains all text rendered for one repeated item; without that proof the quote may still describe a whole record. Absence from a fragment does not prove absence from its record. Note: {}",
@@ -367,6 +415,12 @@ fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], gr
         ),
         criteria,
     ))
+}
+
+/// Whether `note`, as a field question shows it, quotes a heading or link with no proof that it is all of its record.
+fn fragment(note: &serde_json::Value) -> bool {
+    let kind = note.get("source_kind").and_then(serde_json::Value::as_str);
+    matches!(kind, Some("heading" | "link")) && note.get("whole_record") != Some(&serde_json::Value::Bool(true))
 }
 
 #[derive(Debug)]
@@ -567,6 +621,10 @@ async fn narrowed(
     tokens: &TokenBudget,
     ledger: Option<&Ledger>,
 ) -> Result<Narrowed> {
+    // A fragment with no value to offer gives no field of a record, and code needs no question to say so.
+    if numbers.is_empty() && fragment(note) {
+        return Ok(Narrowed::NoRecord);
+    }
     let max = jev.profile().max_choice_options;
     // Two options distinguish an irrelevant note from a whole record whose field is missing.
     while numbers.len() + 2 > max {
@@ -773,7 +831,7 @@ fn total(amounts: &[&Amount]) -> String {
 async fn select_records(
     jev: &dyn DecisionClient,
     llm: &dyn LLMClient,
-    state: &serde_json::Value,
+    states: &HashMap<String, serde_json::Value>,
     tally: &Tally,
     index: usize,
     outer_fields: &HashMap<(usize, usize), FieldAnswer>,
@@ -871,22 +929,25 @@ async fn select_records(
         if let Some(kind) = found[*note].source_kind {
             shown["source_kind"] = json!(kind);
         }
+        let state = &states[&found[*note].page];
         match narrowed(jev, state, &inner, &shown, numbers(&found[*note].quote), tokens, ledger).await? {
             Narrowed::Offer(values) => {
-                questions.insert(format!("inner/n{note}"), field_question(&inner, &shown, &values, false));
+                let question = field_question(&inner, &shown, &values, false);
+                questions.insert(format!("inner/n{note}"), (found[*note].page.clone(), question));
                 offers.insert(*note, values);
             }
             Narrowed::NoValue | Narrowed::NoRecord => return Ok(Err(missing(*note))),
             Narrowed::Unjudged => return Ok(Err(Unworked::Unjudged)),
         }
     }
-    let answered = ask(jev, state, &questions, tokens, ledger).await?;
+    let (answered, oversized) = by_page(jev, states, questions, tokens, ledger).await?;
     let mut dated = None;
     let mut values = Vec::new();
     for note in records {
         let answer = answered.as_ref().and_then(|answers| answers.get(&format!("inner/n{note}")));
         let value = match known.remove(&note) {
             Some(value) => value,
+            None if oversized.contains(&format!("inner/n{note}")) => return Ok(Err(Unworked::Oversized)),
             None => match field_answer(answer, &offers[&note]) {
                 FieldAnswer::Value(value) => value,
                 FieldAnswer::NoValue | FieldAnswer::NoRecord => return Ok(Err(missing(note))),
@@ -938,7 +999,9 @@ pub(super) async fn work_selected(
     let flat_ids: HashSet<String> = candidates(notes).into_iter().map(|candidate| candidate.id).collect();
     let state = json!({"task": task});
     let mut members = IndexMap::new();
-    let source_state = membership_state(task, notes);
+    let pages: HashSet<&str> = found.iter().map(|candidate| candidate.page.as_str()).collect();
+    let states: HashMap<String, serde_json::Value> =
+        pages.into_iter().map(|page| (page.to_string(), membership_state(task, notes, page))).collect();
     let mut offered = HashMap::new();
     let mut fields = HashMap::new();
     // Each count per group's first claim of its kind and grouping field, and the claims it leads.
@@ -1022,7 +1085,8 @@ pub(super) async fn work_selected(
                 continue;
             }
             if tally.op == Op::Count {
-                members.insert(format!("t{index}/n{note}"), member_question(tally, &candidate.note, example.as_ref()));
+                let question = member_question(tally, &candidate.note, example.as_ref());
+                members.insert(format!("t{index}/n{note}"), (candidate.page.clone(), question));
             } else {
                 let mut shown_note = candidate.note.clone();
                 if candidate.whole_record {
@@ -1031,12 +1095,11 @@ pub(super) async fn work_selected(
                 if let Some(kind) = candidate.source_kind {
                     shown_note["source_kind"] = json!(kind);
                 }
-                match narrowed(jev, &source_state, tally, &shown_note, numbers(&candidate.quote), tokens, ledger)
-                    .await?
-                {
+                let state = &states[&candidate.page];
+                match narrowed(jev, state, tally, &shown_note, numbers(&candidate.quote), tokens, ledger).await? {
                     Narrowed::Offer(numbers) => {
-                        members
-                            .insert(format!("t{index}/n{note}"), field_question(tally, &shown_note, &numbers, false));
+                        let question = field_question(tally, &shown_note, &numbers, false);
+                        members.insert(format!("t{index}/n{note}"), (candidate.page.clone(), question));
                         offered.insert((*index, note), numbers);
                     }
                     Narrowed::NoRecord => {
@@ -1052,7 +1115,7 @@ pub(super) async fn work_selected(
             }
         }
     }
-    let answered = ask(jev, &source_state, &members, tokens, ledger).await?;
+    let (answered, oversized) = by_page(jev, &states, members, tokens, ledger).await?;
     for ((index, note), numbers) in offered {
         let answer = answered.as_ref().and_then(|a| a.get(&format!("t{index}/n{note}")));
         fields.insert((index, note), field_answer(answer, &numbers));
@@ -1101,7 +1164,9 @@ pub(super) async fn work_selected(
         let records = judged.remove(index).flatten();
         let Some(records) = records.and_then(|records| distinct(asking, records, &found, &repeats, repeated.as_ref()))
         else {
-            worked.insert(*index, Err(Unworked::Unjudged));
+            let prefix = format!("t{asking}/");
+            let unasked = oversized.iter().any(|key| key.starts_with(&prefix));
+            worked.insert(*index, Err(if unasked { Unworked::Oversized } else { Unworked::Unjudged }));
             continue;
         };
         if let Some((by, _)) = tally.grouped() {
@@ -1140,20 +1205,8 @@ pub(super) async fn work_selected(
     for (index, tally, mut records) in pending {
         let basis = records.iter().map(|note| found[*note].id.clone()).collect::<Vec<_>>();
         if let Some(within) = selections.get(&index) {
-            match select_records(
-                jev,
-                llm,
-                &source_state,
-                tally,
-                index,
-                &fields,
-                within,
-                &records,
-                &found,
-                tokens,
-                ledger,
-            )
-            .await?
+            match select_records(jev, llm, &states, tally, index, &fields, within, &records, &found, tokens, ledger)
+                .await?
             {
                 Ok(selected) => records = selected,
                 Err(reason) => {
@@ -1341,7 +1394,7 @@ mod tests {
         ambiguous_notes.remember_capture(&ambiguous, 0);
         assert_eq!(ambiguous_notes.source_kind(&whole), None);
         assert!(found.iter().all(|candidate| candidate.note.get("whole_record").is_none()));
-        let state = membership_state("Total the product prices", &notes);
+        let state = membership_state("Total the product prices", &notes, &found[0].page);
         assert!(state["notes"].as_array().unwrap().iter().all(|note| note.get("whole_record").is_none()));
         let tally = Tally {
             op: Op::Sum,
@@ -1358,6 +1411,31 @@ mod tests {
         assert!(question.instructions.contains("Absence from a fragment does not prove absence from its record"));
         assert!(question.criteria[NO_VALUE].as_str().unwrap().contains("does not state its"));
         assert!(question.criteria[NO_RECORD].as_str().unwrap().contains("source_kind is heading or link"));
+    }
+
+    /// A shop's name heading beside its price line was judged a shop with no price 51 to 49, and the correct cheapest
+    /// shop was rejected for it.
+    #[tokio::test]
+    async fn a_heading_is_never_offered_as_a_record_missing_its_field() {
+        let tally = Tally {
+            op: Op::Min,
+            of: "shop".into(),
+            field: Some("price".into()),
+            rank: None,
+            by: None,
+            group: None,
+            written: "Clerkenwell Coffee".into(),
+        };
+        let heading = json!({"quote": "Clerkenwell Coffee", "source_kind": "heading"});
+        let Question::Choice(question) = field_question(&tally, &heading, &["84.99".into()], false) else { panic!() };
+        assert!(!question.criteria.contains_key(NO_VALUE), "{:?}", question.criteria.keys());
+        let mut whole = heading.clone();
+        whole["whole_record"] = true.into();
+        let Question::Choice(question) = field_question(&tally, &whole, &[], false) else { panic!() };
+        assert!(question.criteria.contains_key(NO_VALUE));
+        let tokens = FirstField.profile().fit(None).tokens;
+        let answer = narrowed(&FirstField, &json!({}), &tally, &heading, Vec::new(), &tokens, None).await.unwrap();
+        assert!(matches!(answer, Narrowed::NoRecord));
     }
 
     #[test]
@@ -1399,7 +1477,7 @@ mod tests {
     }
 
     #[test]
-    fn membership_context_keeps_separate_page_labels_and_uncited_fields() {
+    fn membership_context_is_its_own_pages_labels_and_uncited_fields() {
         use crate::memory::Fact;
         use fastbrowse_core::models::{Evidence, FactReader};
 
@@ -1422,15 +1500,107 @@ mod tests {
             old,
         ]);
         notes.supersede("https://b.test", "https://b.test", "Current offer 25");
-        let state = membership_state("Compare current offers", &notes);
+        // Each page's notes are judged beside that page's labels alone.
+        let state = membership_state("Compare current offers", &notes, &address("https://b.test"));
         assert_eq!(state["task"], "Compare current offers");
         let context = state["notes"].as_array().unwrap();
-        assert_eq!(context.len(), 3);
-        assert_eq!(context[0]["page"], "https://a.test");
-        assert_eq!(context[1]["page"], "https://b.test");
-        assert_eq!(context[0]["quote"], context[1]["quote"]);
-        assert_eq!(context[2]["quote"], "25");
-        assert_eq!(context[2]["headings"], json!(["Product", "Offer"]));
+        let quotes: Vec<_> = context.iter().map(|note| note["quote"].as_str().unwrap()).collect();
+        assert_eq!(quotes, ["Current offer", "25"]);
+        assert!(context.iter().all(|note| note["page"] == "https://b.test"));
+        assert_eq!(context[1]["headings"], json!(["Product", "Offer"]));
+        let state = membership_state("Compare current offers", &notes, &address("https://a.test"));
+        assert_eq!(state["notes"].as_array().unwrap().len(), 1);
+    }
+
+    /// Two PyPI responses read whole were thousands of notes, and every membership question was sent beside all of
+    /// them: no question fit one request, and the tally was left unworked. A page of records is counted with each
+    /// question beside its own page's labels.
+    #[tokio::test]
+    async fn a_page_of_records_too_large_to_send_whole_is_counted() {
+        use crate::memory::Fact;
+        use crate::retrieval::chunks::evidence;
+        use crate::retrieval::testing::capture;
+        use crate::retrieval::text::Page;
+        use fastbrowse_core::decision::{Evaluation, NoulAnswer};
+        use fastbrowse_core::models::FactReader;
+
+        struct Counting(i64);
+        impl DecisionClient for Counting {
+            fn evaluate<'a>(
+                &'a self,
+                state: &'a serde_json::Value,
+                questions: &'a IndexMap<String, Question>,
+            ) -> fastbrowse_core::BoxFuture<'a, std::result::Result<Evaluation, fastbrowse_core::decision::DecisionError>>
+            {
+                assert!(text::len(&dumps(state)) as i64 <= self.0, "a request beside every note was sent");
+                let answers = questions
+                    .iter()
+                    .map(|(key, question)| {
+                        let Question::Noul(noul) = question else { panic!("a count asks membership") };
+                        let probability = if noul.instructions.contains("filename") { 1.0 } else { 0.0 };
+                        (key.clone(), Answer::Noul(NoulAnswer { kind: Default::default(), probability }))
+                    })
+                    .collect();
+                Box::pin(async move {
+                    Ok(Evaluation {
+                        model: "test".into(),
+                        answers,
+                        input_tokens: 1,
+                        cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                        requests: 1,
+                    })
+                })
+            }
+            fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+                fastbrowse_core::decision::DecisionProfile::jev()
+            }
+        }
+
+        let files: Vec<String> = (0..800)
+            .map(|n| {
+                format!("filename: pkg-0.{n}.tar.gz\nupload_time: 2026-01-01T00:00:{:02}\nsize: {}", n % 60, 1000 + n)
+            })
+            .collect();
+        let mut parts = vec![(BlockKind::Paragraph, "version: 0.399")];
+        parts.extend(files.iter().map(|file| (BlockKind::Record, file.as_str())));
+        let mut captured = capture(&parts);
+        for block in &mut captured.blocks[1..] {
+            block.whole_record = true;
+        }
+        let page = Page::new(&captured);
+        let facts = captured.blocks.iter().map(|block| {
+            let quote = evidence(&page, block, block.start, block.end);
+            Fact::read(&quote.quote.clone(), quote, FactReader::JevChoice)
+        });
+        let mut notes = Notes::new(facts.collect::<Vec<_>>());
+        notes.remember_capture(&captured, 0);
+        let every = text::len(&dumps(
+            &json!({"task": "", "notes": captured.blocks.iter().map(|b| page.slice(b.start, b.end)).collect::<Vec<_>>()}),
+        ));
+        let tokens = Counting(0).profile().fit(None).tokens;
+        let limit = tokens.input_chars(&[""]);
+        assert!(every as i64 > limit, "the records together fit one request: {every} of {limit}");
+        let tally = Tally {
+            op: Op::Count,
+            of: "release file".into(),
+            field: None,
+            rank: None,
+            by: None,
+            group: None,
+            written: "1".into(),
+        };
+        let worked = work(
+            &Counting(limit),
+            &ReadsGroups(&[]),
+            "How many release files are there?",
+            &[(0, &tally, "1", &[])],
+            &notes,
+            &tokens,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(worked[&0].as_ref().unwrap().value, "800");
     }
 
     #[test]
@@ -1638,7 +1808,7 @@ mod tests {
             ((0, 1), FieldAnswer::Value("Dec 6, 2024".into())),
             ((0, 2), FieldAnswer::Value("Nov 8, 2026".into())),
         ]);
-        let state = json!({"task": "compare releases"});
+        let state = HashMap::from([(found[0].page.clone(), json!({"task": "compare releases"}))]);
         let failure = select_records(
             &FirstField,
             &llm,
