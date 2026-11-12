@@ -1,10 +1,10 @@
 ---
 title: Connect an agent to a running Chrome over CDP
-description: "Drive a Chrome you already have open through the extension, or an Electron app over its DevTools port from an SDK: picking a window and keeping a signed-in browser open."
+description: "Drive signed-in Chrome through the fastbrowse extension, or connect an SDK to an Electron app over its DevTools port."
 topic: Browsers and logins
 published: 2026-11-01
 updated: 2026-11-12
-verifiedAgainst: v0.10.0
+verifiedAgainst: v0.11.0
 verifiedOn: 2026-11-12
 ---
 
