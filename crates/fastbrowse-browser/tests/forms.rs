@@ -138,6 +138,39 @@ async fn test_capture_preserves_empty_fields_disabled_actions_and_layout() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_capture_says_which_choice_is_checked() {
+    // #897: a checkout's order summary re-rendered in place for each shipping method, and no read could say which
+    // method its totals were for, so the run took one method's totals as covering all five.
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = `
+          <label><input type=radio name=ship style='opacity:0;position:absolute'>DHL Express $28.40</label>
+          <label><input type=radio name=ship checked style='opacity:0;position:absolute'>UPS Saver $32.61</label>
+          <input type=radio name=ship id=fedex hidden><label for=fedex>FedEx Priority $26.95</label>
+          <label><input type=checkbox checked>Gift wrap</label>
+          <label><input type=checkbox>Insurance</label>
+          <div role=radio aria-checked=true tabindex=0>Pickup</div>
+          <p>Grand Total $174.69</p>`",
+    )
+    .await;
+    let capture = h.page.capture().await.expect("capture");
+    for checked in ["UPS Saver $32.61: checked", "Gift wrap: checked", "Pickup: checked"] {
+        assert!(capture.text.contains(checked), "{checked:?} in {}", capture.text);
+    }
+    for unchecked in ["DHL Express $28.40: checked", "Insurance: checked", "FedEx Priority $26.95: checked"] {
+        assert!(!capture.text.contains(unchecked), "{unchecked:?} in {}", capture.text);
+    }
+    // A hidden choice reached through its label still says it is the one chosen.
+    eval_active(&h.page, "document.querySelector('#fedex').checked = true").await;
+    let capture = h.page.capture().await.expect("capture");
+    assert!(capture.text.contains("FedEx Priority $26.95: checked"), "{}", capture.text);
+    assert!(!capture.text.contains("UPS Saver $32.61: checked"), "{}", capture.text);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_capture_reads_shadow_roots() {
     let Some(h) = harness().await else { return };
     h.goto("").await;
@@ -481,6 +514,64 @@ async fn test_a_combobox_named_by_the_page_keeps_its_name() {
     assert_eq!(control.label, "Categories");
 }
 
+/// react-select under a form library's label, as Wago's addon settings render it: the label's `for` names the wrapper
+/// div, which takes the id, and the combobox input inside has a generated one.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_label_naming_a_widgets_wrapper_names_its_one_field() {
+    let Some(h) = harness().await else { return };
+    let html = "<form><h2>General</h2><label for=categories>Categories</label><div id=categories>\
+                <div><span>Chat &amp; Communication</span>\
+                <div role=button aria-label=\"Remove Chat &amp; Communication\">x</div>\
+                <input id=react-select-2-input role=combobox aria-autocomplete=list aria-expanded=false></div>\
+                <input type=hidden name=categories value=1></div>\
+                <div><input type=checkbox id=is_unlisted><label for=is_unlisted>Unlisted</label></div>\
+                <button>Save changes</button></form>";
+    let control = combobox(&h, html).await;
+    let observation = h.observe().await;
+    h.close().await;
+    assert_eq!(control.label, "Categories");
+    // Tied to a field, the label no longer titles what follows it as a section of its own.
+    for label in ["Unlisted", "Save changes"] {
+        assert_eq!(find(&observation, label).context.as_deref(), Some("General"), "{label}");
+    }
+}
+
+/// The redraw watch reads every observed control's guard on each mutation batch, so a guard must reuse the
+/// snapshot's index of wrapper-naming labels rather than search the page's labels again: on a grid of 2000 unlabelled
+/// inputs that search cost a second per pass.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_guard_reuses_the_snapshots_wrapper_labels() {
+    let Some(h) = harness().await else { return };
+    let html = format!(
+        "<form><label for=categories>Categories</label><div id=categories>\
+         <input id=react-select-2-input role=combobox aria-autocomplete=list aria-expanded=false></div>\
+         {}</form>",
+        "<input>".repeat(200)
+    );
+    combobox(&h, &html).await;
+    let session_id = h.session.active_session_id().unwrap();
+    let guards = h
+        .page
+        .evaluate(
+            &session_id,
+            "(() => { const r = window.__fastbrowse; let searches = 0; \
+             const count = proto => { const native = proto.querySelectorAll; \
+               proto.querySelectorAll = function (s) { if (s === 'label[for]') searches++; return native.call(this, s); }; \
+               return () => { proto.querySelectorAll = native; }; }; \
+             const restore = [count(Document.prototype), count(Element.prototype), count(DocumentFragment.prototype)]; \
+             const changed = [...r.observed].filter(([id, guard]) => r.guardKey(r.nodes.get(id)) !== guard).length; \
+             document.querySelector('label').textContent = 'Tags'; \
+             const field = [...r.observed.keys()].find(id => r.nodes.get(id).id === 'react-select-2-input'); \
+             const renamed = r.guardKey(r.nodes.get(field)) !== r.observed.get(field); \
+             restore.forEach(f => f()); \
+             return { searches, changed, renamed }; })()",
+        )
+        .await
+        .expect("evaluate");
+    h.close().await;
+    assert_eq!(guards, json!({"searches": 0, "changed": 0, "renamed": true}));
+}
+
 // A control clipped to nothing is not on the page for a person, and a widget that mirrors it is (#838).
 
 /// How Tom Select and select2 hide the original field they keep in place.
@@ -592,6 +683,48 @@ async fn test_a_button_that_opens_a_hidden_file_input_uploads_through_its_choose
     h.close().await;
     assert_eq!(result.outcome, StepOutcome::Executed, "{:?}", result.detail);
     assert_eq!(name, json!("lid.stl"));
+}
+
+/// #979: an upload dialog's button that makes a file input in script and clicks it, never adding it to the page. Only
+/// the input's own change handler refers to it, so once the click returns nothing in the page holds it; the button
+/// uploads to it all the same.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_button_that_opens_a_file_input_never_on_the_page_uploads_through_its_chooser() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        "document.body.innerHTML = '<div role=dialog aria-label=\"Add media\"><button>Upload or Drag Image</button></div>'; \
+         document.querySelector('button').onclick = () => { const input = document.createElement('input'); \
+         input.type = 'file'; input.onchange = () => { window.chosen = input.files[0]?.name; }; input.click(); };",
+    )
+    .await;
+    let observation = h.observe().await;
+    let clicked = h
+        .page
+        .act(&action(Operation::Click, find(&observation, "Upload or Drag Image")), &observation)
+        .await
+        .expect("act");
+    assert_eq!(clicked.outcome, StepOutcome::Executed, "{:?}", clicked.detail);
+    // Nothing but the chooser refers to the input now, so a collection before the next observation would take it.
+    let active = h.session.active_session_id().expect("session");
+    h.session.send("HeapProfiler.collectGarbage", json!({}), Some(&active)).await.expect("gc");
+    let observation = h.observe().await;
+    let opener = find(&observation, "Upload or Drag Image");
+    assert_eq!(opener.operations, [Operation::Upload].into(), "{:?}", observation.controls);
+    let upload = Action {
+        files: vec![Attachment {
+            name: "docks.png".into(),
+            mime_type: "image/png".into(),
+            content: Bytes(b"png".to_vec()),
+        }],
+        ..action(Operation::Upload, opener)
+    };
+    let result = h.page.act(&upload, &observation).await.expect("act");
+    let chosen = eval_active(&h.page, "window.chosen ?? null").await;
+    h.close().await;
+    assert_eq!(result.outcome, StepOutcome::Executed, "{:?}", result.detail);
+    assert_eq!(chosen, json!("docks.png"));
 }
 
 #[tokio::test(flavor = "multi_thread")]

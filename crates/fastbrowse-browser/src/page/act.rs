@@ -445,7 +445,7 @@ impl CdpPage {
         {
             self.until_dialog(self.await_popup(&target.0, target.2)).await;
         }
-        let mut changed = self.changed_since(&before_fingerprint, requests).await?;
+        let mut changed = self.changed_since(&before_fingerprint, Some(requests)).await?;
         if matches!(action.operation, Operation::Click | Operation::Enter | Operation::Press)
             && self.session.follow_popup(&popups, opens || self.session.window_opens() != window_opens).await?.is_some()
         {
@@ -794,38 +794,6 @@ impl CdpPage {
         self.click_point(target, (x, y), false, drawn).await
     }
 
-    /// Tie each file input whose chooser a click opened to the control clicked, so the observation offers that control
-    /// as the upload, as a label is offered for its input. An input or page gone since is skipped: nothing to offer.
-    pub(crate) async fn adopt_choosers(&self) {
-        for (session, input, opener) in self.session.take_choosers() {
-            self.adopt_chooser(&session, input, opener).await;
-        }
-    }
-
-    async fn adopt_chooser(&self, session: &str, input: i64, opener: i64) {
-        let session_id = Some(session);
-        let Ok(resolved) = self.session.send("DOM.resolveNode", json!({"backendNodeId": input}), session_id).await
-        else {
-            return;
-        };
-        let Some(object) = resolved["object"]["objectId"].as_str() else { return };
-        let _ = self
-            .session
-            .send(
-                "Runtime.callFunctionOn",
-                json!({
-                    "objectId": object,
-                    "functionDeclaration": "function (opener) { const registry = window.__fastbrowse; \
-                        const node = registry?.nodes.get(opener); \
-                        if (node) registry.chooser = {input: this, opener: node}; }",
-                    "arguments": [{"value": opener}],
-                }),
-                session_id,
-            )
-            .await;
-        let _ = self.session.send("Runtime.releaseObject", json!({"objectId": object}), session_id).await;
-    }
-
     /// Activate a control from the keyboard: focus it and press the key its semantics answer to.
     async fn press(&self, target: &Target) -> Result<Outcome, BrowserError> {
         let (session_id, local_id) = (&target.0, target.2);
@@ -844,6 +812,7 @@ impl CdpPage {
             return Ok(refusal);
         }
         self.press_key(session_id, key).await?;
+        self.session.choosers_pinned().await;
         Ok((StepOutcome::Executed, Some("Pressed from the keyboard: a band fixed to the window covers it.".into())))
     }
 
@@ -1319,11 +1288,13 @@ impl CdpPage {
             .iter()
             .map(|f| json!({"name": f.name, "type": f.mime_type, "data": BASE64.encode(&f.content.0)}))
             .collect();
+        // The snapshot's own `sourceOf` names the input a control stands for, so the upload goes to the input the
+        // observation offered, including one a chooser opened that was never on the page.
         let script = format!(
-            "((id, files, allowed) => {{ const node = window.__fastbrowse?.nodes.get(id); \
-             const chooser = window.__fastbrowse?.chooser; \
-             const e = node?.tagName === 'LABEL' ? node.control : chooser?.opener === node ? chooser.input : node; \
-             if (!e?.isConnected || e.type !== 'file' || e.disabled || \
+            "((id, files, allowed) => {{ const registry = window.__fastbrowse; const node = registry?.nodes.get(id); \
+             if (!node?.isConnected || !registry.sourceOf) return null; \
+             const e = registry.sourceOf(node); \
+             if (e?.type !== 'file' || e.disabled || \
              (allowed && !allowed.includes(location.origin))) return null; \
              const dt = new DataTransfer(); \
              for (const f of files) {{ const bin = atob(f.data); \
@@ -1372,6 +1343,7 @@ impl CdpPage {
             self.input(self.session.send("Input.dispatchMouseEvent", params, Some(&target.0)))
         };
         tokio::try_join!(mouse("mousePressed"), mouse("mouseReleased"))?;
+        self.session.choosers_pinned().await;
         Ok((StepOutcome::Executed, None))
     }
 

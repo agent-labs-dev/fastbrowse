@@ -349,6 +349,11 @@ pub struct Block {
     /// where it leads, nor where a value the page set apart as its own element ends.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<Link>,
+    /// This block is all the text the page renders for one item it repeats, such as a comment, card or list row, with
+    /// each part of it that shows no text named in square brackets: what the block does not show, that item does not
+    /// show. A record can be a `list_item` as well as a `record`, so its kind does not say this.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub whole_record: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

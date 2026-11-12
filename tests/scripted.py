@@ -36,6 +36,20 @@ def steps(task: str) -> tuple[Step, ...]:
     return tuple(found)
 
 
+_READING = frozenset(
+    {
+        Operation.READ,
+        Operation.DONE,
+        Operation.NAVIGATE,
+        Operation.SCROLL,
+        Operation.SCROLL_UP,
+        Operation.BACK,
+        Operation.SWITCH_TAB,
+        Operation.WAIT,
+    }
+)
+
+
 class ScriptedJev:
     """Answers each choice as the script's current step says, and every yes/no so that the run goes on.
 
@@ -47,6 +61,9 @@ class ScriptedJev:
     def __init__(self, script: Sequence[Step]) -> None:
         self._ahead = list(script)
         self._step: Step | None = None
+        # What the task asks to be done on a page is answered from the script: whether it takes a step besides
+        # opening and reading pages.
+        self._acts = any(step.operation not in _READING for step in script)
 
     async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
         if "operation" in questions:
@@ -77,6 +94,8 @@ class ScriptedJev:
         )
 
     def _choice(self, key: str, question: ChoiceQuestion) -> str | None:
+        if key == "steps":
+            return "acts" if self._acts else "reads"
         step = self._step
         if key == "operation":
             return (step.operation if step else Operation.DONE).value

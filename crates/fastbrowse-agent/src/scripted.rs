@@ -68,6 +68,9 @@ pub fn steps(task: &str) -> Result<Vec<Step>> {
 /// script runs out and the operation choice falls back to DONE, with the answer it read judged to cover the task.
 pub struct ScriptedJev {
     state: Mutex<Script>,
+    /// Whether the script takes a step besides opening and reading pages, which is how it answers what the task asks
+    /// to be done on a page.
+    acts: bool,
 }
 
 struct Script {
@@ -77,7 +80,20 @@ struct Script {
 
 impl ScriptedJev {
     pub fn new(script: Vec<Step>) -> ScriptedJev {
-        ScriptedJev { state: Mutex::new(Script { ahead: script.into(), step: None }) }
+        let acts = script.iter().any(|step| {
+            !matches!(
+                step.operation,
+                Operation::Read
+                    | Operation::Done
+                    | Operation::Navigate
+                    | Operation::Scroll
+                    | Operation::ScrollUp
+                    | Operation::Back
+                    | Operation::SwitchTab
+                    | Operation::Wait
+            )
+        });
+        ScriptedJev { state: Mutex::new(Script { ahead: script.into(), step: None }), acts }
     }
 
     fn choice(step: Option<&Step>, key: &str, question: &ChoiceQuestion) -> Option<String> {
@@ -121,7 +137,12 @@ impl DecisionClient for ScriptedJev {
             match question {
                 Question::Choice(question) => {
                     let options: Vec<&String> = question.criteria.keys().collect();
-                    let choice = ScriptedJev::choice(script.step.as_ref(), key, question)
+                    let scripted = if key == "steps" {
+                        Some(if self.acts { "acts" } else { "reads" }.to_string())
+                    } else {
+                        ScriptedJev::choice(script.step.as_ref(), key, question)
+                    };
+                    let choice = scripted
                         .filter(|choice| options.contains(&choice))
                         .or_else(|| options.first().map(|option| option.to_string()))
                         .unwrap_or_default();

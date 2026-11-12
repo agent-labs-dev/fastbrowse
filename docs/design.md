@@ -7,7 +7,9 @@ fastbrowse splits a browser agent into three owners:
 - **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, and budgets. Code does not second-guess a DONE: the run ends `complete` with what Jev read, and a requested record that cannot be filled, a composed claim still unsupported after recovery, or a requested step the page shows the site does not allow ends `unverified`. Once the run has acted, Jev's finish check answers whether every step the task asks for was carried out: `done`, `undone` (the run recovers), or `refused` (the run reads, answers and ends `unverified`).
 
 When a field value or key chord is copied, Jev selects its source and first word. If its end needs a separate choice,
-each choice shows the complete text that would be typed from that first word to the candidate end.
+each choice shows the complete text that would be typed from that first word to the candidate end, with one more
+answer: the value does not begin at that word. Jev then picks the first word again without it. The beginning is checked
+the same way against copies that end where the value ends, and an end Jev rejects there is picked again.
 Code copies the selected span unchanged. A key chord is copied only from the task, never from page text.
 Earlier typing is shown as history, without assuming
 rejection or requiring a different value when the page changed the field.
@@ -129,11 +131,18 @@ Fetch reads the same way: by default a run reads pages over HTTP and follows lin
 offered as what it has. A disabled control (`disabled`, `aria-disabled="true"` or `inert` on the element) is not
 offered, as a browser capture leaves it out, so a disabled next link is no next page. A step only a browser can
 take starts one on the same page, and the run carries on with
-what it knows. `fetch` forbids the browser, and `browser` starts one from the first step.
+what it knows. A served page is not the page a browser shows: it holds text a stylesheet hides and lacks what scripts
+build. So a run over HTTP that took no step cannot finish a task that asks for one, whatever it asks to be told: a
+browser does it.
+`fetch` forbids the browser, and `browser` starts one from the first step.
 Fetched documents have no pixels, so optional screenshots and step frames are skipped.
 
 Browser captures record an icon-only link's destination with nearby container text, passing through empty layout
 wrappers. The search stops at a paragraph even when it is empty, and never uses the page root as nearby text.
+
+Browser captures write each checked checkbox, radio or switch as `Label: checked`, a native one hidden behind a
+visible label included, so text a page re-renders for the option chosen, such as an order total per shipping method,
+is read with the option it belongs to.
 
 Browser and fetch captures write a `time` or custom element's `datetime` in brackets after the text it shows, so a
 relative date such as "3 weeks ago" keeps the exact date the page holds. `ins` and `del` are excluded, and nothing is
@@ -174,7 +183,9 @@ relevance pass narrows them first. If no value choice fits, a page that fits Jev
 facts for synthesis. Jev's pick stands. Code cut the spans from the capture, so neither Jev nor the LLM
 writes page text. A span Jev picks becomes a fact, and identical values from the same page and frame share one choice
 with all their source contexts. When Jev says the answer must be composed, every nonempty source block is kept as a fact and the
-answer is composed when the run tries to finish, with recovery for a rejected draft.
+answer is composed when the run tries to finish, with recovery for a rejected draft. The recovery decision is told
+which claim failed which check, and a draft rejected for leaving out something the task asks for is shown to it whole,
+since no one claim is to blame and only the draft says what it lacks.
 
 A fresh read, including source quotes kept for synthesis, retires earlier facts from the same address when their
 quotes are no longer shown. The facts stay as history. Quotes still shown and evidence from other addresses remain.
@@ -194,12 +205,16 @@ text-fragment deep links; unused facts have no citation. The LLM writes a compos
 each final claim against its original cited quotes, including record identity and values, after any packing rounds.
 A count, total, minimum or maximum, or a place after one such as the second cheapest, is never written or judged as a number. The composer marks it as a tally with
 the kind of record and the field, and Jev answers one question per note read: for a count, whether it holds exactly one
-such record, and for a total or extreme, whether it holds one with its field, then which number in it is the field. A
+such record, and for a total or extreme, whether it holds one with its field, then which number in it is the field. A date, ISO or a day, month name and year, is offered whole with its year beside it, and its day and month are not offered alone, since neither orders anything; code orders dates for an extreme and never adds them. A
 record's name, heading or a link to it holds no value, so it is not counted as a record without one. Code counts, adds
 or compares, writes the value into the claim and cites every record it rests on. For a count per group, such as quotes
 per author, the composer names only the group its claim counts: the run's LLM copies each record's group from its
 quote, a read that is not text of that quote leaves the count unstated, and code groups the records, counts each group
 and checks the claim's place among all of them. A minimum or maximum the claim
+record's name, heading or a link to it holds no value, so it is not counted as a record without one. A record read
+from a screenshot or an element's markup is in the reader's words, so Jev is also asked which record on the same page
+it repeats, if any, and a repeat is not counted again. Code counts, adds
+or compares, writes the value into the claim and cites every record it rests on. A minimum or maximum the claim
 answers with its record's name instead keeps that name, and only the record check judges it. Such a claim gets no support question
 over the value: Jev is asked only whether the claim, with `[computed]` in the value's place, states nothing besides the
 tally. For a minimum or maximum both questions are choices: whether the claim states the value, the record holding it,
@@ -223,7 +238,8 @@ coverage or step check failed, which fault the claims together; a claim it
 writes again with the same text is kept once. A rewrite that retyped a passed claim could change a copied name and
 fail where the first draft had passed. A corrected draft
 must pass citation checks and cover every requested fact or value. If the combined answer exceeds Jev's input limit for the coverage check, individually supported claims remain available as an unverified partial answer; the result identifies the coverage limit. The coverage check judges the written
-facts and values; citation support and browser actions have separate checks. A whole-answer check beside coverage
+facts and values, not the form the task asks for, such as JSON, since code writes every answer as claims; citation
+support and browser actions have separate checks. A whole-answer check beside coverage
 judges the claims against the steps the run carried out on the page: an answer that says something was not done, or
 already existed, when one of those steps may have done it has every claim withheld, and a run still finishing spends a
 recovery to write it again. Only that rewrite gives the composer the steps, as the run's own record and never as
@@ -292,8 +308,8 @@ An empty observation waits on loading events before action history and progress 
 The same blank state is waited out once until a readable page appears, so a later navigation gets its own wait.
 Reloading remains restricted to an untouched opening page, since retrying a later page could repeat a submission.
 `StallRules` has one stall rule: a step that
-changes nothing, a read that adds nothing, or a return to a page state already seen with nothing read since is no
-progress, and `unchanged_actions` such steps in a row ask Jev again. A page state not seen before or a read that adds
+changes nothing, a read that adds nothing, a return to a page state already seen with nothing read since, or a
+further return after one return has already counted for the same evidence is no progress, since one read buys one return. `unchanged_actions` such steps in a row ask Jev again. A page state not seen before or a read that adds
 evidence resets the count and renews the `max_recoveries` budget. The new ask names what failed and leaves the stalled
 action out of its options, and Jev's pick is the next decision on that page. Past `max_recoveries` the run ends
 `stuck`, or `unverified` for a rejected composition, unless an unfilled field requires `needs_input` or a site

@@ -23,7 +23,7 @@ sig = "7990e5ddf72a113b"
 [[bindings]]
 doc = "blog/ai-agent-click-not-on-page.md"
 target = "crates/fastbrowse-core/src/config.rs"
-sig = "56d3053dcd736d88"
+sig = "b15d9a3ecc2bfead"
 
 [[bindings]]
 doc = "blog/ai-agent-click-not-on-page.md"
@@ -33,7 +33,7 @@ sig = "dc19a76311d97fd3"
 [[bindings]]
 doc = "blog/attach-to-running-chrome.md"
 target = "crates/fastbrowse-browser/src/session.rs"
-sig = "6c0f597d360164f6"
+sig = "513bdbe857e82576"
 
 [[bindings]]
 doc = "blog/attach-to-running-chrome.md"

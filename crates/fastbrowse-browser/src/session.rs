@@ -320,9 +320,6 @@ pub(crate) struct State {
     pub(crate) dialogs: HashMap<String, Dialog>,
     /// The address of the document each pending dialog came from, which `Dialog` does not carry.
     pub(crate) dialog_urls: HashMap<String, String>,
-    /// The file input whose chooser opened, per session, as its backend node id, until an observation ties it to the
-    /// control that opened it.
-    pub(crate) choosers: HashMap<String, i64>,
     /// The control each session was last clicked on, by its snapshot id. A page opens a file chooser only on user
     /// activation, and the run's own clicks are the only activation a page gets, so this is the chooser's opener.
     pub(crate) clicked: HashMap<String, i64>,
@@ -340,6 +337,8 @@ pub(crate) struct State {
     /// Frames Chrome's own ad tagging marks as ads or inside one, which a look does not read: once cross-origin frames
     /// were read, a page's ad slots reached every step as its content, and a run answered with an ad's text.
     pub(crate) ad_frames: HashSet<String>,
+    /// session -> how many documents its top frame has committed, for `document_mark`.
+    pub(crate) documents: HashMap<String, u64>,
     /// Document requests the grant refused, so a navigation that was cut short is told from one that failed.
     pub(crate) denials: u32,
     /// Requests paused and not yet released, so closing can release what a stopped task left paused.
@@ -364,6 +363,8 @@ pub(crate) struct Shared {
     pub(crate) client: Mutex<Option<Cdp>>,
     pub(crate) state: Mutex<State>,
     pub(crate) dialog_opened: watch::Sender<u64>,
+    /// File choosers opened whose input is not yet held by the page's registry.
+    pub(crate) chooser_pins: watch::Sender<u32>,
     /// Bumped on every `Page.lifecycleEvent`: the page's own signal that it is still loading or has settled, so a
     /// settle waits on the page rather than a fixed interval.
     pub(crate) lifecycle: watch::Sender<u64>,
@@ -425,6 +426,7 @@ impl BrowserSession {
             client: Mutex::new(None),
             state: Mutex::default(),
             dialog_opened: watch::channel(0).0,
+            chooser_pins: watch::channel(0).0,
             lifecycle: watch::channel(0).0,
             snapshot,
             popup_signal: watch::channel(0).0,
@@ -868,15 +870,17 @@ impl BrowserSession {
         self.0.state.lock().unwrap().clicked.insert(session_id.to_owned(), local_id);
     }
 
-    /// Each file chooser opened since this was last asked: its session, its file input's backend node id and the
-    /// control whose click opened it.
-    pub fn take_choosers(&self) -> Vec<(String, i64, i64)> {
-        let mut state = self.0.state.lock().unwrap();
-        let opened: Vec<_> = state.choosers.drain().collect();
-        opened
-            .into_iter()
-            .filter_map(|(session, input)| Some((session.clone(), input, *state.clicked.get(&session)?)))
-            .collect()
+    /// Wait until each file chooser opened so far has its input held by the page, or a dialog blocks the page from
+    /// answering until it is handled.
+    pub async fn choosers_pinned(&self) {
+        let mut pins = self.0.chooser_pins.subscribe();
+        let mut dialogs = self.0.dialog_opened.subscribe();
+        while *pins.borrow_and_update() != 0 && self.pending_dialog().is_none() {
+            tokio::select! {
+                _ = pins.changed() => {}
+                _ = dialogs.changed() => {}
+            }
+        }
     }
 
     pub fn pending_dialog(&self) -> Option<Dialog> {
@@ -908,6 +912,15 @@ impl BrowserSession {
     /// How many navigations to another document the run's own input has begun, on any page, so far.
     pub fn input_navigations(&self) -> u32 {
         self.0.state.lock().unwrap().input_navigations
+    }
+
+    /// Which document `session_id`'s top frame holds, as a count of the documents it has committed.
+    ///
+    /// The mark moves when, and only when, a navigation commits a new document there (a back-forward cache restore
+    /// included), so a read kept with it holds for as long as its document does. The lifecycle generation is no
+    /// such mark: every request that finishes and every frame's lifecycle event moves it, on an unchanged document.
+    pub fn document_mark(&self, session_id: &str) -> u64 {
+        self.0.state.lock().unwrap().documents.get(session_id).copied().unwrap_or_default()
     }
 
     /// The unique id of the status world `context_id` names on `session_id`, once, if Chrome reported it.
@@ -1483,6 +1496,12 @@ impl Shared {
                     }
                 }
                 self.tag_ad_frame(&params["frame"]);
+                // Only a top frame's commit replaces the document a tab's observation reads; a frame inside it does not.
+                if let Some(session) = session
+                    && params["frame"]["parentId"].is_null()
+                {
+                    *self.state.lock().unwrap().documents.entry(session.to_owned()).or_default() += 1;
+                }
             }
             "Page.frameRequestedNavigation" | "Page.frameStartedLoading" => {
                 if let Some(session) = session {
@@ -1585,9 +1604,9 @@ impl Shared {
                 // A target that went away answers nothing more.
                 state.requests_open.retain(|(sid, _), _| *sid != child);
                 state.request_bytes_due.retain(|(sid, _), _| *sid != child);
+                state.documents.remove(&child);
                 state.navigating.retain(|(sid, _)| *sid != child);
                 state.frames_loading.retain(|(sid, _)| *sid != child);
-                state.choosers.remove(&child);
                 state.clicked.remove(&child);
             }
             "Target.targetInfoChanged" => {
@@ -1633,10 +1652,20 @@ impl Shared {
                 }
                 self.dialog_opened.send_modify(|n| *n += 1);
             }
+            // With the chooser intercepted, Chrome no longer holds its input: one a button made in script and never put
+            // on the page is held only by its own handlers and is collected at the page's next collection. The page's
+            // registry takes it now, tied to the control whose click opened it, so an observation can offer that control
+            // as the upload, as a label is offered for its input.
             "Page.fileChooserOpened" => {
-                if let (Some(session), Some(node)) = (session, params["backendNodeId"].as_i64()) {
-                    self.state.lock().unwrap().choosers.insert(session.to_owned(), node);
-                }
+                let (Some(session), Some(input)) = (session, params["backendNodeId"].as_i64()) else { return };
+                let mut state = self.state.lock().unwrap();
+                let Some(&opener) = state.clicked.get(session) else { return };
+                let (shared, session) = (self.clone(), session.to_owned());
+                let pin = ChooserPin::new(self);
+                self.spawn(&mut state, async move {
+                    let _pin = pin;
+                    pin_chooser(&shared, &session, input, opener).await;
+                });
             }
             "Runtime.bindingCalled" if params["name"] == INPUT_NAVIGATION_BINDING => {
                 self.state.lock().unwrap().input_navigations += 1;
@@ -1867,6 +1896,47 @@ impl Shared {
         let session = session.to_owned();
         self.spawn(&mut state, async move { handle_paused(&shared, params, session).await });
     }
+}
+
+/// A chooser whose input the page's registry does not yet hold, counted while it lives.
+struct ChooserPin(Arc<Shared>);
+
+impl ChooserPin {
+    fn new(shared: &Arc<Shared>) -> Self {
+        shared.chooser_pins.send_modify(|n| *n += 1);
+        Self(shared.clone())
+    }
+}
+
+impl Drop for ChooserPin {
+    fn drop(&mut self) {
+        self.0.chooser_pins.send_modify(|n| *n -= 1);
+    }
+}
+
+/// Hold the chooser's file input in the page's registry as the upload target of `opener`, the control clicked. An
+/// input or page gone already is skipped: nothing to offer.
+async fn pin_chooser(shared: &Arc<Shared>, session: &str, input: i64, opener: i64) {
+    let session_id = Some(session);
+    let browser = shared.session();
+    let Ok(resolved) = browser.send("DOM.resolveNode", json!({"backendNodeId": input}), session_id).await else {
+        return;
+    };
+    let Some(object) = resolved["object"]["objectId"].as_str() else { return };
+    let _ = browser
+        .send(
+            "Runtime.callFunctionOn",
+            json!({
+                "objectId": object,
+                "functionDeclaration": "function (opener) { const registry = window.__fastbrowse; \
+                    const node = registry?.nodes.get(opener); \
+                    if (node) registry.chooser = {input: this, opener: node, connected: this.isConnected}; }",
+                "arguments": [{"value": opener}],
+            }),
+            session_id,
+        )
+        .await;
+    let _ = browser.send("Runtime.releaseObject", json!({"objectId": object}), session_id).await;
 }
 
 pub(crate) async fn adopt_popup(shared: &Arc<Shared>, target_id: &str, opener_id: &str, session: Option<String>) {

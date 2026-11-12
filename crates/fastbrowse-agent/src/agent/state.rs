@@ -307,8 +307,13 @@ pub(crate) struct RunState {
     pub reached: HashMap<String, usize>,
     /// Reads that added evidence, counted over the run.
     pub evidence_reads: usize,
-    /// The action whose page change the next observation judges: a new page state, or one revisited after new
-    /// evidence, is progress.
+    /// `evidence_reads` when a return to a page state already reached last counted as progress. One read buys one
+    /// return: a run going round a cycle of several states otherwise had each of them judged a return after new
+    /// evidence in turn, so one read on Google Flights renewed progress four times while it cleared and reapplied a
+    /// filter the site failed on (#976).
+    pub returned_at: usize,
+    /// The action whose page change the next observation judges: a new page state, or the first return after new
+    /// evidence to one seen before it, is progress.
     pub landing: Option<Withheld>,
     /// The actions that moved nothing since the last one that did. Done again they do the same, so asks leave them out;
     /// one the browser refused as covered is left out only until a performed action changes the page.
@@ -345,6 +350,8 @@ pub(crate) struct RunState {
     pub read_whole: Vec<Capture>,
     /// A DONE was refused because the task is something to carry out, not to be told.
     pub to_carry_out: bool,
+    /// Over HTTP, the task asks for a step besides opening and reading pages, whatever it wants reported.
+    pub asks_steps: bool,
     /// The latest finish check found a step the task asks for that the site does not allow.
     pub refused: bool,
     /// The latest finish check found this step the task asks to be carried out not yet done.
@@ -739,6 +746,7 @@ impl RunState {
             login_readings: HashMap::new(),
             reached: HashMap::new(),
             evidence_reads: 0,
+            returned_at: 0,
             landing: None,
             idle: Vec::new(),
             acted_from: None,
@@ -756,6 +764,7 @@ impl RunState {
             schema_partial: None,
             read_whole: Vec::new(),
             to_carry_out: false,
+            asks_steps: false,
             refused: false,
             undone: None,
             output_intent: OutputIntent::Unknown,

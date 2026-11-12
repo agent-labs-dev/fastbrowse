@@ -167,7 +167,7 @@ pub(crate) struct DocumentResponse {
     document_key: String,
 }
 
-/// A document's response read, kept with the tab and lifecycle generation it was read at.
+/// A document's response read, kept with the tab and the document mark it was read at.
 ///
 /// The status of a document is fixed once it is served, and the read costs an isolated-world evaluate on every
 /// observation. An observation whose document is the one already read keeps that read; a document the read does not
@@ -175,7 +175,7 @@ pub(crate) struct DocumentResponse {
 #[derive(Debug, Clone)]
 pub(crate) struct KeptDocument {
     pub(crate) session_id: String,
-    pub(crate) generation: u64,
+    pub(crate) mark: u64,
     pub(crate) document: DocumentResponse,
 }
 
@@ -233,6 +233,9 @@ struct SnapshotBlock {
     /// Each link's text and address, in the order the block shows them.
     #[serde(default)]
     links: Vec<SnapshotLink>,
+    /// The block is a record's whole text, its textless parts named.
+    #[serde(default)]
+    whole_record: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -541,7 +544,7 @@ impl CdpPage {
     // -- observe / capture ----------------------------------------------------------------------------------
 
     pub async fn observe(&self) -> Result<Observation, BrowserError> {
-        self.adopt_choosers().await;
+        self.session.choosers_pinned().await;
         self.reread(|| self.observe_once(0, true)).await
     }
 
@@ -577,11 +580,10 @@ impl CdpPage {
     /// Wait for the document that replaced the one a read lost to be interactive and quiet, as `navigate` does.
     async fn await_document(&self) -> Result<(), BrowserError> {
         let session_id = self.session.active_session_id()?;
-        let requests = self.session.requests_mark();
         let settle = async {
             if self.ready(&session_id, SETTLE_SECONDS).await? {
                 // Unsettled by the deadline is still a readable page, as after `navigate`.
-                self.changed_since("", requests).await?;
+                self.changed_since("", None).await?;
             }
             Ok::<(), BrowserError>(())
         };
@@ -605,17 +607,17 @@ impl CdpPage {
             }
             // The status read is a command of its own, and it answers the same for as long as the document is: an
             // observation of a document already read keeps that read instead of asking the browser again. The
-            // generation is taken before the read, so a navigation during it leaves the kept copy naming an older
-            // generation and the next observation reads the new document.
+            // document mark is taken before the read, so a navigation during it leaves the kept copy naming an older
+            // mark and the next observation reads the new document.
             let session_id = self.session.active_session_id()?;
-            let generation = self.session.lifecycle_mark();
+            let mark = self.session.document_mark(&session_id);
             let kept = self
                 .state
                 .lock()
                 .unwrap()
                 .document
                 .clone()
-                .filter(|kept| kept.session_id == session_id && kept.generation == generation);
+                .filter(|kept| kept.session_id == session_id && kept.mark == mark);
             // A timer can open a dialog while the snapshot evaluates, and the dialog blocks that
             // evaluate until the 120s command deadline.
             let read = async {
@@ -651,7 +653,7 @@ impl CdpPage {
             let document = match read_document {
                 Some(document) => document,
                 // A kept read names the document it was made in. One that names another document was replaced
-                // without the generation moving, so its status is read now rather than carried over.
+                // without the mark moving, so its status is read now rather than carried over.
                 None => match kept
                     .filter(|kept| main.is_some_and(|main| main.raw.document_key == kept.document.document_key))
                 {
@@ -661,7 +663,7 @@ impl CdpPage {
             };
             if main.is_some_and(|main| main.raw.document_key == document.document_key) {
                 self.state.lock().unwrap().document =
-                    Some(KeptDocument { session_id, generation, document: document.clone() });
+                    Some(KeptDocument { session_id, mark, document: document.clone() });
             }
             let mut kept: Vec<Control> = vec![];
             let mut control_state: HashMap<String, Target> = HashMap::new();
@@ -1017,6 +1019,7 @@ impl CdpPage {
                     control_context: block.control_context.clone(),
                     href: block.href.clone(),
                     links,
+                    whole_record: block.whole_record,
                 });
             }
         }
@@ -1056,6 +1059,7 @@ impl CdpPage {
                     control_context: None,
                     href: None,
                     links: Vec::new(),
+                    whole_record: false,
                 });
                 text.push_str("\n\n");
                 offset += 2;
@@ -1126,7 +1130,7 @@ impl CdpPage {
             return Ok(false);
         };
         if truthy(&changed) {
-            let _ = self.changed_since("", self.session.requests_mark()).await;
+            let _ = self.changed_since("", None).await;
             return Ok(true);
         }
         Ok(false)
@@ -1316,7 +1320,6 @@ impl CdpPage {
         // they are shown.
         let mut failure = "NavigationError".to_owned();
         let mut timed_out = false;
-        let requests = self.session.requests_mark();
         for attempt in 0..NAVIGATE_ATTEMPTS {
             if attempt > 0 {
                 sleep(secs(NAVIGATE_RETRY_SECONDS * f64::from(1u32 << (attempt - 1)))).await;
@@ -1345,7 +1348,7 @@ impl CdpPage {
             }
             if self.ready(&session_id, load_timeout_seconds * f64::from(1u32 << attempt)).await? {
                 // Unsettled by the deadline is still a usable page, and a redirect destroys the promise mid-wait.
-                let _ = self.changed_since("", requests).await;
+                let _ = self.changed_since("", None).await;
                 return Ok(());
             }
             failure = "TimeoutError".to_owned();
@@ -1419,9 +1422,12 @@ impl CdpPage {
     /// after its DOM went quiet, and the run took the add for a click that did nothing and added the item again: its
     /// open request is what holds the settle now. A blocking JavaScript dialog freezes the renderer, and a read that fails
     /// mid-navigation is itself evidence of change. `SETTLE_SECONDS` bounds a page that never does any of this.
+    ///
+    /// `requests` is `None` after a load, whose own end is `ready`, so a request that never answers holds nothing. An
+    /// action passes its mark even when it read no `before`: accepting a confirm is one, and the fetch it starts
+    /// holds the settle, or the next observation reads the page before the handler that answers it has run.
     #[doc(hidden)]
-    pub async fn changed_since(&self, before: &str, requests: u64) -> Result<bool, BrowserError> {
-        let acted = !before.is_empty();
+    pub async fn changed_since(&self, before: &str, requests: Option<u64>) -> Result<bool, BrowserError> {
         let deadline = Instant::now() + secs(SETTLE_SECONDS);
         let dialog = self.session.wait_for_dialog();
         tokio::pin!(dialog);
@@ -1457,7 +1463,7 @@ impl CdpPage {
                         let differs = current.as_deref() != Some(before);
                         // A load has its own end in `ready`; a request only holds an action. One that never
                         // answers, as on a page's first load, would otherwise hold every run to the deadline.
-                        if !(acted && self.session.requests_open_since(requests))
+                        if !requests.is_some_and(|mark| self.session.requests_open_since(mark))
                             && !self.session.navigating()
                             && !self.session.frames_loading()
                             && self.lifecycle_mark() == mark

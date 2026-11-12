@@ -981,8 +981,8 @@ impl Agent {
     }
 
     /// The one stall rule: `stall.unchanged_actions` steps in a row that moved nothing ask Jev again with the stalled
-    /// action left out. A step moves the run on when it gathers evidence, writes a new value, or reaches a page state
-    /// not seen since the last evidence.
+    /// action left out. A step moves the run on when it gathers evidence, writes a new value, reaches a page state never
+    /// seen, or makes the first return since the last evidence to a page state seen before it.
     pub(super) async fn count_progress(
         &self,
         state: &mut RunState,
@@ -1118,8 +1118,8 @@ impl Agent {
         Ok(Some(self.page.act(&retargeted, &raw).await?))
     }
 
-    /// Note the page state reached and judge the last page change by it: a state never seen, or one seen before the
-    /// last evidence was gathered, is progress. A state never seen renews the recovery budget.
+    /// Note the page state reached and judge the last page change by it: a state never seen, or the first return to
+    /// one seen before the last evidence was gathered, is progress. A state never seen renews the recovery budget.
     pub(super) async fn settle(&self, state: &mut RunState, observation: &Observation) -> Step {
         let last = state.reached.insert(state_key(observation), state.evidence_reads);
         if last.is_none() {
@@ -1134,7 +1134,12 @@ impl Agent {
             state.recoveries = 0;
         }
         if let Some(stalled) = state.landing.take() {
-            let progressed = last.is_none_or(|seen_at| seen_at < state.evidence_reads);
+            let returned =
+                last.is_some_and(|seen_at| seen_at < state.evidence_reads) && state.returned_at < state.evidence_reads;
+            if returned {
+                state.returned_at = state.evidence_reads;
+            }
+            let progressed = last.is_none() || returned;
             Box::pin(self.count_progress(state, progressed, observation, Idle::performed(stalled), Status::Stuck))
                 .await?;
         }
