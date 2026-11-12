@@ -1,14 +1,15 @@
 # Parallax dev16 migration
 
-The manifest targets `parallax-evals==2.0.0.dev16`. Its release is a prerequisite:
-`evals/uv.lock` retains the published dev13 artifacts until dev16 is available on
-PyPI. This branch cannot pass a locked dependency install or merge until that
-lock is resolved. The private Parallax repository is not a public dependency
-source. No unpublished artifact URLs or hashes are recorded in the lockfile.
+The harness pins the published `parallax-evals==2.0.0.dev16` release in
+`evals/pyproject.toml` and `evals/uv.lock`. The wheel and source archive are
+served by PyPI and their downloaded bytes match the lock's SHA-256 hashes:
 
-After the maintainer authorizes and completes Parallax's dev16 publication,
-run `uv lock` in `evals/`, inspect the artifact URLs and hashes, run the focused
-judge checks and push the resolved lock to this PR. CI runs the full suite.
+- Wheel: `e08a4c64a54d247c86567dc4b9b308d992942a8af43bff2afc4c3d5aa9a33921`.
+- Source archive: `156df0f6cd0e1b83e02102ac7c391d01b8056ac9d04d1faedc3b1259bfad956f`.
+
+The release tag is `v2.0.0.dev16`, on Parallax commit
+`290f19ee1868de6e15a82bc629b157387abc5431`. The private repository is not a
+consumer dependency source. `uv lock --check` passes with the published lock.
 
 ## Compatibility
 
@@ -23,6 +24,9 @@ Their raw evidence files stay unchanged; they cannot be silently pooled with v4.
 
 An offline replay compared installed Parallax dev13 with dev16 source based on
 Parallax commit `4460ebc5007562ae458d14f8b0ab0fd1bb9b6fb9` and this migration.
+The same replay against the published dev16 wheel produced the identical
+comparison artifact. Its focused compatibility, live, official, tracking and
+publication checks passed: 644 tests.
 Mock HTTP returned synthetic answers, with no provider calls or new grades.
 All 787 saved semantic receipts retained policy hash
 `e697ca113f12e9ac2b1dcae724a792721e67b47d1504a46e8990b4f5bfff7ca1`.
