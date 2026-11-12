@@ -18,12 +18,12 @@ sig = "e9c193d74c5ba38c"
 [[bindings]]
 doc = "blog/agent-skills-browser.md"
 target = "skills/fastbrowse/SKILL.md"
-sig = "da50d2373931715f"
+sig = "8edb3f8c3f025489"
 
 [[bindings]]
 doc = "blog/ai-agent-click-not-on-page.md"
 target = "crates/fastbrowse-core/src/config.rs"
-sig = "b15d9a3ecc2bfead"
+sig = "f739511953505e3f"
 
 [[bindings]]
 doc = "blog/ai-agent-click-not-on-page.md"

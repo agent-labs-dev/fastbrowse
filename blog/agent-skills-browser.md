@@ -36,6 +36,8 @@ The skill follows the browser choice you give it. Otherwise it prefers Browser U
 
 For a task that needs your accounts or localhost, name a suitable local browser. A signed-in Chrome can be connected through the fastbrowse extension or its DevTools address. A separate local Chrome is suitable when the task needs no existing sign-in. Browser selection flags depend on the installed CLI version: check `fastbrowse --help` and [the command-line reference](/docs/flags/).
 
+For a list, say whether the task covers the shown records, every page or a numbered range. fastbrowse can follow observed next-page links while checking each page and keeping its citations.
+
 Behind the skill, the agent calls the CLI or an MCP server. Either way the run reports a status. `complete` means the task was verified, and the other statuses say what was missing: an input, an authorization, evidence for a claim, or access to the page.
 
 ## Limits and writes

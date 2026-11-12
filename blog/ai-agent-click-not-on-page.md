@@ -18,6 +18,8 @@ At each step the agent sends one request that names an operation and its targets
 
 A fill decision can also name other offered fields the task needs filled. Those are filled in page order without a request each, and only while the page still shows each one as it was offered; anything else goes back to a full decision.
 
+A read decision can cover a whole list through its observed next-page links. Each page is checked before it is read; a different list or a page that needs an action returns to an ordinary decision. Each read and navigation still spends its own step.
+
 - Hit-testing runs before every input. A control that moved or was covered between the read and the click is caught at the click.
 - The list has a size limit per step. On a dense page, a relevance check drops controls the task cannot use. A page that is still too dense offers the controls that fit and scrolls for the rest.
 
