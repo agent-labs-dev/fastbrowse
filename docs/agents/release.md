@@ -12,11 +12,19 @@ Versions are patch-by-patch unless the maintainer says otherwise, and every one 
    branch or tag, so confirm the resulting run's `head_sha` is the intended release commit before using its results.
    After a later fix, rerun
    only the tasks it affects (`only`, with the same groups and repeats); be generous when the fix changes a
-   prompt every task sees. `python3 scripts/release_gate.py --ref <sha> --version <x.y.z>` scores each task on
+   prompt every task sees. `uv run --project evals python scripts/release_gate.py --ref <sha> --version <x.y.z>` scores each task on
    the newest campaign run that measured it three times and says whether they pass: no task's pass rate below
    the campaign in `docs/results/release-baseline.json`, and the median run time and mean cost below it.
    The comparison requires valid timing and known cost receipts for every fastbrowse attempt on both sides;
    missing or provisional totals cannot prove an improvement.
+   The campaign also needs the `benchmark-candidate` artifact with both official suites: all 200 BU Bench and
+   300 Online-Mind2Web tasks, each repeated three times. Their groups must match public rows exported by successful
+   Official benchmarks runs on the candidate's agent and harness commits. The candidate stage must have succeeded,
+   including private tracking readback, and its original fixture receipt must pass on the measured build, with successful fixtures on the release
+   tree. Missing artifacts, incomplete repeats or unrelated builds block release. The workflow head may differ from its explicit agent and harness pins. Official upstream scores and evidenced
+   unjudged slots retain their meaning. A verified export does not replace the release
+   candidate's live fixture receipt. These suites establish coverage; the internal baseline comparison does not
+   claim an official score, speed or cost improvement. A later agent fix requires fresh official rows on its build.
    The fixture Evals run must be on the release commit's tree; a squash merge keeps the pull request's tree.
    A rerun's campaign builds the site candidate the same way, each task from its newest run. To build it from the
    finished runs without running anything, dispatch the campaign with `candidate_only` and `fastbrowse_ref` set to
