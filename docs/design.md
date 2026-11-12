@@ -139,10 +139,10 @@ document and read they validate. A CSS state can then renew a read without writi
 The frame keeps each document or shadow root's element order and static control membership. A child-list
 change renews order through saved element-child edges; unchanged siblings keep those edges. Attribute changes
 renew membership, while geometry, listeners and render facts are read fresh. Full reads rebuild the index.
-Text spans still come from the text walker and capture path. Each control's base row can reuse its fields
-when its DOM, source, ancestor attributes, current name and form ownership agree. Reuse compares the exact
-native facts the row consumed and records them into the current read. Geometry, filters and later action
-guards stay live, and context is attached to a copy of the row.
+Text spans still come from the text walker and capture path. Each control's fields and context decisions
+are derived from the current page. Saved reads compare fresh boxes and selector results directly with their
+snapshots, without allocating new comparison arrays. Repeated heading and scope text reuses its normalized
+lines only when a fresh native read returns the exact same text.
 
 A browser observation reports each control's `focused` state. A custom page may leave it unknown.
 The optional `invalid` flag reports `aria-invalid` or a failed native constraint on a field that participates

@@ -44,12 +44,10 @@
   // the native facts it consumed; replaying those facts validates the same branches without deriving the result.
   let renderFacts = mode === 'snapshot' || mode === 'glance' ? new Map() : null;
   let renderInputs = renderFacts ? [] : null;
-  let rowReads = null;
   registry.nativeQueueMicrotask ||= window.queueMicrotask.bind(window);
   registry.nativeQueueMicrotask(() => {
     renderFacts = null;
     renderInputs = null;
-    rowReads = null;
   });
   const textRanges = new WeakMap();
   const readRenderFact = (kind, target, args) => {
@@ -80,6 +78,14 @@
   const sameRenderValue = (left, right) =>
     Array.isArray(left) ? Array.isArray(right) && left.length === right.length &&
       left.every((value, i) => Object.is(value, right[i])) : Object.is(left, right);
+  const boxFields = ['x', 'y', 'width', 'height', 'left', 'top', 'right', 'bottom'];
+  const sameRenderFact = (kind, value, current) => {
+    if (kind === 'box' || kind === 'textBox')
+      return boxFields.every(
+        (field, i) => Object.is(value[i], current[field]));
+    if (kind === 'query') return value.length === current.length && value.every((node, i) => node === current[i]);
+    return sameRenderValue(value, current);
+  };
   const renderFact = (kind, target, args = null) => {
     if (!renderFacts) return readRenderFact(kind, target, args);
     let facts = renderFacts.get(target);
@@ -87,13 +93,10 @@
     const key = `${kind}:${typeof args === 'object' ? JSON.stringify(args) : args}`;
     if (!facts.has(key)) {
       const value = readRenderFact(kind, target, args);
-      const input = [kind, target, args, renderValue(kind, value)];
-      facts.set(key, { value, input });
-      renderInputs.push(input);
+      facts.set(key, value);
+      renderInputs.push([kind, target, args, renderValue(kind, value)]);
     }
-    const fact = facts.get(key);
-    rowReads?.add(fact.input);
-    return fact.value;
+    return facts.get(key);
   };
   const styleProperty = (target, property) => renderFact('style', target, property);
   const visibilityOf = (target, options) => renderFact('visible', target, options);
@@ -478,7 +481,7 @@
     // Adding, removing or aborting a native listener writes no DOM node or attribute.
     kept.listenerStates?.every(([e, value]) => listened(e) === value) &&
     rendered.inputs.every(([kind, target, args, value]) =>
-      sameRenderValue(value, renderValue(kind, readRenderFact(kind, target, args))));
+      sameRenderFact(kind, value, readRenderFact(kind, target, args)));
   if (still)
     return {
       unchanged: true,
@@ -528,7 +531,6 @@
   own.queryTrees ||= new WeakMap();
   own.domVersions ||= new WeakMap();
   own.structureVersions ||= new WeakMap();
-  own.attributeVersions ||= new WeakMap();
   if (!delta || !base || base.document_key !== own.snapshots?.[mode]?.document_key ||
       base.read !== own.snapshots?.[mode]?.read) {
     own.queryResults = new WeakMap();
@@ -536,20 +538,16 @@
     own.elementChildren = new WeakMap();
     own.elementOrders = new WeakMap();
     own.controlMatches = new WeakMap();
-    own.controlRows = new WeakMap();
   }
   own.queryResults ||= new WeakMap();
   own.names ||= new WeakMap();
   own.elementChildren ||= new WeakMap();
   own.elementOrders ||= new WeakMap();
   own.controlMatches ||= new WeakMap();
-  own.controlRows ||= new WeakMap();
   const flushedTrees = new Set();
   const invalidateQueries = (records, root) => {
     const bumped = new Set();
     for (const record of records) {
-      if (record.type === 'attributes')
-        own.attributeVersions.set(record.target, (own.attributeVersions.get(record.target) || 0) + 1);
       for (let node = record.target; node && !bumped.has(node); node = node.parentNode) {
         bumped.add(node);
         own.queryResults.delete(node);
@@ -1243,140 +1241,102 @@
     if (mode !== 'glance') registry.controls.add(e);
     const named = labelOf(e);
     if (!named) unnamed.add(id);
-    const root = flushTree(e);
-    const sourceRoot = flushTree(source);
-    const resolvedLabel = named || fallbackLabel(e) || rname;
+    const root = e.getRootNode();
     const active = renderFact('active', root);
     const activeDescendant = active?.getAttribute('aria-activedescendant');
     // A composite widget can keep DOM focus on its container while its active descendant moves between items.
     const focused = active === e || (!!activeDescendant && root.getElementById?.(activeDescendant) === e);
-    const formId = fieldScope(source), semantics = submitSemantics(e), path = framePath(e.ownerDocument);
-    const key = [own.domVersions.get(e) || 0, own.domVersions.get(source) || 0,
-      rname, resolvedLabel, formId, semantics, path, rname === 'link' ? location.href : null];
-    const previous = own.controlRows.get(e);
-    const sameAncestors = ancestors => {
-      let parent = e.parentElement;
-      for (const [node, version] of ancestors) {
-        if (parent !== node || (own.attributeVersions.get(node) || 0) !== version) return false;
-        parent = parent.parentElement;
-      }
-      return parent === null;
+    const base = {
+      id,
+      role: rname,
+      label: named || fallbackLabel(e) || rname,
+      offscreen: y < 0 || y >= innerHeight,
+      distance: y < 0 || y >= innerHeight ? 1 + Math.abs(y - innerHeight / 2) : 0,
+      sensitive: secret(source),
+      // The root's own active element, so a field inside a shadow root reads as focused where the document names
+      // only its host.
+      focused,
+      input_type: nativeProperty(source, 'type') || null,
+      input_name: source.getAttribute('name') || null,
+      max_length: nativeProperty(source, 'maxLength') > 0 ? nativeProperty(source, 'maxLength') : null,
+      autocomplete: source.getAttribute('autocomplete') || null,
+      frame_origin: e.ownerDocument.location.origin,
+      frame_path: framePath(e.ownerDocument),
+      form_id: fieldScope(source),
+      submit_semantics: submitSemantics(e),
     };
-    let base;
-    if (previous && previous.root === root && previous.sourceRoot === sourceRoot && previous.source === source &&
-        sameRenderValue(previous.key, key) && sameAncestors(previous.ancestors) &&
-        previous.inputs.every(([kind, target, args, value]) =>
-          sameRenderValue(value, renderValue(kind, renderFact(kind, target, args))))) {
-      base = { ...previous.row };
-    } else {
-      const ancestors = [];
-      for (let parent = e.parentElement; parent; parent = parent.parentElement)
-        ancestors.push([parent, own.attributeVersions.get(parent) || 0]);
-      const inputs = new Set();
-      // Memoized helpers can hide facts they read earlier, so names and form semantics are current key inputs.
-      // The row body records each native fact directly, including an atomic read's memo hits.
-      rowReads = inputs;
-      try {
-        base = {
-          id,
-          role: rname,
-          label: resolvedLabel,
-          offscreen: y < 0 || y >= innerHeight,
-          distance: y < 0 || y >= innerHeight ? 1 + Math.abs(y - innerHeight / 2) : 0,
-          sensitive: secret(source),
-          // The root's own active element, so a field inside a shadow root reads as focused where the document names
-          // only its host.
-          focused,
-          input_type: nativeProperty(source, 'type') || null,
-          input_name: source.getAttribute('name') || null,
-          max_length: nativeProperty(source, 'maxLength') > 0 ? nativeProperty(source, 'maxLength') : null,
-          autocomplete: source.getAttribute('autocomplete') || null,
-          frame_origin: e.ownerDocument.location.origin,
-          frame_path: path,
-          form_id: formId,
-          submit_semantics: semantics,
-        };
-        if (rname === 'link' && nativeProperty(e, 'href')) {
-          const u = new URL(nativeProperty(e, 'href'), location.href);
-          // Another origin's link keeps its whole address, as capture.js writes it: a recipe or a follow joins the href
-          // to this page, which would turn host and path into a path on this site and drop the query (#830).
-          base.href = u.origin === location.origin ? u.pathname + u.search : u.href;
-          // The page's own word for "the next page of this list", which survives an icon label or another language:
-          // `rel="next"`, or the pager markup most sites use instead, a `next` class on the link or its list item inside a
-          // pagination container (#750), one named by `pagin` or `pager`, as "page" alone is a layout class. A `next`
-          // class alone also marks carousels, wizards and next-article links. Only a same-origin link is a pager: its href
-          // is a path on this site, where another origin's is an absolute address.
-          const pager = el => el && el.classList && el.classList.contains('next');
-          const paging = el =>
-            el.tagName === 'NAV' ||
-            /pagin|pager/i.test(typeof nativeProperty(el, 'className') === 'string' ? nativeProperty(el, 'className') : '') ||
-            /pagin|pager/i.test(el.getAttribute('aria-label') || '');
-          const container = () => {
-            for (let el = e.parentElement; el; el = el.parentElement) if (paging(el)) return true;
-            return false;
-          };
-          if (
-            u.origin === location.origin &&
-            ((nativeProperty(e, 'rel') && nativeProperty(e, 'rel').split(/\s+/).includes('next')) ||
-              ((pager(e) || (pager(e.parentElement) && e.parentElement.tagName === 'LI')) && container()))
-          )
-            base.next_page = true;
-          // The page's own word that this link saves a file, which a task ruling out downloads has to see before a click.
-          if (e.hasAttribute('download')) base.download = true;
-        }
-        for (const key of ['checked', 'selected', 'expanded']) {
-          const value = e.getAttribute('aria-' + key);
-          if (value !== null) base[key] = value === 'true';
-        }
-        if (['checkbox', 'radio'].includes(nativeProperty(source, 'type'))) base.checked = nativeProperty(source, 'checked');
-        // What the page says about the field. A custom widget marks the element the user sees, not the input
-        // underneath it, so both are asked.
-        if (nativeProperty(source, 'required') || [e, source].some(n => n.getAttribute('aria-required') === 'true')) base.required = true;
-        // Native validation can refuse a form without adding any ARIA attribute or page text. The browser holds that
-        // against a field only once it was edited or its form was submitted, as `:user-invalid`: an empty required field a
-        // page has just opened or reset is not refused, and told it was, a run that had submitted a wizard filled it again.
-        const refused = nativeProperty(source, 'willValidate') === true && renderFact('validity', source) === false && renderFact('state', source, ':user-invalid');
-        if ([e, source].some(n => n.getAttribute('aria-invalid') === 'true') || refused) base.invalid = true;
-        // Why the browser refused it, in its own words: a refused submit shows that only in a bubble the page text
-        // lacks, and a run that saw only `invalid` refilled the field the task named instead of the empty one.
-        if (refused && nativeProperty(source, 'validationMessage')) base.validation_message = nativeProperty(source, 'validationMessage');
-        if (e.tagName === 'SELECT') {
-          base.operations = ['select'];
-          base.options = [...e.options].filter(o => !nativeProperty(o, 'disabled') && !o.closest('optgroup[disabled]')).map(o => nativeProperty(o, 'label'));
-          base.value = [...renderFact('selected', e)].map(o => nativeProperty(o, 'label')).join(', ');
-        } else if (nativeProperty(source, 'type') === 'file') {
-          base.operations = ['upload'];
-          base.value = null;
-        } else {
-          const editable =
-            !nativeProperty(e, 'readOnly') &&
-            e.getAttribute('aria-readonly') !== 'true' &&
-            (['textbox', 'searchbox', 'spinbutton'].includes(rname) ||
-              (rname === 'combobox' && ['INPUT', 'TEXTAREA'].includes(e.tagName)));
-          // reveal() is null for <li>, <progress> and <meter>, whose numeric `value`s are not field contents.
-          // A scripted value control announces its current value instead of exposing a field's value property.
-          const announced = ['slider', 'spinbutton'].includes(rname)
-            ? (e.getAttribute('aria-valuetext') ?? e.getAttribute('aria-valuenow')) : null;
-          base.value = reveal(source) ?? announced ?? (nativeProperty(e, 'isContentEditable') || rname === 'combobox' ? innerTextOf(e).trim() : null);
-          base.operations = editable ? ['fill', 'click', 'enter'] : ['click'];
-          // Only an element that names itself draggable is offered as a drag source: `draggable` reports true for
-          // every <a> and <img> by default, which would offer the whole page as draggable.
-          if (e.getAttribute('draggable') === 'true') base.operations.push('drag');
-        }
-      } finally {
-        rowReads = null;
-      }
-      if (renderFacts) own.controlRows.set(e, { root, sourceRoot, source, key, ancestors, inputs: [...inputs], row: { ...base } });
+    if (rname === 'link' && nativeProperty(e, 'href')) {
+      const u = new URL(nativeProperty(e, 'href'), location.href);
+      // Another origin's link keeps its whole address, as capture.js writes it: a recipe or a follow joins the href
+      // to this page, which would turn host and path into a path on this site and drop the query (#830).
+      base.href = u.origin === location.origin ? u.pathname + u.search : u.href;
+      // The page's own word for "the next page of this list", which survives an icon label or another language:
+      // `rel="next"`, or the pager markup most sites use instead, a `next` class on the link or its list item inside a
+      // pagination container (#750), one named by `pagin` or `pager`, as "page" alone is a layout class. A `next`
+      // class alone also marks carousels, wizards and next-article links. Only a same-origin link is a pager: its href
+      // is a path on this site, where another origin's is an absolute address.
+      const pager = el => el && el.classList && el.classList.contains('next');
+      const paging = el =>
+        el.tagName === 'NAV' ||
+        /pagin|pager/i.test(typeof nativeProperty(el, 'className') === 'string' ? nativeProperty(el, 'className') : '') ||
+        /pagin|pager/i.test(el.getAttribute('aria-label') || '');
+      const container = () => {
+        for (let el = e.parentElement; el; el = el.parentElement) if (paging(el)) return true;
+        return false;
+      };
+      if (
+        u.origin === location.origin &&
+        ((nativeProperty(e, 'rel') && nativeProperty(e, 'rel').split(/\s+/).includes('next')) ||
+          ((pager(e) || (pager(e.parentElement) && e.parentElement.tagName === 'LI')) && container()))
+      )
+        base.next_page = true;
+      // The page's own word that this link saves a file, which a task ruling out downloads has to see before a click.
+      if (e.hasAttribute('download')) base.download = true;
     }
-    base.focused = focused;
-    base.operations = [...base.operations];
-    // Focus can move without rebuilding the static row, and determines whether the widget can receive keys.
+    for (const key of ['checked', 'selected', 'expanded']) {
+      const value = e.getAttribute('aria-' + key);
+      if (value !== null) base[key] = value === 'true';
+    }
+    if (['checkbox', 'radio'].includes(nativeProperty(source, 'type'))) base.checked = nativeProperty(source, 'checked');
+    // What the page says about the field. A custom widget marks the element the user sees, not the input
+    // underneath it, so both are asked.
+    if (nativeProperty(source, 'required') || [e, source].some(n => n.getAttribute('aria-required') === 'true')) base.required = true;
+    // Native validation can refuse a form without adding any ARIA attribute or page text. The browser holds that
+    // against a field only once it was edited or its form was submitted, as `:user-invalid`: an empty required field a
+    // page has just opened or reset is not refused, and told it was, a run that had submitted a wizard filled it again.
+    const refused = nativeProperty(source, 'willValidate') === true && renderFact('validity', source) === false && renderFact('state', source, ':user-invalid');
+    if ([e, source].some(n => n.getAttribute('aria-invalid') === 'true') || refused) base.invalid = true;
+    // Why the browser refused it, in its own words: a refused submit shows that only in a bubble the page text
+    // lacks, and a run that saw only `invalid` refilled the field the task named instead of the empty one.
+    if (refused && nativeProperty(source, 'validationMessage')) base.validation_message = nativeProperty(source, 'validationMessage');
+    if (e.tagName === 'SELECT') {
+      base.operations = ['select'];
+      base.options = [...e.options].filter(o => !nativeProperty(o, 'disabled') && !o.closest('optgroup[disabled]')).map(o => nativeProperty(o, 'label'));
+      base.value = [...renderFact('selected', e)].map(o => nativeProperty(o, 'label')).join(', ');
+    } else if (nativeProperty(source, 'type') === 'file') {
+      base.operations = ['upload'];
+      base.value = null;
+    } else {
+      const editable =
+        !nativeProperty(e, 'readOnly') &&
+        e.getAttribute('aria-readonly') !== 'true' &&
+        (['textbox', 'searchbox', 'spinbutton'].includes(rname) ||
+          (rname === 'combobox' && ['INPUT', 'TEXTAREA'].includes(e.tagName)));
+      // reveal() is null for <li>, <progress> and <meter>, whose numeric `value`s are not field contents.
+      // A scripted value control announces its current value instead of exposing a field's value property.
+      const announced = ['slider', 'spinbutton'].includes(rname)
+        ? (e.getAttribute('aria-valuetext') ?? e.getAttribute('aria-valuenow')) : null;
+      base.value = reveal(source) ?? announced ?? (nativeProperty(e, 'isContentEditable') || rname === 'combobox' ? innerTextOf(e).trim() : null);
+      base.operations = editable ? ['fill', 'click', 'enter'] : ['click'];
+      // Only an element that names itself draggable is offered as a drag source: `draggable` reports true for
+      // every <a> and <img> by default, which would offer the whole page as draggable.
+      if (e.getAttribute('draggable') === 'true') base.operations.push('drag');
+    }
+    // Focus determines whether the widget can receive keys.
     if (!base.operations.includes('fill') && e.tagName !== 'SELECT' && nativeProperty(source, 'type') !== 'file' &&
         !['button', 'link', 'checkbox', 'switch', 'textbox', 'searchbox'].includes(rname) &&
         ARIA_ROLES.includes(rname) && (nativeProperty(e, 'tabIndex') >= 0 || e.hasAttribute('tabindex') || focused))
       base.operations.push('press');
-    base.offscreen = y < 0 || y >= innerHeight;
-    base.distance = base.offscreen ? 1 + Math.abs(y - innerHeight / 2) : 0;
     controls.push(base);
   }
 
@@ -1385,6 +1345,23 @@
   // that holds it and none of its twins, named by that ancestor's heading or its own first line of text.
   // Only labels that actually collide pay for it.
   const HEADINGS = 'h1,h2,h3,h4,h5,h6,[role="heading"],legend,caption,th,dt,summary';
+  own.contextLines ||= new WeakMap();
+  // Many controls read the same heading or month. Native text stays fresh; its normalization is pure code.
+  // Consumers do not mutate these shared lines, which also serve later reads of the same text.
+  const renderedLines = memo(e => {
+    if (!e) return [];
+    const text = innerTextOf(e) || '';
+    const previous = own.contextLines.get(e);
+    if (previous?.text === text) {
+      previous.text = text;
+      return previous.lines;
+    }
+    const lines = text.split('\n').map(line => line.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    own.contextLines.set(e, { text, lines });
+    return lines;
+  });
+  const firstRenderedLine = e => renderedLines(e)[0] || '';
+
   const firstLine = text =>
     (text || '')
       .split('\n')
@@ -1429,7 +1406,7 @@
     let first = '',
       before = '';
     for (const title of titles(scope)) {
-      const text = firstLine(innerTextOf(title));
+      const text = firstRenderedLine(title);
       if (!text || text === label || title.contains(element) || !reaches(title, element)) continue;
       first ||= text;
       if (title.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) before = text;
@@ -1457,10 +1434,8 @@
     // A table row's cells are one line of text, so a week row reads "26 27 28 29 30 1 2": a line made only of this
     // control's and its peers' labels names nothing but them.
     const onlyPeers = line => line.split(' ').every(word => word === label || peer(word));
-    const lines = (innerTextOf(scope) || '')
-      .split('\n')
-      .map(line => line.replace(/\s+/g, ' ').trim())
-      .filter(line => line && !repeated.has(line) && !peer(line) && !onlyPeers(line) && !own?.has(line));
+    const lines = renderedLines(scope)
+      .filter(line => !repeated.has(line) && !peer(line) && !onlyPeers(line) && !own?.has(line));
     return firstLine(lines.map(line => (label ? ` ${line} `.split(` ${label} `).join(' ') : line)).join('\n'));
   };
   const contextOf = (element, holding, label, nearest = true) => {
@@ -1699,7 +1674,7 @@
   const nearestName = (element, label) => {
     const own =
       element.tagName === 'SELECT' || FIELD_CONTAINERS.has(element.getAttribute('role'))
-        ? new Set((innerTextOf(element) || '').split('\n').map(line => line.replace(/\s+/g, ' ').trim()))
+        ? new Set(renderedLines(element))
         : null;
     let first = '';
     for (let e = element.parentElement, path = element; e && e !== e.ownerDocument.body; path = e, e = e.parentElement) {
@@ -1710,7 +1685,7 @@
       const aria = (e.getAttribute('aria-label') || '').trim();
       const outside = [...e.children]
         .filter(child => child !== path)
-        .map(child => firstLine(innerTextOf(child)))
+        .map(child => firstRenderedLine(child))
         .find(line => line && line !== label && !repeated.has(line));
       return (aria !== label && aria) || outside || first;
     }
@@ -1768,7 +1743,7 @@
         before = '';
       for (const title of openTitles(e)) {
         if (inner.contains(title)) continue;
-        const text = firstLine(innerTextOf(title));
+        const text = firstRenderedLine(title);
         if (!text || text === label) continue;
         first ||= text;
         if (title.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) before = text;

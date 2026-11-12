@@ -789,33 +789,7 @@ async fn test_a_changed_name_does_not_derive_an_unrelated_name_again() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_a_changed_control_does_not_derive_an_unrelated_base_row() {
-    let _turn = turn().await;
-    let Some(h) = harness().await else { return };
-    eval_active(&h.session, r#"document.body.innerHTML = '<button id=changed-row>First</button><button id=stable-row autocomplete=off>Second</button>';globalThis.stableRowReads = 0;const original = Element.prototype.getAttribute;Element.prototype.getAttribute = function(name) {if(this.id === 'stable-row' && name === 'aria-required') stableRowReads++;return original.call(this,name)};true"#).await;
-    h.observe().await;
-    // The guard reads autocomplete too, so count an attribute consumed only by the row builder.
-    assert!(eval_active(&h.session, "stableRowReads").await.as_u64().unwrap() > 0);
-    for script in [
-        "document.querySelector('#changed-row').firstChild.data = 'Updated'",
-        "document.querySelector('#changed-row').focus()",
-        "document.querySelector('#stable-row').focus()",
-    ] {
-        eval_active(&h.session, "stableRowReads = 0").await;
-        eval_active(&h.session, script).await;
-        let after = h.observe().await;
-        assert_eq!(eval_active(&h.session, "stableRowReads").await, json!(0), "{script}");
-        let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
-        let mut full = other.observe().await.expect("full read");
-        full.captured_at = after.captured_at;
-        assert_eq!(after, full, "{script}");
-        h.observe().await;
-    }
-    h.close().await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_cached_widget_keys_follow_virtual_focus_without_dom_changes() {
+async fn test_widget_keys_follow_virtual_focus_without_dom_changes() {
     let _turn = turn().await;
     let Some(h) = harness().await else { return };
     eval_active(&h.session, r#"document.body.innerHTML = '<div id=grid role=grid tabindex=0 aria-label=Sheet aria-activedescendant=item><span id=item role=gridcell>Cell</span></div><button id=other>Other</button>';true"#).await;
@@ -837,7 +811,7 @@ async fn test_cached_widget_keys_follow_virtual_focus_without_dom_changes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_cached_base_rows_match_full_reads_when_external_dependencies_change() {
+async fn test_cached_structure_matches_full_reads_when_external_dependencies_change() {
     let _turn = turn().await;
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");
@@ -859,6 +833,30 @@ async fn test_cached_base_rows_match_full_reads_when_external_dependencies_chang
     ] {
         eval_active(&h.session, script).await;
         let after = h.observe().await;
+        let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
+        let mut full = other.observe().await.expect("full read");
+        full.captured_at = after.captured_at;
+        assert_eq!(after, full, "{script}");
+        h.observe().await;
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_context_lines_do_not_normalize_an_unchanged_heading_again() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(&h.session, r#"document.body.innerHTML = '<article><h2 id=changed-heading>First heading</h2><button>Open</button></article><article><h2>Second heading</h2><button>Open</button></article>';globalThis.stableNormalizations = 0;const original = String.prototype.replace;String.prototype.replace = function(...args) {if(String(this) === 'Second heading')stableNormalizations++;return original.apply(this,args)};true"#).await;
+    h.observe().await;
+    assert!(eval_active(&h.session, "stableNormalizations").await.as_u64().unwrap() > 0);
+    for script in [
+        "document.querySelector('#changed-heading').firstChild.data = 'Current heading'",
+        "document.querySelector('#changed-heading').style.display = 'none'",
+    ] {
+        eval_active(&h.session, "stableNormalizations = 0").await;
+        eval_active(&h.session, script).await;
+        let after = h.observe().await;
+        assert_eq!(eval_active(&h.session, "stableNormalizations").await, json!(0));
         let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
         let mut full = other.observe().await.expect("full read");
         full.captured_at = after.captured_at;
