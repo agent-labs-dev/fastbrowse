@@ -4,6 +4,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 _spec = importlib.util.spec_from_file_location(
     "release_gate", Path(__file__).parent.parent / "scripts" / "release_gate.py"
 )
@@ -82,3 +84,48 @@ def test_other_arms_are_not_the_release() -> None:
     ]
     failures, _ = gate.compare(candidate, BASELINE)
     assert failures == []
+
+
+@pytest.mark.parametrize("side", ["candidate", "baseline"])
+@pytest.mark.parametrize("receipt", [{"dollars": None}, {"dollars": 0.0, "unknown_cost": True}])
+def test_an_unpriced_attempt_cannot_prove_a_cheaper_release(side, receipt) -> None:
+    candidate = [row(task, True, 8, 0.01) for task in ("a", "a", "b", "b")]
+    baseline = [dict(r) for r in BASELINE]
+    (candidate if side == "candidate" else baseline)[0].update(receipt)
+    failures, notes = gate.compare(candidate, baseline)
+    assert any(side in failure and "dollars" in failure for failure in failures)
+    assert not any(note.startswith("mean $") for note in notes)
+
+
+def test_a_known_zero_cost_is_still_a_valid_receipt() -> None:
+    candidate = [row(task, True, 8, 0) for task in ("a", "a", "b", "b")]
+    failures, notes = gate.compare(candidate, BASELINE)
+    assert failures == []
+    assert any(note.startswith("mean $ 0,") for note in notes)
+
+
+@pytest.mark.parametrize("side", ["candidate", "baseline"])
+@pytest.mark.parametrize("field", ["seconds", "dollars"])
+@pytest.mark.parametrize("value", [True, "0.001", float("nan"), float("inf"), -1])
+def test_invalid_measurements_cannot_pass_the_release(side, field, value) -> None:
+    candidate = [row(task, True, 8, 0.01) for task in ("a", "a", "b", "b")]
+    baseline = [dict(r) for r in BASELINE]
+    (candidate if side == "candidate" else baseline)[0][field] = value
+    failures, _ = gate.compare(candidate, baseline)
+    assert any(side in failure and field in failure for failure in failures)
+
+
+@pytest.mark.parametrize("field", ["seconds", "dollars"])
+def test_a_missing_measurement_cannot_pass_the_release(field) -> None:
+    candidate = [row(task, True, 8, 0.01) for task in ("a", "a", "b", "b")]
+    candidate[0].pop(field)
+    failures, _ = gate.compare(candidate, BASELINE)
+    assert any("candidate" in failure and field in failure for failure in failures)
+
+
+def test_an_empty_baseline_cannot_prove_an_improvement() -> None:
+    failures, _ = gate.compare(BASELINE, [])
+    assert failures == [
+        "baseline seconds: missing, unknown or invalid measurements",
+        "baseline dollars: missing, unknown or invalid measurements",
+    ]

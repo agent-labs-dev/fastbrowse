@@ -104,6 +104,34 @@ uvx fastbrowse "Log in as standard_user with the saved password and add the back
 The [command-line reference](docs/cli.md#flags) has every flag, your own signed-in Chrome and Bitwarden logins, driving open
 windows and [desktop apps](docs/cli.md#desktop-apps), model and provider settings, and every status with its exit code.
 
+## Use your own Chrome
+
+Run fastbrowse in the Chrome you already use, where you are already signed in. You need
+[uv](https://docs.astral.sh/uv/), Chrome and an [OpenRouter](https://openrouter.ai/) API key. Model calls are
+billed by your provider; this mode needs no Browser Use Cloud key.
+
+1. Install the CLI and register it with your browser:
+
+   ```sh
+   uv tool install fastbrowse
+   export OPENROUTER_API_KEY=...  # replace with your key
+   fastbrowse extension install
+   ```
+
+2. [Add fastbrowse to Chrome](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop).
+   Open it from Chrome's Extensions menu to see runs and their **Stop** buttons.
+3. Start a task from your terminal:
+
+   ```sh
+   fastbrowse "What is the title of the top story?" --start https://news.ycombinator.com/ --extension --browser
+   ```
+
+A run that reaches the page confirms the connection. If it ends `unavailable` with no browser connected,
+[follow the setup checks](docs/troubleshooting.md#the-extension-is-not-connected). Chrome shows a debugging bar
+while fastbrowse works.
+The [setup and usage guide](docs/cli.md#your-own-chrome) covers signed-in tasks, browser selection,
+permissions and stopping a run.
+
 ## How it compares
 
 | | Browser Use agent (hosted) | [Browser Use Ultrafast](https://github.com/browser-use/jev-ultrafast) (`jev-ultrafast`) | fastbrowse |

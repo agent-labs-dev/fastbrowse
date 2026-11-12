@@ -316,7 +316,8 @@ jobs:
             scripts/smoke_binary.py scripts/npm_platform_package.py scripts/smoke_npm_install.py \
             packages/sdk/package.json packages/sdk/tsconfig.json packages/sdk/tsconfig.build.json \
             Cargo.toml Cargo.lock rust-toolchain.toml 'crates/*/Cargo.toml' 'crates/*/build.rs' \
-            crates/fastbrowse-browser/js crates/fastbrowse-browser/extension crates/fastbrowse-cli/generated
+            crates/fastbrowse-browser/js crates/fastbrowse-browser/extension crates/fastbrowse-browser/assets \
+            crates/fastbrowse-cli/generated
           then echo "binaries=true" >> "$GITHUB_OUTPUT"
           else echo "binaries=false" >> "$GITHUB_OUTPUT"
           fi

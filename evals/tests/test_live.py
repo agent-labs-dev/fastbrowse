@@ -575,8 +575,12 @@ async def test_a_hosted_v4_run_is_read_stopped_then_costed(monkeypatch: pytest.M
     # The browser is stopped once, before the session's cost is read, so the cost includes all of its time.
     client.browsers.stop.assert_awaited_once_with("b1")
     assert client.calls == ["stop", "cost"]
-    assert report.dollars == 0.013 and report.unknown_cost is False
-    assert report.cost_by_component == {"llm": 0.01, "search": 0.0, "browser": 0.002, "proxy": 0.001}
+    assert report.dollars is None and report.unknown_cost is True
+    assert report.cost_by_component == {}
+    receipt = report.provisional_hosted_cost
+    assert receipt is not None and receipt.total_cost_usd == "0.013"
+    assert receipt.proxy_cost_usd == "0.001" and receipt.observed_at.tzinfo is not None
+    assert receipt.session_id == "sess-1" and receipt.run_id == "run-1"
     # Timed from the browser being ready to the run completing, by Browser Use's own clock.
     assert timed[0][2:4] == (V4_START + timedelta(seconds=2), V4_START + timedelta(seconds=8))
     assert report.steps == 1 and report.llm_calls == 1 and report.llm_calls_basis == "physical_requests"
@@ -627,7 +631,7 @@ async def test_a_failed_v4_run_is_its_agents_failure_and_a_dispatch_failure_an_o
 
 
 @pytest.mark.parametrize("stop_failed", [False, True])
-async def test_dispatch_outages_keep_the_provider_identity_and_settled_receipt(
+async def test_dispatch_outages_keep_the_provider_identity_and_provisional_receipt(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stop_failed: bool
 ) -> None:
     client = V4Client(
@@ -649,11 +653,15 @@ async def test_dispatch_outages_keep_the_provider_identity_and_settled_receipt(
     assert row.provenance["provider_status"] == "failed"
     assert row.error is not None and "scheduler unavailable" in row.error
     assert "bu_secret_key" not in row.model_dump_json()
-    assert row.dollars == (None if stop_failed else 0.013)
-    assert row.unknown_cost is stop_failed
-    assert row.cost_by_component == (
-        {} if stop_failed else {"llm": 0.01, "search": 0, "browser": 0.002, "proxy": 0.001}
-    )
+    assert row.dollars is None and row.unknown_cost is True
+    assert row.cost_by_component == {}
+    receipt = row.provisional_hosted_cost
+    if stop_failed:
+        assert receipt is None
+    else:
+        assert receipt is not None and receipt.total_cost_usd == "0.013"
+        assert receipt.proxy_cost_usd == "0.001" and receipt.observed_at.tzinfo is not None
+        assert receipt.session_id == "sess-1" and receipt.run_id == "run-1"
     assert ("cost" in client.calls) is (not stop_failed)
     if not stop_failed:
         assert client.calls.index("stop") < client.calls.index("cost")
@@ -1584,6 +1592,35 @@ async def test_a_budget_below_one_run_is_refused_at_startup_and_its_out_reused(m
     assert "requires a fresh output" in capsys.readouterr().err
 
 
+async def test_completed_receipt_preserves_provider_cost_precision(monkeypatch, tmp_path):
+    async def execute(*args, **kwargs):
+        return Outcome("answer", None, "https://example.test"), live.ArmReport(
+            status="complete",
+            dollars=0.018836,
+            seconds=1,
+            cost_by_component={"llm": 0.003127, "proxy": 0.015709},
+        )
+
+    async def judge(*args, **kwargs):
+        return (
+            True,
+            "evidenced",
+            {
+                "judge_cost_usd": 0.0,
+                "known_judge_cost_usd": 0.0,
+                "unpriced_judge_attempts": 0,
+                "judgment": {"policy": "p", "state_sha256": "0" * 64, "questions": {}, "decisions": {}},
+            },
+        )
+
+    monkeypatch.setitem(live.ARMS, "fastbrowse", live.ARMS["fastbrowse"].model_copy(update={"runner": execute}))
+    monkeypatch.setattr(live, "semantic_grade", judge)
+    async with httpx.AsyncClient() as http:
+        row = await live.run_arm("fastbrowse", task("wiki-open"), None, http, tmp_path, record=None)
+    assert row.dollars == 0.018836
+    assert row.cost_by_component == {"llm": 0.003127, "proxy": 0.015709}
+
+
 async def test_interrupted_judgment_retains_completed_agent_evidence(monkeypatch, tmp_path):
     async def execute(*args, **kwargs):
         return Outcome("completed answer", {"result": 42}, "https://example.test"), live.ArmReport(
@@ -2450,7 +2487,7 @@ async def test_the_hosted_agents_final_page_is_read_through_its_kept_alive_brows
     async def websocket(_http: Any, url: str) -> str:
         return url.replace("https://", "wss://")
 
-    async def observe(url: str) -> FinalPage:
+    async def observe(url: str, *, secrets: object = None) -> FinalPage:
         seen.append(url)
         return FinalPage(url="https://pypi.org/project/httpx/")
 

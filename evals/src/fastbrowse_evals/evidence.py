@@ -11,6 +11,7 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from parallax import images
 from pydantic import JsonValue
 
 SHARED_OPERATIONS = {"type_text": "fill", "send_keys": "fill", "escalate": "reason", "reply": "reason"}
@@ -144,5 +145,7 @@ def parts(state: dict[str, JsonValue], limit: int = PART_BYTES) -> list[dict[str
     return [{**state, "pages": list(group)} for group in grouped]
 
 
-def _size(value: object) -> int:
-    return len(json.dumps(value).encode())
+def _size(value: JsonValue) -> int:
+    # Images travel as attachments, so their base64 length must not split page prose into tiny requests.
+    text, _ = images.split(value)
+    return len(json.dumps(text).encode())

@@ -79,6 +79,27 @@ def test_chrome_startup_diagnostic_keeps_the_cause_before_a_long_crash_stack() -
     assert _diagnostic(log) == f":\n{output.strip()}"
 
 
+def test_the_chrome_helper_preserves_a_child_exit_while_its_owner_pipe_is_open(tmp_path: Path) -> None:
+    helper = Path(harness.__file__).with_name("_chrome.py")
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    with subprocess.Popen(
+        [sys.executable, str(helper), str(profile), sys.executable, "-c", "raise SystemExit(7)"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    ) as process:
+        try:
+            assert process.wait(timeout=10) == 7
+            assert process.stderr is not None
+            assert b"Fatal Python error" not in process.stderr.read()
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+    assert not profile.exists()
+
+
 @pytest.mark.skipif(os.name != "posix", reason="checks the owned process with POSIX signals")
 @pytest.mark.parametrize("abort", [False, True])
 def test_the_chrome_helper_stops_its_child_when_the_owner_closes_or_aborts(tmp_path: Path, abort: bool) -> None:

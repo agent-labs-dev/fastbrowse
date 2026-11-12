@@ -147,3 +147,12 @@ connection in its seconds and says so in `timing_note`.
 `benchmarks.py` refuses a group that mixes bases, the release gate never matches rows across them, and `summary`
 reports no seconds for a comparison across them. `bench.py`'s `wall` is a separate diagnostic: spawn to reply on a
 shared Chrome.
+
+The internal live observer retains a PNG of the final viewport alongside document text and control values. It
+captures the selected tab before lifting modal visibility attributes, and supplies the image through the judge's
+existing image evidence contract. An ambiguous final tab yields no image. Tasks declaring secrets, including stored
+credentials, withhold the image entirely; callers that do not declare secret usage also withhold it. A failed image
+capture records its reason and keeps the text and control observations. Viewport images cover only what was visible,
+so document text and controls remain part of the evidence. Each image records its observed viewport dimensions and
+device pixel ratio separately: an arm may retain document evidence from before its browser daemon resets the
+viewport, while the image shows the layout at the later observer read. Existing rows keep their original observations.

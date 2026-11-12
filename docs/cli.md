@@ -23,7 +23,7 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 | `--cloud-profile ID` | with `--cloud`, run on a signed-in Browser Use Cloud profile |
 | `--fetch` | read pages over HTTP with no browser, for a task that only reads |
 | `--desktop APP` | start a Linux desktop app and drive it instead of a browser, through [deskpilot](https://github.com/cjber/deskpilot); see [Desktop apps](#desktop-apps) |
-| `--browser` | start a browser from the first step, rather than reading over HTTP until the task needs one |
+| `--browser` | start a cloud browser from the first step, rather than reading over HTTP until the task needs one; extension runs already start in Chrome |
 | `--viewport WIDTHxHEIGHT` | with `--cloud`, the screen size requested from the cloud Chrome; does not emulate mobile, touch, device scale or user agent. Refused without `--cloud` |
 | `--attach` | with the extension, drive the window you have open instead of a tab of its own |
 | `--target-match TEXT` | with the extension, attach to the first window whose title or URL contains `TEXT` (implies `--attach`) |
@@ -41,8 +41,17 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 | `--input NAME=VALUE` | a named value the task refers to ("the person named in input person"), typed into a field by name; a recipe saved with it types the next run's value (repeatable) |
 | `--file PATH` | a local file the run may attach to a file input on the page, offered under its file name, so a task can say "upload shrike_lid.stl"; the file is read when the run starts and sent to the page as bytes, also to a browser on another machine (repeatable) |
 | `--save-recipe FILE` | write the run's steps as a recipe when it ends `complete`; naming the `--recipe` file repairs it after steps the agent had to decide |
-| `--no-cursor` | don't draw the agent's cursor. By default it is drawn over a Chrome window that shows the run (`--foreground`, or an attached front tab) with [Cua Driver](https://github.com/trycua/cua) on X11, or with [deskpilot](https://github.com/cjber/deskpilot) on Hyprland, and skipped anywhere else |
-| `--cursor` | also bring the window to the front, so the cursor is always drawn |
+| `--no-cursor` | don't draw the agent's cursor. By default it is drawn over a Chrome window that shows the run (`--foreground`, or an attached front tab) with fastbrowse's focus marker through [Cua Driver](https://github.com/trycua/cua) 0.45.4 or later on X11, or with [deskpilot](https://github.com/cjber/deskpilot) on Hyprland, and skipped anywhere else |
+| `--cursor` | also bring the window to the front, including with `--extension`, so the live cursor can be drawn |
+
+On X11, fastbrowse installs its own versioned Cua theme on first use and keeps the live marker visible between
+steps. To keep it upright and still at rest, run these with Cua Driver's daemon running. They apply to every Cua
+cursor:
+
+```sh
+cua-driver config set cursor.rotate off
+cua-driver config set cursor.float off
+```
 
 ```sh
 export SAUCE_PASSWORD=secret_sauce
@@ -58,18 +67,39 @@ of its own, a headless Chrome or a DevTools endpoint is the Python, Node and Go 
 
 ### Your own Chrome
 
-A browser task runs in the Chrome you already use, signed in to everything you are signed in to, with no approval
-prompt. `--extension` is the default and `--local` is an alias for it. Pass `--cloud` for a Browser Use Cloud
-browser, `--fetch` to read over HTTP, or `--desktop` for a desktop app. Set it up once:
+A browser task runs in the Chrome you already use, where you are already signed in. `--extension` is the default
+and `--local` is an alias for it. Pass `--cloud` for a Browser Use Cloud browser, `--fetch` to read over HTTP, or
+`--desktop` for a desktop app. Start tasks from your terminal; the extension connects fastbrowse to Chrome and
+shows the runs you can stop.
 
-1. Run `fastbrowse extension install`. It registers fastbrowse with Chrome, Chromium, Edge and Brave, and prints
-   how to add the extension.
-2. Install [fastbrowse from the Chrome Web Store](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop).
+You need Chrome, [uv](https://docs.astral.sh/uv/) and an [OpenRouter](https://openrouter.ai/) API key.
+Model calls are billed by your provider. You do not need a Browser Use Cloud key for this mode.
 
-Then run a task:
+1. Install fastbrowse and configure your model key:
+
+   ```sh
+   uv tool install fastbrowse
+   export OPENROUTER_API_KEY=...  # replace with your key
+   ```
+
+2. Run `fastbrowse extension install`. It registers the installed program with the Chromium browsers it finds
+   for your user. Chrome, Chromium, Edge and Brave are supported on Linux, macOS and Windows.
+3. [Add fastbrowse to Chrome](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop).
+   Open it from Chrome's Extensions menu to see runs and their **Stop** buttons.
+4. Run a task that reads a public page:
+
+   ```sh
+   fastbrowse "What is the title of the top story?" --start https://news.ycombinator.com/ --extension --browser
+   ```
+
+A run that reaches the page confirms the connection. If it ends `unavailable` with no browser connected,
+restart Chrome or turn the extension off and on, then [check the connection](troubleshooting.md#the-extension-is-not-connected).
+The terminal prints the answer and status. Only `complete` means the whole task was verified.
+To read a signed-in site, use its address and describe what you need:
 
 ```sh
-fastbrowse "Find my last order's delivery date." --start https://www.amazon.com/
+fastbrowse "Find my last order's delivery date. Do not change anything." \
+  --start https://www.amazon.com/ --extension
 ```
 
 `--attach` drives the window you have open instead of a tab of its own, and `--target-match TEXT` picks the window
@@ -82,9 +112,13 @@ debugging the browser. Each run has three ways to stop it, and each ends the run
 which one stopped it: **Stop** in the extension's popup, **Cancel** on that bar (which stops every run in that
 browser), or closing all of the run's tabs.
 
-The extension relays only page-level commands. It cannot read cookies, saved passwords or other sites' storage,
+The extension relays page-level commands, including reading page content and carrying out clicks and typing.
+It cannot read cookies, saved passwords or other sites' storage through browser APIs,
 and fastbrowse accepts connections only from the extension's own ID, over a socket only your user can open. The
-run's [authorization](#flags) rules still apply: a purchase or a message waits for `--authorize`.
+extension sends that content to the local fastbrowse program, which can send it to the model providers you
+configure. The run's [authorization](#flags) rules still apply: actions classified as irreversible wait for
+`--authorize`. Classification can miss a change, so state read-only constraints in your task and check important
+actions yourself.
 
 A run with `--file` needs an extension that can intercept the browser's file chooser. If the run reports that
 interception failed, update the extension. For an unpacked extension, run `fastbrowse extension path` with the
@@ -96,7 +130,10 @@ sends, naming the commands: update the extension from the Chrome Web Store. With
 `--extension-browser LABEL`. `fastbrowse extension install --policy` (Linux) prints a Chrome policy for you to write
 as root, which installs the extension for every profile with no debugging bar and marks Chrome as managed by your
 organization;
-`fastbrowse extension uninstall` removes what `install` wrote.
+`fastbrowse extension uninstall` removes what `install` wrote; remove the extension separately in Chrome.
+
+For extension development, `fastbrowse extension path` writes an unpacked copy. Open `chrome://extensions`,
+turn on Developer mode, choose **Load unpacked** and select that folder. Use the store version for ordinary runs.
 
 **Other extensions can take the run's tab away.** Chrome lets no extension debug a tab while the page holds a frame
 from another extension, and some extensions add one to every page: screen recorders, password managers and writing

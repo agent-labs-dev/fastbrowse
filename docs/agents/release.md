@@ -12,8 +12,10 @@ Versions are patch-by-patch unless the maintainer says otherwise, and every one 
    only the tasks it affects (`only`, with the same groups and repeats); be generous when the fix changes a
    prompt every task sees. `python3 scripts/release_gate.py --ref <sha> --version <x.y.z>` scores each task on
    the newest campaign run that measured it three times and says whether they pass: no task's pass rate below
-   the campaign in `docs/results/release-baseline.json`, and the median run time and mean cost below it. The
-   fixture Evals run must be on the release commit's tree; a squash merge keeps the pull request's tree.
+   the campaign in `docs/results/release-baseline.json`, and the median run time and mean cost below it.
+   The comparison requires valid timing and known cost receipts for every fastbrowse attempt on both sides;
+   missing or provisional totals cannot prove an improvement.
+   The fixture Evals run must be on the release commit's tree; a squash merge keeps the pull request's tree.
    A rerun's campaign builds the site candidate the same way, each task from its newest run. To build it from the
    finished runs without running anything, dispatch the campaign with `candidate_only` and `fastbrowse_ref` set to
    the newest run's build. The candidate's fixture Evals run must be on that build and the build must be in `main`'s

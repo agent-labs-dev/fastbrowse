@@ -19,6 +19,7 @@ Langfuse, so what each task was measured on stays visible.
 
 import argparse
 import json
+import math
 import os
 import statistics
 import subprocess
@@ -86,8 +87,23 @@ def compare(candidate: list[dict[str, Any]], baseline: list[dict[str, Any]]) -> 
         ("median seconds", "seconds", statistics.median),
         ("mean $", "dollars", statistics.fmean),
     ):
-        now = measure([float(row.get(field) or 0) for row in mine])
-        before = measure([float(row.get(field) or 0) for row in base])
+        incomplete = False
+        for side, rows in (("candidate", mine), ("baseline", base)):
+            # An absent receipt is not zero spend or zero time, and dropping it would change the measured population.
+            if not rows or any(
+                not isinstance(value := row.get(field), int | float)
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                or value < 0
+                or (field == "dollars" and row.get("unknown_cost") is True)
+                for row in rows
+            ):
+                failures.append(f"{side} {field}: missing, unknown or invalid measurements")
+                incomplete = True
+        if incomplete:
+            continue
+        now = measure([float(row[field]) for row in mine])
+        before = measure([float(row[field]) for row in base])
         if not now < before:
             failures.append(f"{label} {now:.4g} is not below the baseline's {before:.4g}")
         else:

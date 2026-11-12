@@ -136,7 +136,13 @@ once; later action guards ask again. A saved read also compares the rendering fa
 style properties, visibility, element and text-node boxes, rendered text, live selector matches, focus and
 live control or media values. Those facts stay in the installed script's private closure and name the exact
 document and read they validate. A CSS state can then renew a read without writing a DOM node or attribute.
-The frame still walks the page and sends its text.
+The frame keeps each document or shadow root's element order and static control membership. A child-list
+change renews order through saved element-child edges; unchanged siblings keep those edges. Attribute changes
+renew membership, while geometry, listeners and render facts are read fresh. Full reads rebuild the index.
+Text spans still come from the text walker and capture path. Each control's fields and context decisions
+are derived from the current page. Saved reads compare fresh boxes and selector results directly with their
+snapshots, without allocating new comparison arrays. Repeated heading and scope text reuses its normalized
+lines only when a fresh native read returns the exact same text.
 
 A browser observation reports each control's `focused` state. A custom page may leave it unknown.
 The optional `invalid` flag reports `aria-invalid` or a failed native constraint on a field that participates

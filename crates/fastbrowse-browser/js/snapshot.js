@@ -78,6 +78,14 @@
   const sameRenderValue = (left, right) =>
     Array.isArray(left) ? Array.isArray(right) && left.length === right.length &&
       left.every((value, i) => Object.is(value, right[i])) : Object.is(left, right);
+  const boxFields = ['x', 'y', 'width', 'height', 'left', 'top', 'right', 'bottom'];
+  const sameRenderFact = (kind, value, current) => {
+    if (kind === 'box' || kind === 'textBox')
+      return boxFields.every(
+        (field, i) => Object.is(value[i], current[field]));
+    if (kind === 'query') return value.length === current.length && value.every((node, i) => node === current[i]);
+    return sameRenderValue(value, current);
+  };
   const renderFact = (kind, target, args = null) => {
     if (!renderFacts) return readRenderFact(kind, target, args);
     let facts = renderFacts.get(target);
@@ -473,7 +481,7 @@
     // Adding, removing or aborting a native listener writes no DOM node or attribute.
     kept.listenerStates?.every(([e, value]) => listened(e) === value) &&
     rendered.inputs.every(([kind, target, args, value]) =>
-      sameRenderValue(value, renderValue(kind, readRenderFact(kind, target, args))));
+      sameRenderFact(kind, value, readRenderFact(kind, target, args)));
   if (still)
     return {
       unchanged: true,
@@ -527,9 +535,15 @@
       base.read !== own.snapshots?.[mode]?.read) {
     own.queryResults = new WeakMap();
     own.names = new WeakMap();
+    own.elementChildren = new WeakMap();
+    own.elementOrders = new WeakMap();
+    own.controlMatches = new WeakMap();
   }
   own.queryResults ||= new WeakMap();
   own.names ||= new WeakMap();
+  own.elementChildren ||= new WeakMap();
+  own.elementOrders ||= new WeakMap();
+  own.controlMatches ||= new WeakMap();
   const flushedTrees = new Set();
   const invalidateQueries = (records, root) => {
     const bumped = new Set();
@@ -539,10 +553,12 @@
         own.queryResults.delete(node);
         own.domVersions.set(node, (own.domVersions.get(node) || 0) + 1);
       }
+      if (record.type === 'childList') own.elementChildren.delete(record.target);
       for (const added of record.addedNodes || []) {
         if (added.nodeType !== 1) continue;
         // A removed subtree can be edited while no observer watches it, then inserted somewhere else.
         for (const node of [added, ...added.querySelectorAll('*')]) {
+          own.elementChildren.delete(node);
           own.queryResults.delete(node);
           own.domVersions.set(node, (own.domVersions.get(node) || 0) + 1);
         }
@@ -587,13 +603,54 @@
     if (!entry.queries.has(selector)) entry.queries.set(selector, scope.querySelectorAll(selector));
     return entry.queries.get(selector);
   };
+  // Element order changes only when an element enters or leaves a child list. Saved edges let a changed
+  // subtree renew the order without asking the browser to walk its unchanged siblings again.
+  const indexedElements = scope => {
+    const root = flushTree(scope);
+    const version = own.structureVersions.get(root) || 0;
+    const saved = own.elementOrders.get(scope);
+    if (saved?.root === root && saved.version === version) return saved.elements;
+    const childrenOf = parent => {
+      const entry = own.elementChildren.get(parent);
+      if (entry?.root === root) return entry.children;
+      const children = [];
+      for (let node = parent.firstElementChild; node; node = node.nextElementSibling) children.push(node);
+      if (children.length) own.elementChildren.set(parent, { root, children });
+      return children;
+    };
+    const elements = [];
+    const pending = [{ children: childrenOf(scope), next: 0 }];
+    while (pending.length) {
+      const level = pending[pending.length - 1];
+      if (level.next === level.children.length) {
+        pending.pop();
+        continue;
+      }
+      const node = level.children[level.next++];
+      elements.push(node);
+      const children = childrenOf(node);
+      if (children.length) pending.push({ children, next: 0 });
+    }
+    own.elementOrders.set(scope, { root, version, elements });
+    return elements;
+  };
+  const listedControl = e => {
+    const root = e.getRootNode();
+    const version = own.domVersions.get(e) || 0;
+    let entry = own.controlMatches.get(e);
+    if (entry?.root !== root || entry.version !== version) {
+      entry = { root, version, value: e.matches(SELECTOR) };
+      own.controlMatches.set(e, entry);
+    }
+    return entry.value;
+  };
   flushTree(document);
   const readUndefinedElements = own.undefinedElements;
   const innerTextOf = e => renderFact('text', e);
 
   const safe = e => nativeProperty(e, 'type') !== 'hidden';
   // Password and agent-typed secret values never leave the page: only their length is observed.
-  const secret = e => nativeProperty(e, 'type') === 'password' || e.dataset?.fastbrowseSecret === '1';
+  const secret = e => nativeProperty(e, 'type') === 'password' || nativeProperty(nativeProperty(e, 'dataset'), 'fastbrowseSecret') === '1';
   const reveal = e => (typeof nativeProperty(e, 'value') !== 'string' ? null : secret(e) ? '•'.repeat(nativeProperty(e, 'value').length) : nativeProperty(e, 'value'));
   // What a select has chosen. selectedIndex names only the first chosen option, so a list that allows several gives
   // every chosen index: a later option chosen or taken out changes it.
@@ -1060,11 +1117,10 @@
   let lightElements;
   function* walk(root) {
     // A document observer cannot see mutations inside shadow roots or child documents.
-    const listed = new Set(root.querySelectorAll(SELECTOR));
-    const elements = root.querySelectorAll('*');
+    const elements = indexedElements(root);
     if (root === document) lightElements = [...elements];
     for (const e of elements) {
-      if (listed.has(e) || pressable(e) || focusableText(e)) yield e;
+      if (listedControl(e) || pressable(e) || focusableText(e)) yield e;
       if (e.shadowRoot) {
         deep = true;
         yield* walk(e.shadowRoot);
@@ -1186,8 +1242,10 @@
     const named = labelOf(e);
     if (!named) unnamed.add(id);
     const root = e.getRootNode();
-    const focused = renderFact('active', root);
-    const activeDescendant = focused?.getAttribute('aria-activedescendant');
+    const active = renderFact('active', root);
+    const activeDescendant = active?.getAttribute('aria-activedescendant');
+    // A composite widget can keep DOM focus on its container while its active descendant moves between items.
+    const focused = active === e || (!!activeDescendant && root.getElementById?.(activeDescendant) === e);
     const base = {
       id,
       role: rname,
@@ -1195,9 +1253,9 @@
       offscreen: y < 0 || y >= innerHeight,
       distance: y < 0 || y >= innerHeight ? 1 + Math.abs(y - innerHeight / 2) : 0,
       sensitive: secret(source),
-      // A composite widget can keep DOM focus on its container while its active descendant moves between items.
-      // Read that virtual focus too, in the same root as the item, including a shadow root.
-      focused: focused === e || (!!activeDescendant && root.getElementById?.(activeDescendant) === e),
+      // The root's own active element, so a field inside a shadow root reads as focused where the document names
+      // only its host.
+      focused,
       input_type: nativeProperty(source, 'type') || null,
       input_name: source.getAttribute('name') || null,
       max_length: nativeProperty(source, 'maxLength') > 0 ? nativeProperty(source, 'maxLength') : null,
@@ -1220,7 +1278,7 @@
       const pager = el => el && el.classList && el.classList.contains('next');
       const paging = el =>
         el.tagName === 'NAV' ||
-        /pagin|pager/i.test(typeof el.className === 'string' ? el.className : '') ||
+        /pagin|pager/i.test(typeof nativeProperty(el, 'className') === 'string' ? nativeProperty(el, 'className') : '') ||
         /pagin|pager/i.test(el.getAttribute('aria-label') || '');
       const container = () => {
         for (let el = e.parentElement; el; el = el.parentElement) if (paging(el)) return true;
@@ -1253,8 +1311,8 @@
     if (refused && nativeProperty(source, 'validationMessage')) base.validation_message = nativeProperty(source, 'validationMessage');
     if (e.tagName === 'SELECT') {
       base.operations = ['select'];
-      base.options = [...e.options].filter(o => !nativeProperty(o, 'disabled') && !o.closest('optgroup[disabled]')).map(o => o.label);
-      base.value = [...renderFact('selected', e)].map(o => o.label).join(', ');
+      base.options = [...e.options].filter(o => !nativeProperty(o, 'disabled') && !o.closest('optgroup[disabled]')).map(o => nativeProperty(o, 'label'));
+      base.value = [...renderFact('selected', e)].map(o => nativeProperty(o, 'label')).join(', ');
     } else if (nativeProperty(source, 'type') === 'file') {
       base.operations = ['upload'];
       base.value = null;
@@ -1265,26 +1323,20 @@
         (['textbox', 'searchbox', 'spinbutton'].includes(rname) ||
           (rname === 'combobox' && ['INPUT', 'TEXTAREA'].includes(e.tagName)));
       // reveal() is null for <li>, <progress> and <meter>, whose numeric `value`s are not field contents.
-      // A scripted slider or spinbutton has no `value`: its current value is the one it announces, and a press of its
-      // keys is judged by it.
+      // A scripted value control announces its current value instead of exposing a field's value property.
       const announced = ['slider', 'spinbutton'].includes(rname)
-        ? (e.getAttribute('aria-valuetext') ?? e.getAttribute('aria-valuenow'))
-        : null;
-      base.value =
-        reveal(source) ?? announced ?? (nativeProperty(e, 'isContentEditable') || rname === 'combobox' ? innerTextOf(e).trim() : null);
+        ? (e.getAttribute('aria-valuetext') ?? e.getAttribute('aria-valuenow')) : null;
+      base.value = reveal(source) ?? announced ?? (nativeProperty(e, 'isContentEditable') || rname === 'combobox' ? innerTextOf(e).trim() : null);
       base.operations = editable ? ['fill', 'click', 'enter'] : ['click'];
-      // The APG's composite widgets and value controls need keys beyond activation. A role alone cannot receive
-      // them: focus must reach the widget itself or its current active descendant. Native selects use Select.
-      if (
-        !editable &&
-        !['button', 'link', 'checkbox', 'switch', 'textbox', 'searchbox'].includes(rname) &&
-        ARIA_ROLES.includes(rname) &&
-        (e.tabIndex >= 0 || e.hasAttribute('tabindex') || base.focused)
-      ) base.operations.push('press');
       // Only an element that names itself draggable is offered as a drag source: `draggable` reports true for
       // every <a> and <img> by default, which would offer the whole page as draggable.
       if (e.getAttribute('draggable') === 'true') base.operations.push('drag');
     }
+    // Focus determines whether the widget can receive keys.
+    if (!base.operations.includes('fill') && e.tagName !== 'SELECT' && nativeProperty(source, 'type') !== 'file' &&
+        !['button', 'link', 'checkbox', 'switch', 'textbox', 'searchbox'].includes(rname) &&
+        ARIA_ROLES.includes(rname) && (nativeProperty(e, 'tabIndex') >= 0 || e.hasAttribute('tabindex') || focused))
+      base.operations.push('press');
     controls.push(base);
   }
 
@@ -1293,6 +1345,23 @@
   // that holds it and none of its twins, named by that ancestor's heading or its own first line of text.
   // Only labels that actually collide pay for it.
   const HEADINGS = 'h1,h2,h3,h4,h5,h6,[role="heading"],legend,caption,th,dt,summary';
+  own.contextLines ||= new WeakMap();
+  // Many controls read the same heading or month. Native text stays fresh; its normalization is pure code.
+  // Consumers do not mutate these shared lines, which also serve later reads of the same text.
+  const renderedLines = memo(e => {
+    if (!e) return [];
+    const text = innerTextOf(e) || '';
+    const previous = own.contextLines.get(e);
+    if (previous?.text === text) {
+      previous.text = text;
+      return previous.lines;
+    }
+    const lines = text.split('\n').map(line => line.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    own.contextLines.set(e, { text, lines });
+    return lines;
+  });
+  const firstRenderedLine = e => renderedLines(e)[0] || '';
+
   const firstLine = text =>
     (text || '')
       .split('\n')
@@ -1337,7 +1406,7 @@
     let first = '',
       before = '';
     for (const title of titles(scope)) {
-      const text = firstLine(innerTextOf(title));
+      const text = firstRenderedLine(title);
       if (!text || text === label || title.contains(element) || !reaches(title, element)) continue;
       first ||= text;
       if (title.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) before = text;
@@ -1365,10 +1434,8 @@
     // A table row's cells are one line of text, so a week row reads "26 27 28 29 30 1 2": a line made only of this
     // control's and its peers' labels names nothing but them.
     const onlyPeers = line => line.split(' ').every(word => word === label || peer(word));
-    const lines = (innerTextOf(scope) || '')
-      .split('\n')
-      .map(line => line.replace(/\s+/g, ' ').trim())
-      .filter(line => line && !repeated.has(line) && !peer(line) && !onlyPeers(line) && !own?.has(line));
+    const lines = renderedLines(scope)
+      .filter(line => !repeated.has(line) && !peer(line) && !onlyPeers(line) && !own?.has(line));
     return firstLine(lines.map(line => (label ? ` ${line} `.split(` ${label} `).join(' ') : line)).join('\n'));
   };
   const contextOf = (element, holding, label, nearest = true) => {
@@ -1523,7 +1590,7 @@
   for (const e of offered) for (let p = e?.parentElement; p && !holding.has(p); p = p.parentElement) holding.add(p);
   for (const doc of docs) {
     let host = null;
-    for (const e of doc.body.querySelectorAll('*')) {
+    for (const e of indexedElements(doc.body)) {
       if (host?.contains(e)) continue;
       if (offered.has(e) || holding.has(e) || !isCard(e)) continue;
       if (![...descendants(e, VISUAL)].some(v => !decorative(v))) continue;
@@ -1607,7 +1674,7 @@
   const nearestName = (element, label) => {
     const own =
       element.tagName === 'SELECT' || FIELD_CONTAINERS.has(element.getAttribute('role'))
-        ? new Set((innerTextOf(element) || '').split('\n').map(line => line.replace(/\s+/g, ' ').trim()))
+        ? new Set(renderedLines(element))
         : null;
     let first = '';
     for (let e = element.parentElement, path = element; e && e !== e.ownerDocument.body; path = e, e = e.parentElement) {
@@ -1618,7 +1685,7 @@
       const aria = (e.getAttribute('aria-label') || '').trim();
       const outside = [...e.children]
         .filter(child => child !== path)
-        .map(child => firstLine(innerTextOf(child)))
+        .map(child => firstRenderedLine(child))
         .find(line => line && line !== label && !repeated.has(line));
       return (aria !== label && aria) || outside || first;
     }
@@ -1676,7 +1743,7 @@
         before = '';
       for (const title of openTitles(e)) {
         if (inner.contains(title)) continue;
-        const text = firstLine(innerTextOf(title));
+        const text = firstRenderedLine(title);
         if (!text || text === label) continue;
         first ||= text;
         if (title.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING) before = text;
@@ -1763,7 +1830,7 @@
   registry.scrollIds ||= new WeakMap();
   registry.scrollAxes ||= new Map();
   const scrollAreas = root => {
-    for (const e of root.querySelectorAll('*')) {
+    for (const e of indexedElements(root)) {
       if (e.shadowRoot) scrollAreas(e.shadowRoot);
       if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
         const inner = childDocument(e);

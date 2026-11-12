@@ -44,7 +44,7 @@
   button:disabled { opacity: 0.5; cursor: default; }
   .empty { padding: 14px 10px; text-align: center; color: var(--ink-faint); background: var(--sunk); border-radius: 6px; }
   code { font-family: var(--mono); font-size: 11.5px; padding: 1px 4px; border-radius: 3px; background: var(--sunk); color: var(--ink-muted); }
-  .empty code { background: var(--paper); }
+  .empty code { display: block; margin-top: 8px; overflow-wrap: anywhere; background: var(--paper); }
   footer { padding: 12px 14px 14px; border-top: 1px solid var(--rule); }
   label { display: block; font-size: 12px; color: var(--ink-muted); }
   .field { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
@@ -71,32 +71,33 @@
 <header>
   <img src="icon-48.png" alt="">
   <h1>fastbrowse</h1>
-  <span id="status" class="status">Checking</span>
+  <span id="status" class="status" role="status">Checking connection</span>
 </header>
 <section>
   <div class="head">
     <h2>Runs in this browser</h2>
-    <button id="stop-all" hidden>Stop all</button>
+    <button id="stop-all" title="Stop every fastbrowse run in this browser" hidden>Stop all</button>
   </div>
   <ul id="runs"></ul>
-  <p id="offline" class="hint" hidden>fastbrowse is not connected. Run <code>fastbrowse extension install</code>, then reopen this popup.
-    <a href="https://www.fastbrowse.ai/docs/troubleshooting#the-extension-is-not-connected" target="_blank">More</a></p>
+  <p id="offline" class="hint" hidden>Run <code>fastbrowse extension install</code> in your terminal. Then restart Chrome or turn this extension off and on.
+    <a href="https://www.fastbrowse.ai/docs/troubleshooting/#the-extension-is-not-connected" target="_blank" rel="noreferrer">Setup help</a></p>
 </section>
 <section id="recent-section" class="recent" hidden>
-  <h2>Recent</h2>
+  <h2>Recent runs</h2>
   <ul id="recent"></ul>
   <p id="conflict" class="hint" hidden>A run lost its tab to another extension's frame. Set that extension's
     <b>Site access</b> to <b>On click</b> at <a id="taker" href="#"><code>chrome://extensions</code></a>.
-    <a href="https://www.fastbrowse.ai/docs/troubleshooting#another-extensions-frame-takes-the-tab-away" target="_blank">More</a></p>
+    <a href="https://www.fastbrowse.ai/docs/troubleshooting/#another-extensions-frame-takes-the-tab-away" target="_blank" rel="noreferrer">Fix extension conflicts</a></p>
 </section>
 <footer>
-  <label for="label">Browser name, for <code>--extension-browser</code></label>
+  <label for="label">Browser name</label>
   <div class="field">
-    <input id="label" autocomplete="off" spellcheck="false" placeholder="e.g. work">
-    <span id="saved" class="saved">Saved</span>
+    <input id="label" autocomplete="off" spellcheck="false" placeholder="e.g. work" aria-describedby="label-help">
+    <span id="saved" class="saved" role="status">Saved</span>
   </div>
+  <p id="label-help" class="hint">With more than one browser connected, choose this one with <code>--extension-browser NAME</code>.</p>
   <div class="links">
-    <a href="https://www.fastbrowse.ai/docs/signed-in-sites#your-own-chrome" target="_blank">Docs</a>
+    <a href="https://www.fastbrowse.ai/docs/signed-in-sites/#your-own-chrome" target="_blank" rel="noreferrer">Usage guide</a>
     <span id="browser-id" class="id"></span>
   </div>
 </footer>

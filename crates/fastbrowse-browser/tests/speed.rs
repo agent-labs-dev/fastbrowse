@@ -734,6 +734,42 @@ async fn test_a_changed_card_keeps_its_siblings_structural_queries() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_changed_subtree_reuses_the_document_walk() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(&h.session, r#"document.body.innerHTML = '<article id=changed><button>First</button></article><article id=stable><button>Second</button></article>';globalThis.documentWalks = 0;globalThis.stableChildReads = 0;const original = Document.prototype.querySelectorAll;Document.prototype.querySelectorAll = function(selector) {if(selector === '*') documentWalks++;return original.call(this,selector)};const children = Object.getOwnPropertyDescriptor(Element.prototype,'firstElementChild');Object.defineProperty(Element.prototype,'firstElementChild',{...children,get(){if(this.id === 'stable')stableChildReads++;return children.get.call(this)}});true"#).await;
+    h.observe().await;
+    assert!(eval_active(&h.session, "stableChildReads").await.as_u64().unwrap() > 0);
+    for script in [
+        "document.querySelector('#changed').insertAdjacentHTML('beforeend','<button>Added</button>')",
+        "document.querySelector('#changed').prepend(document.querySelector('#changed').lastChild)",
+        "document.querySelector('#changed').firstChild.remove()",
+        "document.querySelector('#changed button').firstChild.replaceWith(document.createTextNode('Replacement'))",
+        "document.querySelector('#changed').insertAdjacentHTML('beforeend','<a id=changing-link>Link</a>')",
+        "document.querySelector('#changing-link').setAttribute('href','#destination')",
+        "document.querySelector('#changing-link').removeAttribute('href')",
+        "globalThis.detachedCard = document.querySelector('#changed');detachedCard.remove();true",
+        "detachedCard.innerHTML = '<span role=button>Detached replacement</span>';document.body.prepend(detachedCard)",
+        "globalThis.shadowHost = document.createElement('div');document.body.append(shadowHost);shadowHost.attachShadow({mode:'open'}).innerHTML = '<button>Shadow first</button>'",
+        "shadowHost.shadowRoot.prepend(Object.assign(document.createElement('button'),{textContent:'Shadow added'}))",
+        "document.documentElement.append(Object.assign(document.createElement('button'),{textContent:'After body'}))",
+        "document.body.replaceWith(Object.assign(document.createElement('body'),{innerHTML:'<button>New body</button>'}))",
+    ] {
+        eval_active(&h.session, "documentWalks = 0;stableChildReads = 0").await;
+        eval_active(&h.session, script).await;
+        let after = h.observe().await;
+        assert_eq!(eval_active(&h.session, "documentWalks").await, json!(0), "{script}");
+        assert_eq!(eval_active(&h.session, "stableChildReads").await, json!(0), "{script}");
+        let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
+        let mut full = other.observe().await.expect("full read");
+        full.captured_at = after.captured_at;
+        assert_eq!(after, full, "{script}");
+        h.observe().await;
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_changed_name_does_not_derive_an_unrelated_name_again() {
     let _turn = turn().await;
     let Some(h) = harness().await else { return };
@@ -749,6 +785,84 @@ async fn test_a_changed_name_does_not_derive_an_unrelated_name_again() {
     assert!(after.controls.iter().any(|c| c.label == "Updated"));
     assert!(after.controls.iter().any(|c| c.label == "Second"));
     assert_eq!(eval_active(&h.session, "globalThis.stableNameReads").await, json!(0));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_widget_keys_follow_virtual_focus_without_dom_changes() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(&h.session, r#"document.body.innerHTML = '<div id=grid role=grid tabindex=0 aria-label=Sheet aria-activedescendant=item><span id=item role=gridcell>Cell</span></div><button id=other>Other</button>';true"#).await;
+    let before = h.observe().await;
+    assert!(!find(&before, "Cell").operations.contains(&Operation::Press));
+    for target in ["grid", "grid", "other", "grid"] {
+        eval_active(&h.session, &format!("document.getElementById('{target}').focus()")).await;
+        let after = h.observe().await;
+        let cell = find(&after, "Cell");
+        assert_eq!(cell.focused, Some(target == "grid"));
+        assert_eq!(cell.operations.iter().filter(|op| **op == Operation::Press).count(), usize::from(target == "grid"));
+        let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
+        let mut full = other.observe().await.expect("full read");
+        full.captured_at = after.captured_at;
+        assert_eq!(after, full, "{target}");
+        h.observe().await;
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cached_structure_matches_full_reads_when_external_dependencies_change() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(&h.session, r#"document.body.innerHTML = '<nav id=pager><a class=next href=/next>Continue</a></nav><span id=external-name>First name</span><input id=owned form=external-form aria-labelledby=external-name><form id=external-form><button>Send</button></form><select id=choices aria-label=Choice><option>One</option><option>Two</option></select><x-link id=relative-link role=link style=display:block>Relative destination</x-link>';document.querySelector('#relative-link').href='./target';globalThis.optionLabel='One';Object.defineProperty(document.querySelector('option'),'label',{get(){return optionLabel}});true"#).await;
+    h.observe().await;
+    for script in [
+        "document.querySelector('#pager').removeAttribute('id');document.querySelector('nav').replaceWith(Object.assign(document.createElement('div'),{id:'pager',innerHTML:document.querySelector('nav').innerHTML}))",
+        "document.querySelector('#pager').className = 'pagination'",
+        "document.querySelector('#external-name').firstChild.data = 'Changed name'",
+        "document.querySelector('#external-form').id = 'other-form'",
+        "document.querySelector('#other-form').id = 'external-form'",
+        "document.querySelector('#owned').required = true",
+        "document.querySelector('#owned').focus()",
+        "globalThis.optionLabel = 'Current option'",
+        "document.querySelector('#choices').selectedIndex = 1",
+        "history.pushState(null,'','/new-base/')",
+        "document.body.style.minHeight = '4000px';scrollTo(0,1000)",
+        "scrollTo(0,1500)",
+    ] {
+        eval_active(&h.session, script).await;
+        let after = h.observe().await;
+        let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
+        let mut full = other.observe().await.expect("full read");
+        full.captured_at = after.captured_at;
+        assert_eq!(after, full, "{script}");
+        h.observe().await;
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_context_lines_do_not_normalize_an_unchanged_heading_again() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(&h.session, r#"document.body.innerHTML = '<article><h2 id=changed-heading>First heading</h2><button>Open</button></article><article><h2>Second heading</h2><button>Open</button></article>';globalThis.stableNormalizations = 0;const original = String.prototype.replace;String.prototype.replace = function(...args) {if(String(this) === 'Second heading')stableNormalizations++;return original.apply(this,args)};true"#).await;
+    h.observe().await;
+    assert!(eval_active(&h.session, "stableNormalizations").await.as_u64().unwrap() > 0);
+    for script in [
+        "document.querySelector('#changed-heading').firstChild.data = 'Current heading'",
+        "document.querySelector('#changed-heading').style.display = 'none'",
+    ] {
+        eval_active(&h.session, "stableNormalizations = 0").await;
+        eval_active(&h.session, script).await;
+        let after = h.observe().await;
+        assert_eq!(eval_active(&h.session, "stableNormalizations").await, json!(0));
+        let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
+        let mut full = other.observe().await.expect("full read");
+        full.captured_at = after.captured_at;
+        assert_eq!(after, full, "{script}");
+        h.observe().await;
+    }
     h.close().await;
 }
 

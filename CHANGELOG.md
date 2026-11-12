@@ -13,7 +13,21 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.11.0] - 2026-11-12
 
-- Hosted dispatch outages retain their provider run, session and settled billing receipt instead of losing that evidence when retrying ([#1055](https://github.com/agent-labs-dev/fastbrowse/issues/1055)).
+- **The live cursor follows extension runs.** `--cursor` brings the extension's tab forward and draws at the browser window identified by its native host. On X11, Cua Driver 0.45.4 or later draws fastbrowse's ember focus marker and keeps it visible between actions. The marker lands before input, and the control is checked again after the glide. Recordings use the same focus shape.
+
+- **Install the Chrome extension from the Web Store.** The setup guide and README link to the store and walk through connecting Chrome and running a first task. The CLI installation output and extension popup point to setup help and explain how to start and stop runs.
+
+- The eval browser helper preserves Chrome's exit status when Chrome stops before its owner closes the pipe, instead of aborting during Python shutdown ([#1061](https://github.com/agent-labs-dev/fastbrowse/issues/1061)).
+
+- Release comparisons reject missing or unknown costs and invalid timing measurements instead of treating them as zero ([#1059](https://github.com/agent-labs-dev/fastbrowse/issues/1059)).
+
+- **Live eval judges receive the final viewport image.** The observer captures the selected tab before changing modal visibility, retaining visual evidence such as CSS-generated marks alongside text and controls. Tasks declaring secrets withhold the image entirely ([#1056](https://github.com/agent-labs-dev/fastbrowse/issues/1056)).
+
+- **Changed observations reuse the DOM element index.** Insertions, removals and moves rebuild element order through saved child lists, retaining unchanged sibling lists. Control membership stays current when attributes change, with live geometry and rendering checks preserved ([#943](https://github.com/agent-labs-dev/fastbrowse/issues/943)).
+
+- Hosted eval costs remain provisional after browser shutdown. Receipts keep exact provider amounts and their query time; incomplete totals stay unknown ([#1058](https://github.com/agent-labs-dev/fastbrowse/issues/1058)).
+- Eval rows preserve provider cost precision instead of rounding totals to five decimal places ([#1058](https://github.com/agent-labs-dev/fastbrowse/issues/1058)).
+- Hosted dispatch outages retain their provider run, session and available billing receipt instead of losing that evidence when retrying ([#1055](https://github.com/agent-labs-dev/fastbrowse/issues/1055)).
 
 - **Saved observations notice rendering changes without DOM mutations.** A custom element changing its CSS state now refreshes controls, names, positions and hover targets. Reuse checks the rendering facts the saved read consumed, including live selector results, instead of relying on DOM changes alone ([#1050](https://github.com/agent-labs-dev/fastbrowse/issues/1050)).
 
@@ -39,7 +53,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Downloaded XLSX, DOCX and ZIP files provide citable text through the document helper. Worksheets keep cell coordinates, Word keeps text boundaries, and archives name unread members ([#1022](https://github.com/agent-labs-dev/fastbrowse/issues/1022), part of [#986](https://github.com/agent-labs-dev/fastbrowse/issues/986)).
 - Scrolls target the page or a named vertical or horizontal scroll area, including panels and lists in open shadow roots. Container movement counts as progress ([#986](https://github.com/agent-labs-dev/fastbrowse/issues/986)).
 - **A new shadow root renews a saved observation.** Attaching an open shadow root to an existing element now reads its controls instead of returning the earlier shallow page ([#1045](https://github.com/agent-labs-dev/fastbrowse/issues/1045)).
-- **Changed pages reuse control names and transfer fewer control rows.** The browser visits the frame, reuses names whose DOM, label and visibility inputs still match, and sends unchanged controls by their existing ids. Only changed rows and guards transfer. A reader without the matching document and previous read receives the full frame. Context construction indexes peer labels once per read instead of scanning every control for each context ([#943](https://github.com/agent-labs-dev/fastbrowse/issues/943)).
+- **Changed pages reuse control names and transfer fewer control rows.** The browser visits the frame, reuses names whose DOM, label and visibility inputs still match, and sends unchanged controls by their existing ids. Only changed rows and guards transfer. A reader without the matching document and previous read receives the full frame. Context construction indexes peer labels once per read instead of scanning every control for each context and reuses normalized text lines when the current text matches ([#943](https://github.com/agent-labs-dev/fastbrowse/issues/943)).
 - **Hover targets follow stylesheet edits.** Changing a hover selector without adding or removing a CSS rule now replaces the offered target; the rule cache checks its selectors rather than its count.
 - **Widget keys are choices, even when the task names no chord.** Jev can step sliders and spin buttons, navigate tabs, lists, menus, trees and grids, and open combobox popups using the keys their ARIA roles define. Task-provided chords still work, and the edit and authorization gates check the selected key before it is sent ([#1035](https://github.com/agent-labs-dev/fastbrowse/issues/1035)).
 - **A stalled run can try a fresh known route before stopping.** The route proposer sees the current page, collected evidence and previous actions, so it can use facts learned during the run. Previously offered, opened and walled routes are excluded, and Jev chooses whether to navigate ([#1037](https://github.com/agent-labs-dev/fastbrowse/issues/1037)).
@@ -2077,8 +2091,7 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.11.0...HEAD
-[0.11.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.11.0
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.10.0...HEAD
 [0.10.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.10.0
 [0.9.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.9.1
 [0.9.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.9.0
