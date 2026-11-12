@@ -1811,7 +1811,7 @@
   registry.scrollIds ||= new WeakMap();
   registry.scrollAxes ||= new Map();
   const scrollAreas = root => {
-    for (const e of root.querySelectorAll('*')) {
+    for (const e of indexedElements(root)) {
       if (e.shadowRoot) scrollAreas(e.shadowRoot);
       if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
         const inner = childDocument(e);

@@ -1716,7 +1716,7 @@ async def run_arm(
             record=record,
         )
         if isinstance(exc, HostedUnavailable):
-            return EvalRow.model_validate(crashed.model_dump() | exc.report.model_dump(exclude={"status", "error"}))
+            return EvalRow.model_validate(crashed.model_dump() | exc.report.model_dump(exclude={"status"}))
         if isinstance(exc, SpendStop):
             return crashed.model_copy(
                 update={"execution_admission_stopped": True, "execution_admission_reason": str(exc)}
