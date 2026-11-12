@@ -12,7 +12,7 @@ is still honoured for direct callers.
 
 The browser is the caller's: a Browser Use Cloud browser reached through `cdp_ws`, the same kind the fastbrowse arm
 drives, so both arms pay the same round trips. The caller passes fastbrowse's selected Jev source: OpenRouter
-by default, or TypeSafe directly or the Vercel AI Gateway. OpenRouter uses the TypeSafe protocol and key slot
+by default, or TypeSafe directly. OpenRouter uses the TypeSafe protocol and key slot
 at the supplied base URL. This arm keeps its own retry policy without failover.
 The result also carries every decision, stale failure and provenance; with `record`, per-step controls go to
 a `.evidence.json` beside the video. The text helper uses TEXT_MODEL_API_KEY, an OpenRouter key.
@@ -34,40 +34,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-GATEWAY_URL = "https://ai-gateway.vercel.sh/v4/ai/evaluation-model"
-GATEWAY_HEADERS = {
-    "ai-gateway-auth-method": "api-key",
-    "ai-gateway-protocol-version": "0.0.1",
-    "ai-model-id": "typesafe-ai/jev",
-    "ai-evaluation-model-specification-version": "4",
-}
-ROUNDING_UNIT = 0.01
-"""The gateway rounds probabilities to hundredths so they sum to one, which can leave Jev's choice a hundredth
-below another option. fastbrowse accepts that near-tie; jev-ultrafast, written against unrounded direct-API
-answers, would reject the whole response, so the chosen option is lifted to the top before it checks."""
 RECAST_SECONDS = 1.0
 FPS = 25
-
-
-def systemone_answer(payload: dict[str, Any]) -> tuple[dict[str, Any], float | None]:
-    """A gateway response in the direct API's shape, and the gateway's metered cost if it reported one."""
-    metadata = payload.get("providerMetadata") or {}
-    confidence = (metadata.get("typesafe") or {}).get("confidence") or {}
-    answers: dict[str, Any] = {}
-    for key, raw in (payload.get("answers") or {}).items():
-        answer = {**raw, "confidence": confidence.get(key)}
-        probabilities = answer.get("probabilities")
-        choice = answer.get("choice")
-        if isinstance(probabilities, dict) and choice in probabilities:
-            top = max(probabilities.values())
-            if probabilities[choice] < top and top - probabilities[choice] <= ROUNDING_UNIT + 1e-9:
-                answer["probabilities"] = {**probabilities, choice: top}
-        answers[key] = answer
-    cost = (metadata.get("gateway") or {}).get("cost")
-    return (
-        {"answers": answers, "model": "typesafe-ai/jev", "usage": payload.get("usage", {})},
-        None if cost is None else float(cost),
-    )
 
 
 class Unavailable(RuntimeError):
@@ -144,12 +112,6 @@ class Meter:
 
 def patch_transport(model: Any, meter: Meter) -> None:
     base_url = os.environ.get("FASTBROWSE_JEV_BASE_URL", "").rstrip("/")
-    via_gateway = not os.environ.get("TYPESAFE_API_KEY")
-    if via_gateway:
-        if not os.environ.get("AI_GATEWAY_API_KEY"):
-            raise RuntimeError("the caller must supply the selected Jev key")
-        # jev-ultrafast reads its Jev key from here and passes it to post_json, which sends it to the gateway.
-        os.environ["TYPESAFE_API_KEY"] = os.environ["AI_GATEWAY_API_KEY"]
 
     def post_json(url: str, key: str, body: dict[str, Any]) -> dict[str, Any]:
         if "api.typesafe.ai" not in url:
@@ -184,21 +146,6 @@ def patch_transport(model: Any, meter: Meter) -> None:
             raise
 
     def ask(url: str, key: str, body: dict[str, Any]) -> dict[str, Any]:
-        if "api.typesafe.ai" in url and via_gateway:
-            payload = send(
-                f"{base_url}/v4/ai/evaluation-model" if base_url else GATEWAY_URL,
-                {
-                    "Authorization": f"Bearer {key}",
-                    **GATEWAY_HEADERS,
-                    # The pinned Jev release fastbrowse runs; the bare alias moves to each new release.
-                    "ai-model-id": os.environ.get("FASTBROWSE_JEV_MODEL") or GATEWAY_HEADERS["ai-model-id"],
-                },
-                {"state": body["state"], "questions": body["questions"]},
-                "jev",
-            )
-            result, cost = systemone_answer(payload)
-            _meter(meter, "jev", cost, (payload.get("usage") or {}).get("inputTokens"))
-            return result
         kind = "jev" if "api.typesafe.ai" in url else "text"
         if kind == "jev":
             if base_url:
@@ -229,7 +176,7 @@ def _meter(meter: Meter, kind: str, cost: object, tokens: object = None) -> None
             meter.unmetered += 1
         return
     if kind == "jev" and not float(cost):
-        # The gateway meters Jev at $0 while tokens flow; priced at list, as fastbrowse prices its own requests. Without
+        # A provider can report $0 while tokens flow; priced at list, as fastbrowse prices its own requests. Without
         # the tokens or the price, $0 says nothing about the charge.
         if not (isinstance(tokens, int) and tokens > 0 and meter.jev_price):
             if meter.max_dollars is None:

@@ -13,12 +13,11 @@ from typing import Any, Literal
 import httpx
 from fastbrowse.evals import harness
 
-type JevSource = Literal["openrouter", "typesafe", "gateway"]
+type JevSource = Literal["openrouter", "typesafe"]
 
-# Values of the pinned fastbrowse build's Rust core: crates/fastbrowse-clients/src/system_one.rs and vercel.rs.
+# Values of the pinned fastbrowse build's Rust core: crates/fastbrowse-clients/src/system_one.rs.
 OPENROUTER_URL = "https://openrouter.ai/api"
 TYPESAFE_URL = "https://api.typesafe.ai"
-GATEWAY_URL = "https://ai-gateway.vercel.sh"
 JEV_DOLLARS_PER_INPUT_TOKEN = 0.042 / 1_000_000
 RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529})
 """Statuses that say nothing about the request, so a repeat can clear them (crates/fastbrowse-clients/src/validation.rs
@@ -32,7 +31,7 @@ TRANSIENT_TRANSPORT: tuple[type[httpx.HTTPError], ...] = (
 )
 """Transport failures a repeat can clear; fastbrowse's own Python client used exactly these before its Rust core."""
 
-PROVIDER_KEYS = ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "AI_GATEWAY_API_KEY", "EXA_API_KEY")
+PROVIDER_KEYS = ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "EXA_API_KEY")
 """The provider keys a fastbrowse arm is given: Jev, its LLM and optional web search use these.
 The Browser Use key stays with the harness, which starts every cloud browser itself."""
 
@@ -70,16 +69,18 @@ def openrouter_key() -> str:
 
 def jev_source(env: Mapping[str, str] | None = None) -> JevSource:
     """The Jev provider every arm that calls Jev uses: the one named in FASTBROWSE_DECISION_SOURCE (or its former
-    name FASTBROWSE_JEV_SOURCE), else OpenRouter when keyed, else the direct API when keyed, else the gateway."""
+    name FASTBROWSE_JEV_SOURCE), else the direct API when it alone is keyed, else OpenRouter."""
     env = environment() if env is None else env
     named = env.get("FASTBROWSE_DECISION_SOURCE") or env.get("FASTBROWSE_JEV_SOURCE")
     if named is not None:
-        if named not in ("openrouter", "typesafe", "gateway"):
-            raise MissingKey(f"FASTBROWSE_DECISION_SOURCE={named} serves no Jev; use openrouter, typesafe or gateway")
+        if named not in ("openrouter", "typesafe"):
+            raise MissingKey(f"FASTBROWSE_DECISION_SOURCE={named} serves no Jev; use openrouter or typesafe")
         return named
     if env.get("OPENROUTER_API_KEY"):
         return "openrouter"
-    return "typesafe" if env.get("TYPESAFE_API_KEY") else "gateway"
+    if env.get("TYPESAFE_API_KEY"):
+        return "typesafe"
+    return "openrouter"
 
 
 def providers() -> str:
@@ -110,7 +111,7 @@ def jev_models() -> dict[str, str]:
     return dict(core.jev_models())
 
 
-def jev_route() -> tuple[str, str, str, str | None]:
+def jev_route() -> tuple[str, str, str, str]:
     """(key variable, base URL, model, key) of `jev_source()`, for jev-ultrafast's isolated runner. A base URL or
     model set for fastbrowse (FASTBROWSE_DECISION_BASE_URL, FASTBROWSE_DECISION_MODEL) applies to it too."""
     env = environment()
@@ -120,8 +121,8 @@ def jev_route() -> tuple[str, str, str, str | None]:
             name, url, key = "TYPESAFE_API_KEY", OPENROUTER_URL, env.get("OPENROUTER_API_KEY")
         case "typesafe":
             name, url, key = "TYPESAFE_API_KEY", TYPESAFE_URL, env.get("TYPESAFE_API_KEY")
-        case "gateway":
-            name, url, key = "AI_GATEWAY_API_KEY", GATEWAY_URL, env.get("AI_GATEWAY_API_KEY")
+    if not key:
+        raise MissingKey(f"set {'OPENROUTER_API_KEY' if source == 'openrouter' else 'TYPESAFE_API_KEY'}")
     model = jev_models()[source]
     url = env.get("FASTBROWSE_DECISION_BASE_URL") or env.get("FASTBROWSE_JEV_BASE_URL") or url
     model = env.get("FASTBROWSE_DECISION_MODEL") or env.get("FASTBROWSE_JEV_MODEL") or model
