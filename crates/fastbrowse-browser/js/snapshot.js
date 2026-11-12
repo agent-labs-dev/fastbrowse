@@ -103,6 +103,14 @@
       const value = readRenderFact(kind, target, args);
       facts.set(key, value);
       renderInputs.push([kind, target, args, renderValue(kind, value)]);
+      // Keep producer dependencies private to the page. A later incremental pass may reuse a row only after
+      // every native/render fact it consumed has remained valid; unknown ownership deliberately falls back.
+      if (registry.activeControlId != null && target) {
+        registry.controlDependencies ||= new Map();
+        let dependencies = registry.controlDependencies.get(registry.activeControlId);
+        if (!dependencies) registry.controlDependencies.set(registry.activeControlId, dependencies = new Set());
+        dependencies.add(target);
+      }
     }
     return facts.get(key);
   };
@@ -1255,6 +1263,7 @@
 
     const id = identity(e);
     if (mode !== 'glance') registry.controls.add(e);
+    registry.activeControlId = id;
     const named = labelOf(e);
     if (!named) unnamed.add(id);
     const root = e.getRootNode();
@@ -1354,7 +1363,9 @@
         ARIA_ROLES.includes(rname) && (nativeProperty(e, 'tabIndex') >= 0 || e.hasAttribute('tabindex') || focused))
       base.operations.push('press');
     controls.push(base);
+    registry.activeControlId = null;
   }
+  registry.activeControlId = null;
 
   // Controls that read the same cannot be told apart by their label, and a hint naming the right one
   // ("Add to cart under Sauce Labs Backpack") has nothing to match on. Give each twin the widest ancestor
