@@ -271,6 +271,11 @@ quotation delimiters when requested; prose parts keep explanatory wording separa
 which code fills without replacing matching text inside a source part. Packed compositions expose their original
 sources separately, and kept claims retain these parts through a rewrite. Split notes cannot be selected as whole
 sources. The delivered claims keep the same text, cells, tally and evidence id fields.
+For a comparison restricted to each group's minimum or maximum, the composer also names a private selection:
+the grouping field, the inner field and its extreme. Group names must copy an exact span from the record's quote
+or, for captured page text, its own captured heading path. Code selects each group's tied extremes before applying
+the outer comparison. The claim cites every qualifying record used in the selection; record association checks see
+only the outer winners. This selection survives packing and rewrites without adding fields to delivered claims.
 A count, total, minimum or maximum, or a place after one such as the second cheapest, is never written or judged as a number. The composer marks it as a tally with
 the kind of record and the field, and Jev answers one question per note read: for a count, whether it holds exactly one
 such record, and for a total or extreme, whether it holds one with its field, then which number in it is the field. A date, ISO or a day, month name and year, is offered whole with its year beside it, and its day and month are not offered alone, since neither orders anything; code orders dates for an extreme and never adds them. A
