@@ -368,6 +368,8 @@
     kept.innerHeight === innerHeight &&
     kept.hidden === document.hidden &&
     kept.readyState === document.readyState &&
+    // Upgrading a form-associated custom element can change HTML label ownership without a DOM mutation.
+    !kept.undefinedElements?.some(e => e.isConnected && e.matches(':defined')) &&
     // A transition or animation in flight moves what is on screen between one look and the next, so a read taken
     // while one runs does not stand.
     document.getAnimations().length === 0;
@@ -398,8 +400,10 @@
   // the rest of it. `registry.guard` reads them again in a later script, against a page that may have changed
   // since, so the reuse ends as soon as this one does, whether it returns or throws.
   const caches = [];
+  let reading = true;
   registry.nativeQueueMicrotask ||= window.queueMicrotask.bind(window);
   registry.nativeQueueMicrotask(() => {
+    reading = false;
     for (const cache of caches) cache.clear();
     caches.length = 0;
   });
@@ -412,6 +416,77 @@
       return cache.get(e);
     };
   };
+  // These queries use only element names and attributes, never live pseudo-classes or layout. A mutation clears
+  // its subtree's and ancestors' indexes, leaving unrelated cards reusable. A full read builds its indexes anew.
+  own.queryTrees ||= new WeakMap();
+  own.domVersions ||= new WeakMap();
+  own.structureVersions ||= new WeakMap();
+  if (!delta || !base || base.document_key !== own.snapshots?.[mode]?.document_key ||
+      base.read !== own.snapshots?.[mode]?.read) {
+    own.queryResults = new WeakMap();
+    own.names = new WeakMap();
+  }
+  own.queryResults ||= new WeakMap();
+  own.names ||= new WeakMap();
+  const flushedTrees = new Set();
+  const invalidateQueries = (records, root) => {
+    const bumped = new Set();
+    for (const record of records) {
+      for (let node = record.target; node && !bumped.has(node); node = node.parentNode) {
+        bumped.add(node);
+        own.queryResults.delete(node);
+        own.domVersions.set(node, (own.domVersions.get(node) || 0) + 1);
+      }
+      for (const added of record.addedNodes || []) {
+        if (added.nodeType !== 1) continue;
+        // A removed subtree can be edited while no observer watches it, then inserted somewhere else.
+        for (const node of [added, ...added.querySelectorAll('*')]) {
+          own.queryResults.delete(node);
+          own.domVersions.set(node, (own.domVersions.get(node) || 0) + 1);
+        }
+      }
+      if (record.type === 'childList' && [...record.addedNodes, ...record.removedNodes].some(n => n.nodeType === 1))
+        own.structureVersions.set(root, (own.structureVersions.get(root) || 0) + 1);
+    }
+  };
+  const flushTree = scope => {
+    const root = scope.getRootNode();
+    let tree = own.queryTrees.get(root);
+    if (!tree) {
+      const observer = new MutationObserver(records => invalidateQueries(records, root));
+      observer.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
+      tree = { observer, undefinedElements: null, structure: null };
+      own.queryTrees.set(root, tree);
+    }
+    if (!flushedTrees.has(root)) {
+      invalidateQueries(tree.observer.takeRecords(), root);
+      const structure = own.structureVersions.get(root) || 0;
+      if (tree.structure !== structure || tree.undefinedElements === null) {
+        tree.undefinedElements = [...root.querySelectorAll(':not(:defined)')];
+        tree.structure = structure;
+      } else {
+        tree.undefinedElements = tree.undefinedElements.filter(node => !node.matches(':defined'));
+      }
+      if (root === document) own.undefinedElements = tree.undefinedElements;
+      flushedTrees.add(root);
+    }
+    return root;
+  };
+  const descendants = (scope, selector) => {
+    // A guard can run in a later script, before observer callbacks have delivered. It always queries live state.
+    if (!reading) return scope.querySelectorAll(selector);
+    const root = flushTree(scope);
+    let entry = own.queryResults.get(scope);
+    // A detached subtree can acquire different children before entering a newly observed shadow root.
+    if (!entry || entry.root !== root) {
+      entry = { root, queries: new Map() };
+      own.queryResults.set(scope, entry);
+    }
+    if (!entry.queries.has(selector)) entry.queries.set(selector, scope.querySelectorAll(selector));
+    return entry.queries.get(selector);
+  };
+  flushTree(document);
+  const readUndefinedElements = own.undefinedElements;
   const innerTextOf = memo(e => e.innerText);
 
   const safe = e => e.type !== 'hidden';
@@ -540,7 +615,7 @@
   };
   const iconLabel = e => {
     const glyphs = new Set();
-    for (const icon of e.querySelectorAll('svg,i,span,[role="img"]')) {
+    for (const icon of descendants(e, 'svg,i,span,[role="img"]')) {
       if (!icon.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) continue;
       const named = [];
       for (const token of icon.classList) {
@@ -611,12 +686,23 @@
   // A name taken from content reads only what is shown: a card's hidden "Report fraud item" button named the card.
   // A hidden element named through aria-labelledby is read whole, since it is hidden only to serve as the label.
   // An svg's <title> never renders, yet it is the graphic's name.
-  const shown = e => e.localName === 'title' || e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+  let nameReads = null;
+  const shownNow = memo(e => e.localName === 'title' || e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }));
+  const shown = e => {
+    const value = shownNow(e);
+    nameReads?.shown.set(e, value);
+    return value;
+  };
+  const nameValue = e => {
+    const value = e.value;
+    nameReads?.values.set(e, value);
+    return value;
+  };
   const FIELD_CONTAINERS = new Set(['combobox', 'listbox']);
   // The one field an element holds, when it holds exactly one. A hidden input or one under `hidden` is no field a
   // person fills, and an element holding two says nothing about which of them a name on it is for.
   const soleField = e => {
-    const fields = [...e.querySelectorAll('input:not([type=hidden]),select,textarea')].filter(
+    const fields = [...descendants(e, 'input:not([type=hidden]),select,textarea')].filter(
       f => !f.parentElement.closest('[hidden]'),
     );
     return fields.length === 1 ? fields[0] : null;
@@ -655,11 +741,23 @@
   };
   const wrapperLabels = e =>
     e.labels?.length || !e.matches('input,select,textarea') ? [] : borrowedLabels(e.getRootNode()).get(e) || [];
+  const labelsFor = e => {
+    const labels = [...(e.labels || []), ...wrapperLabels(e)];
+    nameReads?.labels.set(e, labels);
+    return labels;
+  };
+  const referencedNode = (root, id) => root.getElementById ? root.getElementById(id) : document.getElementById(id);
   const labelFrom = (e, seen) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
+    nameReads?.nodes.add(e);
     const root = typeof e.getRootNode === 'function' ? e.getRootNode() : document;
-    const byId = id => (root.getElementById ? root.getElementById(id) : document.getElementById(id));
+    const byId = id => {
+      if (!id) return null;
+      const node = referencedNode(root, id);
+      nameReads?.references.push([root, id, node]);
+      return node;
+    };
     const referenced = (e.getAttribute('aria-labelledby') || '')
       .split(/\s+/)
       .map(id => labelFrom(byId(id), seen))
@@ -670,12 +768,12 @@
       e.getAttribute('aria-label') ||
       // A hidden label names nothing, as accname skips hidden nodes outside aria-labelledby: two tabbed forms reusing
       // one id made the hidden tab's label one of the shown field's `labels`, and the field was named twice (#921).
-      [...(e.labels || []), ...wrapperLabels(e)]
+      labelsFor(e)
         .filter(l => shown(l) || !shown(e))
         .map(l => labelFrom(l, seen))
         .filter(Boolean)
         .join(' ') ||
-      (['button', 'submit', 'reset'].includes(e.type) ? e.value : '') ||
+      (['button', 'submit', 'reset'].includes(e.type) ? nameValue(e) : '') ||
       e.getAttribute('alt') ||
       // A field's text is its value, not its name: a list-style select shows every option, and a combobox widget its
       // chosen chips, remove buttons and open options. Accname never names these from content either. A textarea's
@@ -708,11 +806,46 @@
     !e || e.matches('input,select,textarea') || !FIELD_CONTAINERS.has(e.getAttribute('role')) ? null : soleField(e);
   // A name is flattened as accname flattens it, whitespace runs to one space: a template's line breaks and indentation
   // inside a label reached callers as `Username               (required)` (#921).
+  const contentName = e => {
+    if (!e) return '';
+    if (!reading) return labelFrom(e, new Set()) || labelFrom(wrappedField(e), new Set());
+    const root = flushTree(e);
+    const kept = own.names.get(e);
+    if (kept && kept.root === root &&
+        kept.nodes.every(([node, version]) => (own.domVersions.get(node) || 0) === version) &&
+        kept.references.every(([tree, id, node]) => referencedNode(tree, id) === node) &&
+        kept.labels.every(([node, labels]) => {
+          const now = labelsFor(node);
+          return now.length === labels.length && now.every((label, i) => label === labels[i]);
+        }) &&
+        (!kept.needsWrapped || wrappedField(e) === kept.wrapped) &&
+        kept.shown.every(([node, value]) => shown(node) === value) &&
+        kept.values.every(([node, value]) => node.value === value)) return kept.text;
+    const reads = { nodes: new Set(), references: [], labels: new Map(), shown: new Map(), values: new Map() };
+    nameReads = reads;
+    let text, wrapped = null, needsWrapped = false;
+    try {
+      text = labelFrom(e, new Set());
+      if (!text) {
+        needsWrapped = true;
+        wrapped = wrappedField(e);
+        text = labelFrom(wrapped, new Set());
+      }
+    } finally {
+      nameReads = null;
+    }
+    own.names.set(e, {
+      root, text, wrapped, needsWrapped,
+      references: reads.references, labels: [...reads.labels],
+      nodes: [...reads.nodes].map(node => [node, own.domVersions.get(node) || 0]),
+      shown: [...reads.shown], values: [...reads.values],
+    });
+    return text;
+  };
   const labelOf = memo(e =>
     (
       (e && !e.getAttribute('aria-label') && !e.getAttribute('aria-labelledby') && focusableText(e)) ||
-      labelFrom(e, new Set()) ||
-      labelFrom(wrappedField(e), new Set())
+      contentName(e)
     )
       .replace(/\s+/g, ' ')
       .trim(),
@@ -728,11 +861,11 @@
       typeof e.onclick === 'function' ||
       (view.getComputedStyle(e).cursor === 'pointer' &&
         (!e.parentElement || view.getComputedStyle(e.parentElement).cursor !== 'pointer'));
-    if (!(declared || listened(e)) || e.parentElement?.closest(SELECTOR) || [...e.querySelectorAll(SELECTOR)].some(visible))
+    if (!(declared || listened(e)) || e.parentElement?.closest(SELECTOR) || [...descendants(e, SELECTOR)].some(visible))
       return false;
     // A listener can sit on a container to hear its children's clicks, as React's does on its root, so one holding a
     // pressable element leaves the click to it.
-    return declared || ![...e.querySelectorAll('*')].some(c => pressable(c) && visible(c));
+    return declared || ![...descendants(e, '*')].some(c => pressable(c) && visible(c));
   });
   // A script can make a focusable label its menu trigger without a role, href or pointer cursor. Its label may
   // be wrapped in a child, and hidden menu links must not hide the trigger that reveals them. A container holding
@@ -740,7 +873,7 @@
   const focusableText = memo(e => {
     if (e.getAttribute('tabindex') === null || Number(e.getAttribute('tabindex')) < 0) return null;
     if (e.matches(SELECTOR) || e.parentElement?.closest(SELECTOR)) return null;
-    if ([...e.querySelectorAll(SELECTOR)].some(visible)) return null;
+    if ([...descendants(e, SELECTOR)].some(visible)) return null;
     const text = (innerTextOf(e) || '').replace(/\s+/g, ' ').trim();
     return text || null;
   });
@@ -916,7 +1049,7 @@
       p && !p.matches('body,main,article,section,aside,nav,header,footer');
       p = p.parentElement
     ) {
-      if (p.querySelectorAll('input:not([type=hidden]),textarea,select').length > 1) return String(identity(p));
+      if (descendants(p, 'input:not([type=hidden]),textarea,select').length > 1) return String(identity(p));
     }
     return null;
   };
@@ -937,7 +1070,7 @@
     // A button-styled link offers the same label twice, but its inner button owns every useful click point.
     if (rname === 'link') {
       // Most links hold no button, and querying every link for every control was the walk's slowest step.
-      const nested = e.querySelector('button') ? e.querySelectorAll(SELECTOR) : [];
+      const nested = e.querySelector('button') ? descendants(e, SELECTOR) : [];
       const button = nested.length === 1 ? nested[0] : null;
       if (button?.tagName === 'BUTTON' && visible(button) && !button.matches(':disabled') &&
           !button.closest('[aria-disabled="true"],[inert]') && labelOf(button) === labelOf(e)) continue;
@@ -1047,7 +1180,7 @@
   // and the post's first heading ("Data Entry Form") named that picker's Submit when only headings counted.
   // A hidden title names nothing on screen: innerText still returns a `hidden` label's text.
   const titles = memo(scope =>
-    [...scope.querySelectorAll(`${HEADINGS},label`)].filter(
+    [...descendants(scope, `${HEADINGS},label`)].filter(
       e =>
         (e.localName !== 'label' || !labelTarget(e)) && e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
     ));
@@ -1271,7 +1404,7 @@
     for (const e of doc.body.querySelectorAll('*')) {
       if (host?.contains(e)) continue;
       if (offered.has(e) || holding.has(e) || !isCard(e)) continue;
-      if (![...e.querySelectorAll(VISUAL)].some(v => !decorative(v))) continue;
+      if (![...descendants(e, VISUAL)].some(v => !decorative(v))) continue;
       const y = pointerBox(e);
       if (y === null) continue;
       offerHover(e, y);
@@ -1732,6 +1865,7 @@
       innerHeight,
       hidden: document.hidden,
       readyState: document.readyState,
+      undefinedElements: readUndefinedElements,
       url: location.href,
       document_key: String(performance.timeOrigin),
       page_key,

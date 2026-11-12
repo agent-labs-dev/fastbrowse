@@ -708,6 +708,144 @@ async fn test_an_unchanged_page_is_served_from_the_read_it_kept() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_changed_card_keeps_its_siblings_structural_queries() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(&h.session, r#"document.body.innerHTML = '<article id=changed><h2>First</h2><button>Open</button></article><article id=stable><h2>Second</h2><button>Open</button></article>';globalThis.stableQueries = 0;const original = Element.prototype.querySelectorAll;Element.prototype.querySelectorAll = function(selector) {if(this.id === 'stable') globalThis.stableQueries++; return original.call(this, selector)}"#).await;
+    let before = h.observe().await;
+    assert!(eval_active(&h.session, "globalThis.stableQueries").await.as_u64().unwrap() > 0);
+    eval_active(
+        &h.session,
+        "globalThis.stableQueries = 0; document.querySelector('#changed h2').textContent = 'Updated'",
+    )
+    .await;
+    let after = h.observe().await;
+    assert!(before.controls.iter().any(|c| c.context.as_deref() == Some("First")));
+    assert!(after.controls.iter().any(|c| c.context.as_deref() == Some("Updated")));
+    assert!(after.controls.iter().any(|c| c.context.as_deref() == Some("Second")));
+    assert_eq!(eval_active(&h.session, "globalThis.stableQueries").await, json!(0));
+    eval_active(&h.session, "globalThis.savedCard = document.querySelector('#stable'); savedCard.remove(); true").await;
+    eval_active(&h.session, "savedCard.innerHTML = '<p>Wrong fallback</p><h2>Replacement</h2><button>Open</button>'")
+        .await;
+    eval_active(&h.session, "document.body.appendChild(savedCard); true").await;
+    let reinserted = h.observe().await;
+    assert!(reinserted.controls.iter().any(|c| c.context.as_deref() == Some("Replacement")));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_changed_name_does_not_derive_an_unrelated_name_again() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(&h.session, r#"document.body.innerHTML = '<button id=changed-name>First</button><button id=stable-name>Second</button>';globalThis.stableNameReads = 0;const original = Object.getOwnPropertyDescriptor(Node.prototype, 'childNodes');Object.defineProperty(Node.prototype, 'childNodes', {...original, get() {if(this.id === 'stable-name') globalThis.stableNameReads++;return original.get.call(this)}});true"#).await;
+    h.observe().await;
+    assert!(eval_active(&h.session, "globalThis.stableNameReads").await.as_u64().unwrap() > 0);
+    eval_active(
+        &h.session,
+        "globalThis.stableNameReads = 0; document.querySelector('#changed-name').firstChild.data = 'Updated'",
+    )
+    .await;
+    let after = h.observe().await;
+    assert!(after.controls.iter().any(|c| c.label == "Updated"));
+    assert!(after.controls.iter().any(|c| c.label == "Second"));
+    assert_eq!(eval_active(&h.session, "globalThis.stableNameReads").await, json!(0));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cached_names_match_full_reads_when_dom_css_and_live_inputs_change() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(&h.session, r#"document.head.insertAdjacentHTML('beforeend', '<style id=name-css>.name-hidden{display:none}.name-trigger:has(.flag) + button .conditional{display:none}</style>');document.body.innerHTML = '<span id=external>Original reference</span><button aria-labelledby=external></button><input id=native-button type=button value=Original><input id=late-field><div id=wrapper><input id=wrapped-field></div><label for=wrapper>Wrapped name</label><div class=name-trigger></div><button id=styled-name><span>Always</span><span class=conditional>Conditional</span></button><button id=css-name><span class=name-hidden>Hidden</span><span>Shown</span></button>'"#).await;
+    h.observe().await;
+    count_reads(&h).await;
+    for script in [
+        "document.querySelector('#external').firstChild.data = 'Changed reference'",
+        "document.querySelector('#external').id = 'old-reference';document.body.insertAdjacentHTML('beforeend', '<span id=external>Replacement reference</span>')",
+        "document.querySelector('#native-button').value = 'Live value'",
+        "document.body.insertAdjacentHTML('beforeend', '<label for=late-field>Late name</label>')",
+        "document.querySelector('.name-trigger').appendChild(document.createElement('span')).className = 'flag'",
+        "document.querySelector('#name-css').sheet.cssRules[0].style.display = 'inline'",
+        "document.querySelector('#wrapper').hidden = true",
+        "document.querySelector('#wrapper').hidden = false;document.querySelector('#wrapper').insertAdjacentHTML('beforeend', '<input>')",
+        "document.querySelector('#wrapper input:last-child').type = 'hidden'",
+    ] {
+        eval_active(&h.session, "globalThis.__fbReads = {total:0, unchanged:0, delta:0}").await;
+        eval_active(&h.session, script).await;
+        let observed = h.observe().await;
+        let counts = eval_active(&h.session, "globalThis.__fbReads").await;
+        assert_eq!(counts["total"], json!(1), "{script}: {counts}");
+        assert_eq!(counts["delta"], json!(1), "{script}: {counts}");
+        let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
+        let mut full = other.observe().await.expect("full read");
+        full.captured_at = observed.captured_at;
+        assert_eq!(observed, full, "cached name differed from a full read after {script}");
+        h.observe().await;
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_custom_element_upgrade_renews_native_label_ownership() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(&h.session, "document.body.innerHTML = '<label id=owner-label>Shared name<x-name id=custom-field></x-name><input id=native-field></label>'").await;
+    let before = h.observe().await;
+    assert!(before.controls.iter().any(|c| c.label == "Shared name"));
+    count_reads(&h).await;
+    eval_active(
+        &h.session,
+        "customElements.define('x-name', class extends HTMLElement {static formAssociated = true}); true",
+    )
+    .await;
+    let after = h.observe().await;
+    assert_eq!(eval_active(&h.session, "document.querySelector('label').control.localName").await, json!("x-name"));
+    let counts = eval_active(&h.session, "globalThis.__fbReads").await;
+    assert_eq!(counts["total"], json!(1), "{counts}");
+    assert_eq!(counts["delta"], json!(1), "{counts}");
+    let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
+    let mut full = other.observe().await.expect("full read");
+    full.captured_at = after.captured_at;
+    assert_eq!(after, full);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_glance_cannot_consume_a_snapshots_custom_element_upgrade() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(&h.session, "document.body.innerHTML = '<article><label for=x>Alpha</label><x-field id=x></x-field><button>Open</button></article>'").await;
+    let before = h.observe().await;
+    h.page.glance().await.expect("first glance");
+    eval_active(&h.session, "customElements.define('x-field', class extends HTMLElement {static formAssociated = true; constructor() {super(); this.attachInternals()}});true").await;
+    h.page.glance().await.expect("glance after upgrade");
+    let after = h.observe().await;
+    assert_ne!(before.controls, after.controls);
+    let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
+    let mut full = other.observe().await.expect("full read");
+    full.captured_at = after.captured_at;
+    assert_eq!(after, full);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_detached_card_rebuilds_its_queries_in_a_new_shadow_root() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(&h.session, "document.body.innerHTML = '<article id=card><label for=w>Wrapped name</label><div id=w><input id=f></div></article>'").await;
+    h.observe().await;
+    eval_active(&h.session, "globalThis.savedCard = document.querySelector('#card'); savedCard.remove(); true").await;
+    eval_active(&h.session, "savedCard.querySelector('#w').appendChild(document.createElement('input'));true").await;
+    eval_active(&h.session, "document.body.appendChild(document.createElement('div')).attachShadow({mode:'open'}).appendChild(savedCard);true").await;
+    let after = h.observe().await;
+    let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
+    let mut full = other.observe().await.expect("full read");
+    full.captured_at = after.captured_at;
+    assert_eq!(after, full);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_changed_frame_sends_control_deltas() {
     let _turn = turn().await;
     let Some(h) = harness().await else { return };
