@@ -47,6 +47,8 @@ impl Exa {
             .await
             .map_err(|error| SearchFailure { message: error.name().into(), cost: bounded() })?;
         let body: Option<Value> = serde_json::from_str(&response.scrub(&response.text())).ok();
+        // Exa documents costDollars as an estimate, including the value it reports for this request.
+        // https://exa.ai/docs/reference/search.md
         let cost = body
             .as_ref()
             .and_then(|body| body.pointer("/costDollars/total"))
