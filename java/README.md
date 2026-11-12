@@ -51,7 +51,8 @@ Fastbrowse.start().use { fastbrowse ->
 for the platform, unpacked once into the user cache directory; `StartOptions.binaryPath` or `FASTBROWSE_BINARY` runs
 a binary of your own instead. Model keys come from the environment, as the fastbrowse command reads them:
 `TYPESAFE_API_KEY` for Jev and `OPENROUTER_API_KEY` for the LLM. A run uses a Browser Use Cloud browser with
-`BROWSER_USE_API_KEY`, or local Chrome with `BrowserOptions.builder().local(true)`.
+`BROWSER_USE_API_KEY`, or your own Chrome through the fastbrowse extension with `BrowserOptions.builder().local(true)`;
+`.launch(true)` starts a separate Chrome instead.
 
 `run` returns a `CompletableFuture<RunResult>`. A run ends in a `Status`; a run that needs a login or got stuck is
 read from the result, not thrown. Cancelling the future stops the run, and the next run on the client waits until its

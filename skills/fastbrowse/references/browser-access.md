@@ -3,7 +3,7 @@
 ## Sign-in and secrets
 
 Prefer a profile the user has already signed into for fastbrowse. A local `--profile DIR` preserves cookies
-across runs and implies `--local`; a `--cloud-profile ID` uses a Browser Use Cloud profile. Use only a profile the
+across runs and implies `--launch`; a `--cloud-profile ID` uses a Browser Use Cloud profile. Use only a profile the
 user has selected. Profile reuse preserves sign-in, not the agent's plan or memory.
 
 A kept profile is the setup that needs the user once: they sign in by hand in a Chrome started on that directory,

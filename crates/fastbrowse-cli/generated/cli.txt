@@ -1,8 +1,9 @@
 usage: fastbrowse [-h] [--version] [--start START] [--context CONTEXT]
-                  [--cloud | --local] [--headed] [--profile PROFILE]
-                  [--cloud-profile ID] [--cdp-url URL] [--cdp-port PORT]
-                  [--attach] [--target-match PATTERN] [--foreground]
-                  [--proxy-country CC] [--viewport WIDTHxHEIGHT] [--authorize]
+                  [--cloud | --local] [--launch] [--headed]
+                  [--profile PROFILE] [--cloud-profile ID] [--cdp-url URL]
+                  [--cdp-port PORT] [--attach] [--target-match PATTERN]
+                  [--foreground] [--proxy-country CC]
+                  [--viewport WIDTHxHEIGHT] [--authorize]
                   [--secret NAME=ENV_VAR[@ORIGIN]] [--bitwarden ITEM]
                   [--input NAME=VALUE] [--file PATH] [--max-steps MAX_STEPS]
                   [--max-dollars MAX_DOLLARS] [--downloads DOWNLOADS] [--json]
@@ -26,11 +27,13 @@ options:
                         the task, such as where the request came from
   --cloud               use cloud Chrome, overriding local environment
                         defaults
-  --local               use local Chrome instead of a Browser Use Cloud
-                        browser
-  --headed              show the local Chrome window (implies --local)
+  --local               use your own Chrome through the fastbrowse extension
+                        instead of a Browser Use Cloud browser
+  --launch              start a separate local Chrome instead of using your
+                        own (implies --local)
+  --headed              show the launched Chrome window (implies --launch)
   --profile PROFILE     Chrome profile directory kept between runs (implies
-                        --local)
+                        --launch)
   --cloud-profile ID    a Browser Use Cloud profile to run signed in as
   --cdp-url URL         attach to a browser already running at this CDP
                         websocket URL, instead of starting one

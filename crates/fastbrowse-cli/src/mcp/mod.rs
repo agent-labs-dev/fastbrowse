@@ -63,7 +63,8 @@ pub struct ServerConfig {
     /// A profile on the operator's cloud account whose sign-ins every call runs with. A calling model cannot choose
     /// it: which accounts the browser is signed into is the operator's decision, not the task's.
     pub cloud_profile: Option<String>,
-    /// Every call runs in the operator's own browser through the fastbrowse extension.
+    /// Every call runs in the operator's own browser through the fastbrowse extension: `--extension`, or `--local`
+    /// without `--launch`.
     pub extension: bool,
     /// Which browser the extension is connected in, by its label, when there is more than one.
     pub extension_browser: Option<String>,
@@ -396,6 +397,7 @@ pub struct McpArgs {
     pub host: String,
     pub port: i64,
     pub local: bool,
+    pub launch: bool,
     pub headed: bool,
     pub profile: Option<PathBuf>,
     pub foreground: bool,
@@ -425,6 +427,7 @@ pub fn parser() -> Parser {
             Opt::value("--host"),
             Opt::value("--port"),
             Opt::flag("--local"),
+            Opt::flag("--launch"),
             Opt::flag("--headed"),
             Opt::value("--profile"),
             Opt::flag("--foreground"),
@@ -471,6 +474,7 @@ pub fn parse(argv: &[String]) -> Result<McpArgs, Exit> {
         host: parsed.value("--host").unwrap_or("127.0.0.1").to_string(),
         port: parsed.value("--port").and_then(py_int).unwrap_or(8000),
         local: parsed.flag("--local"),
+        launch: parsed.flag("--launch"),
         headed: parsed.flag("--headed"),
         profile: parsed.value("--profile").map(PathBuf::from),
         foreground: parsed.flag("--foreground"),
@@ -512,6 +516,7 @@ pub fn configure(
     let operator = RunTask {
         task: "Validate server browser options.".into(),
         local: args.local,
+        launch: args.launch,
         chrome: Some(chrome.clone()),
         cloud_profile: args.cloud_profile.clone(),
         extension: args.extension,
@@ -564,7 +569,7 @@ pub fn configure(
         chrome,
         foreground: args.foreground,
         cloud_profile: args.cloud_profile.clone(),
-        extension: args.extension,
+        extension: operator.wants_extension(),
         extension_browser: args.extension_browser.clone(),
         ceilings: Limits {
             max_steps: args.max_steps,

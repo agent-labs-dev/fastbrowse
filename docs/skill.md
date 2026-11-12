@@ -33,8 +33,8 @@ want to browse. Keep its `references` directory beside `SKILL.md`. Personal inst
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) for the CLI path. Set `OPENROUTER_API_KEY`,
 the recommended route, for Jev and the LLM. `TYPESAFE_API_KEY` is the direct Jev route. `AI_GATEWAY_API_KEY` is the
 LLM fallback, and on its own also serves Jev as a last resort. Set keys in the calling process environment or a local `.env`, outside the
-conversation. The Browser Use Cloud browser is the skill default and needs `BROWSER_USE_API_KEY`. `--local` starts a separate
-Chrome and needs only the model key. An existing DevTools connection reuses your Chrome.
+conversation. The Browser Use Cloud browser is the skill default and needs `BROWSER_USE_API_KEY`. `--local` runs in your own
+Chrome through the fastbrowse extension and `--launch` starts a separate one; both need only the model key. An existing DevTools connection reuses your Chrome.
 The [CLI guide](../README.md#try-it) covers browser profiles, secrets, and budgets.
 For MCP, use the [server setup](../README.md#use-it-from-an-mcp-client) instead; credentials belong to the server's environment.
 

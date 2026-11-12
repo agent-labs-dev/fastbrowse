@@ -604,6 +604,9 @@ public sealed record RunParams
     [JsonPropertyName("local")]
     public bool? Local { get; init; }
 
+    [JsonPropertyName("launch")]
+    public bool? Launch { get; init; }
+
     [JsonPropertyName("chrome")]
     public LocalChrome? Chrome { get; init; }
 

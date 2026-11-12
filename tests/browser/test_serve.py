@@ -193,7 +193,7 @@ def _run(client: Client, origin: str) -> None:
                 "run_id": "run-1",
                 "task": TASK,
                 "start": f"{origin}/token.html",
-                "local": True,
+                "launch": True,
                 "browser": True,
                 "secrets": [{"name": "token", "origins": [origin]}],
             },

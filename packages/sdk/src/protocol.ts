@@ -414,6 +414,7 @@ export interface RunParams {
   save_recipe?: string | null;
   cursor?: boolean | null;
   local?: boolean;
+  launch?: boolean;
   chrome?: LocalChrome | null;
   cloud_profile?: string | null;
   cdp_url?: string | null;

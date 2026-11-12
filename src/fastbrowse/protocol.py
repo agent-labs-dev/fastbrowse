@@ -183,9 +183,12 @@ class RunParams(Params):
     it can be placed, true also brings the window to the front for it, false turns it off. It is skipped, with the
     run unchanged, where the driver or an X11 display is missing or the window cannot be placed exactly."""
     local: bool = False
-    """Local Chrome instead of a Browser Use Cloud browser."""
+    """A browser on this machine instead of a Browser Use Cloud browser: the user's own Chrome through the fastbrowse
+    extension, or a Chrome the run starts when `launch`, a headed window or a kept profile asks for one."""
+    launch: bool = False
+    """Start a separate local Chrome instead of driving the user's own through the extension. Implies `local`."""
     chrome: LocalChrome | None = None
-    """Which local Chrome, and how. A headed window or a kept profile implies `local`."""
+    """Which local Chrome, and how. A headed window or a kept profile implies `launch`."""
     cloud_profile: str | None = None
     cdp_url: str | None = None
     cdp_port: int | None = Field(default=None, ge=0, le=65535)

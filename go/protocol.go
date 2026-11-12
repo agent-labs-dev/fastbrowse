@@ -369,6 +369,7 @@ type RunParams struct {
 	SaveRecipe          *string           `json:"save_recipe,omitempty"`
 	Cursor              *bool             `json:"cursor,omitempty"`
 	Local               bool              `json:"local,omitempty"`
+	Launch              bool              `json:"launch,omitempty"`
 	Chrome              *LocalChrome      `json:"chrome,omitempty"`
 	CloudProfile        *string           `json:"cloud_profile,omitempty"`
 	CDPURL              *string           `json:"cdp_url,omitempty"`

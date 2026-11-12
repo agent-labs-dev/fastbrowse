@@ -1229,6 +1229,11 @@
           "title": "Local",
           "type": "boolean"
         },
+        "launch": {
+          "default": false,
+          "title": "Launch",
+          "type": "boolean"
+        },
         "chrome": {
           "anyOf": [
             {

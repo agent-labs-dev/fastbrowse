@@ -57,12 +57,14 @@ You need [uv](https://docs.astral.sh/uv/), which fetches Python 3.13 or newer it
 
 ```sh
 export OPENROUTER_API_KEY=...   # Jev, the model that picks each action, and the LLM for start pages, written field values and composed answers
-export BROWSER_USE_API_KEY=...  # the cloud browser; or pass --local to use Chrome
+export BROWSER_USE_API_KEY=...  # the cloud browser; or pass --local to use your own Chrome
 uvx fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/
 ```
 
 With a Browser Use key the cloud browser is the default, because it passes bot checks a fresh local Chrome fails;
 it also prints a URL to watch the run live. Without the key or `--local`, the command stops and asks for one.
+`--local` runs in your own Chrome through the [fastbrowse extension](docs/cli.md#your-own-chrome), signed in as you
+are, and `--launch` starts a separate signed-out Chrome instead.
 `AI_GATEWAY_API_KEY` (Vercel AI Gateway) serves the LLM when `OPENROUTER_API_KEY` is unset. With both keys,
 the automatically selected OpenRouter LLM moves to the gateway for the rest of the run if OpenRouter refuses its key.
 Jev can also run through the gateway as a last resort, or another decision host with `FASTBROWSE_DECISION_SOURCE`.
@@ -89,7 +91,7 @@ exit code is the status, and only `complete` exits 0.
 ```sh
 export SAUCE_PASSWORD=secret_sauce
 uvx fastbrowse "Log in as standard_user with the saved password and add the backpack to the cart." \
-  --start https://www.saucedemo.com/ --secret password=SAUCE_PASSWORD --authorize --local
+  --start https://www.saucedemo.com/ --secret password=SAUCE_PASSWORD --authorize --launch
 ```
 
 The [command-line reference](docs/cli.md#flags) has every flag, signed-in profiles and Bitwarden logins, driving open
@@ -435,7 +437,7 @@ The server's flags set what a calling model may do; a call can ask for less, nev
 
 | Flag | Effect |
 |:--|:--|
-| `--local`, `--headed`, `--profile DIR`, `--foreground`, `--downloads DIR`, `--cursor`, `--no-cursor` | as for the CLI, fixed for every call |
+| `--local`, `--launch`, `--headed`, `--profile DIR`, `--foreground`, `--downloads DIR`, `--cursor`, `--no-cursor` | as for the CLI, fixed for every call |
 | `--cloud-profile ID` | every call runs as that cloud profile |
 | `--extension`, `--extension-browser LABEL` | every call runs in your own Chrome through the fastbrowse extension; see [Your own Chrome](docs/cli.md#your-own-chrome) |
 | `--allow-authorize` | let a call pass `authorize`; without it irreversible actions always stop at `needs_confirmation` |
