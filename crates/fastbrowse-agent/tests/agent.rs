@@ -851,8 +851,8 @@ fn status_case() -> Value {
     // Jev holds each claim supported by its quote, and the two together to cover the task.
     case["jev"]["nouls"] = serde_json::json!({"claim0": 0.9, "claim1": 0.9, "coverage": 0.9});
     case["llm"]["AnswerDraft"] = serde_json::json!([{"claims": [
-        {"text": ["First: live, updated 16:59:21"], "evidence_ids": ["e0"]},
-        {"text": ["After waiting: live, updated 16:59:27"], "evidence_ids": ["e1"]}
+        {"text": [{"prose": "First: live, updated 16:59:21"}], "evidence_ids": ["e0"]},
+        {"text": [{"prose": "After waiting: live, updated 16:59:27"}], "evidence_ids": ["e1"]}
     ]}]);
     let screen = |key: &str, text: &str| {
         let mut screen = case["site"]["screens"]["missing"].clone();
@@ -967,7 +967,7 @@ fn list_case() -> Value {
         screen["capture"]["text"] = text.clone().into();
         screen["capture"]["sha256"] = fastbrowse_core::py::sha256_hex(text.as_bytes()).into();
         screen["capture"]["blocks"][0]["end"] = text.chars().count().into();
-        claims.push(serde_json::json!({"text": [text], "evidence_ids": [format!("e{index}")]}));
+        claims.push(serde_json::json!({"text": [{"prose": text}], "evidence_ids": [format!("e{index}")]}));
         screens.insert(key.clone(), screen);
         urls.insert(url, key.into());
     }
