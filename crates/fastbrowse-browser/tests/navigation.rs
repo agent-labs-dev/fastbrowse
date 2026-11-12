@@ -428,7 +428,9 @@ async fn push_state_between_history_and_snapshot(pushes: u32) {
         }
         let (command, relay, snapped) = (command.clone(), relay.clone(), snapped.clone());
         if method(&command) == "Runtime.evaluate"
-            && [")('snapshot')", ")('snapshot-reuse')"].iter().any(|mode| expression(&command).contains(mode))
+            && [")('snapshot')", ")('snapshot-reuse')", ")('snapshot-delta',"]
+                .iter()
+                .any(|mode| expression(&command).contains(mode))
         {
             // snapshot_first: the snapshot's reply is let through before history is read.
             return Verdict::Later(Box::pin(async move {

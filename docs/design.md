@@ -108,6 +108,14 @@ element follows the rules a pointer cursor does: one inside a control, or holdin
 a container whose listener hears its children's clicks while one of them is pressable. Listeners on the window, the
 document, the root element and the body hear the whole page, so they mark nothing.
 
+The browser derives each changed frame in full, then transfers unchanged control rows by their existing node
+ids and sends only changed rows and guards. The receiver reconstructs the ordered controls against the exact
+document and previous read named by the delta. Each request names the receiver's baseline; a missing or mismatched
+baseline returns a full read directly. A delta that cannot be reconstructed requests a full read. Page text,
+modal state and other frame metadata travel in full. An inline child document or shadow root is still read each time.
+Captures and citation spans keep their own read path. This reduces transfer size, not the work of walking the
+page. Context construction indexes peer labels once per read, preserving shared labels when excluding a control.
+
 A browser observation reports each control's `focused` state. A custom page may leave it unknown.
 The optional `invalid` flag reports `aria-invalid` or a failed native constraint on a field that participates
 in form validation. It describes the current field, without claiming that a submission occurred. A field

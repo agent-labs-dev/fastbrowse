@@ -65,7 +65,7 @@ impl SnapshotScript {
         Self {
             install: format!(
                 "((globalThis.__fastbrowseScripts ||= {{}})[{key}] ||= \
-                 (snapshot => {{ const own = {{ unread: {unread} }}; return mode => snapshot(mode, {origins}, own); }})({SNAPSHOT_JS}))"
+                 (snapshot => {{ const own = {{ unread: {unread} }}; return (mode, base) => snapshot(mode, {origins}, own, base); }})({SNAPSHOT_JS}))"
             ),
             function: format!(
                 "(globalThis.__fastbrowseScripts?.[{key}] ?? (() => {{ throw new Error({}); }})())",

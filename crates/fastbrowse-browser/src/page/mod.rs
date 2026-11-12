@@ -5,6 +5,7 @@
 //! jev_ultrafast/browser.py and jev_ultrafast/snapshot.js. `act` dispatches at most once per call.
 
 pub(crate) mod act;
+mod delta;
 mod pointer;
 pub mod scripts;
 
@@ -868,9 +869,8 @@ impl CdpPage {
         bind: bool,
     ) -> Result<(Vec<(String, FrameObservation<Snapshot>)>, usize), BrowserError> {
         let mode = if bind { "snapshot" } else { "glance" };
-        // `-reuse` lets a frame that has not moved answer from the read it kept. The plain mode is what reads the
-        // frame again in full, for a frame whose kept read this side does not have.
-        let script = format!("{}('{mode}-reuse')", self.page_js);
+        // Each frame supplies its own baseline. A producer with a different baseline sends a full result directly.
+        let script = format!("(base => {}('{mode}-delta', base))", self.page_js);
         let full = format!("{}('{mode}')", self.page_js);
         let result = self.read_frames::<Snapshot>(&script, Some((mode, full.as_str()))).await?;
         let coverage: Vec<(String, usize)> =
@@ -922,7 +922,18 @@ impl CdpPage {
         retry: Option<(&str, &str)>,
     ) -> Result<Option<FrameObservation<T>>, BrowserError> {
         let is_main = frame_key == MAIN;
-        let mut raw = match self.read_frame_value(is_main, session_id, expression).await {
+        let expression = if let Some((slot, _)) = retry {
+            let key = format!("{}|{slot}|{frame_key}", T::SHAPE);
+            let state = self.state.lock().unwrap();
+            let base = state.kept.get(&key).map_or(
+                Value::Null,
+                |kept| json!({"document_key": kept.get("document_key"), "read": kept.get("read")}),
+            );
+            format!("{expression}({base})")
+        } else {
+            expression.to_string()
+        };
+        let mut raw = match self.read_frame_value(is_main, session_id, &expression).await {
             Ok(raw) => raw,
             Err(_) if !is_main => return Ok(None),
             Err(error) => return Err(error),
@@ -964,9 +975,26 @@ impl CdpPage {
                 }
             }
         }
+        if let Some((slot, full)) = retry
+            && raw.get("control_delta").is_some()
+        {
+            let key = format!("{}|{slot}|{frame_key}", T::SHAPE);
+            let kept = self.state.lock().unwrap().kept.get(&key).cloned();
+            raw = match kept.as_ref().and_then(|kept| delta::apply(kept, &raw)) {
+                Some(reconstructed) => reconstructed,
+                None => match self.read_frame_value(is_main, session_id, full).await {
+                    Ok(raw) => raw,
+                    Err(_) if !is_main => return Ok(None),
+                    Err(error) => return Err(error),
+                },
+            };
+            if raw.is_null() {
+                return Ok(None);
+            }
+        }
         let parsed: T = parse(raw.clone(), T::SHAPE)?;
-        // A read this side can serve later is kept as it arrived, under the document and number it names. A read the
-        // page did not keep replaces nothing to serve: the page will not answer "unchanged" about it.
+        // Numbered reads are transport baselines, including deep reads the producer must derive again. Only a
+        // shallow read whose revision still matches can answer unchanged; both paths name this exact baseline.
         if let Some((slot, _)) = retry
             && !served
             && T::keeps_reads()

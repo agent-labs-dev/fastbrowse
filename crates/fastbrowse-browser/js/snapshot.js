@@ -3,10 +3,11 @@
 // Adapted to fastbrowse's Control shape (role + operation set, not per-kind actions) and to traverse
 // open shadow roots. Runs once per frame session (main frame or an OOPIF); CdpPage merges frames.
 // biome-ignore format: session.rs appends mode arguments to this parenthesized expression.
-((mode, allowedOrigins = null, own = {}) => {
-  // A caller that keeps reads for a page that has not moved asks for `-reuse`; plain `snapshot` and `glance` always
-  // read the page, so every existing caller sees exactly what it saw before.
-  const reuse = mode.endsWith('-reuse');
+((mode, allowedOrigins = null, own = {}, base = null) => {
+  // A caller can reuse an unchanged read or request deltas against its baseline. Plain `snapshot` and `glance`
+  // always return the full page, so existing callers keep their original contract.
+  const delta = mode.endsWith('-delta');
+  const reuse = delta || mode.endsWith('-reuse');
   if (reuse) mode = mode.slice(0, -6);
   // Reading a cross-origin frame's document can throw.
   const childDocument = frame => {
@@ -355,6 +356,7 @@
     reuse &&
     kept &&
     kept.mode === mode &&
+    (!delta || (base?.document_key === kept.document_key && base?.read === kept.read)) &&
     kept.rev === registry.rev &&
     kept.live === registry.live() &&
     kept.sheets === registry.sheets() &&
@@ -1089,6 +1091,8 @@
   };
   // Labels more than one control shares, filled in once every control is listed.
   const repeated = new Set();
+  const controlByElement = new Map();
+  const labelsByRole = new Map();
   const nameOf = (scope, element, label, nearest, own = null) => {
     const aria = (scope.getAttribute('aria-label') || '').trim();
     if (aria && aria !== label) return aria;
@@ -1100,17 +1104,16 @@
     // kind (a link inside a checkbox's label names the item). Past a repeated control's label, a datepicker's first
     // line is the month it shows. The label is cut out as whole words, since a day labelled "2" cut out of
     // "October 2026" left "October 0 6".
-    const mine = controls.find(c => registry.nodes.get(c.id) === element);
-    const peers = new Set(
-      controls.filter(c => c !== mine && c.role === mine?.role).map(c => c.label),
-    );
+    const mine = controlByElement.get(element);
+    const counts = labelsByRole.get(mine?.role);
+    const peer = word => (counts?.get(word) || 0) > Number(mine?.label === word);
     // A table row's cells are one line of text, so a week row reads "26 27 28 29 30 1 2": a line made only of this
     // control's and its peers' labels names nothing but them.
-    const onlyPeers = line => line.split(' ').every(word => word === label || peers.has(word));
+    const onlyPeers = line => line.split(' ').every(word => word === label || peer(word));
     const lines = (innerTextOf(scope) || '')
       .split('\n')
       .map(line => line.replace(/\s+/g, ' ').trim())
-      .filter(line => line && !repeated.has(line) && !peers.has(line) && !onlyPeers(line) && !own?.has(line));
+      .filter(line => line && !repeated.has(line) && !peer(line) && !onlyPeers(line) && !own?.has(line));
     return firstLine(lines.map(line => (label ? ` ${line} `.split(` ${label} `).join(' ') : line)).join('\n'));
   };
   const contextOf = (element, holding, label, nearest = true) => {
@@ -1142,7 +1145,7 @@
   };
   addDoc(document);
   // Parsing every stylesheet each step is the slow part on a large site, so a document's hover rules are kept
-  // until its rule counts change (a new sheet, or rules a script inserted).
+  // until their text changes: editing a selector in place changes what a hover reveals without adding a rule.
   registry.hoverRules ||= new WeakMap();
   const revealsIn = doc => {
     const sheets = [];
@@ -1153,27 +1156,31 @@
         /* A cross-origin stylesheet cannot be read. */
       }
     }
-    const version = sheets.map(rules => rules.length).join(',');
-    const cached = registry.hoverRules.get(doc);
-    if (cached?.version === version) return cached.reveals;
-    const reveals = new Map();
+    const selectors = [];
     const collect = rules => {
       for (const rule of rules) {
         if (rule.cssRules?.length) collect(rule.cssRules);
-        for (const selector of (rule.selectorText || '').split(',')) {
-          // Split `a:hover b` into the hovered compound and what it reveals inside it. Rules that restyle the
-          // hovered element itself, or reveal a sibling or a pseudo-element, have nothing to offer here.
-          const m = selector.match(/^(.*?):hover([^\s>+~]*)\s*(>?)\s*([^+~]*)$/);
-          if (!m || !m[1].trim() || !m[4].trim() || m[4].includes('::')) continue;
-          const pair = [
-            (m[1] + m[2]).replaceAll(':hover', '').trim(),
-            `:scope ${m[3]} ${m[4].replaceAll(':hover', '')}`,
-          ];
-          reveals.set(pair.join('\n'), pair);
-        }
+        if (rule.selectorText) selectors.push(rule.selectorText);
       }
     };
     for (const rules of sheets) collect(rules);
+    const version = JSON.stringify(selectors);
+    const cached = registry.hoverRules.get(doc);
+    if (cached?.version === version) return cached.reveals;
+    const reveals = new Map();
+    for (const text of selectors) {
+      for (const selector of text.split(',')) {
+        // Split `a:hover b` into the hovered compound and what it reveals inside it. Rules that restyle the
+        // hovered element itself, or reveal a sibling or a pseudo-element, have nothing to offer here.
+        const m = selector.match(/^(.*?):hover([^\s>+~]*)\s*(>?)\s*([^+~]*)$/);
+        if (!m || !m[1].trim() || !m[4].trim() || m[4].includes('::')) continue;
+        const pair = [
+          (m[1] + m[2]).replaceAll(':hover', '').trim(),
+          `:scope ${m[3]} ${m[4].replaceAll(':hover', '')}`,
+        ];
+        reveals.set(pair.join('\n'), pair);
+      }
+    }
     const found = [...reveals.values()];
     registry.hoverRules.set(doc, { version, reveals: found });
     return found;
@@ -1273,6 +1280,15 @@
   }
 
   const byLabel = new Map();
+  // Context compares a line with the other controls' labels. Index those once, rather than scanning every control
+  // for each card or calendar cell; counts preserve a label another control shares with this one.
+  for (const c of controls) {
+    const element = registry.nodes.get(c.id);
+    if (!controlByElement.has(element)) controlByElement.set(element, c);
+    if (!labelsByRole.has(c.role)) labelsByRole.set(c.role, new Map());
+    const labels = labelsByRole.get(c.role);
+    labels.set(c.label, (labels.get(c.label) || 0) + 1);
+  }
   for (const c of controls) {
     const key = JSON.stringify([c.role, c.label]);
     if (!byLabel.has(key)) byLabel.set(key, []);
@@ -1697,11 +1713,10 @@
       .trim();
   const modal = modals.length ? dialogName(modals.at(-1)) : null;
 
-  // What this read reported, kept for the next look. A read that went into a shadow root or a child document is not
-  // kept: a document observer cannot see either, so it could not tell later whether that part still holds.
-  let read = null;
+  // The read number names a transport baseline. Only shallow reads can answer unchanged: a document observer
+  // cannot see mutations inside a shadow root or child document. Deep reads are still derived in full for deltas.
+  const read = !deep || delta ? ++registry.reads : null;
   if (!deep) {
-    read = ++registry.reads;
     registry.kept ||= {};
     registry.kept[mode] = {
       mode,
@@ -1739,5 +1754,25 @@
   };
   // Absent unless one is open, as on most pages: an unnamed modal is the empty string, not null.
   if (modal !== null) result.modal = modal;
+  const previous = own.snapshots?.[mode];
+  own.snapshots ||= {};
+  own.snapshots[mode] = { read, document_key: result.document_key, controls: semantics, guards, retarget_keys };
+  if (delta && read !== null && previous?.read !== null && previous?.document_key === result.document_key &&
+      base?.document_key === previous.document_key && base?.read === previous.read) {
+    // Layout, CSS and references can change controls outside a mutated subtree. Derive the whole read, then omit
+    // only rows and guards that are exactly equal; action-time guards never read this transport baseline.
+    const rows = new Map(previous.controls.map(c => [c.id, JSON.stringify(c)]));
+    const changed = (now, before) => Object.fromEntries(Object.entries(now).filter(([id, value]) => value !== before[id]));
+    const { controls, guards, retarget_keys, ...metadata } = result;
+    return {
+      ...metadata,
+      control_delta: {
+        base_read: previous.read,
+        controls: controls.map(c => rows.get(c.id) === JSON.stringify(c) ? c.id : c),
+        guards: changed(guards, previous.guards),
+        retarget_keys: changed(retarget_keys, previous.retarget_keys),
+      },
+    };
+  }
   return result;
 })

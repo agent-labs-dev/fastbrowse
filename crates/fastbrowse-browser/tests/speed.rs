@@ -670,9 +670,10 @@ async fn count_reads(h: &Harness) {
     common::eval_active(
         &h.session,
         "(() => { const scripts = globalThis.__fastbrowseScripts; const key = Object.keys(scripts)[0]; \
-         const installed = scripts[key]; globalThis.__fbReads = { total: 0, unchanged: 0 }; \
-         scripts[key] = mode => { const read = installed(mode); globalThis.__fbReads.total++; \
-         if (read && read.unchanged) globalThis.__fbReads.unchanged++; return read; }; })()",
+         const installed = scripts[key]; globalThis.__fbReads = { total: 0, unchanged: 0, delta: 0 }; \
+         scripts[key] = (mode, base) => { const read = installed(mode, base); globalThis.__fbReads.total++; \
+         if (read && read.unchanged) globalThis.__fbReads.unchanged++; \
+         if (read && read.control_delta) globalThis.__fbReads.delta++; return read; }; })()",
     )
     .await;
 }
@@ -703,6 +704,62 @@ async fn test_an_unchanged_page_is_served_from_the_read_it_kept() {
         second.controls.iter().map(|c| (c.label.clone(), c.id.clone())).collect::<Vec<_>>()
     );
     assert_eq!(first.page_key, second.page_key);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_changed_frame_sends_control_deltas() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(&h.session, "document.body.innerHTML = '<button>Before</button><button>Stable</button>'").await;
+    h.observe().await;
+    let function = h.session.snapshot().function.clone();
+    eval_active(&h.session, "document.querySelector('button').textContent = 'After'").await;
+    let delta = eval_active(&h.session, &format!("{function}('snapshot-delta', {{document_key: globalThis.__fastbrowse.kept.snapshot.document_key, read: globalThis.__fastbrowse.kept.snapshot.read}})")).await;
+    let rows = delta["control_delta"]["controls"].as_array().expect("a control delta");
+    assert_eq!(rows.iter().filter(|row| row.is_object()).count(), 1, "{delta}");
+    assert_eq!(rows.iter().filter(|row| row.is_i64()).count(), 1, "{delta}");
+    count_reads(&h).await;
+    // This handle holds the read before the direct call advanced the producer's baseline.
+    eval_active(&h.session, "document.querySelector('button').textContent = 'Newest'").await;
+    let observed = h.observe().await;
+    assert!(observed.controls.iter().any(|control| control.label == "Newest"));
+    assert!(observed.controls.iter().any(|control| control.label == "Stable"));
+    let counts = eval_active(&h.session, "globalThis.__fbReads").await;
+    assert_eq!(counts["total"], json!(1), "{counts}");
+    assert_eq!(counts["delta"], json!(0), "{counts}");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_delta_observations_match_full_reads_after_structural_and_live_changes() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(&h.session, "document.body.innerHTML = '<section><h2>Group</h2><button id=one>One</button><button id=two>Two</button><input id=field><dialog aria-label=Confirm><button>Yes</button></dialog></section>'").await;
+    h.observe().await;
+    count_reads(&h).await;
+    for script in [
+        "document.querySelector('#one').textContent = 'Changed'",
+        "document.querySelector('#field').value = 'live property'",
+        "document.querySelector('section').prepend(document.querySelector('#two'))",
+        "document.querySelector('#one').remove()",
+        "document.querySelector('dialog').showModal()",
+        "document.querySelector('dialog').close()",
+        "document.body.appendChild(document.createElement('div')).attachShadow({mode:'open'}).innerHTML = '<button>Shadow</button>'",
+        "document.querySelector('div').shadowRoot.querySelector('button').textContent = 'Shadow changed'",
+    ] {
+        eval_active(&h.session, "globalThis.__fbReads = {total:0, unchanged:0, delta:0}").await;
+        eval_active(&h.session, script).await;
+        let observed = h.observe().await;
+        let counts = eval_active(&h.session, "globalThis.__fbReads").await;
+        assert_eq!(counts["total"], json!(1), "{script}: {counts}");
+        assert_eq!(counts["delta"], json!(1), "{script}: {counts}");
+        let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
+        let mut full = other.observe().await.expect("full read");
+        full.captured_at = observed.captured_at;
+        assert_eq!(observed, full, "delta differed from a full read after {script}");
+        h.observe().await;
+    }
     h.close().await;
 }
 
@@ -856,6 +913,31 @@ async fn test_a_validation_message_a_script_sets_is_not_served_from_a_kept_read(
     let after = h.observe().await;
     h.close().await;
     assert_eq!(find(&after, "Handle").validation_message.as_deref(), Some("That handle is taken"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_retargeted_hover_rule_replaces_its_offered_target() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(&h.session, r#"document.head.insertAdjacentHTML('beforeend', '<style id=hover-rule>.one .child,.two .child{display:none}.one:hover .child{display:block}</style>');document.body.innerHTML = '<div class=one>First<button class=child>Hidden one</button></div><div class=two>Second<button class=child>Hidden two</button></div>'"#).await;
+    let before = h.observe().await;
+    let hovers = |obs: &fastbrowse_core::page::Observation| {
+        obs.controls
+            .iter()
+            .filter(|c| c.operations.contains(&Operation::Hover))
+            .map(|c| c.label.clone())
+            .collect::<Vec<_>>()
+    };
+    assert!(hovers(&before).iter().any(|label| label.contains("First")), "{:?}", hovers(&before));
+    eval_active(
+        &h.session,
+        "document.querySelector('#hover-rule').sheet.cssRules[1].selectorText = '.two:hover .child'",
+    )
+    .await;
+    let after = h.observe().await;
+    assert!(hovers(&after).iter().any(|label| label.contains("Second")), "{:?}", hovers(&after));
+    assert!(!hovers(&after).iter().any(|label| label.contains("First")), "{:?}", hovers(&after));
+    h.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
