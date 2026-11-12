@@ -869,6 +869,75 @@ async fn test_a_shadow_root_attached_without_a_mutation_renews_the_observation()
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_pointer_listener_changes_renew_a_saved_observation() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(&h.session, "document.body.innerHTML = '<div id=target>New target</div><button>Open</button>';globalThis.handler = () => {};true").await;
+    h.observe().await;
+    count_reads(&h).await;
+    for (script, present) in [
+        ("document.querySelector('#target').addEventListener('click', handler)", true),
+        ("document.querySelector('#target').removeEventListener('click', handler)", false),
+        (
+            "globalThis.controller = new AbortController(); document.querySelector('#target').addEventListener('pointerdown', handler, {signal: controller.signal})",
+            true,
+        ),
+        ("controller.abort()", false),
+    ] {
+        eval_active(&h.session, "globalThis.__fbReads = {total:0, unchanged:0, delta:0}").await;
+        eval_active(&h.session, script).await;
+        let after = h.observe().await;
+        assert_eq!(after.controls.iter().any(|c| c.label == "New target"), present, "{script}");
+        assert_eq!(reads(&h).await, (1, 0), "{script}");
+        let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
+        let mut full = other.observe().await.expect("full read");
+        full.captured_at = after.captured_at;
+        assert_eq!(after, full, "{script}");
+        h.observe().await;
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_saved_read_checks_the_callers_native_listener_capability() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    let source = serde_json::to_string(include_str!("../js/snapshot.js")).expect("script");
+    let setup = format!(
+        "document.body.innerHTML = '<div id=target>New target</div><button>Open</button>';globalThis.probeRead = (0,eval)({source});globalThis.noAPI = {{listeners:null}};globalThis.withAPI = {{listeners:getEventListeners}};probeRead('snapshot-reuse',null,noAPI);true"
+    );
+    let active = h.session.active_session_id().expect("active session");
+    let result = h
+        .session
+        .send(
+            "Runtime.evaluate",
+            json!({"expression":setup,"returnByValue":true,"includeCommandLineAPI":true}),
+            Some(&active),
+        )
+        .await
+        .expect("setup");
+    assert!(result.get("exceptionDetails").is_none(), "{result}");
+    eval_active(&h.session, "document.querySelector('#target').addEventListener('click', () => {})").await;
+    let after = eval_active(&h.session, "probeRead('snapshot-reuse',null,withAPI)").await;
+    assert!(after.get("unchanged").is_none(), "{after}");
+    assert!(after["controls"].as_array().expect("controls").iter().any(|c| c["label"] == "New target"));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_action_guard_reads_pointer_listeners_after_the_observation() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(&h.session, "document.body.innerHTML = '<div id=target>New target</div>';globalThis.handler = () => {};document.querySelector('#target').addEventListener('click', handler)").await;
+    let observed = h.observe().await;
+    let id = find(&observed, "New target").id.clone();
+    eval_active(&h.session, "document.querySelector('#target').removeEventListener('click', handler)").await;
+    let result = h.page.act(&targeted(Operation::Click, &id), &observed).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Stale, "{result:?}");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_changed_frame_sends_control_deltas() {
     let _turn = turn().await;
     let Some(h) = harness().await else { return };

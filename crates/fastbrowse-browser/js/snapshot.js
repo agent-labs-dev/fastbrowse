@@ -247,14 +247,18 @@
   if ((mode === 'snapshot' || mode === 'glance') && !('listeners' in own))
     throw new Error(own.unread);
   const POINTER = ['click', 'mousedown', 'pointerdown', 'mouseup', 'pointerup'];
+  let listenerStates = new Map();
   // The root element and the body hear clicks on the whole page, as the document does, so neither counts.
   const listened = e => {
     if (!own.listeners || e === e.ownerDocument.documentElement || e === e.ownerDocument.body) return false;
+    if (listenerStates?.has(e)) return listenerStates.get(e);
     let listeners = null;
     try {
       listeners = own.listeners(e);
     } catch {}
-    return Boolean(listeners) && POINTER.some(type => Array.isArray(listeners[type]) && listeners[type].length);
+    const value = Boolean(listeners) && POINTER.some(type => Array.isArray(listeners[type]) && listeners[type].length);
+    listenerStates?.set(e, value);
+    return value;
   };
   // Text the page rewrites by itself, such as a player's clock or a countdown, says nothing about which item a control
   // acts on: a Pause beside a ticking remaining time was refused as stale on every one of 52 clicks. Text that changed
@@ -387,11 +391,14 @@
     kept.readyState === document.readyState &&
     // attachShadow emits no document mutation, so a previously shallow page must check its existing hosts.
     kept.lightElements?.every(e => !e.shadowRoot) &&
+    kept.listenerAPI === Boolean(own.listeners) &&
     // Upgrading a form-associated custom element can change HTML label ownership without a DOM mutation.
     !kept.undefinedElements?.some(e => e.isConnected && e.matches(':defined')) &&
     // A transition or animation in flight moves what is on screen between one look and the next, so a read taken
     // while one runs does not stand.
-    document.getAnimations().length === 0;
+    document.getAnimations().length === 0 &&
+    // Adding, removing or aborting a native listener writes no DOM node or attribute.
+    kept.listenerStates?.every(([e, value]) => listened(e) === value);
   if (still)
     return {
       unchanged: true,
@@ -423,6 +430,7 @@
   registry.nativeQueueMicrotask ||= window.queueMicrotask.bind(window);
   registry.nativeQueueMicrotask(() => {
     reading = false;
+    listenerStates = null;
     for (const cache of caches) cache.clear();
     caches.length = 0;
   });
@@ -1918,6 +1926,8 @@
       readyState: document.readyState,
       undefinedElements: readUndefinedElements,
       lightElements,
+      listenerStates: [...listenerStates],
+      listenerAPI: Boolean(own.listeners),
       url: location.href,
       document_key: String(performance.timeOrigin),
       page_key,
