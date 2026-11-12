@@ -33,7 +33,7 @@ sig = "dc19a76311d97fd3"
 [[bindings]]
 doc = "blog/attach-to-running-chrome.md"
 target = "crates/fastbrowse-browser/src/session.rs"
-sig = "5b22ecaeaf68923a"
+sig = "2ce80765df6c7c99"
 
 [[bindings]]
 doc = "blog/attach-to-running-chrome.md"
