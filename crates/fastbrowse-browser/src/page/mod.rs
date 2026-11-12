@@ -893,6 +893,7 @@ impl CdpPage {
             .map(|(_, session)| (session.clone(), self.session.ax_generation(session)))
             .collect();
         let mut result = self.read_frames::<Snapshot>(&script, Some((mode, full.as_str()))).await?;
+        self.bind_snapshot_controls(&result).await;
         // DOM and AX events can arrive between the page read and its reply. A mixed-generation observation cannot
         // safely seed a partial index, so take one coherent full fallback before exposing it to the agent.
         let raced = result.iter().any(|(_, frame)| {
@@ -907,6 +908,24 @@ impl CdpPage {
             result.iter().map(|(_, f)| (f.session_id.clone(), f.raw.inaccessible_frames)).collect();
         let inaccessible = self.inaccessible_frames(&coverage)?;
         Ok((result, inaccessible))
+    }
+
+    async fn bind_snapshot_controls(&self, frames: &[(String, FrameObservation<Snapshot>)]) {
+        for (_, frame) in frames {
+            let generation = self.session.ax_generation(&frame.session_id);
+            for control in &frame.raw.controls {
+                let local_id = control.id;
+                let expression = format!("globalThis.__fastbrowse?.nodes?.get({local_id}) || null");
+                let Ok(handle) = self.session.send("Runtime.evaluate", json!({"expression": expression, "returnByValue": false}), Some(&frame.session_id)).await else { continue };
+                let Some(object_id) = handle["result"]["objectId"].as_str() else { continue };
+                let described = self.session.send("DOM.describeNode", json!({"objectId": object_id}), Some(&frame.session_id)).await.ok();
+                let _ = self.session.send("Runtime.releaseObject", json!({"objectId": object_id}), Some(&frame.session_id)).await;
+                let Some(backend_id) = described.and_then(|value| value["node"]["backendNodeId"].as_i64()) else { continue };
+                if let Some(index) = self.state.lock().unwrap().ax.get_mut(&frame.session_id) {
+                    if index.generation == generation { index.bind_control(control.id.to_string(), backend_id); }
+                }
+            }
+        }
     }
 
     async fn refresh_ax_baselines(&self, sessions: &[(String, String)]) {

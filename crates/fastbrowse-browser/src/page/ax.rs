@@ -23,6 +23,7 @@ pub(crate) struct AxIndex {
     nodes: HashMap<String, AxNode>,
     by_backend_id: HashMap<i64, String>,
     dirty_backend_ids: HashSet<i64>,
+    control_backend_ids: HashMap<String, i64>,
 }
 
 impl AxIndex {
@@ -30,6 +31,7 @@ impl AxIndex {
         self.document_key = document_key;
         self.generation = generation;
         self.nodes.clear(); self.by_backend_id.clear(); self.dirty_backend_ids.clear();
+        self.control_backend_ids.clear();
         for node in nodes {
             if let Some(backend_id) = node.backend_dom_node_id { self.by_backend_id.insert(backend_id, node.node_id.clone()); }
             self.nodes.insert(node.node_id.clone(), node);
@@ -41,6 +43,8 @@ impl AxIndex {
     pub(crate) fn node_for_backend(&self, backend_id: i64) -> Option<&AxNode> { self.by_backend_id.get(&backend_id).and_then(|id| self.nodes.get(id)) }
     #[allow(dead_code)]
     pub(crate) fn dirty(&self) -> impl Iterator<Item = i64> + '_ { self.dirty_backend_ids.iter().copied() }
+    pub(crate) fn bind_control(&mut self, control_id: String, backend_id: i64) { self.control_backend_ids.insert(control_id, backend_id); }
+    pub(crate) fn backend_for_control(&self, control_id: &str) -> Option<i64> { self.control_backend_ids.get(control_id).copied() }
 }
 
 #[cfg(test)]
@@ -50,6 +54,8 @@ mod tests {
     #[test]
     fn baseline_binds_backend_ids_and_replaces_documents() {
         let mut index = AxIndex::default(); index.replace("doc-a".into(), 3, vec![node("ax-a", 11)]);
+        index.bind_control("control-a".into(), 11);
+        assert_eq!(index.backend_for_control("control-a"), Some(11));
         assert_eq!(index.node_for_backend(11).map(|n| n.node_id.as_str()), Some("ax-a"));
         index.replace("doc-b".into(), 4, vec![node("ax-b", 22)]);
         assert_eq!(index.node_for_backend(11), None); assert_eq!(index.node_for_backend(22).map(|n| n.node_id.as_str()), Some("ax-b"));
