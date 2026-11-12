@@ -26,6 +26,9 @@ futures-util = { version = "0.3.34", default-features = false, features = ["sink
 httparse = "1.10.1"
 # The text of a PDF, which Chrome's viewer keeps out of the DOM.
 pdf-extract = "0.12.1"
+calamine = "0.38.0"
+quick-xml = "0.42.0"
+zip = { version = "9.5.1", default-features = false, features = ["deflate"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0.229", features = ["derive"] }
 # Objects keep insertion order, as Python dicts do: a reply parsed and written back keeps its keys where they were.

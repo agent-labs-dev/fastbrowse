@@ -473,6 +473,13 @@ first in `main`. A program that registers no helper still keeps the PDF, and the
 read (`[Downloaded file: ...] The file was kept, but its text was not read: ...`), naming why: no reader, a read
 past 10 seconds, a file that is no PDF, or a reader that did not start or ended without an answer.
 
+Downloaded XLSX workbooks, DOCX documents and ZIP archives use the same killable helper. Workbooks retain each
+worksheet's name, row and column coordinates, empty cells and stored values. Formulas are not evaluated. Word
+text retains paragraph, table-cell, tab and line-break boundaries, with its package part named. Archive members
+are read in memory, never extracted onto the host. Text, CSV, TSV, JSON, XML, Markdown and HTML members are read
+as UTF-8 text; XLSX, DOCX and PDF members use their document readers. Other or invalid members remain named with
+an explicit notice that their contents were not read. Nested archives are not expanded.
+
 The cloud browser ignores `Browser.setDownloadBehavior(deny)`, so bytes come from response interception, never from the remote filesystem. Host-path `DOM.setFileInputFiles` is only valid for a browser on the same machine.
 
 ### Foreground and background

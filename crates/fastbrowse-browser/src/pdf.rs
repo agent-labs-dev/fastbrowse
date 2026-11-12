@@ -29,11 +29,15 @@ pub enum PdfUnread {
 
 /// The text a PDF's pages hold, in page order, or None when it holds none: a scanned PDF is an image of text.
 pub(crate) async fn text(raw: Vec<u8>) -> Result<Option<String>, PdfUnread> {
+    document_text(helper::PDF_TEXT, raw).await
+}
+
+pub(crate) async fn document_text(request: &str, raw: Vec<u8>) -> Result<Option<String>, PdfUnread> {
     let Some(command) = helper::registered() else {
         static SAID: Once = Once::new();
         SAID.call_once(|| {
             crate::warn(
-                "PDF text is not read: no PDF helper process is registered. The fastbrowse binary registers itself, \
+                "Document text is not read: no document helper process is registered. The fastbrowse binary registers itself, \
                  and the Python package its interpreter when Python's own command line started it. Under the Node SDK, \
                  set FASTBROWSE_BINARY to a fastbrowse binary of this version; a Rust program calls \
                  fastbrowse::helper::run_if_requested() first in main",
@@ -41,15 +45,25 @@ pub(crate) async fn text(raw: Vec<u8>) -> Result<Option<String>, PdfUnread> {
         });
         return Err(PdfUnread::NoReader);
     };
-    text_with(command, raw, Duration::from_secs(PARSE_SECONDS)).await
+    text_with_request(command, request, raw, Duration::from_secs(PARSE_SECONDS)).await
 }
 
+#[cfg(test)]
 pub(crate) async fn text_with(
     command: &HelperCommand,
     raw: Vec<u8>,
     limit: Duration,
 ) -> Result<Option<String>, PdfUnread> {
-    let mut child = Owned::spawn(command)?;
+    text_with_request(command, helper::PDF_TEXT, raw, limit).await
+}
+
+async fn text_with_request(
+    command: &HelperCommand,
+    request: &str,
+    raw: Vec<u8>,
+    limit: Duration,
+) -> Result<Option<String>, PdfUnread> {
+    let mut child = Owned::spawn(command, request)?;
     let stdin = child.0.stdin.take().map(tokio::process::ChildStdin::from_std);
     let stdout = child.0.stdout.take().map(tokio::process::ChildStdout::from_std);
     let (Some(Ok(mut stdin)), Some(Ok(mut stdout))) = (stdin, stdout) else { return Err(PdfUnread::ReaderFailed) };
@@ -77,7 +91,7 @@ pub(crate) async fn text_with(
             Some((Reply::Failed, _)) => Err(PdfUnread::Unparsable),
             Some((Reply::Unsupported, _)) => {
                 crate::warn(
-                    "PDF text is not read: the PDF helper process is a fastbrowse of another version. Point it at a \
+                    "Document text is not read: the document helper process is a fastbrowse of another version. Point it at a \
                      fastbrowse binary of this version",
                 );
                 Err(PdfUnread::ReaderFailed)
@@ -99,11 +113,11 @@ pub(crate) async fn text_with(
 struct Owned(Child);
 
 impl Owned {
-    fn spawn(command: &HelperCommand) -> Result<Owned, PdfUnread> {
+    fn spawn(command: &HelperCommand, request: &str) -> Result<Owned, PdfUnread> {
         let mut spawn = Command::new(&command.program);
         spawn
             .args(&command.args)
-            .args([helper::MARKER, helper::PDF_TEXT, helper::PROTOCOL])
+            .args([helper::MARKER, request, helper::PROTOCOL])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -115,7 +129,7 @@ impl Owned {
         }
         spawn.spawn().map(Owned).map_err(|_| {
             crate::warn(
-                "PDF text is not read: the PDF helper process could not start. Check that the program it was \
+                "Document text is not read: the document helper process could not start. Check that the program it was \
                  registered with still exists",
             );
             PdfUnread::ReaderFailed
@@ -137,6 +151,18 @@ pub(crate) mod tests {
     use super::*;
 
     const WIND: &[u8] = include_bytes!("../tests/fixtures/wind.pdf");
+
+    #[tokio::test]
+    async fn a_document_uses_the_same_killable_helper_as_a_pdf() {
+        use std::io::{Cursor, Write};
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        zip.start_file("report.csv", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(b"Item,Amount\nKettle,34.50").unwrap();
+        let raw = zip.finish().unwrap().into_inner();
+        let text =
+            text_with_request(&helper("read"), helper::ZIP_TEXT, raw, Duration::from_secs(30)).await.unwrap().unwrap();
+        assert!(text.contains("[Archive member: report.csv]\nItem,Amount\nKettle,34.50"));
+    }
 
     /// This test binary run as a helper, by [`helper_child`]. A mode just before the marker makes it misbehave.
     fn helper(mode: &str) -> HelperCommand {

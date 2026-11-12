@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Downloaded XLSX, DOCX and ZIP files provide citable text through the document helper. Worksheets keep cell coordinates, Word keeps text boundaries, and archives name unread members ([#1022](https://github.com/agent-labs-dev/fastbrowse/issues/1022), part of [#986](https://github.com/agent-labs-dev/fastbrowse/issues/986)).
+
 - Browserless reads accept JSON APIs and textual HTTP responses as citable blocks, preserving JSON values and delimited fields ([#1021](https://github.com/agent-labs-dev/fastbrowse/issues/1021), part of [#986](https://github.com/agent-labs-dev/fastbrowse/issues/986)).
 
 - **A bench replay finds the answers to requests that cite a note.** A note's id ends with a digest of its page's address, the fixture server takes a new port each run, and the replay's port rule cannot reach a port inside a digest, so every request carrying a note missed its recorded answer. 9 of the 38 fixture cassettes failed on replay for that reason alone. The replay now numbers those digests by first appearance, along with the digest of a control's frame, whose key Chrome makes up anew for a cross-site frame, as it does Chrome target ids, and swaps them back into the recorded answer, so the cassettes already committed replay without a refill ([#768](https://github.com/agent-labs-dev/fastbrowse/issues/768)). Thanks to [@aakashpawar1999](https://github.com/aakashpawar1999) for the fix ([#845](https://github.com/agent-labs-dev/fastbrowse/pull/845)).

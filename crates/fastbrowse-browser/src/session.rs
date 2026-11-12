@@ -2381,7 +2381,7 @@ fn safe_filename(name: &str) -> String {
 /// one is a download and aborts. A `content-disposition: attachment` (or a save-as filename) is the site saying so
 /// explicitly; a bare `text/csv` says it by type. This is a property of the response, not of any one site, so a link
 /// whose target is a file is captured the same way everywhere.
-const DOWNLOAD_MIME_TYPES: [&str; 10] = [
+const DOWNLOAD_MIME_TYPES: [&str; 11] = [
     "text/csv",
     "application/csv",
     "application/octet-stream",
@@ -2392,6 +2392,7 @@ const DOWNLOAD_MIME_TYPES: [&str; 10] = [
     "application/x-7z-compressed",
     "application/vnd.ms-excel",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ];
 
 fn response_mime(mime: &str) -> String {
@@ -2411,6 +2412,15 @@ fn is_download(mime: &str, disposition: &str) -> bool {
 /// why a PDF went unread.
 async fn readable_text(mime: &str, raw: &[u8]) -> Result<Option<String>, crate::PdfUnread> {
     let kind = response_mime(mime);
+    let request = match kind.as_str() {
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => Some(crate::helper::XLSX_TEXT),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => Some(crate::helper::DOCX_TEXT),
+        "application/zip" => Some(crate::helper::ZIP_TEXT),
+        _ => None,
+    };
+    if let Some(request) = request {
+        return crate::pdf::document_text(request, raw.to_vec()).await;
+    }
     if kind == "application/pdf" {
         return crate::pdf::text(raw.to_vec()).await;
     }
@@ -2616,7 +2626,7 @@ mod tests {
         crate::helper::register(crate::testing::test_binary_helper("pdf::tests::helper_child"));
         let raw = vec![b'a'; 100_000];
         assert_eq!(readable_text("text/csv", &raw).await.unwrap().unwrap().len(), raw.len());
-        assert_eq!(readable_text("application/zip", b"PK").await, Ok(None));
+        assert!(readable_text("application/zip", b"PK").await.is_err());
         let pdf = readable_text("application/pdf", include_bytes!("../tests/fixtures/wind.pdf")).await;
         assert_eq!(pdf, Ok(Some("Fairbanks Wind".to_owned())));
     }
