@@ -124,4 +124,19 @@ mod tests {
         let mut incomplete = node("root", 10); incomplete.child_ids = vec!["a".into()];
         assert!(!index.branch_complete(10, &[incomplete]));
     }
+
+    #[test]
+    fn incomplete_grandchildren_cycles_and_duplicates_are_rejected_without_mutation() {
+        let mut index = AxIndex::default();
+        let mut root = node("root", 10); root.child_ids = vec!["a".into()];
+        let mut a = node("a", 11); a.child_ids = vec!["b".into()];
+        index.replace("doc".into(), 1, vec![root, a, node("b", 12)]);
+        let mut changed = node("root", 10); changed.child_ids = vec!["a".into()];
+        let mut changed_a = node("a", 11); changed_a.child_ids = vec!["b".into()];
+        assert!(!index.branch_complete(10, &[changed.clone(), changed_a.clone()]));
+        changed_a.child_ids = vec!["a".into()];
+        assert!(!index.branch_complete(10, &[changed, changed_a, node("b", 12)]));
+        assert!(!index.branch_complete(10, &[node("root", 10), node("root", 10), node("a", 11), node("b", 12)]));
+        assert_eq!(index.node_for_backend(12).map(|node| node.node_id.as_str()), Some("b"));
+    }
 }
