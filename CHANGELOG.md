@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Saved observations notice rendering changes without DOM mutations.** A custom element changing its CSS state now refreshes controls, names, positions and hover targets. Reuse checks the rendering facts the saved read consumed, including live selector results, instead of relying on DOM changes alone ([#1050](https://github.com/agent-labs-dev/fastbrowse/issues/1050)).
+
 - The eval embedder forwards a configured Exa key to fastbrowse while keeping inherited provider keys out of isolated adapters ([#1054](https://github.com/agent-labs-dev/fastbrowse/issues/1054)).
 
 - **A wait lasts until the page changes, within the run's time.** A `wait` step ended after a fixed 5 s, so a status line or queue position that updates less often was reported as a page that did not change ([#1038](https://github.com/agent-labs-dev/fastbrowse/issues/1038)). The step now ends on the page's next change that an observation shows, or on a navigation or dialog, and runs until the run's remaining browsing time when nothing changes. A run with no time limit waits for the change. A wait that ends with nothing changed still counts as no progress.

@@ -132,7 +132,11 @@ query current state. Each saved snapshot or glance keeps its own pending custom-
 upgrade can change label ownership without a DOM mutation. Before reusing a shallow read, the browser checks
 its visited elements for newly attached shadow roots, which also produce no document mutation. It also
 compares the native pointer-listener checks used by the saved read. Each atomic read asks for a node's listeners
-once; later action guards ask again. The frame still walks the page and sends its text.
+once; later action guards ask again. A saved read also compares the rendering facts it consumed: computed
+style properties, visibility, element and text-node boxes, rendered text, live selector matches, focus and
+live control or media values. Those facts stay in the installed script's private closure and name the exact
+document and read they validate. A CSS state can then renew a read without writing a DOM node or attribute.
+The frame still walks the page and sends its text.
 
 A browser observation reports each control's `focused` state. A custom page may leave it unknown.
 The optional `invalid` flag reports `aria-invalid` or a failed native constraint on a field that participates

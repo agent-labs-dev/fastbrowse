@@ -33,13 +33,68 @@
   // A transparent native checkbox is the one control TodoMVC shows, so only its own opacity is excused: a
   // transparent ancestor still hides it. Walked by style, not layout box, as a `display: contents` parent
   // generates no box yet hides nothing.
-  const nativeChoice = e => e.tagName === 'INPUT' && ['checkbox', 'radio'].includes(e.type);
+  const nativeChoice = e => e.tagName === 'INPUT' && ['checkbox', 'radio'].includes(nativeProperty(e, 'type'));
   const shownThrough = e => {
     for (let a = e.parentElement ?? e.getRootNode().host; a; a = a.parentElement ?? a.getRootNode().host)
-      if (a.ownerDocument.defaultView.getComputedStyle(a).opacity === '0') return false;
+      if (styleProperty(a, 'opacity') === '0') return false;
     return true;
   };
   const registry = (window.__fastbrowse ||= { ids: new WeakMap(), nodes: new Map(), next: 1 });
+  // Browser rendering and live selector results can change without a DOM mutation. A saved read records only
+  // the native facts it consumed; replaying those facts validates the same branches without deriving the result.
+  let renderFacts = mode === 'snapshot' || mode === 'glance' ? new Map() : null;
+  let renderInputs = renderFacts ? [] : null;
+  registry.nativeQueueMicrotask ||= window.queueMicrotask.bind(window);
+  registry.nativeQueueMicrotask(() => {
+    renderFacts = null;
+    renderInputs = null;
+  });
+  const textRanges = new WeakMap();
+  const readRenderFact = (kind, target, args) => {
+    switch (kind) {
+      case 'style': return target.ownerDocument.defaultView.getComputedStyle(target)[args];
+      case 'visible': return target?.checkVisibility(args);
+      case 'box': return target.getBoundingClientRect();
+      case 'textBox': {
+        const doc = target.ownerDocument;
+        let range = textRanges.get(doc);
+        if (!range) textRanges.set(doc, range = doc.createRange());
+        range.selectNodeContents(target);
+        return range.getBoundingClientRect();
+      }
+      case 'text': return target?.innerText;
+      case 'query': return target.querySelectorAll(args);
+      case 'state': return target.matches(args);
+      case 'active': return target.activeElement;
+      case 'selected': return [...target.selectedOptions];
+      case 'validity': return target.validity?.valid;
+      case 'prop': return target?.[args];
+    }
+  };
+  const renderValue = (kind, value) =>
+    kind === 'box' || kind === 'textBox'
+      ? [value.x, value.y, value.width, value.height, value.left, value.top, value.right, value.bottom]
+      : kind === 'query' ? [...value] : value;
+  const sameRenderValue = (left, right) =>
+    Array.isArray(left) ? Array.isArray(right) && left.length === right.length &&
+      left.every((value, i) => Object.is(value, right[i])) : Object.is(left, right);
+  const renderFact = (kind, target, args = null) => {
+    if (!renderFacts) return readRenderFact(kind, target, args);
+    let facts = renderFacts.get(target);
+    if (!facts) renderFacts.set(target, facts = new Map());
+    const key = `${kind}:${typeof args === 'object' ? JSON.stringify(args) : args}`;
+    if (!facts.has(key)) {
+      const value = readRenderFact(kind, target, args);
+      facts.set(key, value);
+      renderInputs.push([kind, target, args, renderValue(kind, value)]);
+    }
+    return facts.get(key);
+  };
+  const styleProperty = (target, property) => renderFact('style', target, property);
+  const visibilityOf = (target, options) => renderFact('visible', target, options);
+  const boxOf = target => renderFact('box', target);
+  const textBoxOf = target => renderFact('textBox', target);
+  const nativeProperty = (target, property) => renderFact('prop', target, property);
   // Keep the page's own timer overrides from holding a browser-side frame wait open.
   registry.nativeSetTimeout ||= window.setTimeout.bind(window);
   registry.nativeClearTimeout ||= window.clearTimeout.bind(window);
@@ -340,12 +395,12 @@
         // progress.
         if (
           ('checked' in e || 'selected' in e || e.hasAttribute('aria-checked') || e.hasAttribute('aria-selected')) &&
-          e.checkVisibility({ checkOpacity: !nativeChoice(e), checkVisibilityCSS: true }) &&
+          visibilityOf(e, { checkOpacity: !nativeChoice(e), checkVisibilityCSS: true }) &&
           (!nativeChoice(e) || shownThrough(e))
         )
           hashText(
             JSON.stringify([
-              e.checked ?? null,
+              nativeProperty(e, 'checked') ?? null,
               e.selected ?? null,
               e.getAttribute('aria-checked'),
               e.getAttribute('aria-selected'),
@@ -389,10 +444,12 @@
   // deriving it and sending it back is what an observation costs on a dense page. Anything that can change what a
   // read would say without rewriting a node is asked first, so a reuse is only a page that is provably still.
   const kept = registry.kept?.[mode];
+  const rendered = own.renderReads?.[mode];
   const still =
     reuse &&
     kept &&
     kept.mode === mode &&
+    rendered?.read === kept.read && rendered?.document_key === kept.document_key &&
     (!delta || (base?.document_key === kept.document_key && base?.read === kept.read)) &&
     kept.rev === registry.rev &&
     kept.live === registry.live() &&
@@ -414,7 +471,9 @@
     // while one runs does not stand.
     document.getAnimations().length === 0 &&
     // Adding, removing or aborting a native listener writes no DOM node or attribute.
-    kept.listenerStates?.every(([e, value]) => listened(e) === value);
+    kept.listenerStates?.every(([e, value]) => listened(e) === value) &&
+    rendered.inputs.every(([kind, target, args, value]) =>
+      sameRenderValue(value, renderValue(kind, readRenderFact(kind, target, args))));
   if (still)
     return {
       unchanged: true,
@@ -530,27 +589,26 @@
   };
   flushTree(document);
   const readUndefinedElements = own.undefinedElements;
-  const innerTextOf = memo(e => e.innerText);
+  const innerTextOf = e => renderFact('text', e);
 
-  const safe = e => e.type !== 'hidden';
+  const safe = e => nativeProperty(e, 'type') !== 'hidden';
   // Password and agent-typed secret values never leave the page: only their length is observed.
-  const secret = e => e.type === 'password' || e.dataset?.fastbrowseSecret === '1';
-  const reveal = e => (typeof e.value !== 'string' ? null : secret(e) ? '•'.repeat(e.value.length) : e.value);
+  const secret = e => nativeProperty(e, 'type') === 'password' || e.dataset?.fastbrowseSecret === '1';
+  const reveal = e => (typeof nativeProperty(e, 'value') !== 'string' ? null : secret(e) ? '•'.repeat(nativeProperty(e, 'value').length) : nativeProperty(e, 'value'));
   // What a select has chosen. selectedIndex names only the first chosen option, so a list that allows several gives
   // every chosen index: a later option chosen or taken out changes it.
   const chosen = e =>
-    e.multiple && e.tagName === 'SELECT' ? [...e.selectedOptions].map(o => o.index) : (e.selectedIndex ?? null);
+    nativeProperty(e, 'multiple') && e.tagName === 'SELECT' ? [...renderFact('selected', e)].map(o => o.index) : (nativeProperty(e, 'selectedIndex') ?? null);
   // Tag pickers keep the field they replace on the page, clipped to nothing, and checkVisibility() ignores clip: a
   // control whose own clip or clip-path leaves no area is not there for a person. A hidden checkbox, radio or file
   // input is still reached through its label. Text is still read, as a page states facts in visually hidden text.
   const clippedAway = e => {
-    const style = e.ownerDocument.defaultView.getComputedStyle(e);
-    const rect = /^rect\((.+)\)$/.exec(style.clip);
-    const inset = /^inset\(([^)]*?)(?:\s+round\s.*)?\)$/.exec(style.clipPath);
+    const rect = /^rect\((.+)\)$/.exec(styleProperty(e, 'clip'));
+    const inset = /^inset\(([^)]*?)(?:\s+round\s.*)?\)$/.exec(styleProperty(e, 'clipPath'));
     // Almost every element has neither, and its box is not read.
     if (!rect && !inset) return false;
-    const { width, height } = e.getBoundingClientRect();
-    if (rect && ['absolute', 'fixed'].includes(style.position)) {
+    const { width, height } = boxOf(e);
+    if (rect && ['absolute', 'fixed'].includes(styleProperty(e, 'position'))) {
       // An `auto` side is the border box's own edge.
       const edges = [0, width, height, 0];
       const [top, right, bottom, left] = rect[1]
@@ -592,12 +650,12 @@
   // Asked only of an element whose opacity check failed. One that ignores the pointer while it fades is not offered,
   // as what it covers would take the click.
   const fadingIn = e =>
-    e.checkVisibility({ checkVisibilityCSS: true }) &&
-    e.ownerDocument.defaultView.getComputedStyle(e).pointerEvents !== 'none' &&
+    visibilityOf(e, { checkVisibilityCSS: true }) &&
+    styleProperty(e, 'pointerEvents') !== 'none' &&
     !onChain(
       e,
       a =>
-        a.ownerDocument.defaultView.getComputedStyle(a).opacity === '0' &&
+        styleProperty(a, 'opacity') === '0' &&
         !a.getAnimations().some(t => fadingTo(t) > 0),
     );
   // What is fading out has gone for a person though its opacity is still above zero, as the controls of a card the
@@ -615,18 +673,18 @@
     // "Mark all as complete" input is 1px and off screen, and only its label can be clicked.
     const choice =
       nativeChoice(e) &&
-      e.ownerDocument.defaultView.getComputedStyle(e).pointerEvents !== 'none' &&
-      ![...(e.labels || [])].some(l => l.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }));
+      styleProperty(e, 'pointerEvents') !== 'none' &&
+      ![...(e.labels || [])].some(l => visibilityOf(l, { checkOpacity: true, checkVisibilityCSS: true }));
     if (
       e.closest('[aria-hidden="true"],[inert]') ||
-      (!e.checkVisibility({ checkOpacity: !choice, checkVisibilityCSS: true }) && (choice || !fadingIn(e))) ||
+      (!visibilityOf(e, { checkOpacity: !choice, checkVisibilityCSS: true }) && (choice || !fadingIn(e))) ||
       leaving(e) ||
       (choice && !shownThrough(e)) ||
       (clippedAway(e) && (e.matches(SELECTOR) || pressable(e) || focusableText(e)))
     )
       return false;
     if (!choice) return true;
-    const r = e.getBoundingClientRect();
+    const r = boxOf(e);
     return r.width > 0 && r.height > 0 && !e.matches(':disabled') && !e.closest('[aria-disabled="true"]');
   });
   registry.visible = visible;
@@ -638,7 +696,7 @@
   const sourceOf = (registry.sourceOf = e =>
     registry.chooser?.opener === e && (registry.chooser.input.isConnected || !registry.chooser.connected)
       ? registry.chooser.input
-      : e.tagName === 'LABEL' && ['checkbox', 'radio', 'file'].includes(e.control?.type)
+      : e.tagName === 'LABEL' && ['checkbox', 'radio', 'file'].includes(nativeProperty(e.control, 'type'))
         ? e.control
         : e);
 
@@ -659,7 +717,7 @@
   const iconLabel = e => {
     const glyphs = new Set();
     for (const icon of descendants(e, 'svg,i,span,[role="img"]')) {
-      if (!icon.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) continue;
+      if (!visibilityOf(icon, { checkOpacity: true, checkVisibilityCSS: true })) continue;
       const named = [];
       for (const token of icon.classList) {
         const glyph = ICON_CLASS.exec(token);
@@ -730,14 +788,14 @@
   // A hidden element named through aria-labelledby is read whole, since it is hidden only to serve as the label.
   // An svg's <title> never renders, yet it is the graphic's name.
   let nameReads = null;
-  const shownNow = memo(e => e.localName === 'title' || e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }));
+  const shownNow = memo(e => e.localName === 'title' || visibilityOf(e, { checkOpacity: true, checkVisibilityCSS: true }));
   const shown = e => {
     const value = shownNow(e);
     nameReads?.shown.set(e, value);
     return value;
   };
   const nameValue = e => {
-    const value = e.value;
+    const value = nativeProperty(e, 'value');
     nameReads?.values.set(e, value);
     return value;
   };
@@ -816,7 +874,7 @@
         .map(l => labelFrom(l, seen))
         .filter(Boolean)
         .join(' ') ||
-      (['button', 'submit', 'reset'].includes(e.type) ? nameValue(e) : '') ||
+      (['button', 'submit', 'reset'].includes(nativeProperty(e, 'type')) ? nameValue(e) : '') ||
       e.getAttribute('alt') ||
       // A field's text is its value, not its name: a list-style select shows every option, and a combobox widget its
       // chosen chips, remove buttons and open options. Accname never names these from content either. A textarea's
@@ -863,7 +921,7 @@
         }) &&
         (!kept.needsWrapped || wrappedField(e) === kept.wrapped) &&
         kept.shown.every(([node, value]) => shown(node) === value) &&
-        kept.values.every(([node, value]) => node.value === value)) return kept.text;
+        kept.values.every(([node, value]) => nativeProperty(node, 'value') === value)) return kept.text;
     const reads = { nodes: new Set(), references: [], labels: new Map(), shown: new Map(), values: new Map() };
     nameReads = reads;
     let text, wrapped = null, needsWrapped = false;
@@ -898,12 +956,11 @@
   // listener a script added, or the pointer cursor. The cursor inherits, so only the element it starts on counts, and
   // an element inside a control or holding one leaves the click to that control.
   const pressable = memo(e => {
-    const view = e.ownerDocument.defaultView;
     const declared =
       e.hasAttribute('onclick') ||
-      typeof e.onclick === 'function' ||
-      (view.getComputedStyle(e).cursor === 'pointer' &&
-        (!e.parentElement || view.getComputedStyle(e.parentElement).cursor !== 'pointer'));
+      typeof nativeProperty(e, 'onclick') === 'function' ||
+      (styleProperty(e, 'cursor') === 'pointer' &&
+        (!e.parentElement || styleProperty(e.parentElement, 'cursor') !== 'pointer'));
     if (!(declared || listened(e)) || e.parentElement?.closest(SELECTOR) || [...descendants(e, SELECTOR)].some(visible))
       return false;
     // A listener can sit on a container to hear its children's clicks, as React's does on its root, so one holding a
@@ -925,7 +982,7 @@
   const DATE_TYPES = ['date', 'datetime-local', 'month', 'week', 'time'];
 
   const roleOf = e => {
-    if (sourceOf(e) !== e) return sourceOf(e).type === 'file' ? 'textbox' : sourceOf(e).type;
+    if (sourceOf(e) !== e) return nativeProperty(sourceOf(e), 'type') === 'file' ? 'textbox' : nativeProperty(sourceOf(e), 'type');
     const explicit = e.getAttribute('role');
     if (ARIA_ROLES.includes(explicit)) return explicit;
     if (e.tagName === 'BUTTON' || e.tagName === 'SUMMARY') return 'button';
@@ -933,16 +990,16 @@
     // Next/Prev: a destination is what makes it a link, so without one it is offered as a button instead.
     if (e.tagName === 'A') return e.hasAttribute('href') ? 'link' : 'button';
     if (e.tagName === 'SELECT') return 'combobox';
-    if (e.tagName === 'TEXTAREA' || e.isContentEditable) return 'textbox';
+    if (e.tagName === 'TEXTAREA' || nativeProperty(e, 'isContentEditable')) return 'textbox';
     if (e.tagName === 'INPUT') {
-      if (e.type === 'file') return 'textbox';
-      if (['checkbox', 'radio'].includes(e.type)) return e.type;
-      if (['button', 'submit', 'reset', 'image'].includes(e.type)) return 'button';
-      if (e.type === 'search') return 'searchbox';
-      if (e.type === 'number') return 'spinbutton';
+      if (nativeProperty(e, 'type') === 'file') return 'textbox';
+      if (['checkbox', 'radio'].includes(nativeProperty(e, 'type'))) return nativeProperty(e, 'type');
+      if (['button', 'submit', 'reset', 'image'].includes(nativeProperty(e, 'type'))) return 'button';
+      if (nativeProperty(e, 'type') === 'search') return 'searchbox';
+      if (nativeProperty(e, 'type') === 'number') return 'spinbutton';
       // HTML-AAM maps a range input to the slider role, whose keys step it.
-      if (e.type === 'range') return 'slider';
-      if (['text', 'email', 'url', 'tel', 'password', ...DATE_TYPES].includes(e.type)) return 'textbox';
+      if (nativeProperty(e, 'type') === 'range') return 'slider';
+      if (['text', 'email', 'url', 'tel', 'password', ...DATE_TYPES].includes(nativeProperty(e, 'type'))) return 'textbox';
     }
     // A bare draggable element or a declared drop target has no ARIA role of its own, yet it is a real
     // element to act on. Name it generic rather than null so the control walk does not drop it before the
@@ -955,7 +1012,7 @@
 
   const submitSemantics = memo(e => {
     const form = e.form;
-    const explicit = ['BUTTON', 'INPUT'].includes(e.tagName) && ['submit', 'image'].includes(e.type);
+    const explicit = ['BUTTON', 'INPUT'].includes(e.tagName) && ['submit', 'image'].includes(nativeProperty(e, 'type'));
     const implicit = [
       'text',
       'search',
@@ -970,12 +1027,12 @@
       'datetime-local',
       'number',
     ];
-    if (!form || (!explicit && (e.tagName !== 'INPUT' || !implicit.includes(e.type)))) return null;
+    if (!form || (!explicit && (e.tagName !== 'INPUT' || !implicit.includes(nativeProperty(e, 'type'))))) return null;
     const submit = explicit ? e : [...form.getRootNode().querySelectorAll('button,input')].find(
-      c => c.form === form && (c.type === 'submit' || c.type === 'image'),
+      c => c.form === form && (nativeProperty(c, 'type') === 'submit' || nativeProperty(c, 'type') === 'image'),
     );
     if (submit?.matches(':disabled')) return null;
-    if (!submit && [...form.elements].filter(c => c.tagName === 'INPUT' && implicit.includes(c.type)).length > 1)
+    if (!submit && [...form.elements].filter(c => c.tagName === 'INPUT' && implicit.includes(nativeProperty(c, 'type'))).length > 1)
       return null;
     // A page can make any of these properties return something other than text. Coursera's React app left an
     // HTMLInputElement where a method string belongs and `JSON.stringify` threw on React's circular fiber, which ended
@@ -1059,9 +1116,9 @@
       roleOf(e),
       labelOf(e) || fallbackLabel(e),
       reveal(source),
-      source.checked ?? null,
+      nativeProperty(source, 'checked') ?? null,
       chosen(e),
-      e.readOnly ?? null,
+      nativeProperty(e, 'readOnly') ?? null,
       e.matches(':disabled'),
       e.getAttribute('aria-disabled') === 'true',
       e.getAttribute('aria-expanded'),
@@ -1109,7 +1166,7 @@
       (visible(source) || source.matches(':disabled') || source.closest('[aria-disabled="true"],[inert]'))
     )
       continue;
-    const r = e.getBoundingClientRect(),
+    const r = boxOf(e),
       x = r.x + r.width / 2,
       y = r.y + r.height / 2,
       rname = roleOf(e);
@@ -1129,7 +1186,7 @@
     const named = labelOf(e);
     if (!named) unnamed.add(id);
     const root = e.getRootNode();
-    const focused = root.activeElement;
+    const focused = renderFact('active', root);
     const activeDescendant = focused?.getAttribute('aria-activedescendant');
     const base = {
       id,
@@ -1141,17 +1198,17 @@
       // A composite widget can keep DOM focus on its container while its active descendant moves between items.
       // Read that virtual focus too, in the same root as the item, including a shadow root.
       focused: focused === e || (!!activeDescendant && root.getElementById?.(activeDescendant) === e),
-      input_type: source.type || null,
+      input_type: nativeProperty(source, 'type') || null,
       input_name: source.getAttribute('name') || null,
-      max_length: source.maxLength > 0 ? source.maxLength : null,
+      max_length: nativeProperty(source, 'maxLength') > 0 ? nativeProperty(source, 'maxLength') : null,
       autocomplete: source.getAttribute('autocomplete') || null,
       frame_origin: e.ownerDocument.location.origin,
       frame_path: framePath(e.ownerDocument),
       form_id: fieldScope(source),
       submit_semantics: submitSemantics(e),
     };
-    if (rname === 'link' && e.href) {
-      const u = new URL(e.href, location.href);
+    if (rname === 'link' && nativeProperty(e, 'href')) {
+      const u = new URL(nativeProperty(e, 'href'), location.href);
       // Another origin's link keeps its whole address, as capture.js writes it: a recipe or a follow joins the href
       // to this page, which would turn host and path into a path on this site and drop the query (#830).
       base.href = u.origin === location.origin ? u.pathname + u.search : u.href;
@@ -1171,7 +1228,7 @@
       };
       if (
         u.origin === location.origin &&
-        ((e.rel && e.rel.split(/\s+/).includes('next')) ||
+        ((nativeProperty(e, 'rel') && nativeProperty(e, 'rel').split(/\s+/).includes('next')) ||
           ((pager(e) || (pager(e.parentElement) && e.parentElement.tagName === 'LI')) && container()))
       )
         base.next_page = true;
@@ -1182,28 +1239,28 @@
       const value = e.getAttribute('aria-' + key);
       if (value !== null) base[key] = value === 'true';
     }
-    if (['checkbox', 'radio'].includes(source.type)) base.checked = source.checked;
+    if (['checkbox', 'radio'].includes(nativeProperty(source, 'type'))) base.checked = nativeProperty(source, 'checked');
     // What the page says about the field. A custom widget marks the element the user sees, not the input
     // underneath it, so both are asked.
-    if (source.required || [e, source].some(n => n.getAttribute('aria-required') === 'true')) base.required = true;
+    if (nativeProperty(source, 'required') || [e, source].some(n => n.getAttribute('aria-required') === 'true')) base.required = true;
     // Native validation can refuse a form without adding any ARIA attribute or page text. The browser holds that
     // against a field only once it was edited or its form was submitted, as `:user-invalid`: an empty required field a
     // page has just opened or reset is not refused, and told it was, a run that had submitted a wizard filled it again.
-    const refused = source.willValidate === true && source.validity?.valid === false && source.matches(':user-invalid');
+    const refused = nativeProperty(source, 'willValidate') === true && renderFact('validity', source) === false && renderFact('state', source, ':user-invalid');
     if ([e, source].some(n => n.getAttribute('aria-invalid') === 'true') || refused) base.invalid = true;
     // Why the browser refused it, in its own words: a refused submit shows that only in a bubble the page text
     // lacks, and a run that saw only `invalid` refilled the field the task named instead of the empty one.
-    if (refused && source.validationMessage) base.validation_message = source.validationMessage;
+    if (refused && nativeProperty(source, 'validationMessage')) base.validation_message = nativeProperty(source, 'validationMessage');
     if (e.tagName === 'SELECT') {
       base.operations = ['select'];
-      base.options = [...e.options].filter(o => !o.disabled && !o.closest('optgroup[disabled]')).map(o => o.label);
-      base.value = [...e.selectedOptions].map(o => o.label).join(', ');
-    } else if (source.type === 'file') {
+      base.options = [...e.options].filter(o => !nativeProperty(o, 'disabled') && !o.closest('optgroup[disabled]')).map(o => o.label);
+      base.value = [...renderFact('selected', e)].map(o => o.label).join(', ');
+    } else if (nativeProperty(source, 'type') === 'file') {
       base.operations = ['upload'];
       base.value = null;
     } else {
       const editable =
-        !e.readOnly &&
+        !nativeProperty(e, 'readOnly') &&
         e.getAttribute('aria-readonly') !== 'true' &&
         (['textbox', 'searchbox', 'spinbutton'].includes(rname) ||
           (rname === 'combobox' && ['INPUT', 'TEXTAREA'].includes(e.tagName)));
@@ -1214,7 +1271,7 @@
         ? (e.getAttribute('aria-valuetext') ?? e.getAttribute('aria-valuenow'))
         : null;
       base.value =
-        reveal(source) ?? announced ?? (e.isContentEditable || rname === 'combobox' ? e.innerText.trim() : null);
+        reveal(source) ?? announced ?? (nativeProperty(e, 'isContentEditable') || rname === 'combobox' ? innerTextOf(e).trim() : null);
       base.operations = editable ? ['fill', 'click', 'enter'] : ['click'];
       // The APG's composite widgets and value controls need keys beyond activation. A role alone cannot receive
       // them: focus must reach the widget itself or its current active descendant. Native selects use Select.
@@ -1247,7 +1304,7 @@
   const titles = memo(scope =>
     [...descendants(scope, `${HEADINGS},label`)].filter(
       e =>
-        (e.localName !== 'label' || !labelTarget(e)) && e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
+        (e.localName !== 'label' || !labelTarget(e)) && visibilityOf(e, { checkOpacity: true, checkVisibilityCSS: true }),
     ));
   // A card is an item, a row, or an element the page repeats beside itself with the same tag and class.
   // Each parent's children counted by tag and class once: asking every child about all its siblings is quadratic
@@ -1391,7 +1448,7 @@
   // Where the pointer can rest: an element with a box inside the viewport's width and no taller than it.
   const pointerBox = e => {
     if (e === e.ownerDocument.body || e === e.ownerDocument.documentElement || !visible(e)) return null;
-    const r = e.getBoundingClientRect(),
+    const r = boxOf(e),
       x = r.x + r.width / 2,
       y = r.y + r.height / 2;
     return r.width <= 0 || r.height <= 0 || x < 0 || x >= innerWidth || r.height > innerHeight ? null : y;
@@ -1401,7 +1458,7 @@
     const label =
       e.getAttribute('aria-label') ||
       image?.getAttribute('alt') ||
-      firstLine(e.innerText) ||
+      firstLine(innerTextOf(e)) ||
       e.getAttribute('title') ||
       e.tagName.toLowerCase();
     const role =
@@ -1428,7 +1485,7 @@
     for (const [base, tail] of revealsIn(doc)) {
       let hosts = [];
       try {
-        hosts = doc.querySelectorAll(base);
+        hosts = renderFact('query', doc, base);
       } catch {
         continue;
       }
@@ -1440,7 +1497,7 @@
         if (y === null) continue;
         let hidden = false;
         try {
-          hidden = [...e.querySelectorAll(tail)].some(
+          hidden = [...renderFact('query', e, tail)].some(
             t => !visible(t) && (t.textContent.trim() || t.querySelector('img,a')),
           );
         } catch {
@@ -1448,7 +1505,7 @@
         }
         // Removing the active hover target renumbers its identical siblings and sends the next choice
         // to a different element. Keep it offered while the pointer still reveals its content.
-        if (!hidden && !e.matches(':hover')) continue;
+        if (!hidden && !renderFact('state', e, ':hover')) continue;
         offerHover(e, y);
       }
     }
@@ -1522,7 +1579,7 @@
         const line = node.data.replace(/\s+/g, ' ').trim();
         // A caption a hover rule reveals is not shown, so it cannot tell twins apart.
         if (!line || line === label || repeated.has(line)) continue;
-        if (!node.parentElement?.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) continue;
+        if (!visibilityOf(node.parentElement, { checkOpacity: true, checkVisibilityCSS: true })) continue;
         lines.push(` ${line} `.split(` ${label} `).join(' '));
       }
       return firstLine(lines.join('\n'));
@@ -1781,22 +1838,20 @@
     for (const frame of doc.querySelectorAll('iframe,frame')) {
       const inner = childDocument(frame);
       if (!inner || !granted(inner)) continue;
-      const f = frame.getBoundingClientRect();
-      read(inner, dx + f.left + frame.clientLeft, dy + f.top + frame.clientTop);
+      const f = boxOf(frame);
+      read(inner, dx + f.left + nativeProperty(frame, 'clientLeft'), dy + f.top + nativeProperty(frame, 'clientTop'));
     }
   };
   // Size, the cheapest test, goes first.
   const readText = (doc, dx, dy) => {
     if (!doc.body) return;
     const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
-    const range = doc.createRange();
     let node;
     while ((node = walker.nextNode())) {
       const value = node.textContent.trim(),
         parent = node.parentElement;
       if (!value || !parent) continue;
-      range.selectNodeContents(node);
-      const r = range.getBoundingClientRect();
+      const r = textBoxOf(node);
       if (r.width <= 0 || r.height <= 0 || parent.closest('script,style,noscript,template') || !visible(parent)) {
         continue;
       }
@@ -1823,7 +1878,7 @@
     if (visual_content) return;
     for (const e of doc.querySelectorAll(VISUAL)) {
       if (decorative(e) || !visible(e)) continue;
-      const r = e.getBoundingClientRect();
+      const r = boxOf(e);
       const top = r.top + dy,
         left = r.left + dx;
       if (r.width <= 0 || r.height <= 0) continue;
@@ -1855,13 +1910,13 @@
       media.push({
         kind: e.tagName.toLowerCase(),
         // Its children are fallback text for browsers without players, not its name.
-        label: (e.hasAttribute('aria-label') || e.hasAttribute('aria-labelledby') ? labelOf(e) : e.title) || null,
+        label: (e.hasAttribute('aria-label') || e.hasAttribute('aria-labelledby') ? labelOf(e) : nativeProperty(e, 'title')) || null,
         heading: headingBefore(e) || null,
-        paused: e.paused,
-        ended: e.ended,
-        muted: e.muted,
-        elapsed_seconds: seconds(e.currentTime) ?? 0,
-        duration_seconds: seconds(e.duration),
+        paused: nativeProperty(e, 'paused'),
+        ended: nativeProperty(e, 'ended'),
+        muted: nativeProperty(e, 'muted'),
+        elapsed_seconds: seconds(nativeProperty(e, 'currentTime')) ?? 0,
+        duration_seconds: seconds(nativeProperty(e, 'duration')),
       });
     }
     readFrames(doc, 0, 0, readMedia);
@@ -1881,7 +1936,7 @@
   if (mode !== 'glance') registry.observed = new Map(controls.map(c => [c.id, guards[c.id]]));
   const field_state = [...document.querySelectorAll('input,textarea,select')]
     .filter(safe)
-    .map(e => [identity(e), reveal(e), e.checked, chosen(e), e.disabled, e.readOnly]);
+    .map(e => [identity(e), reveal(e), nativeProperty(e, 'checked'), chosen(e), nativeProperty(e, 'disabled'), nativeProperty(e, 'readOnly')]);
   // Compare meaning and identity for the page_key fingerprint; geometry is re-resolved just before input.
   const semantics = controls.map(({ distance, ...c }) => c);
   const page_key = digest(JSON.stringify([
@@ -1905,8 +1960,8 @@
   // The open modal the rest of the page sits behind. A page marks what is under one aria-hidden or inert, so those
   // controls leave the observation while staying in the document: Google Flights' Stops filter took 145 controls
   // out and put them back on closing, and a run told each by name in every later step.
-  const modals = [...document.querySelectorAll('dialog:modal,[aria-modal="true"]')].filter(
-    e => !e.closest('[aria-hidden="true"],[inert]') && e.checkVisibility({ checkVisibilityCSS: true }),
+  const modals = [...renderFact('query', document, 'dialog:modal,[aria-modal="true"]')].filter(
+    e => !e.closest('[aria-hidden="true"],[inert]') && visibilityOf(e, { checkVisibilityCSS: true }),
   );
   // A dialog is named by aria-label or aria-labelledby, never by its content.
   const dialogName = e =>
@@ -1914,7 +1969,7 @@
       e.getAttribute('aria-label') ||
       (e.getAttribute('aria-labelledby') || '')
         .split(/\s+/)
-        .map(id => (id && e.ownerDocument.getElementById(id)?.innerText) || '')
+        .map(id => (id && innerTextOf(e.ownerDocument.getElementById(id))) || '')
         .join(' ')
     )
       .replace(/\s+/g, ' ')
@@ -1925,6 +1980,8 @@
   // cannot see mutations inside a shadow root or child document. Deep reads are still derived in full for deltas.
   const read = !deep || delta ? ++registry.reads : null;
   if (!deep) {
+    own.renderReads ||= {};
+    own.renderReads[mode] = { read, document_key: String(performance.timeOrigin), inputs: renderInputs };
     registry.kept ||= {};
     registry.kept[mode] = {
       mode,
@@ -1951,6 +2008,7 @@
   } else if (registry.kept) {
     // A deep read cannot be reused, and retaining its earlier shallow tree would pin detached page elements.
     delete registry.kept[mode];
+    if (own.renderReads) delete own.renderReads[mode];
   }
   const result = {
     url: location.href,

@@ -938,6 +938,57 @@ async fn test_an_action_guard_reads_pointer_listeners_after_the_observation() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_render_changes_without_dom_mutations_match_full_observations() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(&h.session, r#"document.head.insertAdjacentHTML('beforeend', '<style>x-panel{display:block}#target:state(gone){display:none}#target:state(faint){opacity:0}#target:state(moved){transform:translateY(2000px)}#target:state(short-name) .label{display:none}#hover{width:120px;height:40px}#hover .tip{display:none}#hover:state(armed):hover .tip{display:block}</style>');globalThis.internals = new WeakMap();customElements.define('x-panel',class extends HTMLElement{constructor(){super();internals.set(this,this.attachInternals())}});document.body.innerHTML = '<x-panel id=target><button>Visible <span class=label>target</span></button></x-panel><x-panel id=hover><span class=tip>Details</span></x-panel><button>Other</button>';globalThis.domChanges = 0;new MutationObserver(records => domChanges += records.length).observe(document, {subtree:true,childList:true,attributes:true,characterData:true});true"#).await;
+    h.observe().await;
+    count_reads(&h).await;
+    for script in [
+        "internals.get(document.querySelector('#target')).states.add('gone')",
+        "internals.get(document.querySelector('#target')).states.clear()",
+        "internals.get(document.querySelector('#target')).states.add('faint')",
+        "internals.get(document.querySelector('#target')).states.clear();internals.get(document.querySelector('#target')).states.add('moved')",
+        "internals.get(document.querySelector('#target')).states.clear();internals.get(document.querySelector('#target')).states.add('short-name')",
+        "internals.get(document.querySelector('#hover')).states.add('armed')",
+    ] {
+        eval_active(&h.session, "globalThis.__fbReads = {total:0, unchanged:0, delta:0}").await;
+        eval_active(&h.session, script).await;
+        assert_eq!(eval_active(&h.session, "domChanges").await, json!(0), "{script}");
+        let after = h.observe().await;
+        assert_eq!(reads(&h).await, (1, 0), "{script}");
+        let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
+        let mut full = other.observe().await.expect("full read");
+        full.captured_at = after.captured_at;
+        assert_eq!(after, full, "{script}");
+        h.observe().await;
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_custom_control_properties_without_events_match_full_observations() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(&h.session, "document.body.innerHTML = '<x-field role=textbox id=field style=display:block>Editable</x-field><button>Other</button>';globalThis.field = document.querySelector('#field');field.value = 'First';field.readOnly = false;field.required = false;globalThis.domChanges = 0;new MutationObserver(records => domChanges += records.length).observe(document,{subtree:true,attributes:true,childList:true,characterData:true});true").await;
+    h.observe().await;
+    count_reads(&h).await;
+    for script in ["field.value = 'Second'", "field.required = true", "field.readOnly = true"] {
+        eval_active(&h.session, "globalThis.__fbReads = {total:0, unchanged:0, delta:0}").await;
+        eval_active(&h.session, script).await;
+        assert_eq!(eval_active(&h.session, "domChanges").await, json!(0), "{script}");
+        let after = h.observe().await;
+        assert_eq!(reads(&h).await, (1, 0), "{script}");
+        let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
+        let mut full = other.observe().await.expect("full read");
+        full.captured_at = after.captured_at;
+        assert_eq!(after, full, "{script}");
+        h.observe().await;
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_changed_frame_sends_control_deltas() {
     let _turn = turn().await;
     let Some(h) = harness().await else { return };
@@ -1104,7 +1155,13 @@ async fn test_form_state_a_script_sets_without_an_event_is_not_served_from_a_kep
         )
         .await;
         let before = h.observe().await;
+        let live_before = eval_active(&h.session, "globalThis.__fastbrowse.live()").await;
         eval_active(&h.session, script).await;
+        assert_ne!(
+            live_before,
+            eval_active(&h.session, "globalThis.__fastbrowse.live()").await,
+            "{kind}: the retained live check held stale property values"
+        );
         let after = h.observe().await;
         assert_ne!(before.page_key, after.page_key, "{kind}: the observation was served from before the change");
         match kind {
