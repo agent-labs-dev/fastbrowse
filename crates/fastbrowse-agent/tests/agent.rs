@@ -851,8 +851,8 @@ fn status_case() -> Value {
     // Jev holds each claim supported by its quote, and the two together to cover the task.
     case["jev"]["nouls"] = serde_json::json!({"claim0": 0.9, "claim1": 0.9, "coverage": 0.9});
     case["llm"]["AnswerDraft"] = serde_json::json!([{"claims": [
-        {"text": "First: live, updated 16:59:21", "evidence_ids": ["e0"]},
-        {"text": "After waiting: live, updated 16:59:27", "evidence_ids": ["e1"]}
+        {"text": ["First: live, updated 16:59:21"], "evidence_ids": ["e0"]},
+        {"text": ["After waiting: live, updated 16:59:27"], "evidence_ids": ["e1"]}
     ]}]);
     let screen = |key: &str, text: &str| {
         let mut screen = case["site"]["screens"]["missing"].clone();
