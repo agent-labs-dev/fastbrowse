@@ -320,6 +320,13 @@ A navigation or a step settles once no frame of the tab, embedded frames include
 up to DOMContentLoaded, within the same settle deadline. A frame that loads after its page is ready is part of what
 the navigation opened, so its controls are in the first observation and the next step's effect does not claim them.
 
+A `wait` step lasts until the page changes by itself: a change to what the settle fingerprint compares, a player
+starting, pausing, ending or muting (in the page, a granted child frame or a frame in a process of its own that an observation reads), a same-document navigation, a navigation to another document, or a dialog. It
+has no fixed bound. A run with `max_seconds` waits at most until it must stop browsing, and a run without one waits
+for the change. The wait samples the fingerprint twice a second beside the events it hears, since a script writing
+`checked` as a property raises none. A wait that ends with nothing changed is a step that changed nothing, under the one stall rule, unless
+a player's clock moved meanwhile. A cancelled wait removes what it installed in the page.
+
 An empty observation waits on loading events before action history and progress are recorded.
 The same blank state is waited out once until a readable page appears, so a later navigation gets its own wait.
 Reloading remains restricted to an untouched opening page, since retrying a later page could repeat a submission.

@@ -1441,18 +1441,270 @@ async fn test_a_wait_while_a_player_plays_is_a_change() {
         before = h.observe().await;
     }
     assert!(before.media.first().is_some_and(|m| !m.paused), "{:?}", before.media);
-    let result = h.page.act(&Action::new(Operation::Wait), &before).await.expect("wait");
+    // A clock ticking is time passing, not the change a wait is for, so the wait lasts its whole budget.
+    let result = h.page.wait(&Action::new(Operation::Wait), &before, 1.0).await.expect("wait");
     assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{result:?}");
     // The clock is no content: it marks no read out of date and counts as no progress.
     assert!(!result.page_changed, "{result:?}");
     assert_eq!(eval_active(&h.page, "document.querySelector('audio').pause(); true").await, json!(true));
     let paused = h.observe().await;
-    let result = h.page.act(&Action::new(Operation::Wait), &paused).await.expect("wait");
+    let result = h.page.wait(&Action::new(Operation::Wait), &paused, 1.0).await.expect("wait");
     assert_eq!(
         (result.outcome, result.detail.as_deref()),
         (StepOutcome::Executed, Some("the page did not change")),
         "{result:?}"
     );
+    h.close().await;
+}
+
+/// How many WAIT watches the active page still holds.
+async fn wait_watches(h: &common::Harness) -> Value {
+    eval_active(&h.page, "(window.__fastbrowse ?? window).__fastbrowseWaits?.size ?? 0").await
+}
+
+// A status line rewritten every few seconds was waited on for five, and the run was told the page did not change.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_outlasts_a_change_later_than_the_settle_bound() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    let script = "{ const line = document.createElement('p'); line.textContent = 'Queue position 4'; \
+                  document.body.append(line); setTimeout(() => { line.textContent = 'Queue position 3'; }, 6500); } true";
+    assert_eq!(eval_active(&h.page, script).await, json!(true));
+    let before = h.observe().await;
+    let started = std::time::Instant::now();
+    let result = h.page.wait(&Action::new(Operation::Wait), &before, 60.0).await.expect("wait");
+    let waited = started.elapsed();
+    assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{result:?}");
+    assert!(result.page_changed, "{result:?}");
+    assert!(waited >= Duration::from_millis(6500) && waited < Duration::from_secs(30), "{waited:?}");
+    assert!(h.page.capture().await.expect("capture").text.contains("Queue position 3"));
+    assert_eq!(wait_watches(&h).await, json!(0));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_ends_when_the_page_navigates_itself() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    let script = "setTimeout(() => location.assign('/dispatch.html'), 5500); true";
+    assert_eq!(eval_active(&h.page, script).await, json!(true));
+    let before = h.observe().await;
+    let started = std::time::Instant::now();
+    let result = h.page.wait(&Action::new(Operation::Wait), &before, 60.0).await.expect("wait");
+    let waited = started.elapsed();
+    assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{result:?}");
+    assert!(result.page_changed, "{result:?}");
+    assert!(waited >= Duration::from_millis(5500) && waited < Duration::from_secs(30), "{waited:?}");
+    assert!(h.observe().await.url.ends_with("/dispatch.html"));
+    h.close().await;
+}
+
+// A script writing `checked` or `selected` as a property raises no mutation or event, so only sampling the fingerprint
+// sees it. The options are in a rendered listbox: a closed dropdown's options draw nothing and are not in the fingerprint. With no budget there is no deadline to compare at, so the wait itself must end.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_unlimited_wait_ends_on_a_property_only_change() {
+    let Some(h) = harness().await else { return };
+    for write in ["box.checked = true", "option.selected = true"] {
+        h.goto("").await;
+        let script = format!(
+            "{{ const box = document.createElement('input'); box.type = 'checkbox'; box.setAttribute('aria-label', 'Agree'); \
+             const select = document.createElement('select'); select.setAttribute('aria-label', 'Size'); \
+             select.multiple = true; select.size = 3; \
+             select.innerHTML = '<option>Small</option><option>Large</option>'; const option = select.options[1]; \
+             document.body.append(box, select); setTimeout(() => {{ {write}; }}, 900); }} true"
+        );
+        assert_eq!(eval_active(&h.page, &script).await, json!(true));
+        let before = h.observe().await;
+        let wait = Action::new(Operation::Wait);
+        let result = tokio::time::timeout(Duration::from_secs(20), h.page.wait(&wait, &before, f64::INFINITY))
+            .await
+            .unwrap_or_else(|_| panic!("{write}: an unlimited wait never saw the property change"))
+            .expect("wait");
+        assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{write}: {result:?}");
+        assert_eq!(wait_watches(&h).await, json!(0), "{write}");
+    }
+    h.close().await;
+}
+
+// The fingerprint walks a granted child frame, so a change made only inside one ends the wait, whether it is DOM text
+// or a player there.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_unlimited_wait_sees_a_child_frame_change_and_its_player() {
+    let Some(h) = harness().await else { return };
+    for change in [
+        "frame.contentDocument.body.firstChild.textContent = 'Seat 2'",
+        "frame.contentDocument.querySelector('audio').muted = false",
+    ] {
+        h.goto("").await;
+        let script = format!(
+            "{{ const frame = document.createElement('iframe'); frame.srcdoc = '<p>Seat 1</p><audio controls muted></audio>'; \
+             document.body.append(frame); frame.onload = () => setTimeout(() => {{ {change}; }}, 900); }} true"
+        );
+        assert_eq!(eval_active(&h.page, &script).await, json!(true));
+        let mut before = h.observe().await;
+        for _ in 0..50 {
+            if before.media.len() == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            before = h.observe().await;
+        }
+        assert_eq!(before.media.len(), 1, "{change}: the frame's player is not observed: {:?}", before.media);
+        let wait = Action::new(Operation::Wait);
+        let result = tokio::time::timeout(Duration::from_secs(20), h.page.wait(&wait, &before, f64::INFINITY))
+            .await
+            .unwrap_or_else(|_| panic!("{change}: an unlimited wait never saw the frame change"))
+            .expect("wait");
+        assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{change}: {result:?}");
+        assert_eq!(wait_watches(&h).await, json!(0), "{change}");
+    }
+    h.close().await;
+}
+
+/// How many WAIT watches each of the tab's sessions holds: the tab itself, then every frame in a process of its own.
+async fn watches_everywhere(h: &common::Harness) -> Vec<i64> {
+    let frames = h.session.frame_sessions().into_iter().map(|(_, session)| session);
+    let mut counts = Vec::new();
+    for session in std::iter::once(h.session.active_session_id().unwrap()).chain(frames) {
+        let held = eval_value(&h.session, &session, "(window.__fastbrowse ?? window).__fastbrowseWaits?.size ?? 0");
+        counts.push(held.await.as_i64().unwrap_or(-1));
+    }
+    counts
+}
+
+/// The session of the cross-origin frame the fixture page draws, which Chrome gives a renderer of its own.
+async fn frame_session(h: &common::Harness) -> String {
+    // Chrome throttles animation frames in offscreen children; the frame must be on screen to run its timers.
+    let main = h.session.active_session_id().expect("active session");
+    eval_value(&h.session, &main, "document.querySelector('iframe').scrollIntoView()").await;
+    let obs = observe_until(&h.page, "Frame button").await;
+    let frame_id = find(&obs, "Frame button").frame_id.clone().expect("a frame id");
+    h.session
+        .frame_sessions()
+        .into_iter()
+        .find(|(frame, _)| *frame == frame_id)
+        .map(|(_, session)| session)
+        .expect("the frame's session")
+}
+
+// A frame in another process is a session of its own, so the page's mutation observer never hears it and the top
+// document's fingerprint holds none of its text. The wait must watch every frame the observation reads.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_unlimited_wait_sees_a_cross_origin_frame_change_and_navigation() {
+    let Some(h) = harness().await else { return };
+    let navigate = format!("location.assign('{}/interstitial.html')", sites().iframe);
+    for change in [
+        "document.body.append(Object.assign(document.createElement('p'), {textContent: 'Seat 2'}))".to_owned(),
+        navigate,
+    ] {
+        h.goto("").await;
+        let session = frame_session(&h).await;
+        let before = h.observe().await;
+        eval_value(&h.session, &session, &format!("setTimeout(() => {{ {change}; }}, 900); true")).await;
+        let wait = Action::new(Operation::Wait);
+        let result = tokio::time::timeout(Duration::from_secs(20), h.page.wait(&wait, &before, f64::INFINITY))
+            .await
+            .unwrap_or_else(|_| panic!("{change}: an unlimited wait never saw the frame change"))
+            .expect("wait");
+        assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{change}: {result:?}");
+        assert_eq!(watches_everywhere(&h).await, vec![0, 0], "{change}");
+    }
+    h.close().await;
+}
+
+// The run's deadline drops the step's future: the watch in the frame's process must go with the tab's, and a wait on
+// a still page with such a frame still ends with the time it was given.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_over_a_cross_origin_frame_ends_with_its_budget_and_a_cancel_clears_every_session() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    frame_session(&h).await;
+    let before = h.observe().await;
+    let wait = Action::new(Operation::Wait);
+    let started = std::time::Instant::now();
+    let result = h.page.wait(&wait, &before, 1.5).await.expect("wait");
+    let waited = started.elapsed();
+    assert_eq!(result.detail.as_deref(), Some("the page did not change"), "{result:?}");
+    assert!(waited >= Duration::from_millis(1500) && waited < Duration::from_secs(8), "{waited:?}");
+    assert_eq!(watches_everywhere(&h).await, vec![0, 0]);
+
+    let mut unbounded = Box::pin(h.page.wait(&wait, &before, f64::INFINITY));
+    assert!(tokio::time::timeout(Duration::from_millis(2000), &mut unbounded).await.is_err(), "a still page ended it");
+    assert_eq!(watches_everywhere(&h).await, vec![1, 1], "the wait watches the tab and its frame");
+    drop(unbounded);
+    let mut left = watches_everywhere(&h).await;
+    for _ in 0..50 {
+        if left == vec![0, 0] {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        left = watches_everywhere(&h).await;
+    }
+    assert_eq!(left, vec![0, 0]);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_ends_with_a_same_document_navigation() {
+    // The address is in the fingerprint, and pushState changes it without a mutation or a lifecycle event.
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    assert_eq!(
+        eval_active(&h.page, "setTimeout(() => history.pushState(null, '', '#later'), 700); true").await,
+        json!(true)
+    );
+    let before = h.observe().await;
+    let result = h.page.wait(&Action::new(Operation::Wait), &before, 30.0).await.expect("wait");
+    assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{result:?}");
+    assert!(h.observe().await.url.ends_with("#later"));
+    assert_eq!(wait_watches(&h).await, json!(0));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_on_a_still_page_ends_with_the_run_budget_and_leaves_no_watch() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    let before = h.observe().await;
+    let started = std::time::Instant::now();
+    let result = h.page.wait(&Action::new(Operation::Wait), &before, 1.5).await.expect("wait");
+    let waited = started.elapsed();
+    assert_eq!(
+        (result.outcome, result.detail.as_deref()),
+        (StepOutcome::Executed, Some("the page did not change")),
+        "{result:?}"
+    );
+    assert!(!result.page_changed, "{result:?}");
+    assert!(waited >= Duration::from_millis(1500) && waited < Duration::from_secs(5), "{waited:?}");
+    assert_eq!(wait_watches(&h).await, json!(0));
+    // A budget already spent still reads the page once.
+    let result = h.page.wait(&Action::new(Operation::Wait), &before, 0.0).await.expect("wait");
+    assert_eq!(result.detail.as_deref(), Some("the page did not change"), "{result:?}");
+    assert_eq!(wait_watches(&h).await, json!(0));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_cancelled_wait_removes_its_watch() {
+    // The run's deadline drops the step's future; the watch it installed must not sample the page on every mutation.
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    let before = h.observe().await;
+    let wait = Action::new(Operation::Wait);
+    let unbounded = h.page.wait(&wait, &before, f64::INFINITY);
+    assert!(tokio::time::timeout(Duration::from_millis(1500), unbounded).await.is_err(), "a still page ended the wait");
+    let mut left = wait_watches(&h).await;
+    for _ in 0..50 {
+        if left == json!(0) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        left = wait_watches(&h).await;
+    }
+    assert_eq!(left, json!(0));
+    // The next wait is not answered by the one cancelled before it.
+    let result = h.page.wait(&wait, &before, 1.0).await.expect("wait");
+    assert_eq!(result.detail.as_deref(), Some("the page did not change"), "{result:?}");
     h.close().await;
 }
 

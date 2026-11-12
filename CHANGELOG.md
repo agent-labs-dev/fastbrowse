@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A wait lasts until the page changes, within the run's time.** A `wait` step ended after a fixed 5 s, so a status line or queue position that updates less often was reported as a page that did not change ([#1038](https://github.com/agent-labs-dev/fastbrowse/issues/1038)). The step now ends on the page's next change that an observation shows, or on a navigation or dialog, and runs until the run's remaining browsing time when nothing changes. A run with no time limit waits for the change. A wait that ends with nothing changed still counts as no progress.
+
 - **Web search can run without a browser.** With `EXA_API_KEY`, Jev picks LLM-proposed queries and opens links from Exa results. Returned fields remain citable, existing browsers stay open, and each search has a cost receipt checked against the run budget ([#986](https://github.com/agent-labs-dev/fastbrowse/issues/986)).
 
 - **Local runs use the browser attached through the extension.** `--local` now selects the extension; `--launch` opens a separate local Chrome. An explicit headed mode or profile also selects launched Chrome. A missing extension stops the run before model calls ([#1005](https://github.com/agent-labs-dev/fastbrowse/issues/1005)).

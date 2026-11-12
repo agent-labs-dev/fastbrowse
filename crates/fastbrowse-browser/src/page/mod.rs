@@ -346,8 +346,6 @@ pub struct CdpPage {
     pub(crate) page_js: String,
     capture_js: String,
     pub(crate) fingerprint_js: String,
-    /// The players' clocks, which `fingerprint_js` leaves out.
-    pub(crate) media_js: String,
     pub(crate) state: Mutex<PageState>,
     pub(crate) pointer_marks: Option<Arc<Mutex<Vec<crate::pointer::PointerMark>>>>,
     #[cfg(feature = "cursor")]
@@ -512,14 +510,12 @@ impl CdpPage {
         let page_js = session.snapshot().function.clone();
         let capture_js = format!("({CAPTURE_JS})({origins})");
         let fingerprint_js = format!("{page_js}('fingerprint').fingerprint");
-        let media_js = format!("{page_js}('fingerprint').media");
         Self {
             session,
             config,
             page_js,
             capture_js,
             fingerprint_js,
-            media_js,
             state: Mutex::default(),
             pointer_marks: None,
             #[cfg(feature = "cursor")]
@@ -1766,6 +1762,15 @@ impl Page for CdpPage {
 
     fn act<'a>(&'a self, action: &'a Action, observation: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
         Box::pin(async move { seam(CdpPage::act(self, action, observation).await) })
+    }
+
+    fn wait<'a>(
+        &'a self,
+        action: &'a Action,
+        observation: &'a Observation,
+        seconds: f64,
+    ) -> BoxFuture<'a, PageResult<ActResult>> {
+        Box::pin(async move { seam(CdpPage::wait(self, action, observation, seconds).await) })
     }
 
     fn redrawn<'a>(

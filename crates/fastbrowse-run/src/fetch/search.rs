@@ -176,6 +176,18 @@ impl Page for SearchPage {
             Ok(result)
         })
     }
+    fn wait<'a>(
+        &'a self,
+        action: &'a Action,
+        observation: &'a Observation,
+        seconds: f64,
+    ) -> BoxFuture<'a, PageResult<ActResult>> {
+        if self.active.load(Ordering::Relaxed) {
+            self.act(action, observation)
+        } else {
+            self.inner.wait(action, observation, seconds)
+        }
+    }
     fn redrawn<'a>(
         &'a self,
         observation: &'a Observation,
@@ -340,6 +352,9 @@ mod tests {
         let results = page.observe().await.unwrap();
         assert_eq!(page.act(&navigation, &results).await.unwrap().detail.as_deref(), Some("retained navigation check"));
         assert_eq!(page.act(&Action::new(Operation::Wait), &results).await.unwrap().outcome, StepOutcome::Failed);
+        // Fixed results never change, so a WAIT on them is refused rather than handed to the browser behind them.
+        let wait = page.wait(&Action::new(Operation::Wait), &results, f64::INFINITY).await.unwrap();
+        assert_eq!(wait.outcome, StepOutcome::Failed);
         assert!(!page.needed_browser());
         page.search("another question", 30.0).await;
         assert!(page.browser_address().is_none());

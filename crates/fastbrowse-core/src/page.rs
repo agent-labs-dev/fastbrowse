@@ -569,6 +569,18 @@ pub trait Page: Send + Sync {
     /// Dispatch at most once. Returns STALE or COVERED without dispatching when guards fail.
     fn act<'a>(&'a self, action: &'a Action, observation: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>>;
 
+    /// Dispatch a WAIT that lasts until the page changes by itself, for at most `seconds` (`f64::INFINITY` for a
+    /// run with no time limit), and report what changed as `act` does. A page that cannot watch itself change acts on
+    /// the WAIT as on any other action.
+    fn wait<'a>(
+        &'a self,
+        action: &'a Action,
+        observation: &'a Observation,
+        _seconds: f64,
+    ) -> BoxFuture<'a, PageResult<ActResult>> {
+        self.act(action, observation)
+    }
+
     /// Whether `target_id`, or with none any control `observation` offered, changed within `timeout_seconds`.
     ///
     /// `act` refuses a control that changed since it was observed, so work deciding on it is already spent. A change

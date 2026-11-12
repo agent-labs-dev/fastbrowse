@@ -219,7 +219,12 @@
     // Players' clocks stay out of the hash: one that plays moves by itself, which must not make a control stale.
     // They are kept beside it, rounded as readMedia rounds them, for a Wait to tell a moving clock.
     const clocks = [];
+    // What a Wait compares beside the hash, from the same walk so it covers the same documents: each player's state as
+    // readMedia reports it, and the documents walked, whose events a Wait listens to.
+    const players = [];
+    const documents = [];
     const include = root => {
+      if (root.nodeType === Node.DOCUMENT_NODE) documents.push(root);
       hashText(root.body?.innerText ?? root.textContent ?? '');
       // innerText omits shadow trees and child documents even when their content is visible.
       for (const e of root.querySelectorAll('*')) {
@@ -244,8 +249,15 @@
             ]),
           );
         // readMedia lists the players of documents only, not of shadow roots.
-        if (root.nodeType === Node.DOCUMENT_NODE && (e.tagName === 'AUDIO' || e.tagName === 'VIDEO'))
+        if (root.nodeType === Node.DOCUMENT_NODE && (e.tagName === 'AUDIO' || e.tagName === 'VIDEO')) {
           clocks.push(Math.round(e.currentTime * 10) / 10);
+          players.push([
+            e.paused,
+            e.ended,
+            e.muted,
+            Number.isFinite(e.duration) ? Math.round(e.duration * 10) / 10 : null,
+          ]);
+        }
         if (e.shadowRoot) include(e.shadowRoot);
         if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
           const inner = childDocument(e);
@@ -258,6 +270,10 @@
       ...clock(),
       fingerprint: location.href + '|' + document.title + '|' + (hash >>> 0) + '|' + scrollY,
       media: clocks.join(','),
+      players: JSON.stringify(players),
+      documents,
+      // Whether this document may be read at all, which a Wait asks of a frame in a process of its own.
+      granted: granted(document),
     };
   }
   if (!document.body) return null;
