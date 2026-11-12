@@ -4,7 +4,7 @@ description: "Install the fastbrowse extension, check it is connected, run a rea
 topic: Browsers and logins
 published: 2026-11-12
 updated: 2026-11-12
-verifiedAgainst: v0.10.0
+verifiedAgainst: v0.11.0
 verifiedOn: 2026-11-12
 ---
 
@@ -26,7 +26,7 @@ Next, add the extension from the [Chrome Web Store](https://chromewebstore.googl
 
 ## Run a read-only task first
 
-`--extension` selects your own Chrome. `--browser` makes this first task open it rather than read the public page over HTTP.
+Browser tasks use the extension by default. `--extension` makes that choice explicit.
 
 ```sh
 fastbrowse "What is the title of the top story?" \
