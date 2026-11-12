@@ -5,6 +5,7 @@
 //! jev_ultrafast/browser.py and jev_ultrafast/snapshot.js. `act` dispatches at most once per call.
 
 pub(crate) mod act;
+mod ax;
 mod delta;
 mod pointer;
 pub mod scripts;

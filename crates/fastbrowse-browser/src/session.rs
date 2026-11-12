@@ -695,6 +695,10 @@ impl BrowserSession {
         self.client()?.send(method, params, session).await
     }
 
+    pub(crate) async fn accessibility_full_ax_tree(&self, session_id: &str) -> Result<Value, BrowserError> {
+        self.send("Accessibility.getFullAXTree", json!({}), Some(session_id)).await
+    }
+
     /// Leave the active tab open when the run ends. A payment or other commit sent from it can still be redirecting
     /// or waiting on a 3-D Secure check when the run stops, and closing the tab would abort it.
     pub fn hand_over_active_tab(&self) {
