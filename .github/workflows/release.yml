@@ -89,8 +89,51 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+  # Package publication waits for the extension version shipped by this tag to reach every Store user.
+  extension-store:
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_npm)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    environment: chrome-web-store
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - name: Require publisher configuration
+        env:
+          CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
+          CWS_SERVICE_ACCOUNT: ${{ vars.CWS_SERVICE_ACCOUNT }}
+          CWS_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.CWS_WORKLOAD_IDENTITY_PROVIDER }}
+        run: |
+          for name in CWS_PUBLISHER_ID CWS_SERVICE_ACCOUNT CWS_WORKLOAD_IDENTITY_PROVIDER; do
+            if [[ -z "${!name}" ]]; then echo "Missing configuration: $name" >&2; exit 1; fi
+          done
+      - id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.CWS_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.CWS_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore.readonly
+          create_credentials_file: false
+      - name: Verify the published extension
+        env:
+          CWS_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
+        run: |
+          version=$(python3 -c 'import json; print(json.load(open("crates/fastbrowse-browser/extension/manifest.json"))["version"])')
+          python3 scripts/extension_store.py verify --version "$version" > store-receipt.json
+          cat store-receipt.json >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-extension-store-receipt
+          path: store-receipt.json
+          if-no-files-found: error
+
   github-release:
-    needs: [binaries, gate]
+    needs: [binaries, gate, extension-store]
     # A run started by hand is a rehearsal and ends here, and with this job every job after it is skipped.
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -202,7 +245,7 @@ jobs:
   # repeat: PyPI refuses a version twice. The build here is this ref's, so its tarballs are new bytes and no
   # transparency-log entry left by the attempt that stopped can refuse them.
   npm-only:
-    needs: binaries
+    needs: [binaries, extension-store]
     if: github.event_name == 'workflow_dispatch' && inputs.publish_npm
     runs-on: ubuntu-latest
     environment: npm
