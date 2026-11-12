@@ -202,7 +202,13 @@ impl HistoryEntry {
         self.acted()
             && !matches!(
                 self.operation,
-                Some(Operation::Escape | Operation::Back | Operation::SwitchTab | Operation::Navigate)
+                Some(
+                    Operation::Escape
+                        | Operation::Back
+                        | Operation::SwitchTab
+                        | Operation::Navigate
+                        | Operation::Search
+                )
             )
     }
 }
