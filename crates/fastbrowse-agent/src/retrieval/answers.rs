@@ -1200,8 +1200,9 @@ async fn review_composition(
     if require_coverage && fits_one {
         questions.insert("coverage".into(), coverage_question(task, columns, &claims, notes, steps));
     }
-    if exact && fits_one {
-        questions.insert("exact".into(), exact_question(task, &claims, Some(&copied)));
+    let copied: Vec<&String> = copied.iter().flatten().collect();
+    if exact && fits_one && !copied.is_empty() {
+        questions.insert("exact".into(), copied_question(task, &copied));
     }
     if !steps.is_empty() && fits_one {
         questions.insert("actions".into(), actions_question(steps, columns, &claims));
@@ -1729,31 +1730,30 @@ fn draft_claims(notes: &Notes) -> Vec<Claim> {
 /// a table cell, a sentence or a row. The span can hold the value beside other page text, such as a footnote marker
 /// and a rank in an infobox cell, or be the whole date where the task asks for its year, and only a writer can narrow
 /// it (#862).
-///
-/// A composed claim mixes the writer's prose with text it copied from the page, which the claim alone cannot tell
-/// apart: "The site confirmed \"2027-03-04\"." was judged 0.47 shown alone. `copied` lists each claim's copied text.
-fn exact_question(task: &str, claims: &[Claim], copied: Option<&[Vec<String>]>) -> Question {
-    let (shown, copies) = match copied {
-        Some(copied) => (
-            json!(
-                claims
-                    .iter()
-                    .zip(copied)
-                    .map(|(claim, copied)| json!({"text": claim.text, "copied_from_page": copied}))
-                    .collect::<Vec<_>>()
-            ),
-            " Each claim lists the page text it copies as copied_from_page; the rest is the writer's own wording.",
-        ),
-        None => (json!(claims.iter().map(|claim| &claim.text).collect::<Vec<_>>()), ""),
-    };
+fn exact_question(task: &str, claims: &[Claim]) -> Question {
     Question::Noul(NoulQuestion::new(
         format!(
-            "{UNTRUSTED} Is each claim of the written answer only what the task asks to be told, in the form the task asks for it? A claim that also holds other text copied from the page beside the requested value, or gives a whole passage, row or date where the task asks for one part of it, is not.{copies} Whether the claims are true and whether they cover the task are checked separately. Task: {} Answer: {}",
+            "{UNTRUSTED} Is each claim of the written answer only what the task asks to be told, in the form the task asks for it? A claim that also holds other text copied from the page beside the requested value, or gives a whole passage, row or date where the task asks for one part of it, is not. Whether the claims are true and whether they cover the task are checked separately. Task: {} Answer: {}",
             dumps(&json!(task)),
-            dumps(&json!({"columns": null, "claims": shown}))
+            dumps(&json!({"columns": null, "claims": claims.iter().map(|claim| &claim.text).collect::<Vec<_>>()}))
         ),
         Some("Each claim states only what the task asks to be told, in the form it asks for."),
         Some("A claim holds page text beside the requested value, or more than the part the task asks for."),
+    ))
+}
+
+/// Whether each text a composed answer copies from the page is only what the task asks to be told. Only its source
+/// parts copy page text, so only they are judged: asked about whole claims, the exact question rejected the writer's
+/// own wording, "The most expensive product is \"Drum Roaster\" at GBP 210.00." at 0.44, as text beside the value.
+fn copied_question(task: &str, copied: &[&String]) -> Question {
+    Question::Noul(NoulQuestion::new(
+        format!(
+            "{UNTRUSTED} A written answer copies these texts from the page. Is each one only a value, name or other wording the task asks to be told, rather than a passage, line or record that holds it among other text, or a whole date where the task asks for one part of it? The rest of the answer is checked separately. Task: {} Copied: {}",
+            dumps(&json!(task)),
+            dumps(&json!(copied))
+        ),
+        Some("Each copied text is only wording the task asks to be told."),
+        Some("A copied text holds page text beside what the task asks to be told, or more than the part it asks for."),
     ))
 }
 
@@ -1782,7 +1782,7 @@ pub(crate) async fn draft_reviewed(
     }
     let questions = IndexMap::from([
         ("coverage".to_string(), coverage_question(task, None, &claims, notes, &[])),
-        ("exact".to_string(), exact_question(task, &claims, None)),
+        ("exact".to_string(), exact_question(task, &claims)),
     ]);
     let state = json!({"task": task, "pages_read": pages_read(notes)});
     let tokens = jev.profile().fit(None).tokens;
@@ -2105,17 +2105,7 @@ mod tests {
         let error = draft.bind(&items).unwrap_err();
         assert!(error.contains("plain string part"), "{error}");
         assert!(error.contains("e0 does not write \"Your email is \"; e0 does not write \"\""), "{error}");
-        // The exact check is shown what the claim copies, apart from the writer's own wording.
-        let Question::Noul(question) =
-            exact_question("Tell me the email.", std::slice::from_ref(&bound.claim), Some(&[bound.copied()]))
-        else {
-            panic!()
-        };
-        assert!(
-            question.instructions.contains(r#""copied_from_page": ["katherine@example.com"]"#),
-            "{}",
-            question.instructions
-        );
+        assert_eq!(bound.copied(), ["katherine@example.com"]);
     }
 
     fn bind_claim(items: &[ComposeItem], text: Value, tally: Option<Tally>) -> BoundClaim {
@@ -3455,32 +3445,33 @@ mod tests {
         assert!(passed_claims(&feedback, &notes, &[]).is_empty());
     }
 
-    /// A composed answer inserts a whole note through a source part: a release record of 16 fields stood in for a
-    /// package's name, and a rewrite inserted "Received stocktake.txt (34 bytes)." again after that pick was rejected
-    /// as holding more than the file's name. A first composition and a rewrite both answer to the exact check.
+    /// A source part inserts page text, and unchecked a whole release record of 16 fields stood in for a package's
+    /// name. Its copied text is held to what the task asks; a claim in the writer's own words copies none to judge.
     #[tokio::test]
-    async fn a_composed_answer_is_checked_for_exactness() {
+    async fn a_composed_answers_copied_text_is_checked_for_exactness() {
         let notes = Notes::new([fact(0, "Received stocktake.txt (34 bytes).".into())]);
-        let picked = Claim::new("Received stocktake.txt (34 bytes).", vec![crate::memory::fact_id(notes.facts()[0])]);
+        let items = initial_items(&notes, false);
         let task = "Submit the document, then tell me the name of the file the site received.";
-        let feedback = dumps(&json!({"columns": null, "draft_claims": [&picked], "rejected_checks": ["exact"]}));
-        for feedback in [None, Some(feedback.as_str())] {
-            for (rejected, problem) in [(None, None), (Some("exact"), Some("beside what the task asks"))] {
-                let mut llm = RecordingLlm::new(None);
-                llm.claims = Some(vec![Claim::new(
-                    "The site received the file Received stocktake.txt (34 bytes).",
-                    vec!["e0".into()],
-                )]);
-                let jev = Support { rejected: rejected.map(str::to_string), ..Support::new(true) };
-                let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, feedback, true, &[]).await.unwrap();
-                assert!(jev.asked.lock().unwrap().iter().any(|asked| asked.contains_key("exact")));
-                let found = reviewed.answer.problem.as_deref();
-                assert_eq!(
-                    found.map(|found| found.contains(problem.unwrap_or_default())),
-                    problem.map(|_| true),
-                    "{found:?}"
-                );
-            }
+        let copying = json!(["The site received ", {"note": "e0", "quoted": false, "part": null}]);
+        let prose = json!(["The site received stocktake.txt."]);
+        for (text, rejected, asked, problem) in [
+            (&copying, None, true, None),
+            (&copying, Some("exact"), true, Some("beside what the task asks")),
+            (&prose, Some("exact"), false, None),
+        ] {
+            let jev = Support { rejected: rejected.map(str::to_string), ..Support::new(true) };
+            let draft: DraftClaim =
+                serde_json::from_value(json!({"evidence_ids": ["e0"], "text": text, "tally": null})).unwrap();
+            let bound = draft.bind(&items).unwrap();
+            let checked =
+                review_composition(&jev, &READS, task, None, vec![bound], &notes, None, true, true, &[]).await.unwrap();
+            assert_eq!(jev.asked.lock().unwrap().iter().any(|questions| questions.contains_key("exact")), asked);
+            let found = checked.problem.as_deref();
+            assert_eq!(
+                found.map(|found| found.contains(problem.unwrap_or_default())),
+                problem.map(|_| true),
+                "{found:?}"
+            );
         }
     }
 
