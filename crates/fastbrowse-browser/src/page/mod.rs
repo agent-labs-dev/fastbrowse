@@ -158,12 +158,12 @@ pub(crate) trait FrameText: DeserializeOwned {
     const SHAPE: &'static str;
     fn url(&self) -> &str;
     fn title(&self) -> &str;
-    /// Whether this read is kept, so a frame that answers "unchanged" is answered from it instead of read again.
-    fn keeps_reads() -> bool {
-        false
+    /// A shape that keeps reads serves the validated parse of its named baseline.
+    fn from_kept(_kept: &KeptRead) -> Option<Arc<Self>> {
+        None
     }
-    /// The number the page gave this read when it kept it; none when the page keeps no read to answer "unchanged" from.
-    fn read(&self) -> Option<u64> {
+    /// None removes the slot: this shape or this read has no numbered baseline to serve.
+    fn keep(_raw: Value, _parsed: &Arc<Self>) -> Option<KeptRead> {
         None
     }
 }
@@ -224,11 +224,11 @@ impl FrameText for Snapshot {
     fn title(&self) -> &str {
         &self.title
     }
-    fn keeps_reads() -> bool {
-        true
+    fn from_kept(kept: &KeptRead) -> Option<Arc<Self>> {
+        Some(Arc::clone(&kept.parsed))
     }
-    fn read(&self) -> Option<u64> {
-        self.read
+    fn keep(raw: Value, parsed: &Arc<Self>) -> Option<KeptRead> {
+        parsed.read.map(|_| KeptRead { raw, parsed: Arc::clone(parsed) })
     }
     const SHAPE: &'static str = "_Snapshot";
     fn url(&self) -> &str {
@@ -284,11 +284,17 @@ impl FrameText for CaptureSnapshot {
     }
 }
 
+/// Raw delta rows and their validated snapshot stay together so an unchanged read needs no second parse.
+pub(crate) struct KeptRead {
+    raw: Value,
+    parsed: Arc<Snapshot>,
+}
+
 /// One frame's page-script output, tagged with how to reach that frame again.
 struct FrameObservation<T> {
     frame_id: Option<String>,
     session_id: String,
-    raw: T,
+    raw: Arc<T>,
 }
 
 /// The page's own text, then each cross-origin frame's in `frames` order under a `[Frame: origin]` line. Only the
@@ -338,7 +344,7 @@ pub(crate) struct PageState {
     pub(crate) viewport: Option<(String, Instant, (f64, f64))>,
     /// `<shape>|<slot>|<frame>` -> the read last kept for that frame. A frame answers "unchanged" only about the
     /// read it kept, so this is what such an answer is served from.
-    pub(crate) kept: HashMap<String, Value>,
+    pub(crate) kept: HashMap<String, Arc<KeptRead>>,
 }
 
 pub struct CdpPage {
@@ -938,7 +944,7 @@ impl CdpPage {
             let state = self.state.lock().unwrap();
             let base = state.kept.get(&key).map_or(
                 Value::Null,
-                |kept| json!({"document_key": kept.get("document_key"), "read": kept.get("read")}),
+                |kept| json!({"document_key": kept.raw.get("document_key"), "read": kept.raw.get("read")}),
             );
             format!("{expression}({base})")
         } else {
@@ -956,7 +962,7 @@ impl CdpPage {
         // reference it is rather than derived and transferred again. A frame whose kept read this side does not have
         // is read again in full: the page's copy and this side's are kept together, but a reused page must never be
         // assumed to agree with a read it does not name.
-        let mut served = false;
+        let mut served = None;
         if let Some((slot, full)) = retry
             && truthy(&raw)
             && raw.get("unchanged").is_some_and(truthy)
@@ -968,11 +974,11 @@ impl CdpPage {
                 (value.get("document_key").and_then(Value::as_str), value.get("read").and_then(Value::as_u64))
             }
             let kept = self.state.lock().unwrap().kept.get(&key).cloned();
-            match kept {
-                Some(kept) if matches!(names(&raw), (Some(_), Some(_))) && names(&kept) == names(&raw) => {
-                    raw = kept;
-                    served = true;
-                }
+            let parsed = kept
+                .filter(|kept| matches!(names(&raw), (Some(_), Some(_))) && names(&kept.raw) == names(&raw))
+                .and_then(|kept| T::from_kept(&kept));
+            match parsed {
+                Some(parsed) => served = Some(parsed),
                 // The page has a read this side did not keep: read the frame again rather than answer from nothing.
                 _ => {
                     raw = match self.read_frame_value(is_main, session_id, full).await {
@@ -987,11 +993,12 @@ impl CdpPage {
             }
         }
         if let Some((slot, full)) = retry
+            && served.is_none()
             && raw.get("control_delta").is_some()
         {
             let key = format!("{}|{slot}|{frame_key}", T::SHAPE);
             let kept = self.state.lock().unwrap().kept.get(&key).cloned();
-            raw = match kept.as_ref().and_then(|kept| delta::apply(kept, &raw)) {
+            raw = match kept.as_ref().and_then(|kept| delta::apply(&kept.raw, &raw)) {
                 Some(reconstructed) => reconstructed,
                 None => match self.read_frame_value(is_main, session_id, full).await {
                     Ok(raw) => raw,
@@ -1003,19 +1010,25 @@ impl CdpPage {
                 return Ok(None);
             }
         }
-        let parsed: T = parse(raw.clone(), T::SHAPE)?;
+        let was_served = served.is_some();
+        let parsed: Arc<T> = match served {
+            Some(parsed) => parsed,
+            None => Arc::new(parse(raw.clone(), T::SHAPE)?),
+        };
         // Numbered reads are transport baselines, including deep reads the producer must derive again. Only a
         // shallow read whose revision still matches can answer unchanged; both paths name this exact baseline.
         if let Some((slot, _)) = retry
-            && !served
-            && T::keeps_reads()
+            && !was_served
         {
             let key = format!("{}|{slot}|{frame_key}", T::SHAPE);
             let mut state = self.state.lock().unwrap();
-            if parsed.read().is_some() {
-                state.kept.insert(key, raw);
-            } else {
-                state.kept.remove(&key);
+            match T::keep(raw, &parsed) {
+                Some(kept) => {
+                    state.kept.insert(key, Arc::new(kept));
+                }
+                None => {
+                    state.kept.remove(&key);
+                }
             }
         }
         // The text and the address it came from were read in one evaluation, so this cannot be raced.
@@ -1983,7 +1996,7 @@ mod tests {
             "document_key": "", "controls": [], "page_key": "", "guards": {}, "retarget_keys": {},
         }))
         .expect("snapshot");
-        (key.to_owned(), FrameObservation { frame_id: None, session_id: String::new(), raw })
+        (key.to_owned(), FrameObservation { frame_id: None, session_id: String::new(), raw: Arc::new(raw) })
     }
 
     #[test]

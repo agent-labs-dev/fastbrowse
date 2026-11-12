@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Unchanged observations reuse their validated snapshot in Rust.** A matching document and read number shares the parsed snapshot instead of cloning and parsing its JSON again. Control deltas still reconstruct from the exact saved rows, and browser rendering checks remain current ([#943](https://github.com/agent-labs-dev/fastbrowse/issues/943)).
+
 - **Detached frames release their saved observations.** Removing an iframe now frees its retained full snapshots on the next frame read. Live frames retain their snapshots across tab switches ([#1062](https://github.com/agent-labs-dev/fastbrowse/issues/1062)).
 - Comparator eval outcomes and timings can publish while costs remain provisional. An unresolved physical charge withholds that arm's complete cost figures and retains its full budget hold; Fastbrowse costs and judge charges still require complete receipts ([#1058](https://github.com/agent-labs-dev/fastbrowse/issues/1058)).
 - Tally membership checks receive the source notes alongside each candidate, preserving separate page labels that qualify a date or price. Numeric extraction and comparisons remain unchanged ([#977](https://github.com/agent-labs-dev/fastbrowse/issues/977)).
