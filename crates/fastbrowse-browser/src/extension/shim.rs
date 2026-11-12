@@ -20,7 +20,7 @@ use super::protocol::{EXTENSION_IDS, HostRecord, PROTOCOL, allowed_methods};
 use crate::error::BrowserError;
 
 /// Domains the session enables with `<Domain>.enable`, which the extension must relay.
-pub const ENABLED_DOMAINS: [&str; 4] = ["Page", "Runtime", "DOM", "Network"];
+pub const ENABLED_DOMAINS: [&str; 5] = ["Page", "Runtime", "DOM", "Network", "Accessibility"];
 
 /// Browser-level methods the shim answers itself rather than relaying.
 pub const ANSWERED: [&str; 11] = [

@@ -1,6 +1,12 @@
 [
+  "Accessibility.disable",
+  "Accessibility.enable",
+  "Accessibility.getFullAXTree",
+  "Accessibility.getPartialAXTree",
   "DOM.describeNode",
   "DOM.enable",
+  "DOM.getDocument",
+  "DOM.requestChildNodes",
   "DOM.resolveNode",
   "Emulation.setDeviceMetricsOverride",
   "Emulation.setFocusEmulationEnabled",
