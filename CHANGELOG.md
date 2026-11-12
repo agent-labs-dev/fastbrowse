@@ -11,13 +11,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-## [0.11.0] - 2026-11-12
-
 - Browserless runs read a JSON response by its structure, so a single value such as a package's name can be selected and cited alone, under its key path. Field choices and read passages also show the headings a value sits under, and a page with more candidates than one Jev request can describe is chosen over a series of requests that each fit, instead of failing as too large ([#1069](https://github.com/agent-labs-dev/fastbrowse/issues/1069)).
 
 - A JSON response's array items are read as whole records, one per item, so a page such as a PyPI release list is a few hundred records rather than thousands of separate keys and values. Counts, totals and comparisons judge each record beside its own page's labels, so they are worked out on large pages instead of being left unanswered.
 
-- A comparison across records no longer rejects a correct answer because a record's name heading was judged a record without the compared value: a heading or link, including a list item that is only a link, names its record and is never judged as all of it. A composed answer is checked for holding only what the task asks, as a picked one is, and can quote just the part of a note it needs, such as an email from "Signed in as …", so it no longer pastes a whole line or record where the task asks for one value. That check is shown which words of each claim were copied from the page, so a correct answer worded around its value is not rejected as copied text. A structured result's fields are chosen to agree with the checked answer, so data no longer names a different record than the answer does.
+- A comparison across records no longer rejects a correct answer because a record's name heading was judged a record without the compared value: a heading or link, including a list item that is only a link, names its record and is never judged as all of it. A composed answer can quote just the part of a note it needs, such as an email from "Signed in as …", and the text it copies from the page is checked for holding only what the task asks, so it no longer pastes a whole line or record where the task asks for one value. A structured result's fields are chosen to agree with the checked answer, so data no longer names a different record than the answer does.
 
 - Release checks require complete three-repeat coverage of both official suites, matched to the candidate build and verified producer receipts. Internal speed and cost comparisons remain separate from the official scores.
 

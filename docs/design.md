@@ -336,8 +336,9 @@ the same words picked on more than one page stated once and citing each. The req
 the task also asks whether each picked text is only what the task asks, in the form it asks for. A pick is a span code
 cut from the page, such as a table cell or a sentence, and can hold the value beside other text, or be a whole date
 where the task asks for its year. When it holds more, the composer writes the answer from the picks and their context,
-told that they held more than the task asks, and its claims pass the same checks as any composed answer, this one
-included: a source part can insert its note's whole text, so a composed answer can hold more than the task asks too.
+told that they held more than the task asks, and its claims pass the same checks as any composed answer.
+A composed answer is judged for exactness on the text it copies through its source parts, since its own wording holds no
+page text: a source part can insert its note's whole text, so a composed answer can copy more than the task asks too.
 
 ## Prompt limits and progress
 
