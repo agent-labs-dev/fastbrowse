@@ -13,6 +13,7 @@ use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionClient, NoulQuestion, Question};
 use fastbrowse_core::llm::{LLMClient, Message, Typed};
 use fastbrowse_core::models::{JevPurpose, LLMPurpose, UNTRUSTED};
+use fastbrowse_core::page::BlockKind;
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::text;
 use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
@@ -136,6 +137,9 @@ struct Candidate {
     literal: bool,
     /// The page the note was read from.
     page: String,
+    /// Whether the saved capture proves that the quote covers an entire repeated item.
+    whole_record: bool,
+    source_kind: Option<BlockKind>,
 }
 
 impl Candidate {
@@ -252,7 +256,16 @@ fn candidates(notes: &Notes) -> Vec<Candidate> {
         .map(|(id, evidence)| {
             let span = (evidence.capture_sha256.clone(), evidence.start, evidence.end);
             let (literal, page) = (evidence.rendered_text, address(&evidence.url));
-            Candidate { id, quote: evidence.quote.clone(), note: shown(notes, evidence), span, literal, page }
+            Candidate {
+                id,
+                quote: evidence.quote.clone(),
+                note: shown(notes, evidence),
+                span,
+                literal,
+                page,
+                whole_record: notes.whole_record(evidence),
+                source_kind: notes.source_kind(evidence),
+            }
         })
         .collect()
 }
@@ -334,12 +347,12 @@ fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], gr
         })
         .collect();
     criteria.insert(NO_RECORD.into(), json!(format!(
-        "The note is not one whole {of} and does not give the {field} of one. A name, label, heading, link or unrelated field alone is not a whole record. Several records, and a value stated across records such as a total or a starting price, are not one record."
+        "The note is not one whole {of} and does not give the {field} of one. A name, label, heading, link or unrelated field alone is not a whole record. Several records, and a value stated across records such as a total or a starting price, are not one record. A note whose source_kind is heading or link and gives no quoted field value is a fragment naming the record, not a record with a missing field."
     )));
     criteria.insert(NO_VALUE.into(), json!(format!("The note gives one whole {of}, but does not state its {field}. A name, label, heading, link or part alone is not a whole record.")));
     Question::Choice(ChoiceQuestion::new(
         format!(
-            "{UNTRUSTED}\nDoes this note give exactly one whole record among {of}, or its {field}? If it does, which quoted value is that record's {field}? Note: {}",
+            "{UNTRUSTED}\nDoes this note give exactly one whole record among {of}, or its {field}? If it does, which quoted value is that record's {field}? source_kind is the captured block type. When it is heading or link, the quote is that heading or link, not the whole record it names. A field absent from a heading or link is not thereby absent from its record. whole_record true proves that this quote contains all text rendered for one repeated item; without that proof the quote may still describe a whole record. Absence from a fragment does not prove absence from its record. Note: {}",
             dumps(note)
         ),
         criteria,
@@ -845,14 +858,19 @@ pub async fn work(
             if tally.op == Op::Count {
                 members.insert(format!("t{index}/n{note}"), member_question(tally, &candidate.note, example.as_ref()));
             } else {
-                match narrowed(jev, &source_state, tally, &candidate.note, numbers(&candidate.quote), tokens, ledger)
+                let mut shown_note = candidate.note.clone();
+                if candidate.whole_record {
+                    shown_note["whole_record"] = true.into();
+                }
+                if let Some(kind) = candidate.source_kind {
+                    shown_note["source_kind"] = json!(kind);
+                }
+                match narrowed(jev, &source_state, tally, &shown_note, numbers(&candidate.quote), tokens, ledger)
                     .await?
                 {
                     Narrowed::Offer(numbers) => {
-                        members.insert(
-                            format!("t{index}/n{note}"),
-                            field_question(tally, &candidate.note, &numbers, false),
-                        );
+                        members
+                            .insert(format!("t{index}/n{note}"), field_question(tally, &shown_note, &numbers, false));
                         offered.insert((*index, note), numbers);
                     }
                     Narrowed::NoRecord => {
@@ -1085,6 +1103,104 @@ mod tests {
     use super::*;
 
     #[test]
+    fn missing_fields_are_judged_with_the_captures_record_extent() {
+        use crate::memory::Fact;
+        use crate::retrieval::chunks::evidence;
+        use crate::retrieval::testing::capture;
+        use crate::retrieval::text::Page;
+        use fastbrowse_core::models::FactReader;
+        use fastbrowse_core::page::BlockKind;
+
+        let mut captured = capture(&[(BlockKind::ListItem, "Product B [price: no text]")]);
+        captured.blocks[0].whole_record = true;
+        let page = Page::new(&captured);
+        let block = &captured.blocks[0];
+        let whole = evidence(&page, block, block.start, block.end);
+        let part = evidence(&page, block, block.start, block.start + 9);
+        let mut notes = Notes::new([
+            Fact::read("product", whole.clone(), FactReader::JevChoice),
+            Fact::read("name", part.clone(), FactReader::JevChoice),
+        ]);
+        notes.remember_capture(&captured, 0);
+        let found = candidates(&notes);
+        assert!(found[0].whole_record);
+        assert!(!found[1].whole_record);
+        assert_eq!(found[0].source_kind, Some(BlockKind::ListItem));
+        assert_eq!(found[1].source_kind, Some(BlockKind::ListItem));
+        assert_eq!(Notes::default().source_kind(&whole), None);
+        let mut unknown = whole.clone();
+        unknown.source_id.push_str("-unknown");
+        assert_eq!(notes.source_kind(&unknown), None);
+        unknown = whole.clone();
+        unknown.capture_sha256.push_str("-unknown");
+        assert_eq!(notes.source_kind(&unknown), None);
+        unknown = whole.clone();
+        unknown.end += 1;
+        assert_eq!(notes.source_kind(&unknown), None);
+        let mut ambiguous = captured.clone();
+        ambiguous.blocks.push(ambiguous.blocks[0].clone());
+        let mut ambiguous_notes = Notes::default();
+        ambiguous_notes.remember_capture(&ambiguous, 0);
+        assert_eq!(ambiguous_notes.source_kind(&whole), None);
+        assert!(found.iter().all(|candidate| candidate.note.get("whole_record").is_none()));
+        let state = membership_state("Total the product prices", &notes);
+        assert!(state["notes"].as_array().unwrap().iter().all(|note| note.get("whole_record").is_none()));
+        let tally = Tally {
+            op: Op::Sum,
+            of: "product".into(),
+            field: Some("price".into()),
+            rank: None,
+            by: None,
+            group: None,
+            written: "12".into(),
+        };
+        let Question::Choice(question) = field_question(&tally, &shown(&notes, &whole), &[], false) else {
+            panic!("numeric fields use a choice");
+        };
+        assert!(question.instructions.contains("Absence from a fragment does not prove absence from its record"));
+        assert!(question.criteria[NO_VALUE].as_str().unwrap().contains("does not state its"));
+        assert!(question.criteria[NO_RECORD].as_str().unwrap().contains("source_kind is heading or link"));
+    }
+
+    #[test]
+    fn equal_text_captures_keep_their_own_structure_and_record_proof() {
+        use crate::retrieval::chunks::evidence;
+        use crate::retrieval::testing::capture;
+        use crate::retrieval::text::Page;
+
+        let mut first = capture(&[(BlockKind::ListItem, "Product B")]);
+        first.blocks[0].whole_record = true;
+        let mut second = first.clone();
+        second.captured_at.second = (second.captured_at.second + 1) % 60;
+        second.blocks[0].kind = BlockKind::Paragraph;
+        second.blocks[0].whole_record = false;
+        let quote = |captured: &fastbrowse_core::page::Capture| {
+            let page = Page::new(captured);
+            let block = &captured.blocks[0];
+            evidence(&page, block, block.start, block.end)
+        };
+        let first_quote = quote(&first);
+        let second_quote = quote(&second);
+        let mut notes = Notes::default();
+        notes.remember_capture(&first, 0);
+        notes.remember_capture(&second, 0);
+        assert_eq!(notes.source_kind(&first_quote), Some(BlockKind::ListItem));
+        assert_eq!(notes.source_kind(&second_quote), Some(BlockKind::Paragraph));
+        assert!(notes.whole_record(&first_quote));
+        assert!(!notes.whole_record(&second_quote));
+        let mut download = first.clone();
+        download.blocks[0].source_url = Some("https://files.example.test/products.csv".into());
+        let download_quote = quote(&download);
+        notes.remember_capture(&download, 0);
+        assert_eq!(notes.source_kind(&download_quote), Some(BlockKind::ListItem));
+        assert!(notes.whole_record(&download_quote));
+        let mut other_page = first_quote.clone();
+        other_page.url.push_str("/other");
+        assert_eq!(notes.source_kind(&other_page), None);
+        assert!(!notes.whole_record(&other_page));
+    }
+
+    #[test]
     fn membership_context_keeps_separate_page_labels_and_uncited_fields() {
         use crate::memory::Fact;
         use fastbrowse_core::models::{Evidence, FactReader};
@@ -1171,6 +1287,8 @@ mod tests {
             note: json!({}),
             span: (capture.into(), start, end),
             literal: true,
+            whole_record: false,
+            source_kind: None,
             page: String::new(),
         };
         let found = [note("a", 0, 50), note("a", 0, 20), note("b", 0, 20), note("a", 60, 90)];
@@ -1210,6 +1328,8 @@ mod tests {
             note: json!({"quote": "One by Ada"}),
             span: (String::new(), 0, 0),
             literal: true,
+            whole_record: false,
+            source_kind: None,
             page: String::new(),
         }];
         for (record, text, usable) in [("r0", Some("Ada"), true), ("r0", None, false), ("r1", Some("Ada"), false)] {
@@ -1242,6 +1362,8 @@ mod tests {
             note: json!({"quote": quote}),
             span: (String::new(), 0, 0),
             literal: true,
+            whole_record: false,
+            source_kind: None,
             page: String::new(),
         };
         let found = [note("One by Ada"), note("Two by Ada"), note("Three by Bo"), note("Four by Bo")];

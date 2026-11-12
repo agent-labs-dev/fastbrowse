@@ -2699,6 +2699,45 @@ mod tests {
         let asked = jev.asked();
         let Question::Choice(missing) = &asked["t0/n1"] else { panic!("missing field is judged") };
         assert_eq!(missing.criteria.keys().map(String::as_str).collect::<Vec<_>>(), ["no_record", "none"]);
+        let shown: serde_json::Value =
+            serde_json::from_str(missing.instructions.split_once(" Note: ").unwrap().1).unwrap();
+        assert!(shown.get("whole_record").is_none());
+        assert!(shown.get("source_kind").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_captured_whole_record_without_its_numeric_field_is_not_silently_omitted() {
+        use crate::retrieval::chunks::evidence;
+        use crate::retrieval::testing::capture;
+        use crate::retrieval::text::Page;
+        use fastbrowse_core::page::BlockKind;
+
+        let mut captured = capture(&[(BlockKind::ListItem, "Product B [price: no text]")]);
+        captured.blocks[0].whole_record = true;
+        let page = Page::new(&captured);
+        let block = &captured.blocks[0];
+        let whole = evidence(&page, block, block.start, block.end);
+        let mut notes = Notes::new([
+            page_fact(0, "https://shop.test/a", "Product A £12"),
+            Fact::read("Product B", whole, FactReader::JevChoice),
+            page_fact(2, "https://shop.test/a", "Audited in 2026"),
+        ]);
+        notes.remember_capture(&captured, 0);
+        let jev = Tallying::new("Product", "£");
+        let claim = tallied("The total is £12.", "£12", tally::Op::Sum, "product", Some("price"), vec![]);
+        let checked =
+            review_claims(&jev, &READS, "Total the product prices", None, vec![claim], &notes, None, true, &[])
+                .await
+                .unwrap();
+        assert!(checked.claims.is_empty());
+        assert!(checked.rejection.unwrap().to_string().contains("states no"));
+        let asked = jev.asked();
+        let Question::Choice(missing) = &asked["t0/n1"] else { panic!("missing field is judged") };
+        assert_eq!(missing.criteria.keys().map(String::as_str).collect::<Vec<_>>(), ["no_record", "none"]);
+        let shown: serde_json::Value =
+            serde_json::from_str(missing.instructions.split_once(" Note: ").unwrap().1).unwrap();
+        assert_eq!(shown["whole_record"], true);
+        assert_eq!(shown["source_kind"], "list_item");
     }
 
     /// A cheapest claim can answer with the record rather than its value, and code then keeps the record's name.
