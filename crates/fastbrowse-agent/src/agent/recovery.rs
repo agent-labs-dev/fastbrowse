@@ -219,6 +219,8 @@ impl Agent {
             if status == Status::Stuck && state.recoveries == self.config.stall.max_recoveries + 1 {
                 let mut routes: Vec<_> = state.routes.iter().collect();
                 routes.sort();
+                let mut visited: Vec<_> = state.visited_addresses.iter().collect();
+                visited.sort();
                 let mut context = json!({
                     "task": state.task,
                     "page": observation,
@@ -226,6 +228,7 @@ impl Agent {
                     "history": state.history,
                     "already_offered": state.known_pages,
                     "routes_opened": routes,
+                    "visited_addresses": visited,
                     "walled": state.walled,
                     "reason": reason,
                 });
@@ -250,6 +253,7 @@ impl Agent {
                         && !state.known_pages.iter().any(same)
                         && !state.routes.iter().any(same)
                         && !state.walled.iter().any(same)
+                        && !state.visited_addresses.iter().any(same)
                         && !self.reveals_text(&route)
                     {
                         state.known_pages.push(route);
