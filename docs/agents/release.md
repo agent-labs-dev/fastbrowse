@@ -46,6 +46,8 @@ The tag-triggered Store check is a separate receipt. The CLI publishing workflow
 directly before any registry write; a separate Store
 workflow's result does not gate another workflow. Publisher authentication and the installed-extension
 check are prerequisites, not properties proved by a successful ZIP build.
+The release workflow's read-only Store check also gates manual npm-only recovery with `publish_npm`.
+A normal manual build rehearsal publishes nothing and does not require Store authentication.
 
 The header of `.github/workflows/release.yml` lists every registry one tag publishes to and the order it
 publishes in. Pull requests and `main` build only the Linux and Windows binaries, leaving the macOS two to the

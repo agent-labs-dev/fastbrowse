@@ -19,7 +19,7 @@ The package artifact and Store response artifact retain the result of each succe
 1. Enable the Chrome Web Store API in the publisher's Google Cloud project. Create a dedicated service
    account and link its email in the existing Chrome Web Store publisher's Account section. The publisher
    ID is shown under Publisher > Settings. Keep the existing extension item.
-2. Configure Google Workload Identity Federation for this repository's Extension Store workflow and
+2. Configure Google Workload Identity Federation for this repository's Extension Store and Release workflows and
    `chrome-web-store` environment. Restrict the provider's attribute condition to this repository and
    environment, and its permitted source refs. Grant that identity permission to impersonate the dedicated account
    for short-lived access tokens. Do not create a service-account key.
@@ -37,6 +37,8 @@ The package artifact and Store response artifact retain the result of each succe
 The CLI release owner must require the compatible Store version before publishing a CLI that needs it.
 That release job needs the same environment, OIDC permission and authentication step as the Store job.
 It must call the check directly, rather than rely on the separate Store workflow completing.
+Normal release publication and manual npm-only recovery both require this check. It needs only the
+`https://www.googleapis.com/auth/chromewebstore.readonly` scope; manual build rehearsals need no Store access.
 `python3 scripts/extension_store.py verify --version VERSION` checks the published version and full rollout
 with the same authentication environment as `status`. It does not replace the installed-extension task check.
 After an HTTP timeout or interrupted write, inspect `status` before retrying: an operation may have reached
