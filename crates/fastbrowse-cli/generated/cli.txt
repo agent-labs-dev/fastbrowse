@@ -1,5 +1,5 @@
 usage: fastbrowse [-h] [--version] [--start START] [--context CONTEXT]
-                  [--cloud | --local] [--launch] [--headed]
+                  [--cloud | --local] [--headed]
                   [--profile PROFILE] [--cloud-profile ID] [--cdp-url URL]
                   [--cdp-port PORT] [--attach] [--target-match PATTERN]
                   [--foreground] [--proxy-country CC]
