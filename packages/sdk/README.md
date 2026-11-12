@@ -18,8 +18,9 @@ With it npm installs the binary for your platform as an optional dependency: `@f
 `darwin-x64`, `linux-arm64`, `linux-x64` or `win32-x64`. No install script runs and nothing is downloaded on
 first use. It needs Node.js 20 or newer, and on Linux it needs glibc.
 
-The binary brings no browser. `local: true` drives the Chrome on your machine. Without it a run starts a
-Browser Use Cloud browser, which needs `BROWSER_USE_API_KEY`.
+The binary brings no browser. `local: true` drives your own Chrome through the
+[fastbrowse extension](../../docs/cli.md#your-own-chrome), signed in as you are; add `launch: true` to start a separate
+Chrome instead. Without either a run starts a Browser Use Cloud browser, which needs `BROWSER_USE_API_KEY`.
 
 ## First run
 

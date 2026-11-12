@@ -369,6 +369,10 @@ fn test_configure_reads_secrets_and_ceilings_from_flags() {
     );
     assert_eq!(config.ceilings.max_dollars, Some(0.25));
     assert!(config.allow_authorize);
+    // #1005: `--local` runs every call in the operator's own Chrome; `--launch` starts a separate one.
+    assert!(config.extension);
+    let launched = configure(&parse(&argv(&["--launch"])).unwrap(), &settings(|_| {}), &environ).unwrap();
+    assert!(!launched.extension && launched.browser_api_key.is_none());
 }
 
 #[test]

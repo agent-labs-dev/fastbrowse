@@ -88,7 +88,7 @@ def repeat_status() -> dict[str, Any]:
         "What is the capital of France?",
         "--start",
         "https://en.wikipedia.org/wiki/Paris",
-        "--local",
+        "--launch",
         "--json",
     ]
     budget = float(os.environ["FB_AUDIT_MAX_DOLLARS"])

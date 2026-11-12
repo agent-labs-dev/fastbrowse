@@ -13,9 +13,11 @@ export type CamelKeys<Model> = { [Name in keyof Model as Camel<Name & string>]: 
 
 /** Which browser a run drives. Given to `Fastbrowse.start`, these are the defaults of every run it makes. */
 export interface BrowserOptions {
-  /** Local Chrome instead of a Browser Use Cloud browser. */
+  /** A browser on this machine instead of a Browser Use Cloud browser: your own Chrome through the fastbrowse extension, unless `launch` asks for a separate one. */
   local?: boolean;
-  /** Which local Chrome, and how. A headed window or a kept profile implies `local`. */
+  /** Start a separate local Chrome instead of driving your own through the extension. Implies `local`. */
+  launch?: boolean;
+  /** Which local Chrome, and how. A headed window or a kept profile implies `launch`. */
   chrome?: CamelKeys<LocalChrome>;
   cloudProfile?: string;
   /** The DevTools WebSocket URL of a browser that is already running. The run neither starts nor stops it. */
@@ -147,6 +149,7 @@ function snakeKeys<Model>(fields: CamelKeys<Model>): Model {
 function browserFields(options: PerRun<BrowserOptions>): Sparse<RunParams> {
   return given<RunParams>({
     local: options.local,
+    launch: options.launch,
     chrome: options.chrome && snakeKeys<LocalChrome>(options.chrome),
     cloud_profile: options.cloudProfile,
     cdp_url: options.cdpUrl,

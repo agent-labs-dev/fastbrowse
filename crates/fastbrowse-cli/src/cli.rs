@@ -120,6 +120,7 @@ pub fn parser(build: &Build) -> Parser {
             Opt::value("--context"),
             Opt::flag("--cloud"),
             Opt::flag("--local"),
+            Opt::flag("--launch"),
             Opt::flag("--headed"),
             Opt::value("--profile"),
             Opt::value("--cloud-profile"),
@@ -163,6 +164,8 @@ pub struct Args {
     pub context: Option<String>,
     pub cloud: bool,
     pub local: bool,
+    /// Start a separate local Chrome instead of driving the user's own through the extension.
+    pub launch: bool,
     pub headed: bool,
     pub profile: Option<PathBuf>,
     pub cloud_profile: Option<String>,
@@ -236,6 +239,7 @@ pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
         context: text("--context"),
         cloud: parsed.flag("--cloud"),
         local: parsed.flag("--local"),
+        launch: parsed.flag("--launch"),
         headed: parsed.flag("--headed"),
         profile: path("--profile"),
         cloud_profile: text("--cloud-profile"),
@@ -446,9 +450,11 @@ fn progress(streams: Streams) -> fastbrowse_core::models::EventHandler {
 pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationError> {
     let handed = args.cdp_url.is_some() || args.cdp_port.is_some();
     let extension = args.extension || args.extension_browser.is_some();
-    if args.cloud && (args.headed || args.profile.is_some() || handed || args.fetch || extension) {
+    if args.cloud && (args.launch || args.headed || args.profile.is_some() || handed || args.fetch || extension) {
         return Err(ConfigurationError(
-            "--cloud cannot be combined with --headed, --profile, --cdp-url, --cdp-port, --fetch or --extension".into(),
+            "--cloud cannot be combined with --launch, --headed, --profile, --cdp-url, --cdp-port, --fetch or \
+             --extension"
+                .into(),
         ));
     }
     let cdp_port = args
@@ -489,6 +495,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         attachments: attachments(&args.file)?,
         cursor: args.cursor,
         local: args.local,
+        launch: args.launch,
         chrome,
         cloud_profile: args.cloud_profile.clone(),
         cdp_url: args.cdp_url.clone(),
@@ -506,6 +513,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         ..RunTask::default()
     };
     fastbrowse_run::check(&task).map_err(|error| ConfigurationError(error.to_string()))?;
+    let extension = task.wants_extension();
     let recipe_sink =
         (args.recipe.is_some() || args.save_recipe.is_some()).then(fastbrowse_agent::agent::RecipeSink::default);
     let host = Host {

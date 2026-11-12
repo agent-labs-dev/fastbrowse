@@ -16,10 +16,11 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 |:--|:--|
 | `--start URL` | the first page; worked out from the task when omitted |
 | `--context TEXT` | background the run may use but never treats as the task |
-| `--local` | local Chrome instead of a cloud browser |
+| `--local` | your own Chrome through the fastbrowse extension instead of a cloud browser; see [Your own Chrome](#your-own-chrome) |
+| `--launch` | start a separate, signed-out local Chrome instead of using your own (implies `--local`) |
 | `--cloud` | force the cloud browser even when `FASTBROWSE_PROFILE` or `FASTBROWSE_HEADED` is set |
-| `--headed` | show the local Chrome window (implies `--local`) |
-| `--profile DIR` | keep the local Chrome profile in `DIR`, so sign-ins persist (implies `--local`) |
+| `--headed` | show the launched Chrome window (implies `--launch`) |
+| `--profile DIR` | keep the launched Chrome's profile in `DIR`, so sign-ins persist (implies `--launch`) |
 | `--cloud-profile ID` | run on a signed-in Browser Use Cloud profile |
 | `--fetch` | read pages over HTTP with no browser, for a task that only reads |
 | `--desktop APP` | start a Linux desktop app and drive it instead of a browser, through [deskpilot](https://github.com/cjber/deskpilot); see [Desktop apps](#desktop-apps) |
@@ -65,7 +66,9 @@ approval prompt. Set it up once:
 2. Add the fastbrowse extension to Chrome. Until it is in the Chrome Web Store, open `chrome://extensions`, turn on
    Developer mode, choose **Load unpacked** and pick the folder `fastbrowse extension path` prints.
 
-Then pass `--extension` to any run:
+Then pass `--local` or `--extension` to any run. With no extension connected the run ends `unavailable` before it
+spends anything, naming the setup step; it never starts a signed-out Chrome in its place. Pass `--launch` for a
+separate Chrome of the run's own.
 
 ```sh
 fastbrowse "Find my last order's delivery date." --start https://www.amazon.com/ --extension

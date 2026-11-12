@@ -97,7 +97,7 @@ async fn an_owned_local_run_applies_viewport_before_its_first_decision() {
         let task = RunTask {
             task: "read the page".into(),
             start: Some(start.into()),
-            local: true,
+            launch: true,
             browser: true,
             viewport: Some((width, height)),
             ..RunTask::default()
@@ -218,7 +218,7 @@ async fn page_after_refusal(start: &str, task: &str, answers_it: f64) -> String 
         ..Host::default()
     };
     let task =
-        RunTask { task: task.into(), start: Some(start.into()), local: true, browser: true, ..RunTask::default() };
+        RunTask { task: task.into(), start: Some(start.into()), launch: true, browser: true, ..RunTask::default() };
     run_task(task, host).await.expect("run returns a result");
     let states = seen.lock().unwrap();
     let pages: Vec<&str> = states.iter().filter_map(|state| state.pointer("/page/text")?.as_str()).collect();
@@ -297,7 +297,7 @@ async fn browser_choices_that_contradict_each_other_are_errors_before_any_browse
         ),
         (
             task(|o, _| {
-                o.local = true;
+                o.launch = true;
                 o.attach = true;
             }),
             "attach and target_match need cdp_url, cdp_port or extension",
@@ -305,9 +305,9 @@ async fn browser_choices_that_contradict_each_other_are_errors_before_any_browse
         (
             task(|o, _| {
                 o.extension = true;
-                o.local = true;
+                o.launch = true;
             }),
-            "extension drives the browser it is connected in; drop local",
+            "extension drives the browser it is connected in; drop launch",
         ),
         (
             task(|o, _| {
@@ -390,15 +390,42 @@ fn only_a_named_local_or_handed_browser_leaves_the_cloud() {
     let chrome = fastbrowse_core::models::LocalChrome::default();
     assert!(on_cloud(&RunTask::default(), &chrome));
     assert!(!on_cloud(&RunTask { local: true, ..RunTask::default() }, &chrome));
+    assert!(!on_cloud(&RunTask { launch: true, ..RunTask::default() }, &chrome));
     assert!(!on_cloud(&RunTask { cdp_port: Some(9222), ..RunTask::default() }, &chrome));
     assert!(!on_cloud(&RunTask { fetch: true, ..RunTask::default() }, &chrome));
     let headed = fastbrowse_core::models::LocalChrome { headed: true, ..chrome };
     assert!(!on_cloud(&RunTask::default(), &headed));
 }
 
+/// A local run drives the user's own Chrome through the extension, and starts a Chrome of its own only when asked
+/// (#1005): a signed-out Chrome cannot do a signed-in task.
+#[test]
+fn local_uses_the_extension_unless_a_launch_is_asked_for() {
+    let task = |task: RunTask| RunTask { task: "read the page".into(), ..task };
+    let headed = fastbrowse_core::models::LocalChrome { headed: true, ..Default::default() };
+    assert!(task(RunTask { local: true, ..RunTask::default() }).wants_extension());
+    for launched in [
+        RunTask { local: true, launch: true, ..RunTask::default() },
+        RunTask { launch: true, ..RunTask::default() },
+        RunTask { local: true, chrome: Some(headed), ..RunTask::default() },
+        RunTask { local: true, fetch: true, ..RunTask::default() },
+    ] {
+        assert!(!task(launched).wants_extension());
+    }
+    assert!(fastbrowse_run::check(&task(RunTask { local: true, extension: true, ..RunTask::default() })).is_ok());
+    let refused = |given: RunTask| fastbrowse_run::check(&task(given)).unwrap_err().to_string();
+    let error = refused(RunTask { local: true, viewport: Some((640, 480)), ..RunTask::default() });
+    assert!(error.contains("pass launch") && error.contains("viewport"), "{error}");
+    let error = refused(RunTask { extension: true, launch: true, ..RunTask::default() });
+    assert!(error.contains("drop launch"), "{error}");
+    let error = refused(RunTask { local: true, cloud_profile: Some("p".into()), ..RunTask::default() });
+    assert!(error.contains("cloud_profile needs the cloud browser"), "{error}");
+}
+
 #[test]
 fn a_viewport_is_local_or_cloud_and_rejects_handed_browsers() {
-    let local = RunTask { task: "read the page".into(), local: true, viewport: Some((640, 480)), ..RunTask::default() };
+    let local =
+        RunTask { task: "read the page".into(), launch: true, viewport: Some((640, 480)), ..RunTask::default() };
     assert!(fastbrowse_run::check(&local).is_ok());
     let handed = RunTask {
         task: "read the page".into(),

@@ -254,6 +254,7 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
         // started, a file that was never written or a cursor nobody saw.
         let browser = given(&[
             ("local", task.local),
+            ("launch", task.launch),
             ("chrome", task.chrome.is_some()),
             ("cloud_profile", task.cloud_profile.is_some()),
             ("cdp_url", task.cdp_url.is_some()),
@@ -287,6 +288,7 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
             ("fetch", task.fetch),
             ("browser", task.browser),
             ("local", task.local),
+            ("launch", task.launch),
             ("chrome", task.chrome.is_some()),
             ("cloud_profile", task.cloud_profile.is_some()),
             ("cdp_url", task.cdp_url.is_some()),
@@ -313,10 +315,25 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
     if task.cdp_url.is_some() && task.cdp_port.is_some() {
         return refuse("cdp_url and cdp_port both name a browser to attach to; pass one".into());
     }
+    // A cloud profile or a country asked of a browser on this machine would run signed out, or browse from this
+    // machine's address, and report neither.
+    let cloud = given(&[
+        ("cloud_profile", task.cloud_profile.is_some()),
+        ("proxy_country", task.proxy_country.is_some()),
+        ("cloud_extensions", !task.cloud_extensions.is_empty()),
+        ("cloud_timeout_minutes", task.cloud_timeout_minutes.is_some()),
+    ]);
+    if !handed && !cloud.is_empty() && (task.local || task.launch || chrome.headed || chrome.profile.is_some()) {
+        return refuse(format!(
+            "{} needs the cloud browser: drop it, or drop local, launch, chrome.headed and chrome.profile \
+             (and FASTBROWSE_HEADED / FASTBROWSE_PROFILE)",
+            cloud.join(", ")
+        ));
+    }
     if extension {
         // The user's own browser is already running, signed in as they are: nothing here can start or shape it.
         let other = given(&[
-            ("local", task.local),
+            ("launch", task.launch),
             ("chrome.headed", chrome.headed),
             ("chrome.profile", chrome.profile.is_some()),
             ("cdp_url", task.cdp_url.is_some()),
@@ -328,12 +345,20 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
             ("viewport", task.viewport.is_some()),
         ]);
         if !other.is_empty() {
+            if task.local_means_extension() {
+                return refuse(format!(
+                    "local drives your own Chrome through the fastbrowse extension; pass launch to start a separate \
+                     Chrome, or drop {}",
+                    other.join(", ")
+                ));
+            }
             return refuse(format!("extension drives the browser it is connected in; drop {}", other.join(", ")));
         }
     } else if handed {
         // Attaching replaces every option that shapes a started browser.
         let shaping = given(&[
             ("local", task.local),
+            ("launch", task.launch),
             ("chrome.headed", chrome.headed),
             ("chrome.profile", chrome.profile.is_some()),
             ("cloud_profile", task.cloud_profile.is_some()),
@@ -359,23 +384,6 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
     } else {
         if task.attach || task.target_match.is_some() {
             return refuse("attach and target_match need cdp_url, cdp_port or extension".into());
-        }
-        // A cloud profile or a country asked of local Chrome would start signed out, or browse from this machine's
-        // address, and report neither.
-        if task.local || chrome.headed || chrome.profile.is_some() {
-            let cloud = given(&[
-                ("cloud_profile", task.cloud_profile.is_some()),
-                ("proxy_country", task.proxy_country.is_some()),
-                ("cloud_extensions", !task.cloud_extensions.is_empty()),
-                ("cloud_timeout_minutes", task.cloud_timeout_minutes.is_some()),
-            ]);
-            if !cloud.is_empty() {
-                return refuse(format!(
-                    "{} needs the cloud browser: drop it, or drop local, chrome.headed and chrome.profile \
-                     (and FASTBROWSE_HEADED / FASTBROWSE_PROFILE)",
-                    cloud.join(", ")
-                ));
-            }
         }
     }
     if let Some(country) = &task.proxy_country {
@@ -700,11 +708,17 @@ fn reads_first(task: &RunTask, chrome: &LocalChrome) -> bool {
             || chrome.profile.is_some())
 }
 
-/// Whether a run starts a Browser Use Cloud browser: it is handed none, fetches without one, and was not asked for
-/// local Chrome by `local`, a headed window or a kept profile, which only local Chrome has.
+/// Whether a run starts a Browser Use Cloud browser: it is handed none, fetches without one, and was not asked for a
+/// browser on this machine by `local`, `launch`, a headed window or a kept profile, which only local Chrome has.
 pub fn on_cloud(task: &RunTask, chrome: &LocalChrome) -> bool {
     let handed = task.cdp_url.is_some() || task.cdp_port.is_some();
-    !(task.fetch || handed || task.wants_extension() || task.local || chrome.headed || chrome.profile.is_some())
+    !(task.fetch
+        || handed
+        || task.wants_extension()
+        || task.local
+        || task.launch
+        || chrome.headed
+        || chrome.profile.is_some())
 }
 
 /// The browser a run drives: one it is handed, a cloud browser, or local Chrome.
