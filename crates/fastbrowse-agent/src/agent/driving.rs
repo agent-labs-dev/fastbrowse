@@ -537,14 +537,13 @@ impl Agent {
     /// output judgments are kept for their existing point of use, so list walking does not start sooner.
     pub(super) async fn task_judgments(
         &self,
-        task: &str,
         given: &str,
         ledger: &fastbrowse_core::telemetry::Ledger,
     ) -> Step<TaskJudgments> {
         use fastbrowse_core::decision::{Answer, DecisionError, Question};
         ledger.reserve(fastbrowse_core::models::CostComponent::Jev, 0.0, 1)?;
         // These judgments all read the task alone. Sending them separately reread the same task on every run.
-        let mut questions = self.output_questions(task);
+        let mut questions = self.output_questions(given);
         questions.insert("dates".to_string(), Question::Noul(crate::dates::dates_question(given)));
         let state = json!({"task": given});
         let asked = self.jev.evaluate(&state, &questions);
@@ -554,26 +553,48 @@ impl Agent {
             self.event("task_dates_failed", || Map::from_iter([("error".into(), error.into())]));
             Ok(TaskJudgments { dates: Vec::new(), output })
         };
+        let mut batched = true;
         let evaluation =
             match fastbrowse_clients::validation::jev_purpose(fastbrowse_core::models::JevPurpose::Action, asked).await
             {
                 Ok(evaluation) => evaluation,
                 Err(DecisionError::Budget(budget)) => return Err(budget.into()),
+                Err(DecisionError::InputTooLarge(_)) => {
+                    // A provider's input limit can admit the date question on its own while refusing the batch.
+                    // Keep its old request available; the output questions are asked at their point of use.
+                    batched = false;
+                    questions.retain(|key, _| key == "dates");
+                    ledger.reserve(fastbrowse_core::models::CostComponent::Jev, 0.0, 1)?;
+                    let asked = self.jev.evaluate(&state, &questions);
+                    match fastbrowse_clients::validation::jev_purpose(
+                        fastbrowse_core::models::JevPurpose::Action,
+                        asked,
+                    )
+                    .await
+                    {
+                        Ok(evaluation) => evaluation,
+                        Err(DecisionError::Budget(budget)) => return Err(budget.into()),
+                        Err(error) => return failed(error.to_string(), None),
+                    }
+                }
                 Err(error) => return failed(error.to_string(), None),
             };
         ledger.record([evaluation.cost.clone()])?;
-        if !matches!(evaluation.answers.get("dates"), Some(Answer::Noul(answer)) if answer.probability > EVEN_ODDS) {
-            return Ok(TaskJudgments { dates: Vec::new(), output: Some(Box::new(evaluation.answers)) });
+        let names_dates =
+            matches!(evaluation.answers.get("dates"), Some(Answer::Noul(answer)) if answer.probability > EVEN_ODDS);
+        let output = batched.then(|| Box::new(evaluation.answers));
+        if !names_dates {
+            return Ok(TaskJudgments { dates: Vec::new(), output });
         }
         let extracted = match crate::dates::task_dates(&*self.llm, given, Some(ledger)).await {
             Ok(extracted) => extracted,
             Err(crate::error::AgentError::Budget(budget)) => return Err(budget.into()),
-            Err(error) => return failed(error.to_string(), Some(Box::new(evaluation.answers))),
+            Err(error) => return failed(error.to_string(), output),
         };
         ledger.record([extracted.cost])?;
         let references = extracted.data.dates;
         self.event("task_dates", || Map::from_iter([("dates".into(), json!(references))]));
-        Ok(TaskJudgments { dates: references, output: Some(Box::new(evaluation.answers)) })
+        Ok(TaskJudgments { dates: references, output })
     }
 
     /// Go to the site's front page when the address this run chose for itself opened nothing.

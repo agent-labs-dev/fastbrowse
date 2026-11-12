@@ -110,6 +110,90 @@ async fn an_owned_local_run_applies_viewport_before_its_first_decision() {
     }
 }
 
+/// Records task-only startup calls, then stops once the rendered browser page reaches a decision.
+struct HandoffDecision {
+    startup: Arc<AtomicUsize>,
+    seen: Arc<Mutex<Vec<Value>>>,
+    scripted: fastbrowse_agent::scripted::ScriptedJev,
+}
+
+impl DecisionClient for HandoffDecision {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        self.scripted.profile()
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        if questions.contains_key("dates") {
+            self.startup.fetch_add(1, Ordering::SeqCst);
+            let task = state["task"].as_str().unwrap();
+            let Question::Choice(output) = &questions["pick"] else { panic!("output choice is present") };
+            assert!(task.contains("input format (a screenshot)"));
+            assert!(output.instructions.contains(task), "all startup questions use the task with its inputs");
+        }
+        if state.get("page").is_some() {
+            self.seen.lock().unwrap().push(state.clone());
+            return Box::pin(async { Err(DecisionError::Failed("stop on the rendered page".into())) });
+        }
+        self.scripted.evaluate(state, questions)
+    }
+}
+
+#[tokio::test]
+async fn an_initial_http_failure_keeps_task_judgments_when_the_browser_opens() {
+    if fastbrowse_browser::adapters::local_chrome::find_chrome(None).is_none() {
+        return;
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let start = format!("http://127.0.0.1:{}/", listener.local_addr().unwrap().port());
+    let server = tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut buffer = [0u8; 4096];
+            let _ = socket.read(&mut buffer).await;
+            let page = "<body><script>document.body.textContent='The rendered value is 34.'</script>";
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{page}",
+                page.len()
+            );
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, reply.as_bytes()).await;
+        }
+    });
+    let startup = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let options = task(|o, h| {
+        o.start = Some(start.clone());
+        o.task = "Report the value in input format.".into();
+        o.inputs = Some(IndexMap::from([("format".into(), "a screenshot".into())]));
+        o.local = true;
+        h.jev = Some(Arc::new(HandoffDecision {
+            startup: startup.clone(),
+            seen: seen.clone(),
+            scripted: fastbrowse_agent::scripted::ScriptedJev::new(Vec::new()),
+        }));
+        h.llm = Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM));
+        h.http = Some(Http::new(Arc::new(|_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+            Box::pin(async {
+                Ok(Response::new(200, "<body><script src='/app.js'></script>").with_header("content-type", "text/html"))
+            })
+        })));
+    });
+    let result = run(options).await;
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+    let result = result.expect("HTTP hands the run to the browser");
+    assert_eq!(result.status, Status::Error);
+    assert_eq!(startup.load(Ordering::SeqCst), 1, "task judgments must survive a failed first fetch");
+    let seen = seen.lock().unwrap();
+    assert!(
+        seen.iter()
+            .any(|state| state.pointer("/page/text").and_then(Value::as_str) == Some("The rendered value is 34.")),
+        "states: {seen:?}"
+    );
+}
+
 /// Answers whether the task answers a consent banner itself with the given probability, and everything else as the
 /// script `wait` says, keeping each page it is shown.
 struct ConsentDecision(f64, Arc<Mutex<Vec<Value>>>, fastbrowse_agent::scripted::ScriptedJev);

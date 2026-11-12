@@ -616,8 +616,10 @@ async fn test_one_read_buys_one_return_to_a_page_state_already_reached() {
 }
 
 /// A page with no browser behind it, which cannot open the address it is given.
+#[derive(Default)]
 struct Unfetchable {
     opens: bool,
+    failure: Option<BrowserError>,
 }
 
 impl Page for Unfetchable {
@@ -639,7 +641,11 @@ impl Page for Unfetchable {
 
     fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
         let opens = self.opens;
+        let failure = self.failure.clone();
         Box::pin(async move {
+            if let Some(failure) = failure {
+                return Err(failure);
+            }
             if opens {
                 return Ok(());
             }
@@ -835,7 +841,7 @@ async fn test_a_loading_page_is_waited_on_until_it_draws() {
 #[tokio::test]
 async fn test_a_page_that_needs_a_browser_ends_the_run_blocked_with_its_reason() {
     let agent = Agent::new(
-        Arc::new(Unfetchable { opens: false }),
+        Arc::new(Unfetchable { opens: false, ..Default::default() }),
         Arc::new(ScriptedJev::new(Vec::new())),
         Arc::new(ScriptedLLM),
     );
@@ -847,11 +853,34 @@ async fn test_a_page_that_needs_a_browser_ends_the_run_blocked_with_its_reason()
 }
 
 #[tokio::test]
+async fn test_an_unreachable_opening_stays_unavailable_without_a_resume() {
+    for failure in
+        [BrowserError::NavigationTimeout("timed out".into()), BrowserError::SiteUnreachable("offline".into())]
+    {
+        let agent = Agent::new(
+            Arc::new(Unfetchable { failure: Some(failure), ..Default::default() }),
+            Arc::new(ScriptedJev::new(Vec::new())),
+            Arc::new(ScriptedLLM),
+        );
+        let sink: super::RecipeSink = Arc::default();
+        let options = super::RunOptions {
+            start: Some("https://example.test/".into()),
+            recipe_sink: Some(sink.clone()),
+            ..Default::default()
+        };
+        let result = agent.run("Read the price", options).await.unwrap();
+        assert_eq!(result.status, Status::Unavailable);
+        assert!(agent.resume().is_none(), "only a browser handoff keeps an unopened run");
+        assert!(sink.lock().unwrap().is_none(), "an unopened run has no recipe");
+    }
+}
+
+#[tokio::test]
 async fn test_a_fill_on_a_fetched_page_goes_to_the_browser_before_asking_for_a_secret() {
     let mut password = Control::new("pw", "textbox", "Token", [Operation::Fill]);
     password.input_type = Some("password".into());
     let agent = Agent::new(
-        Arc::new(Unfetchable { opens: true }),
+        Arc::new(Unfetchable { opens: true, ..Default::default() }),
         Arc::new(ScriptedJev::new(Vec::new())),
         Arc::new(ScriptedLLM),
     );
@@ -865,14 +894,17 @@ async fn test_page_ready_is_told_once_the_opening_page_is_open_and_only_then() {
     for (opens, told) in [(true, 1), (false, 0)] {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counter = calls.clone();
-        let agent =
-            Agent::new(Arc::new(Unfetchable { opens }), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM))
-                .with_page_ready(Some(Arc::new(move || {
-                    let counter = counter.clone();
-                    Box::pin(async move {
-                        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    })
-                })));
+        let agent = Agent::new(
+            Arc::new(Unfetchable { opens, ..Default::default() }),
+            Arc::new(ScriptedJev::new(Vec::new())),
+            Arc::new(ScriptedLLM),
+        )
+        .with_page_ready(Some(Arc::new(move || {
+            let counter = counter.clone();
+            Box::pin(async move {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            })
+        })));
         let options = super::RunOptions { start: Some("https://example.test/".into()), ..Default::default() };
         let _ = agent.run("Read the price", options).await;
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), told);
@@ -3226,7 +3258,7 @@ async fn test_startup_batches_task_judgments_and_keeps_their_answers() {
     let jev = Arc::new(IntentJev { evidence: "appearance", ..IntentJev::new("image") });
     let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
     let mut state = run_state();
-    let judgments = agent.task_judgments(&state.task, &state.task, &state.ledger).await.unwrap();
+    let judgments = agent.task_judgments(&state.task, &state.ledger).await.unwrap();
     assert!(judgments.dates.is_empty());
     let answers = judgments.output.expect("output was judged beside dates");
     assert!(answers.contains_key("dates"));
@@ -3246,14 +3278,82 @@ async fn test_startup_batches_task_judgments_and_keeps_their_answers() {
 #[tokio::test]
 async fn test_failed_date_extraction_keeps_the_other_startup_judgments() {
     let jev = Arc::new(IntentJev { dates: true, ..IntentJev::new("text") });
-    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(WrongRecord));
     let mut state = run_state();
     state.task = "Report tomorrow's opening hours.".into();
-    let judgments = agent.task_judgments(&state.task, &state.task, &state.ledger).await.unwrap();
-    assert!(judgments.dates.is_empty(), "this writer cannot extract dates");
+    let judgments = agent.task_judgments(&state.task, &state.ledger).await.unwrap();
+    assert!(judgments.dates.is_empty(), "this writer returns claims instead of dates");
+    assert_eq!(state.ledger.state().llm_calls, 1, "the failing date extraction was attempted");
     state.output_answers = judgments.output;
     assert_eq!(agent.output_intent(&mut state).await.unwrap(), super::state::OutputIntent::Text);
     assert_eq!(jev.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+struct OversizedStartup {
+    calls: Mutex<Vec<Vec<String>>>,
+    fallback: IntentJev,
+}
+
+impl DecisionClient for OversizedStartup {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        self.fallback.profile()
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        self.calls.lock().unwrap().push(questions.keys().cloned().collect());
+        if questions.contains_key("dates") && questions.len() > 1 {
+            return Box::pin(async { Err(DecisionError::InputTooLarge("provider input limit".into())) });
+        }
+        Box::pin(async move {
+            let mut result = self.fallback.evaluate(state, questions).await?;
+            if let Some(Answer::Noul(answer)) = result.answers.get_mut("dates") {
+                answer.probability = 1.0;
+            }
+            Ok(result)
+        })
+    }
+}
+
+struct Tomorrow;
+
+impl LLMClient for Tomorrow {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        _: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        assert_eq!(purpose, LLMPurpose::Dates);
+        Box::pin(async move {
+            let reply = json!({"dates": [{"text": "tomorrow", "year": null, "month": null, "day": null,
+                "weekday": null, "nth": null, "days_from_today": 1, "months_from_now": null}]});
+            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_oversized_startup_keeps_the_standalone_date_request() {
+    let jev = Arc::new(OversizedStartup { calls: Mutex::new(Vec::new()), fallback: IntentJev::new("image") });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(Tomorrow));
+    let mut state = run_state();
+    state.task = "Take a screenshot of tomorrow's opening hours.".into();
+    let judgments = agent.task_judgments(&state.task, &state.ledger).await.unwrap();
+    assert_eq!(judgments.dates[0].days_from_today, Some(1));
+    assert!(judgments.output.is_none(), "an unasked output question must stay unknown");
+    assert_eq!(agent.output_intent(&mut state).await.unwrap(), super::state::OutputIntent::Image);
+    let calls = jev.calls.lock().unwrap();
+    assert_eq!(calls.len(), 3);
+    assert!(calls[0].contains(&"pick".into()) && calls[0].contains(&"dates".into()));
+    assert_eq!(calls[1], ["dates"]);
+    assert!(!calls[2].contains(&"dates".into()));
+    assert_eq!(state.ledger.state().jev_calls, 3, "every physical request reserves a call");
 }
 
 #[tokio::test]
@@ -3261,7 +3361,7 @@ async fn test_startup_answers_still_reject_an_unoffered_output_choice() {
     let jev = Arc::new(IntentJev::new("image"));
     let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
     let mut state = run_state();
-    let judgments = agent.task_judgments(&state.task, &state.task, &state.ledger).await.unwrap();
+    let judgments = agent.task_judgments(&state.task, &state.ledger).await.unwrap();
     let mut answers = judgments.output.unwrap();
     let Answer::Choice(answer) = answers.get_mut("pick").unwrap() else { unreachable!() };
     answer.choice = "not offered".into();
@@ -3286,8 +3386,11 @@ async fn test_an_image_only_finish_does_not_read_or_compose_text() {
 
 #[tokio::test]
 async fn test_an_http_image_request_escalates_before_reading_or_capturing() {
-    let agent =
-        Agent::new(Arc::new(Unfetchable { opens: false }), Arc::new(IntentJev::new("image")), Arc::new(ScriptedLLM));
+    let agent = Agent::new(
+        Arc::new(Unfetchable { opens: false, ..Default::default() }),
+        Arc::new(IntentJev::new("image")),
+        Arc::new(ScriptedLLM),
+    );
     let failure = agent.finish(&mut run_state(), &observation(&[]), None, None).await.expect_err("a browser is needed");
     assert!(format!("{failure:?}").contains("NeedsBrowser"));
     assert!(format!("{failure:?}").contains("screenshot of the rendered page"));
@@ -3298,7 +3401,8 @@ async fn test_an_http_image_request_escalates_before_reading_or_capturing() {
 #[tokio::test]
 async fn test_an_http_task_with_a_step_to_take_escalates_whatever_it_reports() {
     let jev = IntentJev { evidence: "acts", ..IntentJev::new("text") };
-    let agent = Agent::new(Arc::new(Unfetchable { opens: false }), Arc::new(jev), Arc::new(ScriptedLLM));
+    let agent =
+        Agent::new(Arc::new(Unfetchable { opens: false, ..Default::default() }), Arc::new(jev), Arc::new(ScriptedLLM));
     let mut state = run_state();
     state.task = "Reply to the comment, then report whether the page confirms the reply was posted.".into();
     let failure = agent.finish(&mut state, &observation(&[]), None, None).await.expect_err("a browser is needed");
@@ -4338,7 +4442,7 @@ async fn test_partial_composition_obeys_the_run_deadline() {
     state.notes.add(Fact::read("Record A: 99", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
     let options = super::RunOptions {
         ledger: Some(ledger.clone()),
-        resume: Some(super::Resume { state, url: "https://example.test/".into() }),
+        resume: Some(super::Resume { state: Box::new(state), url: Some("https://example.test/".into()) }),
         ..Default::default()
     };
     let result = tokio::time::timeout(std::time::Duration::from_secs(1), agent.run("Read the record", options))

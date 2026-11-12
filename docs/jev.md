@@ -90,7 +90,9 @@ runs on that click as on any other.
 At startup, one request asks whether the task names dates, what output it asks for, where its evidence can be
 seen and how much of a list it covers. Over HTTP it also asks whether the task needs a browser action. Each
 question reads the task alone. Output judgments are kept until needed; date extraction still runs only when
-Jev judges that the task names a date.
+Jev judges that the task names a date. The questions use the task with its supplied inputs. If a provider rejects
+the batch for its input size, dates are asked separately and output stays a later request. A browser handoff keeps
+the startup judgments even when the first HTTP navigation produced no capture.
 
 All questions in a request see the same state, so what the agent would otherwise ask after a decision goes with it:
 for each offered control, which words a text field takes or which task text supplies a key chord. Only the chosen target's answers are used. Whether a press
