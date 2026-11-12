@@ -242,12 +242,7 @@
       'volumechange',
     ])
       addEventListener(type, bumped, true);
-    new MutationObserver(bumped).observe(document, {
-      subtree: true,
-      characterData: true,
-      childList: true,
-      attributes: true,
-    });
+    registry.observeRoot(document);
     // A short digest of a long text, so a fingerprint is kept and compared without holding the text itself.
     const hash = text => {
       let h = 0x811c9dc5;
