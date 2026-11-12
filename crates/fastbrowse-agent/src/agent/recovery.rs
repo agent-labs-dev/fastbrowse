@@ -175,113 +175,116 @@ pub(super) fn withheld(decision: &Decision) -> Withheld {
 impl Agent {
     /// Spend one recovery on `reason`. Past `stall.max_recoveries` the run ends: as the failure standing on this page or
     /// on the address the run started at, or as `gives_up_as`.
-    pub(super) async fn recover(
-        &self,
-        state: &mut RunState,
-        observation: &Observation,
+    pub(super) fn recover<'a>(
+        &'a self,
+        state: &'a mut RunState,
+        observation: &'a Observation,
         reason: &str,
         gives_up_as: Status,
         withheld: impl Into<Idle>,
-    ) -> Step {
+    ) -> fastbrowse_core::BoxFuture<'a, Step> {
         let withheld = withheld.into();
         let reason = self.redact(reason);
-        state.recoveries += 1;
-        // Recovery spends the stall's evidence so the same threshold crossing cannot trigger it again.
-        state.unchanged = 0;
-        if observation.controls.iter().any(starts_download) {
-            self.downloads_forbidden(state).await?;
-        }
-        if state.recoveries > self.config.stall.max_recoveries {
-            // A page that reports the site failed ends as that failure, whatever the run was last unsure about: a
-            // field the task gives no value for, on a page whose own data requests failed, is not the caller's to
-            // supply. BU Bench bu2-196 was asked for a 2024 USITC report on a DataWeb page reading "Http failure
-            // response for ...: 0 Unknown Error", was asked for input on a control labelled "undefined", and ended
-            // needs_input as if a person could supply it.
-            if let Some(failure) = state.site_failure.as_ref().filter(|failure| failure.url == observation.url) {
-                return Err(failure.stop().into());
+        // Route proposals add model futures to recovery, which otherwise overflow the native worker stack.
+        Box::pin(async move {
+            state.recoveries += 1;
+            // Recovery spends the stall's evidence so the same threshold crossing cannot trigger it again.
+            state.unchanged = 0;
+            if observation.controls.iter().any(starts_download) {
+                self.downloads_forbidden(state).await?;
             }
-            // A run that left a start address that failed and stalled elsewhere ends as that failure, not as a stall.
-            if gives_up_as != Status::NeedsInput
-                && let Some(failure) = state.site_failure.as_ref().or(state.start_failure.as_ref())
-            {
-                return Err(failure.stop().into());
-            }
-            // A run that ends needing a value names it: the stall's own reason names no field, so a caller told only
-            // "no_progress (3)" has nothing to supply before running the same task again.
-            let unfilled = unfilled(observation, state);
-            let status = if unfilled.is_empty() { gives_up_as } else { Status::NeedsInput };
-            // A drawn page's answer may be only in its pixels. Read the screenshot before the run gives up, so the
-            // answer it composes cites what the screen showed instead of ending empty. The read is the same one
-            // `conclude` makes, moved onto the path a stalled run reaches without ever concluding.
-            if status == Status::Stuck {
-                self.read_drawn_page(state, observation).await?;
-            }
-            if status == Status::Stuck && state.recoveries == self.config.stall.max_recoveries + 1 {
-                let mut routes: Vec<_> = state.routes.iter().collect();
-                routes.sort();
-                let mut visited: Vec<_> = state.visited_addresses.iter().collect();
-                visited.sort();
-                let mut context = json!({
-                    "task": state.task,
-                    "page": observation,
-                    "evidence": state.notes.render_for_navigation(),
-                    "history": state.history,
-                    "already_offered": state.known_pages,
-                    "routes_opened": routes,
-                    "visited_addresses": visited,
-                    "walled": state.walled,
-                    "reason": reason,
-                });
-                self.mask_strings(&mut context);
-                let proposal = match recovery_pages(&*self.llm, &context, Some(&state.ledger)).await {
-                    Ok(proposal) => {
-                        state.ledger.record([proposal.cost])?;
-                        proposal.data.urls
+            if state.recoveries > self.config.stall.max_recoveries {
+                // A page that reports the site failed ends as that failure, whatever the run was last unsure about: a
+                // field the task gives no value for, on a page whose own data requests failed, is not the caller's to
+                // supply. BU Bench bu2-196 was asked for a 2024 USITC report on a DataWeb page reading "Http failure
+                // response for ...: 0 Unknown Error", was asked for input on a control labelled "undefined", and ended
+                // needs_input as if a person could supply it.
+                if let Some(failure) = state.site_failure.as_ref().filter(|failure| failure.url == observation.url) {
+                    return Err(failure.stop().into());
+                }
+                // A run that left a start address that failed and stalled elsewhere ends as that failure, not as a stall.
+                if gives_up_as != Status::NeedsInput
+                    && let Some(failure) = state.site_failure.as_ref().or(state.start_failure.as_ref())
+                {
+                    return Err(failure.stop().into());
+                }
+                // A run that ends needing a value names it: the stall's own reason names no field, so a caller told only
+                // "no_progress (3)" has nothing to supply before running the same task again.
+                let unfilled = unfilled(observation, state);
+                let status = if unfilled.is_empty() { gives_up_as } else { Status::NeedsInput };
+                // A drawn page's answer may be only in its pixels. Read the screenshot before the run gives up, so the
+                // answer it composes cites what the screen showed instead of ending empty. The read is the same one
+                // `conclude` makes, moved onto the path a stalled run reaches without ever concluding.
+                if status == Status::Stuck {
+                    self.read_drawn_page(state, observation).await?;
+                }
+                if status == Status::Stuck && state.recoveries == self.config.stall.max_recoveries + 1 {
+                    let mut routes: Vec<_> = state.routes.iter().collect();
+                    routes.sort();
+                    let mut visited: Vec<_> = state.visited_addresses.iter().collect();
+                    visited.sort();
+                    let mut context = json!({
+                        "task": state.task,
+                        "page": observation,
+                        "evidence": state.notes.render_for_navigation(),
+                        "history": state.history,
+                        "already_offered": state.known_pages,
+                        "routes_opened": routes,
+                        "visited_addresses": visited,
+                        "walled": state.walled,
+                        "reason": reason,
+                    });
+                    self.mask_strings(&mut context);
+                    let proposal = match recovery_pages(&*self.llm, &context, Some(&state.ledger)).await {
+                        Ok(proposal) => {
+                            state.ledger.record([proposal.cost])?;
+                            proposal.data.urls
+                        }
+                        Err(crate::error::AgentError::Budget(budget)) => return Err(budget.into()),
+                        Err(error) => {
+                            self.event("recovery_pages_failed", || {
+                                Map::from_iter([("error".into(), error.to_string().into())])
+                            });
+                            Vec::new()
+                        }
+                    };
+                    let mut fresh = false;
+                    for route in proposal.iter().filter_map(|url| accept_start(Some(url))) {
+                        let same = |url: &String| fastbrowse_core::navigation::same_address(&route, url);
+                        if !same(&observation.url)
+                            && !state.known_pages.iter().any(same)
+                            && !state.routes.iter().any(same)
+                            && !state.walled.iter().any(same)
+                            && !state.visited_addresses.iter().any(same)
+                            && !self.reveals_text(&route)
+                        {
+                            state.known_pages.push(route);
+                            fresh = true;
+                        }
                     }
-                    Err(crate::error::AgentError::Budget(budget)) => return Err(budget.into()),
-                    Err(error) => {
-                        self.event("recovery_pages_failed", || {
-                            Map::from_iter([("error".into(), error.to_string().into())])
-                        });
-                        Vec::new()
+                    if fresh {
+                        return self.ask_jev_again(state, observation, &reason, withheld).await;
                     }
+                }
+                // A canvas or picture carries what its text layer does not, so a run that gave up on one is told apart
+                // from a stall on a page it could read: a caller otherwise retries the same task on a page it cannot read.
+                let reason = if status == Status::Stuck && observation.visual_content && !state.notes.answered() {
+                    format!("{reason} {DRAWN_UNREAD}")
+                } else {
+                    reason
                 };
-                let mut fresh = false;
-                for route in proposal.iter().filter_map(|url| accept_start(Some(url))) {
-                    let same = |url: &String| fastbrowse_core::navigation::same_address(&route, url);
-                    if !same(&observation.url)
-                        && !state.known_pages.iter().any(same)
-                        && !state.routes.iter().any(same)
-                        && !state.walled.iter().any(same)
-                        && !state.visited_addresses.iter().any(same)
-                        && !self.reveals_text(&route)
-                    {
-                        state.known_pages.push(route);
-                        fresh = true;
-                    }
-                }
-                if fresh {
-                    return self.ask_jev_again(state, observation, &reason, withheld).await;
-                }
+                let reason = match unfilled.as_slice() {
+                    [] => reason,
+                    [only] => format!("{} needs a value the task does not give: {reason}", text::repr(only)),
+                    many => format!(
+                        "{} need a value the task does not give: {reason}",
+                        many.iter().map(|label| text::repr(label)).collect::<Vec<_>>().join(", ")
+                    ),
+                };
+                return Err(Stop::new(status, reason).into());
             }
-            // A canvas or picture carries what its text layer does not, so a run that gave up on one is told apart
-            // from a stall on a page it could read: a caller otherwise retries the same task on a page it cannot read.
-            let reason = if status == Status::Stuck && observation.visual_content && !state.notes.answered() {
-                format!("{reason} {DRAWN_UNREAD}")
-            } else {
-                reason
-            };
-            let reason = match unfilled.as_slice() {
-                [] => reason,
-                [only] => format!("{} needs a value the task does not give: {reason}", text::repr(only)),
-                many => format!(
-                    "{} need a value the task does not give: {reason}",
-                    many.iter().map(|label| text::repr(label)).collect::<Vec<_>>().join(", ")
-                ),
-            };
-            return Err(Stop::new(status, reason).into());
-        }
-        self.ask_jev_again(state, observation, &reason, withheld).await
+            self.ask_jev_again(state, observation, &reason, withheld).await
+        })
     }
 
     /// Open another route to what the task needs after a bot check at `walled` did not clear, as the first address

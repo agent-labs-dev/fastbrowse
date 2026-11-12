@@ -306,7 +306,7 @@ pub(crate) struct RunState {
     /// since is going round, not forward.
     pub reached: HashMap<String, usize>,
     /// Addresses actually observed, including pages reached through ordinary links. Recovery proposes unseen routes.
-    pub visited_addresses: Box<HashSet<String>>,
+    pub visited_addresses: HashSet<String>,
     /// Reads that added evidence, counted over the run.
     pub evidence_reads: usize,
     /// `evidence_reads` when a return to a page state already reached last counted as progress. One read buys one
@@ -750,7 +750,7 @@ impl RunState {
             navigation_from: None,
             login_readings: HashMap::new(),
             reached: HashMap::new(),
-            visited_addresses: Box::default(),
+            visited_addresses: HashSet::new(),
             evidence_reads: 0,
             returned_at: 0,
             landing: None,
