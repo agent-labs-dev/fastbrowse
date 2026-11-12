@@ -446,17 +446,21 @@ impl Agent {
             Ok(Box::new(state))
         };
         let (opened, prepared) = tokio::join!(open, prepare);
-        let mut state = prepared?;
-        state.started_url = opening;
+        let prepared = prepared.map(|mut state| {
+            state.started_url = opening;
+            state
+        });
         // HTTP can need a browser before any capture exists. Keep task judgments for that handoff, without
         // treating other opening failures as a run that reached its first page.
         if let Err(flow) = opened {
-            if matches!(&flow, Flow::Browser(BrowserError::NeedsBrowser(_))) {
+            if matches!(&flow, Flow::Browser(BrowserError::NeedsBrowser(_)))
+                && let Ok(state) = prepared
+            {
                 self.seen().resume = Some(Resume { state, url: None });
             }
             return Err(flow);
         }
-        let state = slot.insert(*state);
+        let state = slot.insert(*prepared?);
         self.tell_page_ready().await;
         if start.is_some() {
             state.start_landing_url = Some(self.page.address().await?);
