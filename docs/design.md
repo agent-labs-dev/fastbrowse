@@ -134,8 +134,10 @@ its visited elements for newly attached shadow roots, which also produce no docu
 compares the native pointer-listener checks used by the saved read. Each atomic read asks for a node's listeners
 once; later action guards ask again. A saved read also compares the rendering facts it consumed: computed
 style properties, visibility, element and text-node boxes, rendered text, live selector matches, focus and
-live control or media values. Those facts stay in the installed script's private closure and name the exact
-document and read they validate. A CSS state can then renew a read without writing a DOM node or attribute.
+live control or media values. Scroll controls also record extents and positions, overflow propagated from the
+body, and the writing-mode, direction and flex styles that determine their axes. Generated CSS content can
+change those extents without a DOM mutation. Those facts stay in the installed script's private closure and
+name the exact document and read they validate. A CSS state can then renew a read without writing a DOM node or attribute.
 The frame keeps each document or shadow root's element order and static control membership. A child-list
 change renews order through saved element-child edges; unchanged siblings keep those edges. Attribute changes
 renew membership, while geometry, listeners and render facts are read fresh. Full reads rebuild the index.

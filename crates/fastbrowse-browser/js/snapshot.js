@@ -62,6 +62,14 @@
         range.selectNodeContents(target);
         return range.getBoundingClientRect();
       }
+      // Scroll affordances can change through CSS state or generated content without a DOM mutation.
+      case 'scrollSize': return [target.scrollWidth, target.clientWidth, target.scrollHeight, target.clientHeight];
+      case 'scrollPosition': return [target.scrollLeft, target.scrollTop];
+      case 'scrollStyle': {
+        const style = target.ownerDocument.defaultView.getComputedStyle(target);
+        return [style.writingMode, style.direction, style.display,
+          style.display.includes('flex') ? style.flexDirection : null, style.overflowX, style.overflowY];
+      }
       case 'text': return target?.innerText;
       case 'query': return target.querySelectorAll(args);
       case 'state': return target.matches(args);
@@ -1839,15 +1847,16 @@
       if (!safe(e) || !visible(e) || e.closest('[inert]')) continue;
       const view = e.ownerDocument.defaultView;
       const page = e === e.ownerDocument.scrollingElement;
-      const overflow = {x: e.scrollWidth - e.clientWidth, y: e.scrollHeight - e.clientHeight};
+      const [scrollWidth, clientWidth, scrollHeight, clientHeight] = renderFact('scrollSize', e);
+      const overflow = {x: scrollWidth - clientWidth, y: scrollHeight - clientHeight};
       if (overflow.x <= 0 && overflow.y <= 0) continue;
-      const style = view.getComputedStyle(e);
-      const vertical = style.writingMode.startsWith('vertical') || style.writingMode.startsWith('sideways');
-      let inlineReverse = style.direction === 'rtl';
-      let blockReverse = vertical && style.writingMode.endsWith('-rl');
-      if (style.display.includes('flex')) {
-        if (style.flexDirection === 'row-reverse') inlineReverse = !inlineReverse;
-        if (style.flexDirection === 'column-reverse') blockReverse = !blockReverse;
+      const [writingMode, direction, display, flexDirection, overflowX, overflowY] = renderFact('scrollStyle', e);
+      const vertical = writingMode.startsWith('vertical') || writingMode.startsWith('sideways');
+      let inlineReverse = direction === 'rtl';
+      let blockReverse = vertical && writingMode.endsWith('-rl');
+      if (display.includes('flex')) {
+        if (flexDirection === 'row-reverse') inlineReverse = !inlineReverse;
+        if (flexDirection === 'column-reverse') blockReverse = !blockReverse;
       }
       const named = element => element.hasAttribute('aria-label') || element.hasAttribute('aria-labelledby')
         ? labelOf(element) : element.getAttribute('title') || '';
@@ -1858,14 +1867,13 @@
         doc = frame.ownerDocument;
       }
       for (const axis of ['x', 'y']) {
-        let behavior = axis === 'x' ? style.overflowX : style.overflowY;
+        let behavior = axis === 'x' ? overflowX : overflowY;
         // With visible root overflow, CSS propagates the body's overflow to the viewport, including modal locks.
         if (page && behavior === 'visible' && e.ownerDocument.body) {
-          const bodyStyle = view.getComputedStyle(e.ownerDocument.body);
-          behavior = axis === 'x' ? bodyStyle.overflowX : bodyStyle.overflowY;
+          behavior = styleProperty(e.ownerDocument.body, axis === 'x' ? 'overflowX' : 'overflowY');
         }
         if (overflow[axis] <= 0 || !(page && behavior === 'visible') && !['auto', 'scroll', 'overlay'].includes(behavior)) continue;
-        const position = axis === 'x' ? e.scrollLeft : e.scrollTop;
+        const position = renderFact('scrollPosition', e)[axis === 'x' ? 0 : 1];
         // CSSOM View's overflow direction follows the block and inline flow, including reversed flex axes.
         const reverse = (axis === 'x') === vertical ? blockReverse : inlineReverse;
         const min = reverse ? -overflow[axis] : 0, max = reverse ? 0 : overflow[axis];
@@ -1878,7 +1886,7 @@
         const id = ids[axis] ||= registry.next++;
         registry.nodes.set(id, e);
         registry.scrollAxes.set(id, axis);
-        const rect = e.getBoundingClientRect();
+        const rect = boxOf(e);
         controls.push({
           id, role: 'region', operations,
           label: `${axis === 'x' ? 'Horizontal' : 'Vertical'} scroll area: ${page ? 'Page' : named(e) || e.tagName.toLowerCase()}`,
@@ -2018,7 +2026,7 @@
     field_state,
     controls.filter(c => registry.scrollAxes?.has(c.id)).map(c => {
       const e = registry.nodes.get(c.id);
-      return [c.id, e.scrollLeft, e.scrollTop];
+      return [c.id, ...renderFact('scrollPosition', e)];
     }),
     // Playing or not changes the page; the clock advancing does not, or no key would hold until an action.
     media.map(({ elapsed_seconds, ...m }) => m),
