@@ -226,6 +226,11 @@ pub fn command(program: &str, args: &[String]) -> (String, i32) {
                 return (out, 1);
             }
             out.push_str(&format!("Registered the fastbrowse host with {}.\n", registered.join(", ")));
+            out.push_str(
+                "Requires extension 0.1.1 or newer with the required commands. If the Store update is not available, \
+                 run `fastbrowse extension path`, then enable Developer mode at chrome://extensions and choose \
+                 Load unpacked with the printed folder.\n",
+            );
             if args.len() == 2 {
                 out.push_str(&format!(
                     "\nTo install the extension by policy, with no prompt and no debugging bar, write this to {POLICY} \
