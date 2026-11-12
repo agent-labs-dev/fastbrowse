@@ -129,7 +129,9 @@ match. A mutation invalidates the affected subtree and its ancestors. A name rec
 label associations, visibility and native values it used, and checks those dependencies before reuse. Queries
 are also tied to their document or shadow root. Layout and event listeners are read afresh, and action guards
 query current state. Each saved snapshot or glance keeps its own pending custom-element definitions, since an
-upgrade can change label ownership without a DOM mutation. The frame still walks the page and sends its text.
+upgrade can change label ownership without a DOM mutation. Before reusing a shallow read, the browser checks
+its visited elements for newly attached shadow roots, which also produce no document mutation. The frame
+still walks the page and sends its text.
 
 A browser observation reports each control's `focused` state. A custom page may leave it unknown.
 The optional `invalid` flag reports `aria-invalid` or a failed native constraint on a field that participates

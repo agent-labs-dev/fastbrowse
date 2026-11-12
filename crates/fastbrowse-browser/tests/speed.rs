@@ -846,6 +846,29 @@ async fn test_a_detached_card_rebuilds_its_queries_in_a_new_shadow_root() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_shadow_root_attached_without_a_mutation_renews_the_observation() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(&h.session, "document.body.innerHTML = '<article id=host><button>Light</button></article>'").await;
+    h.observe().await;
+    count_reads(&h).await;
+    eval_active(
+        &h.session,
+        "document.querySelector('#host').attachShadow({mode:'open'}).innerHTML = '<button>Shadow buy</button>'",
+    )
+    .await;
+    let after = h.observe().await;
+    assert!(after.controls.iter().any(|c| c.label == "Shadow buy"));
+    assert_eq!(reads(&h).await, (1, 0));
+    assert_eq!(eval_active(&h.session, "globalThis.__fastbrowse.kept.snapshot == null").await, json!(true));
+    let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
+    let mut full = other.observe().await.expect("full read");
+    full.captured_at = after.captured_at;
+    assert_eq!(after, full);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_changed_frame_sends_control_deltas() {
     let _turn = turn().await;
     let Some(h) = harness().await else { return };

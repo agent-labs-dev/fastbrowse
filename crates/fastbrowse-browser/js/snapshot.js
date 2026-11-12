@@ -368,6 +368,8 @@
     kept.innerHeight === innerHeight &&
     kept.hidden === document.hidden &&
     kept.readyState === document.readyState &&
+    // attachShadow emits no document mutation, so a previously shallow page must check its existing hosts.
+    kept.lightElements?.every(e => !e.shadowRoot) &&
     // Upgrading a form-associated custom element can change HTML label ownership without a DOM mutation.
     !kept.undefinedElements?.some(e => e.isConnected && e.matches(':defined')) &&
     // A transition or animation in flight moves what is on screen between one look and the next, so a read taken
@@ -955,10 +957,13 @@
   // A document observer sees neither a shadow root nor a child document, so a read that went into either cannot be
   // told later whether it still holds, and is not reused.
   let deep = false;
+  let lightElements;
   function* walk(root) {
     // A document observer cannot see mutations inside shadow roots or child documents.
     const listed = new Set(root.querySelectorAll(SELECTOR));
-    for (const e of root.querySelectorAll('*')) {
+    const elements = root.querySelectorAll('*');
+    if (root === document) lightElements = [...elements];
+    for (const e of elements) {
       if (listed.has(e) || pressable(e) || focusableText(e)) yield e;
       if (e.shadowRoot) {
         deep = true;
@@ -1866,10 +1871,14 @@
       hidden: document.hidden,
       readyState: document.readyState,
       undefinedElements: readUndefinedElements,
+      lightElements,
       url: location.href,
       document_key: String(performance.timeOrigin),
       page_key,
     };
+  } else if (registry.kept) {
+    // A deep read cannot be reused, and retaining its earlier shallow tree would pin detached page elements.
+    delete registry.kept[mode];
   }
   const result = {
     url: location.href,
