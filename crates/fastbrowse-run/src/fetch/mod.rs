@@ -12,6 +12,8 @@
 //! exactly that: [`NotFetched`], with the browser left as the only reader.
 
 pub mod html;
+mod json;
+pub mod search;
 
 use std::borrow::Cow;
 use std::io::Read;
@@ -241,7 +243,10 @@ async fn serve(http: &Http, url: &str, allowed_origins: Option<&[String]>, secon
     // A server refuses a client that does not name itself: Wikipedia answers 403 to a request with no User-Agent and
     // 200 to one that names it. The version is the crate's own.
     let headers = [
-        ("accept".to_string(), "text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8".to_string()),
+        (
+            "accept".to_string(),
+            "text/html,application/xhtml+xml;q=0.9,application/json;q=0.8,text/*;q=0.8,*/*;q=0.1".to_string(),
+        ),
         ("accept-encoding".to_string(), "gzip, deflate".to_string()),
         ("user-agent".to_string(), format!("fastbrowse/{}", env!("CARGO_PKG_VERSION"))),
     ];
@@ -283,26 +288,27 @@ async fn serve(http: &Http, url: &str, allowed_origins: Option<&[String]>, secon
     let final_url = url::Url::parse(&target).map_or(target.clone(), String::from);
     outside(&final_url, allowed_origins, "a redirect left for ")?;
     let body = decode(content_type, &body, HTML_TYPES.contains(&mime.as_str()));
-    if mime == "text/plain" {
+    let json = mime == "application/json" || (mime.starts_with("application/") && mime.ends_with("+json"));
+    if (mime.starts_with("text/") && !HTML_TYPES.contains(&mime.as_str())) || json {
         if text::strip(&body).is_empty() {
             return Err(refused("the document is empty"));
         }
-        let found = Found {
-            kind: BlockKind::Paragraph,
-            text: clean(&body),
-            heading_path: Vec::new(),
-            href: None,
-            links: Vec::new(),
-            frame_id: None,
-            whole_record: false,
-        };
-        return Ok(Served {
-            url: final_url,
-            title: String::new(),
-            found: vec![found],
-            controls: Vec::new(),
-            frames: Vec::new(),
-        });
+        // A JSON document is read by its structure, so each value can be quoted alone; text that is not entirely JSON
+        // is read whole.
+        let found =
+            json.then(|| json::blocks(&body)).flatten().filter(|found| !found.is_empty()).unwrap_or_else(|| {
+                vec![Found {
+                    kind: BlockKind::Paragraph,
+                    // Delimited fields carry significant whitespace, which HTML's cleanup would change.
+                    text: if json || mime != "text/plain" { body } else { clean(&body) },
+                    heading_path: Vec::new(),
+                    href: None,
+                    links: Vec::new(),
+                    frame_id: None,
+                    whole_record: false,
+                }]
+            });
+        return Ok(Served { url: final_url, title: String::new(), found, controls: Vec::new(), frames: Vec::new() });
     }
     if !HTML_TYPES.contains(&mime.as_str()) {
         let named = if mime.is_empty() { "the response" } else { &mime };

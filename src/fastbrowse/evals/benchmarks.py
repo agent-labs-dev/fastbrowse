@@ -78,8 +78,8 @@ def _without_empty(data: dict[str, Any], names: tuple[str, ...]) -> dict[str, An
 
 
 class Row(PublicModel):
-    """One graded slot. `seconds` is measured as `timing_basis` says; a row without one was measured under an older
-    clock, so it is compared with nothing that has one (`Group.one_clock`)."""
+    """One graded slot. `seconds` retains every attempt on its declared clock. Explicit clocks can share outcomes,
+    while speed comparisons require matched bases. A row without a basis belongs to a legacy measurement."""
 
     task: Identifier
     repeat: Annotated[int, Field(ge=0)]
@@ -89,8 +89,8 @@ class Row(PublicModel):
     score: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
     seconds: Amount
     dollars: Amount | None
-    """None when the arm does not report its cost, so its rows carry a pass rate and seconds and the site shows
-    "cost not reported" in place of a cost."""
+    """None when the comparator's complete cost is unavailable. Its outcome and seconds remain measured, while
+    every row of that arm withholds cost rather than reporting a partial total."""
     physical_runs: Annotated[int, Field(gt=0)]
     # The efficiency figures a comparison is normalized onto, so a slow page or a provider's margin cannot move it.
     # Historical omitted metrics keep their old zero default; an explicit basis requires a recorded count.
@@ -100,17 +100,28 @@ class Row(PublicModel):
     tokens_per_second: Amount = 0.0
     input_tokens: Annotated[int, Field(ge=0)] = 0
     output_tokens: Annotated[int, Field(ge=0)] = 0
-    timing_basis: Literal["session-ready-to-answer"] | None = None
+    timing_basis: Literal["session-ready-to-answer", "physical-attempt-wall-time"] | None = None
     session_open_seconds: Amount | None = None
     """Opening the browser session, totalled like `seconds` and outside them."""
     session_close_seconds: Amount | None = None
     """Closing the browser session, totalled like `seconds` and outside them."""
     timing_note: Limit | None = None
-    """What of browser setup stayed inside `seconds`, for an agent that connects to its browser where the harness
-    cannot see: hosted Browser Use and Browser Harness. None when all of it is outside, in `session_open_seconds`."""
+    """Browser setup or dispatch interruptions retained in `seconds`. A physical wall-time retry has a note and
+    withholds phase totals that its original attempts did not record."""
     failure: Limit | None = None
     """Why a failed slot failed when the verdict alone does not say: a run the site's bot check refused is the
     agent's failure, since another agent may get past it."""
+
+    @model_validator(mode="after")
+    def physical_timing_is_described(self) -> Self:
+        if self.timing_basis == "physical-attempt-wall-time" and (
+            not self.timing_note
+            or self.physical_runs < 2
+            or self.session_open_seconds is not None
+            or self.session_close_seconds is not None
+        ):
+            raise ValueError("physical attempt timing needs its interruption note and retry count without phase totals")
+        return self
 
     @model_serializer(mode="wrap")
     def without_unrecorded_timing(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
@@ -348,9 +359,10 @@ class Group(PublicModel):
 
     @model_validator(mode="after")
     def one_clock(self) -> Self:
-        """Every row of a group is timed alike, references included, whichever arm it is: a comparison between clocks
-        would report the difference between them as speed."""
-        if len({r.timing_basis for r in self.rows}) > 1:
+        """Legacy times lack a measurement basis. Explicit clocks can share outcomes, but consumers compare speed
+        only across matched bases, retaining interruption time rather than dropping the slow row."""
+        bases = {r.timing_basis for r in self.rows}
+        if None in bases and len(bases) > 1:
             raise ValueError("rows timed on different bases cannot be compared in one group")
         return self
 

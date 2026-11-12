@@ -26,8 +26,6 @@ use tree::{Element, Window};
 
 /// How long an action's effect is waited for before it is reported as having changed nothing.
 const SETTLE_SECONDS: f64 = 0.5;
-/// How long a WAIT watches the window change by itself.
-const WAIT_SECONDS: f64 = 5.0;
 const POLL: Duration = Duration::from_millis(100);
 /// Wheel clicks one SCROLL turns.
 const SCROLL_CLICKS: i64 = 5;
@@ -170,13 +168,15 @@ impl DeskpilotPage {
         seconds: f64,
         target_id: Option<&str>,
     ) -> PageResult<bool> {
-        let deadline = Instant::now() + Duration::from_secs_f64(seconds.max(0.0));
+        let deadline = seconds.is_finite().then(|| Instant::now() + Duration::from_secs_f64(seconds.max(0.0)));
         loop {
             if self.differs(observation, target_id).await? {
-                self.settle(deadline).await?;
+                // A continuously updating window must not spend the run settling after the wait found its change.
+                let settle = Instant::now() + Duration::from_secs_f64(SETTLE_SECONDS);
+                self.settle(deadline.map_or(settle, |deadline| deadline.min(settle))).await?;
                 return Ok(true);
             }
-            if Instant::now() >= deadline {
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 return Ok(false);
             }
             tokio::time::sleep(POLL).await;
@@ -380,6 +380,21 @@ impl DeskpilotPage {
             Err(error) => Err(unavailable(error)),
         }
     }
+
+    async fn act_within(&self, action: &Action, observation: &Observation, seconds: f64) -> PageResult<ActResult> {
+        // Only the latest snapshot's ids are live; deskpilot refuses the rest too, but a glance has no snapshot.
+        let latest = self.latest.lock().unwrap().clone();
+        if observation.page_key.is_empty() || latest.as_deref() != Some(observation.page_key.as_str()) {
+            return Ok(ActResult {
+                outcome: StepOutcome::Stale,
+                page_changed: false,
+                detail: Some("the window was read again since this observation".to_string()),
+                moved: false,
+            });
+        }
+        let sent = self.dispatch(action, observation).await;
+        self.measured(sent, observation, seconds).await
+    }
 }
 
 impl Page for DeskpilotPage {
@@ -422,21 +437,18 @@ impl Page for DeskpilotPage {
 
     fn act<'a>(&'a self, action: &'a Action, observation: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
         Box::pin(async move {
-            // Only the latest snapshot's ids are live; deskpilot refuses the rest too, but a glance has no snapshot.
-            let latest = self.latest.lock().unwrap().clone();
-            if observation.page_key.is_empty() || latest.as_deref() != Some(observation.page_key.as_str()) {
-                let detail = "the window was read again since this observation".to_string();
-                return Ok(ActResult {
-                    outcome: StepOutcome::Stale,
-                    page_changed: false,
-                    detail: Some(detail),
-                    moved: false,
-                });
-            }
-            let seconds = if action.operation == Operation::Wait { WAIT_SECONDS } else { SETTLE_SECONDS };
-            let sent = self.dispatch(action, observation).await;
-            self.measured(sent, observation, seconds).await
+            let seconds = if action.operation == Operation::Wait { f64::INFINITY } else { SETTLE_SECONDS };
+            self.act_within(action, observation, seconds).await
         })
+    }
+
+    fn wait<'a>(
+        &'a self,
+        action: &'a Action,
+        observation: &'a Observation,
+        seconds: f64,
+    ) -> BoxFuture<'a, PageResult<ActResult>> {
+        Box::pin(async move { self.act_within(action, observation, seconds).await })
     }
 
     fn redrawn<'a>(

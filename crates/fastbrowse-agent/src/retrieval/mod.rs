@@ -9,6 +9,7 @@ pub(crate) use answers::{Draft, compose_reviewed, draft_reviewed, noticed};
 mod choices;
 mod chunks;
 mod fields;
+mod reduction;
 mod screenshot;
 mod tally;
 pub(crate) mod text;

@@ -16,6 +16,7 @@ use fastbrowse_core::decision::{
     NoulQuestion, Question,
 };
 use fastbrowse_core::effects::leavable;
+use fastbrowse_core::keys::role_keys;
 use fastbrowse_core::models::{CostComponent, CostLine, JevPurpose, Operation, StepOutcome, TARGETED, UNTRUSTED};
 use fastbrowse_core::navigation::navigation_urls;
 use fastbrowse_core::page::{Control, Observation, cut_text, cut_with, pager_link};
@@ -71,8 +72,14 @@ pub static DESTINATION: LazyLock<String> = LazyLock::new(|| untrusted(DESTINATIO
 pub static RELEVANCE: LazyLock<String> = LazyLock::new(|| untrusted(RELEVANCE_RULES));
 pub const GROUP: &str = "Too many elements to list at once. Choose the group that contains the best target if the next\noperation is the one this question names. A later question picks the element inside the group.";
 
+/// The Press operation where a control's ARIA role defines keys, such as a slider stepped by its arrows.
+const PRESS_ROLE_KEYS: &str = "Press a key on a control: one its role supports, such as an arrow that steps a slider or moves through tabs, a menu, a list or a grid, or the key or key chord the task gives in an editable field.";
+
 pub fn operation_label(operation: Operation) -> &'static str {
     match operation {
+        Operation::Search => {
+            "Search the web through the configured search provider, without opening a browser search page."
+        }
         Operation::Navigate => {
             "Open another HTTP(S) address: one the caller supplied for this task, or a page a site the task names is known to serve for an item the task names."
         }
@@ -199,7 +206,13 @@ impl HistoryEntry {
         self.acted()
             && !matches!(
                 self.operation,
-                Some(Operation::Escape | Operation::Back | Operation::SwitchTab | Operation::Navigate)
+                Some(
+                    Operation::Escape
+                        | Operation::Back
+                        | Operation::SwitchTab
+                        | Operation::Navigate
+                        | Operation::Search
+                )
             )
     }
 }
@@ -208,6 +221,8 @@ impl HistoryEntry {
 #[serde(deny_unknown_fields)]
 pub struct StepContext {
     pub task: String,
+    #[serde(default)]
+    pub web_search: bool,
     #[serde(deserialize_with = "lax::nullable")]
     pub subgoal: Option<String>,
     /// The dates the task names, worked out against each page's capture date.
@@ -270,6 +285,8 @@ pub struct StepContext {
     /// decision of their own while the page stays as it was.
     #[serde(skip)]
     pub plan_ahead: bool,
+    #[serde(skip)]
+    pub list_read: ListRead,
     /// Earlier actions left out of `history` to fit Jev's input limit; the state tells Jev how many.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub omitted_actions: usize,
@@ -284,6 +301,7 @@ impl StepContext {
     pub fn new(task: &str) -> StepContext {
         StepContext {
             task: task.into(),
+            web_search: false,
             subgoal: None,
             dates: Vec::new(),
             notes: String::new(),
@@ -308,6 +326,7 @@ impl StepContext {
             screenshot: None,
             ahead: Vec::new(),
             plan_ahead: false,
+            list_read: ListRead::None,
         }
     }
 }
@@ -409,6 +428,26 @@ pub struct Decision {
     /// Other controls to use on this page after this action, in page order, while the page stays as it was.
     #[serde(skip)]
     pub plan: Vec<Planned>,
+    #[serde(skip)]
+    pub read_scope: ReadScope,
+}
+
+/// A list read keeps page judgments while leaving target selection to an ordinary decision.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ListRead {
+    #[default]
+    None,
+    Offer,
+    Continue,
+}
+
+/// These are planner choices, carried out through the existing public Read operation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ReadScope {
+    #[default]
+    Page,
+    List,
+    Return,
 }
 
 impl Decision {
@@ -504,7 +543,7 @@ pub async fn decide(
     let mut tokens = 0;
     // A target is picked from at most `options` groups of at most `group_size`, so no more can be offered at once.
     let max_offered = fitting.group_size() * options;
-    let mut shortlist_tried = controls.len() > max_offered;
+    let mut shortlist_tried = context.list_read != ListRead::Continue && controls.len() > max_offered;
     if shortlist_tried {
         let shortlisted =
             shortlist(jev, &observation, &controls, &context, fitting, ledger, relevance_cache, trace).await?;
@@ -898,8 +937,8 @@ async fn shortlist(
     Ok(Some((kept(low), paid, used)))
 }
 
-/// Whether `control` takes `operation`. A field that takes a fill also takes a key press: observation lists only fill,
-/// and the key a press sends is copied from the task.
+/// Whether `control` takes `operation`. A field that takes a fill also takes a key; other keyboard targets are
+/// offered by the observation, which knows whether the control can receive focus.
 pub fn takes(control: &Control, operation: Operation) -> bool {
     control.operations.contains(&operation)
         || (operation == Operation::Press && control.operations.contains(&Operation::Fill))
@@ -947,6 +986,7 @@ fn offered_operations(
         .copied()
         .filter(|operation| !context.withheld.contains(operation))
         .filter(|operation| match operation {
+            Operation::Search => context.web_search,
             Operation::Navigate => !urls.is_empty(),
             Operation::Click
             | Operation::Hover
@@ -1003,7 +1043,11 @@ pub fn build_request(
     if let Some(reload) = context.reload.as_ref().filter(|url| !urls.contains(url)) {
         urls.push(reload.clone());
     }
-    let offered = offered_operations(observation, &indexed, context, &urls);
+    let offered = if context.list_read == ListRead::Continue {
+        Vec::new()
+    } else {
+        offered_operations(observation, &indexed, context, &urls)
+    };
     let mut questions: IndexMap<String, Question> = IndexMap::new();
     let target_rules = TARGET.as_str();
     questions.insert(
@@ -1025,7 +1069,23 @@ pub fn build_request(
                             known.join(", ")
                         )
                     }
+                    (Operation::Scroll, _) if indexed.contains_key(op) => {
+                        "Scroll the chosen vertical area down, or horizontal area right, to reveal more content.".into()
+                    }
+                    (Operation::ScrollUp, _) if indexed.contains_key(op) => {
+                        "Scroll the chosen vertical area up, or horizontal area left, to reveal content in that direction."
+                            .into()
+                    }
                     (Operation::Navigate, [only]) => format!("{} The address: {only}", operation_label(*op)),
+                    // Only a page with a control whose role defines keys is told so, so a page of plain fields asks
+                    // what it always has.
+                    (Operation::Press, _)
+                        if indexed
+                            .get(op)
+                            .is_some_and(|controls| controls.iter().any(|c| !role_keys(&c.role).is_empty())) =>
+                    {
+                        PRESS_ROLE_KEYS.into()
+                    }
                     _ => operation_label(*op).to_string(),
                 };
                 (op.as_str().to_string(), Value::from(label))
@@ -1033,15 +1093,34 @@ pub fn build_request(
         )
         .into(),
     );
+    if context.list_read != ListRead::None {
+        let Question::Choice(operation) = questions.get_mut(keys::OPERATION).expect("operation question") else {
+            unreachable!("operation is a choice");
+        };
+        if context.list_read == ListRead::Continue {
+            operation.instructions = format!(
+                "{UNTRUSTED}\nThe run is reading a list the task covers, one page at a time. Choose whether to read this page as another page of that same list, or hand it back for an ordinary action decision. Hand it back if it is a different list, an item detail page, a wall, an error, or needs an action before its records can be read. Reading does not declare the task complete."
+            );
+            operation.criteria.insert("stop_list".into(), "Return to an ordinary decision on this page.".into());
+        }
+        if !context.withheld.contains(&Operation::Read)
+            && (context.list_read == ListRead::Continue || offered.contains(&Operation::Read))
+        {
+            operation.criteria.insert(
+                "read_list".into(),
+                "Read this page and continue reading this same list through its observed next-page links, within the pages the task covers. Keep checking each page before reading it.".into(),
+            );
+        }
+    }
     let mut targets: IndexMap<Operation, Vec<Control>> = IndexMap::new();
     let mut groups: IndexMap<Operation, Vec<Vec<Control>>> = IndexMap::new();
     let limit = max_options;
     let size = (config.observation.group_size.max(0) as usize).min(limit);
     for operation in &offered {
-        if !TARGETED.contains(operation) {
+        if !TARGETED.contains(operation) && !fastbrowse_core::models::SCROLLING.contains(operation) {
             continue;
         }
-        let candidates = &indexed[operation];
+        let Some(candidates) = indexed.get(operation) else { continue };
         if candidates.len() <= limit {
             questions.insert(keys::target(*operation), target_question(*operation, candidates, target_rules).into());
             targets.insert(*operation, candidates.clone());
@@ -1212,9 +1291,17 @@ async fn evaluate(
 
     let evaluation = ask(&request.questions).await?;
     let operation_answer = choice_answer(&evaluation, keys::OPERATION)?;
-    let operation = Operation::parse(&operation_answer.choice).ok_or_else(|| {
-        AgentError::Invalid(format!("{} is not a valid Operation", text::repr(&operation_answer.choice)))
-    })?;
+    let read_scope = match operation_answer.choice.as_str() {
+        "read_list" => ReadScope::List,
+        "stop_list" => ReadScope::Return,
+        _ => ReadScope::Page,
+    };
+    let operation = (read_scope != ReadScope::Page)
+        .then_some(Operation::Read)
+        .or_else(|| Operation::parse(&operation_answer.choice))
+        .ok_or_else(|| {
+            AgentError::Invalid(format!("{} is not a valid Operation", text::repr(&operation_answer.choice)))
+        })?;
     let operation_confidence = operation_answer.confidence;
     let mut target: Option<Control> = None;
     let mut tab_id: Option<String> = None;
@@ -1320,6 +1407,7 @@ async fn evaluate(
         })
         .collect();
     Ok(Decision {
+        read_scope,
         plan,
         operation,
         url,
@@ -1546,7 +1634,12 @@ fn target_question(operation: Operation, candidates: &[Control], rules: &str) ->
 /// picker is a useful click target even when its value is already filled.
 fn target_element(control: &Control, operation: Operation) -> Map<String, Value> {
     let mut element = element(control);
-    if control.operations.contains(&Operation::Fill) {
+    if operation == Operation::Press && !role_keys(&control.role).is_empty() {
+        let label = element["label"].as_str().unwrap_or_default().to_string();
+        let given = if control.operations.contains(&Operation::Fill) { ", or a task-supplied key," } else { "" };
+        element
+            .insert("label".into(), format!("Press a key its {} role supports{given} in {label}", control.role).into());
+    } else if control.operations.contains(&Operation::Fill) {
         let label = element["label"].as_str().unwrap_or_default().to_string();
         match operation {
             Operation::Click => {
@@ -1764,6 +1857,20 @@ mod tests {
     }
 
     #[test]
+    fn test_a_list_continuation_respects_a_withheld_read() {
+        let page = observation(vec![link("next")]);
+        let mut context = StepContext { list_read: ListRead::Continue, ..StepContext::new("read every page") };
+        for withheld in [false, true] {
+            context.withheld = if withheld { vec![Operation::Read] } else { Vec::new() };
+            let request = build_request(&page, &page.controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
+            let Question::Choice(operation) = &request.questions[keys::OPERATION] else { unreachable!() };
+            assert_eq!(operation.criteria.contains_key("read_list"), !withheld);
+            assert!(operation.criteria.contains_key("stop_list"));
+            assert!(!request.questions.contains_key("click_target"));
+        }
+    }
+
+    #[test]
     fn test_a_plan_is_asked_only_when_wanted_and_only_of_fields() {
         let controls = vec![field("name", None), button(1), link("away")];
         let page = observation(controls.clone());
@@ -1907,6 +2014,36 @@ mod tests {
     }
 
     #[test]
+    fn test_a_control_whose_role_defines_keys_is_offered_a_press() {
+        let slider = Control::new("volume", "slider", "Volume", [Operation::Click, Operation::Press]);
+        let controls = vec![slider.clone(), field("name", None), button(1)];
+        let page = observation(controls.clone());
+        let request = build_request(&page, &controls, &StepContext::new("t"), &Config::default(), MAX_CHOICE_OPTIONS);
+        let Question::Choice(operation) = &request.questions["operation"] else { panic!("a choice") };
+        assert_eq!(operation.criteria["press"], json!(PRESS_ROLE_KEYS));
+        let Question::Choice(target) = &request.questions["press_target"] else { panic!("a choice") };
+        assert_eq!(target.criteria.keys().collect::<Vec<_>>(), ["volume", "name"]);
+        assert_eq!(target.criteria["volume"]["label"], json!("Press a key its slider role supports in Volume"));
+        assert_eq!(target.criteria["name"]["label"], json!("Press a task-supplied key in name"));
+        let spin = Control::new("qty", "spinbutton", "Quantity", [Operation::Fill]);
+        assert_eq!(
+            target_element(&spin, Operation::Press)["label"],
+            json!("Press a key its spinbutton role supports, or a task-supplied key, in Quantity")
+        );
+        // An activation-only role adds no press, and a page of plain fields is asked what it always was.
+        assert!(!takes(&button(1), Operation::Press));
+        let native_select = Control::new("native", "combobox", "Choose", [Operation::Select]);
+        assert!(!takes(&native_select, Operation::Press));
+        let unfocusable = Control::new("cell", "gridcell", "Cell", [Operation::Click]);
+        assert!(!takes(&unfocusable, Operation::Press));
+        let plain = vec![field("name", None), button(1)];
+        let page = observation(plain.clone());
+        let request = build_request(&page, &plain, &StepContext::new("t"), &Config::default(), MAX_CHOICE_OPTIONS);
+        let Question::Choice(operation) = &request.questions["operation"] else { panic!("a choice") };
+        assert_eq!(operation.criteria["press"], json!(operation_label(Operation::Press)));
+    }
+
+    #[test]
     fn test_jev_picks_the_focused_field_to_leave() {
         let jev = fake(&[("operation", "blur"), ("blur_target", "typing")], "");
         let page = observation(vec![field("left", Some(false)), field("typing", Some(true))]);
@@ -1922,6 +2059,22 @@ mod tests {
         for unfocused in [None, Some(false)] {
             assert!(!element(&field("reference", unfocused)).contains_key("focused"));
         }
+    }
+
+    #[test]
+    fn scrolling_can_choose_a_container_without_requiring_one_on_older_observations() {
+        let context = StepContext::new("Read the rest of the side panel");
+        let jev = fake(&[("operation", "scroll"), ("scroll_target", "panel")], "");
+        let page =
+            observation(vec![Control::new("panel", "region", "Vertical scroll area: Side panel", [Operation::Scroll])]);
+        let decision =
+            block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        assert_eq!(decision.target.unwrap().id, "panel");
+        let page = observation(vec![]);
+        let decision =
+            block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        assert_eq!(decision.operation, Operation::Scroll);
+        assert!(decision.target.is_none());
     }
 
     #[test]

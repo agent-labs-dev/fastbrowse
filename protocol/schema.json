@@ -297,7 +297,8 @@
         "jev",
         "llm",
         "browser",
-        "proxy"
+        "proxy",
+        "search"
       ],
       "title": "CostComponent",
       "type": "string"
@@ -662,6 +663,8 @@
         "pages",
         "dates",
         "known_pages",
+        "recovery_pages",
+        "search",
         "unobtainable",
         "groups"
       ],
@@ -865,7 +868,8 @@
         "wait",
         "read",
         "done",
-        "navigate"
+        "navigate",
+        "search"
       ],
       "title": "Operation",
       "type": "string"
@@ -1227,6 +1231,11 @@
         "local": {
           "default": false,
           "title": "Local",
+          "type": "boolean"
+        },
+        "launch": {
+          "default": false,
+          "title": "Launch",
           "type": "boolean"
         },
         "chrome": {
@@ -2062,7 +2071,7 @@
       "RUN_CANCEL": "run/cancel",
       "SHUTDOWN": "shutdown"
     },
-    "PROTOCOL_VERSION": 2,
+    "PROTOCOL_VERSION": 3,
     "ServerMethod": {
       "RUN_EVENT": "run/event",
       "RUN_FRAME": "run/frame",

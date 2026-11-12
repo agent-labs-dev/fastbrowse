@@ -1555,3 +1555,42 @@ def test_an_exclusion_reason_is_refused_where_the_site_would_refuse_it(reason):
     with pytest.raises(ValidationError):
         benchmarks.ExcludedTask(arm="browser-use", task="pypi-version", reason=reason)
     benchmarks.ExcludedTask(arm="browser-use", task="pypi-version", reason="needs login credentials: none (100%)")
+
+
+def test_explicit_interruption_clock_retains_outcome_group(candidate):
+    data = copy.deepcopy(candidate)
+    row = data["groups"][0]["rows"][0]
+    row.update(
+        timing_basis="physical-attempt-wall-time",
+        timing_note="Includes dispatch and admission interruptions",
+        physical_runs=2,
+        seconds=340.3,
+    )
+    parsed = Candidate.model_validate(data)
+    assert parsed.groups[0].rows[0].seconds == 340.3
+    assert {r.timing_basis for r in parsed.groups[0].rows} == {TIMING_BASIS, "physical-attempt-wall-time"}
+
+
+@pytest.mark.parametrize("missing", ["timing_note", "physical_runs"])
+def test_interruption_clock_requires_note_and_retry_count(candidate, missing):
+    row = copy.deepcopy(candidate["groups"][0]["rows"][0])
+    row.update(
+        timing_basis="physical-attempt-wall-time",
+        timing_note="Includes dispatch and admission interruptions",
+        physical_runs=2,
+    )
+    if missing == "timing_note":
+        row[missing] = None
+    else:
+        row[missing] = 1
+    with pytest.raises(ValidationError, match="interruption note and retry count"):
+        Row.model_validate(row)
+
+
+@pytest.mark.parametrize("field", ["session_open_seconds", "session_close_seconds"])
+def test_physical_clock_rejects_partial_phase_totals(candidate, field):
+    row = copy.deepcopy(candidate["groups"][0]["rows"][0])
+    row.update(timing_basis="physical-attempt-wall-time", timing_note="Dispatch interruption", physical_runs=2)
+    row[field] = 0.1
+    with pytest.raises(ValidationError, match="without phase totals"):
+        Row.model_validate(row)

@@ -26,23 +26,6 @@ the changed writer through both readers.
 
 ## Schemas
 
-## What may be published
-
-- Only a figure we measured, on the build the candidate names. A vendor's own figure appears only as a
-  reference, labelled vendor-published with its source, never beside ours as if measured the same way.
-- Claude Opus 5.5 through OpenRouter is the one judge model behind published figures: Parallax's LLM fallback
-  (`PARALLAX_JUDGE_MODELS`) and the official suites' judges (`PARALLAX_BU_BENCH_JUDGE`,
-  `PARALLAX_MIND2WEB_JUDGE`) all name it, and a group judged by any other model is not published.
-
-## The candidate contract
-
-Three programs share the candidate's schema: `fastbrowse-evals browser publish-candidate` writes it,
-`fastbrowse.evals.benchmarks` validates and installs it, and `agent-labs-dev/fastbrowse-site` parses it
-(`src/lib/benchmark-feed.ts`). A schema change lands in all three. Before any of them merges, run one candidate written by
-the changed writer through both readers.
-
-## Schemas
-
 Schema 1 requires all four original groups. Schema 2 accepts nonempty subsets of those four groups.
 Schema 3 also supports `internal-fastbrowse`: every supported internal task in the current catalog (53 since
 `stretch-wizard-correction` was retired; figures approved earlier ran 54), three repeats each, with
@@ -64,22 +47,35 @@ stopped is a failed row naming why, and a legacy `blocked` slot reads as one. Ea
 reason and counts as `repeats` failed attempts in every pass rate. A row whose agent connects to its browser where the
 harness cannot see (hosted Browser Use, Browser Harness) states what of that setup stayed in its seconds in
 `timing_note`. The site's parser (`src/lib/benchmark-feed.ts`) must accept these fields before a candidate that has
-them is published.
+them is published. A validated never-started retry uses `physical-attempt-wall-time`: its seconds sum the
+recorded dispatch elapsed time and the executed attempts' session-ready-to-answer time, without adding
+executed session opening or closing. Its note describes this accounting and its phase totals stay absent.
+Groups retain outcomes and every elapsed time across explicit bases, but consumers must suppress aggregate
+speed comparisons across bases. Legacy rows without a basis cannot be mixed with explicit clocks.
 
 `internal-hosted` is the head-to-head over the 53 tasks fastbrowse runs; figures approved at 46, 47 or 52 tasks still
 read. A campaign runs `fastbrowse` and `jev-ultrafast` live in one harness invocation, on Browser Use Cloud browsers
-with the same settings. Each arm runs every repeat of every task it can attempt: `browser-use` skips the task that
+with the same settings. A competitor refresh adds `browser-use`, `browser-use-ultrafast` and `browser-harness`. Both hosted Browser Use models return answers. Each arm runs every repeat of every task it can attempt: `browser-use` and `browser-use-ultrafast` skip the task that
 passes only by stopping before an unauthorized step, and `browser-harness` also skips the login tasks, so it runs 47.
-Ultrafast returns no answer, only DONE or BLOCKED, so it runs only the six navigation tasks, which are graded on the
+`jev-ultrafast` returns no answer, only DONE or BLOCKED, so it runs only the six navigation tasks, which are graded on the
 page a run ends on. The catalog states each reason and the site shows those tasks as not run. An arm that did not run has no rows and the site shows it as not measured. An arm
-that reports neither its model nor its spend carries `"dollars": null` and the site shows its pass rate and seconds with
-"cost not reported". Fastbrowse receipts retain known dollar figures, but an unknown or unsettled line marks
-the total incomplete. A provisional figure is a lower bound, not a settled bill.
+whose complete cost is unavailable carries `"dollars": null` on every public row. Its grounded outcomes and seconds
+remain publishable, with no cost total, average, ratio or cost winner. An unresolved charge in any contributing
+slot's physical retries withholds that arm's costs across all contributing invocations. Other arms keep their
+complete costs. Fastbrowse still requires complete costs on every physical attempt.
 
-`browser-use` and `browser-harness` rows come from `docs/results/competitor-reference.json`, which only
+Hosted session usage remains provisional after its browser stops: the provider can report delayed charges and
+supplies no billing-finalized marker. The private `provisional_hosted_cost` receipt preserves the exact amount
+strings and query time; `dollars` remains null and `unknown_cost` true. A later read is a separate usage observation,
+never a replacement for the original receipt or proof of final billing. A later crash can also leave a numeric
+partial receipt with `unknown_cost` true. The unknown flag controls the total; the private partial amount survives.
+Publication replays every unknown attempt at its full original budget hold. Reduced holds, unpriced judges,
+missing grades and incomplete coverage still block publication. Original ledgers remain unchanged.
+
+`browser-use`, `browser-use-ultrafast` and `browser-harness` rows come from `docs/results/competitor-reference.json`, which only
 `publish-candidate` reads. It holds their public rows with the vendor, date, version, browser and campaign of the one
 run that measured them, and the site labels them as measured once on that date, not on this release. A dispatch with
-`refresh_competitors` runs both live on a full head-to-head and leaves `competitor-reference.json` in the candidate
+`refresh_competitors` runs all three live on a full head-to-head and leaves `competitor-reference.json` in the candidate
 artifact; commit that file to `docs/results/` for later campaigns. Publication refuses the head-to-head, naming each
 stale task, when the reference is missing, is graded under another policy, or no longer matches the catalog.
 
@@ -99,7 +95,7 @@ throughput and cost with the previous approved candidate; wall time is recorded 
 catalog differs from the approved one only by tasks listed under the catalog's `retired` (a site that is gone)
 is compared on the tasks both ran; the earlier catalog is found in Git history by its digest. Any other catalog,
 task or limit difference is a protocol change, published only as described
-under [Changing the protocol](#changing-the-protocol). Unresolved costs, missing grades, incomplete coverage and
+under [Changing the protocol](#changing-the-protocol). Unresolved Fastbrowse costs, unpriced judges, missing grades, incomplete coverage and
 a failed fixture workflow block publication. The fixture receipt is a successful maintainer dispatch of
 `evals.yml` whose head commit is the measured build. When `main` has moved past that build, push a branch at
 it and dispatch the workflow there; a branch run counts only when its commit is in `main`'s history, so the
@@ -163,3 +159,20 @@ reason. A protocol change states its cause in its note, such as #356's uncapped 
 pull request became the approval. `python -m fastbrowse.evals.benchmarks --check-diff` still refuses any change to
 them, their archives or their protocol-change records that lacks the owner receipt they were approved with. A new
 campaign is not published there.
+
+Legacy hosted dispatches that lost their receipt can supply `--execution-receipts PATH ...` to
+`publish-candidate`. Each closed, versioned `ExecutionReceipt` sidecar binds the original selected,
+physical and budget ledger hashes, its canonical physical row, the complete stdout log and a separate
+provider archive. The archive records the run, every cursor page of terminal events and the stopped
+browser. Collection provenance names the API version, SDK version, collector and query time. These
+are hash-pinned provider observations, not provider-signed attestations or final billing receipts.
+
+The loader requires an exact unique join between WATCH browser IDs and physical attempts, an explicit
+`worker.never_started` event after dispatch failed at worker admission, present zero token usage and
+no execution events. Missing, unfamiliar or contradictory events reject the receipt. Only an
+unselected attempt preceding a genuinely graded selected retry may use it. Every physical attempt
+has exactly one semantic judgment or validated non-execution receipt; an ordinary missing judge
+still blocks publication. The non-execution detail remains ungraded in private tracking, with its
+reason and provider archive included in the evidence zip and run identity. Selected outcomes still
+come from real judgments. Raw ledgers, elapsed time and the full unknown-cost hold stay unchanged;
+provider IDs and detailed receipts stay out of the public candidate.

@@ -104,8 +104,7 @@ caller can route it without parsing the error; see [Results](cli.md#results).
 - `--bitwarden ITEM`, when the vault item's saved URIs match `--start`.
 - `--extension`, to run in your own Chrome where you are already signed in. See
   [Your own Chrome](cli.md#your-own-chrome).
-- `--profile DIR` for local Chrome you signed into once by hand, or `--cloud-profile ID` for a Browser Use
-  Cloud profile. See [Signed-in sites](cli.md#signed-in-sites).
+- `--cloud --cloud-profile ID` for a Browser Use Cloud profile, or a local profile through the SDK. See [Signed-in sites](cli.md#signed-in-sites).
 - Over MCP, the server's operator adds the secret with `--secret` or `--bitwarden`, or signs in once in the
   server's `--profile`.
 
@@ -151,8 +150,8 @@ limit.
 - A bot check, such as a CAPTCHA, that did not clear. The run waits while the page is still loading, or while
   a Browser Use Cloud browser's CAPTCHA solver works on the check, up to the run's time limit. It stops at once
   when nothing is working on the check or the solver gives up. The error is `bot check at <origin>; it is not a
-  sign-in and no credential passes it. Retry using an attached local browser or choose another source for
-  this research.`
+  sign-in and no credential passes it, and no other route to the task was found. Retry after the check clears
+  or choose another source for the task.`
 - The site answered HTTP 403 and Jev found no way on. The error is
   `Could not complete the task after HTTP 403 at <url>: the site refused this browser session, which may be an access or bot check or a sign-in it requires.`
 
@@ -161,12 +160,9 @@ A bot check can block a cloud browser before any task step runs. Credentials do 
 
 **Next step.**
 
-- Retry with an attached local browser (`--cdp-url` or `--cdp-port`, see
-  [Open windows and Electron apps](cli.md#open-windows-and-electron-apps)), or choose another source for
-  the research.
+- Retry in your own Chrome through the extension (the CLI default), or choose another source for the research.
 - Give `--start` a URL past the check.
-- Run headed with a kept profile (`--headed --profile DIR`), solve the check once by hand in that profile,
-  and point later runs at it.
+- Solve the check by hand in the Chrome profile with the extension installed, then retry.
 
 ## budget_exceeded (exit 7)
 
@@ -240,7 +236,7 @@ the task again.
 
 ### An attached Chrome that waits for approval
 
-With `--cdp-url` or `--cdp-port`, the run connects to a browser you started. If that browser never completes
+With SDK `cdp_url` or `cdp_port`, the run connects to a browser you started. The CLI requires the extension instead. If that browser never completes
 the DevTools handshake, the run ends `unavailable` with:
 
 ```text
@@ -260,12 +256,18 @@ browser starts. When the run ends `unavailable` with `no browser has the fastbro
 
 - Check that `fastbrowse extension install` ran for this user, and run it again after moving or reinstalling
   fastbrowse, since it records where fastbrowse is.
-- Check that the extension is on at `chrome://extensions`, and that Chrome is open.
+- Check that the [store extension](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop)
+  is installed and on at `chrome://extensions`, and that Chrome is open.
 - After installing, restart Chrome or turn the extension off and on, so it connects.
 - The error names the directory the run looked in. A connected browser's host writes there too, and on Linux
   both use `$XDG_RUNTIME_DIR/fastbrowse-hosts`, or `/run/user/<uid>/fastbrowse-hosts` when the variable is
   unset. A run started with `FASTBROWSE_EXTENSION_DIR` set, or with a different `XDG_RUNTIME_DIR` from
   Chrome's, looks somewhere else.
+
+If the error says the extension does not report its supported commands, it is too old for this build.
+Extension 0.1.1 or later must advertise every required command. Store 0.1.0 cannot do that. Update the
+extension, or run `fastbrowse extension path` and load its folder unpacked through **Developer mode** at
+`chrome://extensions`. A newer version number alone does not establish compatibility.
 
 ### Another extension's frame takes the tab away
 
@@ -281,10 +283,10 @@ frames replaced by their length, and an `extension_tab_lost` event names the fra
 
 ### DevToolsActivePort and finding the DevTools address
 
-`--cdp-port PORT` reads the browser's websocket address from `http://127.0.0.1:PORT/json/version`. When nothing
+SDK `cdp_port=PORT` reads the browser's websocket address from `http://127.0.0.1:PORT/json/version`. When nothing
 there answers with one, the run ends `error` with `no DevTools endpoint at
 http://127.0.0.1:PORT/json/version (<cause>)` or `... named no webSocketDebuggerUrl`. Pass the browser's `ws://`
-address with `--cdp-url` instead.
+address with SDK `cdp_url` instead.
 
 A local Chrome that fastbrowse starts itself picks its own DevTools port and writes it to a file named
 `DevToolsActivePort` in its profile directory, which the run reads. If Chrome exits first, or does not answer

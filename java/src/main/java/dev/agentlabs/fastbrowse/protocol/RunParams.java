@@ -32,6 +32,7 @@ public record RunParams(
     @JsonProperty("save_recipe") String saveRecipe,
     @JsonProperty("cursor") Boolean cursor,
     @JsonProperty("local") Boolean local,
+    @JsonProperty("launch") Boolean launch,
     @JsonProperty("chrome") LocalChrome chrome,
     @JsonProperty("cloud_profile") String cloudProfile,
     @JsonProperty("cdp_url") String cdpUrl,
@@ -51,11 +52,15 @@ public record RunParams(
     @JsonProperty("desktop") String desktop) {
 
     public RunParams(String runId, List<SecretRef> secrets, Boolean frames, Boolean until, String task, String start, String context, Map<String, String> inputs, List<RunAttachment> attachments, Limits limits, Authorization authorization, JsonNode outputSchema, String downloads, String record, Boolean cursor, Boolean local, LocalChrome chrome, String cloudProfile, String cdpUrl, Long cdpPort, Boolean attach, String targetMatch, Boolean foreground, String proxyCountry, List<Long> viewport, List<String> cloudExtensions, Long cloudTimeoutMinutes, List<String> allowedOrigins, Boolean fetch, Boolean browser, Boolean extension, String extensionBrowser) {
-        this(runId, secrets, frames, until, task, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record, null, null, cursor, local, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry, viewport, cloudExtensions, cloudTimeoutMinutes, allowedOrigins, fetch, browser, extension, extensionBrowser, null);
+        this(runId, secrets, frames, until, task, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record, null, null, cursor, local, null, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry, viewport, cloudExtensions, cloudTimeoutMinutes, allowedOrigins, fetch, browser, extension, extensionBrowser, null);
     }
 
     public RunParams(String runId, List<SecretRef> secrets, Boolean frames, Boolean until, String task, String start, String context, Map<String, String> inputs, List<RunAttachment> attachments, Limits limits, Authorization authorization, JsonNode outputSchema, String downloads, String record, String recipe, String saveRecipe, Boolean cursor, Boolean local, LocalChrome chrome, String cloudProfile, String cdpUrl, Long cdpPort, Boolean attach, String targetMatch, Boolean foreground, String proxyCountry, List<Long> viewport, List<String> cloudExtensions, Long cloudTimeoutMinutes, List<String> allowedOrigins, Boolean fetch, Boolean browser, Boolean extension, String extensionBrowser) {
-        this(runId, secrets, frames, until, task, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record, recipe, saveRecipe, cursor, local, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry, viewport, cloudExtensions, cloudTimeoutMinutes, allowedOrigins, fetch, browser, extension, extensionBrowser, null);
+        this(runId, secrets, frames, until, task, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record, recipe, saveRecipe, cursor, local, null, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry, viewport, cloudExtensions, cloudTimeoutMinutes, allowedOrigins, fetch, browser, extension, extensionBrowser, null);
+    }
+
+    public RunParams(String runId, List<SecretRef> secrets, Boolean frames, Boolean until, String task, String start, String context, Map<String, String> inputs, List<RunAttachment> attachments, Limits limits, Authorization authorization, JsonNode outputSchema, String downloads, String record, String recipe, String saveRecipe, Boolean cursor, Boolean local, LocalChrome chrome, String cloudProfile, String cdpUrl, Long cdpPort, Boolean attach, String targetMatch, Boolean foreground, String proxyCountry, List<Long> viewport, List<String> cloudExtensions, Long cloudTimeoutMinutes, List<String> allowedOrigins, Boolean fetch, Boolean browser, Boolean extension, String extensionBrowser, String desktop) {
+        this(runId, secrets, frames, until, task, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record, recipe, saveRecipe, cursor, local, null, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry, viewport, cloudExtensions, cloudTimeoutMinutes, allowedOrigins, fetch, browser, extension, extensionBrowser, desktop);
     }
 
     /** A builder for a {@code RunParams}, every field unset. */
@@ -83,6 +88,7 @@ public record RunParams(
         private String saveRecipe;
         private Boolean cursor;
         private Boolean local;
+        private Boolean launch;
         private LocalChrome chrome;
         private String cloudProfile;
         private String cdpUrl;
@@ -193,6 +199,11 @@ public record RunParams(
             return this;
         }
 
+        public Builder launch(Boolean launch) {
+            this.launch = launch;
+            return this;
+        }
+
         public Builder chrome(LocalChrome chrome) {
             this.chrome = chrome;
             return this;
@@ -279,7 +290,7 @@ public record RunParams(
         }
 
         public RunParams build() {
-            return new RunParams(runId, secrets, frames, until, task, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record, recipe, saveRecipe, cursor, local, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry, viewport, cloudExtensions, cloudTimeoutMinutes, allowedOrigins, fetch, browser, extension, extensionBrowser, desktop);
+            return new RunParams(runId, secrets, frames, until, task, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record, recipe, saveRecipe, cursor, local, launch, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry, viewport, cloudExtensions, cloudTimeoutMinutes, allowedOrigins, fetch, browser, extension, extensionBrowser, desktop);
         }
     }
 }

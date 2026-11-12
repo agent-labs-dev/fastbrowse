@@ -97,7 +97,7 @@ async fn an_owned_local_run_applies_viewport_before_its_first_decision() {
         let task = RunTask {
             task: "read the page".into(),
             start: Some(start.into()),
-            local: true,
+            launch: true,
             browser: true,
             viewport: Some((width, height)),
             ..RunTask::default()
@@ -110,8 +110,93 @@ async fn an_owned_local_run_applies_viewport_before_its_first_decision() {
     }
 }
 
+/// Records task-only startup calls, then stops once the rendered browser page reaches a decision.
+struct HandoffDecision {
+    startup: Arc<AtomicUsize>,
+    seen: Arc<Mutex<Vec<Value>>>,
+    scripted: fastbrowse_agent::scripted::ScriptedJev,
+}
+
+impl DecisionClient for HandoffDecision {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        self.scripted.profile()
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        if questions.contains_key("dates") {
+            self.startup.fetch_add(1, Ordering::SeqCst);
+            let task = state["task"].as_str().unwrap();
+            let Question::Choice(output) = &questions["pick"] else { panic!("output choice is present") };
+            assert!(task.contains("input format (a screenshot)"));
+            assert!(output.instructions.contains(task), "all startup questions use the task with its inputs");
+        }
+        if state.get("page").is_some() {
+            self.seen.lock().unwrap().push(state.clone());
+            return Box::pin(async { Err(DecisionError::Failed("stop on the rendered page".into())) });
+        }
+        self.scripted.evaluate(state, questions)
+    }
+}
+
+#[tokio::test]
+async fn an_initial_http_failure_keeps_task_judgments_when_the_browser_opens() {
+    if fastbrowse_browser::adapters::local_chrome::find_chrome(None).is_none() {
+        return;
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let start = format!("http://127.0.0.1:{}/", listener.local_addr().unwrap().port());
+    let server = tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut buffer = [0u8; 4096];
+            let _ = socket.read(&mut buffer).await;
+            let page = "<body><script>document.body.textContent='The rendered value is 34.'</script>";
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{page}",
+                page.len()
+            );
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, reply.as_bytes()).await;
+        }
+    });
+    let startup = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let options = task(|o, h| {
+        o.start = Some(start.clone());
+        o.task = "Report the value in input format.".into();
+        o.inputs = Some(IndexMap::from([("format".into(), "a screenshot".into())]));
+        o.local = true;
+        o.launch = true;
+        h.jev = Some(Arc::new(HandoffDecision {
+            startup: startup.clone(),
+            seen: seen.clone(),
+            scripted: fastbrowse_agent::scripted::ScriptedJev::new(Vec::new()),
+        }));
+        h.llm = Some(Arc::new(fastbrowse_agent::scripted::ScriptedLLM));
+        h.http = Some(Http::new(Arc::new(|_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+            Box::pin(async {
+                Ok(Response::new(200, "<body><script src='/app.js'></script>").with_header("content-type", "text/html"))
+            })
+        })));
+    });
+    let result = run(options).await;
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+    let result = result.expect("HTTP hands the run to the browser");
+    assert_eq!(result.status, Status::Error);
+    assert_eq!(startup.load(Ordering::SeqCst), 1, "task judgments must survive a failed first fetch");
+    let seen = seen.lock().unwrap();
+    assert!(
+        seen.iter()
+            .any(|state| state.pointer("/page/text").and_then(Value::as_str) == Some("The rendered value is 34.")),
+        "states: {seen:?}"
+    );
+}
+
 /// Answers whether the task answers a consent banner itself with the given probability, and everything else as the
-/// script `wait` says, keeping each page it is shown.
+/// script `wait` says until the post-refusal page is recorded.
 struct ConsentDecision(f64, Arc<Mutex<Vec<Value>>>, fastbrowse_agent::scripted::ScriptedJev);
 
 impl DecisionClient for ConsentDecision {
@@ -126,11 +211,15 @@ impl DecisionClient for ConsentDecision {
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         Box::pin(async move {
             if !questions.contains_key("consent") {
-                let first = {
+                let (first, recorded) = {
                     let mut seen = self.1.lock().unwrap();
                     seen.push(state.clone());
-                    seen.len() == 1
+                    (seen.len() == 1, seen.iter().filter(|state| state.pointer("/page/text").is_some()).count() == 2)
                 };
+                // The assertion needs this observation, not an unlimited wait on the static banner that follows it.
+                if recorded {
+                    return Err(DecisionError::Failed("consent observation recorded".into()));
+                }
                 if first {
                     // Time for the browser to refuse the banner before the next page is read.
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -218,8 +307,10 @@ async fn page_after_refusal(start: &str, task: &str, answers_it: f64) -> String 
         ..Host::default()
     };
     let task =
-        RunTask { task: task.into(), start: Some(start.into()), local: true, browser: true, ..RunTask::default() };
-    run_task(task, host).await.expect("run returns a result");
+        RunTask { task: task.into(), start: Some(start.into()), launch: true, browser: true, ..RunTask::default() };
+    let result = run_task(task, host).await.expect("run returns a result");
+    assert_eq!(result.status, Status::Error);
+    assert!(result.error.as_deref().is_some_and(|error| error.contains("consent observation recorded")), "{result:?}");
     let states = seen.lock().unwrap();
     let pages: Vec<&str> = states.iter().filter_map(|state| state.pointer("/page/text")?.as_str()).collect();
     pages.get(1).copied().unwrap_or_default().to_string()
@@ -297,7 +388,7 @@ async fn browser_choices_that_contradict_each_other_are_errors_before_any_browse
         ),
         (
             task(|o, _| {
-                o.local = true;
+                o.launch = true;
                 o.attach = true;
             }),
             "attach and target_match need cdp_url, cdp_port or extension",
@@ -305,9 +396,9 @@ async fn browser_choices_that_contradict_each_other_are_errors_before_any_browse
         (
             task(|o, _| {
                 o.extension = true;
-                o.local = true;
+                o.launch = true;
             }),
-            "extension drives the browser it is connected in; drop local",
+            "extension drives the browser it is connected in; drop launch",
         ),
         (
             task(|o, _| {
@@ -390,15 +481,53 @@ fn only_a_named_local_or_handed_browser_leaves_the_cloud() {
     let chrome = fastbrowse_core::models::LocalChrome::default();
     assert!(on_cloud(&RunTask::default(), &chrome));
     assert!(!on_cloud(&RunTask { local: true, ..RunTask::default() }, &chrome));
+    assert!(!on_cloud(&RunTask { launch: true, ..RunTask::default() }, &chrome));
     assert!(!on_cloud(&RunTask { cdp_port: Some(9222), ..RunTask::default() }, &chrome));
     assert!(!on_cloud(&RunTask { fetch: true, ..RunTask::default() }, &chrome));
     let headed = fastbrowse_core::models::LocalChrome { headed: true, ..chrome };
     assert!(!on_cloud(&RunTask::default(), &headed));
 }
 
+/// A local run drives the user's own Chrome through the extension, and starts a Chrome of its own only when asked
+/// (#1005): a signed-out Chrome cannot do a signed-in task.
+#[test]
+fn local_uses_the_extension_unless_a_launch_is_asked_for() {
+    let task = |task: RunTask| RunTask { task: "read the page".into(), ..task };
+    let headed = fastbrowse_core::models::LocalChrome { headed: true, ..Default::default() };
+    assert!(task(RunTask { local: true, ..RunTask::default() }).wants_extension());
+    for launched in [
+        RunTask { local: true, launch: true, ..RunTask::default() },
+        RunTask { launch: true, ..RunTask::default() },
+        RunTask { local: true, chrome: Some(headed), ..RunTask::default() },
+        RunTask { local: true, fetch: true, ..RunTask::default() },
+    ] {
+        assert!(!task(launched).wants_extension());
+    }
+    assert!(fastbrowse_run::check(&task(RunTask { local: true, extension: true, ..RunTask::default() })).is_ok());
+    let refused = |given: RunTask| fastbrowse_run::check(&task(given)).unwrap_err().to_string();
+    let error = refused(RunTask { local: true, viewport: Some((640, 480)), ..RunTask::default() });
+    assert!(error.contains("pass launch") && error.contains("viewport"), "{error}");
+    assert!(
+        !task(RunTask {
+            local: true,
+            chrome: Some(fastbrowse_core::models::LocalChrome {
+                binary: Some("custom-chrome".into()),
+                ..Default::default()
+            }),
+            ..RunTask::default()
+        })
+        .wants_extension()
+    );
+    let error = refused(RunTask { extension: true, launch: true, ..RunTask::default() });
+    assert!(error.contains("drop launch"), "{error}");
+    let error = refused(RunTask { local: true, cloud_profile: Some("p".into()), ..RunTask::default() });
+    assert!(error.contains("cloud_profile needs the cloud browser"), "{error}");
+}
+
 #[test]
 fn a_viewport_is_local_or_cloud_and_rejects_handed_browsers() {
-    let local = RunTask { task: "read the page".into(), local: true, viewport: Some((640, 480)), ..RunTask::default() };
+    let local =
+        RunTask { task: "read the page".into(), launch: true, viewport: Some((640, 480)), ..RunTask::default() };
     assert!(fastbrowse_run::check(&local).is_ok());
     let handed = RunTask {
         task: "read the page".into(),
@@ -1000,4 +1129,137 @@ async fn an_extension_run_with_no_browser_connected_ends_before_jev_is_asked() {
     let message = format!("{result:?}");
     assert!(message.contains("fastbrowse extension install"), "{message}");
     assert!(asked.lock().unwrap().is_empty(), "Jev was asked before the run found no browser");
+}
+
+struct SearchEntry;
+
+impl LLMClient for SearchEntry {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        _: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
+        Box::pin(async move {
+            let value = match purpose {
+                LLMPurpose::Start => r#"{"url":null,"queries":["returns policy"]}"#,
+                LLMPurpose::KnownPages => r#"{"urls":[]}"#,
+                LLMPurpose::Dates => r#"{"dates":[]}"#,
+                _ => return Err(LLMError::Failed("stop after search entry".into())),
+            };
+            Ok(Generation {
+                data: schema.validate_json(value).map_err(LLMError::Failed)?,
+                cost: CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.0)),
+            })
+        })
+    }
+}
+
+impl DecisionClient for SearchEntry {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        fastbrowse_core::decision::DecisionProfile::jev()
+    }
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            if !questions.contains_key("entry") {
+                return Err(DecisionError::Failed("stop after search entry".into()));
+            }
+            Ok(Evaluation {
+                model: "jev".into(),
+                answers: IndexMap::from([(
+                    "entry".into(),
+                    Answer::Choice(fastbrowse_core::decision::ChoiceAnswer {
+                        kind: Default::default(),
+                        choice: "search/0".into(),
+                        probabilities: IndexMap::from([("search/0".into(), 1.0)]),
+                        confidence: 1.0,
+                    }),
+                )]),
+                input_tokens: 0,
+                cost: CostLine::new(CostComponent::Jev, CostBasis::Metered, Some(0.0)),
+                requests: 1,
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_search_entry_needs_no_browser_and_records_its_provider_receipt() {
+    let requests = Arc::new(AtomicUsize::new(0));
+    let sent = requests.clone();
+    let result = run(task(move |_, host| {
+        host.settings = Some(Settings::from_sources(&[("EXA_API_KEY", "key")], None).unwrap());
+        host.llm = Some(Arc::new(SearchEntry));
+        host.jev = Some(Arc::new(SearchEntry));
+        host.http = Some(Http::new(Arc::new(
+            move |request: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+                assert_eq!(request.url, "https://api.exa.ai/search");
+                sent.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {
+                    Ok::<_, TransportError>(Response::json(
+                        200,
+                        &serde_json::json!({
+                            "results":[{"url":"https://shop.example/policy","title":"Policy"}],
+                            "costDollars":{"total":0.007}
+                        }),
+                    ))
+                })
+            },
+        )));
+    }))
+    .await
+    .unwrap();
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+    assert!(result.browser.is_none());
+    assert!(
+        result.cost.lines.iter().any(|cost| cost.component == CostComponent::Search && cost.dollars == Some(0.007))
+    );
+}
+
+#[tokio::test]
+async fn a_search_is_refused_before_dispatch_when_its_price_exceeds_the_budget() {
+    let result = run(task(|options, host| {
+        options.limits = Some(fastbrowse_core::models::Limits { max_dollars: Some(0.006), ..Default::default() });
+        host.settings = Some(Settings::from_sources(&[("EXA_API_KEY", "key")], None).unwrap());
+        host.llm = Some(Arc::new(SearchEntry));
+        host.jev = Some(Arc::new(SearchEntry));
+        host.http = Some(Http::new(Arc::new(|_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+            panic!("over-budget search dispatched")
+        })));
+    }))
+    .await
+    .unwrap();
+    assert_eq!(result.status, Status::BudgetExceeded);
+    assert!(result.cost.lines.iter().all(|cost| cost.component != CostComponent::Search));
+}
+
+#[tokio::test]
+async fn cancelling_an_in_flight_search_preserves_its_bounded_charge() {
+    let cancel = Cancel::default();
+    let stop = cancel.clone();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let sent = started.clone();
+    let options = task(move |_, host| {
+        host.cancel = stop;
+        host.settings = Some(Settings::from_sources(&[("EXA_API_KEY", "key")], None).unwrap());
+        host.llm = Some(Arc::new(SearchEntry));
+        host.jev = Some(Arc::new(SearchEntry));
+        host.http =
+            Some(Http::new(Arc::new(move |_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+                sent.notify_one();
+                Box::pin(std::future::pending())
+            })));
+    });
+    let running = tokio::spawn(run(options));
+    started.notified().await;
+    cancel.trip();
+    let RunError::Cancelled(receipt) = running.await.unwrap().unwrap_err() else { panic!("not cancelled") };
+    assert!(receipt.cost.lines.iter().any(|cost| cost.component == CostComponent::Search
+        && cost.basis == CostBasis::Bounded
+        && cost.dollars == Some(0.007)));
 }

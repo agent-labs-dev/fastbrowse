@@ -3,9 +3,9 @@ title: Cap browser automation cost per run
 description: What a fastbrowse run reports it spent, what each charge is for, and how to cap a run with --max-dollars and --max-steps.
 topic: Results and cost
 published: 2026-10-31
-updated: 2026-11-11
-verifiedAgainst: v0.10.1
-verifiedOn: 2026-11-11
+updated: 2026-11-12
+verifiedAgainst: v0.10.0
+verifiedOn: 2026-11-12
 ---
 
 Every fastbrowse run reports what it spent. `--json` breaks the total down by component, so model calls and verification calls show up as separate lines. Measured cost per run for benchmark tasks is on [the benchmarks page](/benchmarks/).
@@ -16,13 +16,14 @@ When a model endpoint reports no price, the cost of those calls is unknown. A ru
 
 The result names the resource that ran out in `budget.resource` and the limit it hit in `budget.limit`, so a caller can tell a spent budget from a step limit without parsing an error.
 
-## The three charges on a run
+## Charges on a run
 
-- Model calls, which pick each action and write the answer.
+- Model calls, which pick each action and write the answer. A stalled run can also ask for a fresh known route before stopping.
 - Verification calls, which check each claim against the page text it cites.
+- Optional web search, reported as a search cost line.
 - The browser. A cloud browser is billed by time and added when the run stops.
 
-`--max-dollars` caps model spend and `--max-steps` caps the number of actions. Neither changes the browser bill. Both are unset by default, so set them when a task is one of many.
+`--max-dollars` caps model and web-search spend and `--max-steps` caps the number of actions. Neither changes the browser bill. Both are unset by default, so set them when a task is one of many.
 
 ```sh
 uvx fastbrowse "find the cheapest nonstop flight to Lisbon next Friday" \

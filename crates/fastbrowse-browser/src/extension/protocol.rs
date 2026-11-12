@@ -44,6 +44,9 @@ pub struct HostRecord {
     pub version: String,
     pub protocol: u32,
     pub pid: u32,
+    /// Chrome starts the native host directly; its parent identifies the window for live cursor feedback.
+    #[serde(default)]
+    pub browser_pid: Option<u32>,
     pub socket: PathBuf,
 }
 
@@ -280,6 +283,17 @@ mod tests {
         assert_eq!(host_dir_from(var(None), &run_user), Path::new("/home/someone/.cache/fastbrowse/hosts"));
     }
 
+    #[test]
+    fn older_host_records_have_no_browser_pid() {
+        let old = serde_json::json!({"browserId":"b", "label":"Chrome", "browser":"Chrome",
+            "version":"150", "protocol":PROTOCOL, "pid":42, "socket":"b.sock"});
+        let record: HostRecord = serde_json::from_value(old).unwrap();
+        assert_eq!(record.browser_pid, None);
+        let record = HostRecord { browser_pid: Some(7), ..record };
+        let roundtrip: HostRecord = serde_json::from_slice(&serde_json::to_vec(&record).unwrap()).unwrap();
+        assert_eq!(roundtrip.browser_pid, Some(7));
+    }
+
     fn write_record(dir: &Path, label: &str, pid: u32) {
         let record = HostRecord {
             browser_id: format!("id{label}"),
@@ -288,6 +302,7 @@ mod tests {
             version: "150".into(),
             protocol: PROTOCOL,
             pid,
+            browser_pid: None,
             socket: dir.join(format!("id{label}.sock")),
         };
         std::fs::write(dir.join(format!("id{label}.json")), serde_json::to_vec(&record).unwrap()).unwrap();

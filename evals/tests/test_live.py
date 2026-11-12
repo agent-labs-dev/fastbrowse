@@ -154,27 +154,6 @@ async def test_an_answer_key_that_will_not_come_back_fails_only_its_task(
     assert rows["wiki-open"].failure.startswith("truth raised HTTPStatusError")
 
 
-def test_gateway_answers_take_the_direct_api_shape() -> None:
-    payload = {
-        "answers": {"operation": {"type": "choice", "choice": "CLICK", "probabilities": {"CLICK": 0.50, "DONE": 0.51}}},
-        "usage": {"inputTokens": 900, "outputTokens": 3},
-        "providerMetadata": {"typesafe": {"confidence": {"operation": 0.7}}, "gateway": {"cost": "0.0004"}},
-    }
-    answer, cost = RUNNER["systemone_answer"](payload)
-    operation = answer["answers"]["operation"]
-    assert operation["confidence"] == 0.7
-    # A near-tie the gateway's rounding put a hundredth the wrong way round is Jev's choice, as fastbrowse reads it.
-    assert operation["probabilities"] == {"CLICK": 0.51, "DONE": 0.51}
-    assert cost == 0.0004
-
-
-def test_a_real_gap_in_probabilities_is_left_alone() -> None:
-    payload = {"answers": {"op": {"type": "choice", "choice": "A", "probabilities": {"A": 0.3, "B": 0.7}}}}
-    answer, cost = RUNNER["systemone_answer"](payload)
-    assert answer["answers"]["op"]["probabilities"] == {"A": 0.3, "B": 0.7}
-    assert cost is None
-
-
 def test_the_runner_answers_a_choice_of_one_option_without_asking_jev(monkeypatch: pytest.MonkeyPatch) -> None:
     sent: list[dict[str, Any]] = []
 
@@ -196,13 +175,55 @@ def test_the_runner_answers_a_choice_of_one_option_without_asking_jev(monkeypatc
     assert result["answers"]["operation"]["choice"] == "TYPE_TEXT"
 
 
+@pytest.mark.parametrize("env", [{}, {"AI_GATEWAY_API_KEY": "obsolete"}])
+def test_jev_defaults_to_openrouter_without_a_supported_key(env: dict[str, str]) -> None:
+    assert backend.jev_source(env) == "openrouter"
+
+
+@pytest.mark.parametrize("source,key_name", [("openrouter", "OPENROUTER_API_KEY"), ("typesafe", "TYPESAFE_API_KEY")])
+def test_selected_jev_route_requires_its_key(monkeypatch: pytest.MonkeyPatch, source: str, key_name: str) -> None:
+    monkeypatch.setattr(backend, "environment", lambda: {"FASTBROWSE_DECISION_SOURCE": source})
+    with pytest.raises(backend.MissingKey, match=key_name):
+        backend.jev_route()
+
+
+def test_settings_remove_gateway_backup_and_honor_legacy_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        backend,
+        "environment",
+        lambda: {"FASTBROWSE_JEV_SOURCE": "typesafe", "TYPESAFE_API_KEY": "ts", "AI_GATEWAY_API_KEY": "obsolete"},
+    )
+    assert backend.run_settings() == {"TYPESAFE_API_KEY": "ts", "FASTBROWSE_DECISION_SOURCE": "typesafe"}
+
+
+def test_gateway_is_not_a_jev_source() -> None:
+    with pytest.raises(backend.MissingKey, match="use openrouter or typesafe"):
+        backend.jev_source({"FASTBROWSE_DECISION_SOURCE": "gateway", "AI_GATEWAY_API_KEY": "obsolete"})
+
+
+def test_ultrafast_text_helper_keeps_the_openrouter_wire(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = {"model": live.ULTRAFAST_TEXT_MODEL, "messages": [{"role": "user", "content": "Read the label"}]}
+    response = {"choices": [{"message": {"content": '{"text":"label"}'}}], "usage": {"cost": 0.001}}
+
+    def post(_model: Any, url: str, headers: dict[str, str], sent: dict[str, Any]) -> dict[str, Any]:
+        assert url == "https://openrouter.ai/api/v1/chat/completions"
+        assert headers == {"Authorization": "Bearer or"}
+        assert sent == body
+        return response
+
+    monkeypatch.setitem(RUNNER["patch_transport"].__globals__, "_post", post)
+    model, meter = SimpleNamespace(), RUNNER["Meter"]()
+    RUNNER["patch_transport"](model, meter)
+    assert model.post_json("https://openrouter.ai/api/v1/chat/completions", "or", body) == response
+    assert meter.text == 0.001 and meter.jev == 0 and meter.unmetered == 0
+
+
 @pytest.mark.parametrize(
     ("source", "url", "key"),
     [
         (None, "https://openrouter.ai/api/v1/systemone", "or"),
         ("openrouter", "https://openrouter.ai/api/v1/systemone", "or"),
         ("typesafe", "https://api.typesafe.ai/v1/systemone", "ts"),
-        ("gateway", "https://ai-gateway.vercel.sh/v4/ai/evaluation-model", "gw"),
     ],
 )
 @pytest.mark.parametrize("pinned", [False, True])
@@ -216,21 +237,22 @@ def test_ultrafast_uses_the_selected_jev_route_and_meters_its_cost(
         configured |= {"FASTBROWSE_DECISION_BASE_URL": "https://proxy.test/", "FASTBROWSE_DECISION_MODEL": "pinned-jev"}
     monkeypatch.setattr(backend, "environment", lambda: configured)
     env = live._ultrafast_env("wss://browser.test", "/tmp/ultrafast-test")
+    assert "AI_GATEWAY_API_KEY" not in env
     for name in ("TYPESAFE_API_KEY", "AI_GATEWAY_API_KEY", "FASTBROWSE_JEV_BASE_URL", "FASTBROWSE_JEV_MODEL"):
         monkeypatch.delenv(name, raising=False)
         if name in env:
             monkeypatch.setenv(name, env[name])
 
     def post(_model: Any, endpoint: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
-        path = "/v4/ai/evaluation-model" if source == "gateway" else "/v1/systemone"
+        path = "/v1/systemone"
         assert endpoint == (f"https://proxy.test{path}" if pinned else url)
-        assert headers["Authorization"] == f"Bearer {key}"
-        if source == "gateway":
-            assert "model" not in body
-            assert headers["ai-model-id"] == ("pinned-jev" if pinned else backend.jev_models()["gateway"])
-            return {"answers": {}, "usage": {"inputTokens": 100}, "providerMetadata": {"gateway": {"cost": "0.001"}}}
+        assert headers == {"Authorization": f"Bearer {key}"}
         # The Jev release this fastbrowse build's Rust core sends for the source, never a copy of it.
-        assert body["model"] == ("pinned-jev" if pinned else backend.jev_models()[source or "openrouter"])
+        assert body == {
+            "state": {},
+            "questions": {},
+            "model": "pinned-jev" if pinned else backend.jev_models()[source or "openrouter"],
+        }
         return {"answers": {}, "usage": {"input_tokens": 100, "cost": 0.001}}
 
     monkeypatch.setitem(RUNNER["patch_transport"].__globals__, "_post", post)
@@ -575,8 +597,12 @@ async def test_a_hosted_v4_run_is_read_stopped_then_costed(monkeypatch: pytest.M
     # The browser is stopped once, before the session's cost is read, so the cost includes all of its time.
     client.browsers.stop.assert_awaited_once_with("b1")
     assert client.calls == ["stop", "cost"]
-    assert report.dollars == 0.013 and report.unknown_cost is False
-    assert report.cost_by_component == {"llm": 0.01, "search": 0.0, "browser": 0.002, "proxy": 0.001}
+    assert report.dollars is None and report.unknown_cost is True
+    assert report.cost_by_component == {}
+    receipt = report.provisional_hosted_cost
+    assert receipt is not None and receipt.total_cost_usd == "0.013"
+    assert receipt.proxy_cost_usd == "0.001" and receipt.observed_at.tzinfo is not None
+    assert receipt.session_id == "sess-1" and receipt.run_id == "run-1"
     # Timed from the browser being ready to the run completing, by Browser Use's own clock.
     assert timed[0][2:4] == (V4_START + timedelta(seconds=2), V4_START + timedelta(seconds=8))
     assert report.steps == 1 and report.llm_calls == 1 and report.llm_calls_basis == "physical_requests"
@@ -624,6 +650,43 @@ async def test_a_failed_v4_run_is_its_agents_failure_and_a_dispatch_failure_an_o
     with pytest.raises(Unavailable):
         await live.hosted_arm(task("hn-top"), httpx.AsyncClient(), record=None)
     client.runs.cancel.assert_awaited_once_with("run-1")
+
+
+@pytest.mark.parametrize("stop_failed", [False, True])
+async def test_dispatch_outages_keep_the_provider_identity_and_provisional_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stop_failed: bool
+) -> None:
+    client = V4Client(
+        [
+            v4_event("browser.ready", 1, browser_session_id="b1"),
+            v4_event("run.dispatch_failed", 2),
+        ],
+        status="failed",
+        error="scheduler unavailable bu_secret_key",
+    )
+    use_v4(monkeypatch, client)
+    if stop_failed:
+        client.browsers.stop.side_effect = httpx.ConnectError("down")
+    row = await live.run_arm("browser-use", task("hn-top"), None, httpx.AsyncClient(), tmp_path, record=None)
+    assert row.normalized_status is Ending.UNAVAILABLE and row.passed is None
+    assert any(event["type"] == "run.dispatch_failed" for event in row.events)
+    assert row.session_id == "sess-1" and row.provenance["run_id"] == "run-1"
+    assert row.provenance["browser_session_id"] == "b1"
+    assert row.provenance["provider_status"] == "failed"
+    assert row.error is not None and "scheduler unavailable" in row.error
+    assert "bu_secret_key" not in row.model_dump_json()
+    assert row.dollars is None and row.unknown_cost is True
+    assert row.cost_by_component == {}
+    receipt = row.provisional_hosted_cost
+    if stop_failed:
+        assert receipt is None
+    else:
+        assert receipt is not None and receipt.total_cost_usd == "0.013"
+        assert receipt.proxy_cost_usd == "0.001" and receipt.observed_at.tzinfo is not None
+        assert receipt.session_id == "sess-1" and receipt.run_id == "run-1"
+    assert ("cost" in client.calls) is (not stop_failed)
+    if not stop_failed:
+        assert client.calls.index("stop") < client.calls.index("cost")
 
 
 async def test_a_hosted_run_the_attempt_cancels_is_cancelled_and_its_browser_stopped(
@@ -708,8 +771,8 @@ def test_the_first_friday_grader_takes_the_date_as_the_page_shows_it() -> None:
     assert more_tasks._first_friday_check(Outcome("It shows 10/02/2026.", None, None), truth)
 
 
-def test_the_runner_prices_jev_at_list_when_the_gateway_meters_it_free() -> None:
-    """Every 0.5.6 Jev request was metered at $0 by the gateway, so both Jev-backed arms read as free of it."""
+def test_the_runner_prices_jev_at_list_when_the_provider_reports_zero() -> None:
+    """A zero-dollar provider receipt still needs its token-based list cost."""
     meter = RUNNER["Meter"](0.042 / 1_000_000)
     RUNNER["_meter"](meter, "jev", 0.0, 1_000_000)
     RUNNER["_meter"](meter, "jev", "0.0005", 1_000_000)
@@ -1551,6 +1614,35 @@ async def test_a_budget_below_one_run_is_refused_at_startup_and_its_out_reused(m
     assert "requires a fresh output" in capsys.readouterr().err
 
 
+async def test_completed_receipt_preserves_provider_cost_precision(monkeypatch, tmp_path):
+    async def execute(*args, **kwargs):
+        return Outcome("answer", None, "https://example.test"), live.ArmReport(
+            status="complete",
+            dollars=0.018836,
+            seconds=1,
+            cost_by_component={"llm": 0.003127, "proxy": 0.015709},
+        )
+
+    async def judge(*args, **kwargs):
+        return (
+            True,
+            "evidenced",
+            {
+                "judge_cost_usd": 0.0,
+                "known_judge_cost_usd": 0.0,
+                "unpriced_judge_attempts": 0,
+                "judgment": {"policy": "p", "state_sha256": "0" * 64, "questions": {}, "decisions": {}},
+            },
+        )
+
+    monkeypatch.setitem(live.ARMS, "fastbrowse", live.ARMS["fastbrowse"].model_copy(update={"runner": execute}))
+    monkeypatch.setattr(live, "semantic_grade", judge)
+    async with httpx.AsyncClient() as http:
+        row = await live.run_arm("fastbrowse", task("wiki-open"), None, http, tmp_path, record=None)
+    assert row.dollars == 0.018836
+    assert row.cost_by_component == {"llm": 0.003127, "proxy": 0.015709}
+
+
 async def test_interrupted_judgment_retains_completed_agent_evidence(monkeypatch, tmp_path):
     async def execute(*args, **kwargs):
         return Outcome("completed answer", {"result": 42}, "https://example.test"), live.ArmReport(
@@ -1856,7 +1948,7 @@ async def test_the_judge_decides_a_bot_check_alike_for_every_arm(
 
 
 JUDGE_ENV = {
-    "AI_GATEWAY_API_KEY": "gateway-test-key",
+    "OPENROUTER_API_KEY": "openrouter-test-key",
     "PARALLAX_JUDGE_MODELS": "anthropic/claude-opus-5.5",
     "PARALLAX_JUDGE_BASE_URL": "https://openrouter.ai/api/v1",
     "PARALLAX_JUDGE_API_KEY": "fallback-test-key",
@@ -1868,7 +1960,7 @@ JEV_POLICY = ["--judge-policy", live.JEV_JUDGE_POLICY]
 @pytest.mark.parametrize(
     ("missing", "message"),
     [
-        ("AI_GATEWAY_API_KEY", "AI_GATEWAY_API_KEY"),
+        ("OPENROUTER_API_KEY", "OPENROUTER_API_KEY"),
         ("PARALLAX_JUDGE_MODELS", "PARALLAX_JUDGE_MODELS"),
         ("PARALLAX_JUDGE_BASE_URL", "PARALLAX_JUDGE_BASE_URL"),
         ("PARALLAX_JUDGE_API_KEY", "PARALLAX_JUDGE_API_KEY"),
@@ -1904,7 +1996,7 @@ def test_every_judge_configured_passes_the_start_check(monkeypatch):
 def test_the_opus_policy_needs_no_jev_key(monkeypatch):
     for name, value in JUDGE_ENV.items():
         monkeypatch.setenv(name, value)
-    monkeypatch.delenv("AI_GATEWAY_API_KEY")
+    monkeypatch.delenv("OPENROUTER_API_KEY")
     live.require_judges(use_jev=False)
 
 
@@ -2417,7 +2509,7 @@ async def test_the_hosted_agents_final_page_is_read_through_its_kept_alive_brows
     async def websocket(_http: Any, url: str) -> str:
         return url.replace("https://", "wss://")
 
-    async def observe(url: str) -> FinalPage:
+    async def observe(url: str, *, secrets: object = None) -> FinalPage:
         seen.append(url)
         return FinalPage(url="https://pypi.org/project/httpx/")
 

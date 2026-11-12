@@ -40,16 +40,7 @@ rust:
     node --test crates/fastbrowse-node/test/core.test.ts
     FASTBROWSE_TEST_ADDON="$PWD/crates/fastbrowse-node/fastbrowse.node" npm run check:sdk
 
-# The extension as the zip a Chrome Web Store upload takes: the same nine files `fastbrowse extension path`
-# writes, at the archive's root. Bump `version` in the manifest before uploading a revision.
+# The Store package omits the development key while checking that it identifies the existing item.
+# Bump `version` in the manifest before uploading a revision.
 extension-zip out="dist/fastbrowse-extension.zip":
-    #!/usr/bin/env sh
-    set -eu
-    dest={{quote(out)}}
-    case "$dest" in /*) ;; *) dest="$PWD/$dest" ;; esac
-    files="manifest.json background.js popup.html popup.js allowed-methods.json icon-16.png icon-32.png icon-48.png icon-128.png"
-    mkdir -p "$(dirname "$dest")"
-    rm -f "$dest"
-    cd crates/fastbrowse-browser/extension
-    zip -q -X "$dest" $files
-    echo "$dest"
+    python3 scripts/extension_store.py build --package {{quote(out)}}

@@ -34,6 +34,13 @@ pub fn expire_frame_rechecks(page: &CdpPage) {
     }
 }
 
+/// Snapshot slots currently retained by the page, for frame lifetime assertions.
+pub fn kept_keys(page: &CdpPage) -> Vec<String> {
+    let mut keys: Vec<_> = page.state.lock().unwrap().kept.keys().cloned().collect();
+    keys.sort();
+    keys
+}
+
 /// Upload `files` to the last observation's `control_id`.
 ///
 /// With `grant`, the upload runs as if the session held that origin grant: through a page on

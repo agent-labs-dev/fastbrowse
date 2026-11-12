@@ -33,6 +33,8 @@ Time and cost are averaged over the attempts that ran, since an attempt that nev
 the arms ran, an attempt is compared only where every arm measured the same repeat, at one task version, outside an
 outage.
 
+Jev routes through OpenRouter by default, or TypeSafe directly when selected. The eval harness does not route through the Vercel AI Gateway or forward its key as a backup.
+
 Credentials per arm (environment variable names; values never enter Git, rows or projections):
 
 | arm | needs |
@@ -44,7 +46,7 @@ Credentials per arm (environment variable names; values never enter Git, rows or
 | `jev-ultrafast` | `BROWSER_USE_API_KEY`, `OPENROUTER_API_KEY` |
 | `browser-harness` | `BROWSER_USE_API_KEY` (cloud browser), `OPENROUTER_API_KEY` (Codex's model provider); the pinned Codex CLI on PATH |
 | `fastbrowse-hosted` | `FASTBROWSE_HOSTED_API_KEY`; `FASTBROWSE_HOSTED_URL` overrides the public API |
-| every run (the judge) | `PARALLAX_JUDGE_MODELS=anthropic/claude-opus-5.5`, `PARALLAX_JUDGE_BASE_URL=https://openrouter.ai/api/v1`, `PARALLAX_JUDGE_API_KEY`; `AI_GATEWAY_API_KEY` only with `--judge-policy browser-internal-jev-v3` |
+| every run (the judge) | `PARALLAX_JUDGE_MODELS=anthropic/claude-opus-5.5`, `PARALLAX_JUDGE_BASE_URL=https://openrouter.ai/api/v1`, `PARALLAX_JUDGE_API_KEY`; `OPENROUTER_API_KEY` also with `--judge-policy browser-internal-jev-v4` |
 
 Publish each comparison's ledger with `fastbrowse-evals browser publish-candidate`: `--hosted` (C1), `--backend` (C2) and
 `--ultrafast` (C3); see [Publication candidate](#publication-candidate).
@@ -86,7 +88,7 @@ arm, each page the run saw, each action with its typed values, and the citations
 vocabulary every arm shares; a run with no record at all is UNKNOWN without a judge. A state past the judge's
 documented context window is shared across requests and the verdicts combined, so nothing is cut. Earlier `--judge-policy` values keep judging as they did.
 `--judge-policy
-browser-internal-jev-v3` grades Jev first with the LLM fallback, for unpublished runs. External predicate
+browser-internal-jev-v4` grades Jev first with the LLM fallback, for unpublished runs. External predicate
 and local-command outputs are retained as source evidence and interpreted by `browser-external-jev-v4`.
 Mock fixture comparisons use `browser-mock-jev-v2` with the same semantic transport. Safety tasks, which pass by
 pausing or refusing, go to the pinned fallback without Jev. The hosted Browser Use arm keeps its session's
@@ -357,7 +359,10 @@ step, time or dollar limit, every row's agent limits recorded with each field em
 `.budget.jsonl`, official runs' `budget.jsonl`) is replayed to check that each run started only when the gate
 allowed it, and physical spend over all attempts must not exceed the budget.
 The public limits state that no arm was capped, the hosted cost override, the 4-hour provider session maximum,
-the browser of each arm and the concurrency.
+the browser of each arm and the concurrency. The campaign workflow accepts a positive `concurrency` for every
+group; leaving it empty keeps the harness default of 8. When a candidate keeps rows from earlier runs, pass
+their recorded concurrency. Publication checks each physical attempt against its invocation and states the
+concurrency of every contributing invocation: mixed settings publish as "Concurrency 4 or 8".
 
 - Internal slots total seconds and dollars over every physical run, retries included. An attempt with unknown
   cost or missing timing blocks export.

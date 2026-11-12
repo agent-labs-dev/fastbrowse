@@ -46,7 +46,7 @@ run-name: Benchmark campaign ${{ inputs.campaign_id || github.event.client_paylo
 # run's build named beside its rows.
 #
 # Repository configuration this file needs (checked before any paid call):
-#   secrets: OPENROUTER_API_KEY, AI_GATEWAY_API_KEY, PARALLAX_JUDGE_API_KEY,
+#   secrets: OPENROUTER_API_KEY, PARALLAX_JUDGE_API_KEY,
 #            LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY (each ledger is sent there; the candidate reads them back,
 #            with the fixture run)
 #            BROWSER_USE_API_KEY
@@ -134,7 +134,7 @@ on:
         type: boolean
         default: false
       concurrency:
-        description: Runs in flight at once; empty keeps the default of 8. A smoke applies it to every group. A real campaign applies it to the fastbrowse-hosted group alone, because its ledger is a diagnostic no published group reads
+        description: Runs in flight at once for every group; empty keeps the default of 8. Each invocation and physical attempt records the selected concurrency
         required: false
         type: string
         default: ""
@@ -245,19 +245,9 @@ jobs:
           case "$OFFICIAL_RUNS" in
             *[!0-9\ ]*) echo "::error::official_runs must be run ids separated by spaces"; exit 1 ;;
           esac
-          # A published comparison covers every task of its suites under one setting, so only a smoke changes the
-          # setting. `only` may narrow a release run: the gate scores each task on its newest run (scripts/release_gate.py).
-          # The one exception is `fastbrowse-hosted`, our own product's public API: its rows are a diagnostic (customer
-          # charge, and no copy of the final page, so the page half is ungraded) and it writes its own ledger that no
-          # published group reads, so a real campaign may add it and set its concurrency without moving a published
-          # setting. `fastbrowse-pool` keeps its rule: it drives the same browser a published group's rows name, so it
-          # stays a smoke-only probe. Any other arm is refused below.
-          if test "$SMOKE" != true && test -n "$RUN_CONCURRENCY"; then
-            case " $EXTRA_ARMS " in
-              *" fastbrowse-hosted "*) ;;
-              *) echo "::error::concurrency outside a smoke only sets the fastbrowse-hosted group, so it needs extra_arms fastbrowse-hosted"; exit 1 ;;
-            esac
-          fi
+          # `only` may narrow a release run: the gate scores each task on its newest run.
+          # The hosted API writes a diagnostic ledger; the pool changes a published group's browser and stays
+          # smoke-only. Concurrency applies to every group and is recorded with its invocation and attempts.
           if test "$SMOKE" != true && test -n "$EXTRA_ARMS"; then
             for arm in $EXTRA_ARMS; do
               case "$arm" in
@@ -284,9 +274,15 @@ jobs:
           case "$ONLY" in
             *[!a-z0-9\ -]*) echo "::error::only must be task ids separated by spaces"; exit 1 ;;
           esac
+          # A numeric zero in repository_dispatch would otherwise read as unset in the environment expression.
+          jq -e '(. // {}) | if has("concurrency") and .concurrency != "" then
+            .concurrency | tostring | test("^[0-9]*[1-9][0-9]*$") else true end' <<< "$PAYLOAD" > /dev/null \
+            || { echo "::error::concurrency in client_payload must be a positive integer"; exit 1; }
           case "$RUN_CONCURRENCY" in
             '') ;;
-            *[!0-9]*|0) echo "::error::concurrency must be a positive integer, got '$RUN_CONCURRENCY'"; exit 1 ;;
+            *[!0-9]*) echo "::error::concurrency must be a positive integer, got '$RUN_CONCURRENCY'"; exit 1 ;;
+            *[1-9]*) ;;
+            *) echo "::error::concurrency must be a positive integer, got '$RUN_CONCURRENCY'"; exit 1 ;;
           esac
           # The site stores the candidate as data/benchmark-<campaign_id>.json.
           printf '%s' "$CAMPAIGN_ID" | grep -Eq '^[a-zA-Z0-9_.-]+$' \
@@ -329,7 +325,6 @@ jobs:
         env:
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
           PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
@@ -340,7 +335,6 @@ jobs:
           missing=""
           need() { test -n "$2" || missing="$missing $1"; }
           need OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
-          need AI_GATEWAY_API_KEY "$AI_GATEWAY_API_KEY"
           need PARALLAX_JUDGE_API_KEY "$PARALLAX_JUDGE_API_KEY"
           need PARALLAX_JUDGE_BASE_URL "$PARALLAX_JUDGE_BASE_URL"
           need PARALLAX_JUDGE_MODELS "$PARALLAX_JUDGE_MODELS"
@@ -392,11 +386,9 @@ jobs:
           for arm in $EXTRA_ARMS; do
             if test "$arm" = fastbrowse-hosted; then hosted="fastbrowse-hosted"; else extra="$extra $arm"; fi
           done
-          # A smoke sets every group's concurrency; a real campaign sets the hosted group's alone, because the
-          # published groups' concurrency is part of the setting a figure is measured under.
-          published_conc=""; test "$SMOKE" = true && published_conc="$RUN_CONCURRENCY"
-          fastbrowse="{\"label\":\"fastbrowse\",\"key\":\"fastbrowse\",\"arms\":\"fastbrowse$extra\",\"conc\":\"$published_conc\",\"out\":\"internal-fastbrowse.jsonl\"}"
-          head_to_head="{\"label\":\"head-to-head\",\"key\":\"head-to-head\",\"arms\":\"$paired$extra\",\"conc\":\"$published_conc\",\"out\":\"head-to-head.jsonl\"}"
+          # Every group takes the dispatch setting; empty leaves the harness default of 8.
+          fastbrowse="{\"label\":\"fastbrowse\",\"key\":\"fastbrowse\",\"arms\":\"fastbrowse$extra\",\"conc\":\"$RUN_CONCURRENCY\",\"out\":\"internal-fastbrowse.jsonl\"}"
+          head_to_head="{\"label\":\"head-to-head\",\"key\":\"head-to-head\",\"arms\":\"$paired$extra\",\"conc\":\"$RUN_CONCURRENCY\",\"out\":\"head-to-head.jsonl\"}"
           hosted_group=""
           test -z "$hosted" || hosted_group=",{\"label\":\"hosted\",\"key\":\"hosted\",\"arms\":\"fastbrowse-hosted\",\"conc\":\"$RUN_CONCURRENCY\",\"out\":\"fastbrowse-hosted.jsonl\"}"
           case "$GROUP_SET" in
@@ -408,7 +400,7 @@ jobs:
           {
             echo "### Campaign arms"
             echo
-            echo "Groups: \`$GROUP_SET\`."
+            echo "Groups: \`$GROUP_SET\`. Concurrency: \`${RUN_CONCURRENCY:-8}\`."
             case "$GROUP_SET" in
               fastbrowse) ;;
               *) echo "Head-to-head arms: \`$paired$extra\`." ;;
@@ -520,7 +512,6 @@ jobs:
           FASTBROWSE_HOSTED_API_KEY: ${{ secrets.FASTBROWSE_HOSTED_API_KEY }}
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
           PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
@@ -533,8 +524,7 @@ jobs:
           read -ra only <<< "$ONLY"
           narrow=()
           test "${#only[@]}" -eq 0 || narrow+=(--only "${only[@]}")
-          # Per group: a real campaign's published groups keep the default, and only the hosted diagnostic takes
-          # the dispatch's setting.
+          # The harness records this setting in the invocation and each physical attempt.
           test -z "${{ matrix.conc }}" || narrow+=(--concurrency "${{ matrix.conc }}")
           uv run --no-sync fastbrowse-evals browser internal \
             --arms "${arms[@]}" \

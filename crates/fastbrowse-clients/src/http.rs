@@ -287,7 +287,7 @@ impl Http {
             headers: all,
             body: write(body, Style::HTTPX).into(),
             max_bytes: None,
-            timeout: Duration::from_secs_f64(seconds),
+            timeout: if seconds == f64::INFINITY { Duration::MAX } else { Duration::from_secs_f64(seconds) },
         };
         let mut event = HttpEvent { trace: &self.trace, url, body, began: monotonic(), written: false };
         let result = self.send(request).await;

@@ -60,7 +60,11 @@ async function render() {
   list.replaceChildren();
   if (!runs.length) {
     const empty = element('li', 'empty');
-    empty.append('No run is working here. Start one with ', element('code', '', 'fastbrowse --extension "…"'), '.');
+    if (connected) {
+      empty.append('Ready for a task. Start one in your terminal:', element('code', '', 'fastbrowse "What is the title of the top story?" --start https://news.ycombinator.com/ --extension --browser'));
+    } else {
+      empty.append('Connect Chrome to fastbrowse to start a run.');
+    }
     list.append(empty);
   }
   for (const run of runs) list.append(runItem(run));

@@ -640,6 +640,9 @@ mod cursor {
     /// A `cua-driver` that completes the handshake and then fails every tool call, as Python's mock driver does.
     const FAILING_DRIVER: &str = r#"#!/usr/bin/env python3
 import json, sys
+if len(sys.argv) > 1 and sys.argv[1] == "cursor-theme":
+    print(json.dumps(["fastbrowse.focus.v1"]))
+    sys.exit(0)
 tools = ["start_session", "end_session", "list_windows", "move_cursor", "set_agent_cursor_enabled"]
 started = False
 for line in sys.stdin:
@@ -650,7 +653,7 @@ for line in sys.stdin:
     if method == "initialize":
         reply = {"result": {"capabilities": {}}}
     elif method == "tools/list":
-        schema = {"properties": {"scope": {"enum": ["window", "desktop"]}}}
+        schema = {"properties": {"scope": {"enum": ["window", "desktop"]}, "cursor_theme": {"type": "object"}}}
         reply = {"result": {"tools": [{"name": name, "inputSchema": schema} for name in tools]}}
     elif message["params"]["name"] == "start_session" and not started:
         started = True

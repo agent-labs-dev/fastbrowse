@@ -1089,12 +1089,12 @@
       "default": false
     },
     "cua-codex": {
-      "pin": "cua-driver==0.46.1; codex-cli==0.167.1",
+      "pin": "cua-driver==0.46.1; codex-cli==0.167.2",
       "tier": "local",
       "default": false
     },
     "browser-harness": {
-      "pin": "browser-harness==0.1.13; codex-cli==0.167.1; cli+skill",
+      "pin": "browser-harness==0.1.13; codex-cli==0.167.2; cli+skill",
       "tier": "A",
       "default": false
     }

@@ -8,64 +8,79 @@ sig = "e9f9130a415ed07d"
 [[bindings]]
 doc = "blog/agent-credentials-scoped.md"
 target = "crates/fastbrowse-cli/src/cli.rs"
-sig = "62ed692ee5b94da1"
+sig = "7f0be7087b920344"
 
 [[bindings]]
 doc = "blog/agent-skills-browser.md"
 target = "docs/skill.md"
-sig = "bc61afd3bf10da6c"
+sig = "5bae7908d2b43ce7"
 
 [[bindings]]
 doc = "blog/agent-skills-browser.md"
 target = "skills/fastbrowse/SKILL.md"
-sig = "7990e5ddf72a113b"
+sig = "bdf20b45fa20795a"
 
 [[bindings]]
 doc = "blog/ai-agent-click-not-on-page.md"
 target = "crates/fastbrowse-core/src/config.rs"
-sig = "b15d9a3ecc2bfead"
+sig = "f739511953505e3f"
 
 [[bindings]]
 doc = "blog/ai-agent-click-not-on-page.md"
 target = "crates/fastbrowse-core/src/models.rs"
-sig = "dc19a76311d97fd3"
+sig = "a7ae7b14ff9bbf39"
 
 [[bindings]]
 doc = "blog/attach-to-running-chrome.md"
 target = "crates/fastbrowse-browser/src/session.rs"
-sig = "acb2528589762fe9"
+sig = "06ceccf09e92cc23"
 
 [[bindings]]
 doc = "blog/attach-to-running-chrome.md"
 target = "crates/fastbrowse-cli/src/cli.rs"
-sig = "62ed692ee5b94da1"
+sig = "7f0be7087b920344"
 
 [[bindings]]
 doc = "blog/attach-to-running-chrome.md"
 target = "crates/fastbrowse-cli/src/options.rs"
-sig = "3c20a7351f5a1f6c"
+sig = "9b6c1df9308c46cb"
 
 [[bindings]]
 doc = "blog/browser-automation-cost-per-run.md"
 target = "crates/fastbrowse-cli/src/cli.rs"
-sig = "62ed692ee5b94da1"
+sig = "7f0be7087b920344"
 
 [[bindings]]
 doc = "blog/browser-automation-cost-per-run.md"
 target = "crates/fastbrowse-core/src/models.rs"
-sig = "dc19a76311d97fd3"
+sig = "a7ae7b14ff9bbf39"
 
 [[bindings]]
 doc = "blog/mcp-browser-tool.md"
 target = "crates/fastbrowse-cli/src/mcp/mod.rs"
-sig = "dfd16e6ddd1d30c6"
+sig = "bf5c1ed03303c0a2"
+
+[[bindings]]
+doc = "blog/use-your-own-chrome.md"
+target = "crates/fastbrowse-browser/extension/background.js"
+sig = "3793a2a70ad5c406"
+
+[[bindings]]
+doc = "blog/use-your-own-chrome.md"
+target = "crates/fastbrowse-cli/src/cli.rs"
+sig = "7f0be7087b920344"
+
+[[bindings]]
+doc = "blog/use-your-own-chrome.md"
+target = "crates/fastbrowse-cli/src/extension.rs"
+sig = "1e4c0058e1c4543e"
 
 [[bindings]]
 doc = "blog/verify-browser-agent-results.md"
 target = "crates/fastbrowse-cli/src/cli.rs"
-sig = "62ed692ee5b94da1"
+sig = "7f0be7087b920344"
 
 [[bindings]]
 doc = "blog/verify-browser-agent-results.md"
 target = "crates/fastbrowse-core/src/models.rs"
-sig = "dc19a76311d97fd3"
+sig = "a7ae7b14ff9bbf39"

@@ -99,7 +99,8 @@ async def observe_owned_browser(pid: int) -> "FinalPage":
         endpoint = await asyncio.to_thread(browser_endpoint, pid)
     except Exception as exc:
         return FinalPage(error=f"{type(exc).__name__}: {exc}")
-    return await observe_browser(endpoint)
+    # Eligibility excludes tasks with secrets before this worker starts.
+    return await observe_browser(endpoint, secrets={})
 
 
 def payload(result: Any) -> dict[str, Any]:

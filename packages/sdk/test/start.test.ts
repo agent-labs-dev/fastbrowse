@@ -69,8 +69,8 @@ test('a binary on another protocol version is refused with both versions named, 
   const server = scriptedServer('other_protocol');
   await assert.rejects(Fastbrowse.start({ binaryPath: server.path }), (error: unknown) => {
     assert.ok(error instanceof FastbrowseError);
-    assert.match(error.message, /protocol version 2\b/);
     assert.match(error.message, /protocol version 3\b/);
+    assert.match(error.message, /protocol version 4\b/);
     return true;
   });
   assert.equal(server.running(), false);

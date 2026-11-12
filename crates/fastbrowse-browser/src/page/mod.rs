@@ -5,10 +5,11 @@
 //! jev_ultrafast/browser.py and jev_ultrafast/snapshot.js. `act` dispatches at most once per call.
 
 pub(crate) mod act;
+mod delta;
 mod pointer;
 pub mod scripts;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -157,12 +158,12 @@ pub(crate) trait FrameText: DeserializeOwned {
     const SHAPE: &'static str;
     fn url(&self) -> &str;
     fn title(&self) -> &str;
-    /// Whether this read is kept, so a frame that answers "unchanged" is answered from it instead of read again.
-    fn keeps_reads() -> bool {
-        false
+    /// A shape that keeps reads serves the validated parse of its named baseline.
+    fn from_kept(_kept: &KeptRead) -> Option<Arc<Self>> {
+        None
     }
-    /// The number the page gave this read when it kept it; none when the page keeps no read to answer "unchanged" from.
-    fn read(&self) -> Option<u64> {
+    /// None removes the slot: this shape or this read has no numbered baseline to serve.
+    fn keep(_raw: Value, _parsed: &Arc<Self>) -> Option<KeptRead> {
         None
     }
 }
@@ -223,11 +224,11 @@ impl FrameText for Snapshot {
     fn title(&self) -> &str {
         &self.title
     }
-    fn keeps_reads() -> bool {
-        true
+    fn from_kept(kept: &KeptRead) -> Option<Arc<Self>> {
+        Some(Arc::clone(&kept.parsed))
     }
-    fn read(&self) -> Option<u64> {
-        self.read
+    fn keep(raw: Value, parsed: &Arc<Self>) -> Option<KeptRead> {
+        parsed.read.map(|_| KeptRead { raw, parsed: Arc::clone(parsed) })
     }
     const SHAPE: &'static str = "_Snapshot";
     fn url(&self) -> &str {
@@ -283,11 +284,17 @@ impl FrameText for CaptureSnapshot {
     }
 }
 
+/// Raw delta rows and their validated snapshot stay together so an unchanged read needs no second parse.
+pub(crate) struct KeptRead {
+    raw: Value,
+    parsed: Arc<Snapshot>,
+}
+
 /// One frame's page-script output, tagged with how to reach that frame again.
 struct FrameObservation<T> {
     frame_id: Option<String>,
     session_id: String,
-    raw: T,
+    raw: Arc<T>,
 }
 
 /// The page's own text, then each cross-origin frame's in `frames` order under a `[Frame: origin]` line. Only the
@@ -337,7 +344,7 @@ pub(crate) struct PageState {
     pub(crate) viewport: Option<(String, Instant, (f64, f64))>,
     /// `<shape>|<slot>|<frame>` -> the read last kept for that frame. A frame answers "unchanged" only about the
     /// read it kept, so this is what such an answer is served from.
-    pub(crate) kept: HashMap<String, Value>,
+    pub(crate) kept: HashMap<String, Arc<KeptRead>>,
 }
 
 pub struct CdpPage {
@@ -346,8 +353,6 @@ pub struct CdpPage {
     pub(crate) page_js: String,
     capture_js: String,
     pub(crate) fingerprint_js: String,
-    /// The players' clocks, which `fingerprint_js` leaves out.
-    pub(crate) media_js: String,
     pub(crate) state: Mutex<PageState>,
     pub(crate) pointer_marks: Option<Arc<Mutex<Vec<crate::pointer::PointerMark>>>>,
     #[cfg(feature = "cursor")]
@@ -512,14 +517,12 @@ impl CdpPage {
         let page_js = session.snapshot().function.clone();
         let capture_js = format!("({CAPTURE_JS})({origins})");
         let fingerprint_js = format!("{page_js}('fingerprint').fingerprint");
-        let media_js = format!("{page_js}('fingerprint').media");
         Self {
             session,
             config,
             page_js,
             capture_js,
             fingerprint_js,
-            media_js,
             state: Mutex::default(),
             pointer_marks: None,
             #[cfg(feature = "cursor")]
@@ -537,6 +540,13 @@ impl CdpPage {
     #[cfg(feature = "cursor")]
     pub fn with_cursor(mut self, cursor: Option<Arc<crate::cursor::CursorFeedback>>) -> Self {
         self.cursor = cursor;
+        self
+    }
+
+    /// Native messaging cannot call browser-level SystemInfo, so the host supplies Chrome's process id.
+    #[cfg(feature = "cursor")]
+    pub fn with_cursor_browser_pid(self, pid: Option<u32>) -> Self {
+        *self.cursor_pid.lock().unwrap() = pid.map(i64::from);
         self
     }
 
@@ -737,12 +747,13 @@ impl CdpPage {
                 }
                 for unread in self.session.pending_download_unread() {
                     let why = match unread.reason {
-                        PdfUnread::NoReader => "this program has no PDF reader set up".to_owned(),
+                        PdfUnread::NoReader => "this program has no document reader set up".to_owned(),
+                        PdfUnread::TooLarge => "its decompressed contents or complete text exceed max_download_bytes".to_owned(),
                         PdfUnread::TimedOut => format!("reading it took longer than {PARSE_SECONDS} seconds"),
-                        PdfUnread::Unparsable => "it could not be parsed as a PDF".to_owned(),
+                        PdfUnread::Unparsable => "it could not be parsed as its declared document format".to_owned(),
                         // Not the file's fault, so not said to be: the run should not judge the document by it.
                         PdfUnread::ReaderFailed => {
-                            "the PDF reader did not start or ended without an answer, which says nothing about the file"
+                            "the document reader did not start or ended without an answer, which says nothing about the file"
                                 .to_owned()
                         }
                     };
@@ -867,9 +878,8 @@ impl CdpPage {
         bind: bool,
     ) -> Result<(Vec<(String, FrameObservation<Snapshot>)>, usize), BrowserError> {
         let mode = if bind { "snapshot" } else { "glance" };
-        // `-reuse` lets a frame that has not moved answer from the read it kept. The plain mode is what reads the
-        // frame again in full, for a frame whose kept read this side does not have.
-        let script = format!("{}('{mode}-reuse')", self.page_js);
+        // Each frame supplies its own baseline. A producer with a different baseline sends a full result directly.
+        let script = format!("(base => {}('{mode}-delta', base))", self.page_js);
         let full = format!("{}('{mode}')", self.page_js);
         let result = self.read_frames::<Snapshot>(&script, Some((mode, full.as_str()))).await?;
         let coverage: Vec<(String, usize)> =
@@ -895,7 +905,17 @@ impl CdpPage {
         let mut result: Vec<(String, FrameObservation<T>)> = vec![];
         // Preserve source order regardless of completion order so capture offsets and hashes stay stable.
         let reads = sources.iter().map(|(key, sid)| self.read_frame::<T>(key, sid, expression, retry));
-        let frames = futures_util::future::try_join_all(reads).await?;
+        let frames = futures_util::future::try_join_all(reads).await;
+        let (live_frames, live_sessions) = self.session.frame_read_liveness();
+        {
+            let mut state = self.state.lock().unwrap();
+            state.unanswered.retain(|session_id, _| live_sessions.contains(session_id));
+            // A detached frame is never read again, so its last full snapshot cannot expire through read_frame.
+            state.kept.retain(|key, _| {
+                key.rsplit_once('|').is_some_and(|(_, frame)| frame == MAIN || live_frames.contains(frame))
+            });
+        }
+        let frames = frames?;
         for ((key, _), frame) in sources.into_iter().zip(frames) {
             if let Some(frame) = frame {
                 // A dict in Python: a key read twice keeps its first place.
@@ -908,8 +928,6 @@ impl CdpPage {
         if let Some((_, main)) = result.iter().find(|(k, _)| k == MAIN) {
             self.session.set_tab_info(&target_id, main.raw.url(), main.raw.title());
         }
-        let live: HashSet<String> = self.session.frame_sessions().into_iter().map(|(_, s)| s).collect();
-        self.state.lock().unwrap().unanswered.retain(|session_id, _| live.contains(session_id));
         Ok(result)
     }
 
@@ -921,7 +939,18 @@ impl CdpPage {
         retry: Option<(&str, &str)>,
     ) -> Result<Option<FrameObservation<T>>, BrowserError> {
         let is_main = frame_key == MAIN;
-        let mut raw = match self.read_frame_value(is_main, session_id, expression).await {
+        let expression = if let Some((slot, _)) = retry {
+            let key = format!("{}|{slot}|{frame_key}", T::SHAPE);
+            let state = self.state.lock().unwrap();
+            let base = state.kept.get(&key).map_or(
+                Value::Null,
+                |kept| json!({"document_key": kept.raw.get("document_key"), "read": kept.raw.get("read")}),
+            );
+            format!("{expression}({base})")
+        } else {
+            expression.to_string()
+        };
+        let mut raw = match self.read_frame_value(is_main, session_id, &expression).await {
             Ok(raw) => raw,
             Err(_) if !is_main => return Ok(None),
             Err(error) => return Err(error),
@@ -933,7 +962,7 @@ impl CdpPage {
         // reference it is rather than derived and transferred again. A frame whose kept read this side does not have
         // is read again in full: the page's copy and this side's are kept together, but a reused page must never be
         // assumed to agree with a read it does not name.
-        let mut served = false;
+        let mut served = None;
         if let Some((slot, full)) = retry
             && truthy(&raw)
             && raw.get("unchanged").is_some_and(truthy)
@@ -945,11 +974,11 @@ impl CdpPage {
                 (value.get("document_key").and_then(Value::as_str), value.get("read").and_then(Value::as_u64))
             }
             let kept = self.state.lock().unwrap().kept.get(&key).cloned();
-            match kept {
-                Some(kept) if matches!(names(&raw), (Some(_), Some(_))) && names(&kept) == names(&raw) => {
-                    raw = kept;
-                    served = true;
-                }
+            let parsed = kept
+                .filter(|kept| matches!(names(&raw), (Some(_), Some(_))) && names(&kept.raw) == names(&raw))
+                .and_then(|kept| T::from_kept(&kept));
+            match parsed {
+                Some(parsed) => served = Some(parsed),
                 // The page has a read this side did not keep: read the frame again rather than answer from nothing.
                 _ => {
                     raw = match self.read_frame_value(is_main, session_id, full).await {
@@ -963,19 +992,43 @@ impl CdpPage {
                 }
             }
         }
-        let parsed: T = parse(raw.clone(), T::SHAPE)?;
-        // A read this side can serve later is kept as it arrived, under the document and number it names. A read the
-        // page did not keep replaces nothing to serve: the page will not answer "unchanged" about it.
+        if let Some((slot, full)) = retry
+            && served.is_none()
+            && raw.get("control_delta").is_some()
+        {
+            let key = format!("{}|{slot}|{frame_key}", T::SHAPE);
+            let kept = self.state.lock().unwrap().kept.get(&key).cloned();
+            raw = match kept.as_ref().and_then(|kept| delta::apply(&kept.raw, &raw)) {
+                Some(reconstructed) => reconstructed,
+                None => match self.read_frame_value(is_main, session_id, full).await {
+                    Ok(raw) => raw,
+                    Err(_) if !is_main => return Ok(None),
+                    Err(error) => return Err(error),
+                },
+            };
+            if raw.is_null() {
+                return Ok(None);
+            }
+        }
+        let was_served = served.is_some();
+        let parsed: Arc<T> = match served {
+            Some(parsed) => parsed,
+            None => Arc::new(parse(raw.clone(), T::SHAPE)?),
+        };
+        // Numbered reads are transport baselines, including deep reads the producer must derive again. Only a
+        // shallow read whose revision still matches can answer unchanged; both paths name this exact baseline.
         if let Some((slot, _)) = retry
-            && !served
-            && T::keeps_reads()
+            && !was_served
         {
             let key = format!("{}|{slot}|{frame_key}", T::SHAPE);
             let mut state = self.state.lock().unwrap();
-            if parsed.read().is_some() {
-                state.kept.insert(key, raw);
-            } else {
-                state.kept.remove(&key);
+            match T::keep(raw, &parsed) {
+                Some(kept) => {
+                    state.kept.insert(key, Arc::new(kept));
+                }
+                None => {
+                    state.kept.remove(&key);
+                }
             }
         }
         // The text and the address it came from were read in one evaluation, so this cannot be raced.
@@ -1189,7 +1242,7 @@ impl CdpPage {
         // changed or vanished control, or a new document, is a redraw.
         let check = format!(
             "(ids => {{ const r = window.__fastbrowse; if (!r?.observed) return true; \
-             return ids.some(id => r.observed.has(id) && r.guardKey(r.nodes.get(id)) !== r.observed.get(id)); }})({})",
+             return ids.some(id => r.observed.has(id) && r.guardKey(r.nodes.get(id), id) !== r.observed.get(id)); }})({})",
             py_json(&json!(ids))
         );
         // One renderer call hears every change: the page's own mutations say when to look again, and the time given
@@ -1602,8 +1655,9 @@ impl CdpPage {
     }
 
     /// The page script for one settle: a promise the page resolves on its own frame and mutation events once the
-    /// document is interactive, has not mutated for `SETTLE_QUIET_SECONDS`, and shows no progress indicator (or has
-    /// shown one for `SETTLE_LOADING_SECONDS`), then samples the fingerprint in the same call. `seconds` bounds it.
+    /// document is interactive, has not mutated for `SETTLE_QUIET_SECONDS`, shows no progress indicator (or has
+    /// shown one for `SETTLE_LOADING_SECONDS`) and has run the timers and frame callbacks the action's input scheduled
+    /// that are due before the deadline, then samples the fingerprint in the same call. `seconds` bounds it.
     ///
     /// The `fastbrowse:settle` marker is what the integration test matches to count settle reads.
     fn settle_script(&self, seconds: f64) -> String {
@@ -1626,7 +1680,9 @@ impl CdpPage {
                const ready = document.readyState !== 'loading'; const held = busy(); \
                const last = r.lastMutation || 0; \
                const moved = last >= (r.lastInput || 0); \
-               if (ready && !held && (!moved || now - last >= quiet) && frameAt >= last) return done(); \
+               const drawing = now - Math.max(last, r.lastInput || 0) < quiet; \
+               const pending = Boolean(r.pendingBefore && r.pendingBefore(deadline, drawing)); \
+               if (ready && !held && !pending && (!moved || now - last >= quiet) && frameAt >= last) return done(); \
                if (now >= deadline || (held && now - started >= loading)) return done(); \
                r.nativeRequestAnimationFrame(t => {{ frameAt = t; check(); }}); }}; \
              const timer = r.nativeSetTimeout(done, {deadline}); \
@@ -1765,6 +1821,15 @@ impl Page for CdpPage {
 
     fn act<'a>(&'a self, action: &'a Action, observation: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
         Box::pin(async move { seam(CdpPage::act(self, action, observation).await) })
+    }
+
+    fn wait<'a>(
+        &'a self,
+        action: &'a Action,
+        observation: &'a Observation,
+        seconds: f64,
+    ) -> BoxFuture<'a, PageResult<ActResult>> {
+        Box::pin(async move { seam(CdpPage::wait(self, action, observation, seconds).await) })
     }
 
     fn redrawn<'a>(
@@ -1931,7 +1996,7 @@ mod tests {
             "document_key": "", "controls": [], "page_key": "", "guards": {}, "retarget_keys": {},
         }))
         .expect("snapshot");
-        (key.to_owned(), FrameObservation { frame_id: None, session_id: String::new(), raw })
+        (key.to_owned(), FrameObservation { frame_id: None, session_id: String::new(), raw: Arc::new(raw) })
     }
 
     #[test]

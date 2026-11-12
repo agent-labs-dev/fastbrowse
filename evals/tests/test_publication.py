@@ -119,7 +119,7 @@ def write_journal(results: Path, attempts: list[dict[str, Any]], run: dict[str, 
         common = {"id": f"{a['arm']}/{a['task']}/{a['repeat']}/{a['retries']}", "limit": run["budget_usd"]}
         common |= {"reservation": hold, "policy": "start-gate-v1"}
         # An unknown charge keeps its whole hold, as `CampaignBudget.settle` does.
-        charge = hold if a.get("dollars") is None else a["dollars"] + judge_spend(a)
+        charge = hold if a.get("unknown_cost") or a.get("dollars") is None else a["dollars"] + judge_spend(a)
         journal += [common | {"committed": hold}, common | {"committed": charge}]
     results.with_suffix(".budget.jsonl").write_text("".join(json.dumps(r) + "\n" for r in journal))
 
@@ -425,7 +425,7 @@ def test_export_counts_every_physical_run_and_keeps_source_grades_separate(tmp_p
     ("edits", "message"),
     [
         ({"hosted": lambda a: a[0].update(dollars=None)}, "dollars"),
-        ({"hosted": lambda a: a[0].update(unknown_cost=True)}, "unknown charge"),
+        ({"hosted": lambda a: a[0].update(unknown_cost="unknown")}, "unknown_cost"),
         ({"hosted": lambda a: a[0].pop("seconds")}, "seconds"),
         ({"hosted": lambda a: a[0].update(passed=None)}, "judgment"),
         ({"hosted": lambda a: a.pop()}, "every task"),
@@ -1522,10 +1522,50 @@ def test_a_default_campaign_publishes_on_the_reference_and_a_refresh_writes_it(
         h.export(hosted=live, ultrafast=None, bu_bench=None, mind2web=None)
 
 
-def test_a_reference_on_another_clock_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_export_retains_a_physical_reference_clock(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    refresh = h.export(ultrafast=None, bu_bench=None, mind2web=None)
+    reference = publication.competitor_reference(refresh, CATALOG, "2026-11-01")
+    body = reference.model_dump(mode="json")
+    physical = next(
+        row for row in body["rows"] if (row["arm"], row["task"], row["repeat"]) == ("browser-use", "pypi-version", 1)
+    )
+    for row in body["rows"]:
+        if row["arm"] == "browser-use":
+            row["dollars"] = None
+    physical.update(
+        status="completed",
+        completed=True,
+        score=1.0,
+        llm_calls=None,
+        jev_calls=0,
+        tokens_per_second=0.0,
+        input_tokens=34339,
+        output_tokens=225,
+        seconds=340.3,
+        dollars=None,
+        physical_runs=2,
+        timing_basis="physical-attempt-wall-time",
+        timing_note=publication.PHYSICAL_TIMING_NOTE,
+    )
+    physical.pop("session_open_seconds", None)
+    physical.pop("session_close_seconds", None)
+    path = tmp_path / "reference.json"
+    path.write_text(json.dumps(body))
+    live = write_ledger(tmp_path, "live", ("fastbrowse", "jev-ultrafast"), task_arms=HOSTED_TASKS, budget_usd=1000.0)
+    candidate = h.export(hosted=live, ultrafast=None, bu_bench=None, mind2web=None, reference=path)
+    group = Candidate.model_validate_json(candidate.model_dump_json()).groups[0]
+    retained = [row.model_dump(mode="json") for row in group.rows if row.arm in publication.REFERENCE_ARMS]
+    assert retained == sorted(body["rows"], key=lambda row: (row["arm"], row["task"], row["repeat"]))
+    assert group.references == reference.arms
+    assert publication.MIXED_TIMING_NOTE in group.limits
+    assert publication.TIMING_NOTE not in group.limits
+
+
+def test_a_reference_with_an_unrecorded_clock_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = reference_file(tmp_path)
     monkeypatch.setattr(publication, "reference_basis", lambda _: None)
-    with pytest.raises(PublicationError, match="another clock"):
+    with pytest.raises(PublicationError, match="unrecorded clock"):
         publication.with_reference(refreshed(tmp_path)[1], path, CATALOG)
 
 
@@ -1726,3 +1766,147 @@ def test_the_head_to_head_takes_fastbrowse_from_a_newer_fastbrowse_only_run(tmp_
     moved = write_ledger(second, "internal-fastbrowse", ("fastbrowse",), **other)
     with pytest.raises(PublicationError, match="drove fastbrowse on different browsers"):
         publication.internal_group("internal-hosted", [duel, moved], CATALOG, DIGEST)
+
+
+@pytest.mark.parametrize("arm", ["browser-use", "browser-harness"])
+@pytest.mark.parametrize("partial", [None, 0.3])
+def test_unresolved_comparator_cost_keeps_outcome_time_and_private_receipts(
+    tmp_path: Path, arm: str, partial: float | None
+) -> None:
+    def unknown(attempts: list[dict[str, Any]]) -> None:
+        next(a for a in attempts if a["arm"] == arm).update(dollars=partial, unknown_cost=True)
+
+    ledger = write_ledger(tmp_path, "hosted", ("fastbrowse", arm), unknown, task_arms=HOSTED_TASKS)
+    sources = [ledger, ledger.with_suffix(".attempts.jsonl"), ledger.with_suffix(".budget.jsonl")]
+    original = [p.read_bytes() for p in sources]
+    group = publication.internal_group("internal-hosted", ledger, CATALOG, DIGEST).group
+    theirs = [r for r in group.rows if r.arm == arm]
+    assert all(r.dollars is None and r.seconds == 2.0 for r in theirs)
+    assert {r.score for r in theirs} == {0.0, 1.0}
+    assert all(r.dollars == 0.25 for r in group.rows if r.arm == "fastbrowse")
+    assert [p.read_bytes() for p in sources] == original
+
+
+def test_an_unknown_retry_withholds_the_selected_slots_cost(tmp_path: Path) -> None:
+    def retry(attempts: list[dict[str, Any]]) -> None:
+        selected = next(a for a in attempts if a["arm"] == "browser-use")
+        earlier = dict(selected, selected=False, dollars=None, unknown_cost=True)
+        selected["retries"] = 1
+        attempts.insert(attempts.index(selected), earlier)
+
+    ledger = write_ledger(tmp_path, "hosted", ("fastbrowse", "browser-use"), retry)
+    group = publication.internal_group("internal-hosted", ledger, CATALOG, DIGEST).group
+    retried = next(r for r in group.rows if r.physical_runs == 2)
+    assert retried.dollars is None and retried.seconds == 4.0
+    assert all(r.dollars is None for r in group.rows if r.arm == "browser-use")
+
+
+def test_a_newer_unknown_cost_withholds_the_arms_older_priced_slots(tmp_path: Path) -> None:
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir(), second.mkdir()
+    arms = ("fastbrowse", "browser-use")
+    earlier = write_ledger(first, "hosted", arms)
+    task = next(t["id"] for t in entries(arms))
+
+    def unknown(attempts: list[dict[str, Any]]) -> None:
+        narrowed({task})(attempts)
+        next(a for a in attempts if a["arm"] == "browser-use").update(dollars=None, unknown_cost=True)
+
+    newer = write_ledger(second, "hosted", arms, unknown, **LATER)
+    group = publication.internal_group("internal-hosted", [earlier, newer], CATALOG, DIGEST).group
+    assert len(group.rows) == (53 + 52) * 3
+    assert all(r.dollars is None for r in group.rows if r.arm == "browser-use")
+    assert all(r.dollars == 0.25 for r in group.rows if r.arm == "fastbrowse")
+    assert {s.run_id for s in group.sources if s.arm == "browser-use"} == {"r1", "r2"}
+
+
+def test_an_unknown_comparator_charge_cannot_release_its_hold(tmp_path: Path) -> None:
+    def unknown(attempts: list[dict[str, Any]]) -> None:
+        next(a for a in attempts if a["arm"] == "browser-use").update(dollars=None, unknown_cost=True)
+
+    ledger = write_ledger(tmp_path, "hosted", ("fastbrowse", "browser-use"), unknown)
+    path = ledger.with_suffix(".budget.jsonl")
+    journal = [json.loads(line) for line in path.read_text().splitlines()]
+    indices = [n for n, row in enumerate(journal) if row["id"].startswith("browser-use/")]
+    journal[indices[1]]["committed"] = 0.0
+    path.write_text("".join(json.dumps(r) + "\n" for r in journal))
+    with pytest.raises(PublicationError, match="settled journal charge"):
+        publication.internal_group("internal-hosted", ledger, CATALOG, DIGEST)
+
+
+@pytest.mark.parametrize("value", [-0.1, float("nan"), float("inf"), True])
+def test_even_an_unknown_partial_receipt_requires_finite_nonnegative_dollars(tmp_path: Path, value: Any) -> None:
+    def invalid(attempts: list[dict[str, Any]]) -> None:
+        next(a for a in attempts if a["arm"] == "browser-use").update(dollars=value, unknown_cost=True)
+
+    ledger = write_ledger(tmp_path, "hosted", ("fastbrowse", "browser-use"), invalid)
+    with pytest.raises(PublicationError, match="dollars"):
+        publication.internal_group("internal-hosted", ledger, CATALOG, DIGEST)
+
+
+def test_an_unknown_agent_charge_cannot_hide_an_unpriced_judge(tmp_path: Path) -> None:
+    def unknown(attempts: list[dict[str, Any]]) -> None:
+        next(a for a in attempts if a["arm"] == "browser-use").update(dollars=None, unknown_cost=True)
+
+    ledger = write_ledger(tmp_path, "hosted", ("fastbrowse", "browser-use"), unknown)
+    for path in (ledger, ledger.with_suffix(".attempts.jsonl")):
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        row = next(r for r in rows if r["unknown_cost"])
+        row["semantic_judge"]["judgment"]["fallback_calls"] = [
+            {"model": OPUS_JUDGE, "attempt": 1, "latency_ms": 1, "cost_usd": None}
+        ]
+        path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    with pytest.raises(PublicationError, match="unpriced judge"):
+        publication.internal_group("internal-hosted", ledger, CATALOG, DIGEST)
+
+
+def test_unresolved_holds_still_enforce_the_campaign_start_budget(tmp_path: Path) -> None:
+    def unknown(attempts: list[dict[str, Any]]) -> None:
+        for row in attempts:
+            if row["arm"] == "browser-use":
+                row.update(dollars=None, unknown_cost=True)
+
+    ledger = write_ledger(tmp_path, "hosted", ("fastbrowse", "browser-use"), unknown)
+    with pytest.raises(PublicationError, match="budget gate should have refused"):
+        publication.internal_group("internal-hosted", ledger, CATALOG, DIGEST)
+
+
+def test_selected_results_cannot_change_a_partial_receipts_unknown_flag(tmp_path: Path) -> None:
+    def partial(attempts: list[dict[str, Any]]) -> None:
+        next(a for a in attempts if a["arm"] == "browser-use").update(dollars=0.3, unknown_cost=True)
+
+    ledger = write_ledger(tmp_path, "hosted", ("fastbrowse", "browser-use"), partial)
+    rows = [json.loads(line) for line in ledger.read_text().splitlines()]
+    next(row for row in rows if row["unknown_cost"])["unknown_cost"] = False
+    ledger.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    with pytest.raises(PublicationError, match="differs from its selected attempt"):
+        publication.internal_group("internal-hosted", ledger, CATALOG, DIGEST)
+
+
+@pytest.mark.parametrize("concurrency", [4, 8])
+def test_internal_publication_preserves_explicit_concurrency(tmp_path: Path, concurrency: int) -> None:
+    results = internal_fastbrowse_ledger(tmp_path, concurrency=concurrency)
+    group = publication.internal_group("internal-fastbrowse", results, CATALOG, DIGEST)
+    assert any(note.startswith(f"Concurrency {concurrency};") for note in group.group.limits)
+
+
+def test_internal_publication_rejects_relabeling_attempt_concurrency(tmp_path: Path) -> None:
+    results = internal_fastbrowse_ledger(tmp_path, concurrency=4)
+    attempts = results.with_suffix(".attempts.jsonl")
+    rows = publication.lines(attempts)
+    rows[0]["concurrency"] = 8
+    attempts.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    with pytest.raises(PublicationError, match="concurrency differs from the protocol"):
+        publication.internal_group("internal-fastbrowse", results, CATALOG, DIGEST)
+
+
+@pytest.mark.parametrize("new_concurrency,reported", [(4, "4"), (8, "4 or 8")])
+def test_internal_publication_reports_each_retained_invocation_concurrency(
+    tmp_path: Path, new_concurrency: int, reported: str
+) -> None:
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir(), second.mkdir()
+    duel = write_ledger(first, "hosted", ("fastbrowse", "browser-use"), concurrency=4)
+    alone = write_ledger(second, "internal-fastbrowse", ("fastbrowse",), concurrency=new_concurrency, **LATER)
+    group = publication.internal_group("internal-hosted", [duel, alone], CATALOG, DIGEST).group
+    assert any(note.startswith(f"Concurrency {reported};") for note in group.limits)

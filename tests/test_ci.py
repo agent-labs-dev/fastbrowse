@@ -1,5 +1,6 @@
 """Required CI checks fail closed when a dependency fails or does not run."""
 
+import json
 import os
 import re
 import shlex
@@ -179,3 +180,93 @@ def test_registry_parity_takes_a_version_only_from_a_tag_pushed_release() -> Non
     steps = yaml.safe_load(Path(".github/workflows/registry-parity.yml").read_text())["jobs"]["parity"]["steps"]
     release = next(step for step in steps if step.get("id") == "release")
     assert "github.event.workflow_run.event == 'push'" in release["if"]
+
+
+def _campaign_step(name: str) -> dict[str, Any]:
+    jobs = yaml.safe_load(Path(".github/workflows/benchmark-campaign.yml").read_text())["jobs"]
+    return next(step for step in jobs["resolve"]["steps"] if step.get("name") == name)
+
+
+@pytest.mark.parametrize(
+    "concurrency,passes",
+    [
+        ("", True),
+        ("4", True),
+        ("8", True),
+        ("1", True),
+        ("0", False),
+        ("00", False),
+        ("-1", False),
+        ("1.5", False),
+        ("four", False),
+    ],
+)
+def test_campaign_admits_positive_concurrency_without_extra_arms(concurrency: str, passes: bool) -> None:
+    env = dict.fromkeys(("EXTRA_ARMS", "HEAD_TO_HEAD_ARMS", "OFFICIAL_RUNS", "ONLY"), "")
+    env |= {
+        "GROUPS_CHOSEN": "all",
+        "CANDIDATE_ONLY": "false",
+        "SMOKE": "false",
+        "REFRESH": "false",
+        "SUITES": "core dev stretch-dev",
+        "PAYLOAD": "null",
+        "REPEAT": "3",
+        "BUDGET": "38",
+        "RUN_CONCURRENCY": concurrency,
+        "CAMPAIGN_ID": "test",
+    }
+    result = subprocess.run(
+        ["bash", "-e", "-c", _campaign_step("Require the full comparison protocol")["run"]],
+        env=os.environ | env,
+        capture_output=True,
+        text=True,
+    )
+    assert (result.returncode == 0) is passes, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("concurrency", ["", "4"])
+@pytest.mark.parametrize("smoke", ["true", "false"])
+@pytest.mark.parametrize("groups", ["all", "fastbrowse", "head-to-head"])
+def test_campaign_matrix_preserves_concurrency_for_every_group(
+    tmp_path: Path, concurrency: str, smoke: str, groups: str
+) -> None:
+    output, summary = tmp_path / "output", tmp_path / "summary"
+    env = {
+        "RUN_CONCURRENCY": concurrency,
+        "SMOKE": smoke,
+        "GROUP_SET": groups,
+        "REFRESH": "false",
+        "EXTRA_ARMS": "fastbrowse-hosted",
+        "HEAD_TO_HEAD_ARMS": "",
+        "GITHUB_OUTPUT": str(output),
+        "GITHUB_STEP_SUMMARY": str(summary),
+    }
+    subprocess.run(
+        ["bash", "-e", "-c", _campaign_step("Build the group matrix")["run"]],
+        env=os.environ | env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert f"Concurrency: `{concurrency or '8'}`" in summary.read_text()
+    matrix = json.loads(output.read_text().removeprefix("matrix="))
+    assert {entry["conc"] for entry in matrix} == {concurrency}
+    assert {entry["label"] for entry in matrix} == (
+        {"fastbrowse", "head-to-head", "hosted"} if groups == "all" else {groups, "hosted"}
+    )
+
+
+@pytest.mark.parametrize(
+    "value,passes",
+    [(0, False), (4, True), (1.5, False), (True, False), (None, False), ("", True), ("4", True), ("00", False)],
+)
+def test_campaign_checks_raw_payload_concurrency_before_defaulting(value: Any, passes: bool) -> None:
+    script = _campaign_step("Require the full comparison protocol")["run"]
+    start = script.index('jq -e \'(. // {}) | if has("concurrency")')
+    end = script.index('case "$RUN_CONCURRENCY"', start)
+    result = subprocess.run(
+        ["bash", "-e", "-c", script[start:end]],
+        env=os.environ | {"PAYLOAD": json.dumps({"concurrency": value})},
+        capture_output=True,
+    )
+    assert (result.returncode == 0) is passes

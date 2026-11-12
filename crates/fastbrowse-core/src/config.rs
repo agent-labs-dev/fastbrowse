@@ -139,9 +139,9 @@ pub struct Config {
     /// 160 controls, and a caller that is not debugging a run would carry them on every step for nothing.
     #[serde(deserialize_with = "lax::boolean")]
     pub step_choices: bool,
-    /// Ask with each step's decision which other fields on the page the task needs filled, and fill
-    /// those in the filled field's form in page order without a decision each, back to deciding as soon
-    /// as the page changes under them.
+    /// Ask which other fields in the chosen field's form need filling, and offer a list read when the task
+    /// covers its pages. Planned fills return to deciding on a redraw; list reads retain each page's wall
+    /// checks and let Jev return to ordinary actions before reading it.
     #[serde(deserialize_with = "lax::boolean")]
     pub plan_ahead: bool,
     /// Uploads move as bytes over the DevTools socket; larger files return NEEDS_INPUT with a reason.

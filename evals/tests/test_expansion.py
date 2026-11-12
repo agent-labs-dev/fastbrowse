@@ -309,12 +309,15 @@ async def test_subprocess_uses_shared_prompt_and_harness_evidence(
             }
         ).encode()
 
-    async def observed(_: str, *, url: str | None = None, evidence: object = None) -> FinalPage:
+    async def observed(_: str, *, url: str | None = None, evidence: object = None, secrets: object = None) -> FinalPage:
         assert entered, "the final page is read while the browser is still open"
+        assert secrets == task.secrets
         if arm == "jev-ultrafast":
             # The runner's own address and evidence, read before its daemon reset the tab, are kept.
             assert url == "https://pypi.org/project/runner" and evidence is not None
-            return FinalPage(url=url, controls=(("runner", "kept"),), evidence=evidence)  # ty: ignore[invalid-argument-type]
+            return FinalPage(
+                url=url, controls=(("runner", "kept"),), evidence=evidence, frame="data:image/png;base64,AAAA"
+            )  # ty: ignore[invalid-argument-type]
         return FinalPage(url="https://pypi.org/project/httpx", controls=(("observed", None),))
 
     monkeypatch.setattr(live, "cloud_browser", cloud)
@@ -328,6 +331,7 @@ async def test_subprocess_uses_shared_prompt_and_harness_evidence(
     assert not entered
     assert report.dollars == (None if unknown_browser_cost else 0.03)
     assert report.unknown_cost is unknown_browser_cost
+    assert report.final_page_capture == "data:image/png;base64,AAAA"
     if arm == "jev-ultrafast":
         assert outcome.final_url == "https://pypi.org/project/runner" and outcome.controls == (("runner", "kept"),)
         assert outcome.evidence and outcome.evidence.device_pixel_ratio == 1
@@ -384,7 +388,7 @@ async def test_oss_arm_runs_on_its_own_browser_and_the_harness_clock(stopped: bo
 
         yield send, receive
 
-    async def observed(cdp: str) -> FinalPage:
+    async def observed(cdp: str, *, secrets: object = None) -> FinalPage:
         log.append("observe")
         return FinalPage(url="https://pypi.org/project/httpx", controls=())
 
@@ -683,8 +687,15 @@ def test_a_decision_loop_is_stopped_by_the_arm_itself(
     assert printed["actions"] == (0 if not acts else decisions)
 
 
-async def test_fast_arm_grades_the_page_the_harness_read_not_the_reported_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    task = live_tasks.TASKS[0]
+@pytest.mark.parametrize("secret_usage", ["none", "declared", "stored"])
+async def test_fast_arm_grades_the_page_the_harness_read_not_the_reported_url(
+    monkeypatch: pytest.MonkeyPatch, secret_usage: str
+) -> None:
+    task = dataclasses.replace(
+        live_tasks.TASKS[0],
+        secrets={"password": "hidden"} if secret_usage == "declared" else {},
+        bitwarden_item="vault-item" if secret_usage == "stored" else None,
+    )
     held: list[bool] = []
 
     async def run(prompt: str, **kwargs: object) -> SimpleNamespace:
@@ -698,8 +709,9 @@ async def test_fast_arm_grades_the_page_the_harness_read_not_the_reported_url(mo
         held.append(viewport)
         yield
 
-    async def observed(cdp_url: str, *, url: str | None = None) -> FinalPage:
+    async def observed(cdp_url: str, *, url: str | None = None, secrets: object = None) -> FinalPage:
         assert url == "https://unobserved.test"
+        assert secrets == (None if secret_usage == "stored" else task.secrets)
         return FinalPage(error="expected one final tab, found 2")
 
     monkeypatch.setattr(live, "run_task", run)
