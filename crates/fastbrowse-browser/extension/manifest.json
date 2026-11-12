@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "fastbrowse",
-  "description": "Lets fastbrowse runs work in this browser, where you are already signed in, without a remote debugging prompt.",
+  "description": "Run fastbrowse tasks in your own Chrome, already signed in, in their own tab group. The popup lists and stops runs.",
   "version": "0.1.1",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzA0tvwZP/4cEw3Ozvchqi5Mtuwe9xqS8WrGzBtxQ/ZtOo6W+dIo9Qko0jOvDHIHZSBp3P/xiLG2G+O3mmesMIoDzlHo50c+kvTotHlax6dnz5OZTy/9IoSBVJkg7kdbJiOW/FuqeSgbNunvLQTHDptxpvH1ENOSRXi2kjVFWw6lDmM1T2fQCkXnsJJxRtswspe0fXILbMEPmbefa4/zMwiHX3/aQrCebykS/2ywqZNWn7dLagqKdwRlqOWsmPkz1siWtRGq8DwNwriY5cx2fMH2d8Y+9gm8tWtpXdFR5SESYG5YG8292yw4mWhuw/qweug4AAd9wXv5G7OTTOfNtDwIDAQAB",
   "minimum_chrome_version": "125",
