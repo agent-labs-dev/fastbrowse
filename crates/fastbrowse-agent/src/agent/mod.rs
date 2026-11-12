@@ -415,9 +415,9 @@ impl Agent {
             runtime.spawn(async move { llm.context_tokens(fastbrowse_core::models::LLMPurpose::Compose).await });
         }
         let given = state::with_inputs(task, &options.inputs);
-        let (opening, dates, known) =
-            tokio::join!(open, self.task_dates(&given, ledger), self.known_pages(&given, start, ledger));
-        let (opening, dates, known) = (opening?, dates?, known?);
+        let (opening, judgments, known) =
+            tokio::join!(open, self.task_judgments(task, &given, ledger), self.known_pages(&given, start, ledger));
+        let (opening, judgments, known) = (opening?, judgments?, known?);
         self.tell_page_ready().await;
         let mut state = RunState::new(
             task.to_string(),
@@ -426,7 +426,8 @@ impl Agent {
             options.authorization.clone().unwrap_or_default(),
             ledger.clone(),
         );
-        state.dates = dates;
+        state.dates = judgments.dates;
+        state.output_answers = judgments.output;
         state.known_pages = known;
         state.replay = options.recipe.clone().map(replay::Replay::new);
         state.context = options.context.clone();

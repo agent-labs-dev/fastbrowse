@@ -27,6 +27,11 @@ use crate::retrieval::page_quotes;
 use crate::start::{accept_start, propose_start};
 use crate::verification::RecordSchema;
 
+pub(super) struct TaskJudgments {
+    pub dates: Vec<crate::dates::DateReference>,
+    pub output: Option<Box<indexmap::IndexMap<String, fastbrowse_core::decision::Answer>>>,
+}
+
 fn recipe_step(
     decision: &Decision,
     raw: &Observation,
@@ -528,45 +533,47 @@ impl Agent {
         Ok(known)
     }
 
-    /// The dates the task names, as the parts it states. Jev first judges from the task alone whether it names any, so
-    /// a task without one costs no extraction; the run asks this while its first page opens.
-    pub(super) async fn task_dates(
+    /// Independent task judgments share startup's request. Date extraction runs only when Jev finds a date;
+    /// output judgments are kept for their existing point of use, so list walking does not start sooner.
+    pub(super) async fn task_judgments(
         &self,
         task: &str,
+        given: &str,
         ledger: &fastbrowse_core::telemetry::Ledger,
-    ) -> Step<Vec<crate::dates::DateReference>> {
+    ) -> Step<TaskJudgments> {
         use fastbrowse_core::decision::{Answer, DecisionError, Question};
         ledger.reserve(fastbrowse_core::models::CostComponent::Jev, 0.0, 1)?;
-        let questions =
-            indexmap::IndexMap::from([("dates".to_string(), Question::Noul(crate::dates::dates_question(task)))]);
-        let state = json!({"task": task});
+        // These judgments all read the task alone. Sending them separately reread the same task on every run.
+        let mut questions = self.output_questions(task);
+        questions.insert("dates".to_string(), Question::Noul(crate::dates::dates_question(given)));
+        let state = json!({"task": given});
         let asked = self.jev.evaluate(&state, &questions);
         // As with the consent question, a task whose dates could not be asked about runs on with today's date alone:
         // the step that needs Jev next meets the same failure and handles it. Only the budget stops the run here.
-        let failed = |error: String| {
+        let failed = |error: String, output| {
             self.event("task_dates_failed", || Map::from_iter([("error".into(), error.into())]));
-            Ok(Vec::new())
+            Ok(TaskJudgments { dates: Vec::new(), output })
         };
         let evaluation =
             match fastbrowse_clients::validation::jev_purpose(fastbrowse_core::models::JevPurpose::Action, asked).await
             {
                 Ok(evaluation) => evaluation,
                 Err(DecisionError::Budget(budget)) => return Err(budget.into()),
-                Err(error) => return failed(error.to_string()),
+                Err(error) => return failed(error.to_string(), None),
             };
         ledger.record([evaluation.cost.clone()])?;
         if !matches!(evaluation.answers.get("dates"), Some(Answer::Noul(answer)) if answer.probability > EVEN_ODDS) {
-            return Ok(Vec::new());
+            return Ok(TaskJudgments { dates: Vec::new(), output: Some(Box::new(evaluation.answers)) });
         }
-        let extracted = match crate::dates::task_dates(&*self.llm, task, Some(ledger)).await {
+        let extracted = match crate::dates::task_dates(&*self.llm, given, Some(ledger)).await {
             Ok(extracted) => extracted,
             Err(crate::error::AgentError::Budget(budget)) => return Err(budget.into()),
-            Err(error) => return failed(error.to_string()),
+            Err(error) => return failed(error.to_string(), Some(Box::new(evaluation.answers))),
         };
         ledger.record([extracted.cost])?;
         let references = extracted.data.dates;
         self.event("task_dates", || Map::from_iter([("dates".into(), json!(references))]));
-        Ok(references)
+        Ok(TaskJudgments { dates: references, output: Some(Box::new(evaluation.answers)) })
     }
 
     /// Go to the site's front page when the address this run chose for itself opened nothing.

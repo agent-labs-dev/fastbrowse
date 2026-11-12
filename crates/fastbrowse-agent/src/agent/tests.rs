@@ -2974,6 +2974,7 @@ async fn test_requested_final_screenshot_is_captured_with_default_config() {
 
 struct IntentJev {
     choice: &'static str,
+    dates: bool,
     /// The answer to any other choice asked beside the output, where it is offered.
     evidence: &'static str,
     calls: std::sync::atomic::AtomicUsize,
@@ -2982,7 +2983,13 @@ struct IntentJev {
 
 impl IntentJev {
     fn new(choice: &'static str) -> Self {
-        Self { choice, evidence: "page_text", calls: Default::default(), fallback: ScriptedJev::new(Vec::new()) }
+        Self {
+            choice,
+            dates: false,
+            evidence: "page_text",
+            calls: Default::default(),
+            fallback: ScriptedJev::new(Vec::new()),
+        }
     }
 }
 
@@ -2998,7 +3005,12 @@ impl DecisionClient for IntentJev {
         if !intent {
             return self.fallback.evaluate(state, questions);
         }
-        assert_eq!(state, &json!({}), "output intent must not depend on page content or evidence identities");
+        if questions.contains_key("dates") {
+            assert!(state.get("task").is_some());
+            assert_eq!(state.as_object().unwrap().len(), 1, "startup must see only the task");
+        } else {
+            assert_eq!(state, &json!({}), "output intent must not depend on page content or evidence identities");
+        }
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let Question::Choice(question) = &questions["pick"] else { unreachable!() };
         assert!(question.instructions.ends_with("Does the task ask to be told something, and in what form?"));
@@ -3007,7 +3019,7 @@ impl DecisionClient for IntentJev {
             question.criteria.keys().map(String::as_str).collect::<Vec<_>>(),
             ["text", "image", "text_image", "carried_out"]
         );
-        let answers = questions
+        let mut answers: IndexMap<String, Answer> = questions
             .iter()
             .filter_map(|(key, question)| {
                 let Question::Choice(question) = question else { return None };
@@ -3026,6 +3038,15 @@ impl DecisionClient for IntentJev {
                 Some((key.clone(), Answer::Choice(answer)))
             })
             .collect();
+        if questions.contains_key("dates") {
+            answers.insert(
+                "dates".into(),
+                Answer::Noul(NoulAnswer {
+                    kind: fastbrowse_core::decision::NoulTag,
+                    probability: if self.dates { 1.0 } else { 0.0 },
+                }),
+            );
+        }
         Box::pin(async move {
             Ok(Evaluation {
                 model: "test".into(),
@@ -3197,6 +3218,56 @@ async fn test_output_intent_is_cached_without_guessing_from_task_text() {
     for _ in 0..2 {
         assert_eq!(agent.output_intent(&mut state).await.unwrap(), super::state::OutputIntent::Image);
     }
+    assert_eq!(jev.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn test_startup_batches_task_judgments_and_keeps_their_answers() {
+    let jev = Arc::new(IntentJev { evidence: "appearance", ..IntentJev::new("image") });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let judgments = agent.task_judgments(&state.task, &state.task, &state.ledger).await.unwrap();
+    assert!(judgments.dates.is_empty());
+    let answers = judgments.output.expect("output was judged beside dates");
+    assert!(answers.contains_key("dates"));
+    assert!(answers.contains_key("pick"));
+    assert!(answers.contains_key("evidence"));
+    assert!(answers.contains_key("extent"));
+    state.output_answers = Some(answers);
+    assert_eq!(state.output_intent, super::state::OutputIntent::Unknown);
+    assert!(!state.appearance, "startup keeps answers without changing when they apply");
+    assert_eq!(agent.output_intent(&mut state).await.unwrap(), super::state::OutputIntent::Image);
+    assert!(state.appearance);
+    assert_eq!(jev.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(state.ledger.state().jev_calls, 1);
+    assert_eq!(state.ledger.breakdown().lines.len(), 1, "using a kept answer adds no receipt");
+}
+
+#[tokio::test]
+async fn test_failed_date_extraction_keeps_the_other_startup_judgments() {
+    let jev = Arc::new(IntentJev { dates: true, ..IntentJev::new("text") });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Report tomorrow's opening hours.".into();
+    let judgments = agent.task_judgments(&state.task, &state.task, &state.ledger).await.unwrap();
+    assert!(judgments.dates.is_empty(), "this writer cannot extract dates");
+    state.output_answers = judgments.output;
+    assert_eq!(agent.output_intent(&mut state).await.unwrap(), super::state::OutputIntent::Text);
+    assert_eq!(jev.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn test_startup_answers_still_reject_an_unoffered_output_choice() {
+    let jev = Arc::new(IntentJev::new("image"));
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let judgments = agent.task_judgments(&state.task, &state.task, &state.ledger).await.unwrap();
+    let mut answers = judgments.output.unwrap();
+    let Answer::Choice(answer) = answers.get_mut("pick").unwrap() else { unreachable!() };
+    answer.choice = "not offered".into();
+    state.output_answers = Some(answers);
+    assert!(format!("{:?}", agent.output_intent(&mut state).await.unwrap_err()).contains("not offered"));
+    assert_eq!(state.output_intent, super::state::OutputIntent::Unknown);
     assert_eq!(jev.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 

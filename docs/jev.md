@@ -87,6 +87,11 @@ runs on that click as on any other.
 
 ## One request a step
 
+At startup, one request asks whether the task names dates, what output it asks for, where its evidence can be
+seen and how much of a list it covers. Over HTTP it also asks whether the task needs a browser action. Each
+question reads the task alone. Output judgments are kept until needed; date extraction still runs only when
+Jev judges that the task names a date.
+
 All questions in a request see the same state, so what the agent would otherwise ask after a decision goes with it:
 for each offered control, which words a text field takes or which task text supplies a key chord. Only the chosen target's answers are used. Whether a press
 commits anything, and whether the task asked for that on an authorized run, stay follow-ups that see only the task, the
