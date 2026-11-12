@@ -1,5 +1,6 @@
 """Keep a harness-owned Chrome tied to its owner's open stdin pipe."""
 
+import os
 import shutil
 import subprocess
 import sys
@@ -8,10 +9,13 @@ import threading
 
 def run() -> int:
     process = subprocess.Popen(sys.argv[2:], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+    owner_pipe = sys.stdin.fileno()
 
     def stop_on_eof() -> None:
         # A native abort bypasses the owner's finally block, but still closes its pipe.
-        sys.stdin.buffer.read()
+        # A browser can exit before its owner closes the pipe. A buffered read holds Python's shutdown lock then.
+        while os.read(owner_pipe, 8192):
+            pass
         try:
             process.terminate()
         except ProcessLookupError:

@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- The eval browser helper preserves Chrome's exit status when Chrome stops before its owner closes the pipe, instead of aborting during Python shutdown ([#1061](https://github.com/agent-labs-dev/fastbrowse/issues/1061)).
+
 - Release comparisons reject missing or unknown costs and invalid timing measurements instead of treating them as zero ([#1059](https://github.com/agent-labs-dev/fastbrowse/issues/1059)).
 
 - **Live eval judges receive the final viewport image.** The observer captures the selected tab before changing modal visibility, retaining visual evidence such as CSS-generated marks alongside text and controls. Tasks declaring secrets withhold the image entirely ([#1056](https://github.com/agent-labs-dev/fastbrowse/issues/1056)).
