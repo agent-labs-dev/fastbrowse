@@ -25,7 +25,7 @@ A read decision can cover a whole list through its observed next-page links. Eac
 
 ## The authorization gate
 
-Every click the model picks is judged before it runs, including links, navigation to an address from the task, each Enter press or key chord, and accepting a confirm or prompt dialog. A refusal is recorded as a failed step with a reason.
+Every click the model picks is judged before it runs, including links, navigation to a supplied or proposed known address, each Enter press or key chord, and accepting a confirm or prompt dialog. A refusal is recorded as a failed step with a reason.
 
 An action the judge is confident cannot be undone stops the run at `needs_confirmation` with exit code 3, and an uncertain one goes to recovery. In a browser that stays open, such as a running Chrome reached over its DevTools port or through the extension, a run stopped at `needs_confirmation` leaves its tab on the step it stopped at. The judge can be wrong, so read the step before you authorize it.
 

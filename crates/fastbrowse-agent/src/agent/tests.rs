@@ -2883,6 +2883,9 @@ impl LLMClient for EmptyImageLLM {
         schema: &'a dyn ResponseSchema,
         _: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        if purpose == LLMPurpose::RecoveryPages {
+            return Box::pin(async { Err(LLMError::Failed("no route provider".into())) });
+        }
         assert_eq!(serde_json::to_value(purpose).unwrap(), json!("image_read"));
         assert_eq!(schema.name(), "ImageReading");
         assert_eq!(messages.iter().map(|message| message.images.len()).sum::<usize>(), 1);
@@ -8165,4 +8168,37 @@ async fn test_search_entry_groups_more_choices_than_the_provider_accepts() {
 #[test]
 fn test_a_search_does_not_count_as_a_site_mutation() {
     assert!(!executed(Some(Operation::Search), None, true).changed_site());
+}
+
+#[tokio::test]
+async fn test_recovery_does_not_reopen_an_address_reached_through_a_link() {
+    struct OldRoute;
+    impl LLMClient for OldRoute {
+        fn generate_value<'a>(
+            &'a self,
+            purpose: LLMPurpose,
+            _: &'a [Message],
+            schema: &'a dyn ResponseSchema,
+            _: Option<&'a Ledger>,
+        ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+            Box::pin(async move {
+                assert_eq!(purpose, LLMPurpose::RecoveryPages);
+                let data =
+                    schema.validate_json(r#"{"urls":["HTTPS://PREVIOUS.TEST:443"]}"#).map_err(LLMError::Failed)?;
+                Ok(Generation { data, cost: free() })
+            })
+        }
+    }
+    let mut config = fastbrowse_core::config::Config::default();
+    config.stall.max_recoveries = 0;
+    let agent =
+        Agent::new(Arc::new(NoPage), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(OldRoute)).with_config(config);
+    let mut state = run_state();
+    let mut previous = observation(&[]);
+    previous.url = "https://previous.test/".into();
+    agent.settle(&mut state, &previous).await.unwrap();
+    let current = observation(&[]);
+    let error = agent.recover(&mut state, &current, "no progress", Status::Stuck, None).await.err();
+    assert!(matches!(error, Some(Flow::Stop(stop)) if stop.status == Status::Stuck));
+    assert!(state.known_pages.is_empty(), "a previously observed address is not a fresh route");
 }

@@ -1238,6 +1238,7 @@ impl Agent {
     /// Note the page state reached and judge the last page change by it: a state never seen, or the first return to
     /// one seen before the last evidence was gathered, is progress. A state never seen renews the recovery budget.
     pub(super) async fn settle(&self, state: &mut RunState, observation: &Observation) -> Step {
+        state.visited_addresses.insert(observation.url.clone());
         let last = state.reached.insert(state_key(observation), state.evidence_reads);
         if last.is_none() {
             if let Some(failure) = &state.site_failure

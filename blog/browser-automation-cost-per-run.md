@@ -18,7 +18,7 @@ The result names the resource that ran out in `budget.resource` and the limit it
 
 ## Charges on a run
 
-- Model calls, which pick each action and write the answer.
+- Model calls, which pick each action and write the answer. A stalled run can also ask for a fresh known route before stopping.
 - Verification calls, which check each claim against the page text it cites.
 - Optional web search, reported as a search cost line.
 - The browser. A cloud browser is billed by time and added when the run stops.
