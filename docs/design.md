@@ -474,7 +474,8 @@ read (`[Downloaded file: ...] The file was kept, but its text was not read: ...`
 past 10 seconds, a file that is no PDF, or a reader that did not start or ended without an answer.
 
 Downloaded XLSX workbooks, DOCX documents and ZIP archives use the same killable helper. Workbooks retain each
-worksheet's name, row and column coordinates, empty cells and stored values. Formulas are not evaluated. Word
+worksheet's name and each stored cell's row, column and value. Empty coordinates are omitted, so sparse sheets
+are read without allocating the rectangle between their cells. Formulas are not evaluated. Word
 text retains paragraph, table-cell, tab and line-break boundaries, with its package part named. Archive members
 are read in memory, never extracted onto the host. Text, CSV, TSV, JSON, XML, Markdown and HTML members are read
 as UTF-8 text; XLSX, DOCX and PDF members use their document readers. Other or invalid members remain named with

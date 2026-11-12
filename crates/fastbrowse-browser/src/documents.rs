@@ -60,23 +60,23 @@ fn spreadsheet(raw: &[u8], budget: &mut Budget) -> Result<String> {
     let mut workbook = Xlsx::new(Cursor::new(raw))?;
     let mut out = String::new();
     for name in workbook.sheet_names().to_owned() {
-        let range = workbook.worksheet_range(&name)?;
+        let mut cells = workbook.worksheet_cells_reader(&name)?;
         budget.append(&mut out, &format!("[Worksheet: {name}]\n"))?;
-        if let Some((first_row, first_column)) = range.start() {
-            for (row, values) in range.rows().enumerate() {
-                // Coordinates retain the association of empty cells and distinguish sheets with the same labels.
-                budget.append(
-                    &mut out,
-                    &format!("row {} (first column {}): ", first_row as usize + row + 1, first_column + 1),
-                )?;
-                budget.append(
-                    &mut out,
-                    &serde_json::to_string(&values.iter().map(ToString::to_string).collect::<Vec<_>>())?,
-                )?;
-                out.push('\n');
-            }
+        // Dense worksheet ranges allocate every coordinate between two cells. A sparse file can span the whole
+        // worksheet, so stream its stored cells and retain their coordinates without materializing empty space.
+        while let Some(cell) = cells.next_cell()? {
+            let (row, column) = cell.get_position();
+            budget.append(
+                &mut out,
+                &format!(
+                    "row {}, column {}: {}\n",
+                    row + 1,
+                    column + 1,
+                    serde_json::to_string(&calamine::Data::from(cell.get_value().clone()).to_string())?
+                ),
+            )?;
         }
-        out.push('\n');
+        budget.append(&mut out, "\n")?;
     }
     Ok(out)
 }
@@ -229,18 +229,30 @@ mod tests {
         assert!(parse(ZIP_TEXT, b"invalid", usize::MAX).is_err());
     }
 
-    #[test]
-    fn workbook_keeps_sheet_identity_coordinates_and_empty_cells() {
-        let raw = zip(&[
+    fn workbook(sheet: &[u8]) -> Vec<u8> {
+        zip(&[
             ("_rels/.rels", br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#),
             ("[Content_Types].xml", br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>"#),
             ("xl/workbook.xml", br#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Revenue" sheetId="1" r:id="rId1"/></sheets></workbook>"#),
             ("xl/_rels/workbook.xml.rels", br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#),
-            ("xl/worksheets/sheet1.xml", br#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="2"><c r="B2" t="inlineStr"><is><t>Total</t></is></c><c r="D2"><v>42.5</v></c></row></sheetData></worksheet>"#),
-        ]);
+            ("xl/worksheets/sheet1.xml", sheet),
+        ])
+    }
+
+    #[test]
+    fn workbook_keeps_sheet_identity_and_cell_coordinates() {
+        let raw = workbook(br#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="2"><c r="B2" t="inlineStr"><is><t>Total</t></is></c><c r="D2"><v>42.5</v></c></row></sheetData></worksheet>"#);
         let text = parse(XLSX_TEXT, &raw, usize::MAX).unwrap();
         assert!(text.contains("[Worksheet: Revenue]"));
-        assert!(text.contains("row 2 (first column 2): [\"Total\",\"\",\"42.5\"]"), "{text}");
+        assert!(text.contains("row 2, column 2: \"Total\""), "{text}");
+        assert!(text.contains("row 2, column 4: \"42.5\""), "{text}");
         assert!(parse(XLSX_TEXT, b"invalid", usize::MAX).is_err());
+    }
+
+    #[test]
+    fn a_sparse_workbook_does_not_allocate_the_rectangle_between_cells() {
+        let raw = workbook(br#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:XFD1048576"/><sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="1048576"><c r="XFD1048576"><v>2</v></c></row></sheetData></worksheet>"#);
+        let text = parse(XLSX_TEXT, &raw, 64 * 1024).unwrap();
+        assert_eq!(text, "[Worksheet: Revenue]\nrow 1, column 1: \"1\"\nrow 1048576, column 16384: \"2\"\n\n");
     }
 }
