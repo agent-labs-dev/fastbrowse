@@ -115,16 +115,16 @@ Benchmarking makes three comparisons:
 - **C1, agent against agent:** fastbrowse against the hosted Browser Use agent, Browser Harness and Jev
   Ultrafast, the figures above, on the same tasks on Browser Use cloud browsers under identical limits with each
   agent at its own defaults. On the same 53-task catalog, fastbrowse alone passed 90.5% of its 159 attempts at
-  $0.0149 a run.
+  $0.0149 a run. Jev Ultrafast, the fourth arm of that live suite, passed 4.6% of 129 attempts at $0.0017 a run
+  and was fastest on 2 of the 50 tasks two or more agents passed. It cannot return an answer, so every task that
+  asks a question fails, and 6 of the 53 tasks are counted as failures: five need login credentials it has no way
+  to be given, and saucedemo-pause needs a pause before an irreversible step, which it cannot make.
 - **C2, browser against browser:** the same fastbrowse build on its own browser pool and on a Browser Use Cloud
   browser. In an earlier record (release-0.5.25), not on the published page, the pool passed fewer tasks.
-- **C3, fastbrowse against `jev-ultrafast`:** measured on the published page as the fourth arm of that live suite,
-  where Jev Ultrafast passed 4.6% of 129 attempts at $0.0017 a run and was fastest on 2 of the 50 tasks two or
-  more agents passed. It cannot return an answer, so every task that asks a question fails, and it has no way to
-  be given login credentials, so 6 of the 53 tasks are counted as failures. That arm ran on a Browser Use cloud
-  browser like every arm of the campaign; the pairing on fastbrowse's own browser pool over the 6 navigation
-  tasks has not been run. Browser Use's vendor-reported 22 seconds and $0.0064 a task for Ultrafast cover the
-  model and the search only, with the browser and proxy billed separately, so they are not comparable with our
+- **C3, fastbrowse on its own browser pool against `jev-ultrafast`:** not yet measured. The pairing over the 6
+  navigation tasks both run has not been run; the Ultrafast figures above are C1's, on a Browser Use cloud browser
+  like every arm of that campaign. Browser Use's vendor-reported 22 seconds and $0.0064 a task for Ultrafast cover
+  the model and the search only, with the browser and proxy billed separately, so they are not comparable with our
   figures.
 
 The [benchmark page](https://fastbrowse.ai/benchmarks) publishes campaign release-0.10.0 (fastbrowse-evals at
