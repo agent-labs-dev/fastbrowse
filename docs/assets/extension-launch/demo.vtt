@@ -1,0 +1,12 @@
+WEBVTT
+
+00:00.000 --> 00:03.000
+Start a read-only task from the fastbrowse CLI.
+
+00:03.000 --> 00:06.000
+The extension opens a tab group in Chrome.
+Use Stop in its popup to stop the run.
+
+00:06.000 --> 00:12.000
+The terminal reports the result and a citation.
+The run closes its tabs.
