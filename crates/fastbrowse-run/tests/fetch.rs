@@ -155,7 +155,7 @@ async fn test_a_page_that_is_not_html_is_left_to_the_browser() {
 #[tokio::test]
 async fn test_json_responses_keep_their_exact_values_in_citable_spans() {
     let raw =
-        "{\"name\":\"A & B\",\"release\":{\"version\":\"2.1\",\"date\":\"2026-11-12\"},\"count\":9007199254740993}";
+        "{\"name\":\"A  & B\",\"release\":{\"version\":\"2.1\",\"date\":\"2026-11-12\"},\"count\":9007199254740993}";
     for mime in ["application/json", "application/problem+json; charset=utf-8", "text/csv"] {
         let capture =
             fetched(&client(raw, 200, mime), "https://shop.example.com/api").await.expect("readable response");
@@ -165,6 +165,23 @@ async fn test_json_responses_keep_their_exact_values_in_citable_spans() {
         let quoted: String =
             capture.text.chars().skip(block.start as usize).take((block.end - block.start) as usize).collect();
         assert_eq!(quoted, raw);
+    }
+}
+
+#[tokio::test]
+async fn text_and_json_endpoints_can_negotiate_a_supported_response() {
+    for mime in ["application/json", "text/csv"] {
+        let http = serving(move |request| {
+            let ranges: Vec<_> = request
+                .header("accept")
+                .unwrap_or_default()
+                .split(',')
+                .map(|part| part.split(';').next().unwrap().trim())
+                .collect();
+            let accepted = ranges.contains(&mime) || (mime.starts_with("text/") && ranges.contains(&"text/*"));
+            Response::new(if accepted { 200 } else { 406 }, "{\"value\":42}").with_header("content-type", mime)
+        });
+        assert!(fetched(&http, "https://api.example.test/value").await.is_ok(), "{mime}");
     }
 }
 
