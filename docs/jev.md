@@ -224,8 +224,8 @@ Tally membership questions about a page's notes are asked beside that page's cur
 price can be read alongside separate page labels. A note proven to be a whole record is left out of that context,
 since it is all its item shows and is judged in a question of its own. The provider's input limits still apply: a
 question whose page context does not fit is not sent with missing notes, and the claim's tally reports that its page
-needs more context than the decision model accepts. A heading or link is never offered as a whole record that lacks
-the field, since it only names its record. For a total or extreme, one choice qualifies the record and selects its quoted
+needs more context than the decision model accepts. A heading or link, or a quote that lies within one link's text such as a
+list item that is only a link, is never offered as a whole record that lacks the field, since it only names its record. For a total or extreme, one choice qualifies the record and selects its quoted
 numeric field together. A whole record with a missing field remains distinct from a note that is not a record,
 and withholds the result after deduplication. Questions narrowing large numeric offers receive the same source
 context; code computes the total or ordering.

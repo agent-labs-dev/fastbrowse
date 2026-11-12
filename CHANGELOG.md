@@ -15,7 +15,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - A JSON response's array items are read as whole records, one per item, so a page such as a PyPI release list is a few hundred records rather than thousands of separate keys and values. Counts, totals and comparisons judge each record beside its own page's labels, so they are worked out on large pages instead of being left unanswered.
 
-- A comparison across records no longer rejects a correct answer because a record's name heading was judged a record without the compared value: a heading or link names its record and is never judged as all of it. An answer rewritten after it was rejected for copying page text beside the requested value is checked for that again, rather than passing with the same text.
+- A comparison across records no longer rejects a correct answer because a record's name heading was judged a record without the compared value: a heading or link, including a list item that is only a link, names its record and is never judged as all of it. A composed answer is checked for holding only what the task asks, as a picked one is, so one that pastes a whole record where the task asks for a name is rewritten rather than returned.
 
 - Release checks require complete three-repeat coverage of both official suites, matched to the candidate build and verified producer receipts. Internal speed and cost comparisons remain separate from the official scores.
 

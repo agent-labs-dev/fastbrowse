@@ -852,11 +852,11 @@ pub(crate) async fn compose_reviewed(
         }
         all
     });
-    // A rewrite of an answer rejected for copying page text beside the value is held to that check again: unchecked,
-    // "The site received the file Received stocktake.txt (34 bytes)." repeated the rejected draft and passed.
-    let exact = feedback.is_some_and(|feedback| rejected_checks(feedback).iter().any(|check| check == "exact"));
+    // A composed answer is held to what the task asks to be told as a pick is: a source part inserts its note's
+    // entire text, and unchecked, a whole release record of 16 fields stood in for "httpx", and a rewrite repeated
+    // "The site received the file Received stocktake.txt (34 bytes)." after that check rejected it.
     let reviewed =
-        review_composition(jev, llm, task, columns.as_deref(), claims, notes, ledger, reports, exact, steps).await?;
+        review_composition(jev, llm, task, columns.as_deref(), claims, notes, ledger, reports, true, steps).await?;
     let CheckedClaims { claims, problem, rejection, denies_steps } = reviewed;
     let claims = if numbers { numbered(claims) } else { claims };
     if !reports {
@@ -3366,29 +3366,32 @@ mod tests {
         assert!(passed_claims(&feedback, &notes, &[]).is_empty());
     }
 
-    /// A pick of "Received stocktake.txt (34 bytes)." for the file a site received was rejected as holding more than the
-    /// name, and the rewrite inserted that whole note again: the rewrite answers to the check that rejected its draft.
+    /// A composed answer inserts a whole note through a source part: a release record of 16 fields stood in for a
+    /// package's name, and a rewrite inserted "Received stocktake.txt (34 bytes)." again after that pick was rejected
+    /// as holding more than the file's name. A first composition and a rewrite both answer to the exact check.
     #[tokio::test]
-    async fn a_rewrite_after_an_exact_rejection_is_checked_for_exactness_again() {
+    async fn a_composed_answer_is_checked_for_exactness() {
         let notes = Notes::new([fact(0, "Received stocktake.txt (34 bytes).".into())]);
         let picked = Claim::new("Received stocktake.txt (34 bytes).", vec![crate::memory::fact_id(notes.facts()[0])]);
         let task = "Submit the document, then tell me the name of the file the site received.";
-        for (rejected, problem) in [(None, None), (Some("exact"), Some("beside what the task asks"))] {
-            let mut llm = RecordingLlm::new(None);
-            llm.claims = Some(vec![Claim::new(
-                "The site received the file Received stocktake.txt (34 bytes).",
-                vec!["e0".into()],
-            )]);
-            let jev = Support { rejected: rejected.map(str::to_string), ..Support::new(true) };
-            let feedback = dumps(&json!({"columns": null, "draft_claims": [&picked], "rejected_checks": ["exact"]}));
-            let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, Some(&feedback), true, &[]).await.unwrap();
-            assert!(jev.asked.lock().unwrap().iter().any(|asked| asked.contains_key("exact")));
-            let found = reviewed.answer.problem.as_deref();
-            assert_eq!(
-                found.map(|found| found.contains(problem.unwrap_or_default())),
-                problem.map(|_| true),
-                "{found:?}"
-            );
+        let feedback = dumps(&json!({"columns": null, "draft_claims": [&picked], "rejected_checks": ["exact"]}));
+        for feedback in [None, Some(feedback.as_str())] {
+            for (rejected, problem) in [(None, None), (Some("exact"), Some("beside what the task asks"))] {
+                let mut llm = RecordingLlm::new(None);
+                llm.claims = Some(vec![Claim::new(
+                    "The site received the file Received stocktake.txt (34 bytes).",
+                    vec!["e0".into()],
+                )]);
+                let jev = Support { rejected: rejected.map(str::to_string), ..Support::new(true) };
+                let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, feedback, true, &[]).await.unwrap();
+                assert!(jev.asked.lock().unwrap().iter().any(|asked| asked.contains_key("exact")));
+                let found = reviewed.answer.problem.as_deref();
+                assert_eq!(
+                    found.map(|found| found.contains(problem.unwrap_or_default())),
+                    problem.map(|_| true),
+                    "{found:?}"
+                );
+            }
         }
     }
 
