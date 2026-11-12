@@ -445,9 +445,10 @@ The server's flags set what a calling model may do; a call can ask for less, nev
 
 | Flag | Effect |
 |:--|:--|
-| `--local`, `--launch`, `--headed`, `--profile DIR`, `--foreground`, `--downloads DIR`, `--cursor`, `--no-cursor` | server browser settings, fixed for every call; `--local` starts separate Chrome, and `--headed` or `--profile` imply it |
+| `--launch`, `--headed`, `--profile DIR` | start separate Chrome; a headed window or kept profile implies launch |
+| `--foreground`, `--downloads DIR`, `--cursor`, `--no-cursor` | fixed for every call |
 | `--cloud-profile ID` | every call runs as that cloud profile |
-| `--extension`, `--extension-browser LABEL` | every call runs in your own Chrome through the fastbrowse extension; see [Your own Chrome](docs/cli.md#your-own-chrome) |
+| `--local`, `--extension`, `--extension-browser LABEL` | every call runs in your own Chrome through the fastbrowse extension; see [Your own Chrome](docs/cli.md#your-own-chrome) |
 | `--allow-authorize` | let a call pass `authorize`; without it irreversible actions always stop at `needs_confirmation` |
 | `--secret NAME=ENV_VAR@ORIGIN` | typed when a call's start page is on `ORIGIN`; the model sees `NAME` only |
 | `--bitwarden ITEM` | a vault login a call may name in `bitwarden` |

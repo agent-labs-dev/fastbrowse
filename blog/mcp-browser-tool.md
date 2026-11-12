@@ -16,7 +16,9 @@ A calling model cannot override these:
 
 | Flag | Effect |
 |:--|:--|
-| `--local`, `--launch`, `--headed`, `--profile DIR`, `--downloads DIR`, `--cursor`, `--no-cursor` | as for the CLI, fixed for every call |
+| `--local`, `--extension` | every call runs in your own Chrome through the fastbrowse extension |
+| `--launch`, `--headed`, `--profile DIR` | start separate Chrome; a headed window or kept profile implies launch |
+| `--downloads DIR`, `--cursor`, `--no-cursor` | fixed for every call |
 | `--cloud-profile ID` | every call runs as that cloud profile |
 | `--allow-authorize` | lets a call pass `authorize`; without it an irreversible action always stops at `needs_confirmation` |
 | `--secret NAME=ENV_VAR@ORIGIN` | typed when a call's start page is on `ORIGIN`; the model sees `NAME` only |
