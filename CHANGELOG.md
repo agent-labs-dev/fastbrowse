@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Widget keys are choices, even when the task names no chord.** Jev can step sliders and spin buttons, navigate tabs, lists, menus, trees and grids, and open combobox popups using the keys their ARIA roles define. Task-provided chords still work, and the edit and authorization gates check the selected key before it is sent ([#1035](https://github.com/agent-labs-dev/fastbrowse/issues/1035)).
+
 - **Web search can run without a browser.** With `EXA_API_KEY`, Jev picks LLM-proposed queries and opens links from Exa results. Returned fields remain citable, existing browsers stay open, and each search has a cost receipt checked against the run budget ([#986](https://github.com/agent-labs-dev/fastbrowse/issues/986)).
 
 - **Local runs use the browser attached through the extension.** `--local` now selects the extension; `--launch` opens a separate local Chrome. An explicit headed mode or profile also selects launched Chrome. A missing extension stops the run before model calls ([#1005](https://github.com/agent-labs-dev/fastbrowse/issues/1005)).

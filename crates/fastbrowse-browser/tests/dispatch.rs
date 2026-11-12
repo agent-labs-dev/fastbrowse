@@ -1682,3 +1682,57 @@ async fn scroll_area_names_exclude_contents_and_identify_their_frame() {
     assert!(areas.iter().any(|c| c.context.as_deref().is_some_and(|c| c.contains("Activity log"))), "{areas:?}");
     h.close().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_role_keys_step_a_native_slider_and_focus_a_composite_widget() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        r#"
+        document.body.innerHTML = '<input aria-label="Volume" type="range" min="0" max="100" value="42">'
+          + '<div role="grid" tabindex="0" aria-label="Sheet" aria-activedescendant="first">'
+          + '<span role="gridcell" id="first">First</span><span role="gridcell" id="second">Second</span></div>';
+        document.querySelector('[role=grid]').addEventListener('keydown', e => {
+          if (e.key === 'ArrowRight') e.currentTarget.setAttribute('aria-activedescendant', 'second');
+          if (e.key === 'ArrowLeft') e.currentTarget.setAttribute('aria-activedescendant', 'first');
+        });
+        true
+    "#,
+    )
+    .await;
+    let before = h.observe().await;
+    let slider = find(&before, "Volume");
+    assert_eq!(slider.role, "slider");
+    assert_eq!(slider.value.as_deref(), Some("42"));
+    let press =
+        Action { target_id: Some(slider.id.clone()), text: Some("ArrowRight".into()), ..Action::new(Operation::Press) };
+    let result = h.page.act(&press, &before).await.expect("slider press");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+    let after = h.observe().await;
+    assert_eq!(find(&after, "Volume").value.as_deref(), Some("43"));
+    let grid = find(&after, "Sheet");
+    let press =
+        Action { target_id: Some(grid.id.clone()), text: Some("ArrowRight".into()), ..Action::new(Operation::Press) };
+    let result = h.page.act(&press, &after).await.expect("grid press");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+    assert_eq!(
+        eval_active(&h.page, "document.querySelector('[role=grid]').getAttribute('aria-activedescendant')").await,
+        json!("second")
+    );
+    let moved = h.observe().await;
+    assert_eq!(find(&moved, "Second").focused, Some(true));
+    assert_eq!(find(&moved, "First").focused, Some(false));
+    assert_ne!(after.page_key, moved.page_key);
+    let item = find(&moved, "Second");
+    assert!(item.operations.contains(&Operation::Press));
+    let press =
+        Action { target_id: Some(item.id.clone()), text: Some("ArrowLeft".into()), ..Action::new(Operation::Press) };
+    let result = h.page.act(&press, &moved).await.expect("virtual item press");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+    assert_eq!(eval_active(&h.page, "[document.activeElement.getAttribute('role'), document.activeElement.getAttribute('aria-activedescendant')]").await, json!(["grid", "first"]));
+    let returned = h.observe().await;
+    assert_eq!(find(&returned, "First").focused, Some(true));
+    assert_ne!(moved.page_key, returned.page_key);
+    h.close().await;
+}

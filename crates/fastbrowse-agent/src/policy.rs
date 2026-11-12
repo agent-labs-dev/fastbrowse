@@ -16,6 +16,7 @@ use fastbrowse_core::decision::{
     NoulQuestion, Question,
 };
 use fastbrowse_core::effects::leavable;
+use fastbrowse_core::keys::role_keys;
 use fastbrowse_core::models::{CostComponent, CostLine, JevPurpose, Operation, StepOutcome, TARGETED, UNTRUSTED};
 use fastbrowse_core::navigation::navigation_urls;
 use fastbrowse_core::page::{Control, Observation, cut_text, cut_with, pager_link};
@@ -70,6 +71,9 @@ pub static TARGET: LazyLock<String> = LazyLock::new(|| untrusted(TARGET_RULES));
 pub static DESTINATION: LazyLock<String> = LazyLock::new(|| untrusted(DESTINATION_RULES));
 pub static RELEVANCE: LazyLock<String> = LazyLock::new(|| untrusted(RELEVANCE_RULES));
 pub const GROUP: &str = "Too many elements to list at once. Choose the group that contains the best target if the next\noperation is the one this question names. A later question picks the element inside the group.";
+
+/// The Press operation where a control's ARIA role defines keys, such as a slider stepped by its arrows.
+const PRESS_ROLE_KEYS: &str = "Press a key on a control: one its role supports, such as an arrow that steps a slider or moves through tabs, a menu, a list or a grid, or the key or key chord the task gives in an editable field.";
 
 pub fn operation_label(operation: Operation) -> &'static str {
     match operation {
@@ -904,8 +908,8 @@ async fn shortlist(
     Ok(Some((kept(low), paid, used)))
 }
 
-/// Whether `control` takes `operation`. A field that takes a fill also takes a key press: observation lists only fill,
-/// and the key a press sends is copied from the task.
+/// Whether `control` takes `operation`. A field that takes a fill also takes a key; other keyboard targets are
+/// offered by the observation, which knows whether the control can receive focus.
 pub fn takes(control: &Control, operation: Operation) -> bool {
     control.operations.contains(&operation)
         || (operation == Operation::Press && control.operations.contains(&Operation::Fill))
@@ -1040,6 +1044,15 @@ pub fn build_request(
                             .into()
                     }
                     (Operation::Navigate, [only]) => format!("{} The address: {only}", operation_label(*op)),
+                    // Only a page with a control whose role defines keys is told so, so a page of plain fields asks
+                    // what it always has.
+                    (Operation::Press, _)
+                        if indexed
+                            .get(op)
+                            .is_some_and(|controls| controls.iter().any(|c| !role_keys(&c.role).is_empty())) =>
+                    {
+                        PRESS_ROLE_KEYS.into()
+                    }
                     _ => operation_label(*op).to_string(),
                 };
                 (op.as_str().to_string(), Value::from(label))
@@ -1560,7 +1573,12 @@ fn target_question(operation: Operation, candidates: &[Control], rules: &str) ->
 /// picker is a useful click target even when its value is already filled.
 fn target_element(control: &Control, operation: Operation) -> Map<String, Value> {
     let mut element = element(control);
-    if control.operations.contains(&Operation::Fill) {
+    if operation == Operation::Press && !role_keys(&control.role).is_empty() {
+        let label = element["label"].as_str().unwrap_or_default().to_string();
+        let given = if control.operations.contains(&Operation::Fill) { ", or a task-supplied key," } else { "" };
+        element
+            .insert("label".into(), format!("Press a key its {} role supports{given} in {label}", control.role).into());
+    } else if control.operations.contains(&Operation::Fill) {
         let label = element["label"].as_str().unwrap_or_default().to_string();
         match operation {
             Operation::Click => {
@@ -1918,6 +1936,36 @@ mod tests {
             assert!(!operation.criteria.contains_key("blur"));
             assert!(!request.questions.contains_key("blur_target"));
         }
+    }
+
+    #[test]
+    fn test_a_control_whose_role_defines_keys_is_offered_a_press() {
+        let slider = Control::new("volume", "slider", "Volume", [Operation::Click, Operation::Press]);
+        let controls = vec![slider.clone(), field("name", None), button(1)];
+        let page = observation(controls.clone());
+        let request = build_request(&page, &controls, &StepContext::new("t"), &Config::default(), MAX_CHOICE_OPTIONS);
+        let Question::Choice(operation) = &request.questions["operation"] else { panic!("a choice") };
+        assert_eq!(operation.criteria["press"], json!(PRESS_ROLE_KEYS));
+        let Question::Choice(target) = &request.questions["press_target"] else { panic!("a choice") };
+        assert_eq!(target.criteria.keys().collect::<Vec<_>>(), ["volume", "name"]);
+        assert_eq!(target.criteria["volume"]["label"], json!("Press a key its slider role supports in Volume"));
+        assert_eq!(target.criteria["name"]["label"], json!("Press a task-supplied key in name"));
+        let spin = Control::new("qty", "spinbutton", "Quantity", [Operation::Fill]);
+        assert_eq!(
+            target_element(&spin, Operation::Press)["label"],
+            json!("Press a key its spinbutton role supports, or a task-supplied key, in Quantity")
+        );
+        // An activation-only role adds no press, and a page of plain fields is asked what it always was.
+        assert!(!takes(&button(1), Operation::Press));
+        let native_select = Control::new("native", "combobox", "Choose", [Operation::Select]);
+        assert!(!takes(&native_select, Operation::Press));
+        let unfocusable = Control::new("cell", "gridcell", "Cell", [Operation::Click]);
+        assert!(!takes(&unfocusable, Operation::Press));
+        let plain = vec![field("name", None), button(1)];
+        let page = observation(plain.clone());
+        let request = build_request(&page, &plain, &StepContext::new("t"), &Config::default(), MAX_CHOICE_OPTIONS);
+        let Question::Choice(operation) = &request.questions["operation"] else { panic!("a choice") };
+        assert_eq!(operation.criteria["press"], json!(operation_label(Operation::Press)));
     }
 
     #[test]

@@ -7084,6 +7084,8 @@ struct FirstChoice {
     asked: Mutex<Vec<String>>,
     /// Picks the first option whose criterion holds this text, in place of the first option.
     wants: Option<&'static str>,
+    /// The probability every yes-or-no question is answered with; without one they go unanswered.
+    noul: Option<f64>,
 }
 
 impl DecisionClient for FirstChoice {
@@ -7095,7 +7097,17 @@ impl DecisionClient for FirstChoice {
         let answers = questions
             .iter()
             .filter_map(|(key, question)| {
-                let Question::Choice(choice) = question else { return None };
+                let choice = match question {
+                    Question::Choice(choice) => choice,
+                    Question::Score(_) | Question::Box(_) => return None,
+                    Question::Noul(question) => {
+                        self.noul?;
+                        self.asked.lock().unwrap().push(question.instructions.clone());
+                        let answer =
+                            fastbrowse_core::decision::NoulAnswer { kind: Default::default(), probability: self.noul? };
+                        return Some((key.clone(), Answer::Noul(answer)));
+                    }
+                };
                 self.asked.lock().unwrap().push(choice.instructions.clone());
                 let wanted = self.wants.and_then(|wants| {
                     choice.criteria.iter().find(|(_, criterion)| criterion.to_string().contains(wants)).map(|(k, _)| k)
@@ -7840,4 +7852,74 @@ async fn a_known_page_that_redirects_is_reached_by_the_address_it_was_opened_at(
     assert_eq!(state.reached_known_pages, vec![known.clone()]);
     let context = agent.context(&state, &home, Vec::new(), false, false).unwrap();
     assert!(!context.known_pages.contains(&known), "a redirected known page is not offered again");
+}
+
+/// A slider is stepped by the keys its role defines, so Jev picks one of them rather than writing a key: offered
+/// only "a key the task gives", a run asked to nudge a volume slider had nothing to copy.
+#[tokio::test]
+async fn test_a_press_on_a_slider_picks_one_of_the_keys_its_role_supports() {
+    let slider = Control { value: Some("30".into()), ..Control::new("v", "slider", "Volume", [Operation::Click]) };
+    let page = observation(std::slice::from_ref(&slider));
+    // Every gate question is answered no: a step of a slider commits nothing.
+    let jev = Arc::new(FirstChoice { wants: Some("ArrowRight"), noul: Some(0.0), ..Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.edits_forbidden = Some(false);
+    let action = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(slider))).await.expect("action");
+    assert_eq!((action.operation, action.text.as_deref()), (Operation::Press, Some("ArrowRight")));
+    assert_eq!(state.text_source, Some(fastbrowse_core::recipe::RecipeText::Literal("ArrowRight".into())));
+    let asked = jev.asked.lock().unwrap();
+    assert!(asked.iter().any(|q| q.contains("Which key should be pressed in") && q.contains("a slider supports")));
+}
+
+/// A role's keys do not take the place of a chord the task states: Jev says the task gives it, and it is copied.
+#[tokio::test]
+async fn test_a_press_on_a_role_with_keys_still_takes_a_chord_the_task_gives() {
+    let slider = Control::new("v", "slider", "Volume", [Operation::Click]);
+    let page = observation(std::slice::from_ref(&slider));
+    let jev = Arc::new(FirstChoice { wants: Some("The task gives the key"), ..Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.edits_forbidden = Some(false);
+    let _ = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(slider))).await;
+    let asked = jev.asked.lock().unwrap();
+    let picked = asked.iter().position(|q| q.contains("Which key should be pressed in")).expect("the key question");
+    // The copy from the task is asked after the key question, as a press on an editable field always asks it.
+    assert!(asked.len() > picked + 1, "{asked:?}");
+}
+
+#[tokio::test]
+async fn test_a_role_key_is_classified_before_an_unauthorized_press() {
+    let tab = Control::new("t", "tab", "Saved report", [Operation::Click]);
+    let page = observation(std::slice::from_ref(&tab));
+    let jev = Arc::new(FirstChoice { wants: Some("Delete"), noul: Some(1.0), ..Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.edits_forbidden = Some(false);
+    let result = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(tab))).await;
+    assert!(matches!(result, Err(Flow::Stop(ref stop)) if stop.status == Status::NeedsConfirmation));
+    let asked = jev.asked.lock().unwrap();
+    assert!(asked.iter().any(|q| q.contains("exact key chord to press is") && q.contains("Delete")));
+}
+
+#[tokio::test]
+async fn test_a_read_only_task_can_press_a_navigation_key_but_not_change_a_value() {
+    for (role, key, probability, allowed) in [("tab", "ArrowRight", 0.0, true), ("slider", "ArrowRight", 1.0, false)] {
+        let control = Control::new("widget", role, "Widget", [Operation::Click, Operation::Press]);
+        let page = observation(std::slice::from_ref(&control));
+        let jev = Arc::new(FirstChoice { wants: Some(key), noul: Some(probability), ..Default::default() });
+        let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.task = "Read the page without changing any values or settings".into();
+        state.edits_forbidden = Some(true);
+        let result = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(control))).await;
+        assert_eq!(result.is_ok(), allowed, "{role}: {result:?}");
+        assert!(
+            jev.asked
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|q| q.contains("exact key chord") && q.contains("change a field's value"))
+        );
+    }
 }

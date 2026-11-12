@@ -10,7 +10,7 @@ When a field value or key chord is copied, Jev selects its source and first word
 each choice shows the complete text that would be typed from that first word to the candidate end, with one more
 answer: the value does not begin at that word. Jev then picks the first word again without it. The beginning is checked
 the same way against copies that end where the value ends, and an end Jev rejects there is picked again.
-Code copies the selected span unchanged. A key chord is copied only from the task, never from page text.
+Code copies the selected span unchanged. A task-provided key chord is copied only from the task, never from page text. Controls with standard ARIA keyboard interactions also offer their role's keys for Jev to choose.
 Earlier typing is shown as history, without assuming
 rejection or requiring a different value when the page changed the field.
 
@@ -183,7 +183,7 @@ others as they were. Jev is asked which option to toggle and told which are sele
 selection back fails the step, as on a single select, and the action guard and page fingerprint read every selected
 option, so choosing or removing any one of them is a change.
 
-Press on an editable field sends the key or key chord Jev copied from the task. Its modifiers and DOM key are sent
+Press sends a key Jev selects from the target control's ARIA role, or a key chord copied from the task. Sliders, spin buttons, tabs, lists, trees, menus and grids offer their standard WAI-ARIA keyboard interactions. A composite container is indexed for keyboard use when it has a `tabindex`. The selected chord is stated to the irreversible-action classifier before dispatch. Its modifiers and DOM key are sent
 as one browser input, and a chord that can submit or save goes through the same irreversibility and authorization gates
 as Enter.
 
