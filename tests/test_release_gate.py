@@ -152,3 +152,195 @@ def test_release_speed_requires_legacy_clock_to_match():
     candidate = [{**r, "dollars": 0.01, "timing_basis": "session-ready-to-answer"} for r in BASELINE]
     failures, _ = gate.compare(candidate, BASELINE)
     assert failures == ["median seconds cannot compare different timing bases"]
+
+
+def test_minor_release_requires_both_official_groups():
+    import json
+
+    raw = json.loads((Path(__file__).parent.parent / "docs/results/benchmark-candidate.json").read_text())
+    with pytest.raises(gate.GateError, match="official groups"):
+        gate.official_candidate(raw, raw["campaign_id"], raw["agent_sha"])
+
+
+def official_raw():
+    import json
+
+    raw = json.loads((Path(__file__).parent.parent / "docs/results/benchmark-candidate.json").read_text())
+    template = raw["groups"][0]["rows"][0]
+    for name, count, metric in (("bu-bench", 200, "weighted-rubric"), ("online-mind2web", 300, "full-task-success")):
+        tasks = [f"task{i}" for i in range(count)]
+        raw["groups"].append(
+            {
+                "id": name,
+                "agent_sha": raw["agent_sha"],
+                "runner_sha": raw["runner_sha"],
+                "metric": metric,
+                "source_sha256": "f" * 64,
+                "task_ids": tasks,
+                "repeats": 3,
+                "limits": ["Test protocol"],
+                "rows": [{**template, "task": task, "repeat": repeat} for task in tasks for repeat in range(3)],
+            }
+        )
+    return raw
+
+
+def check_official(raw):
+    return gate.official_candidate(raw, raw["campaign_id"], raw["agent_sha"])
+
+
+def test_complete_official_coverage_keeps_upstream_partial_scores():
+    raw = official_raw()
+    raw["groups"][-2]["rows"][0]["score"] = 0.25
+    result = check_official(raw)
+    assert result.groups[-2].rows[0].score == 0.25
+    assert sum(len(g.rows) for g in result.groups[-2:]) == 1500
+
+
+@pytest.mark.parametrize("repeats", [1, 2, 4])
+def test_official_release_requires_three_complete_repeats(repeats):
+    raw = official_raw()
+    group = raw["groups"][-1]
+    group["repeats"] = repeats
+    template = group["rows"][0]
+    group["rows"] = [{**template, "task": task, "repeat": i} for task in group["task_ids"] for i in range(repeats)]
+    with pytest.raises(gate.GateError, match="three repeats"):
+        check_official(raw)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "duplicate", "extra", "foreign-task"])
+def test_official_release_refuses_inexact_slots(mutation):
+    from pydantic import ValidationError
+
+    raw = official_raw()
+    rows = raw["groups"][-1]["rows"]
+    if mutation == "missing":
+        rows.pop()
+    elif mutation == "duplicate":
+        rows[-1] = dict(rows[0])
+    elif mutation == "extra":
+        rows.append({**rows[0], "repeat": 3})
+    else:
+        rows[-1]["task"] = "unrelated"
+    with pytest.raises(ValidationError, match="scheduled slot"):
+        check_official(raw)
+
+
+def test_official_release_refuses_unknown_cost():
+    from pydantic import ValidationError
+
+    raw = official_raw()
+    raw["groups"][-1]["rows"][0]["dollars"] = None
+    with pytest.raises(ValidationError, match="report their cost"):
+        check_official(raw)
+
+
+@pytest.mark.parametrize("field", ["campaign_id", "agent_sha"])
+def test_official_release_requires_exact_candidate_identity(field):
+    raw = official_raw()
+    kwargs = {"campaign": raw["campaign_id"], "agent_sha": raw["agent_sha"]}
+    kwargs["campaign" if field == "campaign_id" else field] = "unrelated"
+    with pytest.raises(gate.GateError, match="exact fixture receipt"):
+        gate.official_candidate(raw, **kwargs)
+
+
+@pytest.mark.parametrize("reason", ["no-verdict", "task-changed"])
+def test_official_release_does_not_accept_nonproducer_unjudged_reasons(reason):
+    raw = official_raw()
+    group = raw["groups"][-1]
+    removed = group["rows"].pop()
+    group["unjudged"] = [{"task": removed["task"], "repeat": removed["repeat"], "arm": "fastbrowse", "reason": reason}]
+    with pytest.raises(gate.GateError, match="evidence-unavailable"):
+        check_official(raw)
+
+
+def test_official_release_preserves_evidenced_unjudged_slot():
+    raw = official_raw()
+    group = raw["groups"][-1]
+    removed = group["rows"].pop()
+    group["unjudged"] = [
+        {"task": removed["task"], "repeat": removed["repeat"], "arm": "fastbrowse", "reason": "evidence-unavailable"}
+    ]
+    candidate = check_official(raw)
+    assert len(candidate.groups[-1].rows) == 899
+    assert len(candidate.groups[-1].unjudged) == 1
+
+
+def test_candidate_intake_requires_successful_producer_stage(monkeypatch):
+    import json
+
+    raw = official_raw()
+    campaign = raw["campaign_id"]
+    monkeypatch.setattr(gate, "_runs", lambda *_: [{"displayTitle": f"Benchmark campaign {campaign}", "databaseId": 1}])
+
+    def gh(*args):
+        if args[-1].endswith("/jobs?per_page=100"):
+            return json.dumps({"jobs": [{"name": "Build the candidate", "conclusion": "failure"}]})
+        if args[0] == "api":
+            return json.dumps({"path": ".github/workflows/benchmark-campaign.yml", "head_sha": raw["runner_sha"]})
+        pytest.fail("failed producer must not supply an artifact")
+
+    monkeypatch.setattr(gate, "_gh", gh)
+    with pytest.raises(gate.GateError, match="no complete official campaign candidate"):
+        gate.campaign_candidate("o/r", campaign, "tree", raw["fixture"]["run_id"])
+
+
+def test_complete_candidate_intake_requires_original_official_receipts(monkeypatch):
+    import json
+
+    raw = official_raw()
+    campaign = raw["campaign_id"]
+    monkeypatch.setattr(gate, "_runs", lambda *_: [{"displayTitle": f"Benchmark campaign {campaign}", "databaseId": 1}])
+    monkeypatch.setattr(gate, "_tree", lambda *_: "tree")
+
+    def gh(*args):
+        if args[0] == "run":
+            directory = Path(args[args.index("-D") + 1])
+            (directory / "benchmark-candidate.json").write_text(json.dumps(raw))
+            return ""
+        if args[-1].endswith("/jobs?per_page=100"):
+            return json.dumps({"jobs": [{"name": "Build the candidate", "conclusion": "success"}]})
+        return json.dumps({"path": ".github/workflows/benchmark-campaign.yml", "head_sha": raw["runner_sha"]})
+
+    def refuse(*_):
+        raise gate.GateError("missing original official receipts")
+
+    monkeypatch.setattr(gate, "_gh", gh)
+    monkeypatch.setattr(gate, "official_receipts", refuse)
+    with pytest.raises(gate.GateError, match="missing original official receipts"):
+        gate.campaign_candidate("o/r", campaign, "tree", raw["fixture"]["run_id"])
+
+
+def test_candidate_keeps_valid_original_fixture_after_new_same_tree_dispatch(monkeypatch):
+    import json
+
+    raw = official_raw()
+    campaign = raw["campaign_id"]
+    original = raw["fixture"]["run_id"]
+    monkeypatch.setattr(gate, "_runs", lambda *_: [{"displayTitle": f"Benchmark campaign {campaign}", "databaseId": 1}])
+    monkeypatch.setattr(gate, "_tree", lambda *_: "tree")
+
+    def gh(*args):
+        if args[0] == "run":
+            directory = Path(args[args.index("-D") + 1])
+            (directory / "benchmark-candidate.json").write_text(json.dumps(raw))
+            return ""
+        if args[-1].endswith("/jobs?per_page=100"):
+            return json.dumps({"jobs": [{"name": "Build the candidate", "conclusion": "success"}]})
+        if args[-1].endswith(f"/runs/{original}"):
+            return json.dumps(
+                {
+                    "head_sha": raw["agent_sha"],
+                    "path": ".github/workflows/evals.yml",
+                    "event": "workflow_dispatch",
+                    "status": "completed",
+                    "conclusion": "success",
+                }
+            )
+        return json.dumps({"path": ".github/workflows/benchmark-campaign.yml", "head_sha": "different-workflow-head"})
+
+    monkeypatch.setattr(gate, "_gh", gh)
+    monkeypatch.setattr(gate, "official_receipts", lambda *_: ["verified original rows"])
+    candidate, notes = gate.campaign_candidate("o/r", campaign, "tree", original + 1)
+    assert candidate.fixture.run_id == original
+    assert "verified original rows" in notes

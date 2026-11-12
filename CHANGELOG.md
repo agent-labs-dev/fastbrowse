@@ -11,7 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-## [0.11.0] - 2026-11-12
+- Release checks require complete three-repeat coverage of both official suites, matched to the candidate build and verified producer receipts. Internal speed and cost comparisons remain separate from the official scores.
 
 - Numeric comparisons can first select each group's minimum or maximum from source-bound fields. Code performs both comparisons and retains the selection basis separately from the winning records ([#977](https://github.com/agent-labs-dev/fastbrowse/issues/977)).
 

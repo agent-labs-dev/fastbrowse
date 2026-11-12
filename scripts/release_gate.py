@@ -17,6 +17,8 @@ Langfuse, so what each task was measured on stays visible.
     uv run python scripts/release_gate.py --ref <sha>        # before tagging: would this commit pass?
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import math
@@ -28,7 +30,10 @@ import tempfile
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from fastbrowse.evals.benchmarks import Candidate
 
 BASELINE = Path(__file__).resolve().parent.parent / "docs" / "results" / "release-baseline.json"
 ARM = "fastbrowse"
@@ -155,6 +160,109 @@ MIN_RUNS = 3
 """A task's pass rate rests on at least this many runs, as a published comparison does."""
 
 
+def official_candidate(raw: dict[str, Any], campaign: str, agent_sha: str) -> Candidate:
+    """A release requires official coverage even when its baseline measured only internal tasks."""
+    from fastbrowse.evals.benchmarks import Candidate
+
+    candidate = Candidate.model_validate(raw)
+    if candidate.campaign_id != campaign or candidate.agent_sha != agent_sha or candidate.fixture is None:
+        raise GateError("the campaign candidate must identify the measured build and its exact fixture receipt")
+    groups = {group.id: group for group in candidate.groups if group.id in {"bu-bench", "online-mind2web"}}
+    if set(groups) != {"bu-bench", "online-mind2web"}:
+        raise GateError("the release candidate must contain both official groups")
+    for name, group in groups.items():
+        if (
+            group.repeats != MIN_RUNS
+            or group.agent_sha != candidate.agent_sha
+            or group.runner_sha != candidate.runner_sha
+            or group.sources
+            or group.references
+            or group.excluded
+        ):
+            raise GateError(f"{name}: three repeats on the exact candidate build and runner are required")
+        if any(row.dollars is None for row in group.rows) or any(slot.dollars is None for slot in group.blocked):
+            raise GateError(f"{name}: official costs must be known")
+        if any(slot.reason != "evidence-unavailable" for slot in group.unjudged):
+            raise GateError(f"{name}: an official unjudged slot requires evidence-unavailable producer proof")
+    return candidate
+
+
+def official_receipts(repo: str, candidate: Candidate) -> list[str]:
+    """The producer's public artifacts bind the candidate to checked task sources and upstream grades."""
+    from fastbrowse_evals.publication import OfficialRows, official_collected
+
+    expected = {group.id: group for group in candidate.groups if group.id in {"bu-bench", "online-mind2web"}}
+    found: dict[str, int] = {}
+    for run in _runs(repo, "official-benchmarks.yml", "--status", "success"):
+        run_id = int(run["databaseId"])
+        metadata = json.loads(_gh("api", f"repos/{repo}/actions/runs/{run_id}"))
+        if (
+            metadata["path"] != ".github/workflows/official-benchmarks.yml"
+            or metadata["event"] != "workflow_dispatch"
+            or metadata["conclusion"] != "success"
+            or metadata["status"] != "completed"
+        ):
+            continue
+        with tempfile.TemporaryDirectory(prefix="release-official-") as directory:
+            try:
+                _gh("run", "download", str(run_id), "-R", repo, "-D", directory, "-p", "official-rows-*")
+            except subprocess.CalledProcessError:
+                continue
+            for path in sorted(Path(directory).rglob("*.rows.json")):
+                part = OfficialRows.model_validate_json(path.read_bytes())
+                if (
+                    part.agent_sha != candidate.agent_sha
+                    or part.runner_sha != candidate.runner_sha
+                    or part.repeats != MIN_RUNS
+                    or part.group not in expected
+                ):
+                    continue
+                if official_collected(part).group == expected[part.group]:
+                    found.setdefault(part.group, run_id)
+        if found.keys() == expected.keys():
+            return [f"{name}: verified official producer run {found[name]}" for name in sorted(found)]
+    raise GateError("both official groups require matching public receipts from successful exact-runner workflows")
+
+
+def campaign_candidate(repo: str, campaign: str, tree: str, fixture_id: int) -> tuple[Candidate, list[str]]:
+    """A successful candidate stage has checked the private tracking readback before exporting public figures."""
+    for run in _runs(repo, "benchmark-campaign.yml", "--status", "completed"):
+        if run["displayTitle"].split()[-1:] != [campaign]:
+            continue
+        run_id = int(run["databaseId"])
+        metadata = json.loads(_gh("api", f"repos/{repo}/actions/runs/{run_id}"))
+        if metadata["path"] != ".github/workflows/benchmark-campaign.yml":
+            continue
+        jobs = json.loads(_gh("api", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"))["jobs"]
+        if not any(job["name"] == "Build the candidate" and job["conclusion"] == "success" for job in jobs):
+            continue
+        with tempfile.TemporaryDirectory(prefix="release-candidate-") as directory:
+            try:
+                _gh("run", "download", str(run_id), "-R", repo, "-D", directory, "-n", "benchmark-candidate")
+            except subprocess.CalledProcessError:
+                continue
+            paths = list(Path(directory).rglob("benchmark-candidate.json"))
+            if len(paths) != 1:
+                continue
+            raw = json.loads(paths[0].read_text(encoding="utf-8"))
+        if _tree(repo, raw["agent_sha"]) != tree:
+            continue
+        candidate = official_candidate(raw, campaign, raw["agent_sha"])
+        assert candidate.fixture is not None
+        if candidate.fixture.run_id != fixture_id:
+            fixture = json.loads(_gh("api", f"repos/{repo}/actions/runs/{candidate.fixture.run_id}"))
+            if (
+                fixture["head_sha"] != candidate.agent_sha
+                or fixture["path"] != ".github/workflows/evals.yml"
+                or fixture["event"] != "workflow_dispatch"
+                or fixture["conclusion"] != "success"
+                or fixture["status"] != "completed"
+            ):
+                raise GateError("the candidate's original fixture receipt must pass on its measured build")
+        return candidate, [f"official candidate: campaign run {run_id}", *official_receipts(repo, candidate)]
+    raise GateError("no complete official campaign candidate on the release tree")
+
+
 def campaign_rows(repo: str, campaign: str) -> tuple[list[dict[str, Any]], list[str]]:
     """Each task's rows from the newest finished run of `campaign` that measured it `MIN_RUNS` times or more, and a
     line per run used naming the commits it measured and how many tasks it supplied. An older run never supplies a
@@ -204,18 +312,22 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--ref needs --version")
     tree = _tree(args.repo, ref)
     try:
-        print(f"fixtures: Evals run {fixture_run(args.repo, tree)} passed on tree {tree}")
+        fixture_id = fixture_run(args.repo, tree)
+        print(f"fixtures: Evals run {fixture_id} passed on tree {tree}")
         if args.tag and not measures_itself(args.repo, args.tag, version):
             print(f"{args.tag} is a patch release without 'Benchmarks: run' in its tag message: no campaign needed")
             return 0
         baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
+        _, official_notes = campaign_candidate(args.repo, f"release-{version}", tree, fixture_id)
         candidate, used = campaign_rows(args.repo, f"release-{version}")
         failures, notes = compare(candidate, ledger_rows(args.repo, int(baseline["campaign_run"])))
-    except GateError as error:
+    except (GateError, ValueError, subprocess.CalledProcessError) as error:
         print(f"::error::{error}", file=sys.stderr)
         return 1
     print(f"campaign release-{version} against {baseline['version']} (run {baseline['campaign_run']}):")
     for line in used:
+        print(f"  {line}")
+    for line in official_notes:
         print(f"  {line}")
     for note in notes:
         print(f"  {note}")
