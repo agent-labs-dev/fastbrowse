@@ -443,6 +443,7 @@ impl Tags for Tree {
 
 /// A repeated card, read as one block: what `capture.js` calls a record.
 struct Record {
+    heading_level: Option<usize>,
     /// The tag token that closes the card.
     close: usize,
     kind: BlockKind,
@@ -462,6 +463,7 @@ struct Holds {
     links: usize,
     first_link: Option<usize>,
     leaf_of_its_own: bool,
+    heading_level: Option<usize>,
 }
 
 impl Holds {
@@ -472,6 +474,7 @@ impl Holds {
         self.links += other.links;
         self.first_link = self.first_link.or(other.first_link);
         self.leaf_of_its_own |= other.leaf_of_its_own;
+        self.heading_level = self.heading_level.into_iter().chain(other.heading_level).min();
     }
 }
 
@@ -579,7 +582,8 @@ impl Tree {
                 let link = if self.link(i) { Some(i) } else { inside.first_link.filter(|_| inside.links == 1) };
                 let href = link.and_then(|link| elements[link].href.as_deref()).map(|href| join(&self.url, href));
                 let kind = if tag == "li" { BlockKind::ListItem } else { BlockKind::Record };
-                candidates[i] = Some(Record { close: element.close, kind, href, facts });
+                candidates[i] =
+                    Some(Record { heading_level: inside.heading_level, close: element.close, kind, href, facts });
             }
             let own = Holds {
                 framed,
@@ -589,6 +593,7 @@ impl Tree {
                 links: usize::from(self.link(i)),
                 first_link: self.link(i).then_some(i),
                 leaf_of_its_own: LEAVES_OF_THEIR_OWN.contains(&tag),
+                heading_level: (!element.hidden).then(|| heading_level(tag)).flatten(),
             };
             let mut around = inside;
             around.add(own);
@@ -877,6 +882,14 @@ impl<'a> Reader<'a> {
         {
             self.stamps.push((tag.to_string(), datetime.to_string(), String::new()));
         }
+        let record = if self.record.is_none() && self.tables == 0 { self.records.remove(&at) } else { None };
+        if let Some(record) = &record {
+            self.flush(None, None, false);
+            // An atomic card skips its internal heading, which must still end a preceding sibling's heading.
+            if let Some(level) = record.heading_level {
+                self.headings.retain(|(higher, _)| *higher < level);
+            }
+        }
         self.control(tag, attrs);
         if tag == "a"
             && let Some(href) = get("href").filter(|href| !href.is_empty()).map(|href| join(self.url, href))
@@ -905,10 +918,7 @@ impl<'a> Reader<'a> {
             self.record_break(tag, true);
             return;
         }
-        if self.tables == 0
-            && let Some(record) = self.records.remove(&at)
-        {
-            self.flush(None, None, false);
+        if let Some(record) = record {
             self.record = Some(record);
             return;
         }
@@ -1207,6 +1217,9 @@ impl<'a> Reader<'a> {
             clean(&raw)
         };
         if text.is_empty() {
+            if closing_heading && let Some(level) = self.heading {
+                self.headings.retain(|(higher, _)| *higher < level);
+            }
             return;
         }
         let kind = kind.unwrap_or(self.kind);
@@ -1537,6 +1550,59 @@ mod tests {
             found.last().map(|b| (b.text.as_str(), b.heading_path.clone())),
             Some(("After", vec!["Books".into()]))
         );
+    }
+
+    #[test]
+    fn sibling_records_do_not_inherit_an_earlier_records_heading() {
+        for level in [3, 5] {
+            let html = include_str!("../../../../tests/browser/sites/sibling-record-headings.html")
+                .replace("<h3>", &format!("<h{level}>"))
+                .replace("</h3>", &format!("</h{level}>"));
+            let (_, found) = blocks(&html, "https://example.test/releases");
+            let records: Vec<_> = found.iter().filter(|block| block.whole_record).collect();
+            assert_eq!(records.len(), 3);
+            for (record, version) in records.iter().zip(["3.0", "2.0", "1.0"]) {
+                assert!(record.text.contains(&format!("Version {version}")));
+                assert_eq!(record.heading_path, ["Package", "Release history"]);
+            }
+            let after = found.iter().find(|block| block.text == "After the releases.").unwrap();
+            assert_eq!(after.heading_path, ["Package", "Release history"]);
+        }
+    }
+
+    #[test]
+    fn record_heading_boundaries_follow_visible_heading_ranks() {
+        let cases = [
+            ("<h2>Group</h2><h3>Earlier</h3><h3></h3><p>After</p>".to_string(), vec!["Group"]),
+            (
+                format!("<h2>Group</h2>{}<p>After</p>", "<div class='card'><h2></h2><p>Value</p></div>".repeat(3)),
+                vec![],
+            ),
+            ("<h2>Group</h2><h4>Earlier</h4><h3>Later</h3><p>After</p>".to_string(), vec!["Group", "Later"]),
+            (
+                format!("<h2>Group</h2>{}<p>After</p>", "<div class='card'><h2>Item</h2><p>Value</p></div>".repeat(3)),
+                vec![],
+            ),
+            (
+                format!(
+                    "<h2>Group</h2>{}<p>After</p>",
+                    "<div class='card'><span hidden><h2>Hidden</h2></span><p>Value</p></div>".repeat(3)
+                ),
+                vec!["Group"],
+            ),
+        ];
+        for (markup, expected) in cases {
+            let (_, found) = blocks(&markup, "https://example.test/");
+            let after = found.iter().find(|block| block.text == "After").unwrap();
+            assert_eq!(after.heading_path, expected, "{markup}");
+        }
+        let markup = format!(
+            "<h2>Group</h2><div><h3>Earlier</h3><p>Value</p></div>{}",
+            "<a class='card' href='/item'><h3>Item</h3><p>Value</p></a>".repeat(3)
+        );
+        let (_, _, controls, _) = read(&markup, "https://example.test/");
+        assert_eq!(controls.len(), 3);
+        assert!(controls.iter().all(|control| control.context.as_deref() == Some("Group")));
     }
 
     #[test]

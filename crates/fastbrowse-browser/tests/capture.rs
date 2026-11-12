@@ -317,6 +317,55 @@ async fn test_two_linked_cards_inside_unlabelled_wrappers_remain_separate_record
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_sibling_records_do_not_inherit_an_earlier_records_heading() {
+    for level in [3, 5] {
+        let markup = include_str!("../../../tests/browser/sites/sibling-record-headings.html")
+            .replace("<h3>", &format!("<h{level}>"))
+            .replace("</h3>", &format!("</h{level}>"));
+        let Some(h) = icons_with(&markup).await else {
+            return;
+        };
+        let capture = content_capture(&h.page).await;
+        let records: Vec<_> = capture.blocks.iter().filter(|block| block.whole_record).collect();
+        assert_eq!(records.len(), 3);
+        for (record, version) in records.iter().zip(["3.0", "2.0", "1.0"]) {
+            assert!(text_of(&capture, record).contains(&format!("Version {version}")));
+            assert_eq!(path(record), ["Package", "Release history"]);
+        }
+        let after = capture.blocks.iter().find(|block| text_of(&capture, block) == "After the releases.").unwrap();
+        assert_eq!(path(after), ["Package", "Release history"]);
+        h.close().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_record_heading_boundaries_follow_visible_heading_ranks() {
+    let cases = [
+        ("<h2>Group</h2><h3>Earlier</h3><h3></h3><p>After</p>".to_string(), vec!["Group"]),
+        (format!("<h2>Group</h2>{}<p>After</p>", "<div class='card'><h2></h2><p>Value</p></div>".repeat(3)), vec![]),
+        ("<h2>Group</h2><h4>Earlier</h4><h3>Later</h3><p>After</p>".to_string(), vec!["Group", "Later"]),
+        (
+            format!("<h2>Group</h2>{}<p>After</p>", "<div class='card'><h2>Item</h2><p>Value</p></div>".repeat(3)),
+            vec![],
+        ),
+        (
+            format!(
+                "<h2>Group</h2>{}<p>After</p>",
+                "<div class='card'><span hidden><h2>Hidden</h2></span><p>Value</p></div>".repeat(3)
+            ),
+            vec!["Group"],
+        ),
+    ];
+    for (markup, expected) in cases {
+        let Some(h) = icons_with(&markup).await else { return };
+        let capture = content_capture(&h.page).await;
+        let after = capture.blocks.iter().find(|block| text_of(&capture, block) == "After").unwrap();
+        assert_eq!(path(after), expected, "{markup}");
+        h.close().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_nested_record_lists_keep_the_inner_records() {
     let Some(h) = harness().await else { return };
     h.page.navigate("about:blank", None).await.expect("navigate");

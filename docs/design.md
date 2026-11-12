@@ -185,6 +185,10 @@ Fetched documents have no pixels, so optional screenshots and step frames are sk
 JSON responses, including `application/*+json`, and other `text/*` responses are read as quoted text blocks.
 JSON and delimited data keep their whitespace and literal values, without HTML parsing or numeric conversion.
 
+Browser and HTTP heading paths follow heading ranks. A heading inside a repeated record ends earlier headings
+of the same or deeper rank, without naming later records. Headings hidden by the capture do not change that
+context; HTTP sees hidden attributes and inline styles, but does not apply stylesheets.
+
 Browser captures record an icon-only link's destination with nearby container text, passing through empty layout
 wrappers. The search stops at a paragraph even when it is empty, and never uses the page root as nearby text.
 

@@ -12,7 +12,7 @@
   const blocks = [];
   let path = [];
   // The headings a frame stands under: its own headings rank among themselves, so its h1 cannot end them.
-  let floor = 0;
+  let headingLevels = [];
   let framePath = null;
   let sourcePath = '';
   let inaccessible = 0;
@@ -379,21 +379,31 @@
     flush(run);
   }
 
+  function endHeading(level) {
+    while (headingLevels.length && headingLevels.at(-1) >= level) {
+      headingLevels.pop();
+      path.pop();
+    }
+  }
+
   function block(el) {
     if (el.matches('nav,[role="navigation"]')) {
       // Navigation help headings describe their menu, not product facts in the following main content.
-      const surrounding = [...path];
+      const surrounding = [path, headingLevels];
+      path = [...path];
+      headingLevels = [...headingLevels];
       walk(el);
-      path = surrounding;
+      [path, headingLevels] = surrounding;
       return;
     }
     const level = HEADINGS[el.tagName];
     if (level) {
       const text = textOf(el);
-      while (path.length > floor && path.length - floor >= level) path.pop();
+      endHeading(level);
       if (text) {
         push('heading', text, { links: linksIn([el]) }, [el]);
         path.push(text);
+        headingLevels.push(level);
       }
       return;
     }
@@ -406,6 +416,9 @@
     if (el.tagName === 'PRE') return push('code', textOf(el), {}, [el]);
     const record = recordText(el);
     if ((el.tagName === 'LI' && leaf(el)) || record !== null) {
+      // A card's heading still ends an earlier sibling's heading, even when the card is read without walking it.
+      const heading = [...el.querySelectorAll('h1,h2,h3,h4,h5,h6')].find(visible);
+      if (heading) endHeading(HEADINGS[heading.tagName]);
       const links = el.matches('a[href]') ? [el] : el.querySelectorAll('a[href]');
       push(
         el.tagName === 'LI' ? 'list_item' : 'record',
@@ -451,13 +464,14 @@
   }
 
   function scope(root, frame, source, headings = []) {
-    const previous = [path, floor, framePath, sourcePath];
+    const previous = [path, headingLevels, framePath, sourcePath];
     path = [...headings];
-    floor = headings.length;
+    headingLevels = [];
     framePath = frame;
     sourcePath = source;
     walk(root);
     path = [...headings];
+    headingLevels = [];
     for (const e of [...root.querySelectorAll('input,select,textarea,button,[role="button"]')].filter(visible)) {
       // Placeholders suggest input; they do not label a value or prove an empty named field.
       if (CONTROLS.has(e.tagName) && !e.labels?.length && !e.hasAttribute('aria-label') && !e.hasAttribute('aria-labelledby')) continue;
@@ -564,7 +578,7 @@
       // A frame the walk never reached (hidden, or inside a record or table read as one block) is still read.
       if (FRAMES.has(e.tagName) && !entered.has(e)) enter(e, []);
     }
-    [path, floor, framePath, sourcePath] = previous;
+    [path, headingLevels, framePath, sourcePath] = previous;
   }
 
   scope(document.body, null, '');
