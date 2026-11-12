@@ -1584,6 +1584,35 @@ async def test_a_budget_below_one_run_is_refused_at_startup_and_its_out_reused(m
     assert "requires a fresh output" in capsys.readouterr().err
 
 
+async def test_completed_receipt_preserves_provider_cost_precision(monkeypatch, tmp_path):
+    async def execute(*args, **kwargs):
+        return Outcome("answer", None, "https://example.test"), live.ArmReport(
+            status="complete",
+            dollars=0.018836,
+            seconds=1,
+            cost_by_component={"llm": 0.003127, "proxy": 0.015709},
+        )
+
+    async def judge(*args, **kwargs):
+        return (
+            True,
+            "evidenced",
+            {
+                "judge_cost_usd": 0.0,
+                "known_judge_cost_usd": 0.0,
+                "unpriced_judge_attempts": 0,
+                "judgment": {"policy": "p", "state_sha256": "0" * 64, "questions": {}, "decisions": {}},
+            },
+        )
+
+    monkeypatch.setitem(live.ARMS, "fastbrowse", live.ARMS["fastbrowse"].model_copy(update={"runner": execute}))
+    monkeypatch.setattr(live, "semantic_grade", judge)
+    async with httpx.AsyncClient() as http:
+        row = await live.run_arm("fastbrowse", task("wiki-open"), None, http, tmp_path, record=None)
+    assert row.dollars == 0.018836
+    assert row.cost_by_component == {"llm": 0.003127, "proxy": 0.015709}
+
+
 async def test_interrupted_judgment_retains_completed_agent_evidence(monkeypatch, tmp_path):
     async def execute(*args, **kwargs):
         return Outcome("completed answer", {"result": 42}, "https://example.test"), live.ArmReport(

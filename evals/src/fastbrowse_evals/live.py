@@ -1789,7 +1789,7 @@ async def run_arm(
             "execution_admission_stopped": request_session is not None and request_session.stop_reason is not None,
             "execution_admission_reason": None if request_session is None else request_session.stop_reason,
             "seconds": round(report.seconds, 1),
-            "dollars": None if report.dollars is None else round(report.dollars, 5),
+            "dollars": report.dollars,
         }
     )
 
