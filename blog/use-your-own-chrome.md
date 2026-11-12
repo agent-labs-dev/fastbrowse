@@ -70,7 +70,7 @@ With the extension in more than one browser, give each a name in its popup, then
 
 ```sh
 fastbrowse "What is the title of the top story?" \
-  --start https://news.ycombinator.com/ --extension --browser-browser work
+  --start https://news.ycombinator.com/ --extension --extension-browser work --browser
 ```
 
 ## Remove it
