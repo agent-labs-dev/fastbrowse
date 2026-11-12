@@ -79,16 +79,22 @@ https://github.com/agent-labs-dev/fastbrowse
 
 ## Screenshots
 
-Chrome takes 1 to 5 and prefers the maximum. Each is 1280x800 (Chrome currently downscales to 640x400) or 640x400,
-square corners, full bleed, no padding. Screenshots should show the extension's real experience, so capture the build
-being submitted and keep text large enough to read at 640x400. Use a throwaway profile and public sites, so nothing
-personal is visible. Chrome's docs give no caption rule, so check the dashboard for caption fields before drafting any.
+Three 1280x800 captures and a silent walkthrough are ready for the current store version:
 
-| # | Show | Setup |
-|---|------|-------|
-| 1 | A run in progress | Chrome window beside a terminal that just ran `fastbrowse "What is the title of the top story?" --start https://news.ycombinator.com/ --extension --browser`, with the tab group `fastbrowse: What is the title...` and Hacker News in it |
-| 2 | The popup with a run | Toolbar popup with one run listed with its task, tab count and **Stop**. **0.1.1** adds **Connected** to this shot |
-| 3 | The finished run | Terminal showing the answer, next to Chrome with the run's tabs closed |
+| Asset | Shows |
+|---|---|
+| [Start](assets/extension-launch/01-start.png) | The first-task command beside Chrome |
+| [Running](assets/extension-launch/02-running.png) | The task's tab group, Chrome's debugging bar and the popup's Stop button |
+| [Result](assets/extension-launch/03-result.png) | The terminal's complete result and cited answer, after the task's tabs close |
+| [Walkthrough](assets/extension-launch/demo.mp4) | Starting the task, the active run and its result |
+
+These are real captures from an isolated Chrome for Testing profile running the published 0.1.0 extension files
+and released fastbrowse 0.10.0. The extension's public manifest key was restored to keep its store identity when
+loading the downloaded package unpacked. They demonstrate the run, not the store installation UI or a signed-in
+account. There is no audio and no personal data. The terminal shows the first-task command, run status and answer.
+
+Chrome accepts 1 to 5 screenshots at 1280x800 or 640x400. Re-capture the popup and run for 0.1.1 before uploading
+assets that describe its new controls. Keep the exact build and CLI version with future captures.
 
 Promo images are optional. Chrome's guidance is to communicate the brand, avoid text and not use a screenshot. Small
 tile 440x280 and marquee 1400x560. A marquee is required for a featured spot. The store icon is the 128x128 PNG in the
