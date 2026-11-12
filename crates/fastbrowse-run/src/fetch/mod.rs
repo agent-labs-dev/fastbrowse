@@ -12,6 +12,7 @@
 //! exactly that: [`NotFetched`], with the browser left as the only reader.
 
 pub mod html;
+mod json;
 pub mod search;
 
 use std::borrow::Cow;
@@ -292,23 +293,22 @@ async fn serve(http: &Http, url: &str, allowed_origins: Option<&[String]>, secon
         if text::strip(&body).is_empty() {
             return Err(refused("the document is empty"));
         }
-        let found = Found {
-            kind: BlockKind::Paragraph,
-            // JSON strings and delimited fields carry significant whitespace, which HTML's cleanup would change.
-            text: if json || mime != "text/plain" { body } else { clean(&body) },
-            heading_path: Vec::new(),
-            href: None,
-            links: Vec::new(),
-            frame_id: None,
-            whole_record: false,
-        };
-        return Ok(Served {
-            url: final_url,
-            title: String::new(),
-            found: vec![found],
-            controls: Vec::new(),
-            frames: Vec::new(),
-        });
+        // A JSON document is read by its structure, so each value can be quoted alone; text that is not entirely JSON
+        // is read whole.
+        let found =
+            json.then(|| json::blocks(&body)).flatten().filter(|found| !found.is_empty()).unwrap_or_else(|| {
+                vec![Found {
+                    kind: BlockKind::Paragraph,
+                    // Delimited fields carry significant whitespace, which HTML's cleanup would change.
+                    text: if json || mime != "text/plain" { body } else { clean(&body) },
+                    heading_path: Vec::new(),
+                    href: None,
+                    links: Vec::new(),
+                    frame_id: None,
+                    whole_record: false,
+                }]
+            });
+        return Ok(Served { url: final_url, title: String::new(), found, controls: Vec::new(), frames: Vec::new() });
     }
     if !HTML_TYPES.contains(&mime.as_str()) {
         let named = if mime.is_empty() { "the response" } else { &mime };

@@ -246,20 +246,54 @@ async fn test_a_page_that_is_not_html_is_left_to_the_browser() {
     assert!(error.0.contains("HTTP 404"), "{error}");
 }
 
+fn quoted(capture: &fastbrowse_core::page::Capture, start: i64, end: i64) -> String {
+    capture.text.chars().skip(start as usize).take((end - start) as usize).collect()
+}
+
 #[tokio::test]
 async fn test_json_responses_keep_their_exact_values_in_citable_spans() {
     let raw =
         "{\"name\":\"A  & B\",\"release\":{\"version\":\"2.1\",\"date\":\"2026-11-12\"},\"count\":9007199254740993}";
-    for mime in ["application/json", "application/problem+json; charset=utf-8", "text/csv"] {
+    for mime in ["application/json", "application/problem+json; charset=utf-8"] {
         let capture =
             fetched(&client(raw, 200, mime), "https://shop.example.com/api").await.expect("readable response");
-        assert!(capture.text.contains(raw));
-        assert_eq!(capture.blocks.len(), 1);
-        let block = &capture.blocks[0];
-        let quoted: String =
-            capture.text.chars().skip(block.start as usize).take((block.end - block.start) as usize).collect();
-        assert_eq!(quoted, raw);
+        let values: Vec<(String, Vec<String>)> = capture
+            .blocks
+            .iter()
+            .filter(|block| block.kind == BlockKind::Paragraph)
+            .map(|block| (quoted(&capture, block.start, block.end), block.heading_path.clone()))
+            .collect();
+        let at = |parts: &[&str]| parts.iter().map(|part| part.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            values,
+            [
+                ("A  & B".to_string(), at(&["name"])),
+                ("2.1".to_string(), at(&["release", "version"])),
+                ("2026-11-12".to_string(), at(&["release", "date"])),
+                ("9007199254740993".to_string(), at(&["count"])),
+            ],
+            "{mime}"
+        );
     }
+    // Delimited text, and a body that only claims to be JSON, are read whole.
+    for (body, mime) in [(raw, "text/csv"), ("{\"name\": 1,", "application/json")] {
+        let capture = fetched(&client(body, 200, mime), "https://shop.example.com/api").await.expect("readable");
+        assert_eq!(capture.blocks.len(), 1, "{mime}");
+        assert_eq!(quoted(&capture, capture.blocks[0].start, capture.blocks[0].end), body);
+    }
+}
+
+#[tokio::test]
+async fn a_json_field_is_a_candidate_of_its_own_with_its_key_path() {
+    // #1069: `"name":"httpx"` sat inside one 899 character word of the response, so no choice could copy the name.
+    let raw = r#"{"info":{"description":"An HTTP client.","name":"httpx","version":"0.28.1"},"releases":{"0.1.0":[{"filename":"httpx-0.1.0.tar.gz"}]}}"#;
+    let capture = fetched(&client(raw, 200, "application/json"), "https://pypi.org/pypi/httpx/json").await.unwrap();
+    let field = fastbrowse_agent::retrieval::ScalarField::new(fastbrowse_agent::retrieval::Annotation::Str);
+    let candidates = fastbrowse_agent::retrieval::field_candidates(&capture, &field).unwrap();
+    let name = candidates.iter().find(|candidate| candidate.evidence.quote == "httpx").expect("the name alone");
+    assert_eq!(quoted(&capture, name.evidence.start, name.evidence.end), "httpx");
+    assert_eq!(name.evidence.heading_path, ["info", "name"]);
+    assert!(name.context.contains("'info', 'name'"), "{}", name.context);
 }
 
 #[tokio::test]

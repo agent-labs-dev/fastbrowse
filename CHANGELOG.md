@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Browserless runs read a JSON response by its structure, so a single value such as a package's name can be selected and cited alone, under its key path. Field choices also show the headings a value sits under ([#1069](https://github.com/agent-labs-dev/fastbrowse/issues/1069)).
+
 - Release checks require complete three-repeat coverage of both official suites, matched to the candidate build and verified producer receipts. Internal speed and cost comparisons remain separate from the official scores.
 
 - Numeric comparisons can first select each group's minimum or maximum from source-bound fields. Code performs both comparisons and retains the selection basis separately from the winning records ([#977](https://github.com/agent-labs-dev/fastbrowse/issues/977)).
