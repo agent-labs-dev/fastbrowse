@@ -32,8 +32,8 @@ TRANSIENT_TRANSPORT: tuple[type[httpx.HTTPError], ...] = (
 )
 """Transport failures a repeat can clear; fastbrowse's own Python client used exactly these before its Rust core."""
 
-PROVIDER_KEYS = ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "AI_GATEWAY_API_KEY")
-"""The only provider keys a fastbrowse arm is given: Jev and its LLM run on these. The Browser Use key stays with the
+PROVIDER_KEYS = ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "AI_GATEWAY_API_KEY", "EXA_API_KEY")
+"""The provider keys a fastbrowse arm is given: Jev, its LLM and optional web search use these. The Browser Use key stays with the
 harness, which starts every cloud browser itself."""
 
 

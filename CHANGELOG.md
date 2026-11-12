@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- The eval embedder forwards a configured Exa key to fastbrowse while keeping inherited provider keys out of isolated adapters ([#1054](https://github.com/agent-labs-dev/fastbrowse/issues/1054)).
+
 - **A wait lasts until the page changes, within the run's time.** A `wait` step ended after a fixed 5 s, so a status line or queue position that updates less often was reported as a page that did not change ([#1038](https://github.com/agent-labs-dev/fastbrowse/issues/1038)). The step now ends on the page's next change that an observation shows, or on a navigation or dialog, and runs until the run's remaining browsing time when nothing changes. A run with no time limit waits for the change. A wait that ends with nothing changed still counts as no progress.
 
 - Successful grouping requests now record their model cost and physical call count, including when their returned groups cannot be used ([#1051](https://github.com/agent-labs-dev/fastbrowse/issues/1051)).
