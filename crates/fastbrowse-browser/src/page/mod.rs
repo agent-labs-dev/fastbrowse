@@ -881,7 +881,24 @@ impl CdpPage {
         // Each frame supplies its own baseline. A producer with a different baseline sends a full result directly.
         let script = format!("(base => {}('{mode}-delta', base))", self.page_js);
         let full = format!("{}('{mode}')", self.page_js);
-        let result = self.read_frames::<Snapshot>(&script, Some((mode, full.as_str()))).await?;
+        let mut sessions = self.session.frame_sessions();
+        let main_session = self.session.active_session_id()?;
+        sessions.push((MAIN.to_owned(), main_session));
+        let generations: HashMap<String, u64> = sessions
+            .iter()
+            .map(|(_, session)| (session.clone(), self.session.ax_generation(session)))
+            .collect();
+        let mut result = self.read_frames::<Snapshot>(&script, Some((mode, full.as_str()))).await?;
+        // DOM and AX events can arrive between the page read and its reply. A mixed-generation observation cannot
+        // safely seed a partial index, so take one coherent full fallback before exposing it to the agent.
+        let raced = result.iter().any(|(_, frame)| {
+            generations
+                .get(&frame.session_id)
+                .is_some_and(|generation| *generation != self.session.ax_generation(&frame.session_id))
+        });
+        if raced {
+            result = self.read_frames::<Snapshot>(&full, None).await?;
+        }
         let coverage: Vec<(String, usize)> =
             result.iter().map(|(_, f)| (f.session_id.clone(), f.raw.inaccessible_frames)).collect();
         let inaccessible = self.inaccessible_frames(&coverage)?;

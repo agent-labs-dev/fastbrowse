@@ -283,6 +283,9 @@ pub(crate) struct Popup {
 
 #[derive(Default)]
 pub(crate) struct State {
+    /// Frame-session AX/DOM generation, bumped by browser events that invalidate a partial control index.
+    /// Consumers must compare the generation before and after a read and discard mixed results.
+    pub(crate) ax_generations: HashMap<String, u64>,
     /// Insertion ordered: `tabs()` lists them in this order, and a closed active tab with neither
     /// an opener nor an earlier active tab still open hands over to the first.
     pub(crate) tabs: Vec<TabState>,
@@ -725,11 +728,18 @@ impl BrowserSession {
 
     /// Retained reads belong to attached frames across tabs; missed-read deadlines belong to the active tab.
     pub(crate) fn frame_read_liveness(&self) -> (HashSet<String>, HashSet<String>) {
-        let state = self.0.state.lock().unwrap();
+        let mut state = self.0.state.lock().unwrap();
+        let live_sessions: HashSet<String> = state.frame_sessions_of_active().into_iter().map(|(_, session)| session).collect();
+        state.ax_generations.retain(|session, _| live_sessions.contains(session));
         (
             state.frame_sessions.iter().map(|(frame, _)| frame.clone()).collect(),
-            state.frame_sessions_of_active().into_iter().map(|(_, session)| session).collect(),
+            live_sessions,
         )
+    }
+
+    /// Generation of the browser-maintained AX/DOM frontier for a frame session.
+    pub(crate) fn ax_generation(&self, session_id: &str) -> u64 {
+        self.0.state.lock().unwrap().ax_generations.get(session_id).copied().unwrap_or_default()
     }
 
     /// `frame_id` and every frame drawn inside it, whose sessions descend from that frame's session.
@@ -1504,6 +1514,10 @@ impl Shared {
     pub(crate) fn on_event(self: &Arc<Self>, event: &Event) {
         let params = &event.params;
         let session = event.session.as_deref();
+        if let Some(session) = session && invalidates_ax(&event.method) {
+            let mut state = self.state.lock().unwrap();
+            *state.ax_generations.entry(session.to_owned()).or_default() += 1;
+        }
         match event.method.as_str() {
             "Runtime.executionContextCreated" => {
                 let context = &params["context"];
@@ -1933,6 +1947,18 @@ impl Shared {
         let session = session.to_owned();
         self.spawn(&mut state, async move { handle_paused(&shared, params, session).await });
     }
+}
+
+fn invalidates_ax(method: &str) -> bool {
+    matches!(
+        method,
+        "DOM.childNodeInserted"
+            | "DOM.childNodeRemoved"
+            | "DOM.attributeModified"
+            | "DOM.characterDataModified"
+            | "DOM.documentUpdated"
+            | "Accessibility.nodesUpdated"
+    )
 }
 
 /// A chooser whose input the page's registry does not yet hold, counted while it lives.
@@ -2581,6 +2607,23 @@ fn declared_length(headers: &Value) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ax_generation_invalidates_on_dom_and_accessibility_changes_only() {
+        for method in [
+            "DOM.childNodeInserted",
+            "DOM.childNodeRemoved",
+            "DOM.attributeModified",
+            "DOM.characterDataModified",
+            "DOM.documentUpdated",
+            "Accessibility.nodesUpdated",
+        ] {
+            assert!(invalidates_ax(method), "{method}");
+        }
+        for method in ["DOM.enable", "Accessibility.enable", "Page.lifecycleEvent", "Runtime.consoleAPICalled"] {
+            assert!(!invalidates_ax(method), "{method}");
+        }
+    }
 
     #[test]
     fn the_cookie_refusal_bundle_reaches_only_native_timers() {
