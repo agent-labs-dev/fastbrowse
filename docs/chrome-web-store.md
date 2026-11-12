@@ -123,8 +123,9 @@ model provider the person configured.
 | --- | --- | --- |
 | Website content | Yes | The text and structure of the page in a tab a run is working in, and the result of the clicks and typing a run performs, are relayed to the local program so the run can decide its next step. |
 | Web history | Yes | The address and title of each tab a run opened or was given, and of a tab the run's page opens, are relayed to the local program. A run that asks for the list of open tabs is given the address and title of each open tab. |
-| Authentication information | No | No command that reads cookies, storage or saved passwords is relayed, and the extension itself never reads them. A run works inside the signed-in session the tab already has. |
-| Personally identifiable information, health, financial, location, personal communications, user activity | No | The extension collects none of these. It types and clicks on the run's instruction; it does not record what the person does. |
+| Authentication information | Yes | A password or code the person hands their run (`--secret`) passes through the extension once, as the command that enters it into the page's field. No command that reads cookies, storage or saved passwords is relayed, and the extension itself never reads them. A run otherwise works inside the signed-in session the tab already has. |
+| Personally identifiable information, health, financial, location, personal communications | Yes | Not sought, but carried by the website content row: a run on a mail, bank, medical, map or account page relays that page's text, so whatever the page shows of these reaches the local program and may go on to the person's model provider. The extension keeps none of it. |
+| User activity | No | The extension types and clicks on the run's instruction; it does not record what the person does in the browser. |
 
 Certify on the same tab: the extension does not sell data to third parties, does not use or transfer data for
 purposes unrelated to its single purpose, and does not use or transfer data to determine creditworthiness or for
@@ -136,13 +137,16 @@ reader's words.
 The extension is the browser half of a program that runs on the reviewer's machine, so the steps below are what
 make it work. It shows **Not connected** until step 3 has run.
 
-1. Install the agent, which needs Python 3.11 or newer: `uv tool install fastbrowse` (or `pipx install fastbrowse`).
+1. Install the agent, which needs Python 3.13 or newer: `uv tool install fastbrowse`, which fetches Python 3.13 itself
+   if the machine lacks it (or `pipx install fastbrowse` on a Python 3.13 interpreter).
 2. Register the browser: `fastbrowse extension install`. It writes a native messaging host manifest for each
    Chromium browser it finds and prints how to add the extension.
 3. Add this extension, then restart Chrome so the service worker connects. The popup should say **Connected**,
    with the browser's own name in the Browser name field.
-4. Give the agent a model key in the environment, such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, or point
-   `FASTBROWSE_LLM_PROVIDER` at a local model. A run needs one to plan.
+4. Give the agent one [OpenRouter](https://openrouter.ai/) key: `export OPENROUTER_API_KEY=...`. That single key
+   serves both models a run needs, Jev, which picks each action, and the LLM that writes the answer. A provider
+   key such as `OPENAI_API_KEY` alone is not enough: it configures neither the provider nor Jev's decision source,
+   and the run stops during configuration.
 5. Run a task: `fastbrowse "What is the title of this page?" --start https://example.com/ --extension`
 
 A tab opens in a group named **fastbrowse: What is the title of this page?**, Chrome shows its debugging bar, and

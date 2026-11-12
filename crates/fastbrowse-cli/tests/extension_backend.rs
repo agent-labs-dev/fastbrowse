@@ -290,7 +290,10 @@ async fn a_run_drives_a_tab_through_the_extension() {
     let _ = session.close().await;
     drop(browser);
 
-    // An older installed extension rejects the interception command even when the CLI has it.
+    // An installed extension whose hello lists the interception command but whose relay rejects it, so the
+    // connection is accepted and only the command fails: the run must stop rather than leave a native picker.
+    // Dropping the method from `allowed-methods.json` would drop it from hello too, and the shim would refuse the
+    // connection before the command was ever sent.
     let stale_extension = root.join("stale-extension");
     std::fs::create_dir(&stale_extension).expect("extension folder");
     for entry in std::fs::read_dir(extension).expect("extension files").flatten() {
@@ -298,11 +301,16 @@ async fn a_run_drives_a_tab_through_the_extension() {
             std::fs::copy(entry.path(), stale_extension.join(entry.file_name())).expect("copy extension file");
         }
     }
-    let allowed = stale_extension.join("allowed-methods.json");
-    let mut methods: Vec<String> =
-        serde_json::from_slice(&std::fs::read(&allowed).expect("allowlist")).expect("decode allowlist");
-    methods.retain(|method| method != "Page.setInterceptFileChooserDialog");
-    std::fs::write(allowed, serde_json::to_vec(&methods).expect("encode allowlist")).expect("stale allowlist");
+    let background = stale_extension.join("background.js");
+    let script = std::fs::read_to_string(&background).expect("background script");
+    let relay = "if (!(await allowedMethods()).has(method)) throw";
+    assert!(script.contains(relay), "the relay's method check moved");
+    let refusing = script.replacen(
+        relay,
+        "if (method === 'Page.setInterceptFileChooserDialog' || !(await allowedMethods()).has(method)) throw",
+        1,
+    );
+    std::fs::write(background, refusing).expect("refusing relay");
     let stale_root = root.join("stale");
     let browser = Browser::launch(&chrome, &stale_root, &stale_extension);
     let record = browser.record().await;
