@@ -327,6 +327,8 @@ enum BackTarget {
 
 #[derive(Default)]
 pub(crate) struct PageState {
+    /// Private AX baselines, keyed by frame session. They never enter observations, traces or model input.
+    pub(crate) ax: HashMap<String, ax::AxIndex>,
     pub(crate) last: Option<ObservedState>,
     /// The count of navigations the run's input had begun, and the page's address, when the last action began. A
     /// dialog blocks the page, so accepting one is judged against this mark, and only when the dialog came from that
@@ -885,6 +887,7 @@ impl CdpPage {
         let mut sessions = self.session.frame_sessions();
         let main_session = self.session.active_session_id()?;
         sessions.push((MAIN.to_owned(), main_session));
+        self.refresh_ax_baselines(&sessions).await;
         let generations: HashMap<String, u64> = sessions
             .iter()
             .map(|(_, session)| (session.clone(), self.session.ax_generation(session)))
@@ -904,6 +907,18 @@ impl CdpPage {
             result.iter().map(|(_, f)| (f.session_id.clone(), f.raw.inaccessible_frames)).collect();
         let inaccessible = self.inaccessible_frames(&coverage)?;
         Ok((result, inaccessible))
+    }
+
+    async fn refresh_ax_baselines(&self, sessions: &[(String, String)]) {
+        for (_, session_id) in sessions {
+            let generation = self.session.ax_generation(session_id);
+            let fresh = self.state.lock().unwrap().ax.get(session_id).is_some_and(|index| index.generation == generation);
+            if fresh { continue; }
+            let Ok(raw) = self.session.accessibility_full_ax_tree(session_id).await else { continue };
+            let Some(nodes) = raw.get("nodes").cloned().and_then(|value| serde_json::from_value(value).ok()) else { continue };
+            let document_key = self.session.document_mark(session_id).to_string();
+            self.state.lock().unwrap().ax.entry(session_id.clone()).or_default().replace(document_key, generation, nodes);
+        }
     }
 
     /// Read every frame of the active tab with `expression`.

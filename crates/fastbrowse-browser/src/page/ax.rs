@@ -35,8 +35,11 @@ impl AxIndex {
             self.nodes.insert(node.node_id.clone(), node);
         }
     }
+    #[allow(dead_code)]
     pub(crate) fn invalidate_backend(&mut self, backend_id: i64, generation: u64) { self.generation = generation; self.dirty_backend_ids.insert(backend_id); }
+    #[allow(dead_code)]
     pub(crate) fn node_for_backend(&self, backend_id: i64) -> Option<&AxNode> { self.by_backend_id.get(&backend_id).and_then(|id| self.nodes.get(id)) }
+    #[allow(dead_code)]
     pub(crate) fn dirty(&self) -> impl Iterator<Item = i64> + '_ { self.dirty_backend_ids.iter().copied() }
 }
 
