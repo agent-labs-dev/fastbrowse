@@ -292,9 +292,7 @@ fn example(notes: &Notes, cited: &[String]) -> Option<serde_json::Value> {
         .map(|evidence| shown(notes, evidence))
 }
 
-/// Whether a note is one record. A total or an extreme needs each record's field, so it asks for a record with its
-/// field, or the field of one: a record's name, heading or a link to it holds no value, and counted alone it would be
-/// a record without one.
+/// Whether a count includes this whole record, rather than a mention or part of it.
 fn member_question(tally: &Tally, note: &serde_json::Value, example: Option<&serde_json::Value>) -> Question {
     let of = text::repr(&tally.of);
     // Asked about a biography that quotes its author, with only `of` ("quote by J.K. Rowling across the whole site")
@@ -306,42 +304,67 @@ fn member_question(tally: &Tally, note: &serde_json::Value, example: Option<&ser
             dumps(example)
         )
     });
-    let (question, yes, no) = match tally.field.as_deref().filter(|_| tally.op != Op::Count).map(text::repr) {
-        // "Is this note one" leaves a plain record line near even odds, while "exactly one whole" keeps a note listing
-        // several out as well. "Record among" reads `of` as the set the records belong to: asked whether a product line
-        // held one whole 'products listed across all pages', Jev said no to every one, and the count was 0.
-        None => (
-            format!(
-                "Is this note exactly one whole record among {of}? A note holding several records is not one, and nor is a record's tags, label or heading alone, or a value a page states across several records, such as a total.{example}"
-            ),
-            format!("The note is exactly one whole record among {of}."),
-            format!("The note is no record among {of}, several, or only part of one."),
-        ),
-        Some(field) => (
-            format!(
-                "Is this note one whole {of} with its {field}, or the {field} of one? Part of a record without its {field}, such as its name, a label, a heading or a link to it, is not, and nor is a value a page states across several records, such as a total or a price they start from."
-            ),
-            format!("The note is one {of} with its {field}, or gives the {field} of one."),
-            format!("The note is not one {of} with its {field}, and does not give the {field} of one."),
-        ),
-    };
+    let question = format!(
+        "Is this note exactly one whole record among {of}? A note holding several records is not one, and nor is a record's tags, label or heading alone, or a value a page states across several records, such as a total.{example}"
+    );
+    let yes = format!("The note is exactly one whole record among {of}.");
+    let no = format!("The note is no record among {of}, several, or only part of one.");
     Question::Noul(NoulQuestion::new(format!("{UNTRUSTED}\n{question} Note: {}", dumps(note)), Some(&yes), Some(&no)))
 }
 
 const NO_VALUE: &str = "none";
+const NO_RECORD: &str = "no_record";
 
-fn value_question(tally: &Tally, note: &serde_json::Value, numbers: &[String]) -> Question {
+/// Qualification and the field are one decision: independent questions can admit an unrelated date, then reject it.
+fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], grouped: bool) -> Question {
+    let of = text::repr(&tally.of);
     let field = text::repr(tally.field.as_deref().unwrap_or("value"));
-    let mut criteria: IndexMap<String, serde_json::Value> = numbers
+    let mut criteria: IndexMap<String, serde_json::Value> = offers
         .iter()
         .enumerate()
-        .map(|(index, number)| (format!("n{index}"), json!(format!("{} is its {field}.", text::repr(number)))))
+        .map(|(index, value)| {
+            let key = format!("{}{index}", if grouped { "g" } else { "n" });
+            let value = if grouped { format!("one of {value}") } else { text::repr(value) };
+            (
+                key,
+                json!(format!(
+                    "{value} is its {field}: the note gives one {of} with its {field}, or the {field} of one."
+                )),
+            )
+        })
         .collect();
-    criteria.insert(NO_VALUE.into(), json!(format!("None of these numbers is its {field}.")));
+    criteria.insert(NO_RECORD.into(), json!(format!(
+        "The note is not one whole {of} and does not give the {field} of one. A name, label, heading, link or unrelated field alone is not a whole record. Several records, and a value stated across records such as a total or a starting price, are not one record."
+    )));
+    criteria.insert(NO_VALUE.into(), json!(format!("The note gives one whole {of}, but does not state its {field}. A name, label, heading, link or part alone is not a whole record.")));
     Question::Choice(ChoiceQuestion::new(
-        format!("{UNTRUSTED}\nWhich number in this note is the {field} of the record it holds? Note: {}", dumps(note)),
+        format!(
+            "{UNTRUSTED}\nDoes this note give exactly one whole record among {of}, or its {field}? If it does, which quoted value is that record's {field}? Note: {}",
+            dumps(note)
+        ),
         criteria,
     ))
+}
+
+#[derive(Debug)]
+enum FieldAnswer {
+    Value(String),
+    NoRecord,
+    NoValue,
+    Unjudged,
+}
+
+fn field_answer(answer: Option<&Answer>, offers: &[String]) -> FieldAnswer {
+    let Some(Answer::Choice(answer)) = answer else { return FieldAnswer::Unjudged };
+    match answer.choice.as_str() {
+        NO_RECORD => FieldAnswer::NoRecord,
+        NO_VALUE => FieldAnswer::NoValue,
+        choice => choice
+            .strip_prefix('n')
+            .and_then(|n| n.parse::<usize>().ok())
+            .and_then(|n| offers.get(n))
+            .map_or(FieldAnswer::Unjudged, |value| FieldAnswer::Value(value.clone())),
+    }
 }
 
 const RECORD: &str = "The record's id, such as r0.";
@@ -503,6 +526,8 @@ enum Narrowed {
     Offer(Vec<String>),
     /// Jev said no group holds the field.
     NoValue,
+    /// The note does not hold the requested record or its field.
+    NoRecord,
     /// Jev left a group question unanswered.
     Unjudged,
 }
@@ -520,27 +545,15 @@ async fn narrowed(
     ledger: Option<&Ledger>,
 ) -> Result<Narrowed> {
     let max = jev.profile().max_choice_options;
-    let field = text::repr(tally.field.as_deref().unwrap_or("value"));
-    // One option is kept for no value, in the groups and in the final choice alike.
-    while numbers.len() >= max {
-        let size = numbers.len().div_ceil(max - 1);
+    // Two options distinguish an irrelevant note from a whole record whose field is missing.
+    while numbers.len() + 2 > max {
+        let size = numbers.len().div_ceil(max - 2);
         let groups: Vec<Vec<String>> = numbers.chunks(size).map(<[String]>::to_vec).collect();
-        let mut criteria: IndexMap<String, serde_json::Value> = groups
+        let offers = groups
             .iter()
-            .enumerate()
-            .map(|(index, group)| {
-                let listed = group.iter().map(|number| text::repr(number)).collect::<Vec<_>>().join(", ");
-                (format!("g{index}"), json!(format!("Its {field} is one of {listed}.")))
-            })
-            .collect();
-        criteria.insert(NO_VALUE.into(), json!(format!("None of these numbers is its {field}.")));
-        let question = Question::Choice(ChoiceQuestion::new(
-            format!(
-                "{UNTRUSTED}\nWhich numbers in this note hold the {field} of the record it holds? Note: {}",
-                dumps(note)
-            ),
-            criteria,
-        ));
+            .map(|group| group.iter().map(|number| text::repr(number)).collect::<Vec<_>>().join(", "))
+            .collect::<Vec<_>>();
+        let question = field_question(tally, note, &offers, true);
         let key = "group".to_string();
         let answered = ask(jev, state, &IndexMap::from([(key.clone(), question)]), tokens, ledger).await?;
         let Some(Answer::Choice(answer)) = answered.as_ref().and_then(|answered| answered.get(&key)) else {
@@ -548,6 +561,9 @@ async fn narrowed(
         };
         if answer.choice == NO_VALUE {
             return Ok(Narrowed::NoValue);
+        }
+        if answer.choice == NO_RECORD {
+            return Ok(Narrowed::NoRecord);
         }
         let Some(group) =
             answer.choice.strip_prefix('g').and_then(|n| n.parse::<usize>().ok()).and_then(|n| groups.get(n))
@@ -746,6 +762,9 @@ pub async fn work(
     let found = candidates(notes);
     let state = json!({"task": task});
     let mut members = IndexMap::new();
+    let source_state = membership_state(task, notes);
+    let mut offered = HashMap::new();
+    let mut fields = HashMap::new();
     // Each count per group's first claim of its kind and grouping field, and the claims it leads.
     let mut leaders: HashMap<(String, String), usize> = HashMap::new();
     let mut led: HashMap<usize, usize> = HashMap::new();
@@ -823,15 +842,49 @@ pub async fn work(
         }
         let example = example(notes, cited);
         for (note, candidate) in found.iter().enumerate() {
-            members.insert(format!("t{index}/n{note}"), member_question(tally, &candidate.note, example.as_ref()));
+            if tally.op == Op::Count {
+                members.insert(format!("t{index}/n{note}"), member_question(tally, &candidate.note, example.as_ref()));
+            } else {
+                match narrowed(jev, &source_state, tally, &candidate.note, numbers(&candidate.quote), tokens, ledger)
+                    .await?
+                {
+                    Narrowed::Offer(numbers) => {
+                        members.insert(
+                            format!("t{index}/n{note}"),
+                            field_question(tally, &candidate.note, &numbers, false),
+                        );
+                        offered.insert((*index, note), numbers);
+                    }
+                    Narrowed::NoRecord => {
+                        fields.insert((*index, note), FieldAnswer::NoRecord);
+                    }
+                    Narrowed::NoValue => {
+                        fields.insert((*index, note), FieldAnswer::NoValue);
+                    }
+                    Narrowed::Unjudged => {
+                        fields.insert((*index, note), FieldAnswer::Unjudged);
+                    }
+                }
+            }
         }
     }
-    let answered = ask(jev, &membership_state(task, notes), &members, tokens, ledger).await?;
+    let answered = ask(jev, &source_state, &members, tokens, ledger).await?;
+    for ((index, note), numbers) in offered {
+        let answer = answered.as_ref().and_then(|a| a.get(&format!("t{index}/n{note}")));
+        fields.insert((index, note), field_answer(answer, &numbers));
+    }
     let member = |index: usize, note: usize| {
         let index = led.get(&index).copied().unwrap_or(index);
-        match answered.as_ref().and_then(|a| a.get(&format!("t{index}/n{note}"))) {
-            Some(Answer::Noul(answer)) if (0.0..=1.0).contains(&answer.probability) => Some(answer.probability > 0.5),
-            _ => None,
+        match fields.get(&(index, note)) {
+            Some(FieldAnswer::Value(_) | FieldAnswer::NoValue) => Some(true),
+            Some(FieldAnswer::NoRecord) => Some(false),
+            Some(FieldAnswer::Unjudged) => None,
+            None => match answered.as_ref().and_then(|a| a.get(&format!("t{index}/n{note}"))) {
+                Some(Answer::Noul(answer)) if (0.0..=1.0).contains(&answer.probability) => {
+                    Some(answer.probability > 0.5)
+                }
+                _ => None,
+            },
         }
     };
     // Each claim's records Jev judged, whole, before any repeat among them is dropped.
@@ -853,9 +906,6 @@ pub async fn work(
     }
     let repeated = ask(jev, &state, &repeats, tokens, ledger).await?;
     let mut pending = Vec::new();
-    let mut values = IndexMap::new();
-    // The numbers each multi-number note was asked to choose among, after narrowing.
-    let mut offered: HashMap<(usize, usize), Vec<String>> = HashMap::new();
     for (index, tally, _, _) in claims {
         if worked.contains_key(index) {
             continue;
@@ -884,32 +934,8 @@ pub async fn work(
             worked.insert(*index, Err(Unworked::Draft(reason)));
             continue;
         }
-        let mut unjudged = false;
-        for note in &records {
-            let numbers = numbers(&found[*note].quote);
-            if numbers.len() > 1 {
-                let numbers = match narrowed(jev, &state, tally, &found[*note].note, numbers, tokens, ledger).await? {
-                    Narrowed::Offer(numbers) => numbers,
-                    // No group holds the field, so the note states none, as the final choice would have said.
-                    Narrowed::NoValue => Vec::new(),
-                    Narrowed::Unjudged => {
-                        unjudged = true;
-                        break;
-                    }
-                };
-                if numbers.len() > 1 {
-                    values.insert(format!("t{index}/v{note}"), value_question(tally, &found[*note].note, &numbers));
-                }
-                offered.insert((*index, *note), numbers);
-            }
-        }
-        if unjudged {
-            worked.insert(*index, Err(Unworked::Unjudged));
-            continue;
-        }
         pending.push((*index, *tally, records));
     }
-    let picked = ask(jev, &state, &values, tokens, ledger).await?;
     for (index, tally, _, _) in claims {
         let Some((by, group)) = tally.grouped() else { continue };
         if worked.contains_key(index) {
@@ -927,24 +953,16 @@ pub async fn work(
     for (index, tally, records) in pending {
         let mut amounts = Vec::new();
         for note in records {
-            let numbers = offered.remove(&(index, note)).unwrap_or_else(|| numbers(&found[note].quote));
-            let chosen = match numbers.len() {
-                0 => None,
-                1 => Some(numbers[0].clone()),
-                _ => match picked.as_ref().and_then(|a| a.get(&format!("t{index}/v{note}"))) {
-                    Some(Answer::Choice(answer)) => answer
-                        .choice
-                        .strip_prefix('n')
-                        .and_then(|n| n.parse::<usize>().ok())
-                        .and_then(|n| numbers.get(n).cloned()),
-                    _ => {
-                        worked.insert(index, Err(Unworked::Unjudged));
-                        break;
-                    }
-                },
+            let chosen = match fields.get(&(index, note)) {
+                Some(FieldAnswer::Value(value)) => Some(value.as_str()),
+                Some(FieldAnswer::NoValue) => None,
+                _ => {
+                    worked.insert(index, Err(Unworked::Unjudged));
+                    break;
+                }
             };
             // A record whose field is not in its note is counted as having none, and so leaves no value to state.
-            let Some(amount) = chosen.as_deref().and_then(amount) else {
+            let Some(amount) = chosen.and_then(amount) else {
                 let field = text::repr(tally.field.as_deref().unwrap_or("value"));
                 let reason = format!("This note is one {} but states no {field}.", text::repr(&tally.of));
                 worked.insert(index, Err(Unworked::Notes { reason, notes: vec![found[note].id.clone()] }));

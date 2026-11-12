@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Numeric tally checks qualify each record and select its quoted field in one decision. A missing field still withholds the result, while an unrelated date is not admitted by a separate membership verdict ([#977](https://github.com/agent-labs-dev/fastbrowse/issues/977)).
+
 - Legacy hosted dispatch outages can retain verified non-execution evidence without inventing a judge verdict or releasing their cost hold ([#1055](https://github.com/agent-labs-dev/fastbrowse/issues/1055)).
 
 - **Unchanged observations reuse their validated snapshot in Rust.** A matching document and read number shares the parsed snapshot instead of cloning and parsing its JSON again. Control deltas still reconstruct from the exact saved rows, and browser rendering checks remain current ([#943](https://github.com/agent-labs-dev/fastbrowse/issues/943)).

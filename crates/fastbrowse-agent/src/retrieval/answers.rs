@@ -2048,7 +2048,7 @@ mod tests {
             json!(["The source says ", {"note":"e0", "quoted":true}, "; the minimum price is ", {"computed":true}, "."]),
             tally,
         );
-        let jev = Tallying::new("Filters", "GBP");
+        let jev = Tallying::new("Filters", "4.60|4.20");
         let checked = review_composition(
             &jev,
             &READS,
@@ -2177,7 +2177,7 @@ mod tests {
         let tally = tallied("", "GBP 4.60", Op::Min, "product", Some("price"), vec![]).tally;
         let bound = bind_claim(&items, json!([{"note":"e0", "quoted":true}, "; minimum: ", {"computed":true}]), tally);
         let other = Claim::new("Unsupported claim", items[0].sources.clone()).into();
-        let jev = Tallying { rejects: Some("claim1"), ..Tallying::new("Filters", "GBP") };
+        let jev = Tallying { rejects: Some("claim1"), ..Tallying::new("Filters", "4.60|4.20") };
         let checked = review_composition(
             &jev,
             &READS,
@@ -2383,6 +2383,7 @@ mod tests {
     struct Tallying {
         member: &'static str,
         value: &'static str,
+        unanswered: Option<&'static str>,
         support: f64,
         /// A plain claim check judged unsupported, whatever `support` says.
         rejects: Option<&'static str>,
@@ -2397,6 +2398,7 @@ mod tests {
             Tallying {
                 member,
                 value,
+                unanswered: None,
                 support: 0.9,
                 rejects: None,
                 same: None,
@@ -2430,7 +2432,9 @@ mod tests {
                     let pick = choice
                         .criteria
                         .iter()
-                        .find(|(_, criterion)| criterion.as_str().is_some_and(|c| c.contains(self.value)))
+                        .find(|(_, criterion)| {
+                            criterion.as_str().is_some_and(|c| self.value.split('|').any(|value| c.contains(value)))
+                        })
                         .map_or("none".to_string(), |(option, _)| option.clone());
                     // A record's group is the listed one its note names.
                     let note = choice.instructions.rsplit_once("Note: ").map_or("", |(_, note)| note);
@@ -2439,6 +2443,19 @@ mod tests {
                         name.and_then(|name| name.strip_suffix("'.")).is_some_and(|name| note.contains(name))
                     });
                     let pick = match key.rsplit_once('/').map(|(_, check)| check) {
+                        Some(check)
+                            if check.starts_with('n')
+                                && choice.criteria.contains_key("no_record")
+                                && !note.contains(self.member) =>
+                        {
+                            "no_record".to_string()
+                        }
+                        _ if key == "group"
+                            && choice.criteria.contains_key("no_record")
+                            && !note.contains(self.member) =>
+                        {
+                            "no_record".to_string()
+                        }
                         Some("record") => named.to_string(),
                         Some("states") => stated.to_string(),
                         Some(check) if check.starts_with('g') => {
@@ -2467,7 +2484,11 @@ mod tests {
                 _ if self.rejects == Some(key) => Answer::Noul(NoulAnswer { kind: NoulTag, probability: 0.1 }),
                 _ => Answer::Noul(NoulAnswer { kind: NoulTag, probability: self.support }),
             };
-            let answers = questions.iter().map(|(key, question)| (key.clone(), answer(key, question))).collect();
+            let answers = questions
+                .iter()
+                .filter(|(key, _)| self.unanswered != Some(key.as_str()))
+                .map(|(key, question)| (key.clone(), answer(key, question)))
+                .collect();
             Box::pin(async move {
                 Ok(Evaluation {
                     model: "test".into(),
@@ -2593,16 +2614,19 @@ mod tests {
             .unwrap();
         assert_eq!(checked.problem, None);
         assert_eq!(checked.claims, [Claim::new("The cheapest is Book X at £10.69.", cheapest)]);
-        // Only the note with two numbers needs Jev to say which is the price.
+        // One choice both qualifies each note and selects its quoted field, including single-number notes.
         let asked = jev.asked();
-        assert_eq!(asked.keys().filter(|key| key.contains("/v")).collect::<Vec<_>>(), ["t0/v1"]);
+        assert!(asked.keys().all(|key| !key.contains("/v")));
+        for key in ["t0/n0", "t0/n1"] {
+            let Question::Choice(choice) = &asked[key] else { panic!("joint field is a choice") };
+            assert!(choice.criteria.contains_key("no_record") && choice.criteria.contains_key("none"));
+        }
         {
             let states = jev.states.lock().unwrap();
             let (_, membership) =
                 states.iter().find(|(keys, _)| keys.iter().any(|key| key.starts_with("t0/n"))).unwrap();
             assert_eq!(membership["notes"].as_array().unwrap().len(), 4);
-            let (_, numeric) = states.iter().find(|(keys, _)| keys.iter().any(|key| key.starts_with("t0/v"))).unwrap();
-            assert_eq!(numeric, &json!({"task": "Find the cheapest book"}));
+            assert_eq!(membership["task"], "Find the cheapest book");
         }
         // Jev judges only that the book the claim names is one code found at the extreme.
         let Question::Choice(record) = &asked["claim0/record"] else { panic!("record is a choice") };
@@ -2657,6 +2681,26 @@ mod tests {
         assert!(checked.claims.is_empty(), "two prices have no third place");
     }
 
+    #[tokio::test]
+    async fn a_whole_record_without_its_numeric_field_is_not_silently_omitted() {
+        let notes = Notes::new([
+            page_fact(0, "https://shop.test/a", "Product A £12"),
+            page_fact(1, "https://shop.test/b", "Product B, price unavailable"),
+            page_fact(2, "https://shop.test/a", "Audited in 2026"),
+        ]);
+        let jev = Tallying::new("Product", "£");
+        let claim = tallied("The total is £12.", "£12", tally::Op::Sum, "product", Some("price"), vec![]);
+        let checked =
+            review_claims(&jev, &READS, "Total the product prices", None, vec![claim], &notes, None, true, &[])
+                .await
+                .unwrap();
+        assert!(checked.claims.is_empty());
+        assert!(checked.rejection.unwrap().to_string().contains("states no"));
+        let asked = jev.asked();
+        let Question::Choice(missing) = &asked["t0/n1"] else { panic!("missing field is judged") };
+        assert_eq!(missing.criteria.keys().map(String::as_str).collect::<Vec<_>>(), ["no_record", "none"]);
+    }
+
     /// A cheapest claim can answer with the record rather than its value, and code then keeps the record's name.
     #[tokio::test]
     async fn an_extreme_written_as_its_record_keeps_the_name_and_cites_the_winner() {
@@ -2700,7 +2744,7 @@ mod tests {
         let checked = review_claims(&jev, &READS, task, None, vec![named], &notes, None, true, &[]).await.unwrap();
         assert_eq!(checked.problem, None);
         assert_eq!(checked.claims, [Claim::new("requests released last.", latest.clone())]);
-        let Question::Choice(value) = &jev.asked()["t0/v0"] else { panic!("value is a choice") };
+        let Question::Choice(value) = &jev.asked()["t0/n0"] else { panic!("value is a choice") };
         let offered: Vec<&str> = value.criteria.values().filter_map(|c| c.as_str()).collect();
         assert!(offered[0].starts_with("'May 14, 2026'") && offered[2].starts_with("'2026-05-14'"), "{offered:?}");
         assert!(offered[1].starts_with("'2026' "), "a date's year is offered, as a year orders: {offered:?}");
@@ -2733,7 +2777,7 @@ mod tests {
         let notes = Notes::new(facts);
         let task = "Which was founded earliest, A or B?";
         let claim = tallied("A was founded earliest.", "A", tally::Op::Min, "company", Some("founding year"), vec![]);
-        let jev = Tallying::new("Founded", "'1998'");
+        let jev = Tallying::new("Founded", "'1998'|'2001'");
         let checked = review_claims(&jev, &READS, task, None, vec![claim], &notes, None, true, &[]).await.unwrap();
         assert_eq!(checked.problem, None);
         assert_eq!(checked.claims, [Claim::new("A was founded earliest.", earliest)]);
@@ -2864,6 +2908,24 @@ mod tests {
                 .unwrap();
         assert_eq!(checked.claims[0].text, "The basket costs £1.50.");
         assert!(jev.asked().contains_key("group"), "the numbers were narrowed before the value was chosen");
+        let missing = Tallying { unanswered: Some("group"), ..Tallying::new("Item:", "£") };
+        let claim = tallied("The basket costs £1.50.", "£1.50", tally::Op::Sum, "item", Some("price"), vec![]);
+        let checked =
+            review_claims(&missing, &READS, "What does the basket cost?", None, vec![claim], &notes, None, true, &[])
+                .await
+                .unwrap();
+        assert!(checked.claims.is_empty(), "an unanswered narrowing decision cannot supply a value");
+        let unrelated = Notes::new([
+            page_fact(0, "https://shop.test/audit", &format!("Audit: {filler}")),
+            page_fact(1, "https://shop.test/", "Item: Pen £1.50"),
+        ]);
+        let claim = tallied("The basket costs £1.50.", "£1.50", tally::Op::Sum, "item", Some("price"), vec![]);
+        let jev = Tallying::new("Item:", "£");
+        let checked =
+            review_claims(&jev, &READS, "What does the basket cost?", None, vec![claim], &unrelated, None, true, &[])
+                .await
+                .unwrap();
+        assert_eq!(checked.claims[0].text, "The basket costs £1.50.");
     }
 
     /// A book read off a screenshot of a listing page is the same record as its text note there, in other words, so no
