@@ -1402,11 +1402,27 @@
       const overflow = {x: e.scrollWidth - e.clientWidth, y: e.scrollHeight - e.clientHeight};
       if (overflow.x <= 0 && overflow.y <= 0) continue;
       const style = view.getComputedStyle(e);
+      const vertical = style.writingMode.startsWith('vertical') || style.writingMode.startsWith('sideways');
+      let inlineReverse = style.direction === 'rtl';
+      let blockReverse = vertical && style.writingMode.endsWith('-rl');
+      if (style.display.includes('flex')) {
+        if (style.flexDirection === 'row-reverse') inlineReverse = !inlineReverse;
+        if (style.flexDirection === 'column-reverse') blockReverse = !blockReverse;
+      }
+      const named = element => element.hasAttribute('aria-label') || element.hasAttribute('aria-labelledby')
+        ? labelOf(element) : element.getAttribute('title') || '';
+      const frameNames = [];
+      for (let doc = e.ownerDocument; doc !== document;) {
+        const frame = doc.defaultView.frameElement;
+        frameNames.unshift(named(frame) || doc.location.href);
+        doc = frame.ownerDocument;
+      }
       for (const axis of ['x', 'y']) {
         const behavior = axis === 'x' ? style.overflowX : style.overflowY;
         if (overflow[axis] <= 0 || !(page && behavior === 'visible') && !['auto', 'scroll', 'overlay'].includes(behavior)) continue;
         const position = axis === 'x' ? e.scrollLeft : e.scrollTop;
-        const reverse = axis === 'x' && style.direction === 'rtl';
+        // CSSOM View's overflow direction follows the block and inline flow, including reversed flex axes.
+        const reverse = (axis === 'x') === vertical ? blockReverse : inlineReverse;
         const min = reverse ? -overflow[axis] : 0, max = reverse ? 0 : overflow[axis];
         const operations = [];
         if (position < max) operations.push('scroll');
@@ -1420,7 +1436,8 @@
         const rect = e.getBoundingClientRect();
         controls.push({
           id, role: 'region', operations,
-          label: `${axis === 'x' ? 'Horizontal' : 'Vertical'} scroll area: ${page ? 'Page' : labelOf(e) || fallbackLabel(e) || e.tagName.toLowerCase()}`,
+          label: `${axis === 'x' ? 'Horizontal' : 'Vertical'} scroll area: ${page ? 'Page' : named(e) || e.tagName.toLowerCase()}`,
+          ...(frameNames.length ? {context: `Frame: ${frameNames.join(' / ')}`} : {}),
           frame_origin: e.ownerDocument.location.origin,
           frame_path: framePath(e.ownerDocument),
           offscreen: rect.bottom <= 0 || rect.top >= view.innerHeight,
