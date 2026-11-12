@@ -92,20 +92,26 @@ Three 1280x800 screenshots show the current store version. The silent walkthroug
 | [Start](assets/extension-launch/01-start.png) | The first-task command beside Chrome |
 | [Running](assets/extension-launch/02-running.png) | The task's tab group, Chrome's debugging bar and the popup's Stop button |
 | [Result](assets/extension-launch/03-result.png) | The terminal's complete result and cited answer, after the task's tabs close |
-| [Walkthrough](assets/extension-launch/demo.mp4) | Public demo login, sorting products, opening a product and returning its cited price |
-| [Video poster](assets/extension-launch/demo-poster.png) | The product page with the live focus cursor |
+| [Walkthrough](assets/extension-launch/demo.mp4) | Public demo login, cart, test checkout and order confirmation through the extension |
+| [Video poster](assets/extension-launch/demo-poster.png) | The order confirmation with the live focus cursor |
 
 The three numbered screenshots are real captures from an isolated Chrome for Testing profile running the published 0.1.0 extension files
 and released fastbrowse 0.10.0. The extension's public manifest key was restored to keep its store identity when
 loading the downloaded package unpacked. They demonstrate the run, not the store installation UI or a signed-in
 account. There is no audio and no personal data. The terminal shows the first-task command, run status and answer.
 
-The 13-second video uses the source extension 0.1.1 and CLI built from this branch, with Cua Driver 0.45.4 drawing
+The 23-second video uses the source extension 0.1.1 and CLI built from this branch, with Cua Driver 0.45.4 drawing
 fastbrowse's custom focus cursor directly. It uses Sauce Demo's public `standard_user` account and an origin-scoped
-password secret, shown as dots in the field. No private login or model key appears. The real run completed in six
-steps for $0.0028. Only the idle opening and ending were trimmed; actions and cursor motion play at their captured
-speed. The isolated demo profile disables password saving and leak warnings for these public test credentials.
-Rotation and float are off in Cua's cursor settings. This video does not represent the currently released CLI.
+password secret, shown as dots in the field. The task adds one Sauce Labs Backpack to the cart and completes the
+simulated checkout with fictional details. Sauce Demo confirms the order, and fastbrowse cites its $32.39 total.
+No real purchase, private login or model key appears. The real run completed in 12 steps for $0.0088.
+
+Only the idle opening and ending were trimmed; actions and cursor motion play at their captured speed. The
+isolated demo profile disables password saving and leak warnings for these public test credentials. Rotation
+and float are off in Cua's cursor settings. The CLI routes browser actions through `--extension` and a
+profile-local native messaging host, with `--authorize` permitting the simulated checkout. The extension opens
+a run tab in the existing Chrome window; the neutral starting tab remains open. Chrome's debugging bar
+identifies fastbrowse throughout the task. This video previews the branch build and extension 0.1.1.
 
 Chrome accepts 1 to 5 screenshots at 1280x800 or 640x400. Re-capture the popup and run for 0.1.1 before uploading
 assets that describe its new controls. Keep the exact build and CLI version with future captures.
