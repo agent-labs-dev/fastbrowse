@@ -49,6 +49,7 @@ impl AxIndex {
     /// an incomplete `getPartialAXTree` response must be rejected before calling this method.
     pub(crate) fn merge_branch(&mut self, backend_id: i64, nodes: Vec<AxNode>, generation: u64) -> bool {
         let Some(root_id) = self.by_backend_id.get(&backend_id).cloned() else { return false };
+        if !self.branch_complete(backend_id, &nodes) { return false }
         let mut previous_ids = HashSet::from([root_id.clone()]);
         let mut pending = self.nodes.get(&root_id).map(|node| node.child_ids.clone()).unwrap_or_default();
         while let Some(id) = pending.pop() {
@@ -62,7 +63,6 @@ impl AxIndex {
             }
             if let Some(node_backend) = node.backend_dom_node_id { self.by_backend_id.insert(node_backend, node.node_id.clone()); }
         }
-        if !replacement_ids.contains(&root_id) { return false }
         for removed in previous_ids.difference(&replacement_ids) {
             if let Some(old) = self.nodes.remove(removed) {
                 if let Some(old_backend) = old.backend_dom_node_id { self.by_backend_id.remove(&old_backend); }
@@ -75,9 +75,17 @@ impl AxIndex {
 
     pub(crate) fn branch_complete(&self, backend_id: i64, nodes: &[AxNode]) -> bool {
         let Some(root_id) = self.by_backend_id.get(&backend_id) else { return false };
-        let supplied: HashSet<&str> = nodes.iter().map(|node| node.node_id.as_str()).collect();
+        let mut supplied = HashMap::new();
+        for node in nodes { if supplied.insert(node.node_id.as_str(), node).is_some() { return false; } }
         let Some(root) = nodes.iter().find(|node| &node.node_id == root_id) else { return false };
-        root.child_ids.iter().all(|child| supplied.contains(child.as_str()))
+        let mut reachable = HashSet::from([root_id.clone()]);
+        let mut pending = root.child_ids.clone();
+        while let Some(id) = pending.pop() {
+            if !reachable.insert(id.clone()) { return false; }
+            let Some(node) = supplied.get(id.as_str()) else { return false };
+            pending.extend(node.child_ids.iter().cloned());
+        }
+        reachable.len() == supplied.len()
     }
 }
 
@@ -112,6 +120,7 @@ mod tests {
         let mut removed = node("root", 10); removed.child_ids = vec!["a".into()];
         assert!(index.merge_branch(10, vec![removed, node("a", 11)], 3));
         assert_eq!(index.node_for_backend(12), None);
-        assert!(!index.branch_complete(10, &[node("root", 10)]));
+        let mut incomplete = node("root", 10); incomplete.child_ids = vec!["a".into()];
+        assert!(!index.branch_complete(10, &[incomplete]));
     }
 }

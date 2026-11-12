@@ -933,6 +933,21 @@ impl CdpPage {
             let generation = self.session.ax_generation(session_id);
             let fresh = self.state.lock().unwrap().ax.get(session_id).is_some_and(|index| index.generation == generation);
             if fresh { continue; }
+            let dirty = self.session.take_ax_dirty(session_id);
+            if !dirty.is_empty() {
+                let mut complete = true;
+                for backend_id in dirty {
+                    let Ok(raw) = self.session.accessibility_partial_ax_tree(session_id, backend_id).await else { complete = false; break };
+                    let Some(nodes) = raw.get("nodes").cloned().and_then(|value| serde_json::from_value::<Vec<ax::AxNode>>(value).ok()) else { complete = false; break };
+                    let mut state = self.state.lock().unwrap();
+                    let Some(index) = state.ax.get_mut(session_id) else { complete = false; break };
+                    if index.generation != generation || !index.branch_complete(backend_id, &nodes) || !index.merge_branch(backend_id, nodes, generation) {
+                        complete = false;
+                        break;
+                    }
+                }
+                if complete { continue; }
+            }
             let Ok(raw) = self.session.accessibility_full_ax_tree(session_id).await else { continue };
             let Some(nodes) = raw.get("nodes").cloned().and_then(|value| serde_json::from_value(value).ok()) else { continue };
             let document_key = self.session.document_mark(session_id).to_string();
