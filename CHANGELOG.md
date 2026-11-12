@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-12
+
 - Manual eval diagnostics accept separate approved probe and cassette-fill budgets and encrypt raw artifacts while retaining the full fixture gate.
 
 - Browser and HTTP captures end earlier heading context at the same or deeper rank when reading a repeated record, including a group heading with the same rank. Browser heading paths also follow heading ranks when a page skips levels.
@@ -2113,7 +2115,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.10.0...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.10.0
 [0.9.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.9.1
 [0.9.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.9.0
