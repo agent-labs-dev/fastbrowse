@@ -13,11 +13,13 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.11.0] - 2026-11-12
 
+- The eval harness follows Parallax's OpenRouter Jev interface while preserving the proved Opus-only v5 request and receipt identity. The dev16 dependency lock records the published PyPI artifacts ([#889](https://github.com/agent-labs-dev/fastbrowse/issues/889)).
+
 - Eval publication retains dispatch interruption time under an explicit timing basis and refuses speed comparisons across different clocks ([#1055](https://github.com/agent-labs-dev/fastbrowse/issues/1055)).
 
 - **An older Chrome extension names what to update.** A copy without a supported-command list reports that extension 0.1.1 or later is required instead of listing every command as unsupported. The handshake reports the extension version when available and still refuses any missing required command.
 
-- Numeric tally checks qualify each record and select its quoted field in one decision. A missing field still withholds the result, while an unrelated date is not admitted by a separate membership verdict ([#977](https://github.com/agent-labs-dev/fastbrowse/issues/977)).
+- Numeric tally checks qualify each record and select its quoted field in one decision. They receive the quote's captured block type and any proof that it covers a whole repeated item, so a fragment without a value does not imply that its record lacks that value. A missing field still withholds the result, while an unrelated date is not admitted by a separate membership verdict ([#977](https://github.com/agent-labs-dev/fastbrowse/issues/977)).
 
 - Legacy hosted dispatch outages can retain verified non-execution evidence without inventing a judge verdict or releasing their cost hold ([#1055](https://github.com/agent-labs-dev/fastbrowse/issues/1055)).
 

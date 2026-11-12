@@ -1926,7 +1926,7 @@ async def test_the_judge_decides_a_bot_check_alike_for_every_arm(
 
 
 JUDGE_ENV = {
-    "AI_GATEWAY_API_KEY": "gateway-test-key",
+    "OPENROUTER_API_KEY": "openrouter-test-key",
     "PARALLAX_JUDGE_MODELS": "anthropic/claude-opus-5.5",
     "PARALLAX_JUDGE_BASE_URL": "https://openrouter.ai/api/v1",
     "PARALLAX_JUDGE_API_KEY": "fallback-test-key",
@@ -1938,7 +1938,7 @@ JEV_POLICY = ["--judge-policy", live.JEV_JUDGE_POLICY]
 @pytest.mark.parametrize(
     ("missing", "message"),
     [
-        ("AI_GATEWAY_API_KEY", "AI_GATEWAY_API_KEY"),
+        ("OPENROUTER_API_KEY", "OPENROUTER_API_KEY"),
         ("PARALLAX_JUDGE_MODELS", "PARALLAX_JUDGE_MODELS"),
         ("PARALLAX_JUDGE_BASE_URL", "PARALLAX_JUDGE_BASE_URL"),
         ("PARALLAX_JUDGE_API_KEY", "PARALLAX_JUDGE_API_KEY"),
@@ -1974,7 +1974,7 @@ def test_every_judge_configured_passes_the_start_check(monkeypatch):
 def test_the_opus_policy_needs_no_jev_key(monkeypatch):
     for name, value in JUDGE_ENV.items():
         monkeypatch.setenv(name, value)
-    monkeypatch.delenv("AI_GATEWAY_API_KEY")
+    monkeypatch.delenv("OPENROUTER_API_KEY")
     live.require_judges(use_jev=False)
 
 

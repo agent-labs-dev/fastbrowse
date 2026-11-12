@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use fastbrowse_core::citations::{TableBlock, table_blocks};
 use fastbrowse_core::models::{Evidence, FactReader};
-use fastbrowse_core::page::Capture;
+use fastbrowse_core::page::{BlockKind, Capture};
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{dumped_len, dumps, write_string};
@@ -255,20 +255,30 @@ pub struct CapturedPage {
     pub title: String,
 }
 
+type CaptureIdentity = (String, String, DateTime);
+
+#[derive(Clone)]
+struct SourceBlock {
+    source_id: String,
+    start: i64,
+    end: i64,
+    kind: BlockKind,
+    whole_record: bool,
+}
+
 #[derive(Clone, Default)]
 pub struct Notes {
     facts: IndexMap<String, Fact>,
     /// The facts standing as the task's answer: a later read or a reopened count takes one out, and it stays as history.
     answering: IndexSet<String>,
     retired: HashSet<String>,
-    pages: IndexMap<(String, String, DateTime), CapturedPage>,
+    pages: IndexMap<CaptureIdentity, CapturedPage>,
     /// How many of the run's steps that could change the site had been taken when each capture was read.
-    steps_taken: HashMap<(String, String, DateTime), usize>,
-    /// Each remembered capture's table blocks by its hash, so a citation can show a quote as the page shows it.
-    tables: HashMap<String, Arc<[TableBlock]>>,
-    /// Each remembered capture's blocks the capture marked `whole_record`, as its hash, the block's source id and its
-    /// span, so a quote of a whole record says so.
-    records: HashSet<(String, String, i64, i64)>,
+    steps_taken: HashMap<CaptureIdentity, usize>,
+    /// A table's structure belongs to its capture, even when another page renders identical text.
+    tables: HashMap<CaptureIdentity, Arc<[TableBlock]>>,
+    /// A fragment keeps its captured block type, so a heading is not mistaken for the record it names.
+    source_blocks: HashMap<CaptureIdentity, Arc<[SourceBlock]>>,
 }
 
 impl fmt::Debug for Notes {
@@ -293,28 +303,52 @@ impl Notes {
         self.steps_taken.entry(key.clone()).or_insert(steps_taken);
         // A title can change while the quoted body does not; recapturing must not rename older evidence.
         self.pages
-            .entry(key)
+            .entry(key.clone())
             .or_insert_with(|| CapturedPage { url: capture.url.clone(), title: capture.title.clone() });
-        self.tables.entry(capture.sha256.clone()).or_insert_with(|| table_blocks(capture).into());
-        self.records.extend(
-            capture
-                .blocks
-                .iter()
-                .filter(|block| block.whole_record)
-                .map(|block| (capture.sha256.clone(), block.source_id.clone(), block.start, block.end)),
-        );
+        let mut sources: HashMap<CaptureIdentity, Vec<SourceBlock>> = HashMap::new();
+        for block in &capture.blocks {
+            let url = block.source_url.as_ref().unwrap_or(&capture.url);
+            let identity = (capture.sha256.clone(), url.clone(), capture.captured_at);
+            sources.entry(identity).or_default().push(SourceBlock {
+                source_id: block.source_id.clone(),
+                start: block.start,
+                end: block.end,
+                kind: block.kind,
+                whole_record: block.whole_record,
+            });
+        }
+        for (identity, blocks) in sources {
+            self.tables.entry(identity.clone()).or_insert_with(|| table_blocks(capture).into());
+            self.source_blocks.entry(identity).or_insert_with(|| blocks.into());
+        }
     }
 
     /// Whether `evidence` quotes one whole record block of a remembered capture: every part of a card or comment the
     /// page rendered, so what it does not show, that record does not show on the page.
     pub fn whole_record(&self, evidence: &Evidence) -> bool {
-        let span = (evidence.capture_sha256.clone(), evidence.source_id.clone(), evidence.start, evidence.end);
-        self.records.contains(&span)
+        self.source_block(evidence)
+            .is_some_and(|block| block.whole_record && block.start == evidence.start && block.end == evidence.end)
+    }
+
+    /// The uniquely containing block's type; unknown provenance must not invent a page structure.
+    pub fn source_kind(&self, evidence: &Evidence) -> Option<BlockKind> {
+        self.source_block(evidence).map(|block| block.kind)
+    }
+
+    fn source_block(&self, evidence: &Evidence) -> Option<&SourceBlock> {
+        let key = (evidence.capture_sha256.clone(), evidence.url.clone(), evidence.captured_at);
+        let blocks = self.source_blocks.get(&key)?;
+        let mut matching = blocks.iter().filter(|block| {
+            block.source_id == evidence.source_id && block.start <= evidence.start && evidence.end <= block.end
+        });
+        let block = matching.next()?;
+        matching.next().is_none().then_some(block)
     }
 
     /// The table blocks of the capture `evidence` was cut from; none when that capture was never remembered.
     pub fn table_blocks(&self, evidence: &Evidence) -> &[TableBlock] {
-        self.tables.get(&evidence.capture_sha256).map_or(&[], |tables| tables)
+        let key = (evidence.capture_sha256.clone(), evidence.url.clone(), evidence.captured_at);
+        self.tables.get(&key).map_or(&[], |tables| tables)
     }
 
     /// How many of the run's steps that could change the site had been taken when `evidence` was read; None for a
