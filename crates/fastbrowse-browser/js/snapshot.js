@@ -527,9 +527,15 @@
       base.read !== own.snapshots?.[mode]?.read) {
     own.queryResults = new WeakMap();
     own.names = new WeakMap();
+    own.elementChildren = new WeakMap();
+    own.elementOrders = new WeakMap();
+    own.controlMatches = new WeakMap();
   }
   own.queryResults ||= new WeakMap();
   own.names ||= new WeakMap();
+  own.elementChildren ||= new WeakMap();
+  own.elementOrders ||= new WeakMap();
+  own.controlMatches ||= new WeakMap();
   const flushedTrees = new Set();
   const invalidateQueries = (records, root) => {
     const bumped = new Set();
@@ -539,10 +545,12 @@
         own.queryResults.delete(node);
         own.domVersions.set(node, (own.domVersions.get(node) || 0) + 1);
       }
+      if (record.type === 'childList') own.elementChildren.delete(record.target);
       for (const added of record.addedNodes || []) {
         if (added.nodeType !== 1) continue;
         // A removed subtree can be edited while no observer watches it, then inserted somewhere else.
         for (const node of [added, ...added.querySelectorAll('*')]) {
+          own.elementChildren.delete(node);
           own.queryResults.delete(node);
           own.domVersions.set(node, (own.domVersions.get(node) || 0) + 1);
         }
@@ -586,6 +594,47 @@
     }
     if (!entry.queries.has(selector)) entry.queries.set(selector, scope.querySelectorAll(selector));
     return entry.queries.get(selector);
+  };
+  // Element order changes only when an element enters or leaves a child list. Saved edges let a changed
+  // subtree renew the order without asking the browser to walk its unchanged siblings again.
+  const indexedElements = scope => {
+    const root = flushTree(scope);
+    const version = own.structureVersions.get(root) || 0;
+    const saved = own.elementOrders.get(scope);
+    if (saved?.root === root && saved.version === version) return saved.elements;
+    const childrenOf = parent => {
+      const entry = own.elementChildren.get(parent);
+      if (entry?.root === root) return entry.children;
+      const children = [];
+      for (let node = parent.firstElementChild; node; node = node.nextElementSibling) children.push(node);
+      if (children.length) own.elementChildren.set(parent, { root, children });
+      return children;
+    };
+    const elements = [];
+    const pending = [{ children: childrenOf(scope), next: 0 }];
+    while (pending.length) {
+      const level = pending[pending.length - 1];
+      if (level.next === level.children.length) {
+        pending.pop();
+        continue;
+      }
+      const node = level.children[level.next++];
+      elements.push(node);
+      const children = childrenOf(node);
+      if (children.length) pending.push({ children, next: 0 });
+    }
+    own.elementOrders.set(scope, { root, version, elements });
+    return elements;
+  };
+  const listedControl = e => {
+    const root = e.getRootNode();
+    const version = own.domVersions.get(e) || 0;
+    let entry = own.controlMatches.get(e);
+    if (entry?.root !== root || entry.version !== version) {
+      entry = { root, version, value: e.matches(SELECTOR) };
+      own.controlMatches.set(e, entry);
+    }
+    return entry.value;
   };
   flushTree(document);
   const readUndefinedElements = own.undefinedElements;
@@ -1060,11 +1109,10 @@
   let lightElements;
   function* walk(root) {
     // A document observer cannot see mutations inside shadow roots or child documents.
-    const listed = new Set(root.querySelectorAll(SELECTOR));
-    const elements = root.querySelectorAll('*');
+    const elements = indexedElements(root);
     if (root === document) lightElements = [...elements];
     for (const e of elements) {
-      if (listed.has(e) || pressable(e) || focusableText(e)) yield e;
+      if (listedControl(e) || pressable(e) || focusableText(e)) yield e;
       if (e.shadowRoot) {
         deep = true;
         yield* walk(e.shadowRoot);
@@ -1523,7 +1571,7 @@
   for (const e of offered) for (let p = e?.parentElement; p && !holding.has(p); p = p.parentElement) holding.add(p);
   for (const doc of docs) {
     let host = null;
-    for (const e of doc.body.querySelectorAll('*')) {
+    for (const e of indexedElements(doc.body)) {
       if (host?.contains(e)) continue;
       if (offered.has(e) || holding.has(e) || !isCard(e)) continue;
       if (![...descendants(e, VISUAL)].some(v => !decorative(v))) continue;

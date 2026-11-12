@@ -734,6 +734,42 @@ async fn test_a_changed_card_keeps_its_siblings_structural_queries() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_changed_subtree_reuses_the_document_walk() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(&h.session, r#"document.body.innerHTML = '<article id=changed><button>First</button></article><article id=stable><button>Second</button></article>';globalThis.documentWalks = 0;globalThis.stableChildReads = 0;const original = Document.prototype.querySelectorAll;Document.prototype.querySelectorAll = function(selector) {if(selector === '*') documentWalks++;return original.call(this,selector)};const children = Object.getOwnPropertyDescriptor(Element.prototype,'firstElementChild');Object.defineProperty(Element.prototype,'firstElementChild',{...children,get(){if(this.id === 'stable')stableChildReads++;return children.get.call(this)}});true"#).await;
+    h.observe().await;
+    assert!(eval_active(&h.session, "stableChildReads").await.as_u64().unwrap() > 0);
+    for script in [
+        "document.querySelector('#changed').insertAdjacentHTML('beforeend','<button>Added</button>')",
+        "document.querySelector('#changed').prepend(document.querySelector('#changed').lastChild)",
+        "document.querySelector('#changed').firstChild.remove()",
+        "document.querySelector('#changed button').firstChild.replaceWith(document.createTextNode('Replacement'))",
+        "document.querySelector('#changed').insertAdjacentHTML('beforeend','<a id=changing-link>Link</a>')",
+        "document.querySelector('#changing-link').setAttribute('href','#destination')",
+        "document.querySelector('#changing-link').removeAttribute('href')",
+        "globalThis.detachedCard = document.querySelector('#changed');detachedCard.remove();true",
+        "detachedCard.innerHTML = '<span role=button>Detached replacement</span>';document.body.prepend(detachedCard)",
+        "globalThis.shadowHost = document.createElement('div');document.body.append(shadowHost);shadowHost.attachShadow({mode:'open'}).innerHTML = '<button>Shadow first</button>'",
+        "shadowHost.shadowRoot.prepend(Object.assign(document.createElement('button'),{textContent:'Shadow added'}))",
+        "document.documentElement.append(Object.assign(document.createElement('button'),{textContent:'After body'}))",
+        "document.body.replaceWith(Object.assign(document.createElement('body'),{innerHTML:'<button>New body</button>'}))",
+    ] {
+        eval_active(&h.session, "documentWalks = 0;stableChildReads = 0").await;
+        eval_active(&h.session, script).await;
+        let after = h.observe().await;
+        assert_eq!(eval_active(&h.session, "documentWalks").await, json!(0), "{script}");
+        assert_eq!(eval_active(&h.session, "stableChildReads").await, json!(0), "{script}");
+        let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
+        let mut full = other.observe().await.expect("full read");
+        full.captured_at = after.captured_at;
+        assert_eq!(after, full, "{script}");
+        h.observe().await;
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_changed_name_does_not_derive_an_unrelated_name_again() {
     let _turn = turn().await;
     let Some(h) = harness().await else { return };
