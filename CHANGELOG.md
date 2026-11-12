@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Successful grouping requests now record their model cost and physical call count, including when their returned groups cannot be used ([#1051](https://github.com/agent-labs-dev/fastbrowse/issues/1051)).
+
 - Local eval browsers and their temporary profiles are cleaned up even when the eval process aborts in native code.
 
 - **Pointer listener changes renew a saved observation.** Adding, removing or aborting a pointer listener now refreshes controls that become clickable or stop being clickable, even when the page makes no DOM mutation ([#1047](https://github.com/agent-labs-dev/fastbrowse/issues/1047)).
