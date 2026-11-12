@@ -1651,3 +1651,30 @@ async fn a_shadow_roots_right_to_left_scroll_area_keeps_its_physical_direction()
     assert!(left.as_f64().unwrap() < 0.0, "left is negative in a right-to-left area: {left}");
     h.close().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reversed_vertical_scroll_exposes_the_direction_that_moves() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    eval_active(&h.page, r#"document.body.innerHTML = `<section aria-label="Chat" style="display:flex;flex-direction:column-reverse;height:120px;overflow:auto"><div style="height:900px;flex-shrink:0">Older messages</div></section>`"#).await;
+    let before = h.observe().await;
+    let target = find(&before, "Vertical scroll area: Chat");
+    assert!(target.operations.contains(&Operation::ScrollUp));
+    assert!(!target.operations.contains(&Operation::Scroll));
+    let result = h.page.act(&action(Operation::ScrollUp, target), &before).await.unwrap();
+    assert!(result.page_changed, "{result:?}");
+    assert!(eval_active(&h.page, "document.querySelector('section').scrollTop").await.as_f64().unwrap() < 0.0);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn scroll_area_names_exclude_contents_and_identify_their_frame() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    eval_active(&h.page, r#"document.body.innerHTML = `<div style="height:100px;overflow:auto"><p style="height:900px">Feed body must not become the name</p></div><iframe title="Activity log" srcdoc="<div style='height:2000px'>History</div>"></iframe><div style="height:2000px">Main page</div>`"#).await;
+    let observed = h.observe().await;
+    let areas: Vec<_> = observed.controls.iter().filter(|c| c.label.starts_with("Vertical scroll area:")).collect();
+    assert!(areas.iter().all(|c| !c.label.contains("Feed body")), "{areas:?}");
+    assert!(areas.iter().any(|c| c.context.as_deref().is_some_and(|c| c.contains("Activity log"))), "{areas:?}");
+    h.close().await;
+}
