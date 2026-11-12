@@ -161,6 +161,10 @@ pub(crate) trait FrameText: DeserializeOwned {
     fn keeps_reads() -> bool {
         false
     }
+    /// The number the page gave this read when it kept it; none when the page keeps no read to answer "unchanged" from.
+    fn read(&self) -> Option<u64> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -210,6 +214,9 @@ struct Snapshot {
     guards: HashMap<String, Option<String>>,
     /// Digest of the guard without the node ids at its ends, which a redraw changes.
     retarget_keys: HashMap<String, Option<String>>,
+    /// The page's number for this read when it kept it; null for a read it did not keep.
+    #[serde(default)]
+    read: Option<u64>,
 }
 
 impl FrameText for Snapshot {
@@ -218,6 +225,9 @@ impl FrameText for Snapshot {
     }
     fn keeps_reads() -> bool {
         true
+    }
+    fn read(&self) -> Option<u64> {
+        self.read
     }
     const SHAPE: &'static str = "_Snapshot";
     fn url(&self) -> &str {
@@ -929,10 +939,14 @@ impl CdpPage {
             && raw.get("unchanged").is_some_and(truthy)
         {
             let key = format!("{}|{slot}|{frame_key}", T::SHAPE);
-            let document_key = raw.get("document_key").and_then(Value::as_str).unwrap_or_default().to_owned();
+            // Another page on the same session can have replaced the page's kept read since this side took its own,
+            // so the answer is served only when it names the very read held here, by its document and its number.
+            fn names(value: &Value) -> (Option<&str>, Option<u64>) {
+                (value.get("document_key").and_then(Value::as_str), value.get("read").and_then(Value::as_u64))
+            }
             let kept = self.state.lock().unwrap().kept.get(&key).cloned();
             match kept {
-                Some(kept) if kept.get("document_key").and_then(Value::as_str) == Some(document_key.as_str()) => {
+                Some(kept) if matches!(names(&raw), (Some(_), Some(_))) && names(&kept) == names(&raw) => {
                     raw = kept;
                     served = true;
                 }
@@ -950,13 +964,19 @@ impl CdpPage {
             }
         }
         let parsed: T = parse(raw.clone(), T::SHAPE)?;
-        // A read this side can serve later is kept as it arrived, under the document it names.
+        // A read this side can serve later is kept as it arrived, under the document and number it names. A read the
+        // page did not keep replaces nothing to serve: the page will not answer "unchanged" about it.
         if let Some((slot, _)) = retry
             && !served
             && T::keeps_reads()
         {
             let key = format!("{}|{slot}|{frame_key}", T::SHAPE);
-            self.state.lock().unwrap().kept.insert(key, raw);
+            let mut state = self.state.lock().unwrap();
+            if parsed.read().is_some() {
+                state.kept.insert(key, raw);
+            } else {
+                state.kept.remove(&key);
+            }
         }
         // The text and the address it came from were read in one evaluation, so this cannot be raced.
         if let Some(grant) = self.session.grant()

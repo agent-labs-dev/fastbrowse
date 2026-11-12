@@ -617,3 +617,104 @@ async fn test_a_selected_value_is_not_served_from_a_kept_read() {
     assert_eq!(find(&after, "Topic").value.as_deref(), Some("Damaged item"));
     assert_ne!(before.page_key, after.page_key);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_form_state_a_script_sets_without_an_event_is_not_served_from_a_kept_read() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    // A property set from code fires no event and writes no attribute, so neither the listeners nor the document
+    // observer see it; the read must still not be served from before it.
+    for (kind, script) in [
+        ("value", "document.querySelector('input[type=text]').value = 'Filled';"),
+        ("checked", "document.querySelector('input[type=checkbox]').checked = true;"),
+        ("selection", "document.querySelector('select').selectedIndex = 1;"),
+    ] {
+        eval_active(
+            &h.session,
+            r#"document.body.innerHTML = '<input type="text" aria-label="Name"><input type="checkbox" aria-label="Agree"><select aria-label="Topic"><option>General</option><option>Damaged item</option></select>';"#,
+        )
+        .await;
+        let before = h.observe().await;
+        eval_active(&h.session, script).await;
+        let after = h.observe().await;
+        assert_ne!(before.page_key, after.page_key, "{kind}: the observation was served from before the change");
+        match kind {
+            "value" => assert_eq!(find(&after, "Name").value.as_deref(), Some("Filled")),
+            "checked" => assert_eq!(find(&after, "Agree").checked, Some(true)),
+            _ => assert_eq!(find(&after, "Topic").value.as_deref(), Some("Damaged item")),
+        }
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_validation_message_a_script_sets_is_not_served_from_a_kept_read() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(
+        &h.session,
+        r#"document.body.innerHTML = '<input type="text" aria-label="Handle"><button>Save</button>';"#,
+    )
+    .await;
+    let before = h.observe().await;
+    let typed = Action {
+        target_id: Some(find(&before, "Handle").id.clone()),
+        text: Some("taken".into()),
+        ..Action::new(Operation::Fill)
+    };
+    h.page.act(&typed, &before).await.expect("fill");
+    // Leaving the field is what lets the page show a refusal on it (`:user-invalid`).
+    let filled = h.observe().await;
+    let left = Action { target_id: Some(find(&filled, "Handle").id.clone()), ..Action::new(Operation::Blur) };
+    h.page.act(&left, &filled).await.expect("blur");
+    let typed_obs = h.observe().await;
+    assert_eq!(find(&typed_obs, "Handle").validation_message, None);
+    // A server check answering late, as a signup form's "already taken" does: no event, no attribute.
+    eval_active(&h.session, "document.querySelector('input').setCustomValidity('That handle is taken');").await;
+    let after = h.observe().await;
+    h.close().await;
+    assert_eq!(find(&after, "Handle").validation_message.as_deref(), Some("That handle is taken"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_css_rule_edited_in_place_is_not_served_from_a_kept_read() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(
+        &h.session,
+        "document.head.insertAdjacentHTML('beforeend', '<style>.later { color: black; }</style>'); \
+         document.body.innerHTML = '<button>Stays</button><button class=\"later\">Goes</button>';",
+    )
+    .await;
+    let before = h.observe().await;
+    assert!(before.controls.iter().any(|c| c.label == "Goes"));
+    // The rule count is unchanged and nothing in the document is rewritten.
+    eval_active(&h.session, "[...document.styleSheets].at(-1).cssRules[0].style.display = 'none';").await;
+    let after = h.observe().await;
+    h.close().await;
+    assert!(
+        !after.controls.iter().any(|c| c.label == "Goes"),
+        "a control the edited rule hides is still observed: {:?}",
+        after.controls.iter().map(|c| &c.label).collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_page_handle_is_not_served_another_handles_newer_read() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(&h.session, "document.body.innerHTML = '<button>Before</button>';").await;
+    h.observe().await;
+    eval_active(&h.session, "document.querySelector('button').textContent = 'After';").await;
+    // A second handle on the same session reads the changed page, so the page's kept read is now that one; the first
+    // handle still holds its own older read of the same document.
+    let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
+    assert!(other.observe().await.expect("observe").controls.iter().any(|c| c.label == "After"));
+    let again = h.observe().await;
+    h.close().await;
+    assert!(
+        again.controls.iter().any(|c| c.label == "After"),
+        "the first handle was served its own older read: {:?}",
+        again.controls.iter().map(|c| &c.label).collect::<Vec<_>>()
+    );
+}

@@ -87,17 +87,39 @@
       childList: true,
       attributes: true,
     });
-    // A sheet another origin serves is not readable here, and its rules are not what changed ours.
-    registry.sheets = () => {
-      let rules = 0;
-      for (const sheet of document.styleSheets) {
-        rules += 1;
-        try {
-          rules += sheet.cssRules.length;
-        } catch {}
-      }
-      return rules;
+    // A short digest of a long text, so a fingerprint is kept and compared without holding the text itself.
+    const hash = text => {
+      let h = 0x811c9dc5;
+      for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619);
+      return `${text.length}:${h >>> 0}`;
     };
+    // The CSSOM edits a rule in place (`rule.style.display = 'none'`) with no record to observe and no rule added, so
+    // every readable rule is fingerprinted by its text. A sheet another origin serves is not readable here, and its
+    // rules are not what changed ours.
+    registry.sheets = () => {
+      const parts = [];
+      for (const sheet of [...document.styleSheets, ...(document.adoptedStyleSheets || [])]) {
+        parts.push(`${sheet.disabled}|${sheet.media?.mediaText}`);
+        try {
+          for (const rule of sheet.cssRules) parts.push(rule.cssText);
+        } catch {
+          parts.push('opaque');
+        }
+      }
+      return hash(parts.join('\n'));
+    };
+    // A form control's live state is a property, not an attribute: `input.value = ...`, `checkbox.checked = true` and
+    // `setCustomValidity(...)` change what a read reports with no event and no record to observe.
+    registry.live = () => {
+      const parts = [];
+      for (const e of document.querySelectorAll('input,textarea,select,button')) {
+        const chosen = e.type === 'select-multiple' ? [...e.selectedOptions].map(o => o.index).join() : e.selectedIndex;
+        parts.push(JSON.stringify([e.value, e.checked, e.indeterminate, chosen, e.validationMessage]));
+      }
+      return hash(parts.join('\n'));
+    };
+    // Each kept read is numbered, so a caller answered "unchanged" can tell whether the read it holds is that one.
+    registry.reads = 0;
   }
   const ARIA_ROLES = [
     'button',
@@ -245,6 +267,7 @@
     kept &&
     kept.mode === mode &&
     kept.rev === registry.rev &&
+    kept.live === registry.live() &&
     kept.sheets === registry.sheets() &&
     kept.href === location.href &&
     kept.title === document.title &&
@@ -257,8 +280,19 @@
     // A transition or animation in flight moves what is on screen between one look and the next, so a read taken
     // while one runs does not stand.
     document.getAnimations().length === 0;
-  if (still) return { unchanged: true, url: kept.url, title: kept.title, document_key: kept.document_key, page_key: kept.page_key };
+  if (still)
+    return {
+      unchanged: true,
+      url: kept.url,
+      title: kept.title,
+      document_key: kept.document_key,
+      page_key: kept.page_key,
+      read: kept.read,
+    };
+  // Taken before the read, so a change made while it runs leaves the kept read unmatched rather than reused.
   const readRev = registry.rev;
+  const readLive = registry.live();
+  const readSheets = registry.sheets();
   const identity = e => {
     if (!registry.ids.has(e)) registry.ids.set(e, registry.next++);
     const id = registry.ids.get(e);
@@ -1496,12 +1530,16 @@
 
   // What this read reported, kept for the next look. A read that went into a shadow root or a child document is not
   // kept: a document observer cannot see either, so it could not tell later whether that part still holds.
+  let read = null;
   if (!deep) {
+    read = ++registry.reads;
     registry.kept ||= {};
     registry.kept[mode] = {
       mode,
+      read,
       rev: readRev,
-      sheets: registry.sheets(),
+      live: readLive,
+      sheets: readSheets,
       href: location.href,
       title: document.title,
       scrollX,
@@ -1528,6 +1566,7 @@
     guards,
     retarget_keys,
     inaccessible_frames: inaccessible,
+    read,
   };
   // Absent unless one is open, as on most pages: an unnamed modal is the empty string, not null.
   if (modal !== null) result.modal = modal;
