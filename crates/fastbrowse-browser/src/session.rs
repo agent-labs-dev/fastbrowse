@@ -82,7 +82,25 @@ static REFUSE_COOKIES_JS: LazyLock<String> = LazyLock::new(|| {
     const BUNDLE: &str = include_str!("../js/autoconsent/autoconsent.standalone.js");
     const TIER2: &str = "heuristicMode: \"tier2\"";
     assert_eq!(BUNDLE.matches(TIER2).count(), 1, "the autoconsent bundle sets its heuristic mode once");
-    BUNDLE.replacen(TIER2, "heuristicMode: \"reject\"", 1)
+    // Its mutation observers schedule background waits during a click's task. They are the browser helper's work,
+    // not the page's response to input, so they must not hold the page's settle open. It runs in the page's world,
+    // where its rules read the page's globals, so the bundle's own timer calls are bound to the native timers in its
+    // scope: bare names resolve to the bindings below, and the calls it makes through `window` are rewritten to them.
+    // The counts are asserted so that a vendored update that adds another way to reach a timer is read before it ships.
+    const WINDOW_TIMERS: [(&str, &str); 2] =
+        [("window.setTimeout(", "setTimeout("), ("window.clearTimeout(", "clearTimeout(")];
+    let mut bundle = BUNDLE.replacen(TIER2, "heuristicMode: \"reject\"", 1);
+    for (through_window, bare) in WINDOW_TIMERS {
+        assert_eq!(bundle.matches(through_window).count(), 1, "the autoconsent bundle calls {through_window} once");
+        bundle = bundle.replace(through_window, bare);
+    }
+    for reach in [".setTimeout", ".clearTimeout", "setInterval", "clearInterval", "requestAnimationFrame"] {
+        assert!(!bundle.contains(reach), "the autoconsent bundle reaches a timer through {reach}");
+    }
+    format!(
+        "(() => {{ const setTimeout = window.__fastbrowse.nativeSetTimeout; \
+         const clearTimeout = window.__fastbrowse.nativeClearTimeout; {bundle} }})()"
+    )
 });
 
 /// The isolated world the input watch runs in: the page's own scripts cannot see a global, a listener or a binding
@@ -2527,6 +2545,15 @@ fn declared_length(headers: &Value) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cookie_refusal_bundle_reaches_only_native_timers() {
+        // A call through `window` skips the lexical binding to the native timers and reaches the wrapped one that
+        // attributes work to the run's action.
+        for through_window in ["window.setTimeout(", "window.clearTimeout("] {
+            assert!(!REFUSE_COOKIES_JS.contains(through_window), "{through_window}");
+        }
+    }
 
     #[test]
     fn test_a_percent_before_a_multibyte_character_is_kept() {

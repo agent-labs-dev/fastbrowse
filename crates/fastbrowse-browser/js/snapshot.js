@@ -43,6 +43,83 @@
   registry.nativeSetTimeout ||= window.setTimeout.bind(window);
   registry.nativeClearTimeout ||= window.clearTimeout.bind(window);
   registry.nativeRequestAnimationFrame ||= window.requestAnimationFrame.bind(window);
+  registry.nativeCancelAnimationFrame ||= window.cancelAnimationFrame.bind(window);
+  // A click can schedule its first write after the next frame. Only work descended from the current action's input
+  // holds a settle: unrelated page timers must not charge an idle click the whole deadline, and a loop an earlier
+  // action started (a poll that reschedules itself, an animation frame chain) belongs to that action, so it must not
+  // hold every later one. `action` numbers the run's actions: the first input after a read opens the next one.
+  if (!registry.pendingWork) {
+    registry.pendingWork = new Set();
+    registry.action = 0;
+    // The action whose input the running task descends from, or null. It lasts to the next task, so the promise
+    // reactions and observer callbacks the task queued count as its work too. `turnInFrame` says the task is a frame
+    // callback.
+    registry.turn = null;
+    registry.turnInFrame = false;
+    let turns = 0;
+    registry.inputTurn = (action, inFrame = false) => {
+      registry.turn = action;
+      registry.turnInFrame = inFrame;
+      const current = ++turns;
+      registry.nativeSetTimeout(() => {
+        if (current === turns) registry.turn = null;
+      }, 0);
+    };
+    // Whether the current action has work that runs before `deadline`, a `performance.now()` time. A timer cannot run
+    // before its delay, so one due later cannot change what a settle bounded by `deadline` reads. A frame callback that
+    // asks for the next frame is the page drawing, which never has to end: it holds only while `drawing`, which the
+    // settle answers as it does for mutations, by its quiet window.
+    registry.pendingBefore = (deadline, drawing) => {
+      for (const work of registry.pendingWork)
+        if (work.action === registry.action && work.due <= deadline && (drawing || !work.nextFrame)) return true;
+      return false;
+    };
+    // `delayed` says whether the second argument is a delay: a frame callback is due at the next frame.
+    const wrap = (schedule, cancel, delayed) => {
+      const pending = new Map();
+      const start = (callback, ...args) => {
+        if (registry.turn === null || typeof callback !== 'function') return schedule(callback, ...args);
+        // Web IDL converts a timer delay to a signed long. Convert once: an object's valueOf can change the page
+        // or return another delay on a second call, so tracking and Chrome must receive the same number.
+        if (delayed && args.length) args[0] = +args[0] | 0;
+        const work = {
+          action: registry.turn,
+          due: performance.now() + (delayed ? Math.max(0, args[0] || 0) : 0),
+          nextFrame: !delayed && registry.turnInFrame,
+        };
+        registry.pendingWork.add(work);
+        let id;
+        try {
+          id = schedule(function (...values) {
+            pending.delete(id);
+            registry.pendingWork.delete(work);
+            registry.inputTurn(work.action, !delayed);
+            return Reflect.apply(callback, this, values);
+          }, ...args);
+        } catch (error) {
+          registry.pendingWork.delete(work);
+          throw error;
+        }
+        pending.set(id, work);
+        return id;
+      };
+      const stop = id => {
+        const key = delayed ? +id | 0 : +id >>> 0;
+        registry.pendingWork.delete(pending.get(key));
+        pending.delete(key);
+        return cancel(key);
+      };
+      return [start, stop];
+    };
+    [window.setTimeout, window.clearTimeout] = wrap(registry.nativeSetTimeout, registry.nativeClearTimeout, true);
+    // HTML timers share one handle map, so clearInterval can cancel a setTimeout too.
+    window.clearInterval = window.clearTimeout;
+    [window.requestAnimationFrame, window.cancelAnimationFrame] = wrap(
+      registry.nativeRequestAnimationFrame,
+      registry.nativeCancelAnimationFrame,
+      false,
+    );
+  }
   // What was offered to be acted on; `ids` also names hover targets and fingerprinted nodes.
   registry.controls ||= new WeakSet();
   // A change counter, so a read can tell later whether the page it described has moved since. Everything here can
@@ -182,10 +259,17 @@
     registry.lastMutation = performance.now();
     registry.lastInput = 0;
     const input = () => {
+      // `quiet` is set by a read and cleared by input, so the first input since a read is a new action's.
+      if (registry.quiet) registry.action++;
+      registry.inputTurn(registry.action);
       registry.quiet = false;
       registry.lastInput = performance.now();
     };
-    for (const type of ['pointerdown', 'mousedown', 'keydown', 'input', 'change', 'wheel', 'scroll']) {
+    // Chrome can deliver release in a later task than press, after the press's input turn has ended.
+    for (const type of [
+      'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'auxclick', 'dblclick',
+      'keydown', 'keyup', 'keypress', 'submit', 'input', 'change', 'wheel', 'scroll',
+    ]) {
       addEventListener(type, input, true);
     }
     new MutationObserver(records => {
@@ -631,6 +715,7 @@
     const view = e.ownerDocument.defaultView;
     const declared =
       e.hasAttribute('onclick') ||
+      typeof e.onclick === 'function' ||
       (view.getComputedStyle(e).cursor === 'pointer' &&
         (!e.parentElement || view.getComputedStyle(e.parentElement).cursor !== 'pointer'));
     if (!(declared || listened(e)) || e.parentElement?.closest(SELECTOR) || [...e.querySelectorAll(SELECTOR)].some(visible))

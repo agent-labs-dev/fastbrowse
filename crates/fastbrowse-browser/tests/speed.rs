@@ -287,6 +287,43 @@ async fn test_noop_input_reports_no_change() {
     h.close().await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn test_settle_tracks_click_work_when_release_is_a_later_task() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.page.navigate(settling_site(), None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        "document.body.innerHTML = '<button>Start</button>'; \
+         document.querySelector('button').onclick = () => setTimeout(() => { \
+         document.querySelector('button').textContent = 'Finished'; }, 150);",
+    )
+    .await;
+    h.observe().await;
+    let point = eval_active(&h.session, "(() => { const r = document.querySelector('button').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()").await;
+    let active = h.session.active_session_id().expect("active");
+    for event in ["mousePressed", "mouseReleased"] {
+        h.session
+            .send(
+                "Input.dispatchMouseEvent",
+                json!({"type":event,"x":point["x"],"y":point["y"],"button":"left","clickCount":1}),
+                Some(&active),
+            )
+            .await
+            .expect("mouse event");
+        if event == "mousePressed" {
+            h.page
+                .evaluate(&active, "new Promise(resolve => __fastbrowse.nativeSetTimeout(resolve, 0))")
+                .await
+                .expect("next task");
+            assert_eq!(eval_active(&h.session, "__fastbrowse.turn").await, json!(null));
+        }
+    }
+    h.page.settled_fingerprint().await.expect("settled");
+    assert_eq!(eval_active(&h.session, "document.querySelector('button').textContent").await, json!("Finished"));
+    h.close().await;
+}
+
 /// A page whose cross-site frame stops answering: its renderer spins once the test asks it to.
 fn hung_frame_site() -> &'static str {
     static SITE: OnceLock<String> = OnceLock::new();
@@ -462,13 +499,132 @@ async fn test_a_settle_does_not_re_read_for_each_of_the_pages_writes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_settle_waits_for_work_the_click_scheduled_before_its_first_mutation() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        "document.body.innerHTML = '<button>Delayed</button>'; \
+         document.querySelector('button').onclick = () => { \
+           setTimeout(() => { document.querySelector('button').textContent = 'Finished'; }, 150); };",
+    )
+    .await;
+    let obs = h.observe().await;
+    let result = h.page.act(&targeted(Operation::Click, &find(&obs, "Delayed").id), &obs).await.expect("act");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+    assert!(result.page_changed, "the click's scheduled work was still pending: {result:?}");
+    let after = h.observe().await;
+    assert!(after.controls.iter().any(|control| control.label == "Finished"));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_settle_waits_for_nested_input_work_and_ignores_cancelled_timers() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        "document.body.innerHTML = '<button>Nested</button>'; \
+         document.querySelector('button').onclick = () => { \
+           const cancelled = setTimeout(() => { throw new Error('cancelled'); }, 10000); \
+           clearInterval(String(cancelled)); \
+           requestAnimationFrame(() => { \
+             setTimeout(() => { \
+               Promise.resolve().then(() => { \
+                 setTimeout(value => { document.querySelector('button').textContent = value; }, 150, 'Nested finished'); \
+               }); \
+             }, 0); \
+           }); \
+         };",
+    )
+    .await;
+    let obs = h.observe().await;
+    let result = h.page.act(&targeted(Operation::Click, &find(&obs, "Nested").id), &obs).await.expect("act");
+    assert!(result.page_changed, "{result:?}");
+    let after = h.observe().await;
+    assert!(after.controls.iter().any(|control| control.label == "Nested finished"));
+    let pending = eval_active(&h.session, "window.__fastbrowse.pendingWork.size").await;
+    assert_eq!(pending, json!(0), "cancelled timers must release their pending work");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_loop_an_earlier_click_started_does_not_hold_a_later_idle_click() {
+    let _turn = turn().await;
+    // A poll that reschedules itself and a frame chain are the first click's work: the second click scheduled
+    // nothing, so its settle answers at once, as on an idle page.
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        "document.body.innerHTML = '<button>Loop</button><button>Idle</button>'; \
+         document.querySelector('button').onclick = () => { \
+           const poll = () => setTimeout(poll, 50); poll(); \
+           const spin = () => requestAnimationFrame(spin); spin(); };",
+    )
+    .await;
+    let obs = h.observe().await;
+    h.page.act(&targeted(Operation::Click, &find(&obs, "Loop").id), &obs).await.expect("loop");
+    let obs = h.observe().await;
+    let begun = Instant::now();
+    let result = h.page.act(&targeted(Operation::Click, &find(&obs, "Idle").id), &obs).await.expect("idle");
+    let elapsed = begun.elapsed().as_secs_f64();
+    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+    assert!(!result.page_changed, "{result:?}");
+    assert!(elapsed < 0.25, "the earlier click's loop held this one: {elapsed}");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_settle_reads_a_write_two_frames_after_the_click() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        "document.body.innerHTML = '<button>Frames</button>'; \
+         document.querySelector('button').onclick = () => requestAnimationFrame(() => requestAnimationFrame(() => { \
+           document.querySelector('button').textContent = 'Drawn'; }));",
+    )
+    .await;
+    let obs = h.observe().await;
+    let result = h.page.act(&targeted(Operation::Click, &find(&obs, "Frames").id), &obs).await.expect("act");
+    assert!(result.page_changed, "{result:?}");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_settle_does_not_wait_for_a_timer_due_after_its_deadline() {
+    let _turn = turn().await;
+    // A timer due after the settle's deadline cannot change what the settle reads, so it holds nothing.
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        "document.body.innerHTML = '<button>Later</button>'; \
+         document.querySelector('button').onclick = () => setTimeout(() => {}, 60000);",
+    )
+    .await;
+    let obs = h.observe().await;
+    let begun = Instant::now();
+    let result = h.page.act(&targeted(Operation::Click, &find(&obs, "Later").id), &obs).await.expect("act");
+    let elapsed = begun.elapsed().as_secs_f64();
+    assert!(!result.page_changed, "{result:?}");
+    assert!(elapsed < 0.25, "a timer due after the deadline held the settle: {elapsed}");
+    assert_eq!(eval_active(&h.session, "window.__fastbrowse.pendingWork.size").await, json!(1));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_settle_of_an_idle_page_pays_no_quiet_window() {
     let _turn = turn().await;
     // A page that was already quiet before the click has nothing to wait for, so the settle answers at once rather
     // than charging every action a fixed quiet window.
     let Some((h, proxy)) = proxied().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");
-    eval_active(&h.session, "document.body.innerHTML = '<button>Idle</button>'").await;
+    eval_active(&h.session, "document.body.innerHTML = '<button>Idle</button>'; setTimeout(() => {}, 10000);").await;
     let obs = h.observe().await;
     sleep(Duration::from_millis(300)).await;
     let start = proxy.len();
@@ -717,4 +873,38 @@ async fn test_a_page_handle_is_not_served_another_handles_newer_read() {
         "the first handle was served its own older read: {:?}",
         again.controls.iter().map(|c| &c.label).collect::<Vec<_>>()
     );
+}
+
+/// Reading a delay can run page code, so the native call must receive the value already converted for tracking.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_timer_delay_is_converted_once_before_scheduling() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h.session,
+        r#"
+      document.body.innerHTML = '<button>Delay</button>';
+      window.conversions = window.cancelConversions = 0;
+      window.cancelledFired = false;
+      document.querySelector('button').onclick = () => {
+        const id = setTimeout(() => window.cancelledFired = true, 75);
+        clearInterval({valueOf() { return ++window.cancelConversions === 1 ? id : 0; }});
+        setTimeout(
+          () => document.querySelector('button').textContent = 'Finished',
+          {valueOf() { return ++window.conversions === 1 ? 4294967446 : 10000; }}
+        );
+      };
+    "#,
+    )
+    .await;
+    let before = h.observe().await;
+    let result = h.page.act(&targeted(Operation::Click, &find(&before, "Delay").id), &before).await.expect("click");
+    assert!(result.page_changed, "{result:?}");
+    assert_eq!(
+        eval_active(&h.session, "[window.conversions, window.cancelConversions, window.cancelledFired]").await,
+        json!([1, 1, false])
+    );
+    assert!(h.observe().await.viewport_text.contains("Finished"));
+    h.close().await;
 }

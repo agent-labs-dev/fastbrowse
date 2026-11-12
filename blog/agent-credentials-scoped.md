@@ -3,9 +3,9 @@ title: Browser agent logins without sharing passwords
 description: "Three ways to let a fastbrowse run act in your account: a signed-in browser profile, a cloud profile, or a login typed from a Bitwarden vault."
 topic: Browsers and logins
 published: 2026-11-01
-updated: 2026-11-10
-verifiedAgainst: v0.10.1
-verifiedOn: 2026-11-10
+updated: 2026-11-12
+verifiedAgainst: v0.10.0
+verifiedOn: 2026-11-12
 ---
 
 fastbrowse offers three ways to let a run act in your account. In order of how much you hand over:

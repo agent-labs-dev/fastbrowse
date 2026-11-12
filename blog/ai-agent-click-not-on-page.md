@@ -3,9 +3,9 @@ title: Why an AI agent clicks the wrong button
 description: An agent that clicks screen coordinates can hit a control that is not there. How an indexed control set bounds what fastbrowse can click.
 topic: How the agent acts
 published: 2026-10-31
-updated: 2026-11-11
-verifiedAgainst: v0.10.1
-verifiedOn: 2026-11-11
+updated: 2026-11-12
+verifiedAgainst: v0.10.0
+verifiedOn: 2026-11-12
 ---
 
 An agent that clicks screen coordinates can hit a control that is not there. The click lands on something real, just not the button the task meant, and the run reports a wrong answer.
@@ -34,7 +34,7 @@ An action the judge is confident cannot be undone stops the run at `needs_confir
 For a run that clicked something unexpected, check whether the right control was in that list:
 
 - It was offered but not picked: reword the task.
-- It was never offered: the page is the problem, and a different start page usually fixes it.
+- It was never offered: inspect the page capture and check whether the control was visible and enabled before retrying.
 
 The control the agent clicked and the quote a result is checked against come from one reading of the page. [How it works](/docs/design/) covers the loop, [run statuses and exit codes](/docs/results/) lists each ending, and [the comparison page](/compare/) shows how other agents read a page.
 

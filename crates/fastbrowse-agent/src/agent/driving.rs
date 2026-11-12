@@ -255,7 +255,7 @@ impl Agent {
                     // The address is the raw observation's, and an error is written out of the process, so a secret
                     // typed earlier and echoed in another host is redacted here as in any other report.
                     let error = format!(
-                        "bot check at {}; it is not a sign-in and no credential passes it, and no other route to the task was found. Retry using an attached local browser or choose another source for this research.",
+                        "bot check at {}; it is not a sign-in and no credential passes it, and no other route to the task was found. Retry after the check clears or choose another source for the task.",
                         self.redact(&origin)
                     );
                     let evidence = self.wall_quotes(&raw).await;

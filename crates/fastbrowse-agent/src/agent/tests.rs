@@ -3892,7 +3892,8 @@ async fn test_a_commit_already_made_is_asked_about_as_a_repeat() {
     let requested: Vec<_> = seen.iter().filter(|instructions| instructions.contains("Does `task` ask")).collect();
     assert_eq!(requested.len(), 2, "{seen:?}");
     assert!(!requested[0].contains("already"), "{}", requested[0]);
-    assert!(requested[1].contains("already done this once"), "{}", requested[1]);
+    assert!(requested[1].contains("previously executed this control action once"), "{}", requested[1]);
+    assert!(requested[1].contains("Execution records dispatch, not whether"), "{}", requested[1]);
 }
 
 #[test]

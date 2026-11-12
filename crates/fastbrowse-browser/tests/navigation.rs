@@ -777,3 +777,30 @@ async fn test_the_pager_and_load_more_at_the_foot_of_a_long_listing_are_still_of
     assert!(labels.contains(&"Show more books"));
     h.close().await;
 }
+
+/// A hover cursor on decoration must not replace the parent's explicit click handler after pointer entry.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_onclick_property_keeps_its_target_when_a_child_gains_a_hover_cursor() {
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    let session_id = h.session.active_session_id().unwrap();
+    eval_value(
+        &h.session,
+        &session_id,
+        r#"(() => {
+      document.body.innerHTML = `<style>.tile {width:200px;height:100px}.tile:hover img {cursor:pointer}</style>
+        <div class="tile"><img alt="Choose a game" width="200" height="100"></div><output id="result"></output>`;
+      document.querySelector('.tile').onclick = () => document.querySelector('#result').textContent = 'Chosen';
+    })()"#,
+    )
+    .await;
+    let before = h.observe().await;
+    let target = find(&before, "Choose a game");
+    let result = h.page.act(&click(&target.id), &before).await.expect("click");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+    assert_eq!(
+        eval_value(&h.session, &session_id, "document.querySelector('#result').textContent").await,
+        json!("Chosen")
+    );
+    h.close().await;
+}

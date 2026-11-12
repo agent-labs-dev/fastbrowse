@@ -1602,8 +1602,9 @@ impl CdpPage {
     }
 
     /// The page script for one settle: a promise the page resolves on its own frame and mutation events once the
-    /// document is interactive, has not mutated for `SETTLE_QUIET_SECONDS`, and shows no progress indicator (or has
-    /// shown one for `SETTLE_LOADING_SECONDS`), then samples the fingerprint in the same call. `seconds` bounds it.
+    /// document is interactive, has not mutated for `SETTLE_QUIET_SECONDS`, shows no progress indicator (or has
+    /// shown one for `SETTLE_LOADING_SECONDS`) and has run the timers and frame callbacks the action's input scheduled
+    /// that are due before the deadline, then samples the fingerprint in the same call. `seconds` bounds it.
     ///
     /// The `fastbrowse:settle` marker is what the integration test matches to count settle reads.
     fn settle_script(&self, seconds: f64) -> String {
@@ -1626,7 +1627,9 @@ impl CdpPage {
                const ready = document.readyState !== 'loading'; const held = busy(); \
                const last = r.lastMutation || 0; \
                const moved = last >= (r.lastInput || 0); \
-               if (ready && !held && (!moved || now - last >= quiet) && frameAt >= last) return done(); \
+               const drawing = now - Math.max(last, r.lastInput || 0) < quiet; \
+               const pending = Boolean(r.pendingBefore && r.pendingBefore(deadline, drawing)); \
+               if (ready && !held && !pending && (!moved || now - last >= quiet) && frameAt >= last) return done(); \
                if (now >= deadline || (held && now - started >= loading)) return done(); \
                r.nativeRequestAnimationFrame(t => {{ frameAt = t; check(); }}); }}; \
              const timer = r.nativeSetTimeout(done, {deadline}); \

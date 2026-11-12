@@ -252,7 +252,10 @@ fn gate_questions(
         .count();
     if done > 0 {
         let times = if done == 1 { "once".to_string() } else { format!("{done} times") };
-        action += &format!("This run has already done this {times}.\n");
+        action += &format!(
+            "This run previously executed this control action {times}. Execution records dispatch, not whether \
+             the task's requested result happened. Judge that from the page and the recorded effects.\n"
+        );
     }
     (irreversible, action, lasting)
 }

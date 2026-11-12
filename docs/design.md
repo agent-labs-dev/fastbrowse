@@ -24,6 +24,8 @@ Jev judges every model-selected click, drag or key chord, including links, navig
 confirm, prompt and before-unload dialogs. Code-selected pagination is exempt. One rule applies: the action
 proceeds when Jev judges it not irreversible, or when the run is authorized and Jev judges the task asked
 for it; otherwise the run stops at `needs_confirmation`. The irreversibility and task-authorization questions receive the action's control context and drag destination, the non-sensitive value submitted with Enter, and non-sensitive values from the submitted form. Sensitive values are excluded.
+The question includes creating an authenticated session and granting another site access to an account. Opening
+a sign-in page alone does neither. A task that only asks whether a page is logged in does not authorize signing in.
 
 A submission of a form that holds more than one password field changes an account's credentials whatever
 the page calls it, so Jev is not asked whether it is irreversible: an unauthorized run stops at
@@ -36,7 +38,7 @@ cannot argue an action through. An authorized run also asks, in the same request
 the action only in some state of the page or site ("reply if nobody has answered yet"). When it does, or the run
 has already carried out a commit, and the action commits or leaves something the site keeps, a second Jev request
 asks, as a choice, whether in the state the page shows the task says to do it with these values, says not to, has
-been done already by the run's earlier steps and is not asked for again, or cannot be told. It does not
+already produced the requested result according to the page or recorded effects and is not asked for again, or cannot be told. A prior executed input is reported as an attempt, not proof that its result happened. It does not
 say the action is conditional, so a step the task asks for outright before a condition on a later one is
 judged as asked. The same request asks which of the task's values the action uses: those to use at first, or
 those the task gives only once something happens ("if the site rejects anything, use SW1A 1AA"). For the later
@@ -303,6 +305,10 @@ A navigation retains its observed source page for decisions on the destination, 
 A navigation or a step settles once no frame of the tab, embedded frames included, is still loading its document
 up to DOMContentLoaded, within the same settle deadline. A frame that loads after its page is ready is part of what
 the navigation opened, so its controls are in the first observation and the next step's effect does not claim them.
+The step also tracks function timers and animation frames scheduled during its input task, including their
+nested callbacks. Timers due before the settle deadline hold the wait; frame chains use the existing quiet
+window so an endless animation can settle. Cancelled callbacks, callbacks from earlier actions, timers due
+after the deadline, unrelated page timers and the cookie-banner helper's background timers do not hold it open.
 
 An empty observation waits on loading events before action history and progress are recorded.
 The same blank state is waited out once until a readable page appears, so a later navigation gets its own wait.
