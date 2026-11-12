@@ -95,3 +95,44 @@ Public projections contain ids, source hashes, grades, completion, build identit
 model throughput and the input and output token counts behind that throughput only. Answers, page content,
 credentials, local paths and private trace links never enter a public dataset or page. Langfuse upload is
 not publication approval. Read-back checks must verify an upload before marking tracking complete.
+
+### Manual CI diagnostics
+
+The existing `Evals` workflow accepts optional `probe` and `fill_tasks` inputs on
+`workflow_dispatch`. Both run on Blacksmith after the fixture checks. Every successful
+invocation still covers all 41 fixture tasks at least three times, stability and
+publication. Diagnostic results never enter the fixture rows or a publication candidate.
+
+`probe` is a JSON object with `task`, optional `start`, `fetch`, `allowed_origins`, `output_schema` and `settings`.
+`settings` accepts only `FASTBROWSE_DECISION_SOURCE`, `FASTBROWSE_DECISION_MODEL`,
+`FASTBROWSE_LLM_PROVIDER`, `FASTBROWSE_LLM_MODEL` and `FASTBROWSE_LLM_REASONING`.
+Credentials come from CI secrets. Defaults match the campaign backend's `run_settings`:
+provider keys excluding AI Gateway, fastbrowse options and an explicitly selected Jev
+source. Set the model options to the retained request's values when comparing runs;
+a new request is a controlled diagnostic, not a replay of a missing original request.
+The schema has an object root and uses the public API's supported JSON Schema subset;
+an offline public API preflight refuses unsupported constraints before fixture spending.
+Its HTTP transport and browser access callback refuse all network and browser work. The helper
+calls public `run_task` with a local browser or fetch, the supplied schema and
+`Limits(max_dollars=...)`. Supply a separate finite positive `probe_budget`.
+The encrypted receipt retains the result, full `traced()` events, costs, checkout SHA
+and loaded native extension hash. Exceptions and unknown costs retain the full budget
+as unresolved, rather than counting a missing charge as zero.
+
+`fill_tasks` is a JSON array of existing fixture task IDs. Supply a separate finite
+positive `fill_budget`. This delegates to `bench fill`: its existing budget checks
+between tasks, so an active task and its passes can exceed it. It is not a hard
+spending ceiling. Admit that exposure separately before dispatch. The helper refuses
+a successful diagnostic if coverage is incomplete, a cassette has misses, grading
+fails, costs are unpriced or reported spending exceeds the approved figure. The
+receipt conservatively retains the full unresolved budget hold for reconciliation.
+No scheduled invocation enables either diagnostic or adds its spending.
+
+Both diagnostics require `diagnostic_certificate`, a public PEM encryption certificate
+whose private key the maintainer holds. Input validation tests CMS encryption before
+any paid call. Raw results, traces, fill logs and cassettes are archived and encrypted
+with OpenSSL CMS AES-256; only `diagnostics.cms` enters the workflow artifact beside
+the existing fixture files. Do not put secrets in dispatch inputs. Decrypt the downloaded
+file in private scratch with `openssl cms -decrypt -binary -inform DER -in diagnostics.cms
+-recip recipient.pem -inkey recipient.key -out diagnostics.tar.gz`. Keep the private key
+outside GitHub. These options do not dispatch, publish results or update cassettes in Git.
