@@ -567,6 +567,7 @@ pub trait Page: Send + Sync {
     fn capture(&self) -> BoxFuture<'_, PageResult<Capture>>;
 
     /// Dispatch at most once. Returns STALE or COVERED without dispatching when guards fail.
+    /// A Wait passed directly here has no deadline; use `wait` for a bounded wait or cancel the action.
     fn act<'a>(&'a self, action: &'a Action, observation: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>>;
 
     /// Dispatch a WAIT that lasts until the page changes by itself, for at most `seconds` (`f64::INFINITY` for a
