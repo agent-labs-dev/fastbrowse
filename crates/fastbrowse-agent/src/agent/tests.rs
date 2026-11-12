@@ -2824,7 +2824,7 @@ impl LLMClient for CoverageComposer {
             let reply = match purpose {
                 LLMPurpose::ImageRead => json!({"text": "premium 3.459 per gallon"}),
                 LLMPurpose::Compose => json!({
-                    "claims": [{"text": "Premium is 3.459 per gallon", "evidence_ids": [evidence_id.unwrap_or_default()]}]
+                    "claims": [{"text": ["Premium is 3.459 per gallon"], "evidence_ids": [evidence_id.unwrap_or_default()]}]
                 }),
                 _ => json!(null),
             };
@@ -3215,7 +3215,7 @@ impl LLMClient for PopulationWriter {
         _: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         let reply = match purpose {
-            LLMPurpose::Compose => json!({"claims": [{"text": "41,798,407", "evidence_ids": [self.0]}]}),
+            LLMPurpose::Compose => json!({"claims": [{"text": ["41,798,407"], "evidence_ids": [self.0]}]}),
             _ => json!(null),
         };
         Box::pin(async move {
@@ -4139,7 +4139,7 @@ impl LLMClient for WritesRecord {
                 ledger.reserve(CostComponent::Llm, 0.0, 1)?;
             }
             let data = schema
-                .validate_json(&json!({"claims": [{"text": self.0, "evidence_ids": ["e0"]}]}).to_string())
+                .validate_json(&json!({"claims": [{"text": [self.0], "evidence_ids": ["e0"]}]}).to_string())
                 .map_err(LLMError::Failed)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
@@ -5824,7 +5824,7 @@ impl LLMClient for RepairComposer {
                 ledger.reserve(CostComponent::Llm, 0.0, 1)?;
             }
             let data = schema
-                .validate_json(&json!({"claims": [{"text": text, "evidence_ids": evidence_ids}]}).to_string())
+                .validate_json(&json!({"claims": [{"text": [text], "evidence_ids": evidence_ids}]}).to_string())
                 .map_err(LLMError::Failed)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
@@ -5853,9 +5853,9 @@ impl LLMClient for GrowingComposer {
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         let second = self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed) > 0;
         Box::pin(async move {
-            let mut claims = vec![json!({"text": "Record B: 34", "evidence_ids": ["e0"]})];
+            let mut claims = vec![json!({"text": ["Record B: 34"], "evidence_ids": ["e0"]})];
             if second {
-                claims.push(json!({"text": "Record C: 57", "evidence_ids": ["e1"]}));
+                claims.push(json!({"text": ["Record C: 57"], "evidence_ids": ["e1"]}));
             }
             let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
@@ -5897,7 +5897,7 @@ impl LLMClient for TwoClaimComposer {
         _: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         Box::pin(async move {
-            let claims = json!([{"text": "Record B: 34", "evidence_ids": ["e0"]}, {"text": "Record A: 99", "evidence_ids": ["e0"]}]);
+            let claims = json!([{"text": ["Record B: 34"], "evidence_ids": ["e0"]}, {"text": ["Record A: 99"], "evidence_ids": ["e0"]}]);
             let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
@@ -7226,8 +7226,7 @@ impl LLMClient for AlreadyExists {
         _: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         Box::pin(async move {
-            let claims =
-                json!([{"text": "The project already exists, so no new project was created.", "evidence_ids": ["e0"]}]);
+            let claims = json!([{"text": ["The project already exists, so no new project was created."], "evidence_ids": ["e0"]}]);
             let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
