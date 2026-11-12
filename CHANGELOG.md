@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Manual eval diagnostics accept separate approved probe and cassette-fill budgets and encrypt raw artifacts while retaining the full fixture gate.
+
 - Browser and HTTP captures end earlier heading context at the same or deeper rank when reading a repeated record, including a group heading with the same rank. Browser heading paths also follow heading ranks when a page skips levels.
 
 - String field extraction preserves long quotes once with labeled boundaries when repeated prefixes and suffixes would exceed the decision provider's context. Selected values still copy exact source spans ([#1068](https://github.com/agent-labs-dev/fastbrowse/issues/1068)).

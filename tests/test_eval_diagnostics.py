@@ -76,8 +76,9 @@ def test_probe_preserves_schema_trace_cost_and_budget_on_failure(tmp_path, monke
 
     async def run(task, **kwargs):
         calls.append((task, kwargs))
-        assert collecting() is not None
-        collecting().append({"event": "http", "request": "full original payload"})
+        events = collecting()
+        assert events is not None
+        events.append({"event": "http", "request": "full original payload"})
         raise RuntimeError("provider failure")
 
     monkeypatch.setattr(fastbrowse, "run_task", run)
