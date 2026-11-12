@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- String field extraction preserves long quotes once with labeled boundaries when repeated prefixes and suffixes would exceed the decision provider's context. Selected values still copy exact source spans ([#1068](https://github.com/agent-labs-dev/fastbrowse/issues/1068)).
+
 - With publisher access configured, CI can submit Chrome extension updates for staged Web Store review with short-lived credentials. The package builder omits the development key, and publication requires the matching approved version ([#1063](https://github.com/agent-labs-dev/fastbrowse/issues/1063)).
 
 - The eval harness removes its obsolete gateway route and follows Parallax's OpenRouter Jev interface while preserving the proved Opus-only v5 request and receipt identity. The dev16 dependency lock records the published PyPI artifacts ([#889](https://github.com/agent-labs-dev/fastbrowse/issues/889)).
