@@ -136,6 +136,8 @@ build. So a run over HTTP that took no step cannot finish a task that asks for o
 browser does it.
 `fetch` forbids the browser, and `browser` starts one from the first step.
 Fetched documents have no pixels, so optional screenshots and step frames are skipped.
+JSON responses, including `application/*+json`, and other `text/*` responses are read as quoted text blocks.
+JSON and delimited data keep their whitespace and literal values, without HTML parsing or numeric conversion.
 
 Browser captures record an icon-only link's destination with nearby container text, passing through empty layout
 wrappers. The search stops at a paragraph even when it is empty, and never uses the page root as nearby text.
@@ -479,6 +481,16 @@ selected by `binaryPath`, `FASTBROWSE_BINARY` or its platform package, and a Rus
 first in `main`. A program that registers no helper still keeps the PDF, and the observation says its text was not
 read (`[Downloaded file: ...] The file was kept, but its text was not read: ...`), naming why: no reader, a read
 past 10 seconds, a file that is no PDF, or a reader that did not start or ended without an answer.
+
+Downloaded XLSX workbooks, DOCX documents and ZIP archives use the same killable helper. Workbooks retain each
+worksheet's name and each stored cell's row, column and value. Empty coordinates are omitted, so sparse sheets
+are read without allocating the rectangle between their cells. Formulas are not evaluated. Word
+text retains paragraph, table-cell, tab and line-break boundaries, with its package part named. Archive members
+are read in memory, never extracted onto the host. Text, CSV, TSV, JSON, XML, Markdown and HTML members are read
+as UTF-8 text; XLSX, DOCX and PDF members use their document readers. Other or invalid members remain named with
+an explicit notice that their contents were not read. Nested archives are not expanded. Generic or missing MIME types use the download filename to select these readers.
+The configured `max_download_bytes` also bounds aggregate decompressed container bytes and extracted output; a
+document exceeding it is reported unread, rather than returning truncated text.
 
 The cloud browser ignores `Browser.setDownloadBehavior(deny)`, so bytes come from response interception, never from the remote filesystem. Host-path `DOM.setFileInputFiles` is only valid for a browser on the same machine.
 

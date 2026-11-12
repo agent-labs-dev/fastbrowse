@@ -145,10 +145,44 @@ async fn test_plain_text_is_read_as_one_block() {
 
 #[tokio::test]
 async fn test_a_page_that_is_not_html_is_left_to_the_browser() {
-    let error = fetched(&client("{}", 200, "application/json"), "https://shop.example.com/api").await.unwrap_err();
+    let error =
+        fetched(&client("binary", 200, "application/octet-stream"), "https://shop.example.com/api").await.unwrap_err();
     assert!(error.0.contains("not a document read as text"), "{error}");
     let error = fetched(&client("gone", 404, "text/html"), "https://shop.example.com/missing").await.unwrap_err();
     assert!(error.0.contains("HTTP 404"), "{error}");
+}
+
+#[tokio::test]
+async fn test_json_responses_keep_their_exact_values_in_citable_spans() {
+    let raw =
+        "{\"name\":\"A  & B\",\"release\":{\"version\":\"2.1\",\"date\":\"2026-11-12\"},\"count\":9007199254740993}";
+    for mime in ["application/json", "application/problem+json; charset=utf-8", "text/csv"] {
+        let capture =
+            fetched(&client(raw, 200, mime), "https://shop.example.com/api").await.expect("readable response");
+        assert!(capture.text.contains(raw));
+        assert_eq!(capture.blocks.len(), 1);
+        let block = &capture.blocks[0];
+        let quoted: String =
+            capture.text.chars().skip(block.start as usize).take((block.end - block.start) as usize).collect();
+        assert_eq!(quoted, raw);
+    }
+}
+
+#[tokio::test]
+async fn text_and_json_endpoints_can_negotiate_a_supported_response() {
+    for mime in ["application/json", "text/csv"] {
+        let http = serving(move |request| {
+            let ranges: Vec<_> = request
+                .header("accept")
+                .unwrap_or_default()
+                .split(',')
+                .map(|part| part.split(';').next().unwrap().trim())
+                .collect();
+            let accepted = ranges.contains(&mime) || (mime.starts_with("text/") && ranges.contains(&"text/*"));
+            Response::new(if accepted { 200 } else { 406 }, "{\"value\":42}").with_header("content-type", mime)
+        });
+        assert!(fetched(&http, "https://api.example.test/value").await.is_ok(), "{mime}");
+    }
 }
 
 #[tokio::test]

@@ -241,7 +241,10 @@ async fn serve(http: &Http, url: &str, allowed_origins: Option<&[String]>, secon
     // A server refuses a client that does not name itself: Wikipedia answers 403 to a request with no User-Agent and
     // 200 to one that names it. The version is the crate's own.
     let headers = [
-        ("accept".to_string(), "text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8".to_string()),
+        (
+            "accept".to_string(),
+            "text/html,application/xhtml+xml;q=0.9,application/json;q=0.8,text/*;q=0.8,*/*;q=0.1".to_string(),
+        ),
         ("accept-encoding".to_string(), "gzip, deflate".to_string()),
         ("user-agent".to_string(), format!("fastbrowse/{}", env!("CARGO_PKG_VERSION"))),
     ];
@@ -283,13 +286,15 @@ async fn serve(http: &Http, url: &str, allowed_origins: Option<&[String]>, secon
     let final_url = url::Url::parse(&target).map_or(target.clone(), String::from);
     outside(&final_url, allowed_origins, "a redirect left for ")?;
     let body = decode(content_type, &body, HTML_TYPES.contains(&mime.as_str()));
-    if mime == "text/plain" {
+    let json = mime == "application/json" || (mime.starts_with("application/") && mime.ends_with("+json"));
+    if (mime.starts_with("text/") && !HTML_TYPES.contains(&mime.as_str())) || json {
         if text::strip(&body).is_empty() {
             return Err(refused("the document is empty"));
         }
         let found = Found {
             kind: BlockKind::Paragraph,
-            text: clean(&body),
+            // JSON strings and delimited fields carry significant whitespace, which HTML's cleanup would change.
+            text: if json || mime != "text/plain" { body } else { clean(&body) },
             heading_path: Vec::new(),
             href: None,
             links: Vec::new(),
