@@ -130,6 +130,23 @@ TARGET_ID = re.compile(r"\b[0-9A-F]{32}\b")
 numbered by first appearance in the body as the agent wrote it, before members are sorted (sorting first would
 number them by the random ids themselves), and swapped back into the response (`translate_targets`)."""
 
+NOTE_ID = re.compile(r"\b([0-9a-f]{64}:\d+:\d+):([0-9a-f]{16})(?::([0-9a-f]{16}))?\b")
+"""A note id (`evidence_id` in `fastbrowse-agent`). Its fourth part digests the page's address, which holds the
+fixture server's port, and an optional fifth part digests a control's frame, whose key Chrome makes up for a
+cross-site frame. Both change every run, and the port rule cannot reach inside a digest, so every request citing a
+note missed. The digests are numbered by first appearance, as target ids are, and swapped back into the response
+(`translate_notes`). Numbering hides no change of control: every note the agent renders with a control writes that
+control's dump beside its id (`control_context=`), and its source block follows from the span the id keeps, so a quote
+moved to another control still changes the key."""
+
+
+def _note_digests(match: re.Match[str]) -> list[str]:
+    return [digest for digest in match.group(2, 3) if digest]
+
+
+def _rewrite_note(match: re.Match[str], digests: dict[str, str]) -> str:
+    return ":".join([match.group(1), *(digests.get(digest, digest) for digest in _note_digests(match))])
+
 
 def _as_written(body: bytes | str | Any) -> str:
     if isinstance(body, bytes):
@@ -142,12 +159,20 @@ def target_ids(body: bytes | str | Any) -> list[str]:
     return list(dict.fromkeys(TARGET_ID.findall(_as_written(body))))
 
 
+def note_digests(body: bytes | str | Any) -> list[str]:
+    """The digests in the note ids a request names, in the order it first names them."""
+    return list(dict.fromkeys(d for match in NOTE_ID.finditer(_as_written(body)) for d in _note_digests(match)))
+
+
 def canonical_json(body: bytes | str | Any) -> str:
     """The body as one canonical JSON string. A body that is not JSON is canonicalized as text."""
     text = _as_written(body)
     numbers = {target: f"<target {n}>" for n, target in enumerate(target_ids(text), 1)}
     if numbers:
         text = TARGET_ID.sub(lambda match: numbers[match.group()], text)
+    digests = {digest: f"<digest {n}>" for n, digest in enumerate(note_digests(text), 1)}
+    if digests:
+        text = NOTE_ID.sub(lambda match: _rewrite_note(match, digests), text)
     try:
         parsed = json.loads(text)
     except ValueError:
@@ -161,6 +186,15 @@ def translate_targets(response: str, recorded: Any, requested: Any) -> str:
     if not swaps:
         return response
     return TARGET_ID.sub(lambda match: swaps.get(match.group(), match.group()), response)
+
+
+def translate_notes(response: str, recorded: Any, requested: Any) -> str:
+    """A recorded response with the note ids it cites rewritten to the digests the new request named, so a composed
+    answer cites notes the replayed run holds."""
+    swaps = dict(zip(note_digests(recorded), note_digests(requested), strict=False))
+    if not swaps:
+        return response
+    return NOTE_ID.sub(lambda match: _rewrite_note(match, swaps), response)
 
 
 def translate_origin(response: str, recorded_origin: str | None, requested_origin: str | None) -> str:
@@ -482,7 +516,7 @@ class Proxy:
                 self._served[key] = index + 1
                 exchange = stored[min(index, len(stored) - 1)]
                 hold = exchange.latency if self._latency is Latency.RECORDED else 0.0
-                text = translate_targets(exchange.body, exchange.request, body)
+                text = translate_notes(translate_targets(exchange.body, exchange.request, body), exchange.request, body)
                 if exchange.fixture_origin and self._requested_origin:
                     recorded, requested = exchange.fixture_origin, self._requested_origin
                     text = translate_response_origin(text, recorded, requested)

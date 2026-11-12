@@ -489,6 +489,33 @@ def test_chrome_target_ids_are_numbered_and_swapped_back() -> None:
         assert _post(base, JEV, state(new_a, new_b)).json() == {"choice": new_b}
 
 
+def test_note_ids_are_keyed_apart_from_the_digests_that_change_every_run() -> None:
+    account, orders = "9c2068632cb0cf36db87072651e313e07cf9927d5edfd8fc862a55740229938e", "e3b0" * 16
+    # The same notes on a fixture served from another port, with a control in a frame Chrome named anew: only each
+    # id's address digest and the control's frame digest differ.
+    old = {"account": "7d4ed89f79ff865f", "orders": "2db15fe124ef7eb5", "frame": "0a1a3e6c59ff288b"}
+    new = {"account": "9b6003106a65a436", "orders": "f68234783bb37d0e", "frame": "78b05301b2a1baae"}
+
+    def notes(run: dict[str, str]) -> dict[str, str]:
+        return {
+            "notes": f'- [{account}:0:12:{run["account"]}] quote="Your account"\n'
+            f'- [{account}:13:21:{run["account"]}] quote="Password"\n'
+            f'- [{orders}:0:6:{run["orders"]}] quote="Orders"\n'
+            f'- [{orders}:7:13:{run["orders"]}:{run["frame"]}] quote="Cancel"'
+        }
+
+    assert request_key(LLM, notes(old)) == request_key(LLM, notes(new))
+    # Notes from two pages are still told apart from notes that name one page twice.
+    assert request_key(LLM, notes(old)) != request_key(LLM, notes(old | {"orders": old["account"]}))
+    cassette = Cassette(task="t")
+    cited = json.dumps({"cites": [f"{orders}:0:6:{old['orders']}", f"{orders}:7:13:{old['orders']}:{old['frame']}"]})
+    cassette.exchanges.append(_exchange(LLM, notes(old), cited))
+    with Proxy(cassette) as base:
+        assert _post(base, LLM, notes(new)).json() == {
+            "cites": [f"{orders}:0:6:{new['orders']}", f"{orders}:7:13:{new['orders']}:{new['frame']}"]
+        }
+
+
 def test_a_run_still_going_is_not_compared(tmp_path: Path) -> None:
     path = tmp_path / "run.json"
     path.write_text(json.dumps({"meta": {}, "tasks": [{"task": "a"}]}))
