@@ -72,6 +72,13 @@ impl AxIndex {
         self.dirty_backend_ids.remove(&backend_id);
         true
     }
+
+    pub(crate) fn branch_complete(&self, backend_id: i64, nodes: &[AxNode]) -> bool {
+        let Some(root_id) = self.by_backend_id.get(&backend_id) else { return false };
+        let supplied: HashSet<&str> = nodes.iter().map(|node| node.node_id.as_str()).collect();
+        let Some(root) = nodes.iter().find(|node| &node.node_id == root_id) else { return false };
+        root.child_ids.iter().all(|child| supplied.contains(child.as_str()))
+    }
 }
 
 #[cfg(test)]
@@ -105,5 +112,6 @@ mod tests {
         let mut removed = node("root", 10); removed.child_ids = vec!["a".into()];
         assert!(index.merge_branch(10, vec![removed, node("a", 11)], 3));
         assert_eq!(index.node_for_backend(12), None);
+        assert!(!index.branch_complete(10, &[node("root", 10)]));
     }
 }
