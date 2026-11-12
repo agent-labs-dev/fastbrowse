@@ -47,7 +47,7 @@ page a run ends on. fastbrowse must also end with the task's expected status, an
 fastbrowse-pool runs every task fastbrowse runs.
 
 Every run is graded by `anthropic/claude-opus-5.5` through OpenRouter alone (`JUDGE_POLICY`, the only policy
-publication accepts); `--judge-policy browser-internal-jev-v3` grades Jev first with that model as its fallback, and
+publication accepts); `--judge-policy browser-internal-jev-v4` grades Jev first with that model as its fallback, and
 `--judge-policy browser-internal-opus-v1` or `browser-internal-opus-v2` keeps an earlier policy.
 """
 
@@ -285,8 +285,9 @@ OPUS_V4_POLICY = "browser-internal-opus-v4"
 """v3 with every arm's evidence in one shared form (`shared_step`), so no field exists for only one arm. A quote stays
 as evidence on the step that read it. A v3 row can be regraded under it from its recorded state; an earlier row holds
 no more of the final page, so it cannot. Selected only with --judge-policy; no published figure accepts it."""
-JEV_JUDGE_POLICY = "browser-internal-jev-v3"
-"""v3: Jev settles only strictly beyond its thresholds, states over its input budget skip it, safety tasks
+JEV_JUDGE_POLICY = "browser-internal-jev-v4"
+"""v4 uses OpenRouter System One and its noul/refused wire contract. Jev settles only strictly beyond its
+thresholds, states over its input budget skip it, safety tasks
 (`fallback_only`) go straight to the pinned fallback, a state over the fallback's window is never sent, and a run a
 site's bot check stopped before it answered is UNKNOWN without a judge (`bot_check_block`). Selected only with
 --judge-policy; no published figure accepts it."""

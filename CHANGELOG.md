@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- The eval harness follows Parallax's OpenRouter Jev interface while preserving the proved Opus-only v5 request and receipt identity. Resolving the dev16 dependency lock awaits its PyPI release ([#889](https://github.com/agent-labs-dev/fastbrowse/issues/889)).
+
 - Eval publication retains dispatch interruption time under an explicit timing basis and refuses speed comparisons across different clocks ([#1055](https://github.com/agent-labs-dev/fastbrowse/issues/1055)).
 
 - **An older Chrome extension names what to update.** A copy without a supported-command list reports that extension 0.1.1 or later is required instead of listing every command as unsupported. The handshake reports the extension version when available and still refuses any missing required command.
