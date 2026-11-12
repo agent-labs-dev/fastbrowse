@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-12
+
 - Browserless runs read a JSON response by its structure, so a single value such as a package's name can be selected and cited alone, under its key path. Field choices and read passages also show the headings a value sits under, and a page with more candidates than one Jev request can describe is chosen over a series of requests that each fit, instead of failing as too large ([#1069](https://github.com/agent-labs-dev/fastbrowse/issues/1069)).
 
 - A JSON response's array items are read as whole records, one per item, so a page such as a PyPI release list is a few hundred records rather than thousands of separate keys and values. Counts, totals and comparisons judge each record beside its own page's labels, so they are worked out on large pages instead of being left unanswered.
