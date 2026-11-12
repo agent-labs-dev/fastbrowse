@@ -8080,7 +8080,11 @@ async fn a_known_page_that_redirects_is_reached_by_the_address_it_was_opened_at(
 /// only "a key the task gives", a run asked to nudge a volume slider had nothing to copy.
 #[tokio::test]
 async fn test_a_press_on_a_slider_picks_one_of_the_keys_its_role_supports() {
-    let slider = Control { value: Some("30".into()), ..Control::new("v", "slider", "Volume", [Operation::Click]) };
+    let slider = Control {
+        value: Some("30".into()),
+        context: Some("orientation: vertical".into()),
+        ..Control::new("v", "slider", "Volume", [Operation::Click])
+    };
     let page = observation(std::slice::from_ref(&slider));
     // Every gate question is answered no: a step of a slider commits nothing.
     let jev = Arc::new(FirstChoice { wants: Some("ArrowRight"), noul: Some(0.0), ..Default::default() });
@@ -8091,7 +8095,9 @@ async fn test_a_press_on_a_slider_picks_one_of_the_keys_its_role_supports() {
     assert_eq!((action.operation, action.text.as_deref()), (Operation::Press, Some("ArrowRight")));
     assert_eq!(state.text_source, Some(fastbrowse_core::recipe::RecipeText::Literal("ArrowRight".into())));
     let asked = jev.asked.lock().unwrap();
-    assert!(asked.iter().any(|q| q.contains("Which key should be pressed in") && q.contains("a slider supports")));
+    assert!(asked.iter().any(|q| q.contains("Which key should be pressed in")
+        && q.contains("a slider supports")
+        && q.contains("orientation: vertical")));
 }
 
 /// A role's keys do not take the place of a chord the task states: Jev says the task gives it, and it is copied.

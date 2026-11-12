@@ -342,6 +342,11 @@
               e.getAttribute('aria-selected'),
             ]),
           );
+        // A role key can change only the widget's announced value, without editing text or an input field.
+        if (
+          (e.matches('input[type="range"],input[type="number"]') || ['slider', 'spinbutton'].includes(e.getAttribute('role'))) &&
+          e.checkVisibility({checkVisibilityCSS: true})
+        ) hashText(JSON.stringify([e.matches('input[type="range"],input[type="number"]') ? e.value : null, e.getAttribute('aria-valuenow'), e.getAttribute('aria-valuetext')]));
         // readMedia lists the players of documents only, not of shadow roots.
         if (root.nodeType === Node.DOCUMENT_NODE && (e.tagName === 'AUDIO' || e.tagName === 'VIDEO'))
           clocks.push(Math.round(e.currentTime * 10) / 10);
@@ -1660,6 +1665,16 @@
     }
     const column = columns.get(table).get(cell);
     if (column) c.context = [c.context, `column: ${column}`].filter(Boolean).join('; ');
+  }
+
+  // A tab or option inherits its key direction from the composite that owns it, not from its own role.
+  for (const c of controls) {
+    if (!c.operations.includes('press')) continue;
+    const e = registry.nodes.get(c.id);
+    const owner = e?.closest('[role="tablist"],[role="listbox"],[role="radiogroup"],[role="menu"],[role="menubar"],[role="tree"],[role="treegrid"],[role="grid"]');
+    const orientation = e?.getAttribute('aria-orientation') ?? owner?.getAttribute('aria-orientation');
+    if (orientation === 'vertical' || orientation === 'horizontal')
+      c.context = [c.context, `orientation: ${orientation}`].filter(Boolean).join('; ');
   }
 
   // A wheel at the viewport centre misses panels and horizontal lists. Index the browser's actual scroll owners,
