@@ -1709,6 +1709,7 @@ async fn test_role_keys_step_a_native_slider_and_focus_a_composite_widget() {
         Action { target_id: Some(slider.id.clone()), text: Some("ArrowRight".into()), ..Action::new(Operation::Press) };
     let result = h.page.act(&press, &before).await.expect("slider press");
     assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+    assert!(result.page_changed, "a range value change must count as progress: {result:?}");
     let after = h.observe().await;
     assert_eq!(find(&after, "Volume").value.as_deref(), Some("43"));
     let grid = find(&after, "Sheet");
@@ -1734,5 +1735,30 @@ async fn test_role_keys_step_a_native_slider_and_focus_a_composite_widget() {
     let returned = h.observe().await;
     assert_eq!(find(&returned, "First").focused, Some(true));
     assert_ne!(moved.page_key, returned.page_key);
+    h.close().await;
+}
+
+#[tokio::test]
+async fn test_role_keys_capture_orientation_and_count_custom_slider_progress() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(&h.page, r#"
+      document.body.innerHTML = '<div role="slider" style="width:100px;height:20px" tabindex="0" aria-label="Level" aria-valuenow="2" aria-orientation="vertical"></div>'
+        + '<div role="tablist" aria-label="Sections" tabindex="0" aria-orientation="vertical"><button role="tab" tabindex="0">Summary</button></div>';
+      document.querySelector('[role=slider]').addEventListener('keydown', e => {
+        if (e.key === 'ArrowUp') e.currentTarget.setAttribute('aria-valuenow', '3');
+      }); true
+    "#).await;
+    let before = h.observe().await;
+    let slider = find(&before, "Level");
+    assert!(slider.context.as_deref().is_some_and(|context| context.contains("orientation: vertical")));
+    let tab = find(&before, "Summary");
+    assert!(tab.context.as_deref().is_some_and(|context| context.contains("orientation: vertical")));
+    let press =
+        Action { target_id: Some(slider.id.clone()), text: Some("ArrowUp".into()), ..Action::new(Operation::Press) };
+    let result = h.page.act(&press, &before).await.expect("custom slider press");
+    assert_eq!(result.outcome, StepOutcome::Executed);
+    assert!(result.page_changed, "an announced value change must count as progress: {result:?}");
+    assert_eq!(find(&h.observe().await, "Level").value.as_deref(), Some("3"));
     h.close().await;
 }

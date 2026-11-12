@@ -185,7 +185,7 @@ option, so choosing or removing any one of them is a change.
 
 Press sends a key Jev selects from the target control's ARIA role, or a key chord copied from the task.
 Sliders, spin buttons, tabs, lists, trees, menus and grids offer their standard WAI-ARIA keyboard interactions
-when focus can reach them. A composite container is indexed for keyboard use when it has a `tabindex`.
+when focus can reach them. An explicit `aria-orientation` on a widget or its owning composite is included in its context, so the key chooser knows its direction. Widget value changes count as progress. A composite container is indexed for keyboard use when it has a `tabindex`.
 An active descendant keeps DOM focus on its owner while receiving the chosen key. Native selects keep their
 Select operation. The selected chord is stated to the irreversible-action classifier before dispatch.
 When the task forbids edits, Jev also judges whether that chord changes a value or only moves through the page.
