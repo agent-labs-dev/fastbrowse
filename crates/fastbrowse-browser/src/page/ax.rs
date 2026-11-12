@@ -44,6 +44,7 @@ impl AxIndex {
     #[allow(dead_code)]
     pub(crate) fn dirty(&self) -> impl Iterator<Item = i64> + '_ { self.dirty_backend_ids.iter().copied() }
     pub(crate) fn bind_control(&mut self, control_id: String, backend_id: i64) { self.control_backend_ids.insert(control_id, backend_id); }
+    #[allow(dead_code)]
     pub(crate) fn backend_for_control(&self, control_id: &str) -> Option<i64> { self.control_backend_ids.get(control_id).copied() }
     /// Merge one complete changed branch. Callers must supply the branch's current nodes, including child order;
     /// an incomplete `getPartialAXTree` response must be rejected before calling this method.
