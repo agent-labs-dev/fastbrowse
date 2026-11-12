@@ -688,8 +688,7 @@ async fn reads(h: &Harness) -> (i64, i64) {
 async fn test_an_unchanged_page_is_served_from_the_read_it_kept() {
     let _turn = turn().await;
     let Some(h) = harness().await else { return };
-    // A read that went into a shadow root or a child document is not kept, since a document observer sees neither, so
-    // this page has only what the observer covers.
+    // This page has only controls in the main document, so the kept-read path also exercises its native fact checks.
     common::eval_active(&h.session, "document.body.innerHTML = '<button>One</button><button>Two</button>';").await;
     let first = h.observe().await;
     count_reads(&h).await;

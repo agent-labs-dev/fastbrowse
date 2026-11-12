@@ -42,7 +42,7 @@
   const registry = (window.__fastbrowse ||= { ids: new WeakMap(), nodes: new Map(), next: 1 });
   // Browser rendering and live selector results can change without a DOM mutation. A saved read records only
   // the native facts it consumed; replaying those facts validates the same branches without deriving the result.
-  let renderFacts = mode === 'snapshot' || mode === 'glance' ? new Map() : null;
+  let renderFacts = mode === 'snapshot' || mode === 'glance' || reuse ? new Map() : null;
   let renderInputs = renderFacts ? [] : null;
   registry.nativeQueueMicrotask ||= window.queueMicrotask.bind(window);
   registry.nativeQueueMicrotask(() => {
@@ -2091,7 +2091,7 @@
   } else if (registry.kept) {
     // Deep roots are observed while walking, so their baseline can be reused when every root remains unchanged.
     own.renderReads ||= {};
-    own.renderReads[mode] = { read, document_key: String(performance.timeOrigin), inputs: [] };
+    own.renderReads[mode] = { read, document_key: String(performance.timeOrigin), inputs: renderInputs };
     registry.kept ||= {};
     registry.kept[mode] = {
       mode,
@@ -2107,6 +2107,9 @@
       innerHeight,
       hidden: document.hidden,
       readyState: document.readyState,
+      undefinedElements: readUndefinedElements,
+      lightElements,
+      listenerStates: [...listenerStates],
       listenerAPI: Boolean(own.listeners),
       url: location.href,
       document_key: String(performance.timeOrigin),
