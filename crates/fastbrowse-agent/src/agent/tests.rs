@@ -3154,14 +3154,17 @@ impl DecisionClient for Reviewing {
                         probabilities: IndexMap::new(),
                         confidence: 1.0,
                     }),
-                    _ => Answer::Noul(NoulAnswer {
+                    Question::Noul(noul) => Answer::Noul(NoulAnswer {
                         kind: Default::default(),
                         probability: match key.as_str() {
                             "coverage" => self.1,
-                            "exact" => self.2,
+                            // Exactness is judged on the claims shown: only the cell's rank is text beside the value.
+                            "exact" if noul.instructions.contains("(37th)") => self.2,
+                            "exact" => 1.0,
                             _ => self.0.claims,
                         },
                     }),
+                    _ => unreachable!("reviews ask choices and nouls"),
                 };
                 (key.clone(), answer)
             })

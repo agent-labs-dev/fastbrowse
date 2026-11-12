@@ -294,6 +294,13 @@ async fn a_json_field_is_a_candidate_of_its_own_with_its_key_path() {
     assert_eq!(quoted(&capture, name.evidence.start, name.evidence.end), "httpx");
     assert_eq!(name.evidence.heading_path, ["info", "name"]);
     assert!(name.context.contains("'info', 'name'"), "{}", name.context);
+    // A release file is one whole record under its path, its value a word of its own for a choice to narrow to.
+    let file = capture.blocks.iter().find(|block| block.kind == BlockKind::Record).expect("the release file");
+    assert!(file.whole_record);
+    let record = candidates.iter().find(|c| c.evidence.quote == "filename: httpx-0.1.0.tar.gz").expect("the record");
+    assert_eq!(quoted(&capture, record.evidence.start, record.evidence.end), record.evidence.quote);
+    assert_eq!(record.evidence.heading_path, ["releases", "0.1.0", "0"]);
+    assert!(record.evidence.quote.split_whitespace().any(|word| word == "httpx-0.1.0.tar.gz"));
 }
 
 #[tokio::test]

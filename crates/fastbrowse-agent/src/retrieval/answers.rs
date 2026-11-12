@@ -1024,6 +1024,7 @@ async fn review_composition(
     let drafted_composition: Vec<Option<Composition>> = claims.iter().map(|claim| claim.composition.clone()).collect();
     let mut untallied = Vec::new();
     let mut unjudged_tally = false;
+    let mut oversized_tally = false;
     // What each claim's support is judged on: the claim with a worked value shown as computed.
     let mut shown = drafted.clone();
     // The tally each worked claim stated, which its support is judged against.
@@ -1050,6 +1051,10 @@ async fn review_composition(
             }
             Some(Err(Unworked::Unjudged)) => {
                 unjudged_tally = true;
+                claim.claim
+            }
+            Some(Err(Unworked::Oversized)) => {
+                oversized_tally = true;
                 claim.claim
             }
             None => claim.claim,
@@ -1165,7 +1170,7 @@ async fn review_composition(
     let oversized_claim = questions.iter().any(|(key, question)| !whole.contains(&key.as_str()) && too_large(question));
     let oversized_coverage = ["coverage", "exact"].iter().any(|key| questions.get(*key).is_some_and(too_large));
     let oversized_actions = questions.get("actions").is_some_and(too_large);
-    let oversized = oversized_claim || oversized_coverage || oversized_actions;
+    let oversized = oversized_claim || oversized_coverage || oversized_actions || oversized_tally;
     let (answered, failure) = if questions.is_empty() {
         (None, None)
     } else {
@@ -1233,6 +1238,8 @@ async fn review_composition(
     let problem = failure.clone().or_else(|| {
         if oversized_claim {
             Some("A composed claim's quotes exceed the decision model's input limits.".into())
+        } else if oversized_tally {
+            Some("A composed claim's count, total or extreme needs more of its page as context than the decision model accepts.".into())
         } else if oversized_coverage {
             Some("The written answer exceeds the decision model's input limits for checking task coverage.".into())
         } else if oversized_actions {
@@ -2793,11 +2800,14 @@ mod tests {
             assert!(choice.criteria.contains_key("no_record") && choice.criteria.contains_key("none"));
         }
         {
+            // Each page's notes are asked beside that page's notes alone.
             let states = jev.states.lock().unwrap();
-            let (_, membership) =
-                states.iter().find(|(keys, _)| keys.iter().any(|key| key.starts_with("t0/n"))).unwrap();
-            assert_eq!(membership["notes"].as_array().unwrap().len(), 4);
-            assert_eq!(membership["task"], "Find the cheapest book");
+            let memberships: Vec<_> =
+                states.iter().filter(|(keys, _)| keys.iter().any(|key| key.starts_with("t0/n"))).collect();
+            let sizes: Vec<usize> =
+                memberships.iter().map(|(_, state)| state["notes"].as_array().unwrap().len()).collect();
+            assert_eq!(sizes, [3, 1]);
+            assert!(memberships.iter().all(|(_, state)| state["task"] == "Find the cheapest book"));
         }
         // Jev judges only that the book the claim names is one code found at the extreme.
         let Question::Choice(record) = &asked["claim0/record"] else { panic!("record is a choice") };
