@@ -23,7 +23,10 @@ Versions are patch-by-patch unless the maintainer says otherwise, and every one 
    the newest run's build. The candidate's fixture Evals run must be on that build and the build must be in `main`'s
    history, so build it after the release pull request merges, or dispatch Evals again on the merged commit and rerun
    one task there so the newest run is on it.
-4. Once the maintainer says to release, `git tag v<x.y.z> <sha> && git push origin v<x.y.z>`. The tag's workflow
+4. Before tagging a CLI that requires an extension update, use the [Store workflow](extension-store.md)
+   to submit the reviewed package, wait for approval, publish it and verify the Store-installed extension through
+   the current CLI. The required manifest version must be published to all users before the CLI publishes.
+   Then, once the maintainer says to release, `git tag v<x.y.z> <sha> && git push origin v<x.y.z>`. The tag's workflow
    publishes once the sdist, the wheels and the five binaries build and pass their smoke tests and its `gate`
    job finds those evals passing on the tagged tree. Then point `docs/results/release-baseline.json` at the new
    release's campaign, so the next release is compared with this one. Publish the release commit's fixture rows
@@ -35,6 +38,14 @@ Versions are patch-by-patch unless the maintainer says otherwise, and every one 
    by hand when either job's secret is missing.
 
 ## The release workflow
+
+The [Extension Store workflow](extension-store.md) submits extension changes on `main` for staged review.
+Run `just extension-zip` to build the same package locally, with a version and SHA256 receipt. Its manifest
+version is independent of the CLI version. CLI tags check the published extension without resubmitting it.
+The tag-triggered Store check is a separate receipt. The CLI publishing workflow must check that version
+directly before any registry write; a separate Store
+workflow's result does not gate another workflow. Publisher authentication and the installed-extension
+check are prerequisites, not properties proved by a successful ZIP build.
 
 The header of `.github/workflows/release.yml` lists every registry one tag publishes to and the order it
 publishes in. Pull requests and `main` build only the Linux and Windows binaries, leaving the macOS two to the

@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- With publisher access configured, CI can submit Chrome extension updates for staged Web Store review with short-lived credentials. The package builder omits the development key, and publication requires the matching approved version ([#1063](https://github.com/agent-labs-dev/fastbrowse/issues/1063)).
+
 - The eval harness removes its obsolete gateway route and follows Parallax's OpenRouter Jev interface while preserving the proved Opus-only v5 request and receipt identity. The dev16 dependency lock records the published PyPI artifacts ([#889](https://github.com/agent-labs-dev/fastbrowse/issues/889)).
 
 - Eval publication retains dispatch interruption time under an explicit timing basis and refuses speed comparisons across different clocks ([#1055](https://github.com/agent-labs-dev/fastbrowse/issues/1055)).

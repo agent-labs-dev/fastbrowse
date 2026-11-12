@@ -190,7 +190,7 @@ Longer post:
 ### Before submitting 0.1.1
 
 - [ ] Manifest `description` matches the chosen short description.
-- [ ] Package built from the tagged release, with the ID `ghodfgfhbfaghhfdabopagbfopdjgpop` matching `EXTENSION_IDS` in the CLI, and including the icons.
+- [ ] Package built from the reviewed source commit, with the ID `ghodfgfhbfaghhfdabopagbfopdjgpop` matching `EXTENSION_IDS` in the CLI, and including the icons.
 - [ ] Single-purpose statement, permission justifications (`debugger`, `tabs`, `tabGroups`, `nativeMessaging`, `storage`, `alarms`) and privacy practices updated in the dashboard.
 - [ ] Privacy policy URL states that page content goes to the configured model providers.
 - [ ] Screenshots captured from the submitted build.
@@ -198,6 +198,13 @@ Longer post:
 
 ### Submit the compatible update
 
+Use the [Extension Store automation](agents/extension-store.md) after configuring publisher authentication.
+`just extension-zip` builds the package and prints its version and SHA256. Extension changes on `main`
+submit for staged review; manual workflow actions inspect status and publish the matching approved version.
+Finish review, publication and the installed-extension task check before releasing a CLI that requires
+the update. The API does not update listing, privacy or screenshot fields for this workflow.
+
+For a manual upload, use the same reviewed ZIP rather than rebuilding it through another packaging tool.
 Follow Chrome's [update workflow](https://developer.chrome.com/docs/webstore/update) after the package is reviewed:
 
 1. Open the existing item `ghodfgfhbfaghhfdabopagbfopdjgpop` in the developer dashboard. Do not create another item.
