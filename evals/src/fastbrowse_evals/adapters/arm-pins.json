@@ -13,7 +13,7 @@
   },
   "@openai/codex": {
     "registry": "npm",
-    "version": "0.167.1"
+    "version": "0.167.2"
   },
   "browser-use/jev-ultrafast": {
     "registry": "github",
