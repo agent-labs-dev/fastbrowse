@@ -1381,7 +1381,8 @@ impl CdpPage {
             }
         };
         let mut seen = Waited { semantic: moved, clock: false };
-        for session_id in std::mem::take(&mut cleanup.sessions) {
+        // Cancellation during a finish evaluation must still remove that watch and the sessions left after it.
+        while let Some(session_id) = cleanup.sessions.last().cloned() {
             let bounded = session_id != main;
             match self.wait_evaluate(&session_id, &finish, bounded).await {
                 Ok(Value::Array(found)) => {
@@ -1392,6 +1393,7 @@ impl CdpPage {
                 // A watch the page no longer has went with its document, or with the frame that held it.
                 _ => seen.semantic |= installed.contains(&session_id),
             }
+            cleanup.sessions.pop();
         }
         Ok(seen)
     }
