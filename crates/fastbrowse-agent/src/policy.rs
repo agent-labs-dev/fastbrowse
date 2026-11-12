@@ -1025,6 +1025,13 @@ pub fn build_request(
                             known.join(", ")
                         )
                     }
+                    (Operation::Scroll, _) if indexed.contains_key(op) => {
+                        "Scroll the chosen vertical area down, or horizontal area right, to reveal more content.".into()
+                    }
+                    (Operation::ScrollUp, _) if indexed.contains_key(op) => {
+                        "Scroll the chosen vertical area up, or horizontal area left, to reveal content in that direction."
+                            .into()
+                    }
                     (Operation::Navigate, [only]) => format!("{} The address: {only}", operation_label(*op)),
                     _ => operation_label(*op).to_string(),
                 };
@@ -1038,10 +1045,10 @@ pub fn build_request(
     let limit = max_options;
     let size = (config.observation.group_size.max(0) as usize).min(limit);
     for operation in &offered {
-        if !TARGETED.contains(operation) {
+        if !TARGETED.contains(operation) && !fastbrowse_core::models::SCROLLING.contains(operation) {
             continue;
         }
-        let candidates = &indexed[operation];
+        let Some(candidates) = indexed.get(operation) else { continue };
         if candidates.len() <= limit {
             questions.insert(keys::target(*operation), target_question(*operation, candidates, target_rules).into());
             targets.insert(*operation, candidates.clone());
@@ -1922,6 +1929,22 @@ mod tests {
         for unfocused in [None, Some(false)] {
             assert!(!element(&field("reference", unfocused)).contains_key("focused"));
         }
+    }
+
+    #[test]
+    fn scrolling_can_choose_a_container_without_requiring_one_on_older_observations() {
+        let context = StepContext::new("Read the rest of the side panel");
+        let jev = fake(&[("operation", "scroll"), ("scroll_target", "panel")], "");
+        let page =
+            observation(vec![Control::new("panel", "region", "Vertical scroll area: Side panel", [Operation::Scroll])]);
+        let decision =
+            block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        assert_eq!(decision.target.unwrap().id, "panel");
+        let page = observation(vec![]);
+        let decision =
+            block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        assert_eq!(decision.operation, Operation::Scroll);
+        assert!(decision.target.is_none());
     }
 
     #[test]

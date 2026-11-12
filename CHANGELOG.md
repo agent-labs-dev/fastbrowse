@@ -20,6 +20,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - **Checks for completed actions use less repeated text.** Jev reads control field names once above ordered rows, keeping every control and value while reducing repeated field names ([#903](https://github.com/agent-labs-dev/fastbrowse/issues/903)).
 - **Task judgments share the startup call.** Jev judges whether the task names dates, what output it asks for, where its evidence can be seen and how much of a list it covers in one request. The output judgments are kept until needed and survive an initial HTTP failure that needs a browser, saving their separate call ([#902](https://github.com/agent-labs-dev/fastbrowse/issues/902)).
 - Downloaded XLSX, DOCX and ZIP files provide citable text through the document helper. Worksheets keep cell coordinates, Word keeps text boundaries, and archives name unread members ([#1022](https://github.com/agent-labs-dev/fastbrowse/issues/1022), part of [#986](https://github.com/agent-labs-dev/fastbrowse/issues/986)).
+- Scrolls target the page or a named vertical or horizontal scroll area, including panels and lists in open shadow roots. Container movement counts as progress ([#986](https://github.com/agent-labs-dev/fastbrowse/issues/986)).
+
+- Downloaded XLSX, DOCX and ZIP files provide citable text through the document helper. Worksheets keep cell coordinates, Word keeps text boundaries, and archives name unread members ([#1022](https://github.com/agent-labs-dev/fastbrowse/issues/1022), part of [#986](https://github.com/agent-labs-dev/fastbrowse/issues/986)).
 
 - Browserless reads accept JSON APIs and textual HTTP responses as citable blocks, preserving JSON values and delimited fields ([#1021](https://github.com/agent-labs-dev/fastbrowse/issues/1021), part of [#986](https://github.com/agent-labs-dev/fastbrowse/issues/986)).
 

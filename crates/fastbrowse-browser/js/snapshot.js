@@ -309,6 +309,9 @@
       hashText(root.body?.innerText ?? root.textContent ?? '');
       // innerText omits shadow trees and child documents even when their content is visible.
       for (const e of root.querySelectorAll('*')) {
+        // A panel can move without changing any text or the document's own scroll position.
+        if ((e.scrollLeft !== 0 || e.scrollTop !== 0) && e.checkVisibility({checkVisibilityCSS: true}))
+          hashText(JSON.stringify([e.scrollLeft, e.scrollTop]));
         // A filter can change only its checkmark, so text alone reported "Nonstop only" as a no-op.
         // Field values stay out: the run judges fills by the value it wrote, even when a popup changes.
         // Only rendered controls: a hidden carousel's aria-selected dots churn on their own and would read as
@@ -385,7 +388,10 @@
     registry.nodes.set(id, e);
     return id;
   };
-  for (const [id, e] of registry.nodes) if (!e.isConnected) registry.nodes.delete(id);
+  for (const [id, e] of registry.nodes) if (!e.isConnected) {
+    registry.nodes.delete(id);
+    registry.scrollAxes?.delete(id);
+  }
   // The DOM cannot change while this script runs, so a label, a text or a section title read once is reused for
   // the rest of it. `registry.guard` reads them again in a later script, against a page that may have changed
   // since, so the reuse ends as soon as this one does, whether it returns or throws.
@@ -854,8 +860,12 @@
     for (const e of registry.selfUpdating) if (scope.contains(e)) text = text.replace(innerTextOf(e) || '', '');
     return digest(text.slice(0, GUARD_TEXT_CHARS));
   });
-  registry.guard = e => {
+  registry.guard = (e, id) => {
     if (!e?.isConnected || !visible(e)) return null;
+    const axis = registry.scrollAxes?.get(id);
+    if (axis) return [identity(e), 'scroll', axis,
+      e.getAttribute('aria-label'), e.getAttribute('aria-labelledby'), e.getAttribute('title'),
+      e.ownerDocument.location.origin, e.ownerDocument.defaultView.performance.timeOrigin, identity(e)];
     const source = sourceOf(e);
     if (source !== e && (source.matches(':disabled') || source.closest('[aria-disabled="true"],[inert]'))) return null;
     const scope = e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') || e.parentElement;
@@ -884,8 +894,8 @@
       identity(source),
     ];
   };
-  registry.guardKey = e => {
-    const guard = registry.guard(e);
+  registry.guardKey = (e, id) => {
+    const guard = registry.guard(e, id);
     return guard && digest(JSON.stringify(guard));
   };
 
@@ -1467,6 +1477,74 @@
     if (column) c.context = [c.context, `column: ${column}`].filter(Boolean).join('; ');
   }
 
+  // A wheel at the viewport centre misses panels and horizontal lists. Index the browser's actual scroll owners,
+  // separately for each overflowing axis, so the chosen target determines which content moves.
+  registry.scrollIds ||= new WeakMap();
+  registry.scrollAxes ||= new Map();
+  const scrollAreas = root => {
+    for (const e of root.querySelectorAll('*')) {
+      if (e.shadowRoot) scrollAreas(e.shadowRoot);
+      if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
+        const inner = childDocument(e);
+        if (inner?.body && granted(inner)) scrollAreas(inner);
+      }
+      if (!safe(e) || !visible(e) || e.closest('[inert]')) continue;
+      const view = e.ownerDocument.defaultView;
+      const page = e === e.ownerDocument.scrollingElement;
+      const overflow = {x: e.scrollWidth - e.clientWidth, y: e.scrollHeight - e.clientHeight};
+      if (overflow.x <= 0 && overflow.y <= 0) continue;
+      const style = view.getComputedStyle(e);
+      const vertical = style.writingMode.startsWith('vertical') || style.writingMode.startsWith('sideways');
+      let inlineReverse = style.direction === 'rtl';
+      let blockReverse = vertical && style.writingMode.endsWith('-rl');
+      if (style.display.includes('flex')) {
+        if (style.flexDirection === 'row-reverse') inlineReverse = !inlineReverse;
+        if (style.flexDirection === 'column-reverse') blockReverse = !blockReverse;
+      }
+      const named = element => element.hasAttribute('aria-label') || element.hasAttribute('aria-labelledby')
+        ? labelOf(element) : element.getAttribute('title') || '';
+      const frameNames = [];
+      for (let doc = e.ownerDocument; doc !== document;) {
+        const frame = doc.defaultView.frameElement;
+        frameNames.unshift(named(frame) || doc.location.href);
+        doc = frame.ownerDocument;
+      }
+      for (const axis of ['x', 'y']) {
+        let behavior = axis === 'x' ? style.overflowX : style.overflowY;
+        // With visible root overflow, CSS propagates the body's overflow to the viewport, including modal locks.
+        if (page && behavior === 'visible' && e.ownerDocument.body) {
+          const bodyStyle = view.getComputedStyle(e.ownerDocument.body);
+          behavior = axis === 'x' ? bodyStyle.overflowX : bodyStyle.overflowY;
+        }
+        if (overflow[axis] <= 0 || !(page && behavior === 'visible') && !['auto', 'scroll', 'overlay'].includes(behavior)) continue;
+        const position = axis === 'x' ? e.scrollLeft : e.scrollTop;
+        // CSSOM View's overflow direction follows the block and inline flow, including reversed flex axes.
+        const reverse = (axis === 'x') === vertical ? blockReverse : inlineReverse;
+        const min = reverse ? -overflow[axis] : 0, max = reverse ? 0 : overflow[axis];
+        const operations = [];
+        if (position < max) operations.push('scroll');
+        if (position > min) operations.push('scroll_up');
+        if (!operations.length) continue;
+        let ids = registry.scrollIds.get(e);
+        if (!ids) registry.scrollIds.set(e, ids = {});
+        const id = ids[axis] ||= registry.next++;
+        registry.nodes.set(id, e);
+        registry.scrollAxes.set(id, axis);
+        const rect = e.getBoundingClientRect();
+        controls.push({
+          id, role: 'region', operations,
+          label: `${axis === 'x' ? 'Horizontal' : 'Vertical'} scroll area: ${page ? 'Page' : named(e) || e.tagName.toLowerCase()}`,
+          ...(frameNames.length ? {context: `Frame: ${frameNames.join(' / ')}`} : {}),
+          frame_origin: e.ownerDocument.location.origin,
+          frame_path: framePath(e.ownerDocument),
+          offscreen: rect.bottom <= 0 || rect.top >= view.innerHeight,
+          distance: rect.bottom <= 0 || rect.top >= view.innerHeight ? 1 + Math.abs(rect.top) : 0,
+        });
+      }
+    }
+  };
+  scrollAreas(document);
+
   controls.sort((a, b) => a.distance - b.distance);
 
   // Text in a same-process child document is on screen as much as the parent's: a frameset page has no text of
@@ -1569,7 +1647,7 @@
   const guards = {},
     retarget_keys = {};
   for (const c of controls) {
-    const guard = registry.guard(registry.nodes.get(c.id));
+    const guard = registry.guard(registry.nodes.get(c.id), c.id);
     guards[c.id] = guard && digest(JSON.stringify(guard));
     // A redraw changes the node ids at either end of the guard. Everything between them, including the receiving
     // document's timeOrigin and form semantics, must survive before an action can follow it.
@@ -1592,6 +1670,10 @@
     viewport_text,
     semantics,
     field_state,
+    controls.filter(c => registry.scrollAxes?.has(c.id)).map(c => {
+      const e = registry.nodes.get(c.id);
+      return [c.id, e.scrollLeft, e.scrollTop];
+    }),
     // Playing or not changes the page; the clock advancing does not, or no key would hold until an action.
     media.map(({ elapsed_seconds, ...m }) => m),
   ]));

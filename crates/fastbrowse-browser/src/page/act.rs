@@ -614,7 +614,7 @@ impl CdpPage {
             Operation::Drag => self.drag(target, point, action.destination_id.as_deref()).await,
             Operation::Escape => self.key(None, Key::Escape, Point::Gone).await,
             Operation::Scroll | Operation::ScrollUp => {
-                self.scroll(action.operation).await?;
+                self.scroll(action.operation, target).await?;
                 Ok((StepOutcome::Executed, None))
             }
             Operation::Back => self.back().await,
@@ -1201,7 +1201,20 @@ impl CdpPage {
         self.input(self.session.send("Input.dispatchKeyEvent", up, Some(session_id))).await
     }
 
-    async fn scroll(&self, operation: Operation) -> Result<(), BrowserError> {
+    async fn scroll(&self, operation: Operation, target: Option<&Target>) -> Result<(), BrowserError> {
+        if let Some((session_id, _, local_id, ..)) = target {
+            let direction = if operation == Operation::ScrollUp { -1 } else { 1 };
+            let script = format!(
+                "(() => {{ const r = window.__fastbrowse, e = r?.nodes.get({local_id}), \
+                 axis = r?.scrollAxes.get({local_id}); if (!e?.isConnected || !axis) return false; \
+                 e.scrollBy({{left: axis === 'x' ? e.clientWidth * {direction} : 0, \
+                 top: axis === 'y' ? e.clientHeight * {direction} : 0, behavior: 'instant'}}); return true; }})()"
+            );
+            if !truthy(&self.evaluate(session_id, &script).await?) {
+                return Err(BrowserError::Failed("scroll target is no longer an indexed scroll area".into()));
+            }
+            return Ok(());
+        }
         let session_id = self.session.active_session_id()?;
         let delta = if operation == Operation::ScrollUp { -560 } else { 560 };
         // The wheel lands where the page is under the pointer: a point outside the window scrolls nothing. The
@@ -1613,7 +1626,8 @@ impl CdpPage {
         script.push_str("const r = window.__fastbrowse; ");
         let fingerprint = if same_session && !after_move { self.fingerprint_js.as_str() } else { "''" };
         script.push_str(&format!("const fingerprint = {fingerprint}; "));
-        script.push_str(&format!("const guard = r?.guardKey ? r.guardKey(r.nodes.get({local_id})) : null; "));
+        script
+            .push_str(&format!("const guard = r?.guardKey ? r.guardKey(r.nodes.get({local_id}), {local_id}) : null; "));
         script.push_str(&format!(
             "const point = {} && guard === {} ? ({HIT_TEST_JS})({local_id}, {}) : null; ",
             py_json(&json!(hit_test)),

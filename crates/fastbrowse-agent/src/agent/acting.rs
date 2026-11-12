@@ -472,9 +472,10 @@ impl Agent {
             Operation::Hover | Operation::Blur => {
                 Ok(Action { target_id: Some(require(target)?.id.clone()), ..Action::new(decision.operation) })
             }
-            Operation::Escape | Operation::Scroll | Operation::ScrollUp | Operation::Back | Operation::Wait => {
-                Ok(Action::new(decision.operation))
+            Operation::Scroll | Operation::ScrollUp => {
+                Ok(Action { target_id: target.map(|target| target.id.clone()), ..Action::new(decision.operation) })
             }
+            Operation::Escape | Operation::Back | Operation::Wait => Ok(Action::new(decision.operation)),
             Operation::Read | Operation::Done => Err(Flow::Agent(crate::AgentError::Invalid(format!(
                 "{} is handled by the loop, not dispatched",
                 decision.operation
