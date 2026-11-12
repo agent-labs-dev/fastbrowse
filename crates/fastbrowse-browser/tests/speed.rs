@@ -1231,6 +1231,72 @@ async fn test_a_frame_whose_kept_read_is_missing_is_read_again() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_live_frames_saved_read_survives_tab_switches() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    let before = observe_until(&h.page, "Frame button").await;
+    let original = h.session.active_target_id();
+    let frame = h.session.frame_sessions()[0].0.clone();
+    fastbrowse_browser::testing::open_owned_tab(&h.session, "about:blank").await.expect("open owned tab");
+    let other = h.session.active_target_id();
+    let checked = async {
+        h.page.navigate(&format!("{}/inner.html", sites().main), None).await.expect("navigate other tab");
+        h.observe().await;
+        let inactive = seams::kept_keys(&h.page);
+        h.session.switch_tab(&original).await.expect("switch back");
+        let after = observe_until(&h.page, "Frame button").await;
+        let restored = seams::kept_keys(&h.page);
+        assert!(inactive.iter().any(|key| key.ends_with(&format!("|{frame}"))), "{inactive:?}");
+        assert!(restored.iter().any(|key| key.ends_with(&format!("|{frame}"))));
+        assert_eq!(
+            before.controls.iter().map(|control| &control.label).collect::<Vec<_>>(),
+            after.controls.iter().map(|control| &control.label).collect::<Vec<_>>()
+        );
+        h.session.switch_tab(&other).await.expect("switch away");
+        h.session.send("Target.closeTarget", json!({"targetId": original}), None).await.expect("close original tab");
+        wait_until(
+            || async {
+                h.observe().await;
+                !seams::kept_keys(&h.page).iter().any(|key| key.ends_with(&format!("|{frame}")))
+            },
+            5.0,
+        )
+        .await;
+    };
+    let outcome = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(checked)).await;
+    h.close().await;
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_detached_frame_reads_are_released_and_reinserted_frames_are_read() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    observe_until(&h.page, "Frame button").await;
+    let old = h.session.frame_sessions()[0].0.clone();
+    assert!(seams::kept_keys(&h.page).iter().any(|key| key.ends_with(&format!("|{old}"))));
+    eval_active(&h.session, "globalThis.savedFrame = document.querySelector('#cross-frame'); savedFrame.remove()")
+        .await;
+    wait_until(|| async { h.session.frame_sessions().is_empty() }, 5.0).await;
+    h.observe().await;
+    let retained = seams::kept_keys(&h.page);
+    eval_active(&h.session, "document.body.append(savedFrame)").await;
+    let after = observe_until(&h.page, "Frame button").await;
+    let new = h.session.frame_sessions()[0].0.clone();
+    let restored = seams::kept_keys(&h.page);
+    h.close().await;
+    assert!(retained.iter().all(|key| key.ends_with("|main")), "{retained:?}");
+    assert_ne!(old, new);
+    assert!(restored.iter().any(|key| key.ends_with(&format!("|{new}"))));
+    assert!(!restored.iter().any(|key| key.ends_with(&format!("|{old}"))));
+    assert!(after.controls.iter().any(|control| control.label == "Frame button"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_selected_value_is_not_served_from_a_kept_read() {
     let _turn = turn().await;
     let Some(h) = harness().await else { return };

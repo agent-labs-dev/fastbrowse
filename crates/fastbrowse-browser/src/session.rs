@@ -723,6 +723,15 @@ impl BrowserSession {
         self.0.state.lock().unwrap().frame_sessions_of_active()
     }
 
+    /// Retained reads belong to attached frames across tabs; missed-read deadlines belong to the active tab.
+    pub(crate) fn frame_read_liveness(&self) -> (HashSet<String>, HashSet<String>) {
+        let state = self.0.state.lock().unwrap();
+        (
+            state.frame_sessions.iter().map(|(frame, _)| frame.clone()).collect(),
+            state.frame_sessions_of_active().into_iter().map(|(_, session)| session).collect(),
+        )
+    }
+
     /// `frame_id` and every frame drawn inside it, whose sessions descend from that frame's session.
     pub fn frame_family(&self, frame_id: &str) -> HashSet<String> {
         let state = self.0.state.lock().unwrap();

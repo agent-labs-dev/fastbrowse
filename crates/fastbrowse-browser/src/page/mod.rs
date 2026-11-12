@@ -9,7 +9,7 @@ mod delta;
 mod pointer;
 pub mod scripts;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -899,7 +899,17 @@ impl CdpPage {
         let mut result: Vec<(String, FrameObservation<T>)> = vec![];
         // Preserve source order regardless of completion order so capture offsets and hashes stay stable.
         let reads = sources.iter().map(|(key, sid)| self.read_frame::<T>(key, sid, expression, retry));
-        let frames = futures_util::future::try_join_all(reads).await?;
+        let frames = futures_util::future::try_join_all(reads).await;
+        let (live_frames, live_sessions) = self.session.frame_read_liveness();
+        {
+            let mut state = self.state.lock().unwrap();
+            state.unanswered.retain(|session_id, _| live_sessions.contains(session_id));
+            // A detached frame is never read again, so its last full snapshot cannot expire through read_frame.
+            state.kept.retain(|key, _| {
+                key.rsplit_once('|').is_some_and(|(_, frame)| frame == MAIN || live_frames.contains(frame))
+            });
+        }
+        let frames = frames?;
         for ((key, _), frame) in sources.into_iter().zip(frames) {
             if let Some(frame) = frame {
                 // A dict in Python: a key read twice keeps its first place.
@@ -912,8 +922,6 @@ impl CdpPage {
         if let Some((_, main)) = result.iter().find(|(k, _)| k == MAIN) {
             self.session.set_tab_info(&target_id, main.raw.url(), main.raw.title());
         }
-        let live: HashSet<String> = self.session.frame_sessions().into_iter().map(|(_, s)| s).collect();
-        self.state.lock().unwrap().unanswered.retain(|session_id, _| live.contains(session_id));
         Ok(result)
     }
 
