@@ -34,7 +34,8 @@ export type StepOutcome = 'executed' | 'covered' | 'stale' | 'failed';
 export type FactReader = 'jev_choice' | 'llm_image';
 export type CostComponent = 'jev' | 'llm' | 'browser' | 'proxy';
 export type CostBasis = 'metered' | 'estimated' | 'bounded' | 'unsettled' | 'unknown';
-export type LLMPurpose = 'start' | 'compose' | 'image_read' | 'fill' | 'pages' | 'dates' | 'unobtainable' | 'groups';
+export type LLMPurpose =
+  'start' | 'compose' | 'image_read' | 'fill' | 'pages' | 'dates' | 'known_pages' | 'unobtainable' | 'groups';
 export type JevPurpose = 'action' | 'authorization' | 'relevance' | 'read' | 'verify' | 'locate';
 /**
  * Every code an error reply can carry: the JSON-RPC standard ones, then this protocol's own.

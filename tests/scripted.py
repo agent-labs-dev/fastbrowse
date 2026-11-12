@@ -95,7 +95,7 @@ class ScriptedJev:
 
 
 class ScriptedLLM:
-    """Proposes `start` as the start page, the one thing a run asks an LLM."""
+    """Proposes `start` as the start page, and knows no page that holds what the task names."""
 
     def __init__(self, start: str | None = None) -> None:
         self.start = start
@@ -110,7 +110,8 @@ class ScriptedLLM:
     ) -> Generation[T]:
         if ledger is not None:
             ledger.reserve(CostComponent.LLM)
+        answer = {"urls": []} if purpose is LLMPurpose.KNOWN_PAGES else {"url": self.start}
         return Generation(
-            data=schema.model_validate({"url": self.start}),
+            data=schema.model_validate(answer),
             cost=CostLine(component=CostComponent.LLM, basis=CostBasis.ESTIMATED, dollars=0.0, purpose=purpose),
         )

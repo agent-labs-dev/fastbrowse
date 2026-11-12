@@ -661,6 +661,7 @@
         "fill",
         "pages",
         "dates",
+        "known_pages",
         "unobtainable",
         "groups"
       ],

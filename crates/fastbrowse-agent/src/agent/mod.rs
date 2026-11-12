@@ -414,8 +414,9 @@ impl Agent {
             runtime.spawn(async move { llm.context_tokens(fastbrowse_core::models::LLMPurpose::Compose).await });
         }
         let given = state::with_inputs(task, &options.inputs);
-        let (opening, dates) = tokio::join!(open, self.task_dates(&given, ledger));
-        let (opening, dates) = (opening?, dates?);
+        let (opening, dates, known) =
+            tokio::join!(open, self.task_dates(&given, ledger), self.known_pages(&given, start, ledger));
+        let (opening, dates, known) = (opening?, dates?, known?);
         self.tell_page_ready().await;
         let mut state = RunState::new(
             task.to_string(),
@@ -425,6 +426,7 @@ impl Agent {
             ledger.clone(),
         );
         state.dates = dates;
+        state.known_pages = known;
         state.replay = options.recipe.clone().map(replay::Replay::new);
         state.context = options.context.clone();
         state.started_url = opening.clone();
@@ -852,6 +854,12 @@ impl Agent {
             secrets,
             start_url: state.caller_start.clone(),
             start_landing_url: state.start_landing_url.clone(),
+            known_pages: state
+                .known_pages
+                .iter()
+                .filter(|url| !state.reached_known_pages.contains(url))
+                .cloned()
+                .collect(),
             background: state.context.clone(),
             omitted_actions: 0,
             problem: None,
@@ -930,6 +938,15 @@ impl Agent {
         !observation.document_key.is_empty() && state.read_documents.get(&state::read_key(observation)) == Some(&false)
     }
 
+    /// Whether this step already judged that the page holds evidence for the task: Jev said it shows a fact the task
+    /// needs, or the run is composing from records and this page is unread. A read of such a page is not asked again
+    /// whether it holds any: the run that read ten pages of quotes for a count was told page 10 held none by its read,
+    /// at 0.58 against the step's 0.89, and its answer said page 10 was never read.
+    pub(super) fn page_shows(state: &RunState, observation: &Observation, decision: &crate::policy::Decision) -> bool {
+        decision.shows_answer.is_some_and(|probability| probability > fastbrowse_core::decision::EVEN_ODDS)
+            || (state.compose && !Self::page_read(state, observation))
+    }
+
     /// Whether the page is read before the action Jev chose takes the run off it, and if so whether the read may take
     /// it that the page holds evidence for the task.
     ///
@@ -948,8 +965,7 @@ impl Agent {
     ) -> Option<bool> {
         let unread = !Self::page_read(state, observation);
         let first = state.first_url.as_deref() == Some(observation.url.as_str());
-        let shows = decision.shows_answer.is_some_and(|probability| probability > fastbrowse_core::decision::EVEN_ODDS)
-            || (state.compose && unread);
+        let shows = Self::page_shows(state, observation, decision);
         (decision.operation != fastbrowse_core::models::Operation::Read && (shows || (first && unread)))
             .then_some(shows)
     }

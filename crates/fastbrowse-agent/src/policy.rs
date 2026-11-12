@@ -56,7 +56,7 @@ pub(crate) mod keys {
     }
 }
 
-const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPreserve authentication unless the task requires a session change.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\npage.text is what the viewport shows; page.offscreen_text is the page's text outside it.\nA read takes in the whole page, so do not scroll through a page's text to find what a read would.\nA link's href shows where it leads; use it to tell site navigation from content links. A link marked next_page\nis the one the page itself names as its next page.\nA matching link is not an opened result.\nA list the page shows in part is not read yet: while it offers more of a list the task covers, a next page or a load\nmore, take it, not one record's own page.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.";
+const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPreserve authentication unless the task requires a session change.\nWhen navigate names a page that holds the item the task names, open it rather than searching the site for that item.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\npage.text is what the viewport shows; page.offscreen_text is the page's text outside it.\nA read takes in the whole page, so do not scroll through a page's text to find what a read would.\nA link's href shows where it leads; use it to tell site navigation from content links. A link marked next_page\nis the one the page itself names as its next page.\nA matching link is not an opened result.\nA list the page shows in part is not read yet: while it offers more of a list the task covers, a next page or a load\nmore, take it, not one record's own page.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.";
 const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose only an offered element.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode is not the one the task needs, the control that sets the mode is the target, not the\nform's submit.\nElements marked offscreen can be targeted directly. A link's href shows where it leads, already_read marks one to a page this run\nhas read, and next_page marks the one the page itself names as its next page.\nElements carry a `context`: the card, row or section each one belongs to. When the task names one, choose\nby context; a link in one record's context opens it and shows no more of the list.";
 const DESTINATION_RULES: &str = "Another question picks the element to drag; choose the element it should be dropped onto. Prefer the drop\ntarget, drop zone, slot, list, folder, bucket or column the task names, not the element being dragged.";
 const RELEVANCE_RULES: &str = "Could the task's next few actions, or reading what it needs, act on or rely on the element in each question?\nJudge by its label, role, context and href. Site chrome, footers, ads, social links and unrelated navigation\nare not relevant.";
@@ -73,7 +73,9 @@ pub const GROUP: &str = "Too many elements to list at once. Choose the group tha
 
 pub fn operation_label(operation: Operation) -> &'static str {
     match operation {
-        Operation::Navigate => "Open another HTTP(S) address supplied by the caller for this task.",
+        Operation::Navigate => {
+            "Open another HTTP(S) address: one the caller supplied for this task, or a page a site the task names is known to serve for an item the task names."
+        }
         Operation::Click => "Click an element, button, link, menu option, autocomplete suggestion or calendar day.",
         Operation::Hover => "Hover over an element to reveal content the page shows only under the pointer.",
         Operation::Drag => "Drag one element and drop it onto another, to move, reorder or file it.",
@@ -231,6 +233,9 @@ pub struct StepContext {
     pub start_url: Option<String>,
     #[serde(default)]
     pub start_landing_url: Option<String>,
+    /// Pages the site is known to serve for the items the task names, offered as places to navigate (#983).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub known_pages: Vec<String>,
     /// The caller's background, which Jev reads beside the task and never as part of the task.
     #[serde(default)]
     pub background: Option<String>,
@@ -289,6 +294,7 @@ impl StepContext {
             answered_in_notes: false,
             start_url: None,
             start_landing_url: None,
+            known_pages: Vec::new(),
             background: None,
             omitted_actions: 0,
             problem: None,
@@ -987,6 +993,11 @@ pub fn build_request(
         context.start_landing_url.as_deref(),
         observation.controls.is_empty() || context.problem.is_some(),
     );
+    for known in &context.known_pages {
+        if !urls.contains(known) && !fastbrowse_core::navigation::same_address(known, &observation.url) {
+            urls.push(known.clone());
+        }
+    }
     if let Some(reload) = context.reload.as_ref().filter(|url| !urls.contains(url)) {
         urls.push(reload.clone());
     }
@@ -997,7 +1008,26 @@ pub fn build_request(
         keys::OPERATION.into(),
         choice(
             NEXT_ACTION.as_str(),
-            offered.iter().map(|op| (op.as_str().to_string(), Value::from(operation_label(*op)))),
+            offered.iter().map(|op| {
+                // The operation is chosen apart from its target, and a choice of one address is answered without Jev
+                // at all, so the operation names where navigate goes: told only "another address", Jev searched the
+                // site for the item whose page was on offer, with one known page and with two.
+                let known: Vec<&str> =
+                    urls.iter().filter(|url| context.known_pages.contains(url)).map(String::as_str).collect();
+                // Naming a known page as one held keeps Jev to it more firmly than naming it as the address.
+                let label = match (op, urls.as_slice()) {
+                    (Operation::Navigate, _) if !known.is_empty() => {
+                        format!(
+                            "{} Pages known to hold an item the task names: {}",
+                            operation_label(*op),
+                            known.join(", ")
+                        )
+                    }
+                    (Operation::Navigate, [only]) => format!("{} The address: {only}", operation_label(*op)),
+                    _ => operation_label(*op).to_string(),
+                };
+                (op.as_str().to_string(), Value::from(label))
+            }),
         )
         .into(),
     );
@@ -1043,7 +1073,7 @@ pub fn build_request(
     let mut navigation_groups: Vec<Vec<String>> = Vec::new();
     if offered.contains(&Operation::Navigate) {
         let instructions = format!(
-            "{UNTRUSTED}\nChoose the caller-supplied address that advances what the task still needs, or this page's own address to reload it after a site failure. Read relevant evidence here before leaving. Do not revisit a source whose requested evidence is already in the notes unless more evidence is needed there. URLs used as field values are data, not browsing destinations."
+            "{UNTRUSTED}\nChoose the address that advances what the task still needs: one the caller supplied, a page a site the task names is known to serve for an item the task names, which holds that item directly where a search of the site would only lead to it, or this page's own address to reload it after a site failure. Read relevant evidence here before leaving. Do not revisit a source whose requested evidence is already in the notes unless more evidence is needed there. URLs used as field values are data, not browsing destinations."
         );
         if urls.len() > limit {
             navigation_groups = chunks(&urls, size);

@@ -95,6 +95,7 @@ from fastbrowse.models import (
     Unavailable,
 )
 from fastbrowse.safety import ScopedSecrets, origin_of
+from fastbrowse.telemetry import collecting
 from parallax.judge import JudgeConfigError
 from parallax.judging import Judgment
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
@@ -839,7 +840,7 @@ async def fast_arm(
             on_event=lambda event: _on_fast_event(arm, task, event),
             record=record,
         )
-        ended = session_answered()
+        ended = session_answered(run_ended_at(collecting()))
         opening = setup_seconds()
         if browser is None:
             final = FinalPage(url=result.final_url, error="the run opened no browser")
@@ -861,6 +862,18 @@ async def fast_arm(
     quotes = tuple((e.url, e.quote) for e in result.evidence)
     outcome = Outcome(result.answer, result.data, final.url, quotes, final.controls, *_page_of(final))
     return outcome, result, seen
+
+
+def run_ended_at(events: list[object] | None) -> float | None:
+    """When the agent's run ended with its answer, from its `run` phase on `time.monotonic()`. What `run_task` does
+    after that is teardown: encoding a recording, showing the result card and closing the session, which can take
+    minutes on a loaded machine and are not the agent's time. `None` when the trace has no run phase."""
+    ends = [
+        event["ended"]
+        for event in events or ()
+        if isinstance(event, dict) and event.get("event") == "phase" and event.get("phase") == "run"
+    ]
+    return max(ends) if ends else None
 
 
 async def _on_fast_event(arm: str, task: LiveTask, event: StepEvent | BrowserEvent) -> None:

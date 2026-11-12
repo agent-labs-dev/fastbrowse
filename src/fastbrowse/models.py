@@ -236,6 +236,7 @@ class LLMPurpose(StrEnum):
     FILL = "fill"
     PAGES = "pages"
     DATES = "dates"
+    KNOWN_PAGES = "known_pages"
     UNOBTAINABLE = "unobtainable"
     GROUPS = "groups"
 

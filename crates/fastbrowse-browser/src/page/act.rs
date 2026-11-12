@@ -1309,7 +1309,7 @@ impl CdpPage {
         }
         match point {
             Point::Gone | Point::Unsettled => return Ok((StepOutcome::Stale, Some("target disconnected".into()))),
-            Point::Covered => return Ok((StepOutcome::Covered, None)),
+            Point::Covered => return Ok((StepOutcome::Covered, Some(self.covered_detail(target).await))),
             Point::At(..) => {}
         }
         // Atomic with the write: the script checks the origin it runs in, so a document that replaced the observed one
@@ -1408,7 +1408,10 @@ impl CdpPage {
             if guard != target.3 || fresh == Point::Gone {
                 return Ok((StepOutcome::Stale, Some("control changed before pointer press".into()), point));
             }
-            let Point::At(x, y) = fresh else { return Ok((StepOutcome::Covered, None, point)) };
+            // Covered at the press, as at the first look: the report names what covers it either way.
+            let Point::At(x, y) = fresh else {
+                return Ok((StepOutcome::Covered, Some(self.covered_detail(target).await), point));
+            };
             if (x, y) == point {
                 return Ok((StepOutcome::Executed, None, point));
             }
@@ -1437,7 +1440,7 @@ impl CdpPage {
         };
         let point = match point {
             Point::Gone | Point::Unsettled => return Ok((StepOutcome::Stale, Some("drag source disconnected".into()))),
-            Point::Covered => return Ok((StepOutcome::Covered, None)),
+            Point::Covered => return Ok((StepOutcome::Covered, Some(self.covered_detail(target).await))),
             Point::At(x, y) => (x, y),
         };
         let Some(drop) = self.last().and_then(|last| last.controls.get(destination_id).cloned()) else {

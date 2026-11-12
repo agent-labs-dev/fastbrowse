@@ -369,7 +369,8 @@ async def test_a_reservation_the_rust_ledger_refuses_ends_the_run_budget_exceede
             http=counted.http,
             limits=Limits(max_llm_calls=1),
         )
-    assert reserved == [False]
+    # The start page and the known pages are asked together, and each reservation is refused.
+    assert reserved and not any(reserved)
     assert result.status is Status.BUDGET_EXCEEDED
     assert result.budget == BudgetStop(resource="llm_calls", limit=1)
 
@@ -469,7 +470,11 @@ async def test_a_cancelled_llm_call_records_its_receipt_before_run_task_raises()
     reading_started = asyncio.Event()
     cleanup: list[str] = []
 
+    generate = counted.llm.generate
+
     async def hanging(purpose: LLMPurpose, messages: Any, schema: type[BaseModel], *, ledger: Any, **_: Any) -> Any:
+        if purpose is not LLMPurpose.START:
+            return await generate(purpose, messages, schema, ledger=ledger)
         ledger.reserve(CostComponent.LLM)
         reading_started.set()
         try:
@@ -503,7 +508,8 @@ async def test_a_cancelled_llm_call_records_its_receipt_before_run_task_raises()
         assert cleanup == ["recorded"]
     # The charge the dropped call recorded reaches the caller once, and unpriced, never as $0.
     assert stopped.value.receipt.cost.lines.count(UNKNOWN) == 1
-    assert all(line.dollars is None for line in stopped.value.receipt.cost.lines if line.component == CostComponent.LLM)
+    started = [line for line in stopped.value.receipt.cost.lines if line.purpose is LLMPurpose.START]
+    assert started and all(line.dollars is None for line in started)
 
 
 @pytest.mark.usefixtures("rust_core")
@@ -635,7 +641,11 @@ async def test_cancelling_a_run_stops_the_model_call_it_began_before_run_task_ra
     asking = asyncio.Event()
     stopped: list[str] = []
 
-    async def hanging(purpose: LLMPurpose, *_: Any, ledger: Any, **__: Any) -> Any:
+    generate = counted.llm.generate
+
+    async def hanging(purpose: LLMPurpose, *args: Any, ledger: Any, **kwargs: Any) -> Any:
+        if purpose is not LLMPurpose.START:
+            return await generate(purpose, *args, ledger=ledger, **kwargs)
         ledger.reserve(CostComponent.LLM)
         asking.set()
         try:
@@ -686,7 +696,9 @@ async def test_a_transient_model_failure_reaches_traced_on_its_clock(
         asked.append(request.url.path)
         if asked.count("/api/v1/chat/completions") == 1:
             return httpx.Response(503, json={"error": "busy"})
-        proposal = json.dumps({"url": "https://pypi.example/httpx"})
+        # The known pages are asked beside the start page, each for its own schema.
+        known = "urls" in request.content.decode()
+        proposal = json.dumps({"urls": []} if known else {"url": "https://pypi.example/httpx"})
         choice = {"index": 0, "message": {"role": "assistant", "content": proposal}, "finish_reason": "stop"}
         usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
         return httpx.Response(200, json={"id": "x", "model": "m", "choices": [choice], "usage": usage})

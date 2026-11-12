@@ -115,6 +115,10 @@ pub struct Worked {
 pub enum Unworked {
     /// The draft is at fault and a corrected one can fix it: the reason is shown to the composer.
     Draft(String),
+    /// The draft is at fault over the notes named by fact id: the reason speaks of "these notes", and the composer is
+    /// shown them by the labels it cites notes by. Written into the reason, the ids named no note it was shown, and a
+    /// ranked tally left 100 records unnamed was rejected the same way until the run gave up.
+    Notes { reason: String, notes: Vec<String> },
     /// Jev left a question unanswered, so no value can be stated.
     Unjudged,
 }
@@ -714,8 +718,8 @@ pub async fn work(
             // A record whose field is not in its note is counted as having none, and so leaves no value to state.
             let Some(amount) = chosen.as_deref().and_then(amount) else {
                 let field = text::repr(tally.field.as_deref().unwrap_or("value"));
-                let reason = format!("Note {} is one {} but states no {field}.", found[note].id, text::repr(&tally.of));
-                worked.insert(index, Err(Unworked::Draft(reason)));
+                let reason = format!("This note is one {} but states no {field}.", text::repr(&tally.of));
+                worked.insert(index, Err(Unworked::Notes { reason, notes: vec![found[note].id.clone()] }));
                 break;
             };
             amounts.push((note, amount));

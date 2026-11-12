@@ -7498,3 +7498,96 @@ async fn test_a_plan_stops_at_the_step_limit() {
     assert!(stopped.is_err(), "a planned fill went past the step limit");
     assert!(state.history.is_empty());
 }
+
+#[test]
+fn a_known_page_is_offered_to_navigate_to_until_the_run_is_on_it() {
+    // In a recorded first step on a package index, told only "another address" Jev searched the site for the item
+    // whose page was on offer, with one known page and with two. Naming a known page as one held read 0.73, against
+    // 0.66 for naming it as the address.
+    let agent = agent();
+    let mut state = run_state();
+    state.task = "Open the project page of the httpx package.".into();
+    state.known_pages = vec!["https://pypi.org/project/httpx/".into()];
+    let mut search = observation(&[]);
+    search.url = "https://pypi.org/".into();
+    let context = agent.context(&state, &search, Vec::new(), false, false).unwrap();
+    let request = crate::policy::build_request(&search, &[], &context, &Default::default(), 64);
+    let Question::Choice(operations) = &request.questions["operation"] else { panic!("an operation choice") };
+    // The one address is answered without Jev, so the operation it chooses names it.
+    let navigate = operations.criteria["navigate"].as_str().unwrap();
+    assert!(navigate.ends_with("known to hold an item the task names: https://pypi.org/project/httpx/"), "{navigate}");
+    let Question::Choice(targets) = &request.questions["navigate_target"] else { panic!("a navigate target") };
+    assert_eq!(targets.criteria["0"], "https://pypi.org/project/httpx/");
+    let mut there = search.clone();
+    there.url = "https://pypi.org/project/httpx/".into();
+    let context = agent.context(&state, &there, Vec::new(), false, false).unwrap();
+    let request = crate::policy::build_request(&there, &[], &context, &Default::default(), 64);
+    assert!(!request.questions.contains_key("navigate_target")); // With several, the known ones are named, since the operation is chosen apart from its target.
+    state.known_pages.push("https://pypi.org/project/requests/".into());
+    let context = agent.context(&state, &search, Vec::new(), false, false).unwrap();
+    let request = crate::policy::build_request(&search, &[], &context, &Default::default(), 64);
+    let Question::Choice(operations) = &request.questions["operation"] else { panic!("an operation choice") };
+    let navigate = operations.criteria["navigate"].as_str().unwrap();
+    assert!(
+        navigate.ends_with(
+            "known to hold an item the task names: https://pypi.org/project/httpx/, https://pypi.org/project/requests/"
+        ),
+        "{navigate}"
+    );
+}
+
+#[test]
+fn a_read_the_step_chose_keeps_the_steps_word_that_the_page_holds_evidence() {
+    // Counting quotes across ten pages, the step chose to read page 10 judging it showed what the task needs (0.89), and
+    // the read, asked again whether the page held anything, said no at 0.58: page 10 was dropped from the count.
+    let page = Observation { document_key: "page-10".into(), ..at("https://quotes.test/page/10/", &[]) };
+    let mut state = run_state();
+    let mut read = code_decision(Operation::Read, None);
+    read.shows_answer = Some(0.89);
+    assert!(Agent::page_shows(&state, &page, &read));
+    read.shows_answer = Some(0.2);
+    assert!(!Agent::page_shows(&state, &page, &read));
+    // A run composing from records read on earlier pages takes an unread page of them as holding more.
+    state.compose = true;
+    assert!(Agent::page_shows(&state, &page, &read));
+}
+
+#[tokio::test]
+async fn a_known_page_may_be_navigated_to_after_it_was_reached() {
+    // Offered PyPI's httpx page as a known page, Jev chose to open it and the navigation gate stopped the run stuck,
+    // as an address the caller had not supplied.
+    let agent = Agent::new(Arc::new(NoPage), authorized_jev(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Open the project page of the httpx package.".into();
+    // Only the address gate is under test, not whether the step needs confirming.
+    state.authorization = Authorization { irreversible_actions: true };
+    let known = "https://pypi.org/project/httpx/".to_string();
+    state.known_pages = vec![known.clone()];
+    let home = at("https://pypi.org/", &[]);
+    let decision = Decision { url: Some(known.clone()), ..code_decision(Operation::Navigate, None) };
+    let action = agent.action(&mut state, &home, &decision).await;
+    assert!(action.is_ok(), "{action:?}");
+    let elsewhere = Decision { url: Some("https://pypi.org/search/?q=httpx".into()), ..decision };
+    assert!(agent.action(&mut state, &home, &elsewhere).await.is_err(), "a guessed address is still refused");
+}
+
+#[tokio::test]
+async fn a_known_page_that_redirects_is_reached_by_the_address_it_was_opened_at() {
+    // A known page can redirect, an http address to https or a path to its canonical one, so the landing address is
+    // not the one offered. The navigation's own address marks it reached, ending the offer instead of spending the
+    // no-progress budget on the same redirect again.
+    let agent = Agent::new(Arc::new(HungPage::new(0)), authorized_jev(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Open the item page the task names.".into();
+    state.authorization = Authorization { irreversible_actions: true };
+    let known = "http://shop.test/item/1".to_string();
+    state.known_pages = vec![known.clone()];
+    let home = at("https://shop.test/", &[]);
+    let decision = Decision { url: Some(known.clone()), ..code_decision(Operation::Navigate, None) };
+    agent.step(&mut state, &home, &decision).await.expect("the known page opens");
+    let recorded = state.steps.last().expect("the navigation is recorded");
+    assert_eq!(recorded.outcome, StepOutcome::Executed);
+    assert_eq!(state.reached_known_pages, vec![known.clone()]);
+    let context = agent.context(&state, &home, Vec::new(), false, false).unwrap();
+    assert!(!context.known_pages.contains(&known), "a redirected known page is not offered again");
+}
