@@ -2389,11 +2389,20 @@ mod tests {
         /// A note not cut from page text repeats the offered note holding this, and with None no note.
         same: Option<&'static str>,
         asked: Mutex<Vec<IndexMap<String, Question>>>,
+        states: Mutex<Vec<(Vec<String>, Value)>>,
     }
 
     impl Tallying {
         fn new(member: &'static str, value: &'static str) -> Tallying {
-            Tallying { member, value, support: 0.9, rejects: None, same: None, asked: Mutex::new(Vec::new()) }
+            Tallying {
+                member,
+                value,
+                support: 0.9,
+                rejects: None,
+                same: None,
+                asked: Mutex::new(Vec::new()),
+                states: Mutex::new(Vec::new()),
+            }
         }
 
         fn asked(&self) -> IndexMap<String, Question> {
@@ -2404,7 +2413,7 @@ mod tests {
     impl DecisionClient for Tallying {
         fn evaluate<'a>(
             &'a self,
-            _: &'a Value,
+            state: &'a Value,
             questions: &'a IndexMap<String, Question>,
         ) -> BoxFuture<
             'a,
@@ -2412,6 +2421,7 @@ mod tests {
         > {
             use fastbrowse_core::decision::{ChoiceAnswer, ChoiceTag, Evaluation, NoulAnswer, NoulTag};
             self.asked.lock().unwrap().push(questions.clone());
+            self.states.lock().unwrap().push((questions.keys().cloned().collect(), state.clone()));
             let answer = |key: &str, question: &Question| match question {
                 Question::Choice(choice) => {
                     let most = self.profile().max_choice_options;
@@ -2586,6 +2596,14 @@ mod tests {
         // Only the note with two numbers needs Jev to say which is the price.
         let asked = jev.asked();
         assert_eq!(asked.keys().filter(|key| key.contains("/v")).collect::<Vec<_>>(), ["t0/v1"]);
+        {
+            let states = jev.states.lock().unwrap();
+            let (_, membership) =
+                states.iter().find(|(keys, _)| keys.iter().any(|key| key.starts_with("t0/n"))).unwrap();
+            assert_eq!(membership["notes"].as_array().unwrap().len(), 4);
+            let (_, numeric) = states.iter().find(|(keys, _)| keys.iter().any(|key| key.starts_with("t0/v"))).unwrap();
+            assert_eq!(numeric, &json!({"task": "Find the cheapest book"}));
+        }
         // Jev judges only that the book the claim names is one code found at the extreme.
         let Question::Choice(record) = &asked["claim0/record"] else { panic!("record is a choice") };
         let options: Vec<&str> = record.criteria.keys().map(String::as_str).collect();
