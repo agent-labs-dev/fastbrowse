@@ -467,13 +467,21 @@ impl CdpPage {
             }
         }
 
-        // Drawn beside the action, never in its path: a secret's field is left unmarked so nothing about it is drawn.
+        // The live marker carries coordinates, never a field value. Recording marks below still exclude secrets.
         #[cfg(feature = "cursor")]
         if let (Some(cursor), Point::At(x, y), Some(target)) = (&self.cursor, point, &target)
             && target.0 == active
-            && !action.secret
         {
             cursor.follow(self.cursor_geometry(target.0.clone(), observation.document_key.clone()), (x, y));
+            cursor.settled().await;
+            // The glide gives the page time to change. Never deliver a click using its earlier measurement.
+            let hit_test = action.operation.is_targeted() && action.operation != Operation::Blur;
+            let fresh = self.before_action(Some(target), hit_test, false, false, true, false).await?;
+            if fresh.1 != target.3 || !matches!(fresh.2, Point::At(fx, fy) if fx == x && fy == y) {
+                return Ok(result(StepOutcome::Stale, false, "control changed while the cursor moved"));
+            }
+            (before_fingerprint, _, point, announced, opens, address) = fresh;
+            drawn = false;
         }
         if !action.secret
             && let (Some(marks), Point::At(x, y)) = (&self.pointer_marks, point)
