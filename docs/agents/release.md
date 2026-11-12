@@ -6,9 +6,11 @@ Versions are patch-by-patch unless the maintainer says otherwise, and every one 
 2. `uv version <x.y.z>`, then `uv run python scripts/npm_versions.py --write`, which gives the SDK's manifest
    and the Rust workspace the same number. Open a `chore: <x.y.z>` PR. CI fails if the version has no entry or
    npm or Cargo disagrees with it.
-3. Before tagging, measure the release commit: `gh workflow run evals.yml --ref <sha>`, and for a minor release
+3. Before tagging, measure the release commit: `gh workflow run evals.yml --ref <branch-or-tag>`, and for a minor release
    (or a patch tagged with the line `Benchmarks: run`) the campaign `release-<x.y.z>`: every group and suite,
-   three repeats, `refresh_competitors` off unless the site needs new competitor rows. After a later fix, rerun
+   three repeats, `refresh_competitors` off unless the site needs new competitor rows. Workflow dispatch requires a
+   branch or tag, so confirm the resulting run's `head_sha` is the intended release commit before using its results.
+   After a later fix, rerun
    only the tasks it affects (`only`, with the same groups and repeats); be generous when the fix changes a
    prompt every task sees. `python3 scripts/release_gate.py --ref <sha> --version <x.y.z>` scores each task on
    the newest campaign run that measured it three times and says whether they pass: no task's pass rate below
