@@ -45,6 +45,16 @@ public record BrowserOptions(
         String extensionBrowser,
         boolean launch) {
 
+    /** The constructor published before separate local launch selection was added. */
+    public BrowserOptions(boolean local, LocalChrome chrome, String cloudProfile, String cdpUrl,
+            Integer cdpPort, boolean attach, String targetMatch, boolean foreground, String proxyCountry,
+            Integer viewportWidth, Integer viewportHeight, List<String> cloudExtensions,
+            Integer cloudTimeoutMinutes, boolean extension, String extensionBrowser) {
+        this(local, chrome, cloudProfile, cdpUrl, cdpPort, attach, targetMatch, foreground, proxyCountry,
+                viewportWidth, viewportHeight, cloudExtensions, cloudTimeoutMinutes, extension, extensionBrowser,
+                false);
+    }
+
     /** The default: a Browser Use Cloud browser. */
     public static final BrowserOptions CLOUD = builder().build();
 

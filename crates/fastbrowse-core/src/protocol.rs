@@ -362,11 +362,14 @@ impl RunTask {
     }
 
     /// Whether `local` alone reaches the user's own browser. A signed-out Chrome cannot do a signed-in task, so a
-    /// separate one starts only when `launch`, a headed window or a kept profile asks for it, and a browserless,
+    /// separate one starts only when `launch`, a binary, a headed window or a kept profile asks for it, and a browserless,
     /// desktop or attached run keeps its own meaning.
     pub fn local_means_extension(&self) -> bool {
-        let launched =
-            self.launch || self.chrome.as_ref().is_some_and(|chrome| chrome.headed || chrome.profile.is_some());
+        let launched = self.launch
+            || self
+                .chrome
+                .as_ref()
+                .is_some_and(|chrome| chrome.headed || chrome.profile.is_some() || chrome.binary.is_some());
         self.local
             && !launched
             && !self.fetch

@@ -24,8 +24,6 @@ Jev judges every model-selected click, drag or key chord, including links, navig
 confirm, prompt and before-unload dialogs. Code-selected pagination is exempt. One rule applies: the action
 proceeds when Jev judges it not irreversible, or when the run is authorized and Jev judges the task asked
 for it; otherwise the run stops at `needs_confirmation`. The irreversibility and task-authorization questions receive the action's control context and drag destination, the non-sensitive value submitted with Enter, and non-sensitive values from the submitted form. Sensitive values are excluded.
-The question includes creating an authenticated session and granting another site access to an account. Opening
-a sign-in page alone does neither. A task that only asks whether a page is logged in does not authorize signing in.
 
 A submission of a form that holds more than one password field changes an account's credentials whatever
 the page calls it, so Jev is not asked whether it is irreversible: an unauthorized run stops at

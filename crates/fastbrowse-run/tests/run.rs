@@ -416,6 +416,17 @@ fn local_uses_the_extension_unless_a_launch_is_asked_for() {
     let refused = |given: RunTask| fastbrowse_run::check(&task(given)).unwrap_err().to_string();
     let error = refused(RunTask { local: true, viewport: Some((640, 480)), ..RunTask::default() });
     assert!(error.contains("pass launch") && error.contains("viewport"), "{error}");
+    assert!(
+        !task(RunTask {
+            local: true,
+            chrome: Some(fastbrowse_core::models::LocalChrome {
+                binary: Some("custom-chrome".into()),
+                ..Default::default()
+            }),
+            ..RunTask::default()
+        })
+        .wants_extension()
+    );
     let error = refused(RunTask { extension: true, launch: true, ..RunTask::default() });
     assert!(error.contains("drop launch"), "{error}");
     let error = refused(RunTask { local: true, cloud_profile: Some("p".into()), ..RunTask::default() });

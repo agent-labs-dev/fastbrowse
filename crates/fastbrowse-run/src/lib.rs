@@ -336,6 +336,7 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
             ("launch", task.launch),
             ("chrome.headed", chrome.headed),
             ("chrome.profile", chrome.profile.is_some()),
+            ("chrome.binary", task.chrome.as_ref().is_some_and(|chrome| chrome.binary.is_some())),
             ("cdp_url", task.cdp_url.is_some()),
             ("cdp_port", task.cdp_port.is_some()),
             ("cloud_profile", task.cloud_profile.is_some()),

@@ -110,6 +110,9 @@ reads and can change them as it does any other tab, signed-in pages included: a 
 an ad blocker or a translation overlay changes what the run reads. For sensitive work, or runs you want to
 reproduce, use a separate Chrome profile with only fastbrowse installed.
 
+A local run with an explicit `chrome.binary` or `FASTBROWSE_CHROME` executable starts that Chrome instead of using
+the extension. Use `--launch` to make a separate Chrome explicit.
+
 ### A profile of its own
 
 Sign in once by hand in a profile of its own, then point runs at it. `--headed` is only needed for the first run:
