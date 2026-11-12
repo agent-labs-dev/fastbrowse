@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Legacy hosted dispatch outages can retain verified non-execution evidence without inventing a judge verdict or releasing their cost hold ([#1055](https://github.com/agent-labs-dev/fastbrowse/issues/1055)).
+
 - **Unchanged observations reuse their validated snapshot in Rust.** A matching document and read number shares the parsed snapshot instead of cloning and parsing its JSON again. Control deltas still reconstruct from the exact saved rows, and browser rendering checks remain current ([#943](https://github.com/agent-labs-dev/fastbrowse/issues/943)).
 
 - **Detached frames release their saved observations.** Removing an iframe now frees its retained full snapshots on the next frame read. Live frames retain their snapshots across tab switches ([#1062](https://github.com/agent-labs-dev/fastbrowse/issues/1062)).

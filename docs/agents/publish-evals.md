@@ -155,3 +155,20 @@ reason. A protocol change states its cause in its note, such as #356's uncapped 
 pull request became the approval. `python -m fastbrowse.evals.benchmarks --check-diff` still refuses any change to
 them, their archives or their protocol-change records that lacks the owner receipt they were approved with. A new
 campaign is not published there.
+
+Legacy hosted dispatches that lost their receipt can supply `--execution-receipts PATH ...` to
+`publish-candidate`. Each closed, versioned `ExecutionReceipt` sidecar binds the original selected,
+physical and budget ledger hashes, its canonical physical row, the complete stdout log and a separate
+provider archive. The archive records the run, every cursor page of terminal events and the stopped
+browser. Collection provenance names the API version, SDK version, collector and query time. These
+are hash-pinned provider observations, not provider-signed attestations or final billing receipts.
+
+The loader requires an exact unique join between WATCH browser IDs and physical attempts, an explicit
+`worker.never_started` event after dispatch failed at worker admission, present zero token usage and
+no execution events. Missing, unfamiliar or contradictory events reject the receipt. Only an
+unselected attempt preceding a genuinely graded selected retry may use it. Every physical attempt
+has exactly one semantic judgment or validated non-execution receipt; an ordinary missing judge
+still blocks publication. The non-execution detail remains ungraded in private tracking, with its
+reason and provider archive included in the evidence zip and run identity. Selected outcomes still
+come from real judgments. Raw ledgers, elapsed time and the full unknown-cost hold stay unchanged;
+provider IDs and detailed receipts stay out of the public candidate.
