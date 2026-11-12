@@ -239,6 +239,7 @@ class LLMPurpose(StrEnum):
     PAGES = "pages"
     DATES = "dates"
     KNOWN_PAGES = "known_pages"
+    RECOVERY_PAGES = "recovery_pages"
     SEARCH = "search"
     UNOBTAINABLE = "unobtainable"
     GROUPS = "groups"

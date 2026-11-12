@@ -375,6 +375,8 @@ public enum LLMPurpose
     Dates,
     [JsonStringEnumMemberName("known_pages")]
     KnownPages,
+    [JsonStringEnumMemberName("recovery_pages")]
+    RecoveryPages,
     [JsonStringEnumMemberName("search")]
     Search,
     [JsonStringEnumMemberName("unobtainable")]

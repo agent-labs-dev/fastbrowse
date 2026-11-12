@@ -12,7 +12,7 @@ use super::Agent;
 use super::helpers::{decision_label, describe};
 use super::state::{RunState, Step, Stop};
 use crate::policy::{Decision, StepContext, decide, takes};
-use crate::start::{accept_start, propose_route};
+use crate::start::{accept_start, propose_route, recovery_pages};
 
 /// The action a stall is about, which the next ask leaves out: its operation, and the control it acted on by label.
 pub(super) type Withheld = Option<(Operation, Option<String>)>;
@@ -215,6 +215,50 @@ impl Agent {
             // `conclude` makes, moved onto the path a stalled run reaches without ever concluding.
             if status == Status::Stuck {
                 self.read_drawn_page(state, observation).await?;
+            }
+            if status == Status::Stuck && state.recoveries == self.config.stall.max_recoveries + 1 {
+                let mut routes: Vec<_> = state.routes.iter().collect();
+                routes.sort();
+                let mut context = json!({
+                    "task": state.task,
+                    "page": observation,
+                    "evidence": state.notes.render_for_navigation(),
+                    "history": state.history,
+                    "already_offered": state.known_pages,
+                    "routes_opened": routes,
+                    "walled": state.walled,
+                    "reason": reason,
+                });
+                self.mask_strings(&mut context);
+                let proposal = match recovery_pages(&*self.llm, &context, Some(&state.ledger)).await {
+                    Ok(proposal) => {
+                        state.ledger.record([proposal.cost])?;
+                        proposal.data.urls
+                    }
+                    Err(crate::error::AgentError::Budget(budget)) => return Err(budget.into()),
+                    Err(error) => {
+                        self.event("recovery_pages_failed", || {
+                            Map::from_iter([("error".into(), error.to_string().into())])
+                        });
+                        Vec::new()
+                    }
+                };
+                let mut fresh = false;
+                for route in proposal.iter().filter_map(|url| accept_start(Some(url))) {
+                    let same = |url: &String| fastbrowse_core::navigation::same_address(&route, url);
+                    if !same(&observation.url)
+                        && !state.known_pages.iter().any(same)
+                        && !state.routes.iter().any(same)
+                        && !state.walled.iter().any(same)
+                        && !self.reveals_text(&route)
+                    {
+                        state.known_pages.push(route);
+                        fresh = true;
+                    }
+                }
+                if fresh {
+                    return self.ask_jev_again(state, observation, &reason, withheld).await;
+                }
             }
             // A canvas or picture carries what its text layer does not, so a run that gave up on one is told apart
             // from a stall on a page it could read: a caller otherwise retries the same task on a page it cannot read.

@@ -362,7 +362,7 @@ fn scripted_llm(case: &Value, purpose: &str, schema_name: &str, log: &[Value]) -
         return serde_json::json!({"data": data, "cost": cost});
     }
     // A case recorded before the run asked for known pages (#983) knows of none.
-    if schema_name == "KnownPages" && case["llm"].get(schema_name).is_none() {
+    if matches!(schema_name, "KnownPages" | "RecoveryPages") && case["llm"].get(schema_name).is_none() {
         return serde_json::json!({"data": {"urls": []}, "cost": cost});
     }
     let calls = case["calls"].as_array().unwrap();
@@ -1079,4 +1079,73 @@ async fn a_credentialed_list_wall_returns_to_actions_before_reading_it() {
         "{outcome}"
     );
     assert_eq!(outcome["final_url"], "https://list.test/page/2/");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stalled_run_offers_a_fresh_route_to_jev_before_stopping() {
+    let mut case = cases()
+        .into_iter()
+        .find(|case| {
+            case["name"] == "clicks on different buttons that change nothing trip the stall rule and Jev is asked again"
+        })
+        .unwrap();
+    case["calls"] = serde_json::json!([]);
+    case["config"] = serde_json::json!({"stall": {"unchanged_actions": 1, "max_recoveries": 0}});
+    case["limits"]["max_steps"] = 4.into();
+    case["llm"]["RecoveryPages"] = serde_json::json!([{ "urls": ["https://app.test/alternate"] }]);
+    case["jev"]["recover"] = serde_json::json!({"operation": "navigate"});
+    let mut alternate = case["site"]["screens"]["panel"].clone();
+    alternate["observation"]["url"] = "https://app.test/alternate".into();
+    alternate["observation"]["page_key"] = "alternate".into();
+    alternate["observation"]["document_key"] = "alternate".into();
+    alternate["capture"]["url"] = "https://app.test/alternate".into();
+    case["site"]["screens"]["alternate"] = alternate;
+    case["site"]["urls"]["https://app.test/alternate"] = "alternate".into();
+    let log: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let (outcome, _) = play(&case, Some(log.clone())).await;
+    assert!(
+        outcome["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|step| step["operation"] == "navigate" && step["target"] == "https://app.test/alternate"),
+        "{outcome}"
+    );
+    let log = log.lock().unwrap();
+    let proposals: Vec<_> = log
+        .iter()
+        .filter(|call| {
+            call["llm"]["messages"].as_str().is_some_and(|text| text.contains("Another route before stopping"))
+        })
+        .collect();
+    assert_eq!(proposals.len(), 2, "one proposal per stall, including after navigation makes progress");
+    assert_eq!(outcome["status"], "stuck", "a repeated route must not renew recovery: {outcome}");
+    let prompt = proposals[0]["llm"]["messages"].as_str().unwrap();
+    assert!(prompt.contains("untrusted data") && prompt.contains("Three switches") && prompt.contains("history"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_or_repeated_recovery_proposal_preserves_the_stall_stop() {
+    for proposal in
+        [serde_json::json!({"raise": "provider unavailable"}), serde_json::json!({"urls": ["https://app.test/"]})]
+    {
+        let mut case = cases()
+            .into_iter()
+            .find(|case| {
+                case["name"]
+                    == "clicks on different buttons that change nothing trip the stall rule and Jev is asked again"
+            })
+            .unwrap();
+        case["calls"] = serde_json::json!([]);
+        case["config"] = serde_json::json!({"stall": {"unchanged_actions": 1, "max_recoveries": 0}});
+        let current = case["site"]["screens"]["panel"]["observation"]["url"].clone();
+        let proposal = if proposal.get("urls").is_some() { serde_json::json!({"urls": [current]}) } else { proposal };
+        case["llm"]["RecoveryPages"] = serde_json::json!([proposal]);
+        let log: Arc<Mutex<Vec<Value>>> = Arc::default();
+        let (outcome, _) = play(&case, Some(log.clone())).await;
+        assert_eq!(outcome["status"], "stuck", "{outcome}");
+        assert!(!outcome["steps"].as_array().unwrap().iter().any(|step| step["operation"] == "navigate"));
+        let log = log.lock().unwrap();
+        assert_eq!(log.iter().filter(|call| call["llm"]["schema_name"] == "RecoveryPages").count(), 1);
+    }
 }

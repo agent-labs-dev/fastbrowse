@@ -479,6 +479,7 @@ str_enum! {
         Pages = "pages",
         Dates = "dates",
         KnownPages = "known_pages",
+        RecoveryPages = "recovery_pages",
         Search = "search",
         Unobtainable = "unobtainable",
         Groups = "groups",

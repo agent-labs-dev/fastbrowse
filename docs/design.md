@@ -366,7 +366,10 @@ Reloading remains restricted to an untouched opening page, since retrying a late
 changes nothing, a read that adds nothing, a return to a page state already seen with nothing read since, or a
 further return after one return has already counted for the same evidence is no progress, since one read buys one return. `unchanged_actions` such steps in a row ask Jev again. A page state not seen before or a read that adds
 evidence resets the count and renews the `max_recoveries` budget. The new ask names what failed and leaves the stalled
-action out of its options, and Jev's pick is the next decision on that page. Past `max_recoveries` the run ends
+action out of its options, and Jev's pick is the next decision on that page. Before a run would end
+`stuck` past `max_recoveries`, the LLM proposes fresh known addresses using the current observation, evidence
+and history. Code excludes the current page and routes already offered, opened or walled. Jev chooses whether
+to take a proposed route; authorization and spending limits still apply. Without a fresh route the run ends
 `stuck`, or `unverified` for a rejected composition, unless an unfilled field requires `needs_input` or a site
 failure establishes another status. An HTTP error page goes to Jev like any other, with its status among the
 step's page facts, so Jev reloads it when the status can clear, goes back or picks another link; code only waits out a
