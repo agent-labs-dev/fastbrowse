@@ -268,6 +268,19 @@ fn shown(notes: &Notes, evidence: &fastbrowse_core::models::Evidence) -> serde_j
     note
 }
 
+fn membership_state(task: &str, notes: &Notes) -> serde_json::Value {
+    // A date note alone does not show the separate label that makes it the current record. Keep source context
+    // before candidate deduplication, since identical labels on different pages still describe different records.
+    let context: Vec<_> = notes
+        .facts()
+        .into_iter()
+        .filter(|fact| !notes.superseded(&fact_id(fact)))
+        .filter_map(|fact| fact.evidence.as_ref())
+        .map(|evidence| shown(notes, evidence))
+        .collect();
+    json!({"task": task, "notes": context})
+}
+
 /// The first note a claim cites, as a membership question shows it: the composer's own example of the record it
 /// counts.
 fn example(notes: &Notes, cited: &[String]) -> Option<serde_json::Value> {
@@ -813,7 +826,7 @@ pub async fn work(
             members.insert(format!("t{index}/n{note}"), member_question(tally, &candidate.note, example.as_ref()));
         }
     }
-    let answered = ask(jev, &state, &members, tokens, ledger).await?;
+    let answered = ask(jev, &membership_state(task, notes), &members, tokens, ledger).await?;
     let member = |index: usize, note: usize| {
         let index = led.get(&index).copied().unwrap_or(index);
         match answered.as_ref().and_then(|a| a.get(&format!("t{index}/n{note}"))) {
@@ -1052,6 +1065,41 @@ mod tests {
     use fastbrowse_core::models::{CostBasis, CostComponent, CostLine};
 
     use super::*;
+
+    #[test]
+    fn membership_context_keeps_separate_page_labels_and_uncited_fields() {
+        use crate::memory::Fact;
+        use fastbrowse_core::models::{Evidence, FactReader};
+
+        let fact = |page: &str, quote: &str, start: usize| {
+            let evidence: Evidence = serde_json::from_value(json!({
+                "source_id": "s1", "url": page, "frame_id": null,
+                "captured_at": "2026-01-01T00:00:00Z", "capture_sha256": page,
+                "start": start, "end": start + quote.len(), "quote": quote,
+                "heading_path": ["Product", "Offer"],
+            }))
+            .unwrap();
+            Fact::read(quote, evidence, FactReader::JevChoice)
+        };
+        let mut old = fact("https://b.test", "Expired offer", 40);
+        old.evidence.as_mut().unwrap().capture_sha256 = "before".into();
+        let mut notes = Notes::new([
+            fact("https://a.test", "Current offer", 0),
+            fact("https://b.test", "Current offer", 0),
+            fact("https://b.test", "25", 20),
+            old,
+        ]);
+        notes.supersede("https://b.test", "https://b.test", "Current offer 25");
+        let state = membership_state("Compare current offers", &notes);
+        assert_eq!(state["task"], "Compare current offers");
+        let context = state["notes"].as_array().unwrap();
+        assert_eq!(context.len(), 3);
+        assert_eq!(context[0]["page"], "https://a.test");
+        assert_eq!(context[1]["page"], "https://b.test");
+        assert_eq!(context[0]["quote"], context[1]["quote"]);
+        assert_eq!(context[2]["quote"], "25");
+        assert_eq!(context[2]["headings"], json!(["Product", "Offer"]));
+    }
 
     #[test]
     fn a_comma_separated_line_offers_each_cell_as_well_as_the_grouped_number() {

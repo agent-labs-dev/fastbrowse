@@ -220,6 +220,11 @@ row is a place fastbrowse keeps Jev out:
 Asked whether a claim of 10 quotes followed from its 10 cited quotes, Jev answered 0.43 to 0.53, about what it gave
 a claim of 9: a count is not a question for Jev.
 
+Tally membership questions share the current source notes, so a record's date or price can be read alongside
+separate page labels. Context retains identical labels from different pages even when record candidates are
+deduplicated. The provider's input limits still apply: a question whose complete context does not fit is unscored,
+not sent with missing notes. Later numeric extraction and comparisons do not receive this extra context.
+
 ## Unused primitives
 
 - **Structured instructions** ([Structure](https://docs.typesafe.ai/primitives/advanced)): `crates/fastbrowse-core/src/decision.rs`
