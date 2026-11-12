@@ -359,7 +359,12 @@ fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], gr
     criteria.insert(NO_RECORD.into(), json!(format!(
         "The note is not one whole {of} and does not give the {field} of one. A name, label, heading, link or unrelated field alone is not a whole record. Several records, and a value stated across records such as a total or a starting price, are not one record. A note whose source_kind is heading or link and gives no quoted field value is a fragment naming the record, not a record with a missing field."
     )));
-    criteria.insert(NO_VALUE.into(), json!(format!("The note gives one whole {of}, but does not state its {field}. A name, label, heading, link or part alone is not a whole record.")));
+    // A heading or link names its record and is never the whole of it, so it cannot be one shown missing the field:
+    // offered that, Jev split 51 to 49 on whether the heading "Clerkenwell Coffee" was a shop with no price, and a
+    // correct cheapest shop was rejected for it.
+    if !fragment(note) {
+        criteria.insert(NO_VALUE.into(), json!(format!("The note gives one whole {of}, but does not state its {field}. A name, label, heading, link or part alone is not a whole record.")));
+    }
     Question::Choice(ChoiceQuestion::new(
         format!(
             "{UNTRUSTED}\nDoes this note give exactly one whole record among {of}, or its {field}? If it does, which quoted value is that record's {field}? source_kind is the captured block type. When it is heading or link, the quote is that heading or link, not the whole record it names. A field absent from a heading or link is not thereby absent from its record. whole_record true proves that this quote contains all text rendered for one repeated item; without that proof the quote may still describe a whole record. Absence from a fragment does not prove absence from its record. Note: {}",
@@ -367,6 +372,12 @@ fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], gr
         ),
         criteria,
     ))
+}
+
+/// Whether `note`, as a field question shows it, quotes a heading or link with no proof that it is all of its record.
+fn fragment(note: &serde_json::Value) -> bool {
+    let kind = note.get("source_kind").and_then(serde_json::Value::as_str);
+    matches!(kind, Some("heading" | "link")) && note.get("whole_record") != Some(&serde_json::Value::Bool(true))
 }
 
 #[derive(Debug)]
@@ -567,6 +578,10 @@ async fn narrowed(
     tokens: &TokenBudget,
     ledger: Option<&Ledger>,
 ) -> Result<Narrowed> {
+    // A fragment with no value to offer gives no field of a record, and code needs no question to say so.
+    if numbers.is_empty() && fragment(note) {
+        return Ok(Narrowed::NoRecord);
+    }
     let max = jev.profile().max_choice_options;
     // Two options distinguish an irrelevant note from a whole record whose field is missing.
     while numbers.len() + 2 > max {
@@ -1358,6 +1373,31 @@ mod tests {
         assert!(question.instructions.contains("Absence from a fragment does not prove absence from its record"));
         assert!(question.criteria[NO_VALUE].as_str().unwrap().contains("does not state its"));
         assert!(question.criteria[NO_RECORD].as_str().unwrap().contains("source_kind is heading or link"));
+    }
+
+    /// A shop's name heading beside its price line was judged a shop with no price 51 to 49, and the correct cheapest
+    /// shop was rejected for it.
+    #[tokio::test]
+    async fn a_heading_is_never_offered_as_a_record_missing_its_field() {
+        let tally = Tally {
+            op: Op::Min,
+            of: "shop".into(),
+            field: Some("price".into()),
+            rank: None,
+            by: None,
+            group: None,
+            written: "Clerkenwell Coffee".into(),
+        };
+        let heading = json!({"quote": "Clerkenwell Coffee", "source_kind": "heading"});
+        let Question::Choice(question) = field_question(&tally, &heading, &["84.99".into()], false) else { panic!() };
+        assert!(!question.criteria.contains_key(NO_VALUE), "{:?}", question.criteria.keys());
+        let mut whole = heading.clone();
+        whole["whole_record"] = true.into();
+        let Question::Choice(question) = field_question(&tally, &whole, &[], false) else { panic!() };
+        assert!(question.criteria.contains_key(NO_VALUE));
+        let tokens = FirstField.profile().fit(None).tokens;
+        let answer = narrowed(&FirstField, &json!({}), &tally, &heading, Vec::new(), &tokens, None).await.unwrap();
+        assert!(matches!(answer, Narrowed::NoRecord));
     }
 
     #[test]

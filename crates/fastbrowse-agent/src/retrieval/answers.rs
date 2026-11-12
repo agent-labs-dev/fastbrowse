@@ -852,8 +852,11 @@ pub(crate) async fn compose_reviewed(
         }
         all
     });
+    // A rewrite of an answer rejected for copying page text beside the value is held to that check again: unchecked,
+    // "The site received the file Received stocktake.txt (34 bytes)." repeated the rejected draft and passed.
+    let exact = feedback.is_some_and(|feedback| rejected_checks(feedback).iter().any(|check| check == "exact"));
     let reviewed =
-        review_composition(jev, llm, task, columns.as_deref(), claims, notes, ledger, reports, steps).await?;
+        review_composition(jev, llm, task, columns.as_deref(), claims, notes, ledger, reports, exact, steps).await?;
     let CheckedClaims { claims, problem, rejection, denies_steps } = reviewed;
     let claims = if numbers { numbered(claims) } else { claims };
     if !reports {
@@ -967,6 +970,7 @@ async fn review_claims(
         notes,
         ledger,
         require_coverage,
+        false,
         steps,
     )
     .await
@@ -982,6 +986,7 @@ async fn review_composition(
     notes: &Notes,
     ledger: Option<&Ledger>,
     require_coverage: bool,
+    exact: bool,
     steps: &[Value],
 ) -> Result<CheckedClaims> {
     if claims.is_empty() {
@@ -1147,15 +1152,18 @@ async fn review_composition(
     if require_coverage && fits_one {
         questions.insert("coverage".into(), coverage_question(task, columns, &claims, notes, steps));
     }
+    if exact && fits_one {
+        questions.insert("exact".into(), exact_question(task, &claims));
+    }
     if !steps.is_empty() && fits_one {
         questions.insert("actions".into(), actions_question(steps, columns, &claims));
     }
     // A known citation can still be attached to another record's value, so Jev judges the original quotes after
     // every packing round has finished, rather than the intermediate prose those rounds wrote.
     let too_large = |question: &Question| state_chars > tokens.input_chars(&[question.dump_json()]);
-    let oversized_claim =
-        questions.iter().any(|(key, question)| key != "coverage" && key != "actions" && too_large(question));
-    let oversized_coverage = questions.get("coverage").is_some_and(too_large);
+    let whole = ["coverage", "actions", "exact"];
+    let oversized_claim = questions.iter().any(|(key, question)| !whole.contains(&key.as_str()) && too_large(question));
+    let oversized_coverage = ["coverage", "exact"].iter().any(|key| questions.get(*key).is_some_and(too_large));
     let oversized_actions = questions.get("actions").is_some_and(too_large);
     let oversized = oversized_claim || oversized_coverage || oversized_actions;
     let (answered, failure) = if questions.is_empty() {
@@ -1182,6 +1190,7 @@ async fn review_composition(
     rejected_checks.extend(uncited.iter().map(|claim| format!("claim{}/citations", claim["claim"])));
     rejected_checks.extend(untallied.iter().map(|claim| format!("claim{}/tally", claim["claim"])));
     let coverage = !require_coverage || holds("coverage") == Some(true);
+    let only_asked = !questions.contains_key("exact") || holds("exact") == Some(true);
     // A contradiction of the run's own steps cannot be pinned to one claim, so none is shown unless the answer agrees.
     let agrees = !questions.contains_key("actions") || holds("actions") == Some(true);
     let denies_steps = holds("actions") == Some(false);
@@ -1244,6 +1253,8 @@ async fn review_composition(
             Some("The written answer contradicts a step this run took: it says something was not done or already existed that the run's own step may have done.".into())
         } else if !coverage {
             Some("The answer does not establish every requested fact or value.".into())
+        } else if !only_asked {
+            Some("The answer holds page text beside what the task asks to be told.".into())
         } else {
             None
         }
@@ -1519,18 +1530,24 @@ fn pages_read(notes: &Notes) -> Vec<String> {
     unique(notes.facts().into_iter().filter_map(fact_page))
 }
 
+/// The checks a draft's feedback names as rejected.
+fn rejected_checks(feedback: &str) -> Vec<String> {
+    let Ok(feedback) = serde_json::from_str::<serde_json::Value>(feedback) else { return Vec::new() };
+    let checks = feedback["rejected_checks"].as_array().into_iter().flatten();
+    checks.filter_map(serde_json::Value::as_str).map(str::to_string).collect()
+}
+
 /// The claims of a rejected draft that passed every check and still cite current notes or the run's own steps, each as
 /// it was checked and as it was drafted. Steps only append, so an `sN` names the same step in the rewrite. None is kept
 /// when the answer denied a step the run took, or when coverage or exactness was rejected: these are faults of the
 /// claims together, the passed ones included, and a bare "Send updates to my inbox ..." kept as written left the
 /// rewrite only wrong claims to add.
 fn passed_claims(feedback: &str, notes: &Notes, steps: &[Value]) -> Vec<(Claim, BoundClaim)> {
-    let Ok(feedback) = serde_json::from_str::<serde_json::Value>(feedback) else { return Vec::new() };
-    let rejected: Vec<&str> =
-        feedback["rejected_checks"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_str).collect();
-    if rejected.iter().any(|check| matches!(*check, "actions" | "coverage" | "exact")) {
+    let rejected = rejected_checks(feedback);
+    if rejected.iter().any(|check| matches!(check.as_str(), "actions" | "coverage" | "exact")) {
         return Vec::new();
     }
+    let Ok(feedback) = serde_json::from_str::<serde_json::Value>(feedback) else { return Vec::new() };
     let claims = |key: &str| serde_json::from_value::<Vec<Claim>>(feedback[key].clone()).ok();
     let (Some(checked), Some(drafted)) = (claims("draft_claims"), claims("drafted_claims")) else { return Vec::new() };
     let compositions: Vec<Option<Composition>> =
@@ -2210,6 +2227,7 @@ mod tests {
             &notes,
             None,
             false,
+            false,
             &[],
         )
         .await
@@ -2339,6 +2357,7 @@ mod tests {
             &notes,
             None,
             true,
+            false,
             &[],
         )
         .await
@@ -3335,6 +3354,32 @@ mod tests {
         // A pick that holds more than the answer is written again whole, and its feedback has no drafted copy to keep.
         let feedback = dumps(&json!({"columns": null, "draft_claims": [&passed], "rejected_checks": ["exact"]}));
         assert!(passed_claims(&feedback, &notes, &[]).is_empty());
+    }
+
+    /// A pick of "Received stocktake.txt (34 bytes)." for the file a site received was rejected as holding more than the
+    /// name, and the rewrite inserted that whole note again: the rewrite answers to the check that rejected its draft.
+    #[tokio::test]
+    async fn a_rewrite_after_an_exact_rejection_is_checked_for_exactness_again() {
+        let notes = Notes::new([fact(0, "Received stocktake.txt (34 bytes).".into())]);
+        let picked = Claim::new("Received stocktake.txt (34 bytes).", vec![crate::memory::fact_id(notes.facts()[0])]);
+        let task = "Submit the document, then tell me the name of the file the site received.";
+        for (rejected, problem) in [(None, None), (Some("exact"), Some("beside what the task asks"))] {
+            let mut llm = RecordingLlm::new(None);
+            llm.claims = Some(vec![Claim::new(
+                "The site received the file Received stocktake.txt (34 bytes).",
+                vec!["e0".into()],
+            )]);
+            let jev = Support { rejected: rejected.map(str::to_string), ..Support::new(true) };
+            let feedback = dumps(&json!({"columns": null, "draft_claims": [&picked], "rejected_checks": ["exact"]}));
+            let reviewed = compose_reviewed(&jev, &llm, task, &notes, None, Some(&feedback), true, &[]).await.unwrap();
+            assert!(jev.asked.lock().unwrap().iter().any(|asked| asked.contains_key("exact")));
+            let found = reviewed.answer.problem.as_deref();
+            assert_eq!(
+                found.map(|found| found.contains(problem.unwrap_or_default())),
+                problem.map(|_| true),
+                "{found:?}"
+            );
+        }
     }
 
     /// Asked for the priciest Travel book and its price, the composer wrote the book's name as a tally and "It costs
