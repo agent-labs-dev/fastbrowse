@@ -1853,6 +1853,116 @@ mod tests {
             .unwrap()
     }
 
+    /// Retained requests and responses exercise the real client's repair conversation with the private schema.
+    #[tokio::test]
+    async fn retained_source_requests_repair_through_the_production_client() {
+        use std::collections::VecDeque;
+        use std::sync::Arc;
+
+        use fastbrowse_clients::http::{Http, Request, Response};
+        use fastbrowse_clients::openai_compatible::{LLMOptions, OpenAICompatibleLLM};
+
+        let cases: Vec<Value> =
+            serde_json::from_str(include_str!("../../tests/fixtures/source_binding_repair.json")).unwrap();
+        for case in cases {
+            let user = case["user"].as_str().unwrap();
+            let items: Vec<ComposeItem> = user
+                .split_once("# Notes\n")
+                .unwrap()
+                .1
+                .lines()
+                .filter(|line| !line.is_empty())
+                .map(|line| {
+                    let (label, body) = line.split_once(": ").unwrap();
+                    let note: Value = serde_json::from_str(body).unwrap();
+                    ComposeItem {
+                        label: label.into(),
+                        text: note["text"].as_str().unwrap().into(),
+                        sources: vec![label.into()],
+                        quotable: true,
+                        superseded: Some(false),
+                        page: None,
+                        headings: vec![],
+                        links: vec![],
+                        after_step: None,
+                    }
+                })
+                .collect();
+            let good = case["repaired"].as_str().unwrap();
+            // The malformed paid reply was not retained. This prefix is a synthetic EOF, not that receipt.
+            let synthetic_eof = "{\"claims\":[{\"text\":[\"unfinished";
+            let mut failures = vec![(case["original"].as_str().unwrap(), false), (synthetic_eof, true)];
+            if let Some(missing) = case["missing_computed"].as_str() {
+                failures.push((missing, false));
+            }
+            for (bad, eof) in failures {
+                let replies = Arc::new(Mutex::new(VecDeque::from([bad.to_string(), good.to_string()])));
+                let sent = Arc::new(Mutex::new(Vec::<Value>::new()));
+                let replies_for_http = replies.clone();
+                let sent_for_http = sent.clone();
+                let http = Http::new(Arc::new(move |request: Request| {
+                    assert_eq!(request.url, "https://llm.test/v1/chat/completions");
+                    sent_for_http.lock().unwrap().push(serde_json::from_slice(&request.body).unwrap());
+                    let content = replies_for_http.lock().unwrap().pop_front().expect("one repair only");
+                    Box::pin(async move {
+                        Ok(Response::json(
+                            200,
+                            &json!({
+                                "choices": [{"message": {"content": content}, "finish_reason": "stop"}],
+                                "usage": {"prompt_tokens": 20, "completion_tokens": 5, "cost": 0.001}
+                            }),
+                        ))
+                    }) as BoxFuture<'static, _>
+                }));
+                let llm = OpenAICompatibleLLM::new(
+                    "test-key",
+                    http,
+                    "https://llm.test/v1",
+                    HashMap::from([(LLMPurpose::Compose, "deepseek/deepseek-v4.1-flash-1017".into())]),
+                    LLMOptions::default(),
+                )
+                .unwrap();
+                let mut messages = compose_messages("", &[]);
+                messages[1].content = user.into();
+                let result = llm
+                    .generate_value(LLMPurpose::Compose, &messages, &ComposeSchema { items: &items }, None)
+                    .await
+                    .unwrap();
+                assert_eq!(result.cost.dollars, Some(0.002));
+                assert_eq!((result.cost.input_tokens, result.cost.output_tokens), (40, 10));
+                assert!(replies.lock().unwrap().is_empty());
+                let requests = sent.lock().unwrap();
+                assert_eq!(requests.len(), 2);
+                assert_eq!(requests[0]["messages"][1]["content"], user);
+                let retry = requests[1]["messages"].as_array().unwrap();
+                if eof {
+                    assert_eq!(requests[0]["messages"], requests[1]["messages"]);
+                } else {
+                    assert_eq!(retry[2]["content"], bad);
+                    let detail = retry[3]["content"].as_str().unwrap();
+                    assert!(detail.starts_with("Correct the JSON to match the schema. Validation errors:"));
+                    if case["missing_computed"].as_str() == Some(bad) {
+                        assert!(detail.contains("exactly one computed part"));
+                    }
+                }
+                let draft: AnswerDraft = serde_json::from_value(result.data).unwrap();
+                let bound = draft.claims.into_iter().next().unwrap().bind(&items).unwrap();
+                if case["case"] == "paper-filters-compose.json" {
+                    assert_eq!(
+                        bound.text,
+                        "\"Paper Filters - GBP 4.60\" is the cheapest product in the shop, at Paper Filters."
+                    );
+                    assert_eq!(bound.tally.as_ref().unwrap().op, Op::Min);
+                } else {
+                    assert_eq!(
+                        bound.text,
+                        "The new window's heading is \"Example of a new window page for Automation Testing Practice\"."
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn source_parts_copy_whole_notes_and_own_both_quote_delimiters() {
         let heading = "Example of a new window page for Automation Testing Practice";
