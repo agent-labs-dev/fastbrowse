@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Release comparisons reject missing or unknown costs and invalid timing measurements instead of treating them as zero ([#1059](https://github.com/agent-labs-dev/fastbrowse/issues/1059)).
+
 - **Live eval judges receive the final viewport image.** The observer captures the selected tab before changing modal visibility, retaining visual evidence such as CSS-generated marks alongside text and controls. Tasks declaring secrets withhold the image entirely ([#1056](https://github.com/agent-labs-dev/fastbrowse/issues/1056)).
 
 - **Changed observations reuse unchanged control rows.** A control retains its base fields when its source, DOM, ancestor attributes, current name, form ownership and native values agree. Geometry and action guards remain current, including after a layout shift or scroll ([#943](https://github.com/agent-labs-dev/fastbrowse/issues/943)).
