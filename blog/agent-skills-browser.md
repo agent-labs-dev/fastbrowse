@@ -40,6 +40,8 @@ The skill picks a browser in this order:
 
 If no extension is connected, the skill asks you to connect it. A separate browser starts only when you permit `--launch`. An existing DevTools address also lets it drive a Chrome you already have open. Local browsing needs only the model key, and an already signed-in browser needs no credential.
 
+For a widget, describe the operation you need, such as stepping a slider or moving through tabs. Name the chord when the site requires a specific keyboard shortcut.
+
 Behind the skill, the agent calls the CLI or an MCP server. Either way the run reports a status. `complete` means the task was verified, and the other statuses say what was missing: an input, an authorization, evidence for a claim, or access to the page.
 
 ## Limits and writes

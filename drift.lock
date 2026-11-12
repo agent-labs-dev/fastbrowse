@@ -18,7 +18,7 @@ sig = "e9c193d74c5ba38c"
 [[bindings]]
 doc = "blog/agent-skills-browser.md"
 target = "skills/fastbrowse/SKILL.md"
-sig = "8d45de938b34a890"
+sig = "5133119851479e5d"
 
 [[bindings]]
 doc = "blog/ai-agent-click-not-on-page.md"
