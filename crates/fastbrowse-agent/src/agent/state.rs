@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use fastbrowse_core::decision::DecisionError;
+use fastbrowse_core::decision::{Answer, DecisionError};
 use fastbrowse_core::llm::LLMError;
 use fastbrowse_core::models::{Attachment, Authorization, Evidence, Status, StepChoice, StepResult, WallKind};
 use fastbrowse_core::page::{BrowserError, Capture, Control, Observation};
@@ -357,6 +357,9 @@ pub(crate) struct RunState {
     /// The latest finish check found this step the task asks to be carried out not yet done.
     pub undone: Option<String>,
     pub output_intent: OutputIntent,
+    /// Startup judgments are applied when first needed. Kept behind a pointer because growing the run state
+    /// overflowed a debug worker stack during a fill.
+    pub output_answers: Option<Box<IndexMap<String, Answer>>>,
     /// What the task says about signing in, asked of the task alone at the first sign-in wall. None until then, and
     /// when Jev gave no answer.
     pub sign_in: Option<SignInNeeds>,
@@ -768,6 +771,7 @@ impl RunState {
             refused: false,
             undone: None,
             output_intent: OutputIntent::Unknown,
+            output_answers: None,
             sign_in: None,
             dates: Vec::new(),
             appearance: false,

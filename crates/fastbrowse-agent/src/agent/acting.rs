@@ -1,6 +1,6 @@
 //! Turning a decision into an action: the gates code owns and the text a field gets.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionError, EVEN_ODDS, NoulQuestion, Question};
@@ -267,6 +267,24 @@ pub(super) enum Carried {
     Undone(String),
     /// Not carried out, and the page or the recent actions show the site does not allow it.
     Refused,
+}
+
+fn choice_picks(
+    questions: &IndexMap<String, Question>,
+    answers: &IndexMap<String, Answer>,
+) -> Result<IndexMap<String, String>, DecisionError> {
+    let mut picks = IndexMap::new();
+    for (key, question) in questions {
+        let Question::Choice(question) = question else { continue };
+        let Some(Answer::Choice(answer)) = answers.get(key) else {
+            return Err(DecisionError::Failed("expected a choice answer".into()));
+        };
+        if !question.criteria.contains_key(&answer.choice) {
+            return Err(DecisionError::Failed(format!("Jev picked {}, which was not offered", answer.choice)));
+        }
+        picks.insert(key.clone(), answer.choice.clone());
+    }
+    Ok(picks)
 }
 
 impl Agent {
@@ -1498,10 +1516,7 @@ impl Agent {
         Ok(picks["pick"].clone())
     }
 
-    pub(super) async fn output_intent(&self, state: &mut RunState) -> Step<OutputIntent> {
-        if state.output_intent != OutputIntent::Unknown {
-            return Ok(state.output_intent);
-        }
+    pub(super) fn output_questions(&self, task: &str) -> IndexMap<String, Question> {
         let criteria = IndexMap::from([
             (
                 "text".to_string(),
@@ -1556,7 +1571,7 @@ impl Agent {
                 ),
             ),
         ]);
-        let mut asked = vec![
+        let mut asked: Vec<Asked<'static>> = vec![
             // Asked what output the task wants, Jev named the page a task to open ends on as its output, and
             // "Open the httpx repository." was answered with composed text it never asked for (#910).
             ("pick", "Does the task ask to be told something, and in what form?".into(), criteria),
@@ -1581,7 +1596,29 @@ impl Agent {
             ]);
             asked.push(("steps", "What does the task ask to be done on a page?".into(), steps));
         }
-        let picks = self.ask_choices(state, None, asked).await?;
+        asked
+            .into_iter()
+            .map(|(key, question, criteria)| (key.to_string(), page_question(task, &question, criteria)))
+            .collect()
+    }
+
+    pub(super) async fn output_intent(&self, state: &mut RunState) -> Step<OutputIntent> {
+        if state.output_intent != OutputIntent::Unknown {
+            return Ok(state.output_intent);
+        }
+        let questions = self.output_questions(&state.task);
+        let answers = match state.output_answers.take() {
+            Some(answers) => *answers,
+            None => {
+                state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+                let evaluation =
+                    jev_purpose(JevPurpose::Action, self.jev.evaluate(&JsonValue::Object(Map::new()), &questions))
+                        .await?;
+                state.ledger.record([evaluation.cost])?;
+                evaluation.answers
+            }
+        };
+        let picks = choice_picks(&questions, &answers)?;
         state.asks_steps = picks.get("steps").is_some_and(|steps| steps == "acts");
         state.appearance = picks["evidence"] == "appearance";
         state.extent = match picks["extent"].as_str() {
@@ -1739,8 +1776,6 @@ impl Agent {
         context: Option<&Map<String, JsonValue>>,
     ) -> Step<IndexMap<String, String>> {
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
-        let offered: IndexMap<String, HashSet<String>> =
-            asked.iter().map(|(key, _, criteria)| (key.to_string(), criteria.keys().cloned().collect())).collect();
         let questions: IndexMap<String, Question> = asked
             .into_iter()
             .map(|(key, question, criteria)| (key.to_string(), page_question(&state.task, &question, criteria)))
@@ -1756,18 +1791,7 @@ impl Agent {
         };
         let evaluation = jev_purpose(JevPurpose::Action, self.jev.evaluate(&page, &questions)).await?;
         state.ledger.record([evaluation.cost.clone()])?;
-        let mut picks = IndexMap::new();
-        for (key, options) in &offered {
-            let Some(Answer::Choice(answer)) = evaluation.answers.get(key) else {
-                return Err(fastbrowse_core::decision::DecisionError::Failed("expected a choice answer".into()).into());
-            };
-            if !options.contains(&answer.choice) {
-                let message = format!("Jev picked {}, which was not offered", answer.choice);
-                return Err(fastbrowse_core::decision::DecisionError::Failed(message).into());
-            }
-            picks.insert(key.clone(), answer.choice.clone());
-        }
-        Ok(picks)
+        Ok(choice_picks(&questions, &evaluation.answers)?)
     }
 
     async fn accept_dialog(&self, state: &mut RunState, observation: &Observation) -> Step<bool> {
