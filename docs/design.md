@@ -269,7 +269,8 @@ sources cover the request; the generated result is checked before delivery.
 Answer claims use numbered Markdown links built from those notes. `RunResult.citations` exposes the cited facts and
 text-fragment deep links; unused facts have no citation. The LLM writes a composed answer from the notes. Jev judges
 each final claim against its original cited quotes, including record identity and values, after any packing rounds.
-The composer selects source wording by note id in private text parts. Code copies the whole selected note and adds
+The composer selects source wording by note id in private text parts, either the whole note or a part of it, such as
+one field of a record, that code finds in the note's text exactly as written. Code copies the selection and adds
 quotation delimiters when requested; prose parts keep explanatory wording separate. A tally has one computed part,
 which code fills without replacing matching text inside a source part. Packed compositions expose their original
 sources separately, and kept claims retain these parts through a rewrite. Split notes cannot be selected as whole
@@ -320,7 +321,10 @@ judges the claims against the steps the run carried out on the page: an answer t
 already existed, when one of those steps may have done it has every claim withheld, and a run still finishing spends a
 recovery to write it again. Only that rewrite gives the composer the steps, as the run's own record and never as
 citations; on every other draft a long run's clicks would crowd out the notes it writes from. Runs with a caller-supplied output schema
-spend the same recovery, and when it ends without a checked answer they retain their extracted data and end `unverified`. Recovery is not
+spend the same recovery, and when it ends without a checked answer they retain their extracted data and end `unverified`.
+Each schema field is chosen after the answer is checked, with its claims beside the candidates, or with the claims that
+passed when a rewrite is pending: a field choice alone cannot compare records, and chose the other package where the
+answer worked out which was newer. Recovery is not
 attempted when a claim lacks a retained source quote or packed composition cannot reduce to one request.
 Exhausted composition recovery retains supported claims and ends `unverified`, unless a missing field value or
 site failure establishes another status. Those claims can be reused without another composition call only while
@@ -333,7 +337,7 @@ the task also asks whether each picked text is only what the task asks, in the f
 cut from the page, such as a table cell or a sentence, and can hold the value beside other text, or be a whole date
 where the task asks for its year. When it holds more, the composer writes the answer from the picks and their context,
 told that they held more than the task asks, and its claims pass the same checks as any composed answer, this one
-included: a source part inserts its note's whole text, so a composed answer can hold more than the task asks too.
+included: a source part can insert its note's whole text, so a composed answer can hold more than the task asks too.
 
 ## Prompt limits and progress
 

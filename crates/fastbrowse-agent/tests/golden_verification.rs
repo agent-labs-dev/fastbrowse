@@ -74,7 +74,8 @@ fn replay(case: &Value, update: bool) -> Result<Option<Value>, String> {
         }
         "extract" => {
             let schema = record_schema(&args["schema"])?;
-            let options = ExtractOptions { notes: notes.as_ref(), tokens: tokens.clone(), ledger: ledger.as_ref() };
+            let options =
+                ExtractOptions { notes: notes.as_ref(), tokens: tokens.clone(), ledger: ledger.as_ref(), answer: None };
             let capture: Capture = parse(&args["capture"]);
             outcome(block_on(verification::extract(&jev, args["task"].as_str().unwrap(), &capture, &schema, &options)))
         }

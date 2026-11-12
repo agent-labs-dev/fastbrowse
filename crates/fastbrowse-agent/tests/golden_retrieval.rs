@@ -67,6 +67,7 @@ fn replay(case: &Value, update: bool) -> Result<Option<Value>, String> {
                 args.get("task").and_then(Value::as_str),
                 &record_fields,
                 MAX_CHOICE_OPTIONS,
+                false,
             ))
         }
         "field_candidates" => match field_candidates(&capture(), &field(&args["field"])) {

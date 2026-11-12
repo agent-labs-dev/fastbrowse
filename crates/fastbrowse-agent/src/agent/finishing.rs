@@ -145,17 +145,25 @@ impl Agent {
         Ok(None)
     }
 
-    /// The caller's schema, filled from a capture taken inside this branch so it overlaps the answer.
-    async fn extraction(
+    /// The caller's schema, filled from a capture taken inside this branch so it overlaps the answer, each field chosen
+    /// to agree with `answer`'s claims.
+    async fn schema_fields(
         &self,
-        task: &str,
-        notes: &Notes,
-        schema: &RecordSchema,
-        ledger: &fastbrowse_core::telemetry::Ledger,
-    ) -> Step<Extraction> {
+        state: &RunState,
+        output_schema: Option<&RecordSchema>,
+        answer: Option<&ComposedAnswer>,
+    ) -> Step<Option<Extraction>> {
+        let Some(schema) = output_schema else { return Ok(None) };
         let capture = self.capture().await?;
-        let options = ExtractOptions { notes: Some(notes), tokens: self.config.tokens.clone(), ledger: Some(ledger) };
-        Ok(extract(&*self.jev, task, &capture, schema, &options).await?)
+        let claims: Option<Vec<String>> =
+            answer.map(|answer| answer.claims.iter().map(|claim| claim.text.clone()).collect());
+        let options = ExtractOptions {
+            notes: Some(&state.notes),
+            tokens: self.config.tokens.clone(),
+            ledger: Some(&state.ledger),
+            answer: claims.as_deref().filter(|claims| !claims.is_empty()),
+        };
+        Ok(Some(extract(&*self.jev, &state.task, &capture, schema, &options).await?))
     }
 
     /// Open a next page of the list that a task over the whole list, or over pages of it it names, left unread, as a
@@ -268,13 +276,6 @@ impl Agent {
             self.read_drawn_page(state, observation).await?;
         }
         let mut evidence: Vec<Evidence> = state.notes.facts().iter().filter_map(|fact| fact.evidence.clone()).collect();
-        let extraction = match output_schema {
-            Some(schema) => {
-                let (notes, task, ledger) = (state.notes.clone(), state.task.clone(), state.ledger.clone());
-                Some(self.extraction(&task, &notes, schema, &ledger).await?)
-            }
-            None => None,
-        };
         let mut rejection = None;
         let mut answered = if intent == OutputIntent::Image {
             None
@@ -360,7 +361,9 @@ impl Agent {
                 ));
             }
             state.composition_feedback = Some(rejection);
-            state.schema_partial = extraction;
+            // Filled from the claims that passed, so a stop before the rewrite keeps no value the answer did not give.
+            let passed = answered.as_ref().filter(|answer| !answer.claims.is_empty());
+            state.schema_partial = self.schema_fields(state, output_schema, passed).await?;
             self.recover(state, observation, &reason, Status::Unverified, None).await?;
             return Ok(None);
         }
@@ -376,6 +379,8 @@ impl Agent {
         {
             answered = Some(partial.clone());
         }
+        // Each field is chosen from what the answer gives, so data cannot name what the answer does not.
+        let extraction = self.schema_fields(state, output_schema, answered.as_ref()).await?;
         if let Some(composed) = answered {
             let (text, cited) = self.public_answer(&composed);
             answer_text = (!text.is_empty()).then_some(text);
