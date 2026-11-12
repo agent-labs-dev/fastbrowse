@@ -346,8 +346,6 @@
     registry.selfUpdating = new Set();
     registry.changed = new Set();
     registry.quiet = false;
-    registry.dirtyRecords = [];
-    registry.acceptMutations = false;
     // When the document last moved and when the run last touched it, as `performance.now()` reads them. A settle
     // resolves from these rather than from re-reading the page: the observer is the page's own report that it is still
     // writing, so one evaluation waits on it instead of being sent again until two reads agree. The action's own input
@@ -373,7 +371,6 @@
     }
     new MutationObserver(records => {
       registry.lastMutation = performance.now();
-      if (registry.acceptMutations) registry.dirtyRecords.push(...records);
       for (const r of records) {
         // An attribute change moves the page but rewrites no text, so it stamps the clock above and is not a changed
         // text node.
@@ -471,7 +468,6 @@
   // read would say without rewriting a node is asked first, so a reuse is only a page that is provably still.
   const kept = registry.kept?.[mode];
   const rendered = own.renderReads?.[mode];
-  registry.acceptMutations = false;
   const still =
     reuse &&
     kept &&
@@ -501,8 +497,7 @@
     kept.listenerStates?.every(([e, value]) => listened(e) === value) &&
     rendered.inputs.every(([kind, target, args, value]) =>
       sameRenderFact(kind, value, readRenderFact(kind, target, args)));
-  if (still) {
-    registry.acceptMutations = true;
+  if (still)
     return {
       unchanged: true,
       url: kept.url,
@@ -511,7 +506,6 @@
       page_key: kept.page_key,
       read: kept.read,
     };
-  }
   // Taken before the read, so a change made while it runs leaves the kept read unmatched rather than reused.
   const readRev = registry.rev;
   const readLive = registry.live();
@@ -1218,29 +1212,6 @@
   };
 
   const controls = [];
-  // A delta may reuse a row only when the mutation observer gives a finite DOM dependency closure. CSSOM, live
-  // control state, layout and child documents have no such closure here and therefore take the full producer path.
-  const previousSnapshot = delta ? own.snapshots?.[mode] : null;
-  const previousRows = previousSnapshot?.document_key === String(performance.timeOrigin)
-    ? new Map(previousSnapshot.controls.map(control => [control.id, control])) : null;
-  const dirtyRecords = delta ? (registry.dirtyRecords?.splice(0) || []) : [];
-  const dependencyBoundary = node => node?.closest?.('form,dialog,article,li,tr,[role="row"],section,fieldset');
-  const controlDependsOnDirty = e => dirtyRecords.some(record => {
-    const target = record.type === 'characterData' ? record.target.parentElement : record.target;
-    if (!target) return true;
-    if (target === e || target.contains?.(e) || e.contains?.(target)) return true;
-    const boundary = dependencyBoundary(target);
-    if (boundary?.contains(e)) return true;
-    const labelled = (e.getAttribute?.('aria-labelledby') || '').split(/\s+/).filter(Boolean);
-    if (target.id && labelled.includes(target.id)) return true;
-    return record.type === 'childList' && e.parentElement === target;
-  });
-  const reusableRow = (e, id, role, offscreen, distance) => {
-    const row = previousRows?.get(id);
-    if (!row || controlDependsOnDirty(e) || row.role !== role || row.offscreen !== offscreen || row.distance !== distance) return null;
-    return row;
-  };
-  registry.derivationCount = 0;
   // Controls with no accessible name of their own, whose label is an icon's or only their role.
   const unnamed = new Set();
   // A button is scoped too, so a submission can be told apart by the fields of the form it sends.
@@ -1284,16 +1255,6 @@
 
     const id = identity(e);
     if (mode !== 'glance') registry.controls.add(e);
-    const offscreen = y < 0 || y >= innerHeight;
-    const row = reusableRow(e, id, rname, offscreen, offscreen ? 1 + Math.abs(y - innerHeight / 2) : 0);
-    if (row) {
-      registry.reuseCount = (registry.reuseCount || 0) + 1;
-      // The context pass annotates rows in place. Copy the cached row so a later delta never mutates its oracle.
-      controls.push({ ...row });
-      if (!row.label) unnamed.add(id);
-      continue;
-    }
-    registry.derivationCount++;
     const named = labelOf(e);
     if (!named) unnamed.add(id);
     const root = e.getRootNode();
@@ -1305,8 +1266,8 @@
       id,
       role: rname,
       label: named || fallbackLabel(e) || rname,
-      offscreen,
-      distance: offscreen ? 1 + Math.abs(y - innerHeight / 2) : 0,
+      offscreen: y < 0 || y >= innerHeight,
+      distance: y < 0 || y >= innerHeight ? 1 + Math.abs(y - innerHeight / 2) : 0,
       sensitive: secret(source),
       // The root's own active element, so a field inside a shadow root reads as focused where the document names
       // only its host.
@@ -2147,7 +2108,6 @@
     inaccessible_frames: inaccessible,
     read,
   };
-  registry.acceptMutations = true;
   // Absent unless one is open, as on most pages: an unnamed modal is the empty string, not null.
   if (modal !== null) result.modal = modal;
   const previous = own.snapshots?.[mode];
