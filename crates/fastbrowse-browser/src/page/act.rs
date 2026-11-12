@@ -1626,7 +1626,8 @@ impl CdpPage {
         script.push_str("const r = window.__fastbrowse; ");
         let fingerprint = if same_session && !after_move { self.fingerprint_js.as_str() } else { "''" };
         script.push_str(&format!("const fingerprint = {fingerprint}; "));
-        script.push_str(&format!("const guard = r?.guardKey ? r.guardKey(r.nodes.get({local_id})) : null; "));
+        script
+            .push_str(&format!("const guard = r?.guardKey ? r.guardKey(r.nodes.get({local_id}), {local_id}) : null; "));
         script.push_str(&format!(
             "const point = {} && guard === {} ? ({HIT_TEST_JS})({local_id}, {}) : null; ",
             py_json(&json!(hit_test)),

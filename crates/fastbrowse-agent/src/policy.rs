@@ -1029,7 +1029,7 @@ pub fn build_request(
                         "Scroll the chosen vertical area down, or horizontal area right, to reveal more content.".into()
                     }
                     (Operation::ScrollUp, _) if indexed.contains_key(op) => {
-                        "Scroll the chosen vertical area up, or horizontal area left, to return to earlier content."
+                        "Scroll the chosen vertical area up, or horizontal area left, to reveal content in that direction."
                             .into()
                     }
                     (Operation::Navigate, [only]) => format!("{} The address: {only}", operation_label(*op)),

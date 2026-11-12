@@ -1190,7 +1190,7 @@ impl CdpPage {
         // changed or vanished control, or a new document, is a redraw.
         let check = format!(
             "(ids => {{ const r = window.__fastbrowse; if (!r?.observed) return true; \
-             return ids.some(id => r.observed.has(id) && r.guardKey(r.nodes.get(id)) !== r.observed.get(id)); }})({})",
+             return ids.some(id => r.observed.has(id) && r.guardKey(r.nodes.get(id), id) !== r.observed.get(id)); }})({})",
             py_json(&json!(ids))
         );
         // One renderer call hears every change: the page's own mutations say when to look again, and the time given
