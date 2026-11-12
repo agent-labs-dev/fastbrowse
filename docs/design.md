@@ -10,13 +10,21 @@ When a field value or key chord is copied, Jev selects its source and first word
 each choice shows the complete text that would be typed from that first word to the candidate end, with one more
 answer: the value does not begin at that word. Jev then picks the first word again without it. The beginning is checked
 the same way against copies that end where the value ends, and an end Jev rejects there is picked again.
-Code copies the selected span unchanged. A key chord is copied only from the task, never from page text.
+Code copies the selected span unchanged. A task-provided key chord is copied only from the task, never from page text. Controls with standard ARIA keyboard interactions also offer their role's keys for Jev to choose.
 Earlier typing is shown as history, without assuming
 rejection or requiring a different value when the page changed the field.
 
 That loop runs in Rust, in [crates/](../crates): `fastbrowse-agent` holds the run loop, `fastbrowse-browser`
 the page and its indexing, `fastbrowse-clients` the Jev and LLM clients, and `fastbrowse-py` builds them as
 `fastbrowse._native` into the wheel ([ADR 0004](adr/0004-rust-core-by-default.md)).
+
+With `plan_ahead` enabled, Jev can choose to read a list across its observed same-origin next-page links when
+the task covers every page or a resolved page range. Each new page still asks Jev whether to read it as part
+of that list or return to ordinary actions, alongside the usual sign-in, bot-check and site-failure questions.
+These requests omit unrelated action and target choices. Every read and navigation remains a separate step
+with its own citations and budget admission. The list read stops on a changed list, dialog, modal, tabs or
+origin, a failed page, a read adding no evidence, or the task's last page. Only the ordinary finish path can
+declare the task complete. `plan_ahead=false` disables list reads and planned field fills.
 
 ## Authorization
 
@@ -36,7 +44,7 @@ cannot argue an action through. An authorized run also asks, in the same request
 the action only in some state of the page or site ("reply if nobody has answered yet"). When it does, or the run
 has already carried out a commit, and the action commits or leaves something the site keeps, a second Jev request
 asks, as a choice, whether in the state the page shows the task says to do it with these values, says not to, has
-been done already by the run's earlier steps and is not asked for again, or cannot be told. It does not
+already produced the requested result according to the page or recorded effects and is not asked for again, or cannot be told. A prior executed input is reported as an attempt, not proof that its result happened. It does not
 say the action is conditional, so a step the task asks for outright before a condition on a later one is
 judged as asked. The same request asks which of the task's values the action uses: those to use at first, or
 those the task gives only once something happens ("if the site rejects anything, use SW1A 1AA"). For the later
@@ -108,6 +116,28 @@ element follows the rules a pointer cursor does: one inside a control, or holdin
 a container whose listener hears its children's clicks while one of them is pressable. Listeners on the window, the
 document, the root element and the body hear the whole page, so they mark nothing.
 
+The browser visits each changed frame, then transfers unchanged control rows by their existing node
+ids and sends only changed rows and guards. The receiver reconstructs the ordered controls against the exact
+document and previous read named by the delta. Each request names the receiver's baseline; a missing or mismatched
+baseline returns a full read directly. A delta that cannot be reconstructed requests a full read. Page text,
+modal state and other frame metadata travel in full. An inline child document or shadow root is still read each time.
+Captures and citation spans keep their own read path. Context construction indexes peer labels once per read,
+preserving shared labels when excluding a control.
+
+Within a changed frame, structural queries and control names reuse their previous results while their inputs
+match. A mutation invalidates the affected subtree and its ancestors. A name records the nodes, ARIA references,
+label associations, visibility and native values it used, and checks those dependencies before reuse. Queries
+are also tied to their document or shadow root. Layout and event listeners are read afresh, and action guards
+query current state. Each saved snapshot or glance keeps its own pending custom-element definitions, since an
+upgrade can change label ownership without a DOM mutation. Before reusing a shallow read, the browser checks
+its visited elements for newly attached shadow roots, which also produce no document mutation. It also
+compares the native pointer-listener checks used by the saved read. Each atomic read asks for a node's listeners
+once; later action guards ask again. A saved read also compares the rendering facts it consumed: computed
+style properties, visibility, element and text-node boxes, rendered text, live selector matches, focus and
+live control or media values. Those facts stay in the installed script's private closure and name the exact
+document and read they validate. A CSS state can then renew a read without writing a DOM node or attribute.
+The frame still walks the page and sends its text.
+
 A browser observation reports each control's `focused` state. A custom page may leave it unknown.
 The optional `invalid` flag reports `aria-invalid` or a failed native constraint on a field that participates
 in form validation. It describes the current field, without claiming that a submission occurred. A field
@@ -127,6 +157,14 @@ because an order total is gone once the order is placed. The step state's `page_
 and has not changed since, and when it changed after it was last read. Every READ Jev picks goes to the reader. A read
 that adds no new source quote counts toward the stall rule like any other step that moved nothing.
 
+With `EXA_API_KEY`, Jev can choose a web search at the start or during a run. The LLM proposes queries from the
+task, current page and evidence; Jev picks a query. Exa auto search returns up to ten results. Every returned result
+field is kept in a citable record, and result addresses become links that use the existing navigation and origin
+checks. The results view retains the current browser session. Repeating identical results counts as no progress.
+A quote from result metadata cites the API response address; open the result to obtain a citation from its page.
+The ledger reserves the documented search price before dispatch and records the provider receipt, or its bounded
+price when the receipt is unavailable. No key leaves search unavailable.
+
 Fetch reads the same way: by default a run reads pages over HTTP and follows links there, with the page's form controls
 offered as what it has. A disabled control (`disabled`, `aria-disabled="true"` or `inert` on the element) is not
 offered, as a browser capture leaves it out, so a disabled next link is no next page. A step only a browser can
@@ -136,6 +174,8 @@ build. So a run over HTTP that took no step cannot finish a task that asks for o
 browser does it.
 `fetch` forbids the browser, and `browser` starts one from the first step.
 Fetched documents have no pixels, so optional screenshots and step frames are skipped.
+JSON responses, including `application/*+json`, and other `text/*` responses are read as quoted text blocks.
+JSON and delimited data keep their whitespace and literal values, without HTML parsing or numeric conversion.
 
 Browser captures record an icon-only link's destination with nearby container text, passing through empty layout
 wrappers. The search stops at a paragraph even when it is empty, and never uses the page root as nearby text.
@@ -173,9 +213,20 @@ others as they were. Jev is asked which option to toggle and told which are sele
 selection back fails the step, as on a single select, and the action guard and page fingerprint read every selected
 option, so choosing or removing any one of them is a change.
 
-Press on an editable field sends the key or key chord Jev copied from the task. Its modifiers and DOM key are sent
-as one browser input, and a chord that can submit or save goes through the same irreversibility and authorization gates
-as Enter.
+Press sends a key Jev selects from the target control's ARIA role, or a key chord copied from the task.
+Sliders, spin buttons, tabs, lists, trees, menus and grids offer their standard WAI-ARIA keyboard interactions
+when focus can reach them. An explicit `aria-orientation` on a widget or its owning composite is included in its context, so the key chooser knows its direction. Widget value changes count as progress. A composite container is indexed for keyboard use when it has a `tabindex`.
+An active descendant keeps DOM focus on its owner while receiving the chosen key. Native selects keep their
+Select operation. The selected chord is stated to the irreversible-action classifier before dispatch.
+When the task forbids edits, Jev also judges whether that chord changes a value or only moves through the page.
+Its modifiers and DOM key are sent as one browser input, and a chord that can submit or save goes through the
+same irreversibility and authorization gates as Enter.
+
+Scrollable containers are indexed separately for each overflowing axis, including open shadow roots and accessible
+frames. Jev chooses a scroll area and an available direction. Code moves that container by its visible width or
+height; horizontal right-to-left areas retain physical left and right directions. Container offsets contribute to
+the page fingerprint, so a scroll that exposes content counts as progress even when its text is unchanged. A scroll
+without a target retains viewport scrolling.
 
 A read offers Jev one bounded choice over the page's quoted spans, with two more answers: the page does not hold the
 answer, or the answer must be composed from more than one fact. On a page with more spans than one choice can offer, a
@@ -203,6 +254,11 @@ sources cover the request; the generated result is checked before delivery.
 Answer claims use numbered Markdown links built from those notes. `RunResult.citations` exposes the cited facts and
 text-fragment deep links; unused facts have no citation. The LLM writes a composed answer from the notes. Jev judges
 each final claim against its original cited quotes, including record identity and values, after any packing rounds.
+The composer selects source wording by note id in private text parts. Code copies the whole selected note and adds
+quotation delimiters when requested; prose parts keep explanatory wording separate. A tally has one computed part,
+which code fills without replacing matching text inside a source part. Packed compositions expose their original
+sources separately, and kept claims retain these parts through a rewrite. Split notes cannot be selected as whole
+sources. The delivered claims keep the same text, cells, tally and evidence id fields.
 A count, total, minimum or maximum, or a place after one such as the second cheapest, is never written or judged as a number. The composer marks it as a tally with
 the kind of record and the field, and Jev answers one question per note read: for a count, whether it holds exactly one
 such record, and for a total or extreme, whether it holds one with its field, then which number in it is the field. A date, ISO or a day, month name and year, is offered whole with its year beside it, and its day and month are not offered alone, since neither orders anything; code orders dates for an extreme and never adds them. A
@@ -303,6 +359,18 @@ A navigation retains its observed source page for decisions on the destination, 
 A navigation or a step settles once no frame of the tab, embedded frames included, is still loading its document
 up to DOMContentLoaded, within the same settle deadline. A frame that loads after its page is ready is part of what
 the navigation opened, so its controls are in the first observation and the next step's effect does not claim them.
+The step also tracks function timers and animation frames scheduled during its input task, including their
+nested callbacks. Timers due before the settle deadline hold the wait; frame chains use the existing quiet
+window so an endless animation can settle. Cancelled callbacks, callbacks from earlier actions, timers due
+after the deadline, unrelated page timers and the cookie-banner helper's background timers do not hold it open.
+
+A `wait` step lasts until the page changes by itself: a change to what the settle fingerprint compares, a player
+starting, pausing, ending or muting (in the page, a granted child frame or a frame in a process of its own that an observation reads), a same-document navigation, a navigation to another document, or a dialog. It
+has no fixed bound. A run with `max_seconds` waits at most until it must stop browsing, and a run without one waits
+for the change. The wait samples the fingerprint twice a second beside the events it hears, since a script writing
+`checked` as a property raises none. A wait that ends with nothing changed is a step that changed nothing, under the one stall rule, unless
+a player's clock moved meanwhile. A cancelled wait removes what it installed in the page. A direct `Page::act` Wait has no deadline; an embedder bounds it through `Page::wait` or cancellation. Desktop waits use the
+same run deadline while polling the window's accessibility tree for a change.
 
 An empty observation waits on loading events before action history and progress are recorded.
 The same blank state is waited out once until a readable page appears, so a later navigation gets its own wait.
@@ -311,7 +379,10 @@ Reloading remains restricted to an untouched opening page, since retrying a late
 changes nothing, a read that adds nothing, a return to a page state already seen with nothing read since, or a
 further return after one return has already counted for the same evidence is no progress, since one read buys one return. `unchanged_actions` such steps in a row ask Jev again. A page state not seen before or a read that adds
 evidence resets the count and renews the `max_recoveries` budget. The new ask names what failed and leaves the stalled
-action out of its options, and Jev's pick is the next decision on that page. Past `max_recoveries` the run ends
+action out of its options, and Jev's pick is the next decision on that page. Before a run would end
+`stuck` past `max_recoveries`, the LLM proposes fresh known addresses using the current observation, evidence
+and history. Code excludes the current page and addresses already observed, offered, opened or walled. Jev chooses whether
+to take a proposed route; authorization and spending limits still apply. Without a fresh route the run ends
 `stuck`, or `unverified` for a rejected composition, unless an unfilled field requires `needs_input` or a site
 failure establishes another status. An HTTP error page goes to Jev like any other, with its status among the
 step's page facts, so Jev reloads it when the status can clear, goes back or picks another link; code only waits out a
@@ -470,6 +541,16 @@ selected by `binaryPath`, `FASTBROWSE_BINARY` or its platform package, and a Rus
 first in `main`. A program that registers no helper still keeps the PDF, and the observation says its text was not
 read (`[Downloaded file: ...] The file was kept, but its text was not read: ...`), naming why: no reader, a read
 past 10 seconds, a file that is no PDF, or a reader that did not start or ended without an answer.
+
+Downloaded XLSX workbooks, DOCX documents and ZIP archives use the same killable helper. Workbooks retain each
+worksheet's name and each stored cell's row, column and value. Empty coordinates are omitted, so sparse sheets
+are read without allocating the rectangle between their cells. Formulas are not evaluated. Word
+text retains paragraph, table-cell, tab and line-break boundaries, with its package part named. Archive members
+are read in memory, never extracted onto the host. Text, CSV, TSV, JSON, XML, Markdown and HTML members are read
+as UTF-8 text; XLSX, DOCX and PDF members use their document readers. Other or invalid members remain named with
+an explicit notice that their contents were not read. Nested archives are not expanded. Generic or missing MIME types use the download filename to select these readers.
+The configured `max_download_bytes` also bounds aggregate decompressed container bytes and extracted output; a
+document exceeding it is reported unread, rather than returning truncated text.
 
 The cloud browser ignores `Browser.setDownloadBehavior(deny)`, so bytes come from response interception, never from the remote filesystem. Host-path `DOM.setFileInputFiles` is only valid for a browser on the same machine.
 

@@ -411,6 +411,9 @@ async fn read_groups(
     for part in parts {
         let messages = groups_messages(by, of, &part);
         let generated = generate::<RecordGroups>(llm, LLMPurpose::Groups, &messages, ledger).await?;
+        if let Some(ledger) = ledger {
+            ledger.record([generated.cost])?;
+        }
         for answer in generated.data.records {
             let note = answer.record.strip_prefix('r').and_then(|n| n.parse::<usize>().ok());
             let Some(note) = note.filter(|note| records.contains(note)) else { return Ok(None) };
@@ -1110,9 +1113,9 @@ mod tests {
     }
 
     /// Reads every listed record's group as `reads` gives it by the record's id.
-    struct ReadsGroups(&'static [(&'static str, Option<&'static str>)]);
+    struct ReadsGroups<'a>(&'a [(&'a str, Option<&'a str>)]);
 
-    impl LLMClient for ReadsGroups {
+    impl LLMClient for ReadsGroups<'_> {
         fn generate_value<'a>(
             &'a self,
             purpose: LLMPurpose,
@@ -1125,8 +1128,41 @@ mod tests {
                 self.0.iter().map(|(record, text)| json!({"record": record, "text": text})).collect();
             Box::pin(async move {
                 let data = schema.validate_json(&json!({"records": records}).to_string()).map_err(LLMError::Failed)?;
-                Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+                let mut cost = CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.001));
+                cost.purpose = Some(purpose);
+                cost.physical_requests = Some(1);
+                Ok(Generation { data, cost })
             })
+        }
+    }
+
+    #[tokio::test]
+    async fn grouping_records_cost_even_when_the_groups_are_unusable() {
+        let found = [Candidate {
+            id: String::new(),
+            quote: "One by Ada".into(),
+            note: json!({"quote": "One by Ada"}),
+            span: (String::new(), 0, 0),
+            literal: true,
+            page: String::new(),
+        }];
+        for (record, text, usable) in [("r0", Some("Ada"), true), ("r0", None, false), ("r1", Some("Ada"), false)] {
+            let ledger = Ledger::new(Default::default());
+            let responses = [(record, text)];
+            let llm = ReadsGroups(&responses);
+            let groups = read_groups(&llm, "author", "quote", &[0], &found, Some(&ledger)).await.unwrap();
+            assert_eq!(groups.is_some(), usable);
+            let lines = ledger.state().lines.clone();
+            assert_eq!(lines.len(), 1, "a received answer is charged before its groups are checked");
+            assert_eq!(lines[0].component, CostComponent::Llm);
+            assert_eq!(lines[0].dollars, Some(0.001));
+            assert_eq!(lines[0].purpose, Some(LLMPurpose::Groups));
+            assert_eq!(lines[0].physical_requests, Some(1));
+            let capped =
+                Ledger::new(fastbrowse_core::models::Limits { max_dollars: Some(0.0005), ..Default::default() });
+            let result = read_groups(&llm, "author", "quote", &[0], &found, Some(&capped)).await;
+            assert!(matches!(result, Err(AgentError::Budget(_))));
+            assert_eq!(capped.state().lines.len(), 1, "the over-budget receipt remains reportable");
         }
     }
 

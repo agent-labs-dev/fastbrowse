@@ -626,6 +626,39 @@ async def test_a_failed_v4_run_is_its_agents_failure_and_a_dispatch_failure_an_o
     client.runs.cancel.assert_awaited_once_with("run-1")
 
 
+@pytest.mark.parametrize("stop_failed", [False, True])
+async def test_dispatch_outages_keep_the_provider_identity_and_settled_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stop_failed: bool
+) -> None:
+    client = V4Client(
+        [
+            v4_event("browser.ready", 1, browser_session_id="b1"),
+            v4_event("run.dispatch_failed", 2),
+        ],
+        status="failed",
+        error="scheduler unavailable bu_secret_key",
+    )
+    use_v4(monkeypatch, client)
+    if stop_failed:
+        client.browsers.stop.side_effect = httpx.ConnectError("down")
+    row = await live.run_arm("browser-use", task("hn-top"), None, httpx.AsyncClient(), tmp_path, record=None)
+    assert row.normalized_status is Ending.UNAVAILABLE and row.passed is None
+    assert any(event["type"] == "run.dispatch_failed" for event in row.events)
+    assert row.session_id == "sess-1" and row.provenance["run_id"] == "run-1"
+    assert row.provenance["browser_session_id"] == "b1"
+    assert row.provenance["provider_status"] == "failed"
+    assert row.error is not None and "scheduler unavailable" in row.error
+    assert "bu_secret_key" not in row.model_dump_json()
+    assert row.dollars == (None if stop_failed else 0.013)
+    assert row.unknown_cost is stop_failed
+    assert row.cost_by_component == (
+        {} if stop_failed else {"llm": 0.01, "search": 0, "browser": 0.002, "proxy": 0.001}
+    )
+    assert ("cost" in client.calls) is (not stop_failed)
+    if not stop_failed:
+        assert client.calls.index("stop") < client.calls.index("cost")
+
+
 async def test_a_hosted_run_the_attempt_cancels_is_cancelled_and_its_browser_stopped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

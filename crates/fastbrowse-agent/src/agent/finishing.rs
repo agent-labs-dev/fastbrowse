@@ -195,6 +195,7 @@ impl Agent {
             by_code: true,
             offered: Vec::new(),
             plan: Vec::new(),
+            read_scope: crate::policy::ReadScope::Page,
             ahead: IndexMap::new(),
         };
         match Box::pin(self.step(state, observation, &decision)).await {

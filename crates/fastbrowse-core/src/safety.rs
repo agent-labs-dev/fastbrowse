@@ -33,6 +33,7 @@ pub fn may_be_irreversible(operation: Operation) -> bool {
         // off the page. A blur is classified as the fill it follows is: both run only the page's own field handlers,
         // and the page text cannot say which of those handlers sends something.
         Operation::Navigate
+        | Operation::Search
         | Operation::Hover
         | Operation::Fill
         | Operation::Blur
@@ -245,7 +246,9 @@ pub fn met_question(action: &str) -> ChoiceQuestion {
             (
                 DONE.to_string(),
                 Value::from(
-                    "No: the steps taken so far already did this, and the task does not ask for it to be done again.",
+                    "No: the page or recorded effects show that the result the task asks this action to produce already \
+                     happened, and the task does not ask for it again. An executed action with no effect does not \
+                     show this.",
                 ),
             ),
             ("unclear".to_string(), Value::from("The page does not show enough to tell.")),
@@ -1066,6 +1069,14 @@ mod tests {
         assert!(question.instructions.starts_with(&format!(
             "{UNTRUSTED}\nThe agent is about to click the element labelled \"Yes, I'm sure\" while doing `task`.\nIt sits under 'Delete \"all\"' on the page.\n"
         )));
+    }
+
+    #[test]
+    fn a_repeat_requires_evidence_of_the_requested_result() {
+        let question = met_question("Click Post");
+        let done = question.criteria.get(DONE).expect("completed result option").as_str().unwrap();
+        assert!(done.contains("page or recorded effects"));
+        assert!(done.contains("An executed action with no effect does not show this"));
     }
 
     #[test]

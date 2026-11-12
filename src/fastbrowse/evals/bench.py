@@ -87,7 +87,13 @@ TIMING_SENSITIVE = {
 TASK_SECONDS = 900.0
 SHUTDOWN_SECONDS = 30.0
 
-AGENT_ENV_DROPPED = ("OPENROUTER_API_KEY", "AI_GATEWAY_API_KEY", "TYPESAFE_API_KEY", "BROWSER_USE_API_KEY")
+AGENT_ENV_DROPPED = (
+    "OPENROUTER_API_KEY",
+    "AI_GATEWAY_API_KEY",
+    "TYPESAFE_API_KEY",
+    "BROWSER_USE_API_KEY",
+    "EXA_API_KEY",
+)
 """Never handed to the agent: its model traffic goes to the proxy, and only the proxy holds a real key."""
 
 PLACEHOLDER_KEY = "bench-placeholder-key"

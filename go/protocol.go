@@ -6,7 +6,7 @@ package fastbrowse
 import "encoding/json"
 
 // ProtocolVersion is the version of the wire format this client speaks.
-const ProtocolVersion = 2
+const ProtocolVersion = 3
 
 // What a client can ask of the server.
 const (
@@ -117,6 +117,7 @@ const (
 	CostComponentLLM     CostComponent = "llm"
 	CostComponentBrowser CostComponent = "browser"
 	CostComponentProxy   CostComponent = "proxy"
+	CostComponentSearch  CostComponent = "search"
 )
 
 type CostLine struct {
@@ -225,15 +226,17 @@ const (
 type LLMPurpose string
 
 const (
-	LLMPurposeStart        LLMPurpose = "start"
-	LLMPurposeCompose      LLMPurpose = "compose"
-	LLMPurposeImageRead    LLMPurpose = "image_read"
-	LLMPurposeFill         LLMPurpose = "fill"
-	LLMPurposePages        LLMPurpose = "pages"
-	LLMPurposeDates        LLMPurpose = "dates"
-	LLMPurposeKnownPages   LLMPurpose = "known_pages"
-	LLMPurposeUnobtainable LLMPurpose = "unobtainable"
-	LLMPurposeGroups       LLMPurpose = "groups"
+	LLMPurposeStart         LLMPurpose = "start"
+	LLMPurposeCompose       LLMPurpose = "compose"
+	LLMPurposeImageRead     LLMPurpose = "image_read"
+	LLMPurposeFill          LLMPurpose = "fill"
+	LLMPurposePages         LLMPurpose = "pages"
+	LLMPurposeDates         LLMPurpose = "dates"
+	LLMPurposeKnownPages    LLMPurpose = "known_pages"
+	LLMPurposeRecoveryPages LLMPurpose = "recovery_pages"
+	LLMPurposeSearch        LLMPurpose = "search"
+	LLMPurposeUnobtainable  LLMPurpose = "unobtainable"
+	LLMPurposeGroups        LLMPurpose = "groups"
 )
 
 type Limits struct {
@@ -299,6 +302,7 @@ const (
 	OperationRead      Operation = "read"
 	OperationDone      Operation = "done"
 	OperationNavigate  Operation = "navigate"
+	OperationSearch    Operation = "search"
 )
 
 // A method's params. An unknown field is refused, so a misspelled option is never dropped in silence.
@@ -369,6 +373,7 @@ type RunParams struct {
 	SaveRecipe          *string           `json:"save_recipe,omitempty"`
 	Cursor              *bool             `json:"cursor,omitempty"`
 	Local               bool              `json:"local,omitempty"`
+	Launch              bool              `json:"launch,omitempty"`
 	Chrome              *LocalChrome      `json:"chrome,omitempty"`
 	CloudProfile        *string           `json:"cloud_profile,omitempty"`
 	CDPURL              *string           `json:"cdp_url,omitempty"`

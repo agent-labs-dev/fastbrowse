@@ -6,12 +6,14 @@
 //! keyed on a hash of the request body.
 
 mod acting;
+mod batching;
 mod driving;
 mod finishing;
 pub mod helpers;
 mod reading;
 mod recovery;
 mod replay;
+mod search;
 mod seeing;
 pub(crate) mod state;
 
@@ -88,8 +90,9 @@ pub type RecipeSink = Arc<Mutex<Option<RecipeOutcome>>>;
 
 /// A run that ended on a page without a browser: what it knew, and where it stood.
 pub struct Resume {
-    state: RunState,
-    url: String,
+    // A browser handoff moves this state across nested futures; keep its fields off their poll stacks.
+    state: Box<RunState>,
+    url: Option<String>,
 }
 
 /// What the agent learns about the page as it goes, kept apart from the run so the page and the models can be asked
@@ -290,9 +293,9 @@ impl Agent {
                 self.store_recipe(state, sink);
             }
             changed = slot.as_ref().and_then(|state| finishing::changed_fields(&state.history));
-            if let (Some(state), Some(page)) = (slot.take(), self.raw()) {
-                let url = self.page.browser_address().unwrap_or(page.url);
-                self.seen().resume = Some(Resume { state, url });
+            if let Some(state) = slot.take() {
+                let url = self.page.browser_address().or_else(|| self.raw().map(|page| page.url));
+                self.seen().resume = Some(Resume { state: Box::new(state), url });
             }
             ended
         });
@@ -382,22 +385,29 @@ impl Agent {
         ledger: &Arc<Ledger>,
         slot: &mut Option<RunState>,
     ) -> Result<RunResult, Flow> {
-        if let Some(Resume { state, url }) = resume {
-            self.trace.phase("open", self.page.navigate(&url, None)).await?;
-            self.tell_page_ready().await;
-            let state = slot.insert(state.carried_on(ledger.clone()));
-            return Box::pin(self.run_loop(state, options.output_schema.as_deref(), options.until.as_ref())).await;
-        }
+        let prepared = match resume {
+            Some(Resume { state, url: Some(url) }) => {
+                self.trace.phase("open", self.page.navigate(&url, None)).await?;
+                self.tell_page_ready().await;
+                let state = slot.insert((*state).carried_on(ledger.clone()));
+                return Box::pin(self.run_loop(state, options.output_schema.as_deref(), options.until.as_ref())).await;
+            }
+            Some(Resume { state, url: None }) => Some(Box::new((*state).carried_on(ledger.clone()))),
+            None => None,
+        };
         let start = options.start.as_deref();
+        let mut opening = prepared.as_ref().and_then(|state| state.started_url.clone());
         // `start=None` leaves the browser where it is, which is what a caller stepping a run on from a page it opened
         // itself wants. `choose_start` is the other case: a caller with a goal and no page at all, who wants the first
         // address worked out from the task.
         let open = async {
-            let opening = match start {
-                Some(start) => Some(start.to_string()),
-                None if options.choose_start => Some(self.first_page(task, ledger).await?),
-                None => None,
-            };
+            if opening.is_none() {
+                opening = match start {
+                    Some(start) => Some(start.to_string()),
+                    None if options.choose_start => self.first_page(task, ledger).await?,
+                    None => None,
+                };
+            }
             if let Some(opening) = &opening {
                 self.trace.phase("open", self.page.navigate(opening, None)).await?;
             }
@@ -405,7 +415,7 @@ impl Agent {
                 // The caller gave a goal and no page, so this address was worked out from the task.
                 self.front_page_if_blank(opening, browsing_deadline(ledger, false)).await?;
             }
-            Ok::<_, Flow>(opening)
+            Ok::<_, Flow>(())
         };
         // The composer's context window is looked up from the provider's listing and kept by the client. Asked only
         // when the answer is written, the lookup held every run's last step for 0.5 to 2.7 s; asked now, it is known
@@ -414,28 +424,49 @@ impl Agent {
             let llm = self.llm.clone();
             runtime.spawn(async move { llm.context_tokens(fastbrowse_core::models::LLMPurpose::Compose).await });
         }
-        let given = state::with_inputs(task, &options.inputs);
-        let (opening, dates, known) =
-            tokio::join!(open, self.task_dates(&given, ledger), self.known_pages(&given, start, ledger));
-        let (opening, dates, known) = (opening?, dates?, known?);
+        let prepare = async {
+            if let Some(state) = prepared {
+                return Ok::<_, Flow>(state);
+            }
+            let given = state::with_inputs(task, &options.inputs);
+            let (judgments, known) =
+                tokio::join!(self.task_judgments(&given, ledger), self.known_pages(&given, start, ledger));
+            let (judgments, known) = (judgments?, known?);
+            let mut state = RunState::new(
+                task.to_string(),
+                options.inputs.clone(),
+                options.attachments.clone(),
+                options.authorization.clone().unwrap_or_default(),
+                ledger.clone(),
+            );
+            state.dates = judgments.dates;
+            state.output_answers = judgments.output;
+            state.known_pages = known;
+            state.replay = options.recipe.clone().map(replay::Replay::new);
+            state.context = options.context.clone();
+            state.caller_start = start.map(String::from);
+            Ok(Box::new(state))
+        };
+        let (opened, prepared) = tokio::join!(open, prepare);
+        let prepared = prepared.map(|mut state| {
+            state.started_url = opening;
+            state
+        });
+        // HTTP can need a browser before any capture exists. Keep task judgments for that handoff, without
+        // treating other opening failures as a run that reached its first page.
+        if let Err(flow) = opened {
+            if matches!(&flow, Flow::Browser(BrowserError::NeedsBrowser(_)))
+                && let Ok(state) = prepared
+            {
+                self.seen().resume = Some(Resume { state, url: None });
+            }
+            return Err(flow);
+        }
+        let state = slot.insert(*prepared?);
         self.tell_page_ready().await;
-        let mut state = RunState::new(
-            task.to_string(),
-            options.inputs.clone(),
-            options.attachments.clone(),
-            options.authorization.clone().unwrap_or_default(),
-            ledger.clone(),
-        );
-        state.dates = dates;
-        state.known_pages = known;
-        state.replay = options.recipe.clone().map(replay::Replay::new);
-        state.context = options.context.clone();
-        state.started_url = opening.clone();
-        state.caller_start = start.map(String::from);
         if start.is_some() {
             state.start_landing_url = Some(self.page.address().await?);
         }
-        let state = slot.insert(state);
         Box::pin(self.run_loop(state, options.output_schema.as_deref(), options.until.as_ref())).await
     }
 
@@ -850,6 +881,7 @@ impl Agent {
         }
         Ok(StepContext {
             task: state.task.clone(),
+            web_search: self.page.search_price().is_some(),
             subgoal: state.hint.clone(),
             dates: state.dates.clone(),
             notes: self.decision_notes(state),
@@ -890,6 +922,7 @@ impl Agent {
             screenshot: None,
             ahead: self.ahead(state, observation),
             plan_ahead: self.config.plan_ahead,
+            list_read: crate::policy::ListRead::None,
         })
     }
 

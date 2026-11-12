@@ -20,7 +20,7 @@ async fn test_a_pdf_with_no_helper_to_read_it_is_kept_and_said_unread() {
     assert!(!glance.viewport_text.contains("The file was kept, but its text was not read"));
     let text = h.observe().await.viewport_text;
     let notice = format!(
-        "[Downloaded file: map.pdf from {url}] The file was kept, but its text was not read: this program has no PDF \
+        "[Downloaded file: map.pdf from {url}] The file was kept, but its text was not read: this program has no document \
          reader set up."
     );
     assert!(text.contains(&notice), "{text}");

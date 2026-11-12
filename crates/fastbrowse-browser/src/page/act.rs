@@ -1,10 +1,15 @@
 //! `CdpPage.act` and every action it dispatches, with the hit tests and freshness guards in front of them.
 
+use std::collections::HashSet;
 use std::future::Future;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use data_encoding::BASE64;
 use fastbrowse_core::models::{Attachment, Operation, StepOutcome};
 use fastbrowse_core::page::{ActResult, Action, NATIVE_DATE_INPUT_TYPES, Observation};
+use futures_util::StreamExt;
+use futures_util::future::BoxFuture;
+use futures_util::stream::FuturesUnordered;
 use serde_json::{Value, json};
 use tokio::time::{Instant, sleep, timeout};
 
@@ -13,9 +18,9 @@ use super::scripts::{
     LEAVE_SUGGESTING_FIELD_JS, OBSTRUCTIONS, OWNED_JS, PRESENTED_JS, SELECT_TEXT_JS, SUGGESTS_JS, UNCOVER_JS, py_float,
 };
 use super::{BackTarget, CdpPage, Target, truthy, value_str};
-use crate::cdp::secs;
+use crate::cdp::{CDP_REPLY_SECONDS, secs};
 use crate::error::BrowserError;
-use crate::session::py_json;
+use crate::session::{BrowserSession, py_json};
 use crate::urlsplit::urlsplit;
 use crate::warn;
 
@@ -42,6 +47,60 @@ const POPUP_SECONDS: f64 = 1.2;
 /// click's settle does. Paid only by a click whose own input began a navigation and left the page unchanged.
 const DOWNLOAD_SETTLE_SECONDS: f64 = 1.5;
 const CHANGED: &str = "control changed before keyboard use";
+const UNCHANGED: &str = "the page did not change";
+/// How long one evaluation holds a WAIT's watch before arming it again: well inside `CDP_COMMAND_SECONDS`, past which
+/// a command the page has not answered counts against it as a hung page. The watch's lease is twice this.
+const WAIT_ARM_SECONDS: f64 = CDP_REPLY_SECONDS;
+/// The events besides mutations that can change what a WAIT compares: the fingerprint holds the scroll positions,
+/// and the players' state is the observation's. Media and scroll events do not bubble, so they are captured on each
+/// document walked. A same-document navigation is heard on the window's navigation object.
+const WAIT_EVENTS_JS: &str = "['scroll', 'play', 'pause', 'ended', 'volumechange', 'durationchange']";
+/// How often a WAIT's watch samples the fingerprint beside the events it hears, in seconds. This is not a bound on
+/// the wait: it is the delay before a change that raises no event, such as a `checked` property written by a script,
+/// is seen.
+const WAIT_SAMPLE_SECONDS: f64 = 0.5;
+/// Each WAIT's watch has its own name in the page, so one a cancelled wait left behind is never taken for the next.
+static NEXT_WAIT: AtomicU64 = AtomicU64::new(0);
+
+/// Removes a WAIT's watch from every session it was installed in when the wait is dropped before it finished, as
+/// when the run's deadline or a stop cancels the step: a watch left installed would sample the page on every mutation
+/// until its lease ran out.
+struct WaitCleanup {
+    session: BrowserSession,
+    finish: String,
+    sessions: Vec<String>,
+}
+
+impl Drop for WaitCleanup {
+    fn drop(&mut self) {
+        // A dialog freezes the renderer, and a command sent to it then waits out its deadline.
+        if self.session.pending_dialog().is_some() {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else { return };
+        for session_id in std::mem::take(&mut self.sessions) {
+            let (session, finish) = (self.session.clone(), self.finish.clone());
+            runtime.spawn(async move {
+                let params = json!({"expression": finish, "returnByValue": true});
+                let _ = session.send("Runtime.evaluate", params, Some(&session_id)).await;
+            });
+        }
+    }
+}
+
+/// What a WAIT saw. `semantic` is a change an observation shows: the fingerprint, a player's state, a navigation, a
+/// frame or a dialog. `clock` is only a player's clock having moved, which is time passing and not progress, so the
+/// two are kept apart and the result never has to be read back out of the step's detail text.
+#[derive(Clone, Copy, Default)]
+struct Waited {
+    semantic: bool,
+    clock: bool,
+}
+
+/// A failure that ends the run's wait instead of counting as the page changing: the browser is gone or the tab hangs.
+fn fatal_wait_error(error: &BrowserError) -> bool {
+    error.is_unavailable() || matches!(error, BrowserError::PageUnresponsive(_))
+}
 
 /// Where a hit test found a control: a point of it, covered, still scrolling, or gone (`None` in Python).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -308,8 +367,28 @@ fn opt_i64(value: &Value) -> Result<Option<i64>, BrowserError> {
 }
 
 impl CdpPage {
-    /// Dispatch at most once. Returns STALE or COVERED without dispatching when guards fail.
+    /// Dispatch at most once. Returns STALE or COVERED without dispatching when guards fail. A WAIT dispatched here
+    /// has no bound but the page changing; [`CdpPage::wait`] gives it the run's remaining time.
     pub async fn act(&self, action: &Action, observation: &Observation) -> Result<ActResult, BrowserError> {
+        self.act_within(action, observation, f64::INFINITY).await
+    }
+
+    /// Dispatch a WAIT that ends when the page changes by itself or `seconds` pass, guarded and reported as `act`.
+    pub async fn wait(
+        &self,
+        action: &Action,
+        observation: &Observation,
+        seconds: f64,
+    ) -> Result<ActResult, BrowserError> {
+        self.act_within(action, observation, seconds).await
+    }
+
+    async fn act_within(
+        &self,
+        action: &Action,
+        observation: &Observation,
+        wait_seconds: f64,
+    ) -> Result<ActResult, BrowserError> {
         self.session.assert_clear().await?;
         let result = |outcome, page_changed, detail: &str| ActResult {
             outcome,
@@ -430,7 +509,14 @@ impl CdpPage {
         let window_opens = self.session.window_opens();
         let requests = self.session.requests_mark();
         let downloads_before = self.session.downloads_settled();
-        let (outcome, mut detail) = self.dispatch(action, target.as_ref(), point, drawn).await?;
+        let mut waited = None;
+        let (outcome, mut detail) = if action.operation == Operation::Wait {
+            let seen = self.await_change(wait_seconds, &before_fingerprint).await?;
+            waited = Some(seen);
+            (StepOutcome::Executed, (!seen.semantic && !seen.clock).then(|| UNCHANGED.into()))
+        } else {
+            self.dispatch(action, target.as_ref(), point, drawn).await?
+        };
         if outcome != StepOutcome::Executed {
             return Ok(ActResult {
                 outcome,
@@ -446,6 +532,9 @@ impl CdpPage {
             self.until_dialog(self.await_popup(&target.0, target.2)).await;
         }
         let mut changed = self.changed_since(&before_fingerprint, Some(requests)).await?;
+        // The settle reads only the tab's fingerprint, which holds neither a frame in a process of its own nor a
+        // player's state, so a wait ended by either is progress that only the wait itself saw.
+        changed |= waited.is_some_and(|seen| seen.semantic);
         if matches!(action.operation, Operation::Click | Operation::Enter | Operation::Press)
             && self.session.follow_popup(&popups, opens || self.session.window_opens() != window_opens).await?.is_some()
         {
@@ -578,6 +667,7 @@ impl CdpPage {
     ) -> Result<Outcome, BrowserError> {
         let text = action.text.as_deref().unwrap_or_default();
         match action.operation {
+            Operation::Search => Err(BrowserError::Failed("web search is dispatched by the agent".into())),
             Operation::Navigate => {
                 let url = action.url.as_deref().unwrap_or_default();
                 if action.url.is_none() || !matches!(urlsplit(url).0.as_str(), "http" | "https") {
@@ -614,11 +704,11 @@ impl CdpPage {
             Operation::Drag => self.drag(target, point, action.destination_id.as_deref()).await,
             Operation::Escape => self.key(None, Key::Escape, Point::Gone).await,
             Operation::Scroll | Operation::ScrollUp => {
-                self.scroll(action.operation).await?;
+                self.scroll(action.operation, target).await?;
                 Ok((StepOutcome::Executed, None))
             }
             Operation::Back => self.back().await,
-            Operation::Wait => self.await_change().await,
+            Operation::Wait => Err(BrowserError::Failed("wait is dispatched by act, with the run's time left".into())),
             Operation::SwitchTab => {
                 let Some(tab_id) = &action.tab_id else {
                     return Ok((StepOutcome::Failed, Some("switch_tab requires tab_id".into())));
@@ -1201,7 +1291,20 @@ impl CdpPage {
         self.input(self.session.send("Input.dispatchKeyEvent", up, Some(session_id))).await
     }
 
-    async fn scroll(&self, operation: Operation) -> Result<(), BrowserError> {
+    async fn scroll(&self, operation: Operation, target: Option<&Target>) -> Result<(), BrowserError> {
+        if let Some((session_id, _, local_id, ..)) = target {
+            let direction = if operation == Operation::ScrollUp { -1 } else { 1 };
+            let script = format!(
+                "(() => {{ const r = window.__fastbrowse, e = r?.nodes.get({local_id}), \
+                 axis = r?.scrollAxes.get({local_id}); if (!e?.isConnected || !axis) return false; \
+                 e.scrollBy({{left: axis === 'x' ? e.clientWidth * {direction} : 0, \
+                 top: axis === 'y' ? e.clientHeight * {direction} : 0, behavior: 'instant'}}); return true; }})()"
+            );
+            if !truthy(&self.evaluate(session_id, &script).await?) {
+                return Err(BrowserError::Failed("scroll target is no longer an indexed scroll area".into()));
+            }
+            return Ok(());
+        }
         let session_id = self.session.active_session_id()?;
         let delta = if operation == Operation::ScrollUp { -560 } else { 560 };
         // The wheel lands where the page is under the pointer: a point outside the window scrolls nothing. The
@@ -1211,34 +1314,222 @@ impl CdpPage {
         self.input(self.session.send("Input.dispatchMouseEvent", params, Some(&session_id))).await
     }
 
-    /// Wait for the page to change by itself, at most `SETTLE_SECONDS`: the bound every action's settle already has.
+    /// Wait for the page to change by itself, for at most `seconds`: the run's remaining time, unbounded for a run
+    /// with no time limit.
     ///
-    /// This is the step that lets time pass between two reads of a status line. The page's own mutations say when to
-    /// look again; the fingerprint, which the settle that follows compares too, says whether what changed is something
-    /// an observation shows. At the deadline a player's clock having moved counts too: the settle fingerprint leaves it
-    /// out, and a Wait while a player plays is not told that the page did not change.
-    pub(crate) async fn await_change(&self) -> Result<Outcome, BrowserError> {
-        let session_id = self.session.active_session_id()?;
-        let watch = format!(
-            "new Promise(resolve => {{ const r = window.__fastbrowse; \
-             const later = r?.nativeSetTimeout ?? setTimeout, clear = r?.nativeClearTimeout ?? clearTimeout; \
-             const sample = () => {{ try {{ return {fingerprint}; }} catch {{ return null; }} }}; \
-             const clocks = () => {{ try {{ return {media}; }} catch {{ return null; }} }}; \
-             const before = sample(), clocksBefore = clocks(); let queued = false; \
-             const stop = moved => {{ observer.disconnect(); clear(timer); resolve(moved); }}; \
-             const look = () => {{ queued = false; if (sample() !== before) stop(true); }}; \
-             const observer = new MutationObserver(() => {{ if (!queued) {{ queued = true; later(look, 0); }} }}); \
-             observer.observe(document, {{childList: true, subtree: true, attributes: true, characterData: true}}); \
-             const timer = later(() => stop(sample() !== before || clocks() !== clocksBefore), {ms}); }})",
-            fingerprint = self.fingerprint_js,
-            media = self.media_js,
-            ms = py_float(super::SETTLE_SECONDS * 1000.0),
-        );
-        match self.evaluate(&session_id, &watch).await {
-            Ok(changed) if !truthy(&changed) => Ok((StepOutcome::Executed, Some("the page did not change".into()))),
-            // A navigation destroys the watch with its context, which is itself the page changing.
-            _ => Ok((StepOutcome::Executed, None)),
+    /// This is the step that lets time pass between two reads of a status line. A fixed bound ended it before a page
+    /// that updates less often had moved, and the run was told the page did not change. The page's own events say
+    /// when to look again (its mutations, its scrolling, a same-document navigation, a player starting, pausing,
+    /// ending or muting); the fingerprint, which the settle that follows compares too, says whether what changed is
+    /// something an observation shows. A navigation to another document destroys the watch with its context, which is
+    /// itself the page changing, and a dialog opening blocks the page, which is too. When `seconds` run out a player's
+    /// clock having moved counts as well: the fingerprint leaves it out, and a Wait while a player plays is not told
+    /// that the page did not change.
+    async fn await_change(&self, seconds: f64, before: &str) -> Result<Waited, BrowserError> {
+        let main = self.session.active_session_id()?;
+        let token = NEXT_WAIT.fetch_add(1, Ordering::Relaxed);
+        let deadline = seconds.is_finite().then(|| Instant::now() + secs(seconds.max(0.0)));
+        let finish = self.wait_finish_js(token);
+        let mut cleanup = WaitCleanup { session: self.session.clone(), finish: finish.clone(), sessions: Vec::new() };
+        let dialog = self.session.wait_for_dialog();
+        tokio::pin!(dialog);
+        let mut installed = HashSet::new();
+        let mut first = true;
+        let moved = 'wait: loop {
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                if first {
+                    // No time was left to pass, so the page had none to change in.
+                    return Ok(Waited::default());
+                }
+                break false;
+            }
+            first = false;
+            // One evaluation the page holds past the command deadline counts as a hung page, so a long wait is armed
+            // again under it. The watch stays installed between the two, so nothing that happens then is missed.
+            let arm_until = Instant::now() + secs(WAIT_ARM_SECONDS);
+            let until = deadline.map_or(arm_until, |deadline| deadline.min(arm_until));
+            let mut holds = FuturesUnordered::new();
+            let mut offered = HashSet::new();
+            loop {
+                // Taken before the frames are listed, so a frame that attaches in between wakes the next pass.
+                let mark = self.lifecycle_mark();
+                if self
+                    .watch_sessions(token, (&main, before), &mut offered, &mut installed, &mut cleanup, &mut holds)
+                    .await?
+                {
+                    break 'wait true;
+                }
+                tokio::select! {
+                    Some((session_id, held)) = holds.next() => {
+                        // A navigation destroys the watch with its context and a frame's removal does the same to
+                        // its own, which is itself the page changing.
+                        if let Err(error) = held && session_id == main && fatal_wait_error(&error) {
+                            cleanup.sessions.clear();
+                            return Err(error);
+                        }
+                        break 'wait true;
+                    }
+                    // A dialog freezes the renderer, so nothing is sent to it: the watch's lease removes it.
+                    () = &mut dialog => {
+                        cleanup.sessions.clear();
+                        break 'wait true;
+                    }
+                    () = tokio::time::sleep_until(until) => break,
+                    // A frame attached or navigated: watch the sessions that are new, and no others.
+                    _ = self.wait_for_lifecycle(mark, f64::INFINITY) => {}
+                }
+            }
+        };
+        let mut seen = Waited { semantic: moved, clock: false };
+        // Cancellation during a finish evaluation must still remove that watch and the sessions left after it.
+        while let Some(session_id) = cleanup.sessions.last().cloned() {
+            let bounded = session_id != main;
+            match self.wait_evaluate(&session_id, &finish, bounded).await {
+                Ok(Value::Array(found)) => {
+                    seen.semantic |= found.first().is_some_and(truthy);
+                    seen.clock |= found.get(1).is_some_and(truthy);
+                }
+                Err(error) if session_id == main && fatal_wait_error(&error) => return Err(error),
+                // A watch the page no longer has went with its document, or with the frame that held it.
+                _ => seen.semantic |= installed.contains(&session_id),
+            }
+            cleanup.sessions.pop();
         }
+        Ok(seen)
+    }
+
+    /// An evaluation for a wait. A frame in a process of its own is bounded as every frame read is, so one that
+    /// answers nothing is left unwatched rather than holding the page's wait; only the hold itself is not bounded.
+    async fn wait_evaluate(&self, session_id: &str, script: &str, frame: bool) -> Result<Value, BrowserError> {
+        if frame { self.frame_evaluate(session_id, script).await } else { self.evaluate(session_id, script).await }
+    }
+
+    /// The sessions a wait watches: the tab's own and every frame in a process of its own that an observation reads,
+    /// ads left out as they are there.
+    fn wait_sessions(&self, main: &str) -> Vec<String> {
+        let mut sessions = vec![main.to_owned()];
+        for (frame, session_id) in self.session.frame_sessions() {
+            if !self.session.ad_frame(&frame) && !sessions.contains(&session_id) {
+                sessions.push(session_id);
+            }
+        }
+        sessions
+    }
+
+    /// Install the watch in each session not yet offered, and start holding on it. True when a session was already
+    /// found changed or cannot be watched at all, which for the tab is the page having moved on.
+    async fn watch_sessions<'a>(
+        &'a self,
+        token: u64,
+        (main, before): (&str, &str),
+        offered: &mut HashSet<String>,
+        installed: &mut HashSet<String>,
+        cleanup: &mut WaitCleanup,
+        holds: &mut FuturesUnordered<BoxFuture<'a, (String, Result<Value, BrowserError>)>>,
+    ) -> Result<bool, BrowserError> {
+        for session_id in self.wait_sessions(main) {
+            if !offered.insert(session_id.clone()) {
+                continue;
+            }
+            let is_main = session_id == main;
+            if !installed.contains(&session_id) {
+                // Recorded before it is sent, so a wait dropped mid-install still removes what it may have put there.
+                cleanup.sessions.push(session_id.clone());
+                // Only the tab's own fingerprint was read before the dispatch, so only its watch is seeded with it.
+                let seed = if is_main { before } else { "" };
+                match self.wait_evaluate(&session_id, &self.wait_arm_js(token, true, seed), !is_main).await {
+                    Ok(Value::Bool(found)) => {
+                        installed.insert(session_id.clone());
+                        if found {
+                            return Ok(true);
+                        }
+                    }
+                    // The document is not one this run may read, or has no frame left to watch.
+                    Ok(_) if is_main => return Ok(true),
+                    Ok(_) => continue,
+                    Err(error) if is_main && fatal_wait_error(&error) => {
+                        cleanup.sessions.clear();
+                        return Err(error);
+                    }
+                    Err(_) if is_main => return Ok(true),
+                    Err(_) => continue,
+                }
+            }
+            let hold = self.wait_arm_js(token, false, "");
+            holds.push(Box::pin(async move {
+                let held = self.evaluate(&session_id, &hold).await;
+                (session_id, held)
+            }));
+        }
+        Ok(false)
+    }
+
+    /// The one read a wait compares before and after: snapshot.js's fingerprint, which holds the semantic hash, the
+    /// players' clocks it leaves out, each player's state and the documents it walked, child frames included. A
+    /// second reader of the page would drift from what an observation shows.
+    fn wait_read_js(&self) -> String {
+        format!(
+            "const read = () => {{ try {{ return {page}('fingerprint'); }} catch {{ return null; }} }}; \
+             const keyOf = f => f ? f.fingerprint + '\\u0000' + f.players : null;",
+            page = self.page_js,
+        )
+    }
+
+    /// Install the watch for wait `token` and report whether it has seen the page change, or with `install` false find
+    /// the one installed before and resolve once it has. A `seed` is the fingerprint read before the dispatch: a page that
+    /// changed between that read and this install would otherwise become the baseline and never be told apart. A document the run may not read gets no watch. Each arming renews its lease, so a watch whose run went away removes itself.
+    ///
+    /// The watch hears every document the fingerprint walked, so a granted child frame wakes it as the page does. The
+    /// timer samples the fingerprint too, because a script writing `checked` or `selected` as a property raises no
+    /// mutation or event for any listener to hear: sampling is the only way to see it, and it stops with the watch.
+    fn wait_arm_js(&self, token: u64, install: bool, seed: &str) -> String {
+        format!(
+            "(() => {{ const r = window.__fastbrowse, home = r ?? window; \
+             const waits = (home.__fastbrowseWaits ??= new Map()); \
+             const later = r?.nativeSetTimeout ?? setTimeout, clear = r?.nativeClearTimeout ?? clearTimeout; \
+             let w = waits.get({token}); const seed = {seed}; \
+             if (!w) {{ if (!{install}) return null; {read} const f0 = read(); \
+             if (f0 && !f0.granted) return null; \
+             w = {{before: keyOf(f0), clocks: f0?.media ?? null, moved: false, wake: [], queued: false, stopped: false, \
+             lease: 0, timer: 0, docs: new Map(), read, keyOf}}; \
+             const types = {types}; \
+             const look = () => {{ w.queued = false; if (w.moved || w.stopped) return; const f = read(); \
+             if (keyOf(f) !== w.before) {{ w.moved = true; w.stop(); w.wake.splice(0).forEach(g => g()); }} \
+             else hear(f); }}; \
+             const nudge = () => {{ if (!w.queued) {{ w.queued = true; later(look, 0); }} }}; \
+             const forget = d => {{ w.docs.get(d).disconnect(); \
+             for (const type of types) d.removeEventListener(type, nudge, true); w.docs.delete(d); }}; \
+             const hear = f => {{ const walked = new Set(f?.documents ?? [document]); \
+             if (f) for (const d of [...w.docs.keys()]) if (!walked.has(d)) forget(d); \
+             for (const d of walked) {{ if (w.docs.has(d)) continue; \
+             const observer = new MutationObserver(nudge); \
+             observer.observe(d, {{childList: true, subtree: true, attributes: true, characterData: true}}); \
+             for (const type of types) d.addEventListener(type, nudge, true); w.docs.set(d, observer); }} }}; \
+             const tick = () => {{ look(); if (!w.moved && !w.stopped) w.timer = later(tick, {sample}); }}; \
+             w.stop = () => {{ w.stopped = true; clear(w.timer); for (const d of [...w.docs.keys()]) forget(d); \
+             window.navigation?.removeEventListener('currententrychange', nudge); }}; \
+             window.navigation?.addEventListener('currententrychange', nudge); hear(f0); \
+             w.timer = later(tick, {sample}); waits.set({token}, w); \
+             if (seed !== null && f0 && f0.fingerprint !== seed) {{ w.moved = true; w.stop(); }} }} \
+             clear(w.lease); w.lease = later(() => {{ w.stop(); waits.delete({token}); }}, {lease}); \
+             return {install} ? w.moved : w.moved || new Promise(resolve => w.wake.push(() => resolve(true))); }})()",
+            read = self.wait_read_js(),
+            seed = if seed.is_empty() { "null".to_owned() } else { py_json(&json!(seed)) },
+            types = WAIT_EVENTS_JS,
+            sample = py_float(WAIT_SAMPLE_SECONDS * 1000.0),
+            lease = py_float(WAIT_ARM_SECONDS * 2.0 * 1000.0),
+        )
+    }
+
+    /// Remove wait `token`'s watch and report `[semantic change, clock moved]` since it was installed: null when the page
+    /// no longer has it, as after the document that installed it was replaced.
+    fn wait_finish_js(&self, token: u64) -> String {
+        format!(
+            "(() => {{ const r = window.__fastbrowse, home = r ?? window, waits = home.__fastbrowseWaits; \
+             const w = waits?.get({token}); if (!w) return null; waits.delete({token}); w.stop(); \
+             (r?.nativeClearTimeout ?? clearTimeout)(w.lease); w.wake.length = 0; const f = w.read(); \
+             return [w.moved || w.keyOf(f) !== w.before, (f?.media ?? null) !== w.clocks]; }})()"
+        )
     }
 
     pub(crate) async fn back(&self) -> Result<Outcome, BrowserError> {
@@ -1613,7 +1904,8 @@ impl CdpPage {
         script.push_str("const r = window.__fastbrowse; ");
         let fingerprint = if same_session && !after_move { self.fingerprint_js.as_str() } else { "''" };
         script.push_str(&format!("const fingerprint = {fingerprint}; "));
-        script.push_str(&format!("const guard = r?.guardKey ? r.guardKey(r.nodes.get({local_id})) : null; "));
+        script
+            .push_str(&format!("const guard = r?.guardKey ? r.guardKey(r.nodes.get({local_id}), {local_id}) : null; "));
         script.push_str(&format!(
             "const point = {} && guard === {} ? ({HIT_TEST_JS})({local_id}, {}) : null; ",
             py_json(&json!(hit_test)),
@@ -1748,18 +2040,24 @@ fn focus_script(prepare_fill: bool, secret: bool) -> String {
     // A field that holds focus in a document the browser never focused within the wait answers null, as a document
     // without focus does up front: the window, not the field, is what lacks focus, and activating it is the remedy.
     format!(
-        "((id, activated) => {{ const e = window.__fastbrowse?.nodes.get(id); if (!e?.isConnected) return false; \
+        "((id, activated) => {{ const target = window.__fastbrowse?.nodes.get(id); if (!target?.isConnected) return false; \
+         const root = target.getRootNode(), owner = root.activeElement; \
+         const virtual = {virtual_focus} && owner && root.getElementById?.(owner.getAttribute('aria-activedescendant')) === target; \
+         const e = virtual ? owner : target; \
+         const valid = () => target.isConnected && e.isConnected && e.getRootNode().activeElement === e && \
+         (!virtual || root.getElementById?.(e.getAttribute('aria-activedescendant')) === target); \
          if (!activated && !e.ownerDocument.hasFocus()) return null; \
          {mask}e.ownerDocument.defaultView.focus(); e.focus({{preventScroll: true}}); \
-         if (!e.isConnected || e.getRootNode().activeElement !== e) return false; \
+         if (!valid()) return false; \
          return new Promise(resolve => {{ \
          const view = e.ownerDocument.defaultView; \
          const stop = done => {{ view.removeEventListener('focus', check); clearTimeout(timer); resolve(done); }}; \
-         const check = () => {{ if (!e.isConnected || e.getRootNode().activeElement !== e) \
+         const check = () => {{ if (!valid()) \
          {{ stop(false); return; }} \
          if (e.ownerDocument.hasFocus()) {{ {prepare}stop(true); }} }}; \
          view.addEventListener('focus', check); \
          const timer = setTimeout(() => stop(null), {deadline}); check(); }}); }})",
+        virtual_focus = !prepare_fill,
         deadline = py_float(FOCUS_SETTLE_SECONDS * 1000.0),
     )
 }

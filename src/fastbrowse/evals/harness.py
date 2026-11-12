@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.request
@@ -66,6 +67,9 @@ def chrome(binary: str | None = None, *, timeout: float = 90.0) -> Generator[str
         )
         process = subprocess.Popen(
             [
+                sys.executable,
+                str(Path(__file__).with_name("_chrome.py")),
+                profile,
                 found,
                 "--headless=new",
                 "--window-size=1280,900",
@@ -76,6 +80,7 @@ def chrome(binary: str | None = None, *, timeout: float = 90.0) -> Generator[str
                 "--no-startup-window",
             ],
             stdout=subprocess.DEVNULL,
+            stdin=subprocess.PIPE,
             stderr=log,
             # Chrome writes its own messages, such as a required field's "Please fill out this field.", in the locale
             # it starts in, and they reach recorded requests: a cassette filled on an en-GB machine missed on CI.
@@ -85,9 +90,10 @@ def chrome(binary: str | None = None, *, timeout: float = 90.0) -> Generator[str
         try:
             yield _devtools(Path(profile, "DevToolsActivePort"), process, log, timeout)
         finally:
-            process.terminate()
+            assert process.stdin is not None
+            process.stdin.close()
             try:
-                process.wait(timeout=10)
+                process.wait(timeout=15)
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()

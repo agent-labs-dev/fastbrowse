@@ -3,10 +3,11 @@
 // Adapted to fastbrowse's Control shape (role + operation set, not per-kind actions) and to traverse
 // open shadow roots. Runs once per frame session (main frame or an OOPIF); CdpPage merges frames.
 // biome-ignore format: session.rs appends mode arguments to this parenthesized expression.
-((mode, allowedOrigins = null, own = {}) => {
-  // A caller that keeps reads for a page that has not moved asks for `-reuse`; plain `snapshot` and `glance` always
-  // read the page, so every existing caller sees exactly what it saw before.
-  const reuse = mode.endsWith('-reuse');
+((mode, allowedOrigins = null, own = {}, base = null) => {
+  // A caller can reuse an unchanged read or request deltas against its baseline. Plain `snapshot` and `glance`
+  // always return the full page, so existing callers keep their original contract.
+  const delta = mode.endsWith('-delta');
+  const reuse = delta || mode.endsWith('-reuse');
   if (reuse) mode = mode.slice(0, -6);
   // Reading a cross-origin frame's document can throw.
   const childDocument = frame => {
@@ -32,17 +33,149 @@
   // A transparent native checkbox is the one control TodoMVC shows, so only its own opacity is excused: a
   // transparent ancestor still hides it. Walked by style, not layout box, as a `display: contents` parent
   // generates no box yet hides nothing.
-  const nativeChoice = e => e.tagName === 'INPUT' && ['checkbox', 'radio'].includes(e.type);
+  const nativeChoice = e => e.tagName === 'INPUT' && ['checkbox', 'radio'].includes(nativeProperty(e, 'type'));
   const shownThrough = e => {
     for (let a = e.parentElement ?? e.getRootNode().host; a; a = a.parentElement ?? a.getRootNode().host)
-      if (a.ownerDocument.defaultView.getComputedStyle(a).opacity === '0') return false;
+      if (styleProperty(a, 'opacity') === '0') return false;
     return true;
   };
   const registry = (window.__fastbrowse ||= { ids: new WeakMap(), nodes: new Map(), next: 1 });
+  // Browser rendering and live selector results can change without a DOM mutation. A saved read records only
+  // the native facts it consumed; replaying those facts validates the same branches without deriving the result.
+  let renderFacts = mode === 'snapshot' || mode === 'glance' ? new Map() : null;
+  let renderInputs = renderFacts ? [] : null;
+  registry.nativeQueueMicrotask ||= window.queueMicrotask.bind(window);
+  registry.nativeQueueMicrotask(() => {
+    renderFacts = null;
+    renderInputs = null;
+  });
+  const textRanges = new WeakMap();
+  const readRenderFact = (kind, target, args) => {
+    switch (kind) {
+      case 'style': return target.ownerDocument.defaultView.getComputedStyle(target)[args];
+      case 'visible': return target?.checkVisibility(args);
+      case 'box': return target.getBoundingClientRect();
+      case 'textBox': {
+        const doc = target.ownerDocument;
+        let range = textRanges.get(doc);
+        if (!range) textRanges.set(doc, range = doc.createRange());
+        range.selectNodeContents(target);
+        return range.getBoundingClientRect();
+      }
+      case 'text': return target?.innerText;
+      case 'query': return target.querySelectorAll(args);
+      case 'state': return target.matches(args);
+      case 'active': return target.activeElement;
+      case 'selected': return [...target.selectedOptions];
+      case 'validity': return target.validity?.valid;
+      case 'prop': return target?.[args];
+    }
+  };
+  const renderValue = (kind, value) =>
+    kind === 'box' || kind === 'textBox'
+      ? [value.x, value.y, value.width, value.height, value.left, value.top, value.right, value.bottom]
+      : kind === 'query' ? [...value] : value;
+  const sameRenderValue = (left, right) =>
+    Array.isArray(left) ? Array.isArray(right) && left.length === right.length &&
+      left.every((value, i) => Object.is(value, right[i])) : Object.is(left, right);
+  const renderFact = (kind, target, args = null) => {
+    if (!renderFacts) return readRenderFact(kind, target, args);
+    let facts = renderFacts.get(target);
+    if (!facts) renderFacts.set(target, facts = new Map());
+    const key = `${kind}:${typeof args === 'object' ? JSON.stringify(args) : args}`;
+    if (!facts.has(key)) {
+      const value = readRenderFact(kind, target, args);
+      facts.set(key, value);
+      renderInputs.push([kind, target, args, renderValue(kind, value)]);
+    }
+    return facts.get(key);
+  };
+  const styleProperty = (target, property) => renderFact('style', target, property);
+  const visibilityOf = (target, options) => renderFact('visible', target, options);
+  const boxOf = target => renderFact('box', target);
+  const textBoxOf = target => renderFact('textBox', target);
+  const nativeProperty = (target, property) => renderFact('prop', target, property);
   // Keep the page's own timer overrides from holding a browser-side frame wait open.
   registry.nativeSetTimeout ||= window.setTimeout.bind(window);
   registry.nativeClearTimeout ||= window.clearTimeout.bind(window);
   registry.nativeRequestAnimationFrame ||= window.requestAnimationFrame.bind(window);
+  registry.nativeCancelAnimationFrame ||= window.cancelAnimationFrame.bind(window);
+  // A click can schedule its first write after the next frame. Only work descended from the current action's input
+  // holds a settle: unrelated page timers must not charge an idle click the whole deadline, and a loop an earlier
+  // action started (a poll that reschedules itself, an animation frame chain) belongs to that action, so it must not
+  // hold every later one. `action` numbers the run's actions: the first input after a read opens the next one.
+  if (!registry.pendingWork) {
+    registry.pendingWork = new Set();
+    registry.action = 0;
+    // The action whose input the running task descends from, or null. It lasts to the next task, so the promise
+    // reactions and observer callbacks the task queued count as its work too. `turnInFrame` says the task is a frame
+    // callback.
+    registry.turn = null;
+    registry.turnInFrame = false;
+    let turns = 0;
+    registry.inputTurn = (action, inFrame = false) => {
+      registry.turn = action;
+      registry.turnInFrame = inFrame;
+      const current = ++turns;
+      registry.nativeSetTimeout(() => {
+        if (current === turns) registry.turn = null;
+      }, 0);
+    };
+    // Whether the current action has work that runs before `deadline`, a `performance.now()` time. A timer cannot run
+    // before its delay, so one due later cannot change what a settle bounded by `deadline` reads. A frame callback that
+    // asks for the next frame is the page drawing, which never has to end: it holds only while `drawing`, which the
+    // settle answers as it does for mutations, by its quiet window.
+    registry.pendingBefore = (deadline, drawing) => {
+      for (const work of registry.pendingWork)
+        if (work.action === registry.action && work.due <= deadline && (drawing || !work.nextFrame)) return true;
+      return false;
+    };
+    // `delayed` says whether the second argument is a delay: a frame callback is due at the next frame.
+    const wrap = (schedule, cancel, delayed) => {
+      const pending = new Map();
+      const start = (callback, ...args) => {
+        if (registry.turn === null || typeof callback !== 'function') return schedule(callback, ...args);
+        // Web IDL converts a timer delay to a signed long. Convert once: an object's valueOf can change the page
+        // or return another delay on a second call, so tracking and Chrome must receive the same number.
+        if (delayed && args.length) args[0] = +args[0] | 0;
+        const work = {
+          action: registry.turn,
+          due: performance.now() + (delayed ? Math.max(0, args[0] || 0) : 0),
+          nextFrame: !delayed && registry.turnInFrame,
+        };
+        registry.pendingWork.add(work);
+        let id;
+        try {
+          id = schedule(function (...values) {
+            pending.delete(id);
+            registry.pendingWork.delete(work);
+            registry.inputTurn(work.action, !delayed);
+            return Reflect.apply(callback, this, values);
+          }, ...args);
+        } catch (error) {
+          registry.pendingWork.delete(work);
+          throw error;
+        }
+        pending.set(id, work);
+        return id;
+      };
+      const stop = id => {
+        const key = delayed ? +id | 0 : +id >>> 0;
+        registry.pendingWork.delete(pending.get(key));
+        pending.delete(key);
+        return cancel(key);
+      };
+      return [start, stop];
+    };
+    [window.setTimeout, window.clearTimeout] = wrap(registry.nativeSetTimeout, registry.nativeClearTimeout, true);
+    // HTML timers share one handle map, so clearInterval can cancel a setTimeout too.
+    window.clearInterval = window.clearTimeout;
+    [window.requestAnimationFrame, window.cancelAnimationFrame] = wrap(
+      registry.nativeRequestAnimationFrame,
+      registry.nativeCancelAnimationFrame,
+      false,
+    );
+  }
   // What was offered to be acted on; `ids` also names hover targets and fingerprinted nodes.
   registry.controls ||= new WeakSet();
   // A change counter, so a read can tell later whether the page it described has moved since. Everything here can
@@ -130,19 +263,31 @@
     'tab',
     'menuitem',
     'menuitemradio',
+    'menuitemcheckbox',
+    'treeitem',
+    'listbox',
+    'tablist',
+    'grid',
+    'treegrid',
+    'tree',
+    'menu',
+    'menubar',
     'option',
     'gridcell',
     'combobox',
     'textbox',
     'searchbox',
     'spinbutton',
+    'slider',
   ];
   // jQuery UI's datepicker prev/next are anchors with no href, appended to <body> once the field is focused:
   // they carry no destination, only a click handler, so they need naming here to be walked at all.
   const SELECTOR =
     'a[href],a[data-handler][data-event="click"],a[onclick],a[role="button"],' +
     'button,input,textarea,select,summary,label,[contenteditable="true"],[draggable="true"],[ondrop],' +
-    ARIA_ROLES.map(role => `[role="${role}"]`).join(',');
+    ARIA_ROLES.map(role =>
+      `[role="${role}"]` + (['listbox', 'tablist', 'grid', 'treegrid', 'tree', 'menu', 'menubar'].includes(role) ? '[tabindex]' : ''),
+    ).join(',');
   // Elements a script gave a pointer listener, such as a Vue click handler on a bare span: the page's only sign that
   // it is pressed. Chrome's own `getEventListeners` reads them, but it exists only in an evaluate with the command line
   // API, so that evaluate (this mode, once per document) keeps it in `own`, the installed function's closure, where the
@@ -157,14 +302,18 @@
   if ((mode === 'snapshot' || mode === 'glance') && !('listeners' in own))
     throw new Error(own.unread);
   const POINTER = ['click', 'mousedown', 'pointerdown', 'mouseup', 'pointerup'];
+  let listenerStates = new Map();
   // The root element and the body hear clicks on the whole page, as the document does, so neither counts.
   const listened = e => {
     if (!own.listeners || e === e.ownerDocument.documentElement || e === e.ownerDocument.body) return false;
+    if (listenerStates?.has(e)) return listenerStates.get(e);
     let listeners = null;
     try {
       listeners = own.listeners(e);
     } catch {}
-    return Boolean(listeners) && POINTER.some(type => Array.isArray(listeners[type]) && listeners[type].length);
+    const value = Boolean(listeners) && POINTER.some(type => Array.isArray(listeners[type]) && listeners[type].length);
+    listenerStates?.set(e, value);
+    return value;
   };
   // Text the page rewrites by itself, such as a player's clock or a countdown, says nothing about which item a control
   // acts on: a Pause beside a ticking remaining time was refused as stale on every one of 52 clicks. Text that changed
@@ -181,11 +330,20 @@
     // reason to wait out.
     registry.lastMutation = performance.now();
     registry.lastInput = 0;
-    const input = () => {
+    const input = event => {
+      // Filling a field dispatches input and change, but a page's synthetic click is background work.
+      if (!event.isTrusted && event.type !== 'input' && event.type !== 'change') return;
+      // `quiet` is set by a read and cleared by input, so the first input since a read is a new action's.
+      if (registry.quiet) registry.action++;
+      registry.inputTurn(registry.action);
       registry.quiet = false;
       registry.lastInput = performance.now();
     };
-    for (const type of ['pointerdown', 'mousedown', 'keydown', 'input', 'change', 'wheel', 'scroll']) {
+    // Chrome can deliver release in a later task than press, after the press's input turn has ended.
+    for (const type of [
+      'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'auxclick', 'dblclick',
+      'keydown', 'keyup', 'keypress', 'submit', 'input', 'change', 'wheel', 'scroll',
+    ]) {
       addEventListener(type, input, true);
     }
     new MutationObserver(records => {
@@ -219,30 +377,50 @@
     // Players' clocks stay out of the hash: one that plays moves by itself, which must not make a control stale.
     // They are kept beside it, rounded as readMedia rounds them, for a Wait to tell a moving clock.
     const clocks = [];
+    // What a Wait compares beside the hash, from the same walk so it covers the same documents: each player's state as
+    // readMedia reports it, and the documents walked, whose events a Wait listens to.
+    const players = [];
+    const documents = [];
     const include = root => {
+      if (root.nodeType === Node.DOCUMENT_NODE) documents.push(root);
       hashText(root.body?.innerText ?? root.textContent ?? '');
       // innerText omits shadow trees and child documents even when their content is visible.
       for (const e of root.querySelectorAll('*')) {
+        // A panel can move without changing any text or the document's own scroll position.
+        if ((e.scrollLeft !== 0 || e.scrollTop !== 0) && e.checkVisibility({checkVisibilityCSS: true}))
+          hashText(JSON.stringify([e.scrollLeft, e.scrollTop]));
         // A filter can change only its checkmark, so text alone reported "Nonstop only" as a no-op.
         // Field values stay out: the run judges fills by the value it wrote, even when a popup changes.
         // Only rendered controls: a hidden carousel's aria-selected dots churn on their own and would read as
         // progress.
         if (
           ('checked' in e || 'selected' in e || e.hasAttribute('aria-checked') || e.hasAttribute('aria-selected')) &&
-          e.checkVisibility({ checkOpacity: !nativeChoice(e), checkVisibilityCSS: true }) &&
+          visibilityOf(e, { checkOpacity: !nativeChoice(e), checkVisibilityCSS: true }) &&
           (!nativeChoice(e) || shownThrough(e))
         )
           hashText(
             JSON.stringify([
-              e.checked ?? null,
+              nativeProperty(e, 'checked') ?? null,
               e.selected ?? null,
               e.getAttribute('aria-checked'),
               e.getAttribute('aria-selected'),
             ]),
           );
+        // A role key can change only the widget's announced value, without editing text or an input field.
+        if (
+          (e.matches('input[type="range"],input[type="number"]') || ['slider', 'spinbutton'].includes(e.getAttribute('role'))) &&
+          e.checkVisibility({checkVisibilityCSS: true})
+        ) hashText(JSON.stringify([e.matches('input[type="range"],input[type="number"]') ? e.value : null, e.getAttribute('aria-valuenow'), e.getAttribute('aria-valuetext')]));
         // readMedia lists the players of documents only, not of shadow roots.
-        if (root.nodeType === Node.DOCUMENT_NODE && (e.tagName === 'AUDIO' || e.tagName === 'VIDEO'))
+        if (root.nodeType === Node.DOCUMENT_NODE && (e.tagName === 'AUDIO' || e.tagName === 'VIDEO')) {
           clocks.push(Math.round(e.currentTime * 10) / 10);
+          players.push([
+            e.paused,
+            e.ended,
+            e.muted,
+            Number.isFinite(e.duration) ? Math.round(e.duration * 10) / 10 : null,
+          ]);
+        }
         if (e.shadowRoot) include(e.shadowRoot);
         if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
           const inner = childDocument(e);
@@ -255,6 +433,10 @@
       ...clock(),
       fingerprint: location.href + '|' + document.title + '|' + (hash >>> 0) + '|' + scrollY,
       media: clocks.join(','),
+      players: JSON.stringify(players),
+      documents,
+      // Whether this document may be read at all, which a Wait asks of a frame in a process of its own.
+      granted: granted(document),
     };
   }
   if (!document.body) return null;
@@ -262,10 +444,13 @@
   // deriving it and sending it back is what an observation costs on a dense page. Anything that can change what a
   // read would say without rewriting a node is asked first, so a reuse is only a page that is provably still.
   const kept = registry.kept?.[mode];
+  const rendered = own.renderReads?.[mode];
   const still =
     reuse &&
     kept &&
     kept.mode === mode &&
+    rendered?.read === kept.read && rendered?.document_key === kept.document_key &&
+    (!delta || (base?.document_key === kept.document_key && base?.read === kept.read)) &&
     kept.rev === registry.rev &&
     kept.live === registry.live() &&
     kept.sheets === registry.sheets() &&
@@ -277,9 +462,18 @@
     kept.innerHeight === innerHeight &&
     kept.hidden === document.hidden &&
     kept.readyState === document.readyState &&
+    // attachShadow emits no document mutation, so a previously shallow page must check its existing hosts.
+    kept.lightElements?.every(e => !e.shadowRoot) &&
+    kept.listenerAPI === Boolean(own.listeners) &&
+    // Upgrading a form-associated custom element can change HTML label ownership without a DOM mutation.
+    !kept.undefinedElements?.some(e => e.isConnected && e.matches(':defined')) &&
     // A transition or animation in flight moves what is on screen between one look and the next, so a read taken
     // while one runs does not stand.
-    document.getAnimations().length === 0;
+    document.getAnimations().length === 0 &&
+    // Adding, removing or aborting a native listener writes no DOM node or attribute.
+    kept.listenerStates?.every(([e, value]) => listened(e) === value) &&
+    rendered.inputs.every(([kind, target, args, value]) =>
+      sameRenderValue(value, renderValue(kind, readRenderFact(kind, target, args))));
   if (still)
     return {
       unchanged: true,
@@ -299,13 +493,19 @@
     registry.nodes.set(id, e);
     return id;
   };
-  for (const [id, e] of registry.nodes) if (!e.isConnected) registry.nodes.delete(id);
+  for (const [id, e] of registry.nodes) if (!e.isConnected) {
+    registry.nodes.delete(id);
+    registry.scrollAxes?.delete(id);
+  }
   // The DOM cannot change while this script runs, so a label, a text or a section title read once is reused for
   // the rest of it. `registry.guard` reads them again in a later script, against a page that may have changed
   // since, so the reuse ends as soon as this one does, whether it returns or throws.
   const caches = [];
+  let reading = true;
   registry.nativeQueueMicrotask ||= window.queueMicrotask.bind(window);
   registry.nativeQueueMicrotask(() => {
+    reading = false;
+    listenerStates = null;
     for (const cache of caches) cache.clear();
     caches.length = 0;
   });
@@ -318,27 +518,97 @@
       return cache.get(e);
     };
   };
-  const innerTextOf = memo(e => e.innerText);
+  // These queries use only element names and attributes, never live pseudo-classes or layout. A mutation clears
+  // its subtree's and ancestors' indexes, leaving unrelated cards reusable. A full read builds its indexes anew.
+  own.queryTrees ||= new WeakMap();
+  own.domVersions ||= new WeakMap();
+  own.structureVersions ||= new WeakMap();
+  if (!delta || !base || base.document_key !== own.snapshots?.[mode]?.document_key ||
+      base.read !== own.snapshots?.[mode]?.read) {
+    own.queryResults = new WeakMap();
+    own.names = new WeakMap();
+  }
+  own.queryResults ||= new WeakMap();
+  own.names ||= new WeakMap();
+  const flushedTrees = new Set();
+  const invalidateQueries = (records, root) => {
+    const bumped = new Set();
+    for (const record of records) {
+      for (let node = record.target; node && !bumped.has(node); node = node.parentNode) {
+        bumped.add(node);
+        own.queryResults.delete(node);
+        own.domVersions.set(node, (own.domVersions.get(node) || 0) + 1);
+      }
+      for (const added of record.addedNodes || []) {
+        if (added.nodeType !== 1) continue;
+        // A removed subtree can be edited while no observer watches it, then inserted somewhere else.
+        for (const node of [added, ...added.querySelectorAll('*')]) {
+          own.queryResults.delete(node);
+          own.domVersions.set(node, (own.domVersions.get(node) || 0) + 1);
+        }
+      }
+      if (record.type === 'childList' && [...record.addedNodes, ...record.removedNodes].some(n => n.nodeType === 1))
+        own.structureVersions.set(root, (own.structureVersions.get(root) || 0) + 1);
+    }
+  };
+  const flushTree = scope => {
+    const root = scope.getRootNode();
+    let tree = own.queryTrees.get(root);
+    if (!tree) {
+      const observer = new MutationObserver(records => invalidateQueries(records, root));
+      observer.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
+      tree = { observer, undefinedElements: null, structure: null };
+      own.queryTrees.set(root, tree);
+    }
+    if (!flushedTrees.has(root)) {
+      invalidateQueries(tree.observer.takeRecords(), root);
+      const structure = own.structureVersions.get(root) || 0;
+      if (tree.structure !== structure || tree.undefinedElements === null) {
+        tree.undefinedElements = [...root.querySelectorAll(':not(:defined)')];
+        tree.structure = structure;
+      } else {
+        tree.undefinedElements = tree.undefinedElements.filter(node => !node.matches(':defined'));
+      }
+      if (root === document) own.undefinedElements = tree.undefinedElements;
+      flushedTrees.add(root);
+    }
+    return root;
+  };
+  const descendants = (scope, selector) => {
+    // A guard can run in a later script, before observer callbacks have delivered. It always queries live state.
+    if (!reading) return scope.querySelectorAll(selector);
+    const root = flushTree(scope);
+    let entry = own.queryResults.get(scope);
+    // A detached subtree can acquire different children before entering a newly observed shadow root.
+    if (!entry || entry.root !== root) {
+      entry = { root, queries: new Map() };
+      own.queryResults.set(scope, entry);
+    }
+    if (!entry.queries.has(selector)) entry.queries.set(selector, scope.querySelectorAll(selector));
+    return entry.queries.get(selector);
+  };
+  flushTree(document);
+  const readUndefinedElements = own.undefinedElements;
+  const innerTextOf = e => renderFact('text', e);
 
-  const safe = e => e.type !== 'hidden';
+  const safe = e => nativeProperty(e, 'type') !== 'hidden';
   // Password and agent-typed secret values never leave the page: only their length is observed.
-  const secret = e => e.type === 'password' || e.dataset?.fastbrowseSecret === '1';
-  const reveal = e => (typeof e.value !== 'string' ? null : secret(e) ? '•'.repeat(e.value.length) : e.value);
+  const secret = e => nativeProperty(e, 'type') === 'password' || e.dataset?.fastbrowseSecret === '1';
+  const reveal = e => (typeof nativeProperty(e, 'value') !== 'string' ? null : secret(e) ? '•'.repeat(nativeProperty(e, 'value').length) : nativeProperty(e, 'value'));
   // What a select has chosen. selectedIndex names only the first chosen option, so a list that allows several gives
   // every chosen index: a later option chosen or taken out changes it.
   const chosen = e =>
-    e.multiple && e.tagName === 'SELECT' ? [...e.selectedOptions].map(o => o.index) : (e.selectedIndex ?? null);
+    nativeProperty(e, 'multiple') && e.tagName === 'SELECT' ? [...renderFact('selected', e)].map(o => o.index) : (nativeProperty(e, 'selectedIndex') ?? null);
   // Tag pickers keep the field they replace on the page, clipped to nothing, and checkVisibility() ignores clip: a
   // control whose own clip or clip-path leaves no area is not there for a person. A hidden checkbox, radio or file
   // input is still reached through its label. Text is still read, as a page states facts in visually hidden text.
   const clippedAway = e => {
-    const style = e.ownerDocument.defaultView.getComputedStyle(e);
-    const rect = /^rect\((.+)\)$/.exec(style.clip);
-    const inset = /^inset\(([^)]*?)(?:\s+round\s.*)?\)$/.exec(style.clipPath);
+    const rect = /^rect\((.+)\)$/.exec(styleProperty(e, 'clip'));
+    const inset = /^inset\(([^)]*?)(?:\s+round\s.*)?\)$/.exec(styleProperty(e, 'clipPath'));
     // Almost every element has neither, and its box is not read.
     if (!rect && !inset) return false;
-    const { width, height } = e.getBoundingClientRect();
-    if (rect && ['absolute', 'fixed'].includes(style.position)) {
+    const { width, height } = boxOf(e);
+    if (rect && ['absolute', 'fixed'].includes(styleProperty(e, 'position'))) {
       // An `auto` side is the border box's own edge.
       const edges = [0, width, height, 0];
       const [top, right, bottom, left] = rect[1]
@@ -380,12 +650,12 @@
   // Asked only of an element whose opacity check failed. One that ignores the pointer while it fades is not offered,
   // as what it covers would take the click.
   const fadingIn = e =>
-    e.checkVisibility({ checkVisibilityCSS: true }) &&
-    e.ownerDocument.defaultView.getComputedStyle(e).pointerEvents !== 'none' &&
+    visibilityOf(e, { checkVisibilityCSS: true }) &&
+    styleProperty(e, 'pointerEvents') !== 'none' &&
     !onChain(
       e,
       a =>
-        a.ownerDocument.defaultView.getComputedStyle(a).opacity === '0' &&
+        styleProperty(a, 'opacity') === '0' &&
         !a.getAnimations().some(t => fadingTo(t) > 0),
     );
   // What is fading out has gone for a person though its opacity is still above zero, as the controls of a card the
@@ -403,18 +673,18 @@
     // "Mark all as complete" input is 1px and off screen, and only its label can be clicked.
     const choice =
       nativeChoice(e) &&
-      e.ownerDocument.defaultView.getComputedStyle(e).pointerEvents !== 'none' &&
-      ![...(e.labels || [])].some(l => l.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }));
+      styleProperty(e, 'pointerEvents') !== 'none' &&
+      ![...(e.labels || [])].some(l => visibilityOf(l, { checkOpacity: true, checkVisibilityCSS: true }));
     if (
       e.closest('[aria-hidden="true"],[inert]') ||
-      (!e.checkVisibility({ checkOpacity: !choice, checkVisibilityCSS: true }) && (choice || !fadingIn(e))) ||
+      (!visibilityOf(e, { checkOpacity: !choice, checkVisibilityCSS: true }) && (choice || !fadingIn(e))) ||
       leaving(e) ||
       (choice && !shownThrough(e)) ||
       (clippedAway(e) && (e.matches(SELECTOR) || pressable(e) || focusableText(e)))
     )
       return false;
     if (!choice) return true;
-    const r = e.getBoundingClientRect();
+    const r = boxOf(e);
     return r.width > 0 && r.height > 0 && !e.matches(':disabled') && !e.closest('[aria-disabled="true"]');
   });
   registry.visible = visible;
@@ -426,7 +696,7 @@
   const sourceOf = (registry.sourceOf = e =>
     registry.chooser?.opener === e && (registry.chooser.input.isConnected || !registry.chooser.connected)
       ? registry.chooser.input
-      : e.tagName === 'LABEL' && ['checkbox', 'radio', 'file'].includes(e.control?.type)
+      : e.tagName === 'LABEL' && ['checkbox', 'radio', 'file'].includes(nativeProperty(e.control, 'type'))
         ? e.control
         : e);
 
@@ -446,8 +716,8 @@
   };
   const iconLabel = e => {
     const glyphs = new Set();
-    for (const icon of e.querySelectorAll('svg,i,span,[role="img"]')) {
-      if (!icon.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) continue;
+    for (const icon of descendants(e, 'svg,i,span,[role="img"]')) {
+      if (!visibilityOf(icon, { checkOpacity: true, checkVisibilityCSS: true })) continue;
       const named = [];
       for (const token of icon.classList) {
         const glyph = ICON_CLASS.exec(token);
@@ -517,12 +787,23 @@
   // A name taken from content reads only what is shown: a card's hidden "Report fraud item" button named the card.
   // A hidden element named through aria-labelledby is read whole, since it is hidden only to serve as the label.
   // An svg's <title> never renders, yet it is the graphic's name.
-  const shown = e => e.localName === 'title' || e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+  let nameReads = null;
+  const shownNow = memo(e => e.localName === 'title' || visibilityOf(e, { checkOpacity: true, checkVisibilityCSS: true }));
+  const shown = e => {
+    const value = shownNow(e);
+    nameReads?.shown.set(e, value);
+    return value;
+  };
+  const nameValue = e => {
+    const value = nativeProperty(e, 'value');
+    nameReads?.values.set(e, value);
+    return value;
+  };
   const FIELD_CONTAINERS = new Set(['combobox', 'listbox']);
   // The one field an element holds, when it holds exactly one. A hidden input or one under `hidden` is no field a
   // person fills, and an element holding two says nothing about which of them a name on it is for.
   const soleField = e => {
-    const fields = [...e.querySelectorAll('input:not([type=hidden]),select,textarea')].filter(
+    const fields = [...descendants(e, 'input:not([type=hidden]),select,textarea')].filter(
       f => !f.parentElement.closest('[hidden]'),
     );
     return fields.length === 1 ? fields[0] : null;
@@ -561,11 +842,23 @@
   };
   const wrapperLabels = e =>
     e.labels?.length || !e.matches('input,select,textarea') ? [] : borrowedLabels(e.getRootNode()).get(e) || [];
+  const labelsFor = e => {
+    const labels = [...(e.labels || []), ...wrapperLabels(e)];
+    nameReads?.labels.set(e, labels);
+    return labels;
+  };
+  const referencedNode = (root, id) => root.getElementById ? root.getElementById(id) : document.getElementById(id);
   const labelFrom = (e, seen) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
+    nameReads?.nodes.add(e);
     const root = typeof e.getRootNode === 'function' ? e.getRootNode() : document;
-    const byId = id => (root.getElementById ? root.getElementById(id) : document.getElementById(id));
+    const byId = id => {
+      if (!id) return null;
+      const node = referencedNode(root, id);
+      nameReads?.references.push([root, id, node]);
+      return node;
+    };
     const referenced = (e.getAttribute('aria-labelledby') || '')
       .split(/\s+/)
       .map(id => labelFrom(byId(id), seen))
@@ -576,12 +869,12 @@
       e.getAttribute('aria-label') ||
       // A hidden label names nothing, as accname skips hidden nodes outside aria-labelledby: two tabbed forms reusing
       // one id made the hidden tab's label one of the shown field's `labels`, and the field was named twice (#921).
-      [...(e.labels || []), ...wrapperLabels(e)]
+      labelsFor(e)
         .filter(l => shown(l) || !shown(e))
         .map(l => labelFrom(l, seen))
         .filter(Boolean)
         .join(' ') ||
-      (['button', 'submit', 'reset'].includes(e.type) ? e.value : '') ||
+      (['button', 'submit', 'reset'].includes(nativeProperty(e, 'type')) ? nameValue(e) : '') ||
       e.getAttribute('alt') ||
       // A field's text is its value, not its name: a list-style select shows every option, and a combobox widget its
       // chosen chips, remove buttons and open options. Accname never names these from content either. A textarea's
@@ -614,11 +907,46 @@
     !e || e.matches('input,select,textarea') || !FIELD_CONTAINERS.has(e.getAttribute('role')) ? null : soleField(e);
   // A name is flattened as accname flattens it, whitespace runs to one space: a template's line breaks and indentation
   // inside a label reached callers as `Username               (required)` (#921).
+  const contentName = e => {
+    if (!e) return '';
+    if (!reading) return labelFrom(e, new Set()) || labelFrom(wrappedField(e), new Set());
+    const root = flushTree(e);
+    const kept = own.names.get(e);
+    if (kept && kept.root === root &&
+        kept.nodes.every(([node, version]) => (own.domVersions.get(node) || 0) === version) &&
+        kept.references.every(([tree, id, node]) => referencedNode(tree, id) === node) &&
+        kept.labels.every(([node, labels]) => {
+          const now = labelsFor(node);
+          return now.length === labels.length && now.every((label, i) => label === labels[i]);
+        }) &&
+        (!kept.needsWrapped || wrappedField(e) === kept.wrapped) &&
+        kept.shown.every(([node, value]) => shown(node) === value) &&
+        kept.values.every(([node, value]) => nativeProperty(node, 'value') === value)) return kept.text;
+    const reads = { nodes: new Set(), references: [], labels: new Map(), shown: new Map(), values: new Map() };
+    nameReads = reads;
+    let text, wrapped = null, needsWrapped = false;
+    try {
+      text = labelFrom(e, new Set());
+      if (!text) {
+        needsWrapped = true;
+        wrapped = wrappedField(e);
+        text = labelFrom(wrapped, new Set());
+      }
+    } finally {
+      nameReads = null;
+    }
+    own.names.set(e, {
+      root, text, wrapped, needsWrapped,
+      references: reads.references, labels: [...reads.labels],
+      nodes: [...reads.nodes].map(node => [node, own.domVersions.get(node) || 0]),
+      shown: [...reads.shown], values: [...reads.values],
+    });
+    return text;
+  };
   const labelOf = memo(e =>
     (
       (e && !e.getAttribute('aria-label') && !e.getAttribute('aria-labelledby') && focusableText(e)) ||
-      labelFrom(e, new Set()) ||
-      labelFrom(wrappedField(e), new Set())
+      contentName(e)
     )
       .replace(/\s+/g, ' ')
       .trim(),
@@ -628,16 +956,16 @@
   // listener a script added, or the pointer cursor. The cursor inherits, so only the element it starts on counts, and
   // an element inside a control or holding one leaves the click to that control.
   const pressable = memo(e => {
-    const view = e.ownerDocument.defaultView;
     const declared =
       e.hasAttribute('onclick') ||
-      (view.getComputedStyle(e).cursor === 'pointer' &&
-        (!e.parentElement || view.getComputedStyle(e.parentElement).cursor !== 'pointer'));
-    if (!(declared || listened(e)) || e.parentElement?.closest(SELECTOR) || [...e.querySelectorAll(SELECTOR)].some(visible))
+      typeof nativeProperty(e, 'onclick') === 'function' ||
+      (styleProperty(e, 'cursor') === 'pointer' &&
+        (!e.parentElement || styleProperty(e.parentElement, 'cursor') !== 'pointer'));
+    if (!(declared || listened(e)) || e.parentElement?.closest(SELECTOR) || [...descendants(e, SELECTOR)].some(visible))
       return false;
     // A listener can sit on a container to hear its children's clicks, as React's does on its root, so one holding a
     // pressable element leaves the click to it.
-    return declared || ![...e.querySelectorAll('*')].some(c => pressable(c) && visible(c));
+    return declared || ![...descendants(e, '*')].some(c => pressable(c) && visible(c));
   });
   // A script can make a focusable label its menu trigger without a role, href or pointer cursor. Its label may
   // be wrapped in a child, and hidden menu links must not hide the trigger that reveals them. A container holding
@@ -645,7 +973,7 @@
   const focusableText = memo(e => {
     if (e.getAttribute('tabindex') === null || Number(e.getAttribute('tabindex')) < 0) return null;
     if (e.matches(SELECTOR) || e.parentElement?.closest(SELECTOR)) return null;
-    if ([...e.querySelectorAll(SELECTOR)].some(visible)) return null;
+    if ([...descendants(e, SELECTOR)].some(visible)) return null;
     const text = (innerTextOf(e) || '').replace(/\s+/g, ' ').trim();
     return text || null;
   });
@@ -654,7 +982,7 @@
   const DATE_TYPES = ['date', 'datetime-local', 'month', 'week', 'time'];
 
   const roleOf = e => {
-    if (sourceOf(e) !== e) return sourceOf(e).type === 'file' ? 'textbox' : sourceOf(e).type;
+    if (sourceOf(e) !== e) return nativeProperty(sourceOf(e), 'type') === 'file' ? 'textbox' : nativeProperty(sourceOf(e), 'type');
     const explicit = e.getAttribute('role');
     if (ARIA_ROLES.includes(explicit)) return explicit;
     if (e.tagName === 'BUTTON' || e.tagName === 'SUMMARY') return 'button';
@@ -662,14 +990,16 @@
     // Next/Prev: a destination is what makes it a link, so without one it is offered as a button instead.
     if (e.tagName === 'A') return e.hasAttribute('href') ? 'link' : 'button';
     if (e.tagName === 'SELECT') return 'combobox';
-    if (e.tagName === 'TEXTAREA' || e.isContentEditable) return 'textbox';
+    if (e.tagName === 'TEXTAREA' || nativeProperty(e, 'isContentEditable')) return 'textbox';
     if (e.tagName === 'INPUT') {
-      if (e.type === 'file') return 'textbox';
-      if (['checkbox', 'radio'].includes(e.type)) return e.type;
-      if (['button', 'submit', 'reset', 'image'].includes(e.type)) return 'button';
-      if (e.type === 'search') return 'searchbox';
-      if (e.type === 'number') return 'spinbutton';
-      if (['text', 'email', 'url', 'tel', 'password', ...DATE_TYPES].includes(e.type)) return 'textbox';
+      if (nativeProperty(e, 'type') === 'file') return 'textbox';
+      if (['checkbox', 'radio'].includes(nativeProperty(e, 'type'))) return nativeProperty(e, 'type');
+      if (['button', 'submit', 'reset', 'image'].includes(nativeProperty(e, 'type'))) return 'button';
+      if (nativeProperty(e, 'type') === 'search') return 'searchbox';
+      if (nativeProperty(e, 'type') === 'number') return 'spinbutton';
+      // HTML-AAM maps a range input to the slider role, whose keys step it.
+      if (nativeProperty(e, 'type') === 'range') return 'slider';
+      if (['text', 'email', 'url', 'tel', 'password', ...DATE_TYPES].includes(nativeProperty(e, 'type'))) return 'textbox';
     }
     // A bare draggable element or a declared drop target has no ARIA role of its own, yet it is a real
     // element to act on. Name it generic rather than null so the control walk does not drop it before the
@@ -682,7 +1012,7 @@
 
   const submitSemantics = memo(e => {
     const form = e.form;
-    const explicit = ['BUTTON', 'INPUT'].includes(e.tagName) && ['submit', 'image'].includes(e.type);
+    const explicit = ['BUTTON', 'INPUT'].includes(e.tagName) && ['submit', 'image'].includes(nativeProperty(e, 'type'));
     const implicit = [
       'text',
       'search',
@@ -697,12 +1027,12 @@
       'datetime-local',
       'number',
     ];
-    if (!form || (!explicit && (e.tagName !== 'INPUT' || !implicit.includes(e.type)))) return null;
+    if (!form || (!explicit && (e.tagName !== 'INPUT' || !implicit.includes(nativeProperty(e, 'type'))))) return null;
     const submit = explicit ? e : [...form.getRootNode().querySelectorAll('button,input')].find(
-      c => c.form === form && (c.type === 'submit' || c.type === 'image'),
+      c => c.form === form && (nativeProperty(c, 'type') === 'submit' || nativeProperty(c, 'type') === 'image'),
     );
     if (submit?.matches(':disabled')) return null;
-    if (!submit && [...form.elements].filter(c => c.tagName === 'INPUT' && implicit.includes(c.type)).length > 1)
+    if (!submit && [...form.elements].filter(c => c.tagName === 'INPUT' && implicit.includes(nativeProperty(c, 'type'))).length > 1)
       return null;
     // A page can make any of these properties return something other than text. Coursera's React app left an
     // HTMLInputElement where a method string belongs and `JSON.stringify` threw on React's circular fiber, which ended
@@ -727,10 +1057,13 @@
   // A document observer sees neither a shadow root nor a child document, so a read that went into either cannot be
   // told later whether it still holds, and is not reused.
   let deep = false;
+  let lightElements;
   function* walk(root) {
     // A document observer cannot see mutations inside shadow roots or child documents.
     const listed = new Set(root.querySelectorAll(SELECTOR));
-    for (const e of root.querySelectorAll('*')) {
+    const elements = root.querySelectorAll('*');
+    if (root === document) lightElements = [...elements];
+    for (const e of elements) {
       if (listed.has(e) || pressable(e) || focusableText(e)) yield e;
       if (e.shadowRoot) {
         deep = true;
@@ -767,8 +1100,12 @@
     for (const e of registry.selfUpdating) if (scope.contains(e)) text = text.replace(innerTextOf(e) || '', '');
     return digest(text.slice(0, GUARD_TEXT_CHARS));
   });
-  registry.guard = e => {
+  registry.guard = (e, id) => {
     if (!e?.isConnected || !visible(e)) return null;
+    const axis = registry.scrollAxes?.get(id);
+    if (axis) return [identity(e), 'scroll', axis,
+      e.getAttribute('aria-label'), e.getAttribute('aria-labelledby'), e.getAttribute('title'),
+      e.ownerDocument.location.origin, e.ownerDocument.defaultView.performance.timeOrigin, identity(e)];
     const source = sourceOf(e);
     if (source !== e && (source.matches(':disabled') || source.closest('[aria-disabled="true"],[inert]'))) return null;
     const scope = e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') || e.parentElement;
@@ -779,9 +1116,9 @@
       roleOf(e),
       labelOf(e) || fallbackLabel(e),
       reveal(source),
-      source.checked ?? null,
+      nativeProperty(source, 'checked') ?? null,
       chosen(e),
-      e.readOnly ?? null,
+      nativeProperty(e, 'readOnly') ?? null,
       e.matches(':disabled'),
       e.getAttribute('aria-disabled') === 'true',
       e.getAttribute('aria-expanded'),
@@ -797,8 +1134,8 @@
       identity(source),
     ];
   };
-  registry.guardKey = e => {
-    const guard = registry.guard(e);
+  registry.guardKey = (e, id) => {
+    const guard = registry.guard(e, id);
     return guard && digest(JSON.stringify(guard));
   };
 
@@ -817,7 +1154,7 @@
       p && !p.matches('body,main,article,section,aside,nav,header,footer');
       p = p.parentElement
     ) {
-      if (p.querySelectorAll('input:not([type=hidden]),textarea,select').length > 1) return String(identity(p));
+      if (descendants(p, 'input:not([type=hidden]),textarea,select').length > 1) return String(identity(p));
     }
     return null;
   };
@@ -829,7 +1166,7 @@
       (visible(source) || source.matches(':disabled') || source.closest('[aria-disabled="true"],[inert]'))
     )
       continue;
-    const r = e.getBoundingClientRect(),
+    const r = boxOf(e),
       x = r.x + r.width / 2,
       y = r.y + r.height / 2,
       rname = roleOf(e);
@@ -838,7 +1175,7 @@
     // A button-styled link offers the same label twice, but its inner button owns every useful click point.
     if (rname === 'link') {
       // Most links hold no button, and querying every link for every control was the walk's slowest step.
-      const nested = e.querySelector('button') ? e.querySelectorAll(SELECTOR) : [];
+      const nested = e.querySelector('button') ? descendants(e, SELECTOR) : [];
       const button = nested.length === 1 ? nested[0] : null;
       if (button?.tagName === 'BUTTON' && visible(button) && !button.matches(':disabled') &&
           !button.closest('[aria-disabled="true"],[inert]') && labelOf(button) === labelOf(e)) continue;
@@ -848,6 +1185,9 @@
     if (mode !== 'glance') registry.controls.add(e);
     const named = labelOf(e);
     if (!named) unnamed.add(id);
+    const root = e.getRootNode();
+    const focused = renderFact('active', root);
+    const activeDescendant = focused?.getAttribute('aria-activedescendant');
     const base = {
       id,
       role: rname,
@@ -855,20 +1195,20 @@
       offscreen: y < 0 || y >= innerHeight,
       distance: y < 0 || y >= innerHeight ? 1 + Math.abs(y - innerHeight / 2) : 0,
       sensitive: secret(source),
-      // The root's own active element, so a field inside a shadow root reads as focused where the document names
-      // only its host.
-      focused: e.getRootNode().activeElement === e,
-      input_type: source.type || null,
+      // A composite widget can keep DOM focus on its container while its active descendant moves between items.
+      // Read that virtual focus too, in the same root as the item, including a shadow root.
+      focused: focused === e || (!!activeDescendant && root.getElementById?.(activeDescendant) === e),
+      input_type: nativeProperty(source, 'type') || null,
       input_name: source.getAttribute('name') || null,
-      max_length: source.maxLength > 0 ? source.maxLength : null,
+      max_length: nativeProperty(source, 'maxLength') > 0 ? nativeProperty(source, 'maxLength') : null,
       autocomplete: source.getAttribute('autocomplete') || null,
       frame_origin: e.ownerDocument.location.origin,
       frame_path: framePath(e.ownerDocument),
       form_id: fieldScope(source),
       submit_semantics: submitSemantics(e),
     };
-    if (rname === 'link' && e.href) {
-      const u = new URL(e.href, location.href);
+    if (rname === 'link' && nativeProperty(e, 'href')) {
+      const u = new URL(nativeProperty(e, 'href'), location.href);
       // Another origin's link keeps its whole address, as capture.js writes it: a recipe or a follow joins the href
       // to this page, which would turn host and path into a path on this site and drop the query (#830).
       base.href = u.origin === location.origin ? u.pathname + u.search : u.href;
@@ -888,7 +1228,7 @@
       };
       if (
         u.origin === location.origin &&
-        ((e.rel && e.rel.split(/\s+/).includes('next')) ||
+        ((nativeProperty(e, 'rel') && nativeProperty(e, 'rel').split(/\s+/).includes('next')) ||
           ((pager(e) || (pager(e.parentElement) && e.parentElement.tagName === 'LI')) && container()))
       )
         base.next_page = true;
@@ -899,34 +1239,48 @@
       const value = e.getAttribute('aria-' + key);
       if (value !== null) base[key] = value === 'true';
     }
-    if (['checkbox', 'radio'].includes(source.type)) base.checked = source.checked;
+    if (['checkbox', 'radio'].includes(nativeProperty(source, 'type'))) base.checked = nativeProperty(source, 'checked');
     // What the page says about the field. A custom widget marks the element the user sees, not the input
     // underneath it, so both are asked.
-    if (source.required || [e, source].some(n => n.getAttribute('aria-required') === 'true')) base.required = true;
+    if (nativeProperty(source, 'required') || [e, source].some(n => n.getAttribute('aria-required') === 'true')) base.required = true;
     // Native validation can refuse a form without adding any ARIA attribute or page text. The browser holds that
     // against a field only once it was edited or its form was submitted, as `:user-invalid`: an empty required field a
     // page has just opened or reset is not refused, and told it was, a run that had submitted a wizard filled it again.
-    const refused = source.willValidate === true && source.validity?.valid === false && source.matches(':user-invalid');
+    const refused = nativeProperty(source, 'willValidate') === true && renderFact('validity', source) === false && renderFact('state', source, ':user-invalid');
     if ([e, source].some(n => n.getAttribute('aria-invalid') === 'true') || refused) base.invalid = true;
     // Why the browser refused it, in its own words: a refused submit shows that only in a bubble the page text
     // lacks, and a run that saw only `invalid` refilled the field the task named instead of the empty one.
-    if (refused && source.validationMessage) base.validation_message = source.validationMessage;
+    if (refused && nativeProperty(source, 'validationMessage')) base.validation_message = nativeProperty(source, 'validationMessage');
     if (e.tagName === 'SELECT') {
       base.operations = ['select'];
-      base.options = [...e.options].filter(o => !o.disabled && !o.closest('optgroup[disabled]')).map(o => o.label);
-      base.value = [...e.selectedOptions].map(o => o.label).join(', ');
-    } else if (source.type === 'file') {
+      base.options = [...e.options].filter(o => !nativeProperty(o, 'disabled') && !o.closest('optgroup[disabled]')).map(o => o.label);
+      base.value = [...renderFact('selected', e)].map(o => o.label).join(', ');
+    } else if (nativeProperty(source, 'type') === 'file') {
       base.operations = ['upload'];
       base.value = null;
     } else {
       const editable =
-        !e.readOnly &&
+        !nativeProperty(e, 'readOnly') &&
         e.getAttribute('aria-readonly') !== 'true' &&
         (['textbox', 'searchbox', 'spinbutton'].includes(rname) ||
           (rname === 'combobox' && ['INPUT', 'TEXTAREA'].includes(e.tagName)));
       // reveal() is null for <li>, <progress> and <meter>, whose numeric `value`s are not field contents.
-      base.value = reveal(source) ?? (e.isContentEditable || rname === 'combobox' ? e.innerText.trim() : null);
+      // A scripted slider or spinbutton has no `value`: its current value is the one it announces, and a press of its
+      // keys is judged by it.
+      const announced = ['slider', 'spinbutton'].includes(rname)
+        ? (e.getAttribute('aria-valuetext') ?? e.getAttribute('aria-valuenow'))
+        : null;
+      base.value =
+        reveal(source) ?? announced ?? (nativeProperty(e, 'isContentEditable') || rname === 'combobox' ? innerTextOf(e).trim() : null);
       base.operations = editable ? ['fill', 'click', 'enter'] : ['click'];
+      // The APG's composite widgets and value controls need keys beyond activation. A role alone cannot receive
+      // them: focus must reach the widget itself or its current active descendant. Native selects use Select.
+      if (
+        !editable &&
+        !['button', 'link', 'checkbox', 'switch', 'textbox', 'searchbox'].includes(rname) &&
+        ARIA_ROLES.includes(rname) &&
+        (e.tabIndex >= 0 || e.hasAttribute('tabindex') || base.focused)
+      ) base.operations.push('press');
       // Only an element that names itself draggable is offered as a drag source: `draggable` reports true for
       // every <a> and <img> by default, which would offer the whole page as draggable.
       if (e.getAttribute('draggable') === 'true') base.operations.push('drag');
@@ -948,9 +1302,9 @@
   // and the post's first heading ("Data Entry Form") named that picker's Submit when only headings counted.
   // A hidden title names nothing on screen: innerText still returns a `hidden` label's text.
   const titles = memo(scope =>
-    [...scope.querySelectorAll(`${HEADINGS},label`)].filter(
+    [...descendants(scope, `${HEADINGS},label`)].filter(
       e =>
-        (e.localName !== 'label' || !labelTarget(e)) && e.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
+        (e.localName !== 'label' || !labelTarget(e)) && visibilityOf(e, { checkOpacity: true, checkVisibilityCSS: true }),
     ));
   // A card is an item, a row, or an element the page repeats beside itself with the same tag and class.
   // Each parent's children counted by tag and class once: asking every child about all its siblings is quadratic
@@ -992,6 +1346,8 @@
   };
   // Labels more than one control shares, filled in once every control is listed.
   const repeated = new Set();
+  const controlByElement = new Map();
+  const labelsByRole = new Map();
   const nameOf = (scope, element, label, nearest, own = null) => {
     const aria = (scope.getAttribute('aria-label') || '').trim();
     if (aria && aria !== label) return aria;
@@ -1003,17 +1359,16 @@
     // kind (a link inside a checkbox's label names the item). Past a repeated control's label, a datepicker's first
     // line is the month it shows. The label is cut out as whole words, since a day labelled "2" cut out of
     // "October 2026" left "October 0 6".
-    const mine = controls.find(c => registry.nodes.get(c.id) === element);
-    const peers = new Set(
-      controls.filter(c => c !== mine && c.role === mine?.role).map(c => c.label),
-    );
+    const mine = controlByElement.get(element);
+    const counts = labelsByRole.get(mine?.role);
+    const peer = word => (counts?.get(word) || 0) > Number(mine?.label === word);
     // A table row's cells are one line of text, so a week row reads "26 27 28 29 30 1 2": a line made only of this
     // control's and its peers' labels names nothing but them.
-    const onlyPeers = line => line.split(' ').every(word => word === label || peers.has(word));
+    const onlyPeers = line => line.split(' ').every(word => word === label || peer(word));
     const lines = (innerTextOf(scope) || '')
       .split('\n')
       .map(line => line.replace(/\s+/g, ' ').trim())
-      .filter(line => line && !repeated.has(line) && !peers.has(line) && !onlyPeers(line) && !own?.has(line));
+      .filter(line => line && !repeated.has(line) && !peer(line) && !onlyPeers(line) && !own?.has(line));
     return firstLine(lines.map(line => (label ? ` ${line} `.split(` ${label} `).join(' ') : line)).join('\n'));
   };
   const contextOf = (element, holding, label, nearest = true) => {
@@ -1045,7 +1400,7 @@
   };
   addDoc(document);
   // Parsing every stylesheet each step is the slow part on a large site, so a document's hover rules are kept
-  // until its rule counts change (a new sheet, or rules a script inserted).
+  // until their text changes: editing a selector in place changes what a hover reveals without adding a rule.
   registry.hoverRules ||= new WeakMap();
   const revealsIn = doc => {
     const sheets = [];
@@ -1056,27 +1411,31 @@
         /* A cross-origin stylesheet cannot be read. */
       }
     }
-    const version = sheets.map(rules => rules.length).join(',');
-    const cached = registry.hoverRules.get(doc);
-    if (cached?.version === version) return cached.reveals;
-    const reveals = new Map();
+    const selectors = [];
     const collect = rules => {
       for (const rule of rules) {
         if (rule.cssRules?.length) collect(rule.cssRules);
-        for (const selector of (rule.selectorText || '').split(',')) {
-          // Split `a:hover b` into the hovered compound and what it reveals inside it. Rules that restyle the
-          // hovered element itself, or reveal a sibling or a pseudo-element, have nothing to offer here.
-          const m = selector.match(/^(.*?):hover([^\s>+~]*)\s*(>?)\s*([^+~]*)$/);
-          if (!m || !m[1].trim() || !m[4].trim() || m[4].includes('::')) continue;
-          const pair = [
-            (m[1] + m[2]).replaceAll(':hover', '').trim(),
-            `:scope ${m[3]} ${m[4].replaceAll(':hover', '')}`,
-          ];
-          reveals.set(pair.join('\n'), pair);
-        }
+        if (rule.selectorText) selectors.push(rule.selectorText);
       }
     };
     for (const rules of sheets) collect(rules);
+    const version = JSON.stringify(selectors);
+    const cached = registry.hoverRules.get(doc);
+    if (cached?.version === version) return cached.reveals;
+    const reveals = new Map();
+    for (const text of selectors) {
+      for (const selector of text.split(',')) {
+        // Split `a:hover b` into the hovered compound and what it reveals inside it. Rules that restyle the
+        // hovered element itself, or reveal a sibling or a pseudo-element, have nothing to offer here.
+        const m = selector.match(/^(.*?):hover([^\s>+~]*)\s*(>?)\s*([^+~]*)$/);
+        if (!m || !m[1].trim() || !m[4].trim() || m[4].includes('::')) continue;
+        const pair = [
+          (m[1] + m[2]).replaceAll(':hover', '').trim(),
+          `:scope ${m[3]} ${m[4].replaceAll(':hover', '')}`,
+        ];
+        reveals.set(pair.join('\n'), pair);
+      }
+    }
     const found = [...reveals.values()];
     registry.hoverRules.set(doc, { version, reveals: found });
     return found;
@@ -1089,7 +1448,7 @@
   // Where the pointer can rest: an element with a box inside the viewport's width and no taller than it.
   const pointerBox = e => {
     if (e === e.ownerDocument.body || e === e.ownerDocument.documentElement || !visible(e)) return null;
-    const r = e.getBoundingClientRect(),
+    const r = boxOf(e),
       x = r.x + r.width / 2,
       y = r.y + r.height / 2;
     return r.width <= 0 || r.height <= 0 || x < 0 || x >= innerWidth || r.height > innerHeight ? null : y;
@@ -1099,7 +1458,7 @@
     const label =
       e.getAttribute('aria-label') ||
       image?.getAttribute('alt') ||
-      firstLine(e.innerText) ||
+      firstLine(innerTextOf(e)) ||
       e.getAttribute('title') ||
       e.tagName.toLowerCase();
     const role =
@@ -1126,7 +1485,7 @@
     for (const [base, tail] of revealsIn(doc)) {
       let hosts = [];
       try {
-        hosts = doc.querySelectorAll(base);
+        hosts = renderFact('query', doc, base);
       } catch {
         continue;
       }
@@ -1138,7 +1497,7 @@
         if (y === null) continue;
         let hidden = false;
         try {
-          hidden = [...e.querySelectorAll(tail)].some(
+          hidden = [...renderFact('query', e, tail)].some(
             t => !visible(t) && (t.textContent.trim() || t.querySelector('img,a')),
           );
         } catch {
@@ -1146,7 +1505,7 @@
         }
         // Removing the active hover target renumbers its identical siblings and sends the next choice
         // to a different element. Keep it offered while the pointer still reveals its content.
-        if (!hidden && !e.matches(':hover')) continue;
+        if (!hidden && !renderFact('state', e, ':hover')) continue;
         offerHover(e, y);
       }
     }
@@ -1167,7 +1526,7 @@
     for (const e of doc.body.querySelectorAll('*')) {
       if (host?.contains(e)) continue;
       if (offered.has(e) || holding.has(e) || !isCard(e)) continue;
-      if (![...e.querySelectorAll(VISUAL)].some(v => !decorative(v))) continue;
+      if (![...descendants(e, VISUAL)].some(v => !decorative(v))) continue;
       const y = pointerBox(e);
       if (y === null) continue;
       offerHover(e, y);
@@ -1176,6 +1535,15 @@
   }
 
   const byLabel = new Map();
+  // Context compares a line with the other controls' labels. Index those once, rather than scanning every control
+  // for each card or calendar cell; counts preserve a label another control shares with this one.
+  for (const c of controls) {
+    const element = registry.nodes.get(c.id);
+    if (!controlByElement.has(element)) controlByElement.set(element, c);
+    if (!labelsByRole.has(c.role)) labelsByRole.set(c.role, new Map());
+    const labels = labelsByRole.get(c.role);
+    labels.set(c.label, (labels.get(c.label) || 0) + 1);
+  }
   for (const c of controls) {
     const key = JSON.stringify([c.role, c.label]);
     if (!byLabel.has(key)) byLabel.set(key, []);
@@ -1211,7 +1579,7 @@
         const line = node.data.replace(/\s+/g, ' ').trim();
         // A caption a hover rule reveals is not shown, so it cannot tell twins apart.
         if (!line || line === label || repeated.has(line)) continue;
-        if (!node.parentElement?.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) continue;
+        if (!visibilityOf(node.parentElement, { checkOpacity: true, checkVisibilityCSS: true })) continue;
         lines.push(` ${line} `.split(` ${label} `).join(' '));
       }
       return firstLine(lines.join('\n'));
@@ -1380,6 +1748,84 @@
     if (column) c.context = [c.context, `column: ${column}`].filter(Boolean).join('; ');
   }
 
+  // A tab or option inherits its key direction from the composite that owns it, not from its own role.
+  for (const c of controls) {
+    if (!c.operations.includes('press')) continue;
+    const e = registry.nodes.get(c.id);
+    const owner = e?.closest('[role="tablist"],[role="listbox"],[role="radiogroup"],[role="menu"],[role="menubar"],[role="tree"],[role="treegrid"],[role="grid"]');
+    const orientation = e?.getAttribute('aria-orientation') ?? owner?.getAttribute('aria-orientation');
+    if (orientation === 'vertical' || orientation === 'horizontal')
+      c.context = [c.context, `orientation: ${orientation}`].filter(Boolean).join('; ');
+  }
+
+  // A wheel at the viewport centre misses panels and horizontal lists. Index the browser's actual scroll owners,
+  // separately for each overflowing axis, so the chosen target determines which content moves.
+  registry.scrollIds ||= new WeakMap();
+  registry.scrollAxes ||= new Map();
+  const scrollAreas = root => {
+    for (const e of root.querySelectorAll('*')) {
+      if (e.shadowRoot) scrollAreas(e.shadowRoot);
+      if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
+        const inner = childDocument(e);
+        if (inner?.body && granted(inner)) scrollAreas(inner);
+      }
+      if (!safe(e) || !visible(e) || e.closest('[inert]')) continue;
+      const view = e.ownerDocument.defaultView;
+      const page = e === e.ownerDocument.scrollingElement;
+      const overflow = {x: e.scrollWidth - e.clientWidth, y: e.scrollHeight - e.clientHeight};
+      if (overflow.x <= 0 && overflow.y <= 0) continue;
+      const style = view.getComputedStyle(e);
+      const vertical = style.writingMode.startsWith('vertical') || style.writingMode.startsWith('sideways');
+      let inlineReverse = style.direction === 'rtl';
+      let blockReverse = vertical && style.writingMode.endsWith('-rl');
+      if (style.display.includes('flex')) {
+        if (style.flexDirection === 'row-reverse') inlineReverse = !inlineReverse;
+        if (style.flexDirection === 'column-reverse') blockReverse = !blockReverse;
+      }
+      const named = element => element.hasAttribute('aria-label') || element.hasAttribute('aria-labelledby')
+        ? labelOf(element) : element.getAttribute('title') || '';
+      const frameNames = [];
+      for (let doc = e.ownerDocument; doc !== document;) {
+        const frame = doc.defaultView.frameElement;
+        frameNames.unshift(named(frame) || doc.location.href);
+        doc = frame.ownerDocument;
+      }
+      for (const axis of ['x', 'y']) {
+        let behavior = axis === 'x' ? style.overflowX : style.overflowY;
+        // With visible root overflow, CSS propagates the body's overflow to the viewport, including modal locks.
+        if (page && behavior === 'visible' && e.ownerDocument.body) {
+          const bodyStyle = view.getComputedStyle(e.ownerDocument.body);
+          behavior = axis === 'x' ? bodyStyle.overflowX : bodyStyle.overflowY;
+        }
+        if (overflow[axis] <= 0 || !(page && behavior === 'visible') && !['auto', 'scroll', 'overlay'].includes(behavior)) continue;
+        const position = axis === 'x' ? e.scrollLeft : e.scrollTop;
+        // CSSOM View's overflow direction follows the block and inline flow, including reversed flex axes.
+        const reverse = (axis === 'x') === vertical ? blockReverse : inlineReverse;
+        const min = reverse ? -overflow[axis] : 0, max = reverse ? 0 : overflow[axis];
+        const operations = [];
+        if (position < max) operations.push('scroll');
+        if (position > min) operations.push('scroll_up');
+        if (!operations.length) continue;
+        let ids = registry.scrollIds.get(e);
+        if (!ids) registry.scrollIds.set(e, ids = {});
+        const id = ids[axis] ||= registry.next++;
+        registry.nodes.set(id, e);
+        registry.scrollAxes.set(id, axis);
+        const rect = e.getBoundingClientRect();
+        controls.push({
+          id, role: 'region', operations,
+          label: `${axis === 'x' ? 'Horizontal' : 'Vertical'} scroll area: ${page ? 'Page' : named(e) || e.tagName.toLowerCase()}`,
+          ...(frameNames.length ? {context: `Frame: ${frameNames.join(' / ')}`} : {}),
+          frame_origin: e.ownerDocument.location.origin,
+          frame_path: framePath(e.ownerDocument),
+          offscreen: rect.bottom <= 0 || rect.top >= view.innerHeight,
+          distance: rect.bottom <= 0 || rect.top >= view.innerHeight ? 1 + Math.abs(rect.top) : 0,
+        });
+      }
+    }
+  };
+  scrollAreas(document);
+
   controls.sort((a, b) => a.distance - b.distance);
 
   // Text in a same-process child document is on screen as much as the parent's: a frameset page has no text of
@@ -1392,22 +1838,20 @@
     for (const frame of doc.querySelectorAll('iframe,frame')) {
       const inner = childDocument(frame);
       if (!inner || !granted(inner)) continue;
-      const f = frame.getBoundingClientRect();
-      read(inner, dx + f.left + frame.clientLeft, dy + f.top + frame.clientTop);
+      const f = boxOf(frame);
+      read(inner, dx + f.left + nativeProperty(frame, 'clientLeft'), dy + f.top + nativeProperty(frame, 'clientTop'));
     }
   };
   // Size, the cheapest test, goes first.
   const readText = (doc, dx, dy) => {
     if (!doc.body) return;
     const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
-    const range = doc.createRange();
     let node;
     while ((node = walker.nextNode())) {
       const value = node.textContent.trim(),
         parent = node.parentElement;
       if (!value || !parent) continue;
-      range.selectNodeContents(node);
-      const r = range.getBoundingClientRect();
+      const r = textBoxOf(node);
       if (r.width <= 0 || r.height <= 0 || parent.closest('script,style,noscript,template') || !visible(parent)) {
         continue;
       }
@@ -1434,7 +1878,7 @@
     if (visual_content) return;
     for (const e of doc.querySelectorAll(VISUAL)) {
       if (decorative(e) || !visible(e)) continue;
-      const r = e.getBoundingClientRect();
+      const r = boxOf(e);
       const top = r.top + dy,
         left = r.left + dx;
       if (r.width <= 0 || r.height <= 0) continue;
@@ -1466,13 +1910,13 @@
       media.push({
         kind: e.tagName.toLowerCase(),
         // Its children are fallback text for browsers without players, not its name.
-        label: (e.hasAttribute('aria-label') || e.hasAttribute('aria-labelledby') ? labelOf(e) : e.title) || null,
+        label: (e.hasAttribute('aria-label') || e.hasAttribute('aria-labelledby') ? labelOf(e) : nativeProperty(e, 'title')) || null,
         heading: headingBefore(e) || null,
-        paused: e.paused,
-        ended: e.ended,
-        muted: e.muted,
-        elapsed_seconds: seconds(e.currentTime) ?? 0,
-        duration_seconds: seconds(e.duration),
+        paused: nativeProperty(e, 'paused'),
+        ended: nativeProperty(e, 'ended'),
+        muted: nativeProperty(e, 'muted'),
+        elapsed_seconds: seconds(nativeProperty(e, 'currentTime')) ?? 0,
+        duration_seconds: seconds(nativeProperty(e, 'duration')),
       });
     }
     readFrames(doc, 0, 0, readMedia);
@@ -1482,7 +1926,7 @@
   const guards = {},
     retarget_keys = {};
   for (const c of controls) {
-    const guard = registry.guard(registry.nodes.get(c.id));
+    const guard = registry.guard(registry.nodes.get(c.id), c.id);
     guards[c.id] = guard && digest(JSON.stringify(guard));
     // A redraw changes the node ids at either end of the guard. Everything between them, including the receiving
     // document's timeOrigin and form semantics, must survive before an action can follow it.
@@ -1492,7 +1936,7 @@
   if (mode !== 'glance') registry.observed = new Map(controls.map(c => [c.id, guards[c.id]]));
   const field_state = [...document.querySelectorAll('input,textarea,select')]
     .filter(safe)
-    .map(e => [identity(e), reveal(e), e.checked, chosen(e), e.disabled, e.readOnly]);
+    .map(e => [identity(e), reveal(e), nativeProperty(e, 'checked'), chosen(e), nativeProperty(e, 'disabled'), nativeProperty(e, 'readOnly')]);
   // Compare meaning and identity for the page_key fingerprint; geometry is re-resolved just before input.
   const semantics = controls.map(({ distance, ...c }) => c);
   const page_key = digest(JSON.stringify([
@@ -1505,6 +1949,10 @@
     viewport_text,
     semantics,
     field_state,
+    controls.filter(c => registry.scrollAxes?.has(c.id)).map(c => {
+      const e = registry.nodes.get(c.id);
+      return [c.id, e.scrollLeft, e.scrollTop];
+    }),
     // Playing or not changes the page; the clock advancing does not, or no key would hold until an action.
     media.map(({ elapsed_seconds, ...m }) => m),
   ]));
@@ -1512,8 +1960,8 @@
   // The open modal the rest of the page sits behind. A page marks what is under one aria-hidden or inert, so those
   // controls leave the observation while staying in the document: Google Flights' Stops filter took 145 controls
   // out and put them back on closing, and a run told each by name in every later step.
-  const modals = [...document.querySelectorAll('dialog:modal,[aria-modal="true"]')].filter(
-    e => !e.closest('[aria-hidden="true"],[inert]') && e.checkVisibility({ checkVisibilityCSS: true }),
+  const modals = [...renderFact('query', document, 'dialog:modal,[aria-modal="true"]')].filter(
+    e => !e.closest('[aria-hidden="true"],[inert]') && visibilityOf(e, { checkVisibilityCSS: true }),
   );
   // A dialog is named by aria-label or aria-labelledby, never by its content.
   const dialogName = e =>
@@ -1521,18 +1969,19 @@
       e.getAttribute('aria-label') ||
       (e.getAttribute('aria-labelledby') || '')
         .split(/\s+/)
-        .map(id => (id && e.ownerDocument.getElementById(id)?.innerText) || '')
+        .map(id => (id && innerTextOf(e.ownerDocument.getElementById(id))) || '')
         .join(' ')
     )
       .replace(/\s+/g, ' ')
       .trim();
   const modal = modals.length ? dialogName(modals.at(-1)) : null;
 
-  // What this read reported, kept for the next look. A read that went into a shadow root or a child document is not
-  // kept: a document observer cannot see either, so it could not tell later whether that part still holds.
-  let read = null;
+  // The read number names a transport baseline. Only shallow reads can answer unchanged: a document observer
+  // cannot see mutations inside a shadow root or child document. Deep reads are still derived in full for deltas.
+  const read = !deep || delta ? ++registry.reads : null;
   if (!deep) {
-    read = ++registry.reads;
+    own.renderReads ||= {};
+    own.renderReads[mode] = { read, document_key: String(performance.timeOrigin), inputs: renderInputs };
     registry.kept ||= {};
     registry.kept[mode] = {
       mode,
@@ -1548,10 +1997,18 @@
       innerHeight,
       hidden: document.hidden,
       readyState: document.readyState,
+      undefinedElements: readUndefinedElements,
+      lightElements,
+      listenerStates: [...listenerStates],
+      listenerAPI: Boolean(own.listeners),
       url: location.href,
       document_key: String(performance.timeOrigin),
       page_key,
     };
+  } else if (registry.kept) {
+    // A deep read cannot be reused, and retaining its earlier shallow tree would pin detached page elements.
+    delete registry.kept[mode];
+    if (own.renderReads) delete own.renderReads[mode];
   }
   const result = {
     url: location.href,
@@ -1570,5 +2027,25 @@
   };
   // Absent unless one is open, as on most pages: an unnamed modal is the empty string, not null.
   if (modal !== null) result.modal = modal;
+  const previous = own.snapshots?.[mode];
+  own.snapshots ||= {};
+  own.snapshots[mode] = { read, document_key: result.document_key, controls: semantics, guards, retarget_keys };
+  if (delta && read !== null && previous?.read !== null && previous?.document_key === result.document_key &&
+      base?.document_key === previous.document_key && base?.read === previous.read) {
+    // Layout, CSS and references can change controls outside a mutated subtree. Derive the whole read, then omit
+    // only rows and guards that are exactly equal; action-time guards never read this transport baseline.
+    const rows = new Map(previous.controls.map(c => [c.id, JSON.stringify(c)]));
+    const changed = (now, before) => Object.fromEntries(Object.entries(now).filter(([id, value]) => value !== before[id]));
+    const { controls, guards, retarget_keys, ...metadata } = result;
+    return {
+      ...metadata,
+      control_delta: {
+        base_read: previous.read,
+        controls: controls.map(c => rows.get(c.id) === JSON.stringify(c) ? c.id : c),
+        guards: changed(guards, previous.guards),
+        retarget_keys: changed(retarget_keys, previous.retarget_keys),
+      },
+    };
+  }
   return result;
 })

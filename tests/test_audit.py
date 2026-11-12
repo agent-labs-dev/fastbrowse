@@ -46,10 +46,12 @@ def test_paid_cases_keep_exported_model_credentials(monkeypatch: pytest.MonkeyPa
     from fastbrowse.audit.runner import _environment
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "paid-test-key")
+    monkeypatch.setenv("EXA_API_KEY", "search-test-key")
     paid = next(c for c in CASES if c.id == "T1.2")
     refusal = next(c for c in CASES if c.id == "T0.2")
     assert _environment(paid)["OPENROUTER_API_KEY"] == "paid-test-key"
     assert "OPENROUTER_API_KEY" not in _environment(refusal)
+    assert "EXA_API_KEY" not in _environment(refusal)
 
 
 def test_missing_index_is_failed_evidence_instead_of_a_crash() -> None:

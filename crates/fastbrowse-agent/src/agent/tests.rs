@@ -214,6 +214,7 @@ pub(super) fn code_decision(operation: Operation, target: Option<Control>) -> De
     Decision {
         replayed: false,
         plan: Vec::new(),
+        read_scope: crate::policy::ReadScope::Page,
         by_code: false,
         operation,
         url: None,
@@ -616,8 +617,10 @@ async fn test_one_read_buys_one_return_to_a_page_state_already_reached() {
 }
 
 /// A page with no browser behind it, which cannot open the address it is given.
+#[derive(Default)]
 struct Unfetchable {
     opens: bool,
+    failure: Option<BrowserError>,
 }
 
 impl Page for Unfetchable {
@@ -639,7 +642,11 @@ impl Page for Unfetchable {
 
     fn navigate<'a>(&'a self, _: &'a str, _: Option<&'a str>) -> BoxFuture<'a, PageResult<()>> {
         let opens = self.opens;
+        let failure = self.failure.clone();
         Box::pin(async move {
+            if let Some(failure) = failure {
+                return Err(failure);
+            }
             if opens {
                 return Ok(());
             }
@@ -835,7 +842,7 @@ async fn test_a_loading_page_is_waited_on_until_it_draws() {
 #[tokio::test]
 async fn test_a_page_that_needs_a_browser_ends_the_run_blocked_with_its_reason() {
     let agent = Agent::new(
-        Arc::new(Unfetchable { opens: false }),
+        Arc::new(Unfetchable { opens: false, ..Default::default() }),
         Arc::new(ScriptedJev::new(Vec::new())),
         Arc::new(ScriptedLLM),
     );
@@ -847,11 +854,37 @@ async fn test_a_page_that_needs_a_browser_ends_the_run_blocked_with_its_reason()
 }
 
 #[tokio::test]
+async fn test_an_unreachable_opening_stays_unavailable_without_a_resume() {
+    for max_jev_calls in [None, Some(0)] {
+        for failure in
+            [BrowserError::NavigationTimeout("timed out".into()), BrowserError::SiteUnreachable("offline".into())]
+        {
+            let agent = Agent::new(
+                Arc::new(Unfetchable { failure: Some(failure), ..Default::default() }),
+                Arc::new(ScriptedJev::new(Vec::new())),
+                Arc::new(ScriptedLLM),
+            );
+            let sink: super::RecipeSink = Arc::default();
+            let options = super::RunOptions {
+                start: Some("https://example.test/".into()),
+                recipe_sink: Some(sink.clone()),
+                limits: Some(Limits { max_jev_calls, ..Default::default() }),
+                ..Default::default()
+            };
+            let result = agent.run("Read the price", options).await.unwrap();
+            assert_eq!(result.status, Status::Unavailable);
+            assert!(agent.resume().is_none(), "only a browser handoff keeps an unopened run");
+            assert!(sink.lock().unwrap().is_none(), "an unopened run has no recipe");
+        }
+    }
+}
+
+#[tokio::test]
 async fn test_a_fill_on_a_fetched_page_goes_to_the_browser_before_asking_for_a_secret() {
     let mut password = Control::new("pw", "textbox", "Token", [Operation::Fill]);
     password.input_type = Some("password".into());
     let agent = Agent::new(
-        Arc::new(Unfetchable { opens: true }),
+        Arc::new(Unfetchable { opens: true, ..Default::default() }),
         Arc::new(ScriptedJev::new(Vec::new())),
         Arc::new(ScriptedLLM),
     );
@@ -865,14 +898,17 @@ async fn test_page_ready_is_told_once_the_opening_page_is_open_and_only_then() {
     for (opens, told) in [(true, 1), (false, 0)] {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counter = calls.clone();
-        let agent =
-            Agent::new(Arc::new(Unfetchable { opens }), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM))
-                .with_page_ready(Some(Arc::new(move || {
-                    let counter = counter.clone();
-                    Box::pin(async move {
-                        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    })
-                })));
+        let agent = Agent::new(
+            Arc::new(Unfetchable { opens, ..Default::default() }),
+            Arc::new(ScriptedJev::new(Vec::new())),
+            Arc::new(ScriptedLLM),
+        )
+        .with_page_ready(Some(Arc::new(move || {
+            let counter = counter.clone();
+            Box::pin(async move {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            })
+        })));
         let options = super::RunOptions { start: Some("https://example.test/".into()), ..Default::default() };
         let _ = agent.run("Read the price", options).await;
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), told);
@@ -2789,7 +2825,7 @@ impl LLMClient for CoverageComposer {
             let reply = match purpose {
                 LLMPurpose::ImageRead => json!({"text": "premium 3.459 per gallon"}),
                 LLMPurpose::Compose => json!({
-                    "claims": [{"text": "Premium is 3.459 per gallon", "evidence_ids": [evidence_id.unwrap_or_default()]}]
+                    "claims": [{"text": ["Premium is 3.459 per gallon"], "evidence_ids": [evidence_id.unwrap_or_default()]}]
                 }),
                 _ => json!(null),
             };
@@ -2847,6 +2883,9 @@ impl LLMClient for EmptyImageLLM {
         schema: &'a dyn ResponseSchema,
         _: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        if purpose == LLMPurpose::RecoveryPages {
+            return Box::pin(async { Err(LLMError::Failed("no route provider".into())) });
+        }
         assert_eq!(serde_json::to_value(purpose).unwrap(), json!("image_read"));
         assert_eq!(schema.name(), "ImageReading");
         assert_eq!(messages.iter().map(|message| message.images.len()).sum::<usize>(), 1);
@@ -2974,6 +3013,7 @@ async fn test_requested_final_screenshot_is_captured_with_default_config() {
 
 struct IntentJev {
     choice: &'static str,
+    dates: bool,
     /// The answer to any other choice asked beside the output, where it is offered.
     evidence: &'static str,
     calls: std::sync::atomic::AtomicUsize,
@@ -2982,7 +3022,13 @@ struct IntentJev {
 
 impl IntentJev {
     fn new(choice: &'static str) -> Self {
-        Self { choice, evidence: "page_text", calls: Default::default(), fallback: ScriptedJev::new(Vec::new()) }
+        Self {
+            choice,
+            dates: false,
+            evidence: "page_text",
+            calls: Default::default(),
+            fallback: ScriptedJev::new(Vec::new()),
+        }
     }
 }
 
@@ -2998,7 +3044,12 @@ impl DecisionClient for IntentJev {
         if !intent {
             return self.fallback.evaluate(state, questions);
         }
-        assert_eq!(state, &json!({}), "output intent must not depend on page content or evidence identities");
+        if questions.contains_key("dates") {
+            assert!(state.get("task").is_some());
+            assert_eq!(state.as_object().unwrap().len(), 1, "startup must see only the task");
+        } else {
+            assert_eq!(state, &json!({}), "output intent must not depend on page content or evidence identities");
+        }
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let Question::Choice(question) = &questions["pick"] else { unreachable!() };
         assert!(question.instructions.ends_with("Does the task ask to be told something, and in what form?"));
@@ -3007,7 +3058,7 @@ impl DecisionClient for IntentJev {
             question.criteria.keys().map(String::as_str).collect::<Vec<_>>(),
             ["text", "image", "text_image", "carried_out"]
         );
-        let answers = questions
+        let mut answers: IndexMap<String, Answer> = questions
             .iter()
             .filter_map(|(key, question)| {
                 let Question::Choice(question) = question else { return None };
@@ -3026,6 +3077,15 @@ impl DecisionClient for IntentJev {
                 Some((key.clone(), Answer::Choice(answer)))
             })
             .collect();
+        if questions.contains_key("dates") {
+            answers.insert(
+                "dates".into(),
+                Answer::Noul(NoulAnswer {
+                    kind: fastbrowse_core::decision::NoulTag,
+                    probability: if self.dates { 1.0 } else { 0.0 },
+                }),
+            );
+        }
         Box::pin(async move {
             Ok(Evaluation {
                 model: "test".into(),
@@ -3159,7 +3219,7 @@ impl LLMClient for PopulationWriter {
         _: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         let reply = match purpose {
-            LLMPurpose::Compose => json!({"claims": [{"text": "41,798,407", "evidence_ids": [self.0]}]}),
+            LLMPurpose::Compose => json!({"claims": [{"text": ["41,798,407"], "evidence_ids": [self.0]}]}),
             _ => json!(null),
         };
         Box::pin(async move {
@@ -3201,6 +3261,124 @@ async fn test_output_intent_is_cached_without_guessing_from_task_text() {
 }
 
 #[tokio::test]
+async fn test_startup_batches_task_judgments_and_keeps_their_answers() {
+    let jev = Arc::new(IntentJev { evidence: "appearance", ..IntentJev::new("image") });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let judgments = agent.task_judgments(&state.task, &state.ledger).await.unwrap();
+    assert!(judgments.dates.is_empty());
+    let answers = judgments.output.expect("output was judged beside dates");
+    assert!(answers.contains_key("dates"));
+    assert!(answers.contains_key("pick"));
+    assert!(answers.contains_key("evidence"));
+    assert!(answers.contains_key("extent"));
+    state.output_answers = Some(answers);
+    assert_eq!(state.output_intent, super::state::OutputIntent::Unknown);
+    assert!(!state.appearance, "startup keeps answers without changing when they apply");
+    assert_eq!(agent.output_intent(&mut state).await.unwrap(), super::state::OutputIntent::Image);
+    assert!(state.appearance);
+    assert_eq!(jev.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(state.ledger.state().jev_calls, 1);
+    assert_eq!(state.ledger.breakdown().lines.len(), 1, "using a kept answer adds no receipt");
+}
+
+#[tokio::test]
+async fn test_failed_date_extraction_keeps_the_other_startup_judgments() {
+    let jev = Arc::new(IntentJev { dates: true, ..IntentJev::new("text") });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(WrongRecord));
+    let mut state = run_state();
+    state.task = "Report tomorrow's opening hours.".into();
+    let judgments = agent.task_judgments(&state.task, &state.ledger).await.unwrap();
+    assert!(judgments.dates.is_empty(), "this writer returns claims instead of dates");
+    assert_eq!(state.ledger.state().llm_calls, 1, "the failing date extraction was attempted");
+    state.output_answers = judgments.output;
+    assert_eq!(agent.output_intent(&mut state).await.unwrap(), super::state::OutputIntent::Text);
+    assert_eq!(jev.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+struct OversizedStartup {
+    calls: Mutex<Vec<Vec<String>>>,
+    fallback: IntentJev,
+}
+
+impl DecisionClient for OversizedStartup {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        self.fallback.profile()
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        self.calls.lock().unwrap().push(questions.keys().cloned().collect());
+        if questions.contains_key("dates") && questions.len() > 1 {
+            return Box::pin(async { Err(DecisionError::InputTooLarge("provider input limit".into())) });
+        }
+        Box::pin(async move {
+            let mut result = self.fallback.evaluate(state, questions).await?;
+            if let Some(Answer::Noul(answer)) = result.answers.get_mut("dates") {
+                answer.probability = 1.0;
+            }
+            Ok(result)
+        })
+    }
+}
+
+struct Tomorrow;
+
+impl LLMClient for Tomorrow {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        _: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        assert_eq!(purpose, LLMPurpose::Dates);
+        Box::pin(async move {
+            let reply = json!({"dates": [{"text": "tomorrow", "year": null, "month": null, "day": null,
+                "weekday": null, "nth": null, "days_from_today": 1, "months_from_now": null}]});
+            let data = schema.validate_json(&reply.to_string()).map_err(LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_oversized_startup_keeps_the_standalone_date_request() {
+    let jev = Arc::new(OversizedStartup { calls: Mutex::new(Vec::new()), fallback: IntentJev::new("image") });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(Tomorrow));
+    let mut state = run_state();
+    state.task = "Take a screenshot of tomorrow's opening hours.".into();
+    let judgments = agent.task_judgments(&state.task, &state.ledger).await.unwrap();
+    assert_eq!(judgments.dates[0].days_from_today, Some(1));
+    assert!(judgments.output.is_none(), "an unasked output question must stay unknown");
+    assert_eq!(agent.output_intent(&mut state).await.unwrap(), super::state::OutputIntent::Image);
+    let calls = jev.calls.lock().unwrap();
+    assert_eq!(calls.len(), 3);
+    assert!(calls[0].contains(&"pick".into()) && calls[0].contains(&"dates".into()));
+    assert_eq!(calls[1], ["dates"]);
+    assert!(!calls[2].contains(&"dates".into()));
+    assert_eq!(state.ledger.state().jev_calls, 3, "every physical request reserves a call");
+}
+
+#[tokio::test]
+async fn test_startup_answers_still_reject_an_unoffered_output_choice() {
+    let jev = Arc::new(IntentJev::new("image"));
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let judgments = agent.task_judgments(&state.task, &state.ledger).await.unwrap();
+    let mut answers = judgments.output.unwrap();
+    let Answer::Choice(answer) = answers.get_mut("pick").unwrap() else { unreachable!() };
+    answer.choice = "not offered".into();
+    state.output_answers = Some(answers);
+    assert!(format!("{:?}", agent.output_intent(&mut state).await.unwrap_err()).contains("not offered"));
+    assert_eq!(state.output_intent, super::state::OutputIntent::Unknown);
+    assert_eq!(jev.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn test_an_image_only_finish_does_not_read_or_compose_text() {
     let agent = Agent::new(Arc::new(Screenshots::default()), Arc::new(IntentJev::new("image")), Arc::new(ScriptedLLM));
     let mut state = run_state();
@@ -3215,8 +3393,11 @@ async fn test_an_image_only_finish_does_not_read_or_compose_text() {
 
 #[tokio::test]
 async fn test_an_http_image_request_escalates_before_reading_or_capturing() {
-    let agent =
-        Agent::new(Arc::new(Unfetchable { opens: false }), Arc::new(IntentJev::new("image")), Arc::new(ScriptedLLM));
+    let agent = Agent::new(
+        Arc::new(Unfetchable { opens: false, ..Default::default() }),
+        Arc::new(IntentJev::new("image")),
+        Arc::new(ScriptedLLM),
+    );
     let failure = agent.finish(&mut run_state(), &observation(&[]), None, None).await.expect_err("a browser is needed");
     assert!(format!("{failure:?}").contains("NeedsBrowser"));
     assert!(format!("{failure:?}").contains("screenshot of the rendered page"));
@@ -3227,7 +3408,8 @@ async fn test_an_http_image_request_escalates_before_reading_or_capturing() {
 #[tokio::test]
 async fn test_an_http_task_with_a_step_to_take_escalates_whatever_it_reports() {
     let jev = IntentJev { evidence: "acts", ..IntentJev::new("text") };
-    let agent = Agent::new(Arc::new(Unfetchable { opens: false }), Arc::new(jev), Arc::new(ScriptedLLM));
+    let agent =
+        Agent::new(Arc::new(Unfetchable { opens: false, ..Default::default() }), Arc::new(jev), Arc::new(ScriptedLLM));
     let mut state = run_state();
     state.task = "Reply to the comment, then report whether the page confirms the reply was posted.".into();
     let failure = agent.finish(&mut state, &observation(&[]), None, None).await.expect_err("a browser is needed");
@@ -3892,7 +4074,8 @@ async fn test_a_commit_already_made_is_asked_about_as_a_repeat() {
     let requested: Vec<_> = seen.iter().filter(|instructions| instructions.contains("Does `task` ask")).collect();
     assert_eq!(requested.len(), 2, "{seen:?}");
     assert!(!requested[0].contains("already"), "{}", requested[0]);
-    assert!(requested[1].contains("already done this once"), "{}", requested[1]);
+    assert!(requested[1].contains("previously executed this control action once"), "{}", requested[1]);
+    assert!(requested[1].contains("Execution records dispatch, not whether"), "{}", requested[1]);
 }
 
 #[test]
@@ -3960,7 +4143,7 @@ impl LLMClient for WritesRecord {
                 ledger.reserve(CostComponent::Llm, 0.0, 1)?;
             }
             let data = schema
-                .validate_json(&json!({"claims": [{"text": self.0, "evidence_ids": ["e0"]}]}).to_string())
+                .validate_json(&json!({"claims": [{"text": [self.0], "evidence_ids": ["e0"]}]}).to_string())
                 .map_err(LLMError::Failed)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
@@ -4267,7 +4450,7 @@ async fn test_partial_composition_obeys_the_run_deadline() {
     state.notes.add(Fact::read("Record A: 99", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
     let options = super::RunOptions {
         ledger: Some(ledger.clone()),
-        resume: Some(super::Resume { state, url: "https://example.test/".into() }),
+        resume: Some(super::Resume { state: Box::new(state), url: Some("https://example.test/".into()) }),
         ..Default::default()
     };
     let result = tokio::time::timeout(std::time::Duration::from_secs(1), agent.run("Read the record", options))
@@ -4902,11 +5085,13 @@ async fn an_executed_action_without_a_page_change_keeps_covered_actions_withheld
     assert!(!offers(&offered, Operation::Click, "Contact us"), "{problem:?}");
 }
 
-/// A page every action leaves as it was, which records the label of each control it was sent an action on.
+/// A page every action leaves as it was, which records the label of each control it was sent an action on and the
+/// time each WAIT was given.
 struct Unmoved {
     now: Observation,
     sent: Mutex<Vec<(Operation, Option<String>)>>,
     handed_over: std::sync::atomic::AtomicBool,
+    waits: Mutex<Vec<f64>>,
 }
 
 impl Page for Unmoved {
@@ -4937,6 +5122,16 @@ impl Page for Unmoved {
         Box::pin(async {
             Ok(ActResult { outcome: StepOutcome::Executed, page_changed: false, detail: None, moved: false })
         })
+    }
+
+    fn wait<'a>(
+        &'a self,
+        action: &'a Action,
+        observation: &'a Observation,
+        seconds: f64,
+    ) -> BoxFuture<'a, PageResult<ActResult>> {
+        self.waits.lock().unwrap().push(seconds);
+        self.act(action, observation)
     }
 
     fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
@@ -4979,6 +5174,7 @@ async fn test_an_authorized_click_that_left_the_page_unchanged_is_not_sent_again
         now: at("https://shop.test/basket", &[button("Place order"), button("Keep shopping")]),
         sent: Mutex::new(Vec::new()),
         handed_over: Default::default(),
+        waits: Mutex::default(),
     });
     let script = crate::scripted::steps("click Place order; click Place order; click Place order").unwrap();
     let agent = Agent::new(page.clone(), Arc::new(ScriptedJev::new(script)), Arc::new(ScriptedLLM));
@@ -4992,6 +5188,33 @@ async fn test_an_authorized_click_that_left_the_page_unchanged_is_not_sent_again
     let sent = page.sent.lock().unwrap().clone();
     let placed = sent.iter().filter(|(_, label)| label.as_deref() == Some("Place order")).count();
     assert_eq!(placed, 1, "{sent:?}");
+}
+
+#[tokio::test]
+async fn test_a_wait_is_given_the_time_left_to_browse() {
+    // A fixed five seconds ended a WAIT before a page that updates less often had moved. The run's own time is its bound.
+    for max_seconds in [None, Some(600.0)] {
+        let page = Arc::new(Unmoved {
+            now: at("https://shop.test/queue", &[button("Leave queue")]),
+            sent: Mutex::new(Vec::new()),
+            handed_over: Default::default(),
+            waits: Mutex::default(),
+        });
+        let script = crate::scripted::steps("wait").unwrap();
+        let agent = Agent::new(page.clone(), Arc::new(ScriptedJev::new(script)), Arc::new(ScriptedLLM));
+        let options = super::RunOptions {
+            start: Some("https://shop.test/queue".into()),
+            limits: Some(Limits { max_steps: Some(1), max_seconds, ..Limits::default() }),
+            ..Default::default()
+        };
+        let _ = agent.run("Wait for your turn in the queue", options).await;
+        let waits = page.waits.lock().unwrap().clone();
+        let [seconds] = waits[..] else { panic!("{max_seconds:?}: {waits:?}") };
+        match max_seconds {
+            None => assert_eq!(seconds, f64::INFINITY),
+            Some(limit) => assert!(seconds <= limit && seconds > limit - 30.0, "{seconds} of {limit}"),
+        }
+    }
 }
 
 /// The scripted Jev, judging every action irreversible with `irreversible` and every one requested by the task.
@@ -5027,6 +5250,7 @@ async fn test_the_tab_an_authorized_commit_was_sent_from_is_handed_over() {
             now: at("https://shop.test/basket", &[button("Place order"), button("Keep shopping")]),
             sent: Mutex::new(Vec::new()),
             handed_over: Default::default(),
+            waits: Mutex::default(),
         });
         let jev = Commits(ScriptedJev::new(crate::scripted::steps("click Place order").unwrap()), irreversible);
         let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
@@ -5051,6 +5275,7 @@ async fn test_a_run_that_stops_for_a_person_leaves_them_its_tab() {
             now: at("https://shop.test/basket", &[button("Place order"), button("Keep shopping")]),
             sent: Mutex::new(Vec::new()),
             handed_over: Default::default(),
+            waits: Mutex::default(),
         });
         let jev = Commits(ScriptedJev::new(crate::scripted::steps("click Place order").unwrap()), irreversible);
         let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
@@ -5645,7 +5870,7 @@ impl LLMClient for RepairComposer {
                 ledger.reserve(CostComponent::Llm, 0.0, 1)?;
             }
             let data = schema
-                .validate_json(&json!({"claims": [{"text": text, "evidence_ids": evidence_ids}]}).to_string())
+                .validate_json(&json!({"claims": [{"text": [text], "evidence_ids": evidence_ids}]}).to_string())
                 .map_err(LLMError::Failed)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
@@ -5674,9 +5899,9 @@ impl LLMClient for GrowingComposer {
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         let second = self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed) > 0;
         Box::pin(async move {
-            let mut claims = vec![json!({"text": "Record B: 34", "evidence_ids": ["e0"]})];
+            let mut claims = vec![json!({"text": ["Record B: 34"], "evidence_ids": ["e0"]})];
             if second {
-                claims.push(json!({"text": "Record C: 57", "evidence_ids": ["e1"]}));
+                claims.push(json!({"text": ["Record C: 57"], "evidence_ids": ["e1"]}));
             }
             let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
@@ -5718,7 +5943,7 @@ impl LLMClient for TwoClaimComposer {
         _: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         Box::pin(async move {
-            let claims = json!([{"text": "Record B: 34", "evidence_ids": ["e0"]}, {"text": "Record A: 99", "evidence_ids": ["e0"]}]);
+            let claims = json!([{"text": ["Record B: 34"], "evidence_ids": ["e0"]}, {"text": ["Record A: 99"], "evidence_ids": ["e0"]}]);
             let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
@@ -6561,6 +6786,49 @@ fn pager_agent(page: Arc<HungPage>) -> Agent {
     Agent::new(page, jev, Arc::new(ScriptedLLM))
 }
 
+#[test]
+fn a_list_batch_accepts_its_redirect_but_stops_at_range_and_page_boundaries() {
+    use super::batching::ListWalk;
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    read_one(&mut state, &first, Extent::Pages(Some((1, 2))));
+    state.note_pager_pages(&first);
+    assert!(super::batching::offered(&state, &first));
+    let walk = ListWalk::new(&state, &first, "https://list.test/page/2/".into()).unwrap();
+    let second = paged("https://list.test/page/2", "/page/3/");
+    state.arrived_by = Some((super::state::read_key(&second), "https://list.test/page/2/".into()));
+    state.note_pager_pages(&second);
+    assert!(walk.continues(&state, &second));
+    let failed = Observation { response_status: Some(503), ..second.clone() };
+    assert!(!walk.continues(&state, &failed));
+    let covered = Observation { modal: Some("dialog".into()), ..second.clone() };
+    assert!(!walk.continues(&state, &covered));
+    let elsewhere = Observation { url: "https://elsewhere.test/page/2".into(), ..second.clone() };
+    state.arrived_by = Some((super::state::read_key(&elsewhere), "https://list.test/page/2/".into()));
+    assert!(!walk.continues(&state, &elsewhere));
+    let third = paged("https://list.test/page/3/", "/page/4/");
+    let walk = ListWalk::new(&state, &second, third.url.clone()).unwrap();
+    state.note_pager_pages(&third);
+    assert!(!walk.continues(&state, &third), "page three is beyond the selected range");
+    state.extent = Extent::EveryPage;
+    state.note_pager_pages(&paged("https://list.test/another-list/", "/another-list/page/2/"));
+    assert!(!walk.continues(&state, &third), "another list does not inherit the batch");
+}
+
+#[test]
+fn a_list_batch_requires_a_resolved_extent_and_same_origin_pager() {
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    state.note_pager_pages(&first);
+    for extent in [Extent::Shown, Extent::Pages(None)] {
+        state.extent = extent;
+        assert!(!super::batching::offered(&state, &first));
+    }
+    state.extent = Extent::EveryPage;
+    assert!(!super::batching::offered(&state, &paged("https://list.test/", "https://elsewhere.test/page/2/")));
+    assert!(super::batching::offered(&state, &first));
+}
+
 #[tokio::test]
 async fn test_done_on_page_one_of_a_whole_list_task_opens_the_next_page_instead() {
     let browser = Arc::new(HungPage::new(0));
@@ -7047,8 +7315,7 @@ impl LLMClient for AlreadyExists {
         _: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         Box::pin(async move {
-            let claims =
-                json!([{"text": "The project already exists, so no new project was created.", "evidence_ids": ["e0"]}]);
+            let claims = json!([{"text": ["The project already exists, so no new project was created."], "evidence_ids": ["e0"]}]);
             let data = schema.validate_json(&json!({"claims": claims}).to_string()).map_err(LLMError::Failed)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
@@ -7084,6 +7351,8 @@ struct FirstChoice {
     asked: Mutex<Vec<String>>,
     /// Picks the first option whose criterion holds this text, in place of the first option.
     wants: Option<&'static str>,
+    /// The probability every yes-or-no question is answered with; without one they go unanswered.
+    noul: Option<f64>,
 }
 
 impl DecisionClient for FirstChoice {
@@ -7095,7 +7364,17 @@ impl DecisionClient for FirstChoice {
         let answers = questions
             .iter()
             .filter_map(|(key, question)| {
-                let Question::Choice(choice) = question else { return None };
+                let choice = match question {
+                    Question::Choice(choice) => choice,
+                    Question::Score(_) | Question::Box(_) => return None,
+                    Question::Noul(question) => {
+                        self.noul?;
+                        self.asked.lock().unwrap().push(question.instructions.clone());
+                        let answer =
+                            fastbrowse_core::decision::NoulAnswer { kind: Default::default(), probability: self.noul? };
+                        return Some((key.clone(), Answer::Noul(answer)));
+                    }
+                };
                 self.asked.lock().unwrap().push(choice.instructions.clone());
                 let wanted = self.wants.and_then(|wants| {
                     choice.criteria.iter().find(|(_, criterion)| criterion.to_string().contains(wants)).map(|(k, _)| k)
@@ -7840,4 +8119,128 @@ async fn a_known_page_that_redirects_is_reached_by_the_address_it_was_opened_at(
     assert_eq!(state.reached_known_pages, vec![known.clone()]);
     let context = agent.context(&state, &home, Vec::new(), false, false).unwrap();
     assert!(!context.known_pages.contains(&known), "a redirected known page is not offered again");
+}
+
+/// A slider is stepped by the keys its role defines, so Jev picks one of them rather than writing a key: offered
+/// only "a key the task gives", a run asked to nudge a volume slider had nothing to copy.
+#[tokio::test]
+async fn test_a_press_on_a_slider_picks_one_of_the_keys_its_role_supports() {
+    let slider = Control {
+        value: Some("30".into()),
+        context: Some("orientation: vertical".into()),
+        ..Control::new("v", "slider", "Volume", [Operation::Click])
+    };
+    let page = observation(std::slice::from_ref(&slider));
+    // Every gate question is answered no: a step of a slider commits nothing.
+    let jev = Arc::new(FirstChoice { wants: Some("ArrowRight"), noul: Some(0.0), ..Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.edits_forbidden = Some(false);
+    let action = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(slider))).await.expect("action");
+    assert_eq!((action.operation, action.text.as_deref()), (Operation::Press, Some("ArrowRight")));
+    assert_eq!(state.text_source, Some(fastbrowse_core::recipe::RecipeText::Literal("ArrowRight".into())));
+    let asked = jev.asked.lock().unwrap();
+    assert!(asked.iter().any(|q| q.contains("Which key should be pressed in")
+        && q.contains("a slider supports")
+        && q.contains("orientation: vertical")));
+}
+
+/// A role's keys do not take the place of a chord the task states: Jev says the task gives it, and it is copied.
+#[tokio::test]
+async fn test_a_press_on_a_role_with_keys_still_takes_a_chord_the_task_gives() {
+    let slider = Control::new("v", "slider", "Volume", [Operation::Click]);
+    let page = observation(std::slice::from_ref(&slider));
+    let jev = Arc::new(FirstChoice { wants: Some("The task gives the key"), ..Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.edits_forbidden = Some(false);
+    let _ = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(slider))).await;
+    let asked = jev.asked.lock().unwrap();
+    let picked = asked.iter().position(|q| q.contains("Which key should be pressed in")).expect("the key question");
+    // The copy from the task is asked after the key question, as a press on an editable field always asks it.
+    assert!(asked.len() > picked + 1, "{asked:?}");
+}
+
+#[tokio::test]
+async fn test_a_role_key_is_classified_before_an_unauthorized_press() {
+    let tab = Control::new("t", "tab", "Saved report", [Operation::Click]);
+    let page = observation(std::slice::from_ref(&tab));
+    let jev = Arc::new(FirstChoice { wants: Some("Delete"), noul: Some(1.0), ..Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.edits_forbidden = Some(false);
+    let result = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(tab))).await;
+    assert!(matches!(result, Err(Flow::Stop(ref stop)) if stop.status == Status::NeedsConfirmation));
+    let asked = jev.asked.lock().unwrap();
+    assert!(asked.iter().any(|q| q.contains("exact key chord to press is") && q.contains("Delete")));
+}
+
+#[tokio::test]
+async fn test_a_read_only_task_can_press_a_navigation_key_but_not_change_a_value() {
+    for (role, key, probability, allowed) in [("tab", "ArrowRight", 0.0, true), ("slider", "ArrowRight", 1.0, false)] {
+        let control = Control::new("widget", role, "Widget", [Operation::Click, Operation::Press]);
+        let page = observation(std::slice::from_ref(&control));
+        let jev = Arc::new(FirstChoice { wants: Some(key), noul: Some(probability), ..Default::default() });
+        let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.task = "Read the page without changing any values or settings".into();
+        state.edits_forbidden = Some(true);
+        let result = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(control))).await;
+        assert_eq!(result.is_ok(), allowed, "{role}: {result:?}");
+        assert!(
+            jev.asked
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|q| q.contains("exact key chord") && q.contains("change a field's value"))
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_search_entry_groups_more_choices_than_the_provider_accepts() {
+    let jev = Arc::new(FirstChoice { wants: Some("query 599"), ..Default::default() });
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let state = run_state();
+    let options = (0..600).map(|i| (i.to_string(), serde_json::json!(format!("query {i}")))).collect();
+    assert_eq!(agent.choose_entry("Find a source", &state.ledger, options).await.unwrap(), "599");
+    assert_eq!(jev.asked.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn test_a_search_does_not_count_as_a_site_mutation() {
+    assert!(!executed(Some(Operation::Search), None, true).changed_site());
+}
+
+#[tokio::test]
+async fn test_recovery_does_not_reopen_an_address_reached_through_a_link() {
+    struct OldRoute;
+    impl LLMClient for OldRoute {
+        fn generate_value<'a>(
+            &'a self,
+            purpose: LLMPurpose,
+            _: &'a [Message],
+            schema: &'a dyn ResponseSchema,
+            _: Option<&'a Ledger>,
+        ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+            Box::pin(async move {
+                assert_eq!(purpose, LLMPurpose::RecoveryPages);
+                let data =
+                    schema.validate_json(r#"{"urls":["HTTPS://PREVIOUS.TEST:443"]}"#).map_err(LLMError::Failed)?;
+                Ok(Generation { data, cost: free() })
+            })
+        }
+    }
+    let mut config = fastbrowse_core::config::Config::default();
+    config.stall.max_recoveries = 0;
+    let agent =
+        Agent::new(Arc::new(NoPage), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(OldRoute)).with_config(config);
+    let mut state = run_state();
+    let mut previous = observation(&[]);
+    previous.url = "https://previous.test/".into();
+    agent.settle(&mut state, &previous).await.unwrap();
+    let current = observation(&[]);
+    let error = agent.recover(&mut state, &current, "no progress", Status::Stuck, None).await.err();
+    assert!(matches!(error, Some(Flow::Stop(stop)) if stop.status == Status::Stuck));
+    assert!(state.known_pages.is_empty(), "a previously observed address is not a fresh route");
 }

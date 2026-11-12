@@ -660,6 +660,14 @@ class ArmReport(BaseModel):
     """Lease extensions the pool refused or never answered; each is logged, and none stops the run."""
 
 
+class HostedUnavailable(Unavailable):
+    """A hosted outage whose settled provider receipt must survive the interruption."""
+
+    def __init__(self, report: ArmReport) -> None:
+        super().__init__("Browser Use could not dispatch the run" + (f": {report.error}" if report.error else ""))
+        self.report = report
+
+
 class EvalRow(ArmReport):
     """One line of the results file: the arm's report, graded against the task's truth."""
 
@@ -1350,7 +1358,9 @@ async def _hosted_run(
         session_answered()
         wall = time.monotonic() - started
         run = await client.runs.get(created.id)
-        return await _hosted_finish(client, http, task, record, run, events, created_after, wall, stopped)
+        return await _hosted_finish(
+            client, http, task, record, run, events, created_after, wall, stopped, run_id=str(created.id)
+        )
     except (asyncio.CancelledError, Exception):
         # A cancelled attempt or failed poll must stop billing before an outage retry starts.
         with suppress(BrowserUseError, httpx.HTTPError):
@@ -1466,14 +1476,18 @@ async def _hosted_finish(
     created_after: float,
     wall: float,
     stopped: list[bool],
+    *,
+    run_id: str,
 ) -> tuple[Outcome, ArmReport]:
     from browser_use_sdk.v4 import BrowserUseError  # an optional extra
 
-    if any(e.type == "run.dispatch_failed" for e in events):
-        # Browser Use's own infrastructure never started the run's agent: an outage, retried like a 503.
-        raise Unavailable("Browser Use could not dispatch the run")
+    dispatch_failed = any(e.type == "run.dispatch_failed" for e in events)
     browser_id = _hosted_browser_id(events)
-    final = await hosted_final_page(client, http, browser_id)
+    final = (
+        FinalPage(error="the hosted run could not be dispatched")
+        if dispatch_failed
+        else await hosted_final_page(client, http, browser_id)
+    )
     if isinstance(run.output, dict | list):
         answer, data = json.dumps(run.output), (run.output if isinstance(run.output, dict) else None)
     else:
@@ -1505,6 +1519,7 @@ async def _hosted_finish(
             "proxy": float(cost.proxy_cost_usd),
         }
     )
+    provider_error = _scrubbed(run.error, {**task.secrets, "browser_use_api_key": backend.browser_key()})
     report = ArmReport(
         status=status,
         answered=answered is not None,
@@ -1514,9 +1529,14 @@ async def _hosted_finish(
         dollars=None if cost is None else float(cost.total_cost_usd),
         unknown_cost=cost is None,
         cost_by_component=components,
-        error=run.error,
+        error=provider_error if isinstance(provider_error, str) else None,
         model=run.model,
-        provenance={"model_params": json_value(run.model_params), "browser_session_id": browser_id},
+        provenance={
+            "model_params": json_value(run.model_params),
+            "browser_session_id": browser_id,
+            "run_id": run_id,
+            "provider_status": status,
+        },
         steps=sum(1 for e in events if e.type == "core.event" and e.data.get("type") == "step_start"),
         llm_calls=sum(1 for e in events if e.type == "llm.response"),
         llm_calls_basis="physical_requests",
@@ -1526,8 +1546,20 @@ async def _hosted_finish(
         timing_note=HOSTED_SETUP,
         step_log=step_log,
         trace=trace,
+        events=[
+            _scrubbed(
+                json_value({"type": event.type, "ts": event.ts, "data": event.data}),
+                {**task.secrets, "browser_use_api_key": backend.browser_key()},
+            )
+            for event in events
+        ]
+        if dispatch_failed
+        else [],
         observe_error=final.error,
     )
+    if dispatch_failed:
+        # Dispatch can fail after opening a billable browser, so settle its receipt before retrying the outage.
+        raise HostedUnavailable(report)
     if record is not None and browser_id is not None and stopped:
         await _hosted_recording(client, http, browser_id, record)
     return outcome, report
@@ -1683,6 +1715,8 @@ async def run_arm(
             status=status,
             record=record,
         )
+        if isinstance(exc, HostedUnavailable):
+            return EvalRow.model_validate(crashed.model_dump() | exc.report.model_dump(exclude={"status", "error"}))
         if isinstance(exc, SpendStop):
             return crashed.model_copy(
                 update={"execution_admission_stopped": True, "execution_admission_reason": str(exc)}

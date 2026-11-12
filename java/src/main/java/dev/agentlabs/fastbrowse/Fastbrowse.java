@@ -377,6 +377,7 @@ public final class Fastbrowse implements AutoCloseable {
                 .fetch(options.fetch() ? true : null)
                 .browser(options.browserFirst() ? true : null)
                 .local(browser.local() ? true : null)
+                .launch(browser.launch() ? true : null)
                 .chrome(browser.chrome())
                 .cloudProfile(browser.cloudProfile())
                 .cdpUrl(browser.cdpUrl())

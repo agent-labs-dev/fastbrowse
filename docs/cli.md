@@ -16,26 +16,23 @@ prints the full result: every step, the quotes behind the answer, and cost by co
 |:--|:--|
 | `--start URL` | the first page; worked out from the task when omitted |
 | `--context TEXT` | background the run may use but never treats as the task |
-| `--local` | local Chrome instead of a cloud browser |
-| `--cloud` | force the cloud browser even when `FASTBROWSE_PROFILE` or `FASTBROWSE_HEADED` is set |
-| `--headed` | show the local Chrome window (implies `--local`) |
-| `--profile DIR` | keep the local Chrome profile in `DIR`, so sign-ins persist (implies `--local`) |
-| `--cloud-profile ID` | run on a signed-in Browser Use Cloud profile |
+| `--extension` | run in your own Chrome, signed in as you are, through the fastbrowse extension; this is the default for a browser task, see [Your own Chrome](#your-own-chrome) |
+| `--local` | an alias for `--extension` |
+| `--extension-browser LABEL` | with the extension connected in more than one browser, use the one its popup labels `LABEL` |
+| `--cloud` | run in a Browser Use Cloud browser instead, which needs `BROWSER_USE_API_KEY` |
+| `--cloud-profile ID` | with `--cloud`, run on a signed-in Browser Use Cloud profile |
 | `--fetch` | read pages over HTTP with no browser, for a task that only reads |
 | `--desktop APP` | start a Linux desktop app and drive it instead of a browser, through [deskpilot](https://github.com/cjber/deskpilot); see [Desktop apps](#desktop-apps) |
 | `--browser` | start a browser from the first step, rather than reading over HTTP until the task needs one |
-| `--extension` | run in your own Chrome, signed in as you are, through the fastbrowse extension; see [Your own Chrome](#your-own-chrome) |
-| `--extension-browser LABEL` | with the extension connected in more than one browser, use the one its popup labels `LABEL` (implies `--extension`) |
-| `--cdp-url URL`, `--cdp-port PORT` | drive a browser already running, at a `ws://` URL or on `127.0.0.1:PORT` |
-| `--viewport WIDTHxHEIGHT` | set the CSS viewport for owned local Chrome, or the screen size requested from cloud Chrome; does not emulate mobile, touch, device scale or user agent |
-| `--attach` | with `--cdp-url` or `--cdp-port`, drive a window already open instead of opening a tab |
-| `--target-match TEXT` | attach to the first window whose title or URL contains `TEXT` (implies `--attach`) |
+| `--viewport WIDTHxHEIGHT` | with `--cloud`, the screen size requested from the cloud Chrome; does not emulate mobile, touch, device scale or user agent. Refused without `--cloud` |
+| `--attach` | with the extension, drive the window you have open instead of a tab of its own |
+| `--target-match TEXT` | with the extension, attach to the first window whose title or URL contains `TEXT` (implies `--attach`) |
 | `--foreground` | bring the run's tab to the front instead of working behind the current one |
-| `--proxy-country CC` | browse from that country (`uk`, `de`, ...; default `us`); starts the cloud browser before reading |
+| `--proxy-country CC` | with `--cloud`, browse from that country (`uk`, `de`, ...; default `us`); starts the cloud browser before reading |
 | `--authorize` | allow submit, pay, delete and send; otherwise the run stops at `needs_confirmation`. It does not override a task that says to change nothing or not to download |
 | `--secret NAME=ENV_VAR[@ORIGIN]` | let the agent type `$ENV_VAR` on `ORIGIN` (`https://*.site.com` covers its hosts), or on the `--start` origin; models see `NAME` only |
 | `--bitwarden ITEM` | use a vault login on the origin its saved URIs match, including its one-time code |
-| `--max-steps N`, `--max-dollars N` | bound steps and model spend; unlimited by default |
+| `--max-steps N`, `--max-dollars N` | bound steps and model and web-search spend; unlimited by default |
 | `--downloads DIR` | keep downloaded files |
 | `--json` | print the full result |
 | `--trace FILE` | append each model call with its full request and reply, read and check, and with `--extension` every message to and from the extension (image data left out), to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP. The requests carry page text, so treat a trace as you would the pages |
@@ -53,23 +50,30 @@ fastbrowse "Log in as standard_user with the saved password and add the backpack
   --start https://www.saucedemo.com/ --secret password=SAUCE_PASSWORD --authorize
 ```
 
+The CLI refuses `--headed`, `--profile`, `--cdp-url` and `--cdp-port`. A profile
+of its own, a headless Chrome or a DevTools endpoint is the Python, Node and Go SDKs' job: see
+[A profile of its own](#a-profile-of-its-own) and [Open windows and Electron apps](#open-windows-and-electron-apps).
+
 ## Signed-in sites
 
 ### Your own Chrome
 
-`--extension` runs the task in the Chrome you already use, signed in to everything you are signed in to, with no
-approval prompt. Set it up once:
+A browser task runs in the Chrome you already use, signed in to everything you are signed in to, with no approval
+prompt. `--extension` is the default and `--local` is an alias for it. Pass `--cloud` for a Browser Use Cloud
+browser, `--fetch` to read over HTTP, or `--desktop` for a desktop app. Set it up once:
 
 1. Run `fastbrowse extension install`. It registers fastbrowse with Chrome, Chromium, Edge and Brave, and prints
    how to add the extension.
-2. Add the fastbrowse extension to Chrome. Until it is in the Chrome Web Store, open `chrome://extensions`, turn on
-   Developer mode, choose **Load unpacked** and pick the folder `fastbrowse extension path` prints.
+2. Install [fastbrowse from the Chrome Web Store](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop).
 
-Then pass `--extension` to any run:
+Then run a task:
 
 ```sh
-fastbrowse "Find my last order's delivery date." --start https://www.amazon.com/ --extension
+fastbrowse "Find my last order's delivery date." --start https://www.amazon.com/
 ```
+
+`--attach` drives the window you have open instead of a tab of its own, and `--target-match TEXT` picks the window
+whose title or URL contains `TEXT`.
 
 Each run works in a tab group of its own, named after the task, and closes its tabs when it ends. A run that stops at
 `needs_confirmation`, `needs_input` or `needs_login` leaves the tab it stopped in open, out of the group, so you can
@@ -88,8 +92,7 @@ current CLI and click **Reload** on the extension's card in `chrome://extensions
 
 With no browser connected, the run ends `unavailable` before it spends anything; it never falls back to another
 browser. It also ends `unavailable` when the extension is older than fastbrowse and cannot relay a command fastbrowse
-sends, naming the commands: update the extension, or for an unpacked copy run `fastbrowse extension path` and click
-**Reload** on `chrome://extensions`. With the extension in more than one browser, label each one in its popup and pick one with
+sends, naming the commands: update the extension from the Chrome Web Store. With the extension in more than one browser, label each one in its popup and pick one with
 `--extension-browser LABEL`. `fastbrowse extension install --policy` (Linux) prints a Chrome policy for you to write
 as root, which installs the extension for every profile with no debugging bar and marks Chrome as managed by your
 organization;
@@ -109,15 +112,11 @@ reproduce, use a separate Chrome profile with only fastbrowse installed.
 
 ### A profile of its own
 
-Sign in once by hand in a profile of its own, then point runs at it. `--headed` is only needed for the first run:
+The extension uses the profile of the Chrome it is installed in, so sign in there. For a kept profile apart from
+your everyday Chrome, use an SDK: `chrome=LocalChrome(profile=..., headed=True)` in Python (see
+[Embed it](../README.md#embed-it)) keeps the sign-in between runs; the CLI refuses `--profile` and `--headed`.
 
-```sh
-google-chrome --user-data-dir="$HOME/.fastbrowse/amazon" https://www.amazon.com/   # sign in, then close Chrome
-fastbrowse "Add a UGREEN USB-A to USB-C cable, 2m, to my cart." \
-  --start https://www.amazon.com/ --profile ~/.fastbrowse/amazon --headed
-```
-
-On a cloud browser, `--cloud-profile prof_1234` runs as a [Browser Use Cloud](https://cloud.browser-use.com)
+On a cloud browser, `--cloud --cloud-profile prof_1234` runs as a [Browser Use Cloud](https://cloud.browser-use.com)
 profile someone signed in once. The run inherits its cookies and no model sees a credential.
 
 `--bitwarden ITEM` types a Bitwarden vault login. The item's saved URIs must match `--start`. Models see only
@@ -128,7 +127,7 @@ an item, and pass the item's id when its name matches more than one entry:
 
 ```sh
 fastbrowse "Add a UGREEN USB-A to USB-C cable, 2m, to my cart." \
-  --start https://www.amazon.com/ --bitwarden Amazon --profile ~/.fastbrowse/amazon
+  --start https://www.amazon.com/ --bitwarden Amazon
 ```
 
 Without rbw, fastbrowse reads the item through the [Bitwarden CLI](https://bitwarden.com/help/cli/), unlocked
@@ -137,7 +136,7 @@ first:
 ```sh
 export BW_SESSION="$(bw unlock --raw)"
 fastbrowse "Add a UGREEN USB-A to USB-C cable, 2m, to my cart." \
-  --start https://www.amazon.com/ --bitwarden Amazon --profile ~/.fastbrowse/amazon
+  --start https://www.amazon.com/ --bitwarden Amazon
 ```
 
 To change a password, add the replacement as an origin-scoped secret named `new_password`, refer to it in the
@@ -147,36 +146,14 @@ role; when the role is unclear, the run stops at `needs_input`.
 
 ## Open windows and Electron apps
 
-Any Chromium app that exposes a DevTools port can be driven. Restart the app with `--remote-debugging-port` (a
-running app ignores the flag), then attach to its window by title or URL:
+The CLI drives a window you have open through the extension: `--attach` takes over the first window and
+`--target-match TEXT` picks one by title or URL, and neither opens a DevTools port. Without `--start` the run begins
+on whatever the window shows, and the window stays open afterwards. Popups the window opens join the run.
 
-```sh
-open -a "Visual Studio Code" --args --remote-debugging-port=9222 ~/code/my-project   # elsewhere, pass the flag to the binary
-fastbrowse "Open the Extensions view and report how many extensions are installed." \
-  --cdp-port 9222 --target-match my-project
-```
-
-`--attach` takes over the first window, skipping browser-internal pages such as extension options and `chrome://`
-or `devtools://` tabs, and prefers web pages over Electron and app windows; if no usable window exists it opens
-one. `--target-match` picks one by title or URL, and can name an extension page.
-Without `--start` the run begins on whatever the window shows, and the window stays open afterwards. Popups the
-window opens join the run.
-
-For a signed-in browser that stays open, start a Chrome with a data directory of its own (Chrome ignores the port on
-its default one), sign in, and leave it running. Each run opens and closes a background tab in it, and leaves the tab
-open when it stops for you to confirm, fill in or sign in:
-
-```sh
-google-chrome --remote-debugging-port=9222 --user-data-dir="$HOME/.fastbrowse/chrome"
-fastbrowse "Report my open orders." --start https://www.amazon.com/ --cdp-port 9222
-```
-
-A run in a visible window works in a tab behind the current one and never raises the window itself. Chrome still
-brings a window forward when it starts headed, when a page opens a popup, and, with `--attach`, on a click in the
-window's front tab.
-
-A DevTools port gives any program on the machine full control of the app and its sessions. Close the app, or
-restart it without the flag, when you are done.
+An Electron app, or a browser you start with `--remote-debugging-port`, has no extension, so drive it from an SDK
+with `cdp_url=` or `cdp_port=`, `attach=True` and `target_match=` (see [Embed it](../README.md#embed-it)). The CLI
+refuses `--cdp-url` and `--cdp-port`. A DevTools port gives any program on the machine full control of the app and
+its sessions: close the app, or restart it without the flag, when you are done.
 
 ## Desktop apps
 

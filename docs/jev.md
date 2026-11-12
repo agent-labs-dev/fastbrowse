@@ -87,6 +87,13 @@ runs on that click as on any other.
 
 ## One request a step
 
+At startup, one request asks whether the task names dates, what output it asks for, where its evidence can be
+seen and how much of a list it covers. Over HTTP it also asks whether the task needs a browser action. Each
+question reads the task alone. Output judgments are kept until needed; date extraction still runs only when
+Jev judges that the task names a date. The questions use the task with its supplied inputs. If a provider rejects
+the batch for its input size, dates are asked separately and output stays a later request. A browser handoff keeps
+the startup judgments even when the first HTTP navigation produced no capture.
+
 All questions in a request see the same state, so what the agent would otherwise ask after a decision goes with it:
 for each offered control, which words a text field takes or which task text supplies a key chord. Only the chosen target's answers are used. Whether a press
 commits anything, and whether the task asked for that on an authorized run, stay follow-ups that see only the task, the
@@ -142,6 +149,15 @@ upper bound with `bounded` cost basis and no token count, rather than treating b
 An unpriced route still reports unknown cost. Answered image requests use the provider's reported tokens.
 This is estimated spend, not provider-reported billing; output is free. Cancellation before dispatch adds
 no charge. All three routes reach Typesafe, so an outage there can affect all three.
+
+The check for completed or refused actions encodes controls as a table with `columns` and ordered `rows` when its complete HTTP wire encoding
+is shorter than the list of objects. Each control keeps its label,
+context, role, value, checked state and selection when present; a null cell means that property is absent.
+Text extraction and other lists keep their object representation. Page text, notes and action history keep their existing representation.
+
+`python scripts/jev_state_size.py TRACE.jsonl` measures state characters by question set and top-level field;
+it also accepts bench cassettes (`.jsonl.gz`). It counts recorded HTTP exchanges, including retries. Its `input_tokens` are provider-reported totals for the state and
+questions together. Providers do not expose state-only token counts, so the report does not estimate them.
 
 ## Confidence is not correctness
 

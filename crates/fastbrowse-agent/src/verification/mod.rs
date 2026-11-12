@@ -6,7 +6,7 @@ use fastbrowse_core::models::Evidence;
 use fastbrowse_core::output_schema::OutputModel;
 use fastbrowse_core::page::{Capture, Control, Observation, cut_text};
 use fastbrowse_core::py::dump::{Dump, include};
-use fastbrowse_core::py::json::dumps;
+use fastbrowse_core::py::json::{Style, dumps, write};
 use fastbrowse_core::py::text;
 use fastbrowse_core::telemetry::Ledger;
 use indexmap::IndexMap;
@@ -26,13 +26,32 @@ pub struct Extraction {
     pub problem: Option<String>,
 }
 
-fn controls<'a>(controls: impl IntoIterator<Item = &'a Control>) -> Vec<Value> {
-    controls
+fn controls<'a>(controls: impl IntoIterator<Item = &'a Control>, compact: bool) -> Value {
+    let records: Vec<Value> = controls
         .into_iter()
         .map(|control| {
             include(control.dump_exclude_none(), &["label", "context", "role", "value", "checked", "selected"])
         })
-        .collect()
+        .collect();
+    if !compact || records.is_empty() {
+        return Value::Array(records);
+    }
+    // Verdicts need every control's values, but repeating the same field names spends input on their encoding.
+    // Every row keeps its control's position; null means that control has no value for the named column.
+    let mut columns: Vec<&str> = Vec::new();
+    for record in &records {
+        for key in record.as_object().expect("a control is an object").keys() {
+            if !columns.contains(&key.as_str()) {
+                columns.push(key);
+            }
+        }
+    }
+    let rows: Vec<Vec<&Value>> =
+        records.iter().map(|record| columns.iter().map(|key| &record[*key]).collect()).collect();
+    let table = json!({"columns": columns, "rows": rows});
+    let records = Value::Array(records);
+    // A table header costs more than it removes for a short list. Compare the complete HTTP wire encodings.
+    if write(&table, Style::HTTPX).len() < write(&records, Style::HTTPX).len() { table } else { records }
 }
 
 /// The controls holding a value, a check or a selection: the state page text does not show.
@@ -51,6 +70,30 @@ pub fn page_state(
     context: Option<&Map<String, Value>>,
     dates: &[crate::dates::DateReference],
 ) -> Result<Value> {
+    page_state_with(observation, notes, tokens, questions, context, dates, false)
+}
+
+/// Completion verdicts share a control schema; text extraction keeps each field beside its name.
+pub fn page_verdict_state(
+    observation: &Observation,
+    notes: &Notes,
+    tokens: &TokenBudget,
+    questions: &[String],
+    context: Option<&Map<String, Value>>,
+    dates: &[crate::dates::DateReference],
+) -> Result<Value> {
+    page_state_with(observation, notes, tokens, questions, context, dates, true)
+}
+
+fn page_state_with(
+    observation: &Observation,
+    notes: &Notes,
+    tokens: &TokenBudget,
+    questions: &[String],
+    context: Option<&Map<String, Value>>,
+    dates: &[crate::dates::DateReference],
+    compact: bool,
+) -> Result<Value> {
     let mut state: Map<String, Value> = context.cloned().unwrap_or_default();
     // The dropdown choice runs apart from the action choice; it also needs today's date for relative months.
     state.insert("date".into(), crate::dates::dated(observation.captured_at, dates).into());
@@ -63,7 +106,7 @@ pub fn page_state(
     }
     // Inputs and ARIA selection states are absent from innerText; without them a preview can pass completion even
     // though the requested filters were never applied.
-    state.insert("controls".into(), Value::Array(controls(&observation.controls)));
+    state.insert("controls".into(), controls(&observation.controls, compact));
     state.insert("notes".into(), "".into());
     let budget = tokens.input_chars(questions);
     let size = |state: &Map<String, Value>| text::len(&dumps(&Value::Object(state.clone()))) as i64;
@@ -84,7 +127,7 @@ pub fn page_state(
                 Err(AgentError::NotesTooLarge(_)) => {
                     let kept = stateful(&observation.controls);
                     state.insert("controls_omitted".into(), (observation.controls.len() - kept.len()).into());
-                    state.insert("controls".into(), Value::Array(controls(kept)));
+                    state.insert("controls".into(), controls(kept, compact));
                     let rendered = notes.render(room(&state), true, true)?;
                     state.insert("notes".into(), rendered.into());
                 }
@@ -102,7 +145,7 @@ pub fn page_state(
     if size(&state) > budget && !state.contains_key("controls_omitted") {
         let kept = stateful(&observation.controls);
         state.insert("controls_omitted".into(), (observation.controls.len() - kept.len()).into());
-        state.insert("controls".into(), Value::Array(controls(kept)));
+        state.insert("controls".into(), controls(kept, compact));
     }
     if size(&state) > budget {
         return Err(AgentError::ObservationTooLarge(format!(
@@ -220,6 +263,66 @@ mod tests {
     }
 
     #[test]
+    fn control_rows_keep_false_empty_values_and_duplicate_labels() {
+        let controls = vec![
+            Control {
+                checked: Some(false),
+                context: Some("First".into()),
+                ..Control::new("a", "checkbox", "Choice", [])
+            },
+            Control {
+                checked: Some(true),
+                context: Some("Second".into()),
+                ..Control::new("b", "checkbox", "Choice", [])
+            },
+            Control { value: Some(String::new()), ..Control::new("c", "textbox", "Name", []) },
+        ];
+        let table = super::controls(&controls, true);
+        let columns = table["columns"].as_array().unwrap();
+        let restored: Vec<Value> = table["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                Value::Object(
+                    columns
+                        .iter()
+                        .zip(row.as_array().unwrap())
+                        .filter(|(_, value)| !value.is_null())
+                        .map(|(key, value)| (key.as_str().unwrap().to_string(), value.clone()))
+                        .collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            restored,
+            controls
+                .iter()
+                .map(|control| {
+                    include(control.dump_exclude_none(), &["label", "context", "role", "value", "checked", "selected"])
+                })
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn extraction_keeps_named_control_fields_and_short_verdicts_keep_objects() {
+        let mut page = page();
+        page.controls = (0..4)
+            .map(|id| Control {
+                value: Some(format!("value {id}")),
+                ..Control::new(&id.to_string(), "textbox", &format!("Field {id}"), [])
+            })
+            .collect();
+        let original = page_state(&page, &Notes::default(), &TokenBudget::default(), &[], None, &[]).unwrap();
+        let verdict = page_verdict_state(&page, &Notes::default(), &TokenBudget::default(), &[], None, &[]).unwrap();
+        assert!(original["controls"].is_array());
+        assert!(verdict["controls"]["rows"].is_array());
+        let single = &page.controls[..1];
+        assert_eq!(super::controls(single, true), super::controls(single, false));
+    }
+
+    #[test]
     fn the_verifier_sees_each_players_state() {
         let mut page = page();
         page.media = vec![
@@ -243,6 +346,13 @@ mod tests {
             TokenBudget { state_plus_largest_question: 2000, state_plus_all_questions: 4000, ..TokenBudget::default() };
         let state = page_state(&page, &Notes::default(), &tokens, &["q".to_string()], None, &[]).unwrap();
         assert_eq!(state["controls_omitted"], 400);
+        page.controls.extend((0..3).map(|n| Control {
+            value: Some(format!("value {n}")),
+            ..Control::new(&format!("field:{n}"), "textbox", &format!("Field {n}"), [])
+        }));
+        let verdict = page_verdict_state(&page, &Notes::default(), &tokens, &["q".to_string()], None, &[]).unwrap();
+        assert_eq!(verdict["controls_omitted"], 400);
+        assert_eq!(verdict["controls"]["rows"].as_array().unwrap().len(), 3);
     }
 
     #[test]

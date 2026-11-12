@@ -15,6 +15,100 @@ use fastbrowse_run::fetch::html::blocks;
 use fastbrowse_run::fetch::{FetchedPage, NotFetched, eligible, fetch_document};
 use serde_json::Value;
 
+#[tokio::test]
+async fn search_results_keep_citable_fields_and_follow_real_links_through_the_existing_page() {
+    use fastbrowse_clients::environment::Secret;
+    use fastbrowse_clients::search::Exa;
+    use fastbrowse_core::models::{CostBasis, StepOutcome};
+    use fastbrowse_run::fetch::search::SearchPage;
+    let http = serving(|request| {
+        if request.url == "https://api.exa.ai/search" {
+            Response::json(
+                200,
+                &serde_json::json!({"results":[{"url":"https://shop.example.com/policy","title":"Returns policy","metadata":{"quote":"A  & B"}}],"costDollars":{"total":0.007}}),
+            )
+        } else {
+            assert_eq!(request.url, "https://shop.example.com/policy");
+            assert!(request.header("x-api-key").is_none());
+            Response::new(200, "<title>Returns</title><p>Thirty days.</p>").with_header("content-type", "text/html")
+        }
+    });
+    let inner = Arc::new(FetchedPage::new(http.clone(), None, None));
+    let page = SearchPage::new(
+        inner.clone(),
+        FetchedPage::new(http.clone(), None, None),
+        Exa::new(http, Secret::new("test-key")),
+    );
+    let result = page.search("returns policy", 30.0).await;
+    assert!(result.error.is_none());
+    assert!(result.page_changed);
+    assert!(!page.search("returns policy", 30.0).await.page_changed);
+    assert_eq!(result.cost.basis, CostBasis::Estimated);
+    let capture = page.capture().await.unwrap();
+    assert!(capture.text.contains("A  & B"));
+    assert_eq!(capture.sha256, sha256_hex(capture.text.as_bytes()));
+    let observed = page.observe().await.unwrap();
+    let link = observed.controls.iter().find(|control| control.label == "Returns policy").unwrap();
+    let action = Action { target_id: Some(link.id.clone()), ..Action::new(Operation::Click) };
+    assert_eq!(page.act(&action, &observed).await.unwrap().outcome, StepOutcome::Executed);
+    assert_eq!(page.address().await.unwrap(), "https://shop.example.com/policy");
+    assert_eq!(inner.address().await.unwrap(), "https://shop.example.com/policy");
+    assert!(page.capture().await.unwrap().text.contains("Thirty days."));
+}
+
+#[tokio::test]
+async fn search_result_navigation_respects_the_existing_origin_grant() {
+    use fastbrowse_clients::environment::Secret;
+    use fastbrowse_clients::search::Exa;
+    use fastbrowse_run::fetch::search::SearchPage;
+    let http = serving(|request| {
+        assert_eq!(request.url, "https://api.exa.ai/search");
+        Response::json(
+            200,
+            &serde_json::json!({"results":[{"url":"https://outside.example/result","title":"Result"}],"costDollars":{"total":0.007}}),
+        )
+    });
+    let origins = Some(vec!["https://allowed.example".into()]);
+    let inner = Arc::new(FetchedPage::new(http.clone(), origins.clone(), None));
+    let page = SearchPage::new(
+        inner.clone(),
+        FetchedPage::new(http.clone(), origins, None),
+        Exa::new(http, Secret::new("key")),
+    );
+    assert!(page.search("question", 30.0).await.error.is_none());
+    let observed = page.observe().await.unwrap();
+    let action = Action { target_id: Some(observed.controls[0].id.clone()), ..Action::new(Operation::Click) };
+    assert!(page.act(&action, &observed).await.is_err());
+    assert!(inner.needed_browser());
+}
+
+#[tokio::test]
+async fn search_keeps_the_selected_browser_destination_when_http_cannot_read_it() {
+    use fastbrowse_clients::environment::Secret;
+    use fastbrowse_clients::search::Exa;
+    use fastbrowse_run::fetch::search::SearchPage;
+    let http = serving(|request| {
+        if request.url == "https://api.exa.ai/search" {
+            Response::json(
+                200,
+                &serde_json::json!({"results":[{"url":"https://shop.example/app","title":"Shop"}],"costDollars":{"total":0.007}}),
+            )
+        } else {
+            Response::new(200, "<div id=app></div><script src=app.js></script>")
+                .with_header("content-type", "text/html")
+        }
+    });
+    let inner = Arc::new(FetchedPage::new(http.clone(), None, None));
+    let page =
+        SearchPage::new(inner.clone(), FetchedPage::new(http.clone(), None, None), Exa::new(http, Secret::new("key")));
+    assert!(page.search("shop", 30.0).await.error.is_none());
+    let observed = page.observe().await.unwrap();
+    let action = Action { target_id: Some(observed.controls[0].id.clone()), ..Action::new(Operation::Click) };
+    assert!(page.act(&action, &observed).await.is_err());
+    assert!(inner.needed_browser());
+    assert_eq!(page.browser_address().as_deref(), Some("https://shop.example/app"));
+}
+
 const PAGE: &str = r#"<!doctype html>
 <html><head><title>Orders report</title>
 <script>window.x = {"nested": "\"noise\""}</script>
@@ -145,10 +239,44 @@ async fn test_plain_text_is_read_as_one_block() {
 
 #[tokio::test]
 async fn test_a_page_that_is_not_html_is_left_to_the_browser() {
-    let error = fetched(&client("{}", 200, "application/json"), "https://shop.example.com/api").await.unwrap_err();
+    let error =
+        fetched(&client("binary", 200, "application/octet-stream"), "https://shop.example.com/api").await.unwrap_err();
     assert!(error.0.contains("not a document read as text"), "{error}");
     let error = fetched(&client("gone", 404, "text/html"), "https://shop.example.com/missing").await.unwrap_err();
     assert!(error.0.contains("HTTP 404"), "{error}");
+}
+
+#[tokio::test]
+async fn test_json_responses_keep_their_exact_values_in_citable_spans() {
+    let raw =
+        "{\"name\":\"A  & B\",\"release\":{\"version\":\"2.1\",\"date\":\"2026-11-12\"},\"count\":9007199254740993}";
+    for mime in ["application/json", "application/problem+json; charset=utf-8", "text/csv"] {
+        let capture =
+            fetched(&client(raw, 200, mime), "https://shop.example.com/api").await.expect("readable response");
+        assert!(capture.text.contains(raw));
+        assert_eq!(capture.blocks.len(), 1);
+        let block = &capture.blocks[0];
+        let quoted: String =
+            capture.text.chars().skip(block.start as usize).take((block.end - block.start) as usize).collect();
+        assert_eq!(quoted, raw);
+    }
+}
+
+#[tokio::test]
+async fn text_and_json_endpoints_can_negotiate_a_supported_response() {
+    for mime in ["application/json", "text/csv"] {
+        let http = serving(move |request| {
+            let ranges: Vec<_> = request
+                .header("accept")
+                .unwrap_or_default()
+                .split(',')
+                .map(|part| part.split(';').next().unwrap().trim())
+                .collect();
+            let accepted = ranges.contains(&mime) || (mime.starts_with("text/") && ranges.contains(&"text/*"));
+            Response::new(if accepted { 200 } else { 406 }, "{\"value\":42}").with_header("content-type", mime)
+        });
+        assert!(fetched(&http, "https://api.example.test/value").await.is_ok(), "{mime}");
+    }
 }
 
 #[tokio::test]

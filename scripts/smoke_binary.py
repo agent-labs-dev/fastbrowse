@@ -30,7 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import IO, Any
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 
 # The click leaves a mark on the server as well as on the page, so the run is known to have reached a real
 # document, which a result that only says "complete" would not show.
@@ -221,7 +221,7 @@ def check_run(executable: Path) -> None:
     """One run on local Chrome ends `complete`, having clicked the page's button."""
     with fixture_site() as (start, marks), serving(executable, "--run-task", "fastbrowse.scripted:run_task") as client:
         handshake(client)
-        params = {"run_id": "smoke", "task": TASK, "start": start, "local": True, "browser": True}
+        params = {"run_id": "smoke", "task": TASK, "start": start, "launch": True, "browser": True}
         result, ahead = client.request("run", params, RUN_SECONDS)
     events = [message["params"]["event"] for message in ahead if message["method"] == "run/event"]
     clicks = [
