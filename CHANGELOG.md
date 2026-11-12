@@ -11,9 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-## [0.11.0] - 2026-11-12
-
-- Browserless runs read a JSON response by its structure, so a single value such as a package's name can be selected and cited alone, under its key path. Field choices also show the headings a value sits under ([#1069](https://github.com/agent-labs-dev/fastbrowse/issues/1069)).
+- Browserless runs read a JSON response by its structure, so a single value such as a package's name can be selected and cited alone, under its key path. Field choices also show the headings a value sits under, and a page with more candidates than one Jev request can describe is chosen over a series of requests that each fit, instead of failing as too large ([#1069](https://github.com/agent-labs-dev/fastbrowse/issues/1069)).
 
 - Release checks require complete three-repeat coverage of both official suites, matched to the candidate build and verified producer receipts. Internal speed and cost comparisons remain separate from the official scores.
 

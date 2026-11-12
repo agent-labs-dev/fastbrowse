@@ -16,6 +16,7 @@ use serde_json::{Map, Value, json};
 
 use super::chunks::evidence;
 use super::text::{Page, SpanKind, Word, cells, currency, lines_of, spans, table_header_from_text};
+use crate::batches::evaluate_batches;
 use crate::error::{AgentError, Result};
 use crate::memory::Notes;
 use crate::pyre::digit;
@@ -599,7 +600,7 @@ fn field_group_question(
     ChoiceQuestion::new(instructions, criteria)
 }
 
-/// The value Jev picks for one field, grouping first when the pool exceeds Jev's option ceiling.
+/// The value Jev picks for one field, narrowing first when the pool exceeds Jev's option ceiling or one request.
 #[allow(clippy::too_many_arguments)]
 pub async fn choose_candidate(
     jev: &dyn DecisionClient,
@@ -626,23 +627,71 @@ pub async fn choose_candidate(
         }
         Ok(evaluation.answers)
     }
-    let max_options = jev.profile().max_choice_options;
+    let profile = jev.profile();
+    let max_options = profile.max_choice_options;
+    let tokens = profile.fit(None).tokens;
+    let fits = |state: &Value, questions: &IndexMap<String, Question>| {
+        let written: Vec<String> = questions.values().map(Dump::dump_json).collect();
+        let refs: Vec<&str> = written.iter().map(String::as_str).collect();
+        text::len(&dumps(state)) as i64 <= tokens.input_chars(&refs)
+            && questions
+                .values()
+                .all(|question| matches!(question, Question::Choice(choice) if choice.criteria.len() <= max_options))
+    };
+    let alone = |key: &str, question: ChoiceQuestion| IndexMap::from([(key.to_string(), Question::from(question))]);
+    let choice = |part: &[Candidate]| field_question(field, part, Some(name), Some(task), record_fields, max_options);
     let mut pool: Vec<Candidate> = candidates.to_vec();
-    while pool.len() >= max_options {
+    while pool.len() >= max_options || (pool.len() > 1 && !fits(state, &alone(name, choice(&pool)?))) {
         let groups = field_candidate_groups(&pool, max_options);
         let key = format!("{name}_group");
-        let question = field_group_question(field, &groups, Some(name), Some(task));
-        let outer = ask(jev, state, IndexMap::from([(key.clone(), question.into())]), ledger).await?;
-        let Some(Answer::Choice(answer)) = outer.get(&key) else { return Ok(None) };
-        if answer.choice == "none" || answer.choice.is_empty() || !answer.choice.chars().all(|c| c.is_ascii_digit()) {
+        let whole = alone(&key, field_group_question(field, &groups, Some(name), Some(task)));
+        if fits(state, &whole) {
+            let outer = ask(jev, state, whole, ledger).await?;
+            let Some(Answer::Choice(answer)) = outer.get(&key) else { return Ok(None) };
+            if answer.choice == "none" || answer.choice.is_empty() || !answer.choice.chars().all(|c| c.is_ascii_digit())
+            {
+                return Ok(None);
+            }
+            let Some(group) = answer.choice.parse::<usize>().ok().and_then(|index| groups.get(index)) else {
+                return Ok(None);
+            };
+            pool = group.clone();
+            continue;
+        }
+        // Option count bounds a group question, not its size: a JSON document's thousands of leaves describe past
+        // what one request takes (#1069). The pool is then split into parts whose own choice fits beside the state,
+        // halving a part until it does, and every part is asked together. Each part's pick, compared again by the
+        // next round, keeps every candidate in front of Jev once.
+        let mut parts: Vec<&[Candidate]> = pool.chunks(max_options - 1).rev().collect();
+        let mut questions: IndexMap<String, Question> = IndexMap::new();
+        while let Some(part) = parts.pop() {
+            let question = choice(part)?;
+            if fits(state, &alone(name, question.clone())) {
+                questions.insert(format!("{name}_{}", questions.len()), question.into());
+            } else if part.len() > 1 {
+                let (first, rest) = part.split_at(part.len() / 2);
+                parts.extend([rest, first]);
+            }
+            // A candidate that alone exceeds Jev's input cannot be offered, as an oversized batch question goes
+            // unscored.
+        }
+        let answered = evaluate_batches(JevPurpose::Read, jev, state, &questions, &tokens, ledger, None, false).await?;
+        let chosen: std::collections::HashSet<String> = answered
+            .into_iter()
+            .flat_map(|answered| answered.answers.into_values())
+            .filter_map(|answer| match answer {
+                Answer::Choice(answer) => Some(answer.choice),
+                _ => None,
+            })
+            .collect();
+        let winners: Vec<Candidate> = pool.iter().filter(|c| chosen.contains(&c.id)).cloned().collect();
+        // Every part's only candidate chosen means no two of them fit one request, so none can be compared.
+        if winners.is_empty() || winners.len() == pool.len() {
             return Ok(None);
         }
-        let Some(group) = answer.choice.parse::<usize>().ok().and_then(|index| groups.get(index)) else {
-            return Ok(None);
-        };
-        pool = group.clone();
+        pool = winners;
     }
-    let question = field_question(field, &pool, Some(name), Some(task), record_fields, max_options)?;
+    let question = choice(&pool)?;
     let answers = ask(jev, state, IndexMap::from([(name.to_string(), question.into())]), ledger).await?;
     let Some((value, evidence)) = (match answers.get(name) {
         Some(Answer::Choice(answer)) => copy_field(answer, &pool),
@@ -687,16 +736,6 @@ pub async fn choose_candidate(
     let (begin_key, end_key) = (format!("{name}_begins"), format!("{name}_ends"));
     let mut questions =
         IndexMap::from([(begin_key.clone(), ask_edge("begin", begins)), (end_key.clone(), ask_edge("end", ends))]);
-    let profile = jev.profile();
-    let tokens = profile.fit(None).tokens;
-    let fits = |state: &Value, questions: &IndexMap<String, Question>| {
-        let written: Vec<String> = questions.values().map(Dump::dump_json).collect();
-        let refs: Vec<&str> = written.iter().map(String::as_str).collect();
-        text::len(&dumps(state)) as i64 <= tokens.input_chars(&refs)
-            && questions
-                .values()
-                .all(|question| matches!(question, Question::Choice(choice) if choice.criteria.len() <= max_options))
-    };
     let mut edge_state = std::borrow::Cow::Borrowed(state);
     if !fits(state, &questions) {
         // Repeating a long suffix for every boundary exceeds Jev's provider context even with few words. Label
@@ -1025,5 +1064,69 @@ mod narrowing_tests {
                 .unwrap();
         assert_eq!(picked.0, ScalarValue::Str("Alpha-17".into()));
         assert_eq!(picked.1.quote, "Alpha-17");
+    }
+
+    #[tokio::test]
+    async fn a_pool_too_large_for_one_group_question_is_chosen_in_requests_that_fit() {
+        /// Picks the option naming httpx in every question, and checks each request fits the provider context.
+        struct Sized(std::sync::Mutex<usize>);
+
+        impl DecisionClient for Sized {
+            fn evaluate<'a>(
+                &'a self,
+                state: &'a serde_json::Value,
+                questions: &'a IndexMap<String, Question>,
+            ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+                *self.0.lock().unwrap() += 1;
+                let written: Vec<String> = questions.values().map(Dump::dump_json).collect();
+                let refs: Vec<&str> = written.iter().map(String::as_str).collect();
+                assert!(
+                    state.to_string().chars().count() as i64 <= self.profile().fit(None).tokens.input_chars(&refs),
+                    "a field choice exceeded the provider context"
+                );
+                let answers = questions
+                    .iter()
+                    .map(|(key, question)| {
+                        let Question::Choice(question) = question else { panic!("{key} is a choice") };
+                        let choice = question
+                            .criteria
+                            .iter()
+                            .find(|(_, value)| value.to_string().contains("httpx"))
+                            .map_or("none".to_string(), |(id, _)| id.clone());
+                        let answer = ChoiceAnswer {
+                            kind: Default::default(),
+                            choice: choice.clone(),
+                            probabilities: IndexMap::from([(choice, 1.0)]),
+                            confidence: 1.0,
+                        };
+                        (key.clone(), Answer::Choice(answer))
+                    })
+                    .collect();
+                let cost = CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0));
+                Box::pin(
+                    async move { Ok(Evaluation { model: "jev".into(), answers, input_tokens: 0, cost, requests: 1 }) },
+                )
+            }
+
+            fn profile(&self) -> DecisionProfile {
+                crate::scripted::ScriptedJev::new(Vec::new()).profile()
+            }
+        }
+
+        let filler = "a release file uploaded with its digest and size ".repeat(4);
+        let mut texts: Vec<String> = (0..3000).map(|index| format!("release {index} {filler}")).collect();
+        texts.insert(2100, "httpx".into());
+        let blocks: Vec<(BlockKind, &str)> = texts.iter().map(|text| (BlockKind::Paragraph, text.as_str())).collect();
+        let page = capture(&blocks);
+        let field = ScalarField::new(Annotation::Str);
+        let candidates = field_candidates(&page, &field).unwrap();
+        let jev = Sized(Default::default());
+        let picked =
+            choose_candidate(&jev, &json!({}), &field, &candidates, "package", "Report the package.", &[], None)
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(picked.0, ScalarValue::Str("httpx".into()));
+        assert!(*jev.0.lock().unwrap() > 2, "the pool needed more than one request");
     }
 }
