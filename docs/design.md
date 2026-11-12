@@ -208,9 +208,14 @@ others as they were. Jev is asked which option to toggle and told which are sele
 selection back fails the step, as on a single select, and the action guard and page fingerprint read every selected
 option, so choosing or removing any one of them is a change.
 
-Press sends a key Jev selects from the target control's ARIA role, or a key chord copied from the task. Sliders, spin buttons, tabs, lists, trees, menus and grids offer their standard WAI-ARIA keyboard interactions. A composite container is indexed for keyboard use when it has a `tabindex`. The selected chord is stated to the irreversible-action classifier before dispatch. Its modifiers and DOM key are sent
-as one browser input, and a chord that can submit or save goes through the same irreversibility and authorization gates
-as Enter.
+Press sends a key Jev selects from the target control's ARIA role, or a key chord copied from the task.
+Sliders, spin buttons, tabs, lists, trees, menus and grids offer their standard WAI-ARIA keyboard interactions
+when focus can reach them. A composite container is indexed for keyboard use when it has a `tabindex`.
+An active descendant keeps DOM focus on its owner while receiving the chosen key. Native selects keep their
+Select operation. The selected chord is stated to the irreversible-action classifier before dispatch.
+When the task forbids edits, Jev also judges whether that chord changes a value or only moves through the page.
+Its modifiers and DOM key are sent as one browser input, and a chord that can submit or save goes through the
+same irreversibility and authorization gates as Enter.
 
 Scrollable containers are indexed separately for each overflowing axis, including open shadow roots and accessible
 frames. Jev chooses a scroll area and an available direction. Code moves that container by its visible width or

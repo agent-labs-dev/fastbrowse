@@ -38,6 +38,8 @@ For a task that needs your accounts or localhost, name a suitable local browser.
 
 For a list, say whether the task covers the shown records, every page or a numbered range. fastbrowse can follow observed next-page links while checking each page and keeping its citations.
 
+For a widget, describe the operation you need, such as stepping a slider or moving through tabs. Name the chord when the site requires a specific keyboard shortcut.
+
 Behind the skill, the agent calls the CLI or an MCP server. Either way the run reports a status. `complete` means the task was verified, and the other statuses say what was missing: an input, an authorization, evidence for a claim, or access to the page.
 
 ## Limits and writes

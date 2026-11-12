@@ -53,7 +53,8 @@ acceptable budget before starting one. Count earlier run costs against the user'
 ## Set the task boundary
 
 Include the goal, starting address when known, required output, relevant constraints, and supplied field values.
-One call can navigate, search, read multiple pages, and fill a form. Widget keyboard actions follow the target's ARIA role; name a key chord in the task when a site needs a specific shortcut. Split calls when the next task depends on
+One call can navigate, search, read multiple pages, and fill a form. Widget keyboard actions follow the target's
+ARIA role; name a key chord in the task when a site needs a specific shortcut. Split calls when the next task depends on
 the first result or requires a new user decision. Each CLI call is a new run, not a resumable session.
 
 For read-only work, leave authorization off. For a write, only pass CLI `--authorize` or MCP `authorize: true`
