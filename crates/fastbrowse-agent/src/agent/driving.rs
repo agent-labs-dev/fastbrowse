@@ -808,7 +808,7 @@ impl Agent {
     ) -> Step<Watched<Action>> {
         let redecided = state.redecided;
         let target = decision.target.as_ref().map(|target| target.id.as_str());
-        // Role-key authorization grows the action future; nesting it inline overflowed the native worker stack.
+        // Nesting action construction inline with browser dispatch overflowed the native worker stack.
         let building = self.trace.phase("build_action", Box::pin(self.action(state, observation, decision)));
         self.unless_redrawn(redecided, building, observation, target).await
     }

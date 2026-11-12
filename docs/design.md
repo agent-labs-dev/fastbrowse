@@ -365,7 +365,8 @@ starting, pausing, ending or muting (in the page, a granted child frame or a fra
 has no fixed bound. A run with `max_seconds` waits at most until it must stop browsing, and a run without one waits
 for the change. The wait samples the fingerprint twice a second beside the events it hears, since a script writing
 `checked` as a property raises none. A wait that ends with nothing changed is a step that changed nothing, under the one stall rule, unless
-a player's clock moved meanwhile. A cancelled wait removes what it installed in the page.
+a player's clock moved meanwhile. A cancelled wait removes what it installed in the page. Desktop waits use the
+same run deadline while polling the window's accessibility tree for a change.
 
 An empty observation waits on loading events before action history and progress are recorded.
 The same blank state is waited out once until a readable page appears, so a later navigation gets its own wait.
