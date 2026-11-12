@@ -178,6 +178,8 @@ pub struct ExtractOptions<'a> {
     pub notes: Option<&'a Notes>,
     pub tokens: TokenBudget,
     pub ledger: Option<&'a Ledger>,
+    /// The claims of the run's checked answer, which each field is chosen to agree with.
+    pub answer: Option<&'a [String]>,
 }
 
 /// Every field is copied from the spans Jev points at. A field with no supported value fails the extraction.
@@ -215,7 +217,10 @@ pub async fn extract(
         if candidates.is_empty() {
             continue;
         }
-        let state = json!({"task": task, "page": {"url": capture.url, "title": capture.title}});
+        let mut state = json!({"task": task, "page": {"url": capture.url, "title": capture.title}});
+        if let Some(answer) = options.answer {
+            state["answer"] = json!(answer);
+        }
         match choose_candidate(jev, &state, field, &candidates, name, task, &record_fields, options.ledger).await {
             Ok(Some((value, quoted))) => {
                 values.insert(name.clone(), value.to_json());
