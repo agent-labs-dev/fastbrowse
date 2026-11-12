@@ -79,4 +79,4 @@ fastbrowse "What is the title of the top story?" \
 
 For other ways to reach a browser, see [attaching to a running Chrome](/blog/attach-to-running-chrome/).
 
-For connection errors, see [the extension connection checks](../docs/troubleshooting.md#the-extension-is-not-connected).
+For connection errors, see [the extension connection checks](https://www.fastbrowse.ai/docs/troubleshooting/#the-extension-is-not-connected).
