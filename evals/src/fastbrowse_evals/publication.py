@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tempfile
 from collections import defaultdict
-from collections.abc import Awaitable, Callable, Collection, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -277,18 +277,38 @@ TIMING_NOTE = (
 )
 
 
+PHYSICAL_TIMING_NOTE = (
+    "Never-started attempts retain dispatch elapsed time; executed attempts retain session-ready-to-answer time. "
+    "Executed session opening and closing are excluded; complete phase totals are unavailable"
+)
+MIXED_TIMING_NOTE = (
+    "Rows state their clock; physical-attempt-wall-time includes dispatch and admission interruptions. "
+    "Times on different bases are not compared"
+)
+
+
 def timed(fields: dict[str, Any], where: str) -> None:
     """Refuse a row or a run whose seconds were not measured on the one clock every arm is compared on."""
     if fields.get("timing_basis") != TIMING_BASIS:
         raise PublicationError(f"{where}: its seconds are not measured from session ready to the answer")
 
 
-def timing_fields(tries: Iterable[dict[str, Any]]) -> dict[str, Any]:
+def timing_fields(
+    tries: Iterable[dict[str, Any]], execution: Mapping[str, execution_receipts.ValidatedExecution] | None = None
+) -> dict[str, Any]:
     """A public row's timing basis and session seconds, totalled as its seconds are. The pinned public contract may
     predate these fields, and it forbids any it does not name."""
     if "timing_basis" not in getattr(Row, "model_fields", {}):
         return {}
     tries = list(tries)
+    if execution and any(execution_receipts.key(t) in execution for t in tries):
+        # Admission failed before an agent ran, so its elapsed wait has no ready-to-answer clock or phase totals.
+        return {
+            "timing_basis": "physical-attempt-wall-time",
+            "timing_note": PHYSICAL_TIMING_NOTE,
+            "session_open_seconds": None,
+            "session_close_seconds": None,
+        }
     total = {
         key: math.fsum(values) if (values := [t[key] for t in tries if t.get(key) is not None]) else None
         for key in ("session_open_seconds", "session_close_seconds")
@@ -694,7 +714,7 @@ def invocation(
                 tokens_per_second=chosen.get("tokens_per_second") or 0.0,
                 input_tokens=sum(a.get("input_tokens") or 0 for a in tries),
                 output_tokens=sum(a.get("output_tokens") or 0 for a in tries),
-                **timing_fields(tries),
+                **timing_fields(tries, execution),
             )
         )
 
@@ -825,7 +845,7 @@ def internal_group(
         limits.append(UNCAPPED_NOTES[1])
     limits += [
         "Each slot totals physical runs including retries; an unresolved charge withholds its arm's complete cost",
-        TIMING_NOTE,
+        MIXED_TIMING_NOTE if any(row.timing_basis == "physical-attempt-wall-time" for row in rows) else TIMING_NOTE,
         f"Score is the recorded {OPUS_JUDGE.replace('/', ' ')} verdict; completion is the agent's own ending, recorded separately",
     ]
     models = {arm: sorted(set().union(*(item.models[arm] for item in used if arm in item.models))) for arm in arms}

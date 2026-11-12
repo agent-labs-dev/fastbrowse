@@ -47,7 +47,11 @@ stopped is a failed row naming why, and a legacy `blocked` slot reads as one. Ea
 reason and counts as `repeats` failed attempts in every pass rate. A row whose agent connects to its browser where the
 harness cannot see (hosted Browser Use, Browser Harness) states what of that setup stayed in its seconds in
 `timing_note`. The site's parser (`src/lib/benchmark-feed.ts`) must accept these fields before a candidate that has
-them is published.
+them is published. A validated never-started retry uses `physical-attempt-wall-time`: its seconds sum the
+recorded dispatch elapsed time and the executed attempts' session-ready-to-answer time, without adding
+executed session opening or closing. Its note describes this accounting and its phase totals stay absent.
+Groups retain outcomes and every elapsed time across explicit bases, but consumers must suppress aggregate
+speed comparisons across bases. Legacy rows without a basis cannot be mixed with explicit clocks.
 
 `internal-hosted` is the head-to-head over the 53 tasks fastbrowse runs; figures approved at 46, 47 or 52 tasks still
 read. A campaign runs `fastbrowse` and `jev-ultrafast` live in one harness invocation, on Browser Use Cloud browsers

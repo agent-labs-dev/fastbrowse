@@ -129,3 +129,26 @@ def test_an_empty_baseline_cannot_prove_an_improvement() -> None:
         "baseline seconds: missing, unknown or invalid measurements",
         "baseline dollars: missing, unknown or invalid measurements",
     ]
+
+
+def test_release_speed_never_compares_mixed_clocks():
+    baseline = [{**r, "timing_basis": "session-ready-to-answer"} for r in BASELINE]
+    candidate = [{**row(r["task"], True, 8, 0.01), "timing_basis": "session-ready-to-answer"} for r in BASELINE]
+    candidate[0]["timing_basis"] = "physical-attempt-wall-time"
+    failures, notes = gate.compare(candidate, baseline)
+    assert failures == ["median seconds cannot compare different timing bases"]
+    assert not any(note.startswith("median seconds") for note in notes)
+
+
+def test_matched_physical_clocks_keep_all_elapsed_time():
+    baseline = [{**r, "timing_basis": "physical-attempt-wall-time"} for r in BASELINE]
+    candidate = [{**row(r["task"], True, 8, 0.01), "timing_basis": "physical-attempt-wall-time"} for r in BASELINE]
+    candidate[0]["seconds"] = 340.3
+    failures, _ = gate.compare(candidate, baseline)
+    assert failures == []
+
+
+def test_release_speed_requires_legacy_clock_to_match():
+    candidate = [{**r, "dollars": 0.01, "timing_basis": "session-ready-to-answer"} for r in BASELINE]
+    failures, _ = gate.compare(candidate, BASELINE)
+    assert failures == ["median seconds cannot compare different timing bases"]

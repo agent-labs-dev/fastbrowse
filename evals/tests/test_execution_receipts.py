@@ -353,3 +353,26 @@ def test_unmatched_browser_cannot_be_shared_with_another_task(case):
     write(path, sidecar)
     with pytest.raises(ValueError, match="identity is reused"):
         execution.load([path], results, PROMPTS)
+
+
+def test_validated_nonexecution_keeps_elapsed_under_distinct_public_clock(case):
+    results, path, _, _, rows = case
+    receipts = execution.load([path], results, PROMPTS)
+    slot = [
+        r for r in rows if (r["arm"], r["task"], r["repeat"]) == (rows[0]["arm"], rows[0]["task"], rows[0]["repeat"])
+    ]
+    slot[0]["seconds"], slot[1]["seconds"] = 329.1, 11.2
+    slot[1].update(
+        timing_note="Provider connects inside its first step", session_open_seconds=0.71, session_close_seconds=0.12
+    )
+    fields = publication.timing_fields(slot, receipts)
+    assert fields == dict(
+        timing_basis="physical-attempt-wall-time",
+        timing_note=publication.PHYSICAL_TIMING_NOTE,
+        session_open_seconds=None,
+        session_close_seconds=None,
+    )
+    assert sum(r["seconds"] for r in slot) == 340.3
+    assert slot[0]["seconds"] == 329.1 and slot[1]["session_open_seconds"] == 0.71
+    with pytest.raises(ValueError, match="different browser setup"):
+        publication.timing_fields(slot)

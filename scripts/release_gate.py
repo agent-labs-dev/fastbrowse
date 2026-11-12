@@ -87,6 +87,9 @@ def compare(candidate: list[dict[str, Any]], baseline: list[dict[str, Any]]) -> 
         ("median seconds", "seconds", statistics.median),
         ("mean $", "dollars", statistics.fmean),
     ):
+        if field == "seconds" and len({row.get("timing_basis") for row in [*mine, *base]}) > 1:
+            failures.append("median seconds cannot compare different timing bases")
+            continue
         incomplete = False
         for side, rows in (("candidate", mine), ("baseline", base)):
             # An absent receipt is not zero spend or zero time, and dropping it would change the measured population.
