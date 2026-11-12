@@ -285,10 +285,15 @@ const UNSUPPORTED_SCALAR: &str =
 fn marks(block: &Block) -> String {
     let mut marks = Vec::new();
     if block.kind == BlockKind::Heading {
-        marks.push("heading");
+        marks.push("heading".to_string());
+    }
+    // The headings a value sits under tell apart equal values of different records, as a JSON document's key path
+    // tells its `name` from a release's (#1069); a note's candidate carries them the same way (`quote_context`).
+    if !block.heading_path.is_empty() {
+        marks.push(format!("headings {}", tuple_repr(&block.heading_path)));
     }
     if block.frame_id.is_some() {
-        marks.push("inside an embedded frame");
+        marks.push("inside an embedded frame".to_string());
     }
     if marks.is_empty() { String::new() } else { format!("({}) ", marks.join(", ")) }
 }

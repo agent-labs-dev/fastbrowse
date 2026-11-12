@@ -182,8 +182,11 @@ build. So a run over HTTP that took no step cannot finish a task that asks for o
 browser does it.
 `fetch` forbids the browser, and `browser` starts one from the first step.
 Fetched documents have no pixels, so optional screenshots and step frames are skipped.
-JSON responses, including `application/*+json`, and other `text/*` responses are read as quoted text blocks.
-JSON and delimited data keep their whitespace and literal values, without HTML parsing or numeric conversion.
+A JSON response, including `application/*+json`, is read by its structure: each object key is a heading, and each
+string, number, `true`, `false` and `null` is its own block under the path of keys and array indices that leads to it.
+A string reads as its decoded text, a number as written, and repeated keys keep every value. A response that is not
+entirely valid JSON, and other `text/*` responses, are read as one quoted text block. Neither is parsed as HTML, and
+delimited data keeps its whitespace. Browser captures of a JSON document are still read as one code block.
 
 Browser and HTTP heading paths follow heading ranks. A heading inside a repeated record ends earlier headings
 of the same or deeper rank, without naming later records. Headings hidden by the capture do not change that
