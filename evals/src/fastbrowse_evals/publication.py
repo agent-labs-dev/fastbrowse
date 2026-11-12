@@ -1389,7 +1389,7 @@ def competitor_reference(candidate: Candidate, catalog: dict[str, Any], measured
 
 def with_reference(item: Collected, path: Path | None, catalog: dict[str, Any]) -> Collected:
     """The hosted group with the competitors' rows beside its own. A group that ran them live keeps its own. A reference
-    that is missing, judged under another policy, timed on another clock or stale for any task refuses the comparison: nothing is left out."""
+    that is missing, judged under another policy, missing its clock or stale for any task refuses the comparison: nothing is left out."""
     group = item.group
     ran = {r.arm for r in group.rows} & REFERENCE_ARMS.keys()
     if ran == REFERENCE_ARMS.keys():
@@ -1405,9 +1405,9 @@ def with_reference(item: Collected, path: Path | None, catalog: dict[str, Any]) 
         raise PublicationError(
             f"{group.id}: the reference is graded under {reference.judge_policy}, not {JUDGE_POLICY}"
         )
-    if any(reference_basis(row) != TIMING_BASIS for row in reference.rows):
+    if any(reference_basis(row) is None for row in reference.rows):
         raise PublicationError(
-            f"{group.id}: the reference was timed on another clock; dispatch the campaign once with refresh_competitors"
+            f"{group.id}: the reference has an unrecorded clock; dispatch the campaign once with refresh_competitors"
         )
     tasks = {t["id"]: t for suite in catalog["suites"].values() for t in suite}
     stale = sorted(
@@ -1430,9 +1430,14 @@ def with_reference(item: Collected, path: Path | None, catalog: dict[str, Any]) 
             "dispatch the campaign once with refresh_competitors"
         )
     arms = {r.arm for r in group.rows} | {a.arm for a in reference.arms}
+    rows = sorted([*group.rows, *reference.rows], key=lambda r: (r.arm, r.task, r.repeat))
+    limits = group.limits
+    if any(row.timing_basis == "physical-attempt-wall-time" for row in rows):
+        limits = [MIXED_TIMING_NOTE if entry == TIMING_NOTE else entry for entry in limits]
     merged = group.model_copy(
         update={
-            "rows": sorted([*group.rows, *reference.rows], key=lambda r: (r.arm, r.task, r.repeat)),
+            "rows": rows,
+            "limits": limits,
             "references": reference.arms,
             "excluded": exclusions(arms, group.task_ids, catalog),
         }
