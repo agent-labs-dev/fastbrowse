@@ -135,7 +135,9 @@ NOTE_ID = re.compile(r"\b([0-9a-f]{64}:\d+:\d+):([0-9a-f]{16})(?::([0-9a-f]{16})
 fixture server's port, and an optional fifth part digests a control's frame, whose key Chrome makes up for a
 cross-site frame. Both change every run, and the port rule cannot reach inside a digest, so every request citing a
 note missed. The digests are numbered by first appearance, as target ids are, and swapped back into the response
-(`translate_notes`)."""
+(`translate_notes`). Numbering hides no change of control: every note the agent renders with a control writes that
+control's dump beside its id (`control_context=`), and its source block follows from the span the id keeps, so a quote
+moved to another control still changes the key."""
 
 
 def _note_digests(match: re.Match[str]) -> list[str]:
