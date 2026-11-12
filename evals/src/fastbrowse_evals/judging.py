@@ -121,7 +121,7 @@ def _route(use_jev: bool) -> tuple[Any, Any, Any]:
     return panel, llm, primary
 
 
-def _identity(policy: str, questions: Mapping[str, str], panel: Any, llm: Any, primary: Any) -> str:
+def _identity(policy: str, questions: Mapping[str, str], panel: Any, llm: Any, primary: Any, *, use_jev: bool) -> str:
     """The policy's identity: what it asks and how it routes, hashed. Every receipt of the policy records it."""
     return jev.state_sha(
         {
@@ -130,9 +130,12 @@ def _identity(policy: str, questions: Mapping[str, str], panel: Any, llm: Any, p
             "admit_at": ADMIT_AT,
             "reject_at": REJECT_AT,
             "thresholds": THRESHOLDS,
-            "jev_input_tokens": jev.INPUT_TOKENS,
-            "jev_min_tokens_per_byte": jev.MIN_TOKENS_PER_BYTE,
-            "jev_unbilled_rejections": sorted(jev.UNBILLED_REJECTIONS),
+            # Opus-only receipts historically hashed these inactive Jev fields. Preserve that serialization
+            # contract without claiming the old limits describe the current Jev transport.
+            "jev_input_tokens": jev.INPUT_TOKENS if use_jev else 32_000,
+            "jev_min_tokens_per_byte": jev.MIN_TOKENS_PER_BYTE if use_jev else 1 / 3,
+            "jev_unbilled_rejections": [] if use_jev else ["max_tokens_exceeded"],
+            **({"jev_transport": "openrouter-systemone-noul-refused-v1"} if use_jev else {}),
             "fallback_instructions": FALLBACK_INSTRUCTIONS,
             "fallback_schema": JudgeReply.model_json_schema(),
             "jev_model": primary.model if primary else None,
@@ -165,7 +168,7 @@ async def judge_browser(
     panel, llm, primary = _route(use_jev)
     if not use_jev:
         fallback_only = fallback_only or OPUS_ONLY
-    identity = _identity(policy, questions, panel, llm, primary)
+    identity = _identity(policy, questions, panel, llm, primary, use_jev=use_jev)
     if unjudgeable is not None:
         decisions = {key: Decision(passed=None, source="harness", reason=unjudgeable) for key in questions}
         return Judgment(
@@ -205,7 +208,8 @@ async def judge_browser_parts(
     results = [result for result, _ in judged]
     # Hashed from the policy's own questions: the part-worded ones would give a whole-state judgment of the same task
     # another identity, and a campaign holding both is refused as two policies.
-    identity = _identity(policy, questions, *_route(route.get("use_jev", True)))
+    use_jev = route.get("use_jev", True)
+    identity = _identity(policy, questions, *_route(use_jev), use_jev=use_jev)
     return results[0].model_copy(
         update={
             "state_sha256": jev.state_sha(state),
