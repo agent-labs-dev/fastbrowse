@@ -13,6 +13,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.11.0] - 2026-11-12
 
+- **Detached frames release their saved observations.** Removing an iframe now frees its retained full snapshots on the next frame read. Live frames retain their snapshots across tab switches ([#1062](https://github.com/agent-labs-dev/fastbrowse/issues/1062)).
+- Comparator eval outcomes and timings can publish while costs remain provisional. An unresolved physical charge withholds that arm's complete cost figures and retains its full budget hold; Fastbrowse costs and judge charges still require complete receipts ([#1058](https://github.com/agent-labs-dev/fastbrowse/issues/1058)).
+- Tally membership checks receive the source notes alongside each candidate, preserving separate page labels that qualify a date or price. Numeric extraction and comparisons remain unchanged ([#977](https://github.com/agent-labs-dev/fastbrowse/issues/977)).
+
 - Comparator eval outcomes and timings can publish while costs remain provisional. An unresolved physical charge withholds that arm's complete cost figures and retains its full budget hold; Fastbrowse costs and judge charges still require complete receipts ([#1058](https://github.com/agent-labs-dev/fastbrowse/issues/1058)).
 - Tally membership checks receive the source notes alongside each candidate, preserving separate page labels that qualify a date or price. Numeric extraction and comparisons remain unchanged ([#977](https://github.com/agent-labs-dev/fastbrowse/issues/977)).
 

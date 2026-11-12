@@ -119,7 +119,7 @@ document, the root element and the body hear the whole page, so they mark nothin
 The browser visits each changed frame, then transfers unchanged control rows by their existing node
 ids and sends only changed rows and guards. The receiver reconstructs the ordered controls against the exact
 document and previous read named by the delta. Each request names the receiver's baseline; a missing or mismatched
-baseline returns a full read directly. A delta that cannot be reconstructed requests a full read. Page text,
+baseline returns a full read directly. Each frame read releases saved snapshots of detached child frames, preserving live child snapshots across tab switches. A delta that cannot be reconstructed requests a full read. Page text,
 modal state and other frame metadata travel in full. An inline child document or shadow root is still read each time.
 Captures and citation spans keep their own read path. Context construction indexes peer labels once per read,
 preserving shared labels when excluding a control.
