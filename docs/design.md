@@ -271,7 +271,8 @@ text-fragment deep links; unused facts have no citation. The LLM writes a compos
 each final claim against its original cited quotes, including record identity and values, after any packing rounds.
 The composer selects source wording by note id in private text parts, either the whole note or a part of it, such as
 one field of a record, that code finds in the note's text exactly as written. Code copies the selection and adds
-quotation delimiters when requested; prose parts keep explanatory wording separate. A tally has one computed part,
+quotation delimiters when requested; prose parts, objects like the others so the composer does not write connecting
+wording as a source part, keep explanatory wording separate. A tally has one computed part,
 which code fills without replacing matching text inside a source part. Packed compositions expose their original
 sources separately, and kept claims retain these parts through a rewrite. Split notes cannot be selected as whole
 sources. The delivered claims keep the same text, cells, tally and evidence id fields.
