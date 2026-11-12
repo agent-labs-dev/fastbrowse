@@ -46,7 +46,7 @@ run-name: Benchmark campaign ${{ inputs.campaign_id || github.event.client_paylo
 # run's build named beside its rows.
 #
 # Repository configuration this file needs (checked before any paid call):
-#   secrets: OPENROUTER_API_KEY, AI_GATEWAY_API_KEY, PARALLAX_JUDGE_API_KEY,
+#   secrets: OPENROUTER_API_KEY, PARALLAX_JUDGE_API_KEY,
 #            LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY (each ledger is sent there; the candidate reads them back,
 #            with the fixture run)
 #            BROWSER_USE_API_KEY
@@ -329,7 +329,6 @@ jobs:
         env:
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
           PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
@@ -340,7 +339,6 @@ jobs:
           missing=""
           need() { test -n "$2" || missing="$missing $1"; }
           need OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
-          need AI_GATEWAY_API_KEY "$AI_GATEWAY_API_KEY"
           need PARALLAX_JUDGE_API_KEY "$PARALLAX_JUDGE_API_KEY"
           need PARALLAX_JUDGE_BASE_URL "$PARALLAX_JUDGE_BASE_URL"
           need PARALLAX_JUDGE_MODELS "$PARALLAX_JUDGE_MODELS"
@@ -520,7 +518,6 @@ jobs:
           FASTBROWSE_HOSTED_API_KEY: ${{ secrets.FASTBROWSE_HOSTED_API_KEY }}
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
           PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}

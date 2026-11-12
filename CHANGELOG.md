@@ -13,7 +13,13 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.11.0] - 2026-11-12
 
-- The eval harness follows Parallax's OpenRouter Jev interface while preserving the proved Opus-only v5 request and receipt identity. The dev16 dependency lock records the published PyPI artifacts ([#889](https://github.com/agent-labs-dev/fastbrowse/issues/889)).
+- Browser and HTTP captures end earlier heading context at the same or deeper rank when reading a repeated record, including a group heading with the same rank. Browser heading paths also follow heading ranks when a page skips levels.
+
+- String field extraction preserves long quotes once with labeled boundaries when repeated prefixes and suffixes would exceed the decision provider's context. Selected values still copy exact source spans ([#1068](https://github.com/agent-labs-dev/fastbrowse/issues/1068)).
+
+- With publisher access configured, CI can submit Chrome extension updates for staged Web Store review with short-lived credentials. The package builder omits the development key, and publication requires the matching approved version ([#1063](https://github.com/agent-labs-dev/fastbrowse/issues/1063)).
+
+- The eval harness removes its obsolete gateway route and follows Parallax's OpenRouter Jev interface while preserving the proved Opus-only v5 request and receipt identity. The dev16 dependency lock records the published PyPI artifacts ([#889](https://github.com/agent-labs-dev/fastbrowse/issues/889)).
 
 - Eval publication retains dispatch interruption time under an explicit timing basis and refuses speed comparisons across different clocks ([#1055](https://github.com/agent-labs-dev/fastbrowse/issues/1055)).
 
@@ -2108,7 +2114,7 @@ Fixed in the same release, from tasks that failed in the field:
   LLM to plan and read, and code owning verification, safety and secrets.
 
 [unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.11.0...HEAD
-[0.11.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.11.0
+[0.11.0]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.10.0
 [0.9.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.9.1
 [0.9.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.9.0

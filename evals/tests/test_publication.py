@@ -1522,10 +1522,50 @@ def test_a_default_campaign_publishes_on_the_reference_and_a_refresh_writes_it(
         h.export(hosted=live, ultrafast=None, bu_bench=None, mind2web=None)
 
 
-def test_a_reference_on_another_clock_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_export_retains_a_physical_reference_clock(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    refresh = h.export(ultrafast=None, bu_bench=None, mind2web=None)
+    reference = publication.competitor_reference(refresh, CATALOG, "2026-11-01")
+    body = reference.model_dump(mode="json")
+    physical = next(
+        row for row in body["rows"] if (row["arm"], row["task"], row["repeat"]) == ("browser-use", "pypi-version", 1)
+    )
+    for row in body["rows"]:
+        if row["arm"] == "browser-use":
+            row["dollars"] = None
+    physical.update(
+        status="completed",
+        completed=True,
+        score=1.0,
+        llm_calls=None,
+        jev_calls=0,
+        tokens_per_second=0.0,
+        input_tokens=34339,
+        output_tokens=225,
+        seconds=340.3,
+        dollars=None,
+        physical_runs=2,
+        timing_basis="physical-attempt-wall-time",
+        timing_note=publication.PHYSICAL_TIMING_NOTE,
+    )
+    physical.pop("session_open_seconds", None)
+    physical.pop("session_close_seconds", None)
+    path = tmp_path / "reference.json"
+    path.write_text(json.dumps(body))
+    live = write_ledger(tmp_path, "live", ("fastbrowse", "jev-ultrafast"), task_arms=HOSTED_TASKS, budget_usd=1000.0)
+    candidate = h.export(hosted=live, ultrafast=None, bu_bench=None, mind2web=None, reference=path)
+    group = Candidate.model_validate_json(candidate.model_dump_json()).groups[0]
+    retained = [row.model_dump(mode="json") for row in group.rows if row.arm in publication.REFERENCE_ARMS]
+    assert retained == sorted(body["rows"], key=lambda row: (row["arm"], row["task"], row["repeat"]))
+    assert group.references == reference.arms
+    assert publication.MIXED_TIMING_NOTE in group.limits
+    assert publication.TIMING_NOTE not in group.limits
+
+
+def test_a_reference_with_an_unrecorded_clock_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = reference_file(tmp_path)
     monkeypatch.setattr(publication, "reference_basis", lambda _: None)
-    with pytest.raises(PublicationError, match="another clock"):
+    with pytest.raises(PublicationError, match="unrecorded clock"):
         publication.with_reference(refreshed(tmp_path)[1], path, CATALOG)
 
 

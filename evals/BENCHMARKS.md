@@ -33,6 +33,8 @@ Time and cost are averaged over the attempts that ran, since an attempt that nev
 the arms ran, an attempt is compared only where every arm measured the same repeat, at one task version, outside an
 outage.
 
+Jev routes through OpenRouter by default, or TypeSafe directly when selected. The eval harness does not route through the Vercel AI Gateway or forward its key as a backup.
+
 Credentials per arm (environment variable names; values never enter Git, rows or projections):
 
 | arm | needs |
