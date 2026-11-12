@@ -57,9 +57,9 @@ class Config(Frozen):
     on every step for nothing. Labels are masked as everything Jev reads is.
     """
     plan_ahead: bool = True
-    """Ask with each step's decision which other fields on the page the task needs filled, and fill
-    those in the filled field's form in page order without a decision each, back to deciding as soon
-    as the page changes under them.
+    """Ask which other fields in the chosen field's form need filling, and offer a list read when the task
+    covers its pages. Planned fills return to deciding on a redraw; list reads retain each page's wall
+    checks and let Jev return to ordinary actions before reading it.
     """
     max_upload_bytes: int = Field(default=25 * 1024 * 1024, gt=0)
     """Uploads move as bytes over the DevTools socket; larger files return NEEDS_INPUT with a reason."""

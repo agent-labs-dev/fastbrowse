@@ -270,6 +270,8 @@ pub struct StepContext {
     /// decision of their own while the page stays as it was.
     #[serde(skip)]
     pub plan_ahead: bool,
+    #[serde(skip)]
+    pub list_read: ListRead,
     /// Earlier actions left out of `history` to fit Jev's input limit; the state tells Jev how many.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub omitted_actions: usize,
@@ -308,6 +310,7 @@ impl StepContext {
             screenshot: None,
             ahead: Vec::new(),
             plan_ahead: false,
+            list_read: ListRead::None,
         }
     }
 }
@@ -409,6 +412,26 @@ pub struct Decision {
     /// Other controls to use on this page after this action, in page order, while the page stays as it was.
     #[serde(skip)]
     pub plan: Vec<Planned>,
+    #[serde(skip)]
+    pub read_scope: ReadScope,
+}
+
+/// A list read keeps page judgments while leaving target selection to an ordinary decision.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ListRead {
+    #[default]
+    None,
+    Offer,
+    Continue,
+}
+
+/// These are planner choices, carried out through the existing public Read operation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ReadScope {
+    #[default]
+    Page,
+    List,
+    Return,
 }
 
 impl Decision {
@@ -504,7 +527,7 @@ pub async fn decide(
     let mut tokens = 0;
     // A target is picked from at most `options` groups of at most `group_size`, so no more can be offered at once.
     let max_offered = fitting.group_size() * options;
-    let mut shortlist_tried = controls.len() > max_offered;
+    let mut shortlist_tried = context.list_read != ListRead::Continue && controls.len() > max_offered;
     if shortlist_tried {
         let shortlisted =
             shortlist(jev, &observation, &controls, &context, fitting, ledger, relevance_cache, trace).await?;
@@ -1003,7 +1026,11 @@ pub fn build_request(
     if let Some(reload) = context.reload.as_ref().filter(|url| !urls.contains(url)) {
         urls.push(reload.clone());
     }
-    let offered = offered_operations(observation, &indexed, context, &urls);
+    let offered = if context.list_read == ListRead::Continue {
+        Vec::new()
+    } else {
+        offered_operations(observation, &indexed, context, &urls)
+    };
     let mut questions: IndexMap<String, Question> = IndexMap::new();
     let target_rules = TARGET.as_str();
     questions.insert(
@@ -1040,6 +1067,25 @@ pub fn build_request(
         )
         .into(),
     );
+    if context.list_read != ListRead::None {
+        let Question::Choice(operation) = questions.get_mut(keys::OPERATION).expect("operation question") else {
+            unreachable!("operation is a choice");
+        };
+        if context.list_read == ListRead::Continue {
+            operation.instructions = format!(
+                "{UNTRUSTED}\nThe run is reading a list the task covers, one page at a time. Choose whether to read this page as another page of that same list, or hand it back for an ordinary action decision. Hand it back if it is a different list, an item detail page, a wall, an error, or needs an action before its records can be read. Reading does not declare the task complete."
+            );
+            operation.criteria.insert("stop_list".into(), "Return to an ordinary decision on this page.".into());
+        }
+        if !context.withheld.contains(&Operation::Read)
+            && (context.list_read == ListRead::Continue || offered.contains(&Operation::Read))
+        {
+            operation.criteria.insert(
+                "read_list".into(),
+                "Read this page and continue reading this same list through its observed next-page links, within the pages the task covers. Keep checking each page before reading it.".into(),
+            );
+        }
+    }
     let mut targets: IndexMap<Operation, Vec<Control>> = IndexMap::new();
     let mut groups: IndexMap<Operation, Vec<Vec<Control>>> = IndexMap::new();
     let limit = max_options;
@@ -1219,9 +1265,17 @@ async fn evaluate(
 
     let evaluation = ask(&request.questions).await?;
     let operation_answer = choice_answer(&evaluation, keys::OPERATION)?;
-    let operation = Operation::parse(&operation_answer.choice).ok_or_else(|| {
-        AgentError::Invalid(format!("{} is not a valid Operation", text::repr(&operation_answer.choice)))
-    })?;
+    let read_scope = match operation_answer.choice.as_str() {
+        "read_list" => ReadScope::List,
+        "stop_list" => ReadScope::Return,
+        _ => ReadScope::Page,
+    };
+    let operation = (read_scope != ReadScope::Page)
+        .then_some(Operation::Read)
+        .or_else(|| Operation::parse(&operation_answer.choice))
+        .ok_or_else(|| {
+            AgentError::Invalid(format!("{} is not a valid Operation", text::repr(&operation_answer.choice)))
+        })?;
     let operation_confidence = operation_answer.confidence;
     let mut target: Option<Control> = None;
     let mut tab_id: Option<String> = None;
@@ -1327,6 +1381,7 @@ async fn evaluate(
         })
         .collect();
     Ok(Decision {
+        read_scope,
         plan,
         operation,
         url,
@@ -1768,6 +1823,20 @@ mod tests {
         assert!(!grouped.questions.contains_key("click_target"));
         assert_eq!(grouped.state["elements"][0]["context"], "Card 1");
         assert_eq!(grouped.state["elements"][0]["operations"], json!(["click"]));
+    }
+
+    #[test]
+    fn test_a_list_continuation_respects_a_withheld_read() {
+        let page = observation(vec![link("next")]);
+        let mut context = StepContext { list_read: ListRead::Continue, ..StepContext::new("read every page") };
+        for withheld in [false, true] {
+            context.withheld = if withheld { vec![Operation::Read] } else { Vec::new() };
+            let request = build_request(&page, &page.controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
+            let Question::Choice(operation) = &request.questions[keys::OPERATION] else { unreachable!() };
+            assert_eq!(operation.criteria.contains_key("read_list"), !withheld);
+            assert!(operation.criteria.contains_key("stop_list"));
+            assert!(!request.questions.contains_key("click_target"));
+        }
     }
 
     #[test]

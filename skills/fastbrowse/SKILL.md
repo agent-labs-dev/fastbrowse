@@ -7,6 +7,8 @@ description: Use fastbrowse to complete browser tasks described in natural langu
 
 Delegate a complete browser task to fastbrowse. It chooses page controls, runs the task, and returns an answer
 with evidence and a status. Give it the user's goal and necessary values rather than instructions for each click.
+For a list, state whether the task covers the shown records, every page or a numbered page range. fastbrowse
+can follow the list's next-page links while checking each page; an unfinished range remains partial.
 
 ## Choose an entry point
 

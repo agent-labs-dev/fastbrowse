@@ -214,6 +214,7 @@ pub(super) fn code_decision(operation: Operation, target: Option<Control>) -> De
     Decision {
         replayed: false,
         plan: Vec::new(),
+        read_scope: crate::policy::ReadScope::Page,
         by_code: false,
         operation,
         url: None,
@@ -6738,6 +6739,49 @@ fn pager_agent(page: Arc<HungPage>) -> Agent {
         edits_asked: Default::default(),
     });
     Agent::new(page, jev, Arc::new(ScriptedLLM))
+}
+
+#[test]
+fn a_list_batch_accepts_its_redirect_but_stops_at_range_and_page_boundaries() {
+    use super::batching::ListWalk;
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    read_one(&mut state, &first, Extent::Pages(Some((1, 2))));
+    state.note_pager_pages(&first);
+    assert!(super::batching::offered(&state, &first));
+    let walk = ListWalk::new(&state, &first, "https://list.test/page/2/".into()).unwrap();
+    let second = paged("https://list.test/page/2", "/page/3/");
+    state.arrived_by = Some((super::state::read_key(&second), "https://list.test/page/2/".into()));
+    state.note_pager_pages(&second);
+    assert!(walk.continues(&state, &second));
+    let failed = Observation { response_status: Some(503), ..second.clone() };
+    assert!(!walk.continues(&state, &failed));
+    let covered = Observation { modal: Some("dialog".into()), ..second.clone() };
+    assert!(!walk.continues(&state, &covered));
+    let elsewhere = Observation { url: "https://elsewhere.test/page/2".into(), ..second.clone() };
+    state.arrived_by = Some((super::state::read_key(&elsewhere), "https://list.test/page/2/".into()));
+    assert!(!walk.continues(&state, &elsewhere));
+    let third = paged("https://list.test/page/3/", "/page/4/");
+    let walk = ListWalk::new(&state, &second, third.url.clone()).unwrap();
+    state.note_pager_pages(&third);
+    assert!(!walk.continues(&state, &third), "page three is beyond the selected range");
+    state.extent = Extent::EveryPage;
+    state.note_pager_pages(&paged("https://list.test/another-list/", "/another-list/page/2/"));
+    assert!(!walk.continues(&state, &third), "another list does not inherit the batch");
+}
+
+#[test]
+fn a_list_batch_requires_a_resolved_extent_and_same_origin_pager() {
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    state.note_pager_pages(&first);
+    for extent in [Extent::Shown, Extent::Pages(None)] {
+        state.extent = extent;
+        assert!(!super::batching::offered(&state, &first));
+    }
+    state.extent = Extent::EveryPage;
+    assert!(!super::batching::offered(&state, &paged("https://list.test/", "https://elsewhere.test/page/2/")));
+    assert!(super::batching::offered(&state, &first));
 }
 
 #[tokio::test]

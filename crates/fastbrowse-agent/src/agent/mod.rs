@@ -6,6 +6,7 @@
 //! keyed on a hash of the request body.
 
 mod acting;
+mod batching;
 mod driving;
 mod finishing;
 pub mod helpers;
@@ -919,6 +920,7 @@ impl Agent {
             screenshot: None,
             ahead: self.ahead(state, observation),
             plan_ahead: self.config.plan_ahead,
+            list_read: crate::policy::ListRead::None,
         })
     }
 

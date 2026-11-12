@@ -18,6 +18,14 @@ That loop runs in Rust, in [crates/](../crates): `fastbrowse-agent` holds the ru
 the page and its indexing, `fastbrowse-clients` the Jev and LLM clients, and `fastbrowse-py` builds them as
 `fastbrowse._native` into the wheel ([ADR 0004](adr/0004-rust-core-by-default.md)).
 
+With `plan_ahead` enabled, Jev can choose to read a list across its observed same-origin next-page links when
+the task covers every page or a resolved page range. Each new page still asks Jev whether to read it as part
+of that list or return to ordinary actions, alongside the usual sign-in, bot-check and site-failure questions.
+These requests omit unrelated action and target choices. Every read and navigation remains a separate step
+with its own citations and budget admission. The list read stops on a changed list, dialog, modal, tabs or
+origin, a failed page, a read adding no evidence, or the task's last page. Only the ordinary finish path can
+declare the task complete. `plan_ahead=false` disables list reads and planned field fills.
+
 ## Authorization
 
 Jev judges every model-selected click, drag or key chord, including links, navigation to a caller-supplied address, every Enter press and acceptance of

@@ -22,7 +22,7 @@ use super::state::{FailureCause, Flow, OutputIntent, RunState, SiteFailure, Step
 
 use super::{Agent, REDRAW_WATCH_SECONDS, browsing_deadline};
 use crate::memory::address;
-use crate::policy::{Decision, HistoryEntry, Planned, decide};
+use crate::policy::{Decision, HistoryEntry, ListRead, Planned, ReadScope, decide};
 use crate::retrieval::page_quotes;
 use crate::start::{accept_start, propose_start};
 use crate::verification::RecordSchema;
@@ -63,6 +63,7 @@ impl Agent {
         until: Option<&fastbrowse_core::models::UntilCheck>,
     ) -> Step<fastbrowse_core::models::RunResult> {
         state.extraction_pending = output_schema.is_some();
+        let mut list_walk: Option<super::batching::ListWalk> = None;
         loop {
             state.ledger.check(0.0)?;
             if let Some(stop) = super::out_of_browsing_time(state) {
@@ -111,7 +112,24 @@ impl Agent {
             // is asked on every page a secret covers too.
             // A page reported failed is judged afresh, since a "Loading..." page can fill in under the same document.
             let fresh = state.last_page.as_ref() != Some(&page) || state.page_failed;
-            let check_login = fresh && secrets.is_empty();
+            // A list continuation needs to know a wall is not another list page even when it can sign in.
+            let check_login = fresh && (secrets.is_empty() || list_walk.is_some());
+            state.note_pager_pages(&observation);
+            if self.config.plan_ahead
+                && output_schema.is_none()
+                && state.output_answers.is_some()
+                && super::batching::has_pager(&observation)
+            {
+                self.output_intent(state).await?;
+            }
+            if list_walk.as_ref().is_some_and(|walk| !walk.continues(state, &observation))
+                || state.picked.is_some()
+                || state.redecided
+                || state.replay.is_some()
+                || state.page_failed
+            {
+                list_walk = None;
+            }
             // Jev's pick when it was asked again on this page is the decision here: asking once more would only ask
             // the same question without what went wrong.
             let picked = state
@@ -134,10 +152,25 @@ impl Agent {
             {
                 state.reached_known_pages.push(url.clone());
             }
-            let decision = match picked {
+            let mut decision = match picked {
                 Some(picked) => picked,
                 None => {
                     let mut context = self.context(state, &observation, secrets, check_login, fresh)?;
+                    context.list_read = if list_walk.is_some() {
+                        ListRead::Continue
+                    } else if output_schema.is_none()
+                        && self.config.plan_ahead
+                        && state.replay.is_none()
+                        && super::batching::offered(state, &observation)
+                    {
+                        ListRead::Offer
+                    } else {
+                        ListRead::None
+                    };
+                    if context.list_read == ListRead::Continue {
+                        context.plan_ahead = false;
+                        context.ahead.clear();
+                    }
                     let mut offered = observation.clone();
                     leave_out_idle(state, &mut offered, &mut context);
                     state.mark_read_links(&mut offered);
@@ -165,7 +198,9 @@ impl Agent {
                                 ])
                             });
                         }
-                        None => context.screenshot = self.drawn_viewport(&observation).await?,
+                        None => {
+                            context.screenshot = self.drawn_viewport(&observation).await?;
+                        }
                     }
                     let redecided = state.redecided;
                     let deciding = self.trace.phase("decide", async {
@@ -207,7 +242,6 @@ impl Agent {
                 }
             };
             self.record_page(state, &observation);
-            state.note_pager_pages(&observation);
             state.choices = self.choices(&decision);
             judge_site(state, &observation, &decision);
             if let Some(probability) = decision.login_required {
@@ -275,7 +309,13 @@ impl Agent {
                 // What the wall means is the task's to say, asked of the task alone and combined here: credentials it
                 // gives are a sign-in to carry out, and a question about the restriction is answered by the wall.
                 match self.sign_in_needs(state).await? {
-                    Some(needs) if needs.credentials || needs.inspects => {}
+                    Some(needs) if needs.inspects => {}
+                    Some(needs) if needs.credentials => {
+                        if list_walk.is_some() && decision.read_scope == ReadScope::List {
+                            list_walk = None;
+                            continue;
+                        }
+                    }
                     // A route the task does not need an account for is walled, not the task: the run goes another way,
                     // and ends needing a sign-in only once its recoveries are spent.
                     Some(needs) if !needs.account => {
@@ -298,6 +338,17 @@ impl Agent {
             // could still be done (#960). Jev judges it from the page and the task; this ends the run on that answer.
             if decision.unobtainable.is_some_and(|probability| probability >= EVEN_ODDS) {
                 return Err(self.unobtainable(state, &observation).await?.into());
+            }
+            if decision.read_scope == ReadScope::Return {
+                list_walk = None;
+                continue;
+            }
+            // A wall can be the answer to the task, but cannot authorize walking the list behind it.
+            if decision.read_scope == ReadScope::List
+                && (state.page_failed || decision.login_required.unwrap_or(0.0) > thresholds.login_required_above)
+            {
+                list_walk = None;
+                decision.read_scope = ReadScope::Page;
             }
             if let Some(shows) = Self::reads_before_leaving(state, &observation, &decision)
                 // The page the run began on is read for an answer only for a task that asks to be told something: a
@@ -340,6 +391,28 @@ impl Agent {
                     self.trace.phase("plan", Box::pin(self.run_plan(state, &observation, &decision.plan))).await?;
                 }
                 other => other?,
+            }
+            if decision.read_scope == ReadScope::List
+                && state.history.last().is_some_and(|entry| entry.read_progress)
+                && state.picked.is_none()
+                && let Some(next) = state.unread_pager_page().cloned()
+            {
+                state.ledger.check(0.0)?;
+                if let Some(stop) = super::out_of_browsing_time(state) {
+                    return Err(Flow::Stop(stop));
+                }
+                let walk = super::batching::ListWalk::new(state, &observation, next.clone());
+                state.pager_followed.insert(next.clone());
+                self.event("list_read_next_page", || Map::from_iter([("url".into(), next.clone().into())]));
+                self.open_by_code(state, &observation, next).await?;
+                list_walk = walk.filter(|_| {
+                    state.picked.is_none()
+                        && state.history.last().is_some_and(|entry| {
+                            entry.operation == Some(Operation::Navigate) && entry.outcome == StepOutcome::Executed
+                        })
+                });
+            } else {
+                list_walk = None;
             }
         }
     }
@@ -398,6 +471,7 @@ impl Agent {
                 offered: Vec::new(),
                 ahead: planned.ahead.clone(),
                 plan: Vec::new(),
+                read_scope: crate::policy::ReadScope::Page,
             };
             self.event("plan_step", || Map::from_iter([("target".into(), self.redact(&planned.target.label).into())]));
             match Box::pin(self.step(state, &observation, &decision)).await {
