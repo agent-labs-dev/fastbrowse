@@ -81,20 +81,19 @@ The extension stores a random identifier for this browser profile, so a run can 
 The policy, including a section on this extension, is at https://www.fastbrowse.ai/privacy
 ```
 
-Every claim above is checked against `background.js` and `popup.js` in this package: the 38 relayed methods are
-`allowed-methods.json`, the "last five runs" and the "Stop all from two runs" are `RECENT` and the `stop-all`
-visibility rule in `popup.js`, and the debugging bar is the `canceled_by_user` branch in `background.js`. Two things
-the copy deliberately does not say: that the extension hides Chrome's debugging bar (it cannot), and that it works
-without the local program (it does not).
+Every claim above is read off this package: the 38 relayed commands are `allowed-methods.json`, "the last five runs"
+and "Stop all once two runs are working" are `RECENT` and the `stop-all` rule in `popup.js`, and the debugging bar is
+the `canceled_by_user` branch in `background.js`. Two things the copy deliberately does not say: that the extension
+hides Chrome's debugging bar (it cannot), and that it works without the local program (it does not).
 
-### What the last revision said, and why it changed
+### What the live 0.1.0 listing said, and why it changed
 
 Version 0.1.0 went live with "Lets fastbrowse runs work in this browser, where you are already signed in, without a
 remote debugging prompt." The second half is true only in a narrow sense: there is no *Allow* prompt to answer, but
 Chrome still shows its bar saying an extension is debugging this browser, and Cancel on that bar stops every run in
 that browser. A listing that promises the prompt is gone makes that bar look like a fault. The replacement leads with
-where the run happens and puts the bar, and the Cancel rule, in the detailed description where a person can read it
-before installing.
+where a run happens and puts the bar, and the Cancel rule, in the detailed description where it can be read before
+installing.
 
 ## Single purpose
 
