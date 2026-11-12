@@ -16,7 +16,7 @@ use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
 use super::chunks::evidence;
-use super::fields::{Candidate, SOURCES_EXPLAINED, ScalarValue, Sources, context};
+use super::fields::{Candidate, SOURCES_EXPLAINED, ScalarValue, Sources, context, tuple_repr};
 use super::text::{Page, SpanKind, cells, slice, spans};
 use crate::batches::evaluate_batches;
 use crate::error::Result;
@@ -189,7 +189,7 @@ fn read_request(
     // Unoffered passages can disqualify a plausible candidate, for example an older version.
     let body = match blocks {
         None => capture.text.clone(),
-        Some(blocks) => blocks.iter().map(|b| page.slice(b.start, b.end)).collect::<Vec<_>>().join("\n...\n"),
+        Some(blocks) => passage(page, blocks, "\n...\n"),
     };
     shown.insert("text".into(), body.into());
     if blocks.is_some() {
@@ -197,6 +197,28 @@ fn read_request(
     }
     shown.insert("inaccessible_frames".into(), capture.inaccessible_frames.into());
     (json!({"date": date, "page": Value::Object(shown)}), questions)
+}
+
+/// The text of `blocks` joined by `separator`, each block led by the headings it sits under where the text before it
+/// does not already say them. A passage cut from a page loses the headings above it, and a JSON document's key path
+/// is its only label: a release's upload time reads the same as every other release's (#1069). After a heading the
+/// text implies that heading's path with its own text, after any other block that block's path.
+fn passage(page: &Page<'_>, blocks: &[&Block], separator: &str) -> String {
+    let mut implied: Vec<String> = Vec::new();
+    let mut parts = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        let text = page.slice(block.start, block.end);
+        parts.push(if block.heading_path.is_empty() || block.heading_path == implied {
+            text.to_string()
+        } else {
+            format!("(headings {})\n{text}", tuple_repr(&block.heading_path))
+        });
+        implied = block.heading_path.clone();
+        if block.kind == BlockKind::Heading {
+            implied.push(text.to_string());
+        }
+    }
+    parts.join(separator)
 }
 
 /// Whether the state and the questions fit in one request to Jev.
@@ -231,7 +253,7 @@ async fn focus<'a>(
     }
     let mut questions: IndexMap<String, Question> = IndexMap::new();
     for (i, blocks) in windows.iter().enumerate() {
-        let joined = blocks.iter().map(|b| page.slice(b.start, b.end)).collect::<Vec<_>>().join("\n");
+        let joined = passage(page, blocks, "\n");
         let length = text::len(&joined);
         // A block longer than a window is asked about in pieces: a passage scored on its opening alone could hide the
         // current version below an outdated one.
@@ -843,5 +865,40 @@ mod tests {
         let values: Vec<String> =
             read_candidates(&captured, None).into_iter().map(|candidate| candidate.value.to_str()).collect();
         assert_eq!(values, ["https://example.test/x.png"]);
+    }
+
+    #[test]
+    fn a_passage_names_the_headings_its_own_text_does_not() {
+        let path = |parts: &[&str]| parts.iter().map(|part| part.to_string()).collect::<Vec<_>>();
+        let mut page = capture(&[
+            (BlockKind::Heading, "releases"),
+            (BlockKind::Heading, "2.34.2"),
+            (BlockKind::Heading, "upload_time"),
+            (BlockKind::Paragraph, "2026-08-31"),
+            (BlockKind::Heading, "size"),
+            (BlockKind::Paragraph, "64000"),
+        ]);
+        let paths = [
+            &[][..],
+            &["releases"],
+            &["releases", "2.34.2", "0"],
+            &["releases", "2.34.2", "0", "upload_time"],
+            &["releases", "2.34.2", "0"],
+            &["releases", "2.34.2", "0", "size"],
+        ];
+        for (block, parts) in page.blocks.iter_mut().zip(paths) {
+            block.heading_path = path(parts);
+        }
+        let read = Page::new(&page);
+        let blocks: Vec<&Block> = page.blocks.iter().collect();
+        assert_eq!(
+            super::passage(&read, &blocks, "\n"),
+            "releases\n2.34.2\n(headings ('releases', '2.34.2', '0'))\nupload_time\n2026-08-31\n(headings ('releases', '2.34.2', '0'))\nsize\n64000"
+        );
+        // A passage cut from below its headings is led by them.
+        assert_eq!(
+            super::passage(&read, &blocks[3..4], "\n"),
+            "(headings ('releases', '2.34.2', '0', 'upload_time'))\n2026-08-31"
+        );
     }
 }
