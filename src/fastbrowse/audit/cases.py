@@ -208,7 +208,7 @@ CASES: tuple[AuditCase, ...] = (
         id="T0.8",
         tier=0,
         purpose="A cloud browser asked for with no BROWSER_USE_API_KEY is refused cleanly, not with a traceback.",
-        argv=("{cli}", "anything at all", "--json"),
+        argv=("{cli}", "anything at all", "--cloud", "--json"),
         assertions=(
             a("names the browser key", "stderr", "contains", "BROWSER_USE_API_KEY"),
             a("no traceback", "stderr", "not_contains", "Traceback"),

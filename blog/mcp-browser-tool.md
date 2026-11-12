@@ -3,9 +3,9 @@ title: MCP browser server with spending limits
 description: fastbrowse-mcp serves one browse tool over MCP with its limits set on the server. What each flag fixes, and what a calling model can and cannot change.
 topic: Coding agents and MCP
 published: 2026-11-01
-updated: 2026-11-04
+updated: 2026-11-12
 verifiedAgainst: v0.9.1
-verifiedOn: 2026-11-07
+verifiedOn: 2026-11-12
 ---
 
 `fastbrowse-mcp` serves one `browse` tool over MCP. Its limits are set when the server starts. A call can ask for less, never more.
@@ -16,7 +16,7 @@ A calling model cannot override these:
 
 | Flag | Effect |
 |:--|:--|
-| `--local`, `--headed`, `--profile DIR`, `--downloads DIR`, `--cursor`, `--no-cursor` | as for the CLI, fixed for every call |
+| `--local`, `--headed`, `--profile DIR`, `--downloads DIR`, `--cursor`, `--no-cursor` | fixed for every call; `--local` starts separate Chrome, and `--headed` or `--profile` imply it |
 | `--cloud-profile ID` | every call runs as that cloud profile |
 | `--allow-authorize` | lets a call pass `authorize`; without it an irreversible action always stops at `needs_confirmation` |
 | `--secret NAME=ENV_VAR@ORIGIN` | typed when a call's start page is on `ORIGIN`; the model sees `NAME` only |
