@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Hosted dispatch outages retain their provider run, session and settled billing receipt instead of losing that evidence when retrying ([#1055](https://github.com/agent-labs-dev/fastbrowse/issues/1055)).
+
 - **Saved observations notice rendering changes without DOM mutations.** A custom element changing its CSS state now refreshes controls, names, positions and hover targets. Reuse checks the rendering facts the saved read consumed, including live selector results, instead of relying on DOM changes alone ([#1050](https://github.com/agent-labs-dev/fastbrowse/issues/1050)).
 
 - The eval embedder forwards a configured Exa key to fastbrowse while keeping inherited provider keys out of isolated adapters ([#1054](https://github.com/agent-labs-dev/fastbrowse/issues/1054)).
