@@ -3,14 +3,14 @@ title: Add a browser skill to Claude Code and Codex
 description: Install the fastbrowse skill so Claude Code or Codex can browse a site and come back with an answer, its quotes and a run status.
 topic: Coding agents and MCP
 published: 2026-11-01
-updated: 2026-11-08
+updated: 2026-11-12
 verifiedAgainst: v0.9.1
-verifiedOn: 2026-11-08
+verifiedOn: 2026-11-12
 ---
 
 The fastbrowse skill lets a coding agent hand a browser task to fastbrowse and get back an answer, the quotes behind it and a run status it can branch on.
 
-The skill is a set of instructions. It tells the agent when to use fastbrowse, which command or tool to call, which browser to prefer, and how to read a result that is not `complete`. You still configure the model key, and a browser key if the agent may use a cloud browser.
+The skill is a set of instructions. It tells the agent when to use fastbrowse, which command or tool to call, which browser to prefer, and how to read a result that is not `complete`. You still configure the model key and install the extension, plus a browser key if the agent may use a cloud browser.
 
 ## Install it
 
@@ -35,10 +35,10 @@ The agent picks fastbrowse up from the skill's description, or you name it. In C
 The skill picks a browser in this order:
 
 1. The browser you name, if you name one.
-2. Otherwise a Browser Use Cloud browser, which passes most bot checks and needs `BROWSER_USE_API_KEY`.
-3. A local headless Chrome when the task needs your localhost or that key is not set.
+2. Otherwise your own Chrome through the [fastbrowse extension](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop), signed in as you are and able to reach your localhost.
+3. A Browser Use Cloud browser (`--cloud`), which passes most bot checks and needs `BROWSER_USE_API_KEY`, when the task needs a clean browser or no extension is connected.
 
-It drives a Chrome you already have open only when you give it that browser's DevTools address. A local browser needs only the model key, and an already signed-in browser needs no credential.
+The command line has no `--headed`, `--profile`, `--cdp-url` or `--cdp-port`, so a DevTools address, a kept profile or a headless Chrome goes through an SDK. Your own Chrome needs only the model key and the extension, and no browser credential.
 
 Behind the skill, the agent calls the CLI or an MCP server. Either way the run reports a status. `complete` means the task was verified, and the other statuses say what was missing: an input, an authorization, evidence for a claim, or access to the page.
 

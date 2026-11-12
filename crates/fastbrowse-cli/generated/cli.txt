@@ -12,7 +12,7 @@ usage: fastbrowse [-h] [--version] [--start START] [--context CONTEXT]
                   [--cursor | --no-cursor]
                   task
 
-Run one browser task.
+Run one browser task in your own Chrome through the fastbrowse extension.
 
 positional arguments:
   task
@@ -24,18 +24,14 @@ options:
                         the task if omitted
   --context CONTEXT     background the run may use but never treats as part of
                         the task, such as where the request came from
-  --cloud               use cloud Chrome, overriding local environment
-                        defaults
-  --local               use local Chrome instead of a Browser Use Cloud
-                        browser
-  --headed              show the local Chrome window (implies --local)
-  --profile PROFILE     Chrome profile directory kept between runs (implies
-                        --local)
+  --cloud               use Browser Use Cloud instead of the extension
+  --local               use your own Chrome through the extension (the default)
+  --headed              unsupported: local CLI browsing requires the extension
+  --profile PROFILE     unsupported: use a profile with the extension installed
   --cloud-profile ID    a Browser Use Cloud profile to run signed in as
-  --cdp-url URL         attach to a browser already running at this CDP
-                        websocket URL, instead of starting one
-  --cdp-port PORT       attach to a browser or Electron app on this DevTools
-                        port (http://127.0.0.1:<port>/json/version)
+                        (requires --cloud)
+  --cdp-url URL         unsupported in the CLI: use the SDK for CDP connections
+  --cdp-port PORT       unsupported in the CLI: use the SDK for CDP connections
   --attach              attach to an existing page/window without creating a
                         new tab or closing it on exit
   --target-match PATTERN
@@ -45,10 +41,11 @@ options:
                         front, to watch it; otherwise a visible window stays
                         in the background
   --proxy-country CC    country the cloud browser browses from, as Browser
-                        Use's two-letter code, e.g. uk (default: us)
+                        Use's two-letter code, e.g. uk (default: us;
+                        requires --cloud)
   --viewport WIDTHxHEIGHT
-                        CSS viewport for owned local Chrome, or the screen
-                        size requested from cloud Chrome; this does not
+                        screen size requested from cloud Chrome (requires
+                        --cloud); this does not
                         emulate mobile, touch, device scale, or user agent
   --authorize           allow irreversible actions without confirmation
   --secret NAME=ENV_VAR[@ORIGIN]
@@ -78,7 +75,7 @@ options:
                         run blocked
   --browser             start a browser from the first step, rather than reading
                         over HTTP until the run needs one
-  --extension           run in your own Chrome, signed in as you are, through
+  --extension           run in your own Chrome (the default), signed in, through
                         the fastbrowse extension (see: fastbrowse extension
                         install)
   --extension-browser LABEL

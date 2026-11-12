@@ -5,8 +5,8 @@
 //! fastbrowse "Send the form" --start https://example.com/contact --authorize --json
 //! ```
 //!
-//! A Browser Use Cloud browser by default, with a URL printed to watch it live. The answer goes to stdout, progress
-//! and warnings to stderr, and the exit code says how the run ended: 0 only for `complete`.
+//! The user's browser through the extension by default; `--cloud` opts into Browser Use Cloud. The answer goes to
+//! stdout, progress and warnings to stderr, and the exit code says how the run ended: 0 only for `complete`.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -445,8 +445,9 @@ fn progress(streams: Streams) -> fastbrowse_core::models::EventHandler {
 /// The exit code of a run that got as far as starting, or the configuration error that stopped it.
 pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationError> {
     let handed = args.cdp_url.is_some() || args.cdp_port.is_some();
-    let extension = args.extension || args.extension_browser.is_some();
-    if args.cloud && (args.headed || args.profile.is_some() || handed || args.fetch || extension) {
+    let explicit_extension = args.extension || args.extension_browser.is_some();
+    let extension = explicit_extension || (!args.cloud && !args.fetch && args.desktop.is_none());
+    if args.cloud && (args.headed || args.profile.is_some() || handed || args.fetch || explicit_extension) {
         return Err(ConfigurationError(
             "--cloud cannot be combined with --headed, --profile, --cdp-url, --cdp-port, --fetch or --extension".into(),
         ));
@@ -459,21 +460,18 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         })
         .transpose()?;
     let limits = limits(args)?;
-    // The operator's own flags are checked before the browser key: with the cloud browser the default, a missing key
-    // would otherwise hide a secret that could never be typed anywhere.
+    // Check secrets before browser setup so a missing credential names what the operator needs to supply.
     let secrets = secrets(&args.secret, args.bitwarden.as_deref(), args.start.as_deref(), &context.environ)?;
     let settings = (context.settings)()?;
     let chrome = if args.cloud {
         None
-    } else if args.fetch || args.desktop.is_some() {
-        // Kept only to be refused: a browserless run has no window to show or profile to keep.
+    } else {
+        // An existing browser cannot take launch options, and a browserless run has no window to shape.
         (args.headed || args.profile.is_some()).then(|| LocalChrome {
             binary: None,
             headed: args.headed,
             profile: args.profile.clone(),
         })
-    } else {
-        Some(options::chrome(&settings, args.headed, args.profile.as_deref(), None))
     };
     let task = RunTask {
         task: args.task.clone(),
@@ -488,7 +486,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         inputs: (!args.input.is_empty()).then(|| args.input.iter().cloned().collect()),
         attachments: attachments(&args.file)?,
         cursor: args.cursor,
-        local: args.local,
+        local: args.local && !extension,
         chrome,
         cloud_profile: args.cloud_profile.clone(),
         cdp_url: args.cdp_url.clone(),
@@ -500,7 +498,7 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         proxy_country: args.proxy_country.clone(),
         fetch: args.fetch,
         browser: args.browser,
-        extension: args.extension,
+        extension,
         extension_browser: args.extension_browser.clone(),
         desktop: args.desktop.clone(),
         ..RunTask::default()

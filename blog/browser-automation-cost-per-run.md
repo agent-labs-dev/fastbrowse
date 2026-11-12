@@ -3,9 +3,9 @@ title: Cap browser automation cost per run
 description: What a fastbrowse run reports it spent, what each charge is for, and how to cap a run with --max-dollars and --max-steps.
 topic: Results and cost
 published: 2026-10-31
-updated: 2026-11-11
+updated: 2026-11-12
 verifiedAgainst: v0.10.1
-verifiedOn: 2026-11-11
+verifiedOn: 2026-11-12
 ---
 
 Every fastbrowse run reports what it spent. `--json` breaks the total down by component, so model calls and verification calls show up as separate lines. Measured cost per run for benchmark tasks is on [the benchmarks page](/benchmarks/).

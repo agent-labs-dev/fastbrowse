@@ -38,7 +38,7 @@ pub fn environment(task: &RunTask, settings: &Settings) -> Result<Option<String>
     let cloud = on_cloud(task);
     let handed = task.cdp_url.is_some() || task.cdp_port.is_some();
     let binary = task.chrome.as_ref().and_then(|chrome| chrome.binary.as_deref());
-    if !(cloud || handed || task.fetch) && find_chrome(binary).is_none() {
+    if !(cloud || handed || task.fetch || task.wants_extension()) && find_chrome(binary).is_none() {
         return refuse("Chrome was not found: install it, or name it in FASTBROWSE_CHROME or in `chrome.binary`");
     }
     let key = if cloud { Some(settings.browser_key()?.to_string()) } else { None };
