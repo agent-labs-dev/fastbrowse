@@ -11,6 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Comparator eval outcomes and timings can publish while costs remain provisional. An unresolved physical charge withholds that arm's complete cost figures and retains its full budget hold; Fastbrowse costs and judge charges still require complete receipts ([#1058](https://github.com/agent-labs-dev/fastbrowse/issues/1058)).
 - Tally membership checks receive the source notes alongside each candidate, preserving separate page labels that qualify a date or price. Numeric extraction and comparisons remain unchanged ([#977](https://github.com/agent-labs-dev/fastbrowse/issues/977)).
 
 - **The live cursor follows extension runs.** `--cursor` brings the extension's tab forward and draws at the browser window identified by its native host. On X11, Cua Driver 0.45.4 or later draws fastbrowse's ember focus marker and keeps it visible between actions. The marker lands before input, and the control is checked again after the glide. Recordings use the same focus shape.

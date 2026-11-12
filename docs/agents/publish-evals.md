@@ -55,9 +55,18 @@ with the same settings. A competitor refresh adds `browser-use`, `browser-use-ul
 passes only by stopping before an unauthorized step, and `browser-harness` also skips the login tasks, so it runs 47.
 `jev-ultrafast` returns no answer, only DONE or BLOCKED, so it runs only the six navigation tasks, which are graded on the
 page a run ends on. The catalog states each reason and the site shows those tasks as not run. An arm that did not run has no rows and the site shows it as not measured. An arm
-that reports neither its model nor its spend carries `"dollars": null` and the site shows its pass rate and seconds with
-"cost not reported". Fastbrowse receipts retain known dollar figures, but an unknown or unsettled line marks
-the total incomplete. A provisional figure is a lower bound, not a settled bill. Hosted session usage also remains provisional after its browser stops: the provider can report delayed charges and supplies no billing-finalized marker. The private `provisional_hosted_cost` receipt preserves the exact amount strings and host query time; `dollars` remains null and `unknown_cost` true. A later read is a separate usage observation, never a replacement for the original receipt. Publication requires complete costs and rejects these provisional totals.
+whose complete cost is unavailable carries `"dollars": null` on every public row. Its grounded outcomes and seconds
+remain publishable, with no cost total, average, ratio or cost winner. An unresolved charge in any contributing
+slot's physical retries withholds that arm's costs across all contributing invocations. Other arms keep their
+complete costs. Fastbrowse still requires complete costs on every physical attempt.
+
+Hosted session usage remains provisional after its browser stops: the provider can report delayed charges and
+supplies no billing-finalized marker. The private `provisional_hosted_cost` receipt preserves the exact amount
+strings and query time; `dollars` remains null and `unknown_cost` true. A later read is a separate usage observation,
+never a replacement for the original receipt or proof of final billing. A later crash can also leave a numeric
+partial receipt with `unknown_cost` true. The unknown flag controls the total; the private partial amount survives.
+Publication replays every unknown attempt at its full original budget hold. Reduced holds, unpriced judges,
+missing grades and incomplete coverage still block publication. Original ledgers remain unchanged.
 
 `browser-use`, `browser-use-ultrafast` and `browser-harness` rows come from `docs/results/competitor-reference.json`, which only
 `publish-candidate` reads. It holds their public rows with the vendor, date, version, browser and campaign of the one
@@ -82,7 +91,7 @@ throughput and cost with the previous approved candidate; wall time is recorded 
 catalog differs from the approved one only by tasks listed under the catalog's `retired` (a site that is gone)
 is compared on the tasks both ran; the earlier catalog is found in Git history by its digest. Any other catalog,
 task or limit difference is a protocol change, published only as described
-under [Changing the protocol](#changing-the-protocol). Unresolved costs, missing grades, incomplete coverage and
+under [Changing the protocol](#changing-the-protocol). Unresolved Fastbrowse costs, unpriced judges, missing grades, incomplete coverage and
 a failed fixture workflow block publication. The fixture receipt is a successful maintainer dispatch of
 `evals.yml` whose head commit is the measured build. When `main` has moved past that build, push a branch at
 it and dispatch the workflow there; a branch run counts only when its commit is in `main`'s history, so the

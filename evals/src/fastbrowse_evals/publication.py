@@ -208,7 +208,10 @@ INTERNAL = {
     "internal-ultrafast": "jev-ultrafast",
     "internal-backend": "fastbrowse-pool",
 }
-SLOT_FIELDS = ("status", "passed", "seconds", "dollars", "llm_calls", "llm_calls_basis", "timing_note")
+SLOT_FIELDS = (
+    "status", "passed", "seconds", "dollars", "unknown_cost", "provisional_hosted_cost",
+    "llm_calls", "llm_calls_basis", "timing_note",
+)  # fmt: skip
 FASTBROWSE_ARMS = {"fastbrowse", "fastbrowse-pool"}
 """Arms that are fastbrowse itself, whose completion is its own `complete` status."""
 HOSTED_ARMS = (
@@ -220,10 +223,6 @@ HOSTED_ARMS = (
     "browser-use-oss",
 )
 """The arms the hosted head-to-head may measure, in display order: any of them its one invocation ran."""
-COST_NOT_REPORTED: set[str] = set()
-"""Arms whose provider does not report what a run cost, so their rows publish the pass rate and seconds with no
-dollars, never a partial charge read as the whole. Empty while Browser Use is the only vendor arm: its hosted
-agent reports its spend. The mechanism stays so a provider that reports nothing can be named again."""
 BROWSER_MODES = {
     "fastbrowse": {"local-chrome", "browser-use-cloud"},
     "fastbrowse-pool": {"fastbrowse-pool"},
@@ -364,24 +363,40 @@ def internal_protocol(
     return concurrency
 
 
+def attempt_dollars(row: dict[str, Any], where: str) -> float | None:
+    """A partial receipt survives a later crash, so its unknown flag decides whether the total is complete."""
+    unknown = row.get("unknown_cost")
+    if not isinstance(unknown, bool):
+        raise PublicationError(f"{where}: unknown_cost must be recorded as a boolean")
+    dollars = None if row.get("dollars") is None else amount(row["dollars"], f"{where}: dollars")
+    if not unknown and dollars is None:
+        raise PublicationError(f"{where}: a known charge requires dollars")
+    if row.get("started") is False and (unknown or dollars != 0.0):
+        raise PublicationError(f"{where}: a refused start must record a known zero charge")
+    if unknown and row["arm"] in FASTBROWSE_ARMS:
+        raise PublicationError(f"{where}: a Fastbrowse attempt has an unknown charge")
+    return None if unknown else dollars
+
+
 def start_gate(journal: list[dict[str, Any]], physical: dict[str, dict[str, Any]], run: dict[str, Any], where: str):
     """Replay an internal campaign's budget journal against its recorded budget and hold. Each run held its agent,
     browser and judge reserves, and settled at its agent spend plus every priced judge attempt."""
     hold = run["reserve_dollars"] + run["browser_reserve_dollars"] + run["judge_reserve_dollars"]
     charges = {}
     for key, row in physical.items():
+        dollars = attempt_dollars(row, where)
         if row.get("started") is False:
             # Its provider refused to start it, so nothing ran or was charged and the ledger settled it at zero.
             charges[key] = 0.0
             continue
-        if row["arm"] in COST_NOT_REPORTED:
-            # Its charge is unknown, so the ledger kept its whole hold (`CampaignBudget.settle`).
-            charges[key] = hold
-            continue
         judge_known, judge_unknown = tracking.SemanticReceipt.model_validate(row.get("semantic_judge")).judgment.cost()
         if judge_unknown:
             raise PublicationError(f"{where}: unpriced judge attempts leave settlement unknown")
-        charges[key] = row["dollars"] + judge_known
+        if dollars is None:
+            # A later usage query cannot prove billing finality, so the original hold remains committed.
+            charges[key] = hold
+            continue
+        charges[key] = dollars + judge_known
     replay_start_gate(journal, charges, run["budget_usd"], hold, where)
 
 
@@ -589,13 +604,7 @@ def invocation(
             raise PublicationError(f"{where}: the retry index is not recorded")
         amount(attempt.get("seconds"), f"{where}: seconds")
         timed(attempt, where)
-        if attempt["arm"] in COST_NOT_REPORTED and attempt.get("started") is not False:
-            if attempt.get("dollars") is not None or attempt.get("unknown_cost") is not True:
-                raise PublicationError(f"{where}: dollars recorded for an arm whose provider reports no cost")
-        else:
-            amount(attempt.get("dollars"), f"{where}: dollars")
-            if attempt.get("unknown_cost"):
-                raise PublicationError(f"{where}: an original attempt has an unknown charge")
+        attempt_dollars(attempt, where)
         slots[str(attempt["arm"]), str(task), repeat].append(attempt)
     if math.fsum(a["dollars"] for a in attempts if a["dollars"] is not None) > run["budget_usd"] + 1e-9:
         raise PublicationError(f"{group_id}: physical spend exceeds its approved campaign budget")
@@ -653,8 +662,7 @@ def invocation(
                 score=1.0 if verdict else 0.0,
                 failure=failure,
                 seconds=math.fsum(a["seconds"] for a in tries),
-                # A null charge is "cost not reported"; the public contract must accept it for such an arm.
-                dollars=None if arm in COST_NOT_REPORTED else math.fsum(a["dollars"] for a in tries),
+                dollars=(None if any(a["unknown_cost"] for a in tries) else math.fsum(a["dollars"] for a in tries)),
                 physical_runs=len(tries),
                 **call_counts(tries),
                 jev_calls=sum(a.get("jev_calls") or 0 for a in tries),
@@ -734,6 +742,11 @@ def internal_group(group_id: str, results: Path | Sequence[Path], catalog: dict[
     if len(policies) != 1:
         raise PublicationError(f"{group_id}: publication requires one matched semantic judge policy")
     unmeasured = set().union(*(item.unmeasured for item in used)) - arms
+    unpriced = {row.arm for item in used for row in item.rows if row.dollars is None}
+    # A newer partial invocation must not turn the older priced slots into a complete arm total.
+    rows = [
+        row.model_copy(update={"dollars": None}) if row.arm in unpriced else row for item in used for row in item.rows
+    ]
 
     def each(values: Iterable[Any]) -> str:
         return " or ".join(f"{value:g}" for value in sorted(set(values)))
@@ -769,10 +782,8 @@ def internal_group(group_id: str, results: Path | Sequence[Path], catalog: dict[
         limits.append(f"Hosted Browser Use max_cost_usd set to {HOSTED_UNCAPPED_USD} to override its provider default")
     if BROWSER_USE_MODES & set(modes.values()):
         limits.append(UNCAPPED_NOTES[1])
-    unreported = sorted(COST_NOT_REPORTED & arms)
     limits += [
-        "Each slot totals seconds and dollars over every physical run including retries; unknown charges block export"
-        + "".join(f"; {arm} reports no cost, so its rows carry none" for arm in unreported),
+        "Each slot totals physical runs including retries; an unresolved charge withholds its arm's complete cost",
         TIMING_NOTE,
         f"Score is the recorded {OPUS_JUDGE.replace('/', ' ')} verdict; completion is the agent's own ending, recorded separately",
     ]
@@ -811,7 +822,7 @@ def internal_group(group_id: str, results: Path | Sequence[Path], catalog: dict[
         digest,
         list(required),
         limits,
-        [row for item in used for row in item.rows],
+        rows,
         used[0].run,
         unjudged=sorted((slot for item in used for slot in item.unjudged), key=lambda s: (s.arm, s.task, s.repeat)),
         sources=sources,

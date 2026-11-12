@@ -6,8 +6,8 @@ and candidate digest, and the site computes every figure from the candidate's pe
 beside it as `data/benchmark-<campaign>.json`, byte for byte. A group the candidate does not hold keeps its file.
 
 Every site system has one of three states in a measured group file: `systems` maps it to the arm whose rows it shows,
-`cost_not_reported` lists the shown systems whose rows carry no cost (`"dollars": null`), so the site shows their pass
-rate and seconds with "cost not reported", and `not_measured` lists the systems with no rows, shown as "Not measured".
+`cost_not_reported` lists the shown systems whose complete cost is unavailable (`"dollars": null`), so the site shows
+their pass rate and seconds without a cost figure. `not_measured` lists systems with no rows, shown as "Not measured".
 `setups` names what each shown system ran, its version and the models its rows reported, where the candidate records
 them.
 A vendor figure the site already shows for the group is kept only as per-task rows over exactly the campaign's tasks.

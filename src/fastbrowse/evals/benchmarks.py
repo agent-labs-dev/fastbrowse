@@ -89,8 +89,8 @@ class Row(PublicModel):
     score: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
     seconds: Amount
     dollars: Amount | None
-    """None when the arm does not report its cost, so its rows carry a pass rate and seconds and the site shows
-    "cost not reported" in place of a cost."""
+    """None when the comparator's complete cost is unavailable. Its outcome and seconds remain measured, while
+    every row of that arm withholds cost rather than reporting a partial total."""
     physical_runs: Annotated[int, Field(gt=0)]
     # The efficiency figures a comparison is normalized onto, so a slow page or a provider's margin cannot move it.
     # Historical omitted metrics keep their old zero default; an explicit basis requires a recorded count.
