@@ -648,7 +648,7 @@ mod benchmark {
 
     pub fn golden_view(result: Value, guards: Value, fingerprint: Value, origin: &str) -> Value {
         let Value::Object(mut view) = result else { panic!("snapshot is not an object: {result}") };
-        for digest in ["document_key", "page_key", "retarget_keys"] {
+        for digest in ["document_key", "page_key", "retarget_keys", "read"] {
             view.remove(digest);
         }
         // A guard holds its document's `performance.timeOrigin` at index 15.
