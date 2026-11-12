@@ -738,6 +738,7 @@ impl CdpPage {
                 for unread in self.session.pending_download_unread() {
                     let why = match unread.reason {
                         PdfUnread::NoReader => "this program has no document reader set up".to_owned(),
+                        PdfUnread::TooLarge => "its decompressed contents or complete text exceed max_download_bytes".to_owned(),
                         PdfUnread::TimedOut => format!("reading it took longer than {PARSE_SECONDS} seconds"),
                         PdfUnread::Unparsable => "it could not be parsed as its declared document format".to_owned(),
                         // Not the file's fault, so not said to be: the run should not judge the document by it.

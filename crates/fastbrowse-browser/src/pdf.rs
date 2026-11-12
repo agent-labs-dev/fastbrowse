@@ -21,6 +21,8 @@ pub enum PdfUnread {
     TimedOut,
     /// The reader answered that the bytes are no PDF it can parse.
     Unparsable,
+    /// The decompressed document or complete output exceeds max_download_bytes.
+    TooLarge,
     /// The reader did not start, ended without an answer, or is from another fastbrowse version. This says nothing
     /// about the file: an older `fastbrowse` binary, or one a package upgrade deleted under a long-running server,
     /// fails here on any PDF.
@@ -89,6 +91,7 @@ async fn text_with_request(
                 Ok((!text.is_empty()).then(|| text.to_owned()))
             }
             Some((Reply::Failed, _)) => Err(PdfUnread::Unparsable),
+            Some((Reply::TooLarge, _)) => Err(PdfUnread::TooLarge),
             Some((Reply::Unsupported, _)) => {
                 crate::warn(
                     "Document text is not read: the document helper process is a fastbrowse of another version. Point it at a \
@@ -159,9 +162,15 @@ pub(crate) mod tests {
         zip.start_file("report.csv", zip::write::SimpleFileOptions::default()).unwrap();
         zip.write_all(b"Item,Amount\nKettle,34.50").unwrap();
         let raw = zip.finish().unwrap().into_inner();
-        let text =
-            text_with_request(&helper("read"), helper::ZIP_TEXT, raw, Duration::from_secs(30)).await.unwrap().unwrap();
+        let text = text_with_request(&helper("read"), helper::ZIP_TEXT, raw.clone(), Duration::from_secs(30))
+            .await
+            .unwrap()
+            .unwrap();
         assert!(text.contains("[Archive member: report.csv]\nItem,Amount\nKettle,34.50"));
+        assert_eq!(
+            text_with_request(&helper("read"), "zip-text:1", raw, Duration::from_secs(30)).await,
+            Err(PdfUnread::TooLarge)
+        );
     }
 
     /// This test binary run as a helper, by [`helper_child`]. A mode just before the marker makes it misbehave.

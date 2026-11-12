@@ -2217,7 +2217,7 @@ async fn capture_download(
     }
     let kind = response_mime(mime);
     let stored_mime = if kind.is_empty() { "application/octet-stream".to_owned() } else { kind.clone() };
-    let readable = readable_text(mime, &raw).await;
+    let readable = readable_text(mime, &name, &raw, shared.max_download_bytes).await;
     let artifact = shared.artifact_sink.put(ArtifactKind::Download, &name, &stored_mime, &raw).await?;
     let mut state = shared.state.lock().unwrap();
     state.artifacts.push(artifact);
@@ -2410,18 +2410,35 @@ fn is_download(mime: &str, disposition: &str) -> bool {
 
 /// The response's text when it is a text file or a PDF the run should be able to read, None for any other file, and
 /// why a PDF went unread.
-async fn readable_text(mime: &str, raw: &[u8]) -> Result<Option<String>, crate::PdfUnread> {
+async fn readable_text(
+    mime: &str,
+    name: &str,
+    raw: &[u8],
+    max_bytes: usize,
+) -> Result<Option<String>, crate::PdfUnread> {
     let kind = response_mime(mime);
-    let request = match kind.as_str() {
+    let declared = match kind.as_str() {
+        "" | "application/octet-stream" | "binary/octet-stream" => {
+            match name.rsplit('.').next().unwrap_or_default().to_ascii_lowercase().as_str() {
+                "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "zip" => "application/zip",
+                "pdf" => "application/pdf",
+                _ => &kind,
+            }
+        }
+        _ => &kind,
+    };
+    let request = match declared {
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => Some(crate::helper::XLSX_TEXT),
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => Some(crate::helper::DOCX_TEXT),
         "application/zip" => Some(crate::helper::ZIP_TEXT),
         _ => None,
     };
     if let Some(request) = request {
-        return crate::pdf::document_text(request, raw.to_vec()).await;
+        return crate::pdf::document_text(&format!("{request}:{max_bytes}"), raw.to_vec()).await;
     }
-    if kind == "application/pdf" {
+    if declared == "application/pdf" {
         return crate::pdf::text(raw.to_vec()).await;
     }
     if !(kind.starts_with("text/") || kind == "application/csv" || kind == "application/json") {
@@ -2622,12 +2639,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn generic_mime_downloads_use_their_declared_filename() {
+        for mime in ["", "application/octet-stream"] {
+            for name in ["report.xlsx", "report.DOCX", "report.zip"] {
+                assert!(readable_text(mime, name, b"invalid document", 1024).await.is_err(), "{mime}: {name}");
+            }
+        }
+        assert!(readable_text("application/octet-stream", "data.bin", b"binary", 1024).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
     async fn text_and_pdf_downloads_are_read_whole() {
         crate::helper::register(crate::testing::test_binary_helper("pdf::tests::helper_child"));
         let raw = vec![b'a'; 100_000];
-        assert_eq!(readable_text("text/csv", &raw).await.unwrap().unwrap().len(), raw.len());
-        assert!(readable_text("application/zip", b"PK").await.is_err());
-        let pdf = readable_text("application/pdf", include_bytes!("../tests/fixtures/wind.pdf")).await;
+        assert_eq!(readable_text("text/csv", "data.csv", &raw, usize::MAX).await.unwrap().unwrap().len(), raw.len());
+        assert!(readable_text("application/zip", "data.zip", b"PK", usize::MAX).await.is_err());
+        let pdf =
+            readable_text("application/pdf", "wind.pdf", include_bytes!("../tests/fixtures/wind.pdf"), usize::MAX)
+                .await;
         assert_eq!(pdf, Ok(Some("Fairbanks Wind".to_owned())));
     }
 

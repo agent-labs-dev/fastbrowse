@@ -10,26 +10,69 @@ use crate::helper::{DOCX_TEXT, XLSX_TEXT, ZIP_TEXT};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-pub(crate) fn parse(request: &str, raw: &[u8]) -> Result<String> {
+pub(crate) fn parse(request: &str, raw: &[u8], max_bytes: usize) -> Result<String> {
+    let mut budget = Budget { remaining: max_bytes, output: max_bytes };
     match request {
-        XLSX_TEXT => spreadsheet(raw),
-        DOCX_TEXT => document(raw),
-        ZIP_TEXT => archive(raw),
+        XLSX_TEXT => spreadsheet(raw, &mut budget),
+        DOCX_TEXT => document(raw, &mut budget),
+        ZIP_TEXT => archive(raw, &mut budget),
         _ => Err("unknown document format".into()),
     }
 }
 
-fn spreadsheet(raw: &[u8]) -> Result<String> {
+#[derive(Debug)]
+pub(crate) struct LimitExceeded;
+impl std::fmt::Display for LimitExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("document contents exceed max_download_bytes")
+    }
+}
+impl std::error::Error for LimitExceeded {}
+
+struct Budget {
+    remaining: usize,
+    output: usize,
+}
+
+impl Budget {
+    // Compressed downloads can expand far beyond their wire size. The caller's download limit applies to the
+    // complete decompressed contents too; exceeding it rejects the document rather than returning truncated text.
+    fn open<'a>(&mut self, raw: &'a [u8]) -> Result<ZipArchive<Cursor<&'a [u8]>>> {
+        let mut archive = ZipArchive::new(Cursor::new(raw))?;
+        for index in 0..archive.len() {
+            let size = usize::try_from(archive.by_index_raw(index)?.size())?;
+            self.remaining = self.remaining.checked_sub(size).ok_or(LimitExceeded)?;
+        }
+        Ok(archive)
+    }
+
+    fn append(&self, out: &mut String, text: &str) -> Result<()> {
+        if text.len() > self.output.saturating_sub(out.len()) {
+            return Err(LimitExceeded.into());
+        }
+        out.push_str(text);
+        Ok(())
+    }
+}
+
+fn spreadsheet(raw: &[u8], budget: &mut Budget) -> Result<String> {
+    budget.open(raw)?;
     let mut workbook = Xlsx::new(Cursor::new(raw))?;
     let mut out = String::new();
     for name in workbook.sheet_names().to_owned() {
         let range = workbook.worksheet_range(&name)?;
-        out.push_str(&format!("[Worksheet: {name}]\n"));
+        budget.append(&mut out, &format!("[Worksheet: {name}]\n"))?;
         if let Some((first_row, first_column)) = range.start() {
             for (row, values) in range.rows().enumerate() {
                 // Coordinates retain the association of empty cells and distinguish sheets with the same labels.
-                out.push_str(&format!("row {} (first column {}): ", first_row as usize + row + 1, first_column + 1));
-                out.push_str(&serde_json::to_string(&values.iter().map(ToString::to_string).collect::<Vec<_>>())?);
+                budget.append(
+                    &mut out,
+                    &format!("row {} (first column {}): ", first_row as usize + row + 1, first_column + 1),
+                )?;
+                budget.append(
+                    &mut out,
+                    &serde_json::to_string(&values.iter().map(ToString::to_string).collect::<Vec<_>>())?,
+                )?;
                 out.push('\n');
             }
         }
@@ -67,8 +110,8 @@ fn word_text(xml: &str) -> Result<String> {
     }
 }
 
-fn document(raw: &[u8]) -> Result<String> {
-    let mut archive = ZipArchive::new(Cursor::new(raw))?;
+fn document(raw: &[u8], budget: &mut Budget) -> Result<String> {
+    let mut archive = budget.open(raw)?;
     // The main part must exist: an arbitrary ZIP of XML is not a Word document.
     archive.by_name("word/document.xml")?;
     let names = archive.file_names().collect::<std::result::Result<Vec<_>, _>>()?;
@@ -83,41 +126,45 @@ fn document(raw: &[u8]) -> Result<String> {
         archive.by_name(&name)?.read_to_string(&mut xml)?;
         let text = word_text(&xml)?;
         if !text.trim().is_empty() {
-            out.push_str(&format!("[Document part: {name}]\n{text}\n"));
+            budget.append(&mut out, &format!("[Document part: {name}]\n{text}\n"))?;
         }
     }
     Ok(out)
 }
 
-fn archive(raw: &[u8]) -> Result<String> {
-    let mut archive = ZipArchive::new(Cursor::new(raw))?;
+fn archive(raw: &[u8], budget: &mut Budget) -> Result<String> {
+    let mut archive = budget.open(raw)?;
     let mut out = String::new();
     for index in 0..archive.len() {
-        let mut file = archive.by_index(index)?;
-        if file.is_dir() {
+        let raw_file = archive.by_index_raw(index)?;
+        if raw_file.is_dir() {
             continue;
         }
-        let name = file.name()?.into_owned();
-        out.push_str(&format!("[Archive member: {name}]\n"));
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)?;
-        let extension = name.rsplit('.').next().unwrap_or_default().to_ascii_lowercase();
-        let text = match extension.as_str() {
-            "xlsx" => spreadsheet(&bytes),
-            "docx" => document(&bytes),
-            "pdf" => pdf_extract::extract_text_from_mem(&bytes).map_err(Into::into),
-            // ZIP has no member MIME type. Read the formats declared by their filename, never guess that a binary
-            // member is prose because some of its bytes happen to decode as UTF-8.
-            "txt" | "csv" | "tsv" | "json" | "xml" | "md" | "html" => {
-                std::str::from_utf8(&bytes).map(str::to_owned).map_err(Into::into)
+        let name = raw_file.name()?.into_owned();
+        drop(raw_file);
+        budget.append(&mut out, &format!("[Archive member: {name}]\n"))?;
+        let text = (|| -> Result<String> {
+            let mut file = archive.by_index(index)?;
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)?;
+            let extension = name.rsplit('.').next().unwrap_or_default().to_ascii_lowercase();
+            match extension.as_str() {
+                "xlsx" => spreadsheet(&bytes, budget),
+                "docx" => document(&bytes, budget),
+                "pdf" => pdf_extract::extract_text_from_mem(&bytes).map_err(Into::into),
+                // ZIP has no member MIME type. Read declared text formats rather than guessing from binary bytes.
+                "txt" | "csv" | "tsv" | "json" | "xml" | "md" | "html" => {
+                    std::str::from_utf8(&bytes).map(str::to_owned).map_err(Into::into)
+                }
+                _ => Err("unsupported member format".into()),
             }
-            _ => Err("unsupported member format".into()),
-        };
+        })();
         match text {
-            Ok(text) => out.push_str(&text),
-            Err(_) => out.push_str("[Member contents were not read: unsupported or invalid document.]"),
+            Ok(text) => budget.append(&mut out, &text)?,
+            Err(error) if error.is::<LimitExceeded>() => return Err(error),
+            Err(_) => budget.append(&mut out, "[Member contents were not read: unsupported or invalid document.]")?,
         }
-        out.push_str("\n\n");
+        budget.append(&mut out, "\n\n")?;
     }
     Ok(out)
 }
@@ -131,10 +178,34 @@ mod tests {
     fn zip(files: &[(&str, &[u8])]) -> Vec<u8> {
         let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
         for (name, body) in files {
-            writer.start_file(*name, SimpleFileOptions::default()).unwrap();
+            writer
+                .start_file(*name, SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored))
+                .unwrap();
             writer.write_all(body).unwrap();
         }
         writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn compressed_archives_are_refused_before_expanding_past_the_download_limit() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file("large.txt", SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated))
+            .unwrap();
+        writer.write_all(&vec![b'x'; 1024 * 1024]).unwrap();
+        let raw = writer.finish().unwrap().into_inner();
+        assert!(raw.len() < 64 * 1024);
+        assert!(parse(ZIP_TEXT, &raw, 64 * 1024).unwrap_err().to_string().contains("max_download_bytes"));
+    }
+
+    #[test]
+    fn a_corrupt_member_does_not_discard_readable_members() {
+        let mut raw = zip(&[("bad.txt", b"FAIL"), ("good.txt", b"Useful evidence")]);
+        let offset = raw.windows(4).position(|bytes| bytes == b"FAIL").unwrap();
+        raw[offset] = b'X';
+        let text = parse(ZIP_TEXT, &raw, usize::MAX).unwrap();
+        assert!(text.contains("[Archive member: bad.txt]\n[Member contents were not read"), "{text}");
+        assert!(text.contains("Useful evidence"), "{text}");
     }
 
     #[test]
@@ -143,19 +214,19 @@ mod tests {
             ("word/document.xml", br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t xml:space="preserve">A </w:t></w:r><w:r><w:t>&amp; B</w:t><w:tab/><w:t>Total</w:t><w:br/><w:t>42</w:t></w:r></w:p></w:body></w:document>"#),
             ("word/header1.xml", b"<hdr><p><r><t>Quarterly report</t></r></p></hdr>"),
         ]);
-        let text = document(&raw).unwrap();
+        let text = parse(DOCX_TEXT, &raw, usize::MAX).unwrap();
         assert!(text.contains("A & B\tTotal\n42"), "{text}");
         assert!(text.contains("Quarterly report"));
-        assert!(document(&zip(&[("unrelated.xml", b"<t>Not Word</t>")])).is_err());
+        assert!(parse(DOCX_TEXT, &zip(&[("unrelated.xml", b"<t>Not Word</t>")]), usize::MAX).is_err());
     }
 
     #[test]
     fn archive_members_keep_names_and_state_what_was_unread_without_writing_paths() {
         let raw = zip(&[("../report.csv", b"Item,Amount\nKettle,34.50"), ("image.bin", b"\0\xff")]);
-        let text = archive(&raw).unwrap();
+        let text = parse(ZIP_TEXT, &raw, usize::MAX).unwrap();
         assert!(text.contains("[Archive member: ../report.csv]\nItem,Amount\nKettle,34.50"));
         assert!(text.contains("[Archive member: image.bin]\n[Member contents were not read"));
-        assert!(archive(b"invalid").is_err());
+        assert!(parse(ZIP_TEXT, b"invalid", usize::MAX).is_err());
     }
 
     #[test]
@@ -167,9 +238,9 @@ mod tests {
             ("xl/_rels/workbook.xml.rels", br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#),
             ("xl/worksheets/sheet1.xml", br#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="2"><c r="B2" t="inlineStr"><is><t>Total</t></is></c><c r="D2"><v>42.5</v></c></row></sheetData></worksheet>"#),
         ]);
-        let text = spreadsheet(&raw).unwrap();
+        let text = parse(XLSX_TEXT, &raw, usize::MAX).unwrap();
         assert!(text.contains("[Worksheet: Revenue]"));
         assert!(text.contains("row 2 (first column 2): [\"Total\",\"\",\"42.5\"]"), "{text}");
-        assert!(spreadsheet(b"invalid").is_err());
+        assert!(parse(XLSX_TEXT, b"invalid", usize::MAX).is_err());
     }
 }

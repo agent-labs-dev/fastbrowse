@@ -36,11 +36,13 @@ pub(crate) enum Reply {
     Failed = 1,
     /// The request is not one this helper knows: it is from another fastbrowse version.
     Unsupported = 2,
+    /// The complete document exceeds the caller's configured download limit.
+    TooLarge = 3,
 }
 
 impl Reply {
     pub(crate) fn from_byte(byte: u8) -> Option<Reply> {
-        [Reply::Text, Reply::Failed, Reply::Unsupported].into_iter().find(|reply| *reply as u8 == byte)
+        [Reply::Text, Reply::Failed, Reply::Unsupported, Reply::TooLarge].into_iter().find(|reply| *reply as u8 == byte)
     }
 }
 
@@ -98,11 +100,19 @@ pub fn serve(args: &[String]) -> Option<i32> {
     }
     let (reply, body) = match &args[1..] {
         [request, protocol] if request == PDF_TEXT && protocol == PROTOCOL => pdf_text(),
-        [request, protocol] if [XLSX_TEXT, DOCX_TEXT, ZIP_TEXT].contains(&request.as_str()) && protocol == PROTOCOL => {
+        [request, protocol]
+            if [XLSX_TEXT, DOCX_TEXT, ZIP_TEXT].contains(&request.split(':').next().unwrap_or_default())
+                && protocol == PROTOCOL =>
+        {
+            let (request, limit) = request
+                .split_once(':')
+                .map_or((request.as_str(), None), |(name, limit)| (name, limit.parse::<usize>().ok()));
+            let max_bytes = limit.unwrap_or(fastbrowse_core::config::Config::default().max_download_bytes as usize);
             let mut raw = Vec::new();
             match std::io::stdin().read_to_end(&mut raw) {
-                Ok(_) => match crate::documents::parse(request, &raw) {
+                Ok(_) => match crate::documents::parse(request, &raw, max_bytes) {
                     Ok(text) => (Reply::Text, text.into_bytes()),
+                    Err(error) if error.is::<crate::documents::LimitExceeded>() => (Reply::TooLarge, Vec::new()),
                     Err(_) => (Reply::Failed, Vec::new()),
                 },
                 Err(_) => (Reply::Failed, Vec::new()),
