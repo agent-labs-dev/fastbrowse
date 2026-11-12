@@ -724,7 +724,7 @@ async fn browser(
         let connection = BrowserConnection {
             attach: task.attach || task.target_match.is_some(),
             target_match: task.target_match.clone(),
-            foreground: task.foreground,
+            foreground,
             ..BrowserConnection::new(format!("{SCHEME}{}#{}", record.display(), task.task), true)
         };
         return Ok((connection, Owned::Extension(Box::new(connected))));
@@ -995,13 +995,20 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
         session = Some(opened.clone());
         opened.open().await?;
         // A cloud or headless browser has no window on this machine to draw over.
+        let extension_pid = match owned.as_ref() {
+            Some(Owned::Extension(host)) => host.browser_pid,
+            _ => None,
+        };
         let shown = task.cursor != Some(false)
             && host.browser_api_key.is_none()
-            && is_loopback(&opened.connection().cdp_url)
-            && (task.cdp_url.is_some() || task.cdp_port.is_some() || chrome.headed);
+            && (extension_pid.is_some()
+                || (is_loopback(&opened.connection().cdp_url)
+                    && (task.cdp_url.is_some() || task.cdp_port.is_some() || chrome.headed)));
         feedback = cursor_feedback(shown).await.map(Arc::new);
         let pointer_marks = Arc::new(std::sync::Mutex::new(Vec::<fastbrowse_browser::pointer::PointerMark>::new()));
-        let mut cdp = CdpPage::new(opened.clone(), config.clone()).with_cursor(feedback.clone());
+        let mut cdp = CdpPage::new(opened.clone(), config.clone())
+            .with_cursor(feedback.clone())
+            .with_cursor_browser_pid(extension_pid);
         if task.record.is_some() {
             cdp = cdp.with_pointer_marks(pointer_marks.clone());
         }

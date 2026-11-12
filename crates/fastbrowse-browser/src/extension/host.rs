@@ -125,6 +125,7 @@ pub async fn run(origin: &str) -> Result<(), HostError> {
         version: hello["version"].as_str().unwrap_or_default().to_owned(),
         protocol: hello["protocol"].as_u64().and_then(|p| u32::try_from(p).ok()).unwrap_or(PROTOCOL),
         pid: std::process::id(),
+        browser_pid: parent_browser_pid(),
         socket: socket_path(&dir, &browser_id),
     };
     let listener = listen(&record.socket)?;
@@ -266,6 +267,19 @@ async fn serve_run<S: AsyncRead + AsyncWrite + Send + 'static>(
     writing.abort();
 }
 
+// Chrome launches the exec-based native-host launcher, so no page-supplied identity enters the cursor mapping.
+fn parent_browser_pid() -> Option<u32> {
+    #[cfg(unix)]
+    {
+        // SAFETY: getppid has no preconditions.
+        u32::try_from(unsafe { libc::getppid() }).ok().filter(|pid| *pid > 1)
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,6 +310,7 @@ mod tests {
             version: String::new(),
             protocol: PROTOCOL,
             pid,
+            browser_pid: None,
             socket: dir.join("b.sock"),
         };
         // A replacement host has rewritten the record: this host leaves it.

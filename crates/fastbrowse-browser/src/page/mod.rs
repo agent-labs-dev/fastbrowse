@@ -517,6 +517,13 @@ impl CdpPage {
         self
     }
 
+    /// Native messaging cannot call browser-level SystemInfo, so the host supplies Chrome's process id.
+    #[cfg(feature = "cursor")]
+    pub fn with_cursor_browser_pid(self, pid: Option<u32>) -> Self {
+        *self.cursor_pid.lock().unwrap() = pid.map(i64::from);
+        self
+    }
+
     pub fn session(&self) -> &BrowserSession {
         &self.session
     }
