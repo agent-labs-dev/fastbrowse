@@ -946,8 +946,7 @@ def _ultrafast_env(cdp_ws: str, runtime: str) -> dict[str, str]:
     env = arm_environment("jev-ultrafast", runtime)
     # The isolated runner cannot import fastbrowse, so it is handed the Jev route the fastbrowse arms are given.
     key_name, base_url, model, key = backend.jev_route()
-    if key is not None:
-        env[key_name] = key
+    env[key_name] = key
     return env | {
         "TEXT_MODEL_API_KEY": backend.openrouter_key(),
         "TEXT_MODEL_BASE_URL": "https://openrouter.ai/api/v1",

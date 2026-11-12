@@ -36,7 +36,6 @@ name: Official benchmarks
 #            LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY (the run's record in the fastbrowse-evals project)
 #            BROWSER_USE_API_KEY (every task runs on a Browser Use Cloud browser)
 #            HF_TOKEN (only for online-mind2web: a token whose account accepted the dataset's access conditions)
-#   secrets, optional: AI_GATEWAY_API_KEY (Jev's backup route)
 #   vars:    PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT (an age public key)
 #            PARALLAX_BU_BENCH_JUDGE, PARALLAX_MIND2WEB_JUDGE (the judge of each suite run, as JSON; see below)
 #            PARALLAX_JUDGE_BASE_URL, PARALLAX_JUDGE_MODELS (Parallax's own pre-check judge, keyed by PARALLAX_JUDGE_API_KEY)
@@ -392,7 +391,6 @@ jobs:
       - name: Run the suite
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
           # The upstream judge reads its key as OPENAI_API_KEY whatever endpoint it calls.
           OPENAI_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
           # Parallax's own pre-check judge, which runs before the upstream judge.
