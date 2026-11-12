@@ -29,8 +29,10 @@ credentials, irreversible actions and spending under the control of code.
   Tasks over a whole list can follow its next-page links, checking each page and preserving its citations.
 - **Code holds the keys.** Submit, pay, delete and send stop until you allow them. A secret is typed only on the
   origin it was declared for, and models only see its name. Step, time and dollar limits are enforced in code.
-- **Any browser.** A Browser Use Cloud browser by default, local Chrome, or any Chromium browser or Electron app
-  that is already running.
+- **Your own Chrome.** The CLI runs in the Chrome you are signed in to, through the
+  [fastbrowse extension](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop),
+  or in a Browser Use Cloud browser with `--cloud`. The SDKs also drive local Chrome and any Chromium browser or
+  Electron app that is already running.
 - **Desktop apps too.** On Linux with Hyprland, `--desktop` starts a native app and drives it through its
   accessibility tree, in the background, with [deskpilot](https://github.com/cjber/deskpilot).
 - **One agent, every interface.** A CLI, a Python library, Node and Go SDKs that need no Python, an MCP
@@ -54,18 +56,18 @@ excludes.
 ## Try it
 
 You need [uv](https://docs.astral.sh/uv/), which fetches Python 3.13 or newer itself, an
-[OpenRouter](https://openrouter.ai/) key and a [Browser Use](https://browser-use.com/) key:
+[OpenRouter](https://openrouter.ai/) key and the
+[fastbrowse extension](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop) in
+Chrome. Run `uvx fastbrowse extension install` once to register it:
 
 ```sh
 export OPENROUTER_API_KEY=...   # Jev, the model that picks each action, and the LLM for start pages, written field values and composed answers
-export BROWSER_USE_API_KEY=...  # the cloud browser; or pass --local to use your own Chrome
 uvx fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/
 ```
 
-With a Browser Use key the cloud browser is the default, because it passes bot checks a fresh local Chrome fails;
-it also prints a URL to watch the run live. Without the key or `--local`, the command stops and asks for one.
-`--local` runs in your own Chrome through the [fastbrowse extension](docs/cli.md#your-own-chrome), signed in as you
-are, and `--launch` starts a separate signed-out Chrome instead.
+A browser task runs in your own Chrome, signed in as you are, through the extension; with no extension connected the
+command stops before it spends anything. Pass `--cloud` with a `BROWSER_USE_API_KEY` for a Browser Use Cloud browser,
+which passes bot checks and prints a URL to watch the run live.
 `AI_GATEWAY_API_KEY` (Vercel AI Gateway) serves the LLM when `OPENROUTER_API_KEY` is unset. With both keys,
 the automatically selected OpenRouter LLM moves to the gateway for the rest of the run if OpenRouter refuses its key.
 Jev can also run through the gateway as a last resort, or another decision host with `FASTBROWSE_DECISION_SOURCE`.
@@ -85,7 +87,7 @@ To work on fastbrowse itself:
 ```sh
 git clone https://github.com/agent-labs-dev/fastbrowse.git && cd fastbrowse
 uv sync --all-extras   # builds the Rust core, so it needs cargo (rustup installs the pinned toolchain)
-cp .env.example .env   # then fill in the keys, or pass --local
+cp .env.example .env   # then fill in the keys
 uv run fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/
 ```
 
@@ -96,11 +98,11 @@ exit code is the status, and only `complete` exits 0.
 ```sh
 export SAUCE_PASSWORD=secret_sauce
 uvx fastbrowse "Log in as standard_user with the saved password and add the backpack to the cart." \
-  --start https://www.saucedemo.com/ --secret password=SAUCE_PASSWORD --authorize --launch
+  --start https://www.saucedemo.com/ --secret password=SAUCE_PASSWORD --authorize
 ```
 
-The [command-line reference](docs/cli.md#flags) has every flag, signed-in profiles and Bitwarden logins, driving open
-windows, Electron and [desktop apps](docs/cli.md#desktop-apps), model and provider settings, and every status with its exit code.
+The [command-line reference](docs/cli.md#flags) has every flag, your own signed-in Chrome and Bitwarden logins, driving open
+windows and [desktop apps](docs/cli.md#desktop-apps), model and provider settings, and every status with its exit code.
 
 ## How it compares
 
@@ -111,7 +113,7 @@ windows, Electron and [desktop apps](docs/cli.md#desktop-apps), model and provid
 | Cited answers | not graded for citations here | no cited-answer result API | answers backed by captured quotes |
 | Signing in | yes | password fields excluded | `--secret` or a Bitwarden vault item; models see names only |
 | Irreversible actions | explicit task instructions in our fixture tests | no authorization parameter in Agent | classifier plus a code-enforced authorization gate |
-| Browser | cloud | Chrome through Browser Harness; cloud in these evals | cloud by default, or local Chrome with `--local` |
+| Browser | cloud | Chrome through Browser Harness; cloud in these evals | your own Chrome through the extension (CLI default) or cloud with `--cloud`; the SDKs add local Chrome |
 
 The Ultrafast column describes
 [commit 1231850a](https://github.com/browser-use/jev-ultrafast/tree/1231850a0bf1a0c0341fe408ef1668dbbfdfac46),
@@ -191,7 +193,8 @@ asyncio.run(main())
 ```
 
 **Choosing the browser.** With no browser argument, `run_task` starts a Browser Use Cloud browser with
-`BROWSER_USE_API_KEY`, or the key in `browser_api_key=`. `chrome=LocalChrome()` runs local Chrome instead, and
+`BROWSER_USE_API_KEY`, or the key in `browser_api_key=`. The CLI defaults to your own Chrome through the extension.
+`chrome=LocalChrome()` runs local Chrome instead, and
 `cloud_extensions=[...]` loads up to three of your account's Browser Use Cloud extensions into a cloud browser. `cdp_url=` or `cdp_port=` drives a browser already running: the run opens and closes its own tab and leaves
 the rest, though cookies the task sets can persist. `attach=True`, `target_match=` and `foreground=True` work as
 the matching flags do. Passing a cloud key and a CDP address together is an error.
@@ -442,7 +445,7 @@ The server's flags set what a calling model may do; a call can ask for less, nev
 
 | Flag | Effect |
 |:--|:--|
-| `--local`, `--launch`, `--headed`, `--profile DIR`, `--foreground`, `--downloads DIR`, `--cursor`, `--no-cursor` | as for the CLI, fixed for every call |
+| `--local`, `--launch`, `--headed`, `--profile DIR`, `--foreground`, `--downloads DIR`, `--cursor`, `--no-cursor` | server browser settings, fixed for every call; `--local` starts separate Chrome, and `--headed` or `--profile` imply it |
 | `--cloud-profile ID` | every call runs as that cloud profile |
 | `--extension`, `--extension-browser LABEL` | every call runs in your own Chrome through the fastbrowse extension; see [Your own Chrome](docs/cli.md#your-own-chrome) |
 | `--allow-authorize` | let a call pass `authorize`; without it irreversible actions always stop at `needs_confirmation` |

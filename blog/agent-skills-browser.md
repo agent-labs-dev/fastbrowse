@@ -10,7 +10,7 @@ verifiedOn: 2026-11-12
 
 The fastbrowse skill lets a coding agent hand a browser task to fastbrowse and get back an answer, the quotes behind it and a run status it can branch on.
 
-The skill is a set of instructions. It tells the agent when to use fastbrowse, which command or tool to call, which browser to prefer, and how to read a result that is not `complete`. You still configure the model key, and a browser key if the agent may use a cloud browser.
+The skill is a set of instructions. It tells the agent when to use fastbrowse, which command or tool to call, which browser to prefer, and how to read a result that is not `complete`. You still configure the model key and install the extension, plus a browser key if the agent may use a cloud browser.
 
 ## Install it
 
@@ -32,9 +32,13 @@ To install by hand, copy `skills/fastbrowse` to `.claude/skills/fastbrowse` for 
 
 The agent picks fastbrowse up from the skill's description, or you name it. In Claude Code: `/fastbrowse Find the top story on Hacker News and return its title with a citation.`
 
-The skill follows the browser choice you give it. Otherwise it prefers Browser Use Cloud, which needs `BROWSER_USE_API_KEY`.
+The skill picks a browser in this order:
 
-For a task that needs your accounts or localhost, name a suitable local browser. A signed-in Chrome can be connected through the fastbrowse extension or its DevTools address. A separate local Chrome is suitable when the task needs no existing sign-in. Browser selection flags depend on the installed CLI version: check `fastbrowse --help` and [the command-line reference](/docs/flags/).
+1. The browser you name, if you name one.
+2. Otherwise your own Chrome through the [fastbrowse extension](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop), signed in as you are and able to reach your localhost.
+3. A Browser Use Cloud browser (`--cloud`), which passes most bot checks and needs `BROWSER_USE_API_KEY`, when the task needs a clean browser or no extension is connected.
+
+The command line has no `--headed`, `--profile`, `--cdp-url` or `--cdp-port`, so a DevTools address, a kept profile or a headless Chrome goes through an SDK. Your own Chrome needs only the model key and the extension, and no browser credential.
 
 For a list, say whether the task covers the shown records, every page or a numbered range. fastbrowse can follow observed next-page links while checking each page and keeping its citations.
 

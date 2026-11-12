@@ -235,7 +235,7 @@ pub fn command(program: &str, args: &[String]) -> (String, i32) {
             } else {
                 out.push_str(&format!(
                     "Now add the extension: {STORE_URL}\nOr load it unpacked from `fastbrowse extension path` with \
-                     Developer mode on. Then pass --extension to a run.\n"
+                     Developer mode on. CLI runs use the extension by default.\n"
                 ));
             }
             (out, 0)

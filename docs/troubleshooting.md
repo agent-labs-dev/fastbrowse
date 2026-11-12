@@ -104,8 +104,7 @@ caller can route it without parsing the error; see [Results](cli.md#results).
 - `--bitwarden ITEM`, when the vault item's saved URIs match `--start`.
 - `--extension`, to run in your own Chrome where you are already signed in. See
   [Your own Chrome](cli.md#your-own-chrome).
-- `--profile DIR` for local Chrome you signed into once by hand, or `--cloud-profile ID` for a Browser Use
-  Cloud profile. See [Signed-in sites](cli.md#signed-in-sites).
+- `--cloud --cloud-profile ID` for a Browser Use Cloud profile, or a local profile through the SDK. See [Signed-in sites](cli.md#signed-in-sites).
 - Over MCP, the server's operator adds the secret with `--secret` or `--bitwarden`, or signs in once in the
   server's `--profile`.
 
@@ -161,12 +160,9 @@ A bot check can block a cloud browser before any task step runs. Credentials do 
 
 **Next step.**
 
-- Retry with an attached local browser (`--cdp-url` or `--cdp-port`, see
-  [Open windows and Electron apps](cli.md#open-windows-and-electron-apps)), or choose another source for
-  the research.
+- Retry in your own Chrome through the extension (the CLI default), or choose another source for the research.
 - Give `--start` a URL past the check.
-- Run headed with a kept profile (`--headed --profile DIR`), solve the check once by hand in that profile,
-  and point later runs at it.
+- Solve the check by hand in the Chrome profile with the extension installed, then retry.
 
 ## budget_exceeded (exit 7)
 
@@ -240,7 +236,7 @@ the task again.
 
 ### An attached Chrome that waits for approval
 
-With `--cdp-url` or `--cdp-port`, the run connects to a browser you started. If that browser never completes
+With SDK `cdp_url` or `cdp_port`, the run connects to a browser you started. The CLI requires the extension instead. If that browser never completes
 the DevTools handshake, the run ends `unavailable` with:
 
 ```text
@@ -281,10 +277,10 @@ frames replaced by their length, and an `extension_tab_lost` event names the fra
 
 ### DevToolsActivePort and finding the DevTools address
 
-`--cdp-port PORT` reads the browser's websocket address from `http://127.0.0.1:PORT/json/version`. When nothing
+SDK `cdp_port=PORT` reads the browser's websocket address from `http://127.0.0.1:PORT/json/version`. When nothing
 there answers with one, the run ends `error` with `no DevTools endpoint at
 http://127.0.0.1:PORT/json/version (<cause>)` or `... named no webSocketDebuggerUrl`. Pass the browser's `ws://`
-address with `--cdp-url` instead.
+address with SDK `cdp_url` instead.
 
 A local Chrome that fastbrowse starts itself picks its own DevTools port and writes it to a file named
 `DevToolsActivePort` in its profile directory, which the run reads. If Chrome exits first, or does not answer

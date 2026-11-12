@@ -137,12 +137,17 @@ async fn test_a_credential_without_a_start_page_is_refused_rather_than_dropped()
 }
 
 #[tokio::test]
-async fn test_cdp_url_hands_run_task_the_url_and_no_cloud_key() {
-    let ran = cli(&["t", "--start", "https://example.com", "--cdp-url", "ws://browser.test/devtools"]).await;
-    assert_eq!(ran.code, 0);
-    let call = ran.call.unwrap();
-    assert_eq!(call.task.cdp_url.as_deref(), Some("ws://browser.test/devtools"));
-    assert!(call.host.browser_api_key.is_none());
+async fn extension_is_the_default_and_local_alias_without_a_chrome_binary_or_cloud_key() {
+    for flags in [&[][..], &["--local"], &["--extension"], &["--local", "--extension"]] {
+        let mut argv = vec!["task"];
+        argv.extend_from_slice(flags);
+        let settings = Settings { chrome: Some("/no/such/chrome".into()), ..model_settings() };
+        let ran = cli_with(&argv, settings, &[], result(Status::Complete)).await;
+        assert_eq!(ran.code, 0, "{}", ran.err);
+        let call = ran.call.unwrap();
+        assert!(call.task.extension && !call.task.local && call.task.chrome.is_none());
+        assert!(call.host.browser_api_key.is_none());
+    }
 }
 
 #[tokio::test]
@@ -152,6 +157,15 @@ async fn test_fetch_starts_no_browser_and_asks_for_no_cloud_key() {
     let call = ran.call.unwrap();
     assert!(call.task.fetch);
     assert!(call.task.chrome.is_none() && call.host.browser_api_key.is_none());
+}
+
+#[tokio::test]
+async fn desktop_does_not_select_the_default_extension() {
+    let ran = cli(&["task", "--desktop", "app"]).await;
+    assert_eq!(ran.code, 0, "{}", ran.err);
+    let call = ran.call.unwrap();
+    assert_eq!(call.task.desktop.as_deref(), Some("app"));
+    assert!(!call.task.extension && call.task.chrome.is_none());
 }
 
 #[tokio::test]
@@ -176,72 +190,38 @@ async fn test_browser_skips_the_read_first_and_refuses_fetch() {
     let ran = cli(&["t", "--start", "https://example.com", "--browser", "--local"]).await;
     assert_eq!(ran.code, 0, "{}", ran.err);
     let call = ran.call.unwrap();
-    assert!(call.task.browser && !call.task.fetch && call.task.chrome.is_some());
+    assert!(call.task.browser && !call.task.fetch && call.task.extension && call.task.chrome.is_none());
     let ran = cli(&["t", "--start", "https://example.com", "--browser", "--fetch"]).await;
     assert!(ran.call.is_none());
     assert!(ran.err.contains("fetch"), "{}", ran.err);
 }
 
 #[tokio::test]
-async fn test_local_runs_in_your_own_chrome_and_launch_starts_one() {
-    // #1005: a signed-out Chrome cannot do a signed-in task, so `--local` reaches the extension.
-    let mut settings = model_settings();
-    settings.chrome = None;
-    let ran =
-        cli_with(&["t", "--start", "https://example.com", "--local"], settings, &[], result(Status::Complete)).await;
-    let call = ran.call.expect(&ran.err);
-    assert!(call.task.wants_extension() && call.host.browser_api_key.is_none());
-    let ran = cli(&["t", "--start", "https://example.com", "--local"]).await;
-    let call = ran.call.expect(&ran.err);
-    assert!(!call.task.wants_extension(), "an explicitly configured Chrome binary selects a launched browser");
-    let ran = cli(&["t", "--start", "https://example.com", "--launch"]).await;
-    let call = ran.call.expect(&ran.err);
-    assert!(call.task.launch && !call.task.wants_extension() && call.host.browser_api_key.is_none());
-    let ran = cli(&["t", "--cloud", "--launch"]).await;
-    assert!(ran.call.is_none() && ran.err.contains("--launch"), "{}", ran.err);
-}
-
-#[tokio::test]
-async fn test_cdp_url_refuses_flags_that_shape_a_started_browser() {
-    for (flag, field) in [
-        (&["--local"][..], "local"),
-        (&["--headed"], "chrome.headed"),
+async fn local_browser_launch_and_cdp_options_cannot_bypass_the_extension() {
+    for (flags, field) in [
+        (&["--headed"][..], "chrome.headed"),
         (&["--profile", "/tmp/kept"], "chrome.profile"),
+        (&["--cdp-url", "ws://browser.test/devtools"], "cdp_url"),
+        (&["--cdp-port", "9222"], "cdp_port"),
         (&["--cloud-profile", "prof_1"], "cloud_profile"),
         (&["--proxy-country", "uk"], "proxy_country"),
+        (&["--viewport", "800x600"], "viewport"),
     ] {
-        let mut argv = vec!["t", "--start", "https://example.com", "--json", "--cdp-url", "ws://browser.test/devtools"];
-        argv.extend_from_slice(flag);
+        let mut argv = vec!["task", "--json"];
+        argv.extend_from_slice(flags);
         let ran = cli(&argv).await;
+        assert!(ran.call.is_none());
         let error = ran.json()["error"].as_str().unwrap().to_string();
-        assert!(error.contains("cdp_url") && error.contains(field), "{error}");
-        assert!(ran.err.contains(field));
+        assert!(error.contains("extension") && error.contains(field), "{error}");
     }
 }
 
 #[tokio::test]
-async fn test_proxy_country_refuses_local_chrome() {
-    // Local Chrome browses from this machine's IP, so a requested country would be silently ignored.
-    let ran = cli(&["t", "--start", "https://example.com", "--json", "--local", "--proxy-country", "uk"]).await;
-    let result = ran.json();
-    assert_eq!(result["status"], "error");
-    assert!(result["error"].as_str().unwrap().contains("proxy_country needs the cloud browser"));
-}
-
-#[tokio::test]
-async fn test_cdp_url_counts_a_profile_from_the_environment() {
-    // FASTBROWSE_PROFILE implies --profile; a handed-over browser refuses it just the same.
-    let settings = Settings { profile: Some("/tmp/kept".into()), ..model_settings() };
-    let argv = ["t", "--start", "https://example.com", "--json", "--cdp-url", "ws://browser.test/devtools"];
-    let ran = cli_with(&argv, settings, &[], result(Status::Complete)).await;
-    assert!(ran.json()["error"].as_str().unwrap().contains("chrome.profile"));
-}
-
-#[tokio::test]
-async fn test_cdp_url_requires_a_websocket_url() {
-    let ran =
-        cli(&["t", "--start", "https://example.com", "--json", "--cdp-url", "https://browser.test/devtools"]).await;
-    assert!(ran.json()["error"].as_str().unwrap().contains("ws://"));
+async fn extension_ignores_environment_launch_defaults() {
+    let settings = Settings { profile: Some("/tmp/kept".into()), headed: true, ..model_settings() };
+    let ran = cli_with(&["task"], settings, &[], result(Status::Complete)).await;
+    assert_eq!(ran.code, 0, "{}", ran.err);
+    assert!(ran.call.unwrap().task.extension);
 }
 
 #[test]
@@ -259,10 +239,16 @@ async fn test_explicit_cloud_overrides_environment_profile() {
         browser_use_api_key: Some(Secret::new("browser-key")),
         ..model_settings()
     };
-    let ran = cli_with(&["task", "--cloud"], settings, &[], fastbrowse_cli::options::error_result("test")).await;
+    let ran = cli_with(
+        &["task", "--cloud", "--cloud-profile", "signed-in", "--viewport", "800x600", "--proxy-country", "uk"],
+        settings,
+        &[],
+        fastbrowse_cli::options::error_result("test"),
+    )
+    .await;
     let call = ran.call.unwrap();
     assert_eq!(call.host.browser_api_key.as_deref(), Some("browser-key"));
-    assert!(call.task.chrome.is_none());
+    assert!(call.task.chrome.is_none() && !call.task.extension);
 }
 
 #[tokio::test]
@@ -284,22 +270,12 @@ async fn test_login_advice_is_added_only_to_cli_output() {
 }
 
 #[tokio::test]
-async fn test_cdp_port_hands_run_task_the_port_and_no_cloud_key() {
-    let argv = [
-        "t",
-        "--start",
-        "https://example.com",
-        "--cdp-port",
-        "9222",
-        "--attach",
-        "--target-match",
-        "app",
-        "--foreground",
-    ];
+async fn extension_can_attach_to_a_named_window() {
+    let argv = ["t", "--start", "https://example.com", "--attach", "--target-match", "app", "--foreground"];
     let ran = cli(&argv).await;
     assert_eq!(ran.code, 0);
     let call = ran.call.unwrap();
-    assert_eq!(call.task.cdp_port, Some(9222));
+    assert!(call.task.extension && call.task.cdp_port.is_none());
     assert!(call.task.attach && call.task.foreground);
     assert_eq!(call.task.target_match.as_deref(), Some("app"));
     assert!(call.host.browser_api_key.is_none());
@@ -336,35 +312,25 @@ async fn files_reach_the_run_as_attachments_under_their_file_names() {
 #[tokio::test]
 async fn test_cannot_combine_cdp_url_and_cdp_port() {
     let argv = [
+        "--cdp-port",
+        "9222",
         "t",
         "--start",
         "https://example.com",
         "--json",
         "--cdp-url",
         "ws://browser.test/devtools",
-        "--cdp-port",
-        "9222",
     ];
     let ran = cli(&argv).await;
     assert!(ran.json()["error"].as_str().unwrap().contains("cdp_url and cdp_port both name"));
 }
 
 #[tokio::test]
-async fn test_attach_requires_cdp() {
+async fn test_attach_uses_the_default_extension() {
     let ran = cli(&["t", "--start", "https://example.com", "--json", "--attach"]).await;
-    assert!(ran.json()["error"].as_str().unwrap().contains("attach and target_match need"));
-}
-
-#[tokio::test]
-async fn test_cdp_port_must_be_a_port() {
-    for bad_port in ["0", "-5", "65536"] {
-        let ran = cli(&["t", "--start", "https://example.com", "--json", "--cdp-port", bad_port]).await;
-        let error = ran.json()["error"].as_str().unwrap().to_string();
-        assert!(
-            error.contains("cdp-port expects a port from 1 to 65535") || error.contains("cdp_port expects"),
-            "{error}"
-        );
-    }
+    assert_eq!(ran.code, 0, "{}", ran.err);
+    let call = ran.call.unwrap();
+    assert!(call.task.extension && call.task.attach);
 }
 
 #[test]
