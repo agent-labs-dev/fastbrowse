@@ -5085,11 +5085,13 @@ async fn an_executed_action_without_a_page_change_keeps_covered_actions_withheld
     assert!(!offers(&offered, Operation::Click, "Contact us"), "{problem:?}");
 }
 
-/// A page every action leaves as it was, which records the label of each control it was sent an action on.
+/// A page every action leaves as it was, which records the label of each control it was sent an action on and the
+/// time each WAIT was given.
 struct Unmoved {
     now: Observation,
     sent: Mutex<Vec<(Operation, Option<String>)>>,
     handed_over: std::sync::atomic::AtomicBool,
+    waits: Mutex<Vec<f64>>,
 }
 
 impl Page for Unmoved {
@@ -5120,6 +5122,16 @@ impl Page for Unmoved {
         Box::pin(async {
             Ok(ActResult { outcome: StepOutcome::Executed, page_changed: false, detail: None, moved: false })
         })
+    }
+
+    fn wait<'a>(
+        &'a self,
+        action: &'a Action,
+        observation: &'a Observation,
+        seconds: f64,
+    ) -> BoxFuture<'a, PageResult<ActResult>> {
+        self.waits.lock().unwrap().push(seconds);
+        self.act(action, observation)
     }
 
     fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
@@ -5162,6 +5174,7 @@ async fn test_an_authorized_click_that_left_the_page_unchanged_is_not_sent_again
         now: at("https://shop.test/basket", &[button("Place order"), button("Keep shopping")]),
         sent: Mutex::new(Vec::new()),
         handed_over: Default::default(),
+        waits: Mutex::default(),
     });
     let script = crate::scripted::steps("click Place order; click Place order; click Place order").unwrap();
     let agent = Agent::new(page.clone(), Arc::new(ScriptedJev::new(script)), Arc::new(ScriptedLLM));
@@ -5175,6 +5188,33 @@ async fn test_an_authorized_click_that_left_the_page_unchanged_is_not_sent_again
     let sent = page.sent.lock().unwrap().clone();
     let placed = sent.iter().filter(|(_, label)| label.as_deref() == Some("Place order")).count();
     assert_eq!(placed, 1, "{sent:?}");
+}
+
+#[tokio::test]
+async fn test_a_wait_is_given_the_time_left_to_browse() {
+    // A fixed five seconds ended a WAIT before a page that updates less often had moved. The run's own time is its bound.
+    for max_seconds in [None, Some(600.0)] {
+        let page = Arc::new(Unmoved {
+            now: at("https://shop.test/queue", &[button("Leave queue")]),
+            sent: Mutex::new(Vec::new()),
+            handed_over: Default::default(),
+            waits: Mutex::default(),
+        });
+        let script = crate::scripted::steps("wait").unwrap();
+        let agent = Agent::new(page.clone(), Arc::new(ScriptedJev::new(script)), Arc::new(ScriptedLLM));
+        let options = super::RunOptions {
+            start: Some("https://shop.test/queue".into()),
+            limits: Some(Limits { max_steps: Some(1), max_seconds, ..Limits::default() }),
+            ..Default::default()
+        };
+        let _ = agent.run("Wait for your turn in the queue", options).await;
+        let waits = page.waits.lock().unwrap().clone();
+        let [seconds] = waits[..] else { panic!("{max_seconds:?}: {waits:?}") };
+        match max_seconds {
+            None => assert_eq!(seconds, f64::INFINITY),
+            Some(limit) => assert!(seconds <= limit && seconds > limit - 30.0, "{seconds} of {limit}"),
+        }
+    }
 }
 
 /// The scripted Jev, judging every action irreversible with `irreversible` and every one requested by the task.
@@ -5210,6 +5250,7 @@ async fn test_the_tab_an_authorized_commit_was_sent_from_is_handed_over() {
             now: at("https://shop.test/basket", &[button("Place order"), button("Keep shopping")]),
             sent: Mutex::new(Vec::new()),
             handed_over: Default::default(),
+            waits: Mutex::default(),
         });
         let jev = Commits(ScriptedJev::new(crate::scripted::steps("click Place order").unwrap()), irreversible);
         let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
@@ -5234,6 +5275,7 @@ async fn test_a_run_that_stops_for_a_person_leaves_them_its_tab() {
             now: at("https://shop.test/basket", &[button("Place order"), button("Keep shopping")]),
             sent: Mutex::new(Vec::new()),
             handed_over: Default::default(),
+            waits: Mutex::default(),
         });
         let jev = Commits(ScriptedJev::new(crate::scripted::steps("click Place order").unwrap()), irreversible);
         let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));

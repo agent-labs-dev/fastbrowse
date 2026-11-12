@@ -871,6 +871,13 @@ impl Agent {
             let dispatched = async {
                 if action.operation == Operation::Search {
                     self.search_web(state.ledger.clone(), action.text.as_deref().unwrap_or_default()).await
+                } else if action.operation == Operation::Wait {
+                    // A WAIT lasts until the page changes, which may be later than any fixed bound: a status line
+                    // rewritten every ten seconds was never seen to move. The run's own deadline is the only bound.
+                    let seconds = browsing_deadline(&state.ledger, state.compose).map_or(f64::INFINITY, |until| {
+                        until.saturating_duration_since(tokio::time::Instant::now()).as_secs_f64()
+                    });
+                    self.page.wait(&action, &raw, seconds).await.map_err(Flow::from)
                 } else {
                     self.page.act(&action, &raw).await.map_err(Flow::from)
                 }
