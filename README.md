@@ -97,6 +97,8 @@ Run fastbrowse in the Chrome you already use, where you are already signed in. Y
 [uv](https://docs.astral.sh/uv/), Chrome and an [OpenRouter](https://openrouter.ai/) API key. Model calls are
 billed by your provider; this mode needs no Browser Use Cloud key.
 
+This build requires extension **0.1.1 or later** with its supported-command list. Store version 0.1.0 cannot connect to this build. If the store does not offer the update yet, run `fastbrowse extension path`, open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked** and select the printed folder.
+
 1. Install the CLI and register it with your browser:
 
    ```sh

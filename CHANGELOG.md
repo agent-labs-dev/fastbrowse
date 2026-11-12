@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **An older Chrome extension names what to update.** A copy without a supported-command list reports that extension 0.1.1 or later is required instead of listing every command as unsupported. The handshake reports the extension version when available and still refuses any missing required command.
+
 - **The live cursor follows extension runs.** `--cursor` brings the extension's tab forward and draws at the browser window identified by its native host. On X11, Cua Driver 0.45.4 or later draws fastbrowse's ember focus marker and keeps it visible between actions. The marker lands before input, and the control is checked again after the glide. Recordings use the same focus shape.
 
 - **Install the Chrome extension from the Web Store.** The setup guide and README link to the store and walk through connecting Chrome and running a first task. The CLI installation output and extension popup point to setup help and explain how to start and stop runs.

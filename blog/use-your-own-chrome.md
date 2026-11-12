@@ -24,6 +24,8 @@ fastbrowse extension install
 
 Next, add the extension from the [Chrome Web Store](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop), then restart Chrome or turn the extension off and on at `chrome://extensions` so it connects. The first task below is the check: with no browser connected, the run ends `unavailable`. Open fastbrowse from Chrome's Extensions menu to see active runs and their **Stop** buttons.
 
+This build requires extension **0.1.1 or later** with its supported-command list. Store version 0.1.0 cannot connect to this build. If the store does not offer the update yet, run `fastbrowse extension path`, open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked** and select the printed folder.
+
 ## Run a read-only task first
 
 `--extension` selects your own Chrome. `--browser` makes this first task open it rather than read the public page over HTTP.

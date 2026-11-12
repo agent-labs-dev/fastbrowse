@@ -12,13 +12,19 @@ Listing limits come from Chrome's developer docs
 
 ## What is live and what is not
 
-The listing is live at extension version 0.1.0 with PyPI fastbrowse 0.10.0. The 0.1.0 package has the background
+The listing is live at extension version 0.1.0. The 0.1.0 package has the background
 worker, `allowed-methods.json`, the manifest and a minimal popup: the runs in this browser, each with **Stop**, and a
 browser name field. It has no icons.
 
 The source tree is at 0.1.1 and adds the popup's **Connected** and **Not connected** status, **Stop all**, recent
 runs, setup help links and conflict hints. Copy that depends on them is marked **0.1.1**. Do not publish it as live
 until 0.1.1 is approved.
+
+**Launch prerequisite:** this build requires 0.1.1 or later and its explicit supported-command list. The
+approved 0.1.0 package lacks that list and three required commands: `DOM.resolveNode`,
+`Runtime.callFunctionOn` and `Page.setInterceptFileChooserDialog`. The CLI refuses it with `unavailable`;
+a native-host connection or a relay-only Stop test does not prove CLI compatibility. Do not announce the
+store setup as working until a compatible package is approved and installed.
 
 ## Short description
 
@@ -173,7 +179,7 @@ Longer post:
 
 - [x] Listing and announcement copy reviewed against the published 0.1.0 package and the 0.1.1 source.
 - [x] `blog/use-your-own-chrome.md` reviewed and registered in `drift.lock`.
-- [x] Site and docs setup uses the published 0.1.0 controls, with a first task to verify the connection.
+- [ ] Compatible 0.1.1 Store update approved, installed and verified through the current CLI handshake.
 
 ### Before submitting 0.1.1
 
@@ -183,6 +189,21 @@ Longer post:
 - [ ] Privacy policy URL states that page content goes to the configured model providers.
 - [ ] Screenshots captured from the submitted build.
 - [ ] Clean-machine walkthrough: the setup steps in the guide, run exactly as written, end with a `complete` result.
+
+### Submit the compatible update
+
+Follow Chrome's [update workflow](https://developer.chrome.com/docs/webstore/update) after the package is reviewed:
+
+1. Open the existing item `ghodfgfhbfaghhfdabopagbfopdjgpop` in the developer dashboard. Do not create another item.
+2. On **Package**, choose **Upload New Package** and select the reviewed 0.1.1 ZIP. Its root contains
+   `manifest.json`, the worker, popup, command list and four icons; omit the development manifest's `key` field.
+3. Confirm version **0.1.1**, the short description above and the six existing permissions. Update the listing,
+   screenshots and privacy fields to describe that package.
+4. Choose **Submit for Review** only with the maintainer's approval. Disable automatic publishing in the
+   confirmation dialog so approval and publication remain separate actions.
+5. After approval, obtain publication approval, publish, install the update in a clean branded Chrome profile
+   and verify its version and current CLI handshake. A successful handshake alone does not prove task completion.
+6. Complete the clean-machine task check above before posting the launch announcements.
 
 ### Publication (needs the maintainer's say-so for each)
 

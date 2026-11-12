@@ -221,6 +221,27 @@ async fn fill_and_send(page: &CdpPage, session: &BrowserSession, url: &str, name
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn the_extension_reports_its_manifest_version_and_supported_commands() {
+    let Some(chrome) = chrome_for_testing() else {
+        eprintln!("Chrome for Testing is not installed; skipping the extension handshake test");
+        return;
+    };
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("extension-hello-{}", std::process::id()));
+    std::fs::create_dir_all(&root).expect("root");
+    let browser = Browser::launch(&chrome, &root);
+    let record: fastbrowse_browser::extension::protocol::HostRecord =
+        serde_json::from_slice(&std::fs::read(browser.record().await).expect("record")).expect("host record");
+    let endpoint = fastbrowse_browser::extension::shim::connect(&record, "handshake", Default::default())
+        .await
+        .expect("compatible extension");
+    let manifest: serde_json::Value =
+        serde_json::from_str(include_str!("../../fastbrowse-browser/extension/manifest.json")).expect("manifest");
+    assert_eq!(endpoint.hello["extensionVersion"], manifest["version"]);
+    assert_eq!(endpoint.hello["protocol"], fastbrowse_browser::extension::protocol::PROTOCOL);
+    assert_eq!(endpoint.hello["methods"], json!(fastbrowse_browser::extension::protocol::allowed_methods()));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn a_run_drives_a_tab_through_the_extension() {
     let Some(chrome) = chrome_for_testing() else {
         eprintln!("Chrome for Testing is not installed; skipping the extension backend test");
