@@ -130,7 +130,7 @@ from fastbrowse_evals.browsers import (
 )
 from fastbrowse_evals.budget import POLICY, BudgetStop, CampaignBudget
 from fastbrowse_evals.evidence import parts, run_evidence, shared_step
-from fastbrowse_evals.final_page import EVIDENCE, VIEWPORT, FinalPage, observe_browser, prepared_tab
+from fastbrowse_evals.final_page import EVIDENCE, VIEWPORT, FinalPage, FrameViewport, observe_browser, prepared_tab
 from fastbrowse_evals.judging import (
     EVIDENCE_QUESTIONS,
     QUESTIONS,
@@ -336,6 +336,9 @@ def bot_check_block(outcome: Outcome, report: "ArmReport") -> bool:
     )
 
 
+FINAL_CAPTURE_FIELDS = {"final_page_capture", "final_page_capture_viewport", "final_page_capture_withheld"}
+
+
 def judge_state(task: LiveTask, truth: object, outcome: Outcome, report: "ArmReport") -> dict[str, JsonValue]:
     """Everything the judge is shown of one run: the task, its intended outcome and the arm's observations."""
     return {
@@ -353,7 +356,18 @@ def judge_state(task: LiveTask, truth: object, outcome: Outcome, report: "ArmRep
         "final_controls": json_value(outcome.controls),
         "quotes": json_value(outcome.quotes),
         "final_page_unobservable": outcome.unobservable,
-        "report": json_value(report),
+        **({"final_page_capture": report.final_page_capture} if report.final_page_capture else {}),
+        **(
+            {"final_page_capture_viewport": json_value(report.final_page_capture_viewport)}
+            if report.final_page_capture_viewport
+            else {}
+        ),
+        **(
+            {"final_page_capture_withheld": report.final_page_capture_withheld}
+            if report.final_page_capture_withheld
+            else {}
+        ),
+        "report": json_value(report.model_dump(mode="json", exclude=FINAL_CAPTURE_FIELDS)),
     }
 
 
@@ -406,7 +420,9 @@ NO_EVIDENCE = "the run left no record of a page or an action, so its answer cann
 
 def no_evidence(state: Mapping[str, JsonValue]) -> bool:
     """Whether `state` holds only the run's answer: a judge would have nothing to check it against."""
-    return not (state.get("pages") or state.get("timeline") or state.get("final_page"))
+    return not (
+        state.get("pages") or state.get("timeline") or state.get("final_page") or state.get("final_page_capture")
+    )
 
 
 def shown_to(policy: str, state: dict[str, JsonValue], ending: Ending) -> dict[str, JsonValue]:
@@ -417,6 +433,8 @@ def shown_to(policy: str, state: dict[str, JsonValue], ending: Ending) -> dict[s
     `OPUS_V2_POLICY` the report leaves out the agent's own model traffic: those request and response
     bodies are not task evidence, no vendor arm exposes them, and they took one row's state from 19 KB to 1.8 MB, past
     the judge's window. The ledger row keeps everything, and earlier policies are shown the state as they always were."""
+    if policy != JUDGE_POLICY and FINAL_CAPTURE_FIELDS.intersection(state):
+        state = {k: v for k, v in state.items() if k not in FINAL_CAPTURE_FIELDS}
     report = state.get("report")
     if policy == JUDGE_POLICY:
         if "pages" in state or not isinstance(report, dict):
@@ -629,6 +647,9 @@ class ArmReport(BaseModel):
     events: list[object] = []
     unknown_cost: bool | None = None
     observe_error: str | None = None
+    final_page_capture: str | None = None
+    final_page_capture_viewport: FrameViewport | None = None
+    final_page_capture_withheld: str | None = None
     seconds_by_call: dict[str, float] = {}
     # The stable efficiency measures: tokens the model calls sent and how long those calls' own seconds were.
     # Wall clock and cloud load move together, so neither can compare two builds; this can.
@@ -870,7 +891,9 @@ async def fast_arm(
         if browser is None:
             final = FinalPage(url=result.final_url, error="the run opened no browser")
         else:
-            final = await observe_browser(browser.cdp_url, url=result.final_url)
+            final = await observe_browser(
+                browser.cdp_url, url=result.final_url, secrets=task.secrets if not task.bitwarden_item else None
+            )
     finally:
         if browser is not None:
             await tab.__aexit__(None, None, None)
@@ -979,7 +1002,12 @@ async def ultrafast_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path
         # the same observer every arm's final page goes through.
         final = ran.final_page
         if final.error is None:
-            final = await observe_browser(cloud.cdp_url, url=final.url, evidence=final.evidence)
+            final = await observe_browser(
+                cloud.cdp_url,
+                url=final.url,
+                evidence=final.evidence,
+                secrets=task.secrets if not task.bitwarden_item else None,
+            )
     browser, unpriced = _browser_dollars(cloud.cost)
     dollars = ran.jev_dollars + ran.text_dollars + browser
     unknown = bool(ran.unmetered_requests) or unpriced
@@ -1016,6 +1044,9 @@ async def ultrafast_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path
         unmetered_requests=ran.unmetered_requests,
         text_model=ran.text_model,
         observe_error=final.error,
+        final_page_capture=final.frame,
+        final_page_capture_viewport=final.frame_viewport,
+        final_page_capture_withheld=final.frame_withheld,
     )
     return Outcome(None, None, final.url, None, final.controls, *_page_of(final)), report
 
@@ -1433,7 +1464,9 @@ def _hosted_event_at(events: Sequence[Any], kinds: set[str]) -> datetime | None:
     return next((e.ts for e in events if e.type in kinds), None)
 
 
-async def hosted_final_page(client: Any, http: httpx.AsyncClient, browser_id: str | None) -> FinalPage:
+async def hosted_final_page(
+    client: Any, http: httpx.AsyncClient, browser_id: str | None, *, secrets: Mapping[str, str] | None = None
+) -> FinalPage:
     """The page the hosted agent's browser ended on, read through that browser's DevTools address while its
     `keepAlive` holds it open."""
     if browser_id is None:
@@ -1445,7 +1478,7 @@ async def hosted_final_page(client: Any, http: httpx.AsyncClient, browser_id: st
         websocket = await devtools_websocket(http, browser.cdp_url)
     except Exception as exc:
         return FinalPage(error=f"the hosted run's browser did not answer ({type(exc).__name__})")
-    return await observe_browser(websocket)
+    return await observe_browser(websocket, secrets=secrets)
 
 
 def hosted_v4_steps(events: Sequence[Any], secrets: Mapping[str, str]) -> tuple[list[JsonValue], list[str]]:
@@ -1503,7 +1536,9 @@ async def _hosted_finish(
     final = (
         FinalPage(error="the hosted run could not be dispatched")
         if dispatch_failed
-        else await hosted_final_page(client, http, browser_id)
+        else await hosted_final_page(
+            client, http, browser_id, secrets=task.secrets if not task.bitwarden_item else None
+        )
     )
     if isinstance(run.output, dict | list):
         answer, data = json.dumps(run.output), (run.output if isinstance(run.output, dict) else None)
@@ -1580,6 +1615,9 @@ async def _hosted_finish(
         if dispatch_failed
         else [],
         observe_error=final.error,
+        final_page_capture=final.frame,
+        final_page_capture_viewport=final.frame_viewport,
+        final_page_capture_withheld=final.frame_withheld,
     )
     if dispatch_failed:
         # Dispatch can open a billable browser, so preserve its usage snapshot before retrying the outage.
@@ -1904,6 +1942,9 @@ async def _fast_report(
         failure_class=BROWSER_TRANSPORT if TRANSPORT_ERROR.search(result.error or "") else None,
         unknown_cost=cost.has_unknown,
         observe_error=seen.final.error,
+        final_page_capture=seen.final.frame,
+        final_page_capture_viewport=seen.final.frame_viewport,
+        final_page_capture_withheld=seen.final.frame_withheld,
         seconds_by_call=cost.seconds_by_call(),
         **efficiency(cost),
         model=backend.providers(),
@@ -2255,7 +2296,10 @@ async def oss_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | Non
                 _watch("browser-use-oss", task, ready.live_url)
                 ran = _OssResult.model_validate(await receive("result"))
                 seconds = session_answered() - began
-                final = await observe_browser(await devtools_websocket(http, ready.cdp_url))
+                final = await observe_browser(
+                    await devtools_websocket(http, ready.cdp_url),
+                    secrets=task.secrets if not task.bitwarden_item else None,
+                )
                 closing = time.monotonic()
                 await send({})
                 stopped = _OssStopped.model_validate(await receive("stopped"))
@@ -2278,6 +2322,9 @@ async def oss_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | Non
         error=ran.error,
         model=OSS_MODEL,
         observe_error=final.error,
+        final_page_capture=final.frame,
+        final_page_capture_viewport=final.frame_viewport,
+        final_page_capture_withheld=final.frame_withheld,
         provenance={"llm_cost_basis": OSS_LLM_COST}
         | ({} if ran.step_ceiling is None else {"upstream_max_steps": ran.step_ceiling})
         | ({} if ran.timeout_ceiling is None else {"upstream_timeout_seconds": ran.timeout_ceiling}),
@@ -2338,7 +2385,7 @@ async def harness_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path |
                 await _invoke(HARNESS_COMMAND, HARNESS_RUNNER, request, env, runtime, graceful=True)
             )
         session_answered()
-        final = await observe_browser(cloud.cdp_url)
+        final = await observe_browser(cloud.cdp_url, secrets=task.secrets if not task.bitwarden_item else None)
     browser, unpriced = _browser_dollars(cloud.cost)
     unknown = ran.dollars is None or unpriced
     return Outcome(ran.answer, ran.data, final.url, None, final.controls, *_page_of(final)), ArmReport(
@@ -2360,6 +2407,9 @@ async def harness_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path |
         output_tokens=ran.output_tokens,
         provenance=ran.provenance | {"cached_input_tokens": ran.cached_input_tokens},
         observe_error=final.error,
+        final_page_capture=final.frame,
+        final_page_capture_viewport=final.frame_viewport,
+        final_page_capture_withheld=final.frame_withheld,
         artifact=str(artifact),
         cost_by_component=({} if unpriced else {"browser": round(browser, 5)})
         | ({} if ran.dollars is None else {"llm": round(ran.dollars, 5)}),
@@ -2448,6 +2498,9 @@ async def cua_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | Non
         unknown_cost=True,
         provenance=ran.provenance,
         observe_error=final.error,
+        final_page_capture=final.frame,
+        final_page_capture_viewport=final.frame_viewport,
+        final_page_capture_withheld=final.frame_withheld,
         artifact=str(artifact),
     )
 

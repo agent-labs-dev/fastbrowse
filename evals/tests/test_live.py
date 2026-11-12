@@ -2487,7 +2487,7 @@ async def test_the_hosted_agents_final_page_is_read_through_its_kept_alive_brows
     async def websocket(_http: Any, url: str) -> str:
         return url.replace("https://", "wss://")
 
-    async def observe(url: str) -> FinalPage:
+    async def observe(url: str, *, secrets: object = None) -> FinalPage:
         seen.append(url)
         return FinalPage(url="https://pypi.org/project/httpx/")
 
