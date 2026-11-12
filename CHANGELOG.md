@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Install the Chrome extension from the Web Store.** The setup guide and README link to the store and walk through connecting Chrome and running a first task. The CLI installation output and extension popup point to setup help and explain how to start and stop runs.
+
 - The eval browser helper preserves Chrome's exit status when Chrome stops before its owner closes the pipe, instead of aborting during Python shutdown ([#1061](https://github.com/agent-labs-dev/fastbrowse/issues/1061)).
 
 - Release comparisons reject missing or unknown costs and invalid timing measurements instead of treating them as zero ([#1059](https://github.com/agent-labs-dev/fastbrowse/issues/1059)).

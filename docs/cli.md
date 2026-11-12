@@ -58,18 +58,39 @@ of its own, a headless Chrome or a DevTools endpoint is the Python, Node and Go 
 
 ### Your own Chrome
 
-A browser task runs in the Chrome you already use, signed in to everything you are signed in to, with no approval
-prompt. `--extension` is the default and `--local` is an alias for it. Pass `--cloud` for a Browser Use Cloud
-browser, `--fetch` to read over HTTP, or `--desktop` for a desktop app. Set it up once:
+A browser task runs in the Chrome you already use, where you are already signed in. `--extension` is the default
+and `--local` is an alias for it. Pass `--cloud` for a Browser Use Cloud browser, `--fetch` to read over HTTP, or
+`--desktop` for a desktop app. Start tasks from your terminal; the extension connects fastbrowse to Chrome and
+shows the runs you can stop.
 
-1. Run `fastbrowse extension install`. It registers fastbrowse with Chrome, Chromium, Edge and Brave, and prints
-   how to add the extension.
-2. Install [fastbrowse from the Chrome Web Store](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop).
+You need Chrome, [uv](https://docs.astral.sh/uv/) and an [OpenRouter](https://openrouter.ai/) API key.
+Model calls are billed by your provider. You do not need a Browser Use Cloud key for this mode.
 
-Then run a task:
+1. Install fastbrowse and configure your model key:
+
+   ```sh
+   uv tool install fastbrowse
+   export OPENROUTER_API_KEY=...  # replace with your key
+   ```
+
+2. Run `fastbrowse extension install`. It registers the installed program with the Chromium browsers it finds
+   for your user. Chrome, Chromium, Edge and Brave are supported on Linux, macOS and Windows.
+3. [Add fastbrowse to Chrome](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop).
+   Open it from Chrome's Extensions menu to see runs and their **Stop** buttons.
+4. Run a task that reads a public page:
+
+   ```sh
+   fastbrowse "What is the title of the top story?" --start https://news.ycombinator.com/ --extension --browser
+   ```
+
+A run that reaches the page confirms the connection. If it ends `unavailable` with no browser connected,
+restart Chrome or turn the extension off and on, then [check the connection](troubleshooting.md#the-extension-is-not-connected).
+The terminal prints the answer and status. Only `complete` means the whole task was verified.
+To read a signed-in site, use its address and describe what you need:
 
 ```sh
-fastbrowse "Find my last order's delivery date." --start https://www.amazon.com/
+fastbrowse "Find my last order's delivery date. Do not change anything." \
+  --start https://www.amazon.com/ --extension
 ```
 
 `--attach` drives the window you have open instead of a tab of its own, and `--target-match TEXT` picks the window
@@ -82,9 +103,13 @@ debugging the browser. Each run has three ways to stop it, and each ends the run
 which one stopped it: **Stop** in the extension's popup, **Cancel** on that bar (which stops every run in that
 browser), or closing all of the run's tabs.
 
-The extension relays only page-level commands. It cannot read cookies, saved passwords or other sites' storage,
+The extension relays page-level commands, including reading page content and carrying out clicks and typing.
+It cannot read cookies, saved passwords or other sites' storage through browser APIs,
 and fastbrowse accepts connections only from the extension's own ID, over a socket only your user can open. The
-run's [authorization](#flags) rules still apply: a purchase or a message waits for `--authorize`.
+extension sends that content to the local fastbrowse program, which can send it to the model providers you
+configure. The run's [authorization](#flags) rules still apply: actions classified as irreversible wait for
+`--authorize`. Classification can miss a change, so state read-only constraints in your task and check important
+actions yourself.
 
 A run with `--file` needs an extension that can intercept the browser's file chooser. If the run reports that
 interception failed, update the extension. For an unpacked extension, run `fastbrowse extension path` with the
@@ -96,7 +121,10 @@ sends, naming the commands: update the extension from the Chrome Web Store. With
 `--extension-browser LABEL`. `fastbrowse extension install --policy` (Linux) prints a Chrome policy for you to write
 as root, which installs the extension for every profile with no debugging bar and marks Chrome as managed by your
 organization;
-`fastbrowse extension uninstall` removes what `install` wrote.
+`fastbrowse extension uninstall` removes what `install` wrote; remove the extension separately in Chrome.
+
+For extension development, `fastbrowse extension path` writes an unpacked copy. Open `chrome://extensions`,
+turn on Developer mode, choose **Load unpacked** and select that folder. Use the store version for ordinary runs.
 
 **Other extensions can take the run's tab away.** Chrome lets no extension debug a tab while the page holds a frame
 from another extension, and some extensions add one to every page: screen recorders, password managers and writing
