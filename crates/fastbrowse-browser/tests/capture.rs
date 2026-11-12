@@ -319,7 +319,7 @@ async fn test_two_linked_cards_inside_unlabelled_wrappers_remain_separate_record
 #[tokio::test(flavor = "multi_thread")]
 async fn test_sibling_records_do_not_inherit_an_earlier_records_heading() {
     for level in [3, 5] {
-        let markup = include_str!("../../../tests/browser/sites/sibling-record-headings.html")
+        let markup = include_str!("fixtures/sibling-record-headings.html")
             .replace("<h3>", &format!("<h{level}>"))
             .replace("</h3>", &format!("</h{level}>"));
         let Some(h) = icons_with(&markup).await else {
