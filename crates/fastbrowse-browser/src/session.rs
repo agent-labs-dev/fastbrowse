@@ -699,6 +699,15 @@ impl BrowserSession {
         self.send("Accessibility.getFullAXTree", json!({}), Some(session_id)).await
     }
 
+    pub(crate) async fn accessibility_partial_ax_tree(&self, session_id: &str, backend_node_id: i64) -> Result<Value, BrowserError> {
+        self.send(
+            "Accessibility.getPartialAXTree",
+            json!({"backendNodeId": backend_node_id, "fetchRelatives": true}),
+            Some(session_id),
+        )
+        .await
+    }
+
     /// Leave the active tab open when the run ends. A payment or other commit sent from it can still be redirecting
     /// or waiting on a 3-D Secure check when the run stops, and closing the tab would abort it.
     pub fn hand_over_active_tab(&self) {
