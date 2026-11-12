@@ -906,6 +906,11 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
         Some(llm) => llm,
         None => Arc::from(settings.llm(&http)?),
     };
+    let search = settings
+        .exa_api_key
+        .as_ref()
+        .filter(|key| key.is_set())
+        .map(|key| fastbrowse_clients::search::Exa::new(http.clone(), key.clone()));
     let mut fetch_spent: Vec<CostLine> = Vec::new();
     let chrome = task.chrome.clone().unwrap_or_else(|| settings.local_chrome());
     let mut limits = task.limits.clone();
@@ -919,9 +924,19 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
         let on_event = noting(host.on_event.clone(), &told);
         let began = std::time::Instant::now();
         let clients = (jev.clone(), llm.clone());
-        let read =
-            fetched(&task, &host, schema.clone(), &config, http.clone(), clients, origins.clone(), on_event, &told)
-                .await?;
+        let read = fetched(
+            &task,
+            &host,
+            schema.clone(),
+            &config,
+            http.clone(),
+            clients,
+            search.clone(),
+            origins.clone(),
+            on_event,
+            &told,
+        )
+        .await?;
         if task.fetch || !read.needs_browser {
             return Ok(read.result);
         }
@@ -1022,6 +1037,14 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
             cdp = cdp.with_pointer_marks(pointer_marks.clone());
         }
         let page: Arc<dyn Page> = Arc::new(cdp);
+        let page: Arc<dyn Page> = match &search {
+            Some(provider) => Arc::new(fetch::search::SearchPage::new(
+                page,
+                fetch::FetchedPage::new(http.clone(), origins.clone(), host.check_access.clone()),
+                provider.clone(),
+            )),
+            None => page,
+        };
         if let Some(path) = &task.record {
             match Recording::start_with_marks(opened.clone(), path, pointer_marks).await {
                 Ok(started) => *recording.lock().await = Some(started),
@@ -1226,6 +1249,7 @@ async fn fetched(
     config: &Config,
     http: Http,
     (jev, llm): (Arc<dyn DecisionClient>, Arc<dyn LLMClient>),
+    search: Option<fastbrowse_clients::search::Exa>,
     origins: Option<Vec<String>>,
     on_event: EventHandler,
     told: &Told,
@@ -1255,8 +1279,16 @@ async fn fetched(
     let ledger = Arc::new(Ledger::new(task.limits.clone().unwrap_or_default()));
     let redactor = http.trace.redactor().unwrap_or_default();
     let trace = http.trace.clone();
-    let fetched = Arc::new(fetch::FetchedPage::new(http, origins, host.check_access.clone()));
+    let fetched = Arc::new(fetch::FetchedPage::new(http.clone(), origins.clone(), host.check_access.clone()));
     let page: Arc<dyn Page> = fetched.clone();
+    let search_page = search.map(|provider| {
+        Arc::new(fetch::search::SearchPage::new(
+            page.clone(),
+            fetch::FetchedPage::new(http.clone(), origins.clone(), host.check_access.clone()),
+            provider,
+        ))
+    });
+    let page: Arc<dyn Page> = search_page.as_ref().map_or(page, |page| page.clone());
     let agent = Agent::new(page, jev, llm)
         .with_redactor(redactor)
         .with_config(config.clone())
@@ -1288,8 +1320,8 @@ async fn fetched(
     // ends the run blocked, or unverified when the refusal was the screenshot an ending frame asked for. A bot check Jev
     // saw in the document is the other: its script clears it only in a browser.
     let bot_check = result.wall.as_ref().is_some_and(|wall| wall.kind == WallKind::BotCheck);
-    let needs_browser =
-        matches!(result.status, Status::Blocked | Status::Unverified) && (fetched.needed_browser() || bot_check);
+    let needs_browser = matches!(result.status, Status::Blocked | Status::Unverified)
+        && (fetched.needed_browser() || search_page.as_ref().is_some_and(|page| page.needed_browser()) || bot_check);
     let spent = ledger.state().clone();
     Ok(Read { result, needs_browser, spent, resume: agent.resume() })
 }

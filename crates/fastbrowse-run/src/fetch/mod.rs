@@ -12,6 +12,7 @@
 //! exactly that: [`NotFetched`], with the browser left as the only reader.
 
 pub mod html;
+pub mod search;
 
 use std::borrow::Cow;
 use std::io::Read;

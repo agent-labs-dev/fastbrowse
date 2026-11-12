@@ -41,10 +41,11 @@ goes to stdout. Preserve stdout even on a nonzero exit, since it can contain an 
 
 fastbrowse recommends one `OPENROUTER_API_KEY` for Jev and the LLM. `AI_GATEWAY_API_KEY` serves the LLM when
 OpenRouter is absent, and Jev as a last resort; `TYPESAFE_API_KEY` is the direct Jev route. Cloud browsing needs
-`BROWSER_USE_API_KEY`; local browsing needs Chrome. A cloud browser cannot reach the caller's localhost. Check for
-configured keys without printing their values; if missing, ask the user to configure them outside the conversation.
+`BROWSER_USE_API_KEY`; local browsing needs Chrome. Optional `EXA_API_KEY` offers web search without a browser;
+its result links can be read or opened, and search charges count against the run's dollar budget.
+A cloud browser cannot reach the caller's localhost. Check for configured keys without printing their values; if missing, ask the user to configure them outside the conversation.
 
-`max_dollars` limits model spend only. Cloud browser and proxy charges are added after the browser stops and
+`max_dollars` limits model and web-search spend. Cloud browser and proxy charges are added after the browser stops and
 can exceed that limit. For a strict total-spend ceiling, use `--local` or `--launch` when permitted;
 otherwise explain that fastbrowse cannot enforce that ceiling for cloud runs and establish an
 acceptable budget before starting one. Count earlier run costs against the user's total budget across retries.

@@ -504,6 +504,25 @@ pub struct ActResult {
 pub type PageResult<T> = Result<T, BrowserError>;
 
 pub trait Page: Send + Sync {
+    /// The documented maximum price of one configured web-search request. None leaves search unavailable.
+    fn search_price(&self) -> Option<f64> {
+        None
+    }
+
+    /// Replace the view with the provider's real result links, retaining any browser session behind it.
+    fn search<'a>(&'a self, _query: &'a str, _timeout_seconds: f64) -> BoxFuture<'a, SearchOutcome> {
+        Box::pin(async {
+            SearchOutcome {
+                cost: crate::models::CostLine::new(
+                    crate::models::CostComponent::Search,
+                    crate::models::CostBasis::Metered,
+                    Some(0.0),
+                ),
+                error: Some("web search is not configured".into()),
+                page_changed: false,
+            }
+        })
+    }
     /// Whether this page was fetched over HTTP: its scripts never ran, and it can only follow links.
     fn over_http(&self) -> bool {
         false
@@ -606,6 +625,13 @@ pub trait Page: Send + Sync {
     fn loading(&self) -> bool {
         false
     }
+}
+
+/// A search attempt keeps its receipt even when the provider refused it or returned an invalid response.
+pub struct SearchOutcome {
+    pub page_changed: bool,
+    pub cost: crate::models::CostLine,
+    pub error: Option<String>,
 }
 
 #[cfg(test)]

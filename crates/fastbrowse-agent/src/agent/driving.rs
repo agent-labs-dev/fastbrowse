@@ -565,7 +565,14 @@ impl Agent {
     }
 
     /// The page to begin on when the caller named none, proposed from the task.
-    pub(super) async fn first_page(&self, task: &str, ledger: &fastbrowse_core::telemetry::Ledger) -> Step<String> {
+    pub(super) async fn first_page(
+        &self,
+        task: &str,
+        ledger: &std::sync::Arc<fastbrowse_core::telemetry::Ledger>,
+    ) -> Step<Option<String>> {
+        if self.page.search_price().is_some() {
+            return self.search_entry(task, ledger).await;
+        }
         let proposal = propose_start(&*self.llm, task, Some(ledger)).await?;
         ledger.record([proposal.cost])?;
         let Some(opening) = accept_start(proposal.data.url.as_deref()) else {
@@ -574,7 +581,7 @@ impl Agent {
             );
         };
         self.event("start_page", || Map::from_iter([("url".into(), opening.clone().into())]));
-        Ok(opening)
+        Ok(Some(opening))
     }
 
     /// The pages the site is known to serve for the items the task names, asked while the first page opens (#983).
@@ -860,12 +867,19 @@ impl Agent {
                 self.page.withhold_frames(true);
             }
             let raw = self.raw().unwrap_or_else(|| observation.clone());
-            let mut result = match self.trace.phase("act", self.page.act(&action, &raw)).await {
+            let dispatched = async {
+                if action.operation == Operation::Search {
+                    self.search_web(state.ledger.clone(), action.text.as_deref().unwrap_or_default()).await
+                } else {
+                    self.page.act(&action, &raw).await.map_err(Flow::from)
+                }
+            };
+            let mut result = match self.trace.phase("act", dispatched).await {
                 Ok(result) => result,
-                Err(BrowserError::PageUnresponsive(_)) if Self::may_reopen(state, decision, &action) => {
+                Err(Flow::Browser(BrowserError::PageUnresponsive(_))) if Self::may_reopen(state, decision, &action) => {
                     return self.reopen_hung_page(state, observation, decision, started, frame).await;
                 }
-                Err(error) => return Err(error.into()),
+                Err(error) => return Err(error),
             };
             if result.outcome == StepOutcome::Stale
                 && let Some(target) = &decision.target

@@ -1124,3 +1124,136 @@ async fn an_extension_run_with_no_browser_connected_ends_before_jev_is_asked() {
     assert!(message.contains("fastbrowse extension install"), "{message}");
     assert!(asked.lock().unwrap().is_empty(), "Jev was asked before the run found no browser");
 }
+
+struct SearchEntry;
+
+impl LLMClient for SearchEntry {
+    fn generate_value<'a>(
+        &'a self,
+        purpose: LLMPurpose,
+        _: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
+        Box::pin(async move {
+            let value = match purpose {
+                LLMPurpose::Start => r#"{"url":null,"queries":["returns policy"]}"#,
+                LLMPurpose::KnownPages => r#"{"urls":[]}"#,
+                LLMPurpose::Dates => r#"{"dates":[]}"#,
+                _ => return Err(LLMError::Failed("stop after search entry".into())),
+            };
+            Ok(Generation {
+                data: schema.validate_json(value).map_err(LLMError::Failed)?,
+                cost: CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.0)),
+            })
+        })
+    }
+}
+
+impl DecisionClient for SearchEntry {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        fastbrowse_core::decision::DecisionProfile::jev()
+    }
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        Box::pin(async move {
+            if !questions.contains_key("entry") {
+                return Err(DecisionError::Failed("stop after search entry".into()));
+            }
+            Ok(Evaluation {
+                model: "jev".into(),
+                answers: IndexMap::from([(
+                    "entry".into(),
+                    Answer::Choice(fastbrowse_core::decision::ChoiceAnswer {
+                        kind: Default::default(),
+                        choice: "search/0".into(),
+                        probabilities: IndexMap::from([("search/0".into(), 1.0)]),
+                        confidence: 1.0,
+                    }),
+                )]),
+                input_tokens: 0,
+                cost: CostLine::new(CostComponent::Jev, CostBasis::Metered, Some(0.0)),
+                requests: 1,
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_search_entry_needs_no_browser_and_records_its_provider_receipt() {
+    let requests = Arc::new(AtomicUsize::new(0));
+    let sent = requests.clone();
+    let result = run(task(move |_, host| {
+        host.settings = Some(Settings::from_sources(&[("EXA_API_KEY", "key")], None).unwrap());
+        host.llm = Some(Arc::new(SearchEntry));
+        host.jev = Some(Arc::new(SearchEntry));
+        host.http = Some(Http::new(Arc::new(
+            move |request: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+                assert_eq!(request.url, "https://api.exa.ai/search");
+                sent.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {
+                    Ok::<_, TransportError>(Response::json(
+                        200,
+                        &serde_json::json!({
+                            "results":[{"url":"https://shop.example/policy","title":"Policy"}],
+                            "costDollars":{"total":0.007}
+                        }),
+                    ))
+                })
+            },
+        )));
+    }))
+    .await
+    .unwrap();
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+    assert!(result.browser.is_none());
+    assert!(
+        result.cost.lines.iter().any(|cost| cost.component == CostComponent::Search && cost.dollars == Some(0.007))
+    );
+}
+
+#[tokio::test]
+async fn a_search_is_refused_before_dispatch_when_its_price_exceeds_the_budget() {
+    let result = run(task(|options, host| {
+        options.limits = Some(fastbrowse_core::models::Limits { max_dollars: Some(0.006), ..Default::default() });
+        host.settings = Some(Settings::from_sources(&[("EXA_API_KEY", "key")], None).unwrap());
+        host.llm = Some(Arc::new(SearchEntry));
+        host.jev = Some(Arc::new(SearchEntry));
+        host.http = Some(Http::new(Arc::new(|_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+            panic!("over-budget search dispatched")
+        })));
+    }))
+    .await
+    .unwrap();
+    assert_eq!(result.status, Status::BudgetExceeded);
+    assert!(result.cost.lines.iter().all(|cost| cost.component != CostComponent::Search));
+}
+
+#[tokio::test]
+async fn cancelling_an_in_flight_search_preserves_its_bounded_charge() {
+    let cancel = Cancel::default();
+    let stop = cancel.clone();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let sent = started.clone();
+    let options = task(move |_, host| {
+        host.cancel = stop;
+        host.settings = Some(Settings::from_sources(&[("EXA_API_KEY", "key")], None).unwrap());
+        host.llm = Some(Arc::new(SearchEntry));
+        host.jev = Some(Arc::new(SearchEntry));
+        host.http =
+            Some(Http::new(Arc::new(move |_: Request| -> BoxFuture<'static, Result<Response, TransportError>> {
+                sent.notify_one();
+                Box::pin(std::future::pending())
+            })));
+    });
+    let running = tokio::spawn(run(options));
+    started.notified().await;
+    cancel.trip();
+    let RunError::Cancelled(receipt) = running.await.unwrap().unwrap_err() else { panic!("not cancelled") };
+    assert!(receipt.cost.lines.iter().any(|cost| cost.component == CostComponent::Search
+        && cost.basis == CostBasis::Bounded
+        && cost.dollars == Some(0.007)));
+}

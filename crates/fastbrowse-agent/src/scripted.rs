@@ -84,6 +84,7 @@ impl ScriptedJev {
             !matches!(
                 step.operation,
                 Operation::Read
+                    | Operation::Search
                     | Operation::Done
                     | Operation::Navigate
                     | Operation::Scroll
@@ -205,6 +206,7 @@ impl ScriptedLLM {
             LLMPurpose::KnownPages => Some(json!({"urls": []})),
             LLMPurpose::Unobtainable => Some(json!({"item": "", "reason": "", "quote": ""})),
             LLMPurpose::Groups => Some(json!({"records": []})),
+            LLMPurpose::Search => Some(json!({"queries": []})),
         }
     }
 }

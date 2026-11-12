@@ -73,6 +73,9 @@ pub const GROUP: &str = "Too many elements to list at once. Choose the group tha
 
 pub fn operation_label(operation: Operation) -> &'static str {
     match operation {
+        Operation::Search => {
+            "Search the web through the configured search provider, without opening a browser search page."
+        }
         Operation::Navigate => {
             "Open another HTTP(S) address: one the caller supplied for this task, or a page a site the task names is known to serve for an item the task names."
         }
@@ -208,6 +211,8 @@ impl HistoryEntry {
 #[serde(deny_unknown_fields)]
 pub struct StepContext {
     pub task: String,
+    #[serde(default)]
+    pub web_search: bool,
     #[serde(deserialize_with = "lax::nullable")]
     pub subgoal: Option<String>,
     /// The dates the task names, worked out against each page's capture date.
@@ -286,6 +291,7 @@ impl StepContext {
     pub fn new(task: &str) -> StepContext {
         StepContext {
             task: task.into(),
+            web_search: false,
             subgoal: None,
             dates: Vec::new(),
             notes: String::new(),
@@ -970,6 +976,7 @@ fn offered_operations(
         .copied()
         .filter(|operation| !context.withheld.contains(operation))
         .filter(|operation| match operation {
+            Operation::Search => context.web_search,
             Operation::Navigate => !urls.is_empty(),
             Operation::Click
             | Operation::Hover

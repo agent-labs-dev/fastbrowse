@@ -25,17 +25,27 @@ export type Operation =
   | 'wait'
   | 'read'
   | 'done'
-  | 'navigate';
+  | 'navigate'
+  | 'search';
 /**
  * Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev.
  */
 export type Decider = 'jev' | 'code' | 'recipe';
 export type StepOutcome = 'executed' | 'covered' | 'stale' | 'failed';
 export type FactReader = 'jev_choice' | 'llm_image';
-export type CostComponent = 'jev' | 'llm' | 'browser' | 'proxy';
+export type CostComponent = 'jev' | 'llm' | 'browser' | 'proxy' | 'search';
 export type CostBasis = 'metered' | 'estimated' | 'bounded' | 'unsettled' | 'unknown';
 export type LLMPurpose =
-  'start' | 'compose' | 'image_read' | 'fill' | 'pages' | 'dates' | 'known_pages' | 'unobtainable' | 'groups';
+  | 'start'
+  | 'compose'
+  | 'image_read'
+  | 'fill'
+  | 'pages'
+  | 'dates'
+  | 'known_pages'
+  | 'search'
+  | 'unobtainable'
+  | 'groups';
 export type JevPurpose = 'action' | 'authorization' | 'relevance' | 'read' | 'verify' | 'locate';
 /**
  * Every code an error reply can carry: the JSON-RPC standard ones, then this protocol's own.

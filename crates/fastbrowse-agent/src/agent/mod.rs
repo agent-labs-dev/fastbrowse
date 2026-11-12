@@ -13,6 +13,7 @@ pub mod helpers;
 mod reading;
 mod recovery;
 mod replay;
+mod search;
 mod seeing;
 pub(crate) mod state;
 
@@ -403,7 +404,7 @@ impl Agent {
             if opening.is_none() {
                 opening = match start {
                     Some(start) => Some(start.to_string()),
-                    None if options.choose_start => Some(self.first_page(task, ledger).await?),
+                    None if options.choose_start => self.first_page(task, ledger).await?,
                     None => None,
                 };
             }
@@ -880,6 +881,7 @@ impl Agent {
         }
         Ok(StepContext {
             task: state.task.clone(),
+            web_search: self.page.search_price().is_some(),
             subgoal: state.hint.clone(),
             dates: state.dates.clone(),
             notes: self.decision_notes(state),

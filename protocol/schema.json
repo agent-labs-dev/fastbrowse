@@ -297,7 +297,8 @@
         "jev",
         "llm",
         "browser",
-        "proxy"
+        "proxy",
+        "search"
       ],
       "title": "CostComponent",
       "type": "string"
@@ -662,6 +663,7 @@
         "pages",
         "dates",
         "known_pages",
+        "search",
         "unobtainable",
         "groups"
       ],
@@ -865,7 +867,8 @@
         "wait",
         "read",
         "done",
-        "navigate"
+        "navigate",
+        "search"
       ],
       "title": "Operation",
       "type": "string"

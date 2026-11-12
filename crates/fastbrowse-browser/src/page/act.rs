@@ -578,6 +578,7 @@ impl CdpPage {
     ) -> Result<Outcome, BrowserError> {
         let text = action.text.as_deref().unwrap_or_default();
         match action.operation {
+            Operation::Search => Err(BrowserError::Failed("web search is dispatched by the agent".into())),
             Operation::Navigate => {
                 let url = action.url.as_deref().unwrap_or_default();
                 if action.url.is_none() || !matches!(urlsplit(url).0.as_str(), "http" | "https") {

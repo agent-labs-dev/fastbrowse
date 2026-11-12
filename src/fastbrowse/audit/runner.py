@@ -49,6 +49,7 @@ _SCRUBBED = frozenset(
         "PERPLEXITY_API_KEY",
         "FASTBROWSE_DECISION_API_KEY",
         "BROWSER_USE_API_KEY",
+        "EXA_API_KEY",
         "FASTBROWSE_MCP_TOKEN",
         "FASTBROWSE_HEADED",
         "FASTBROWSE_PROFILE",
