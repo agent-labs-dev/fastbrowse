@@ -143,6 +143,15 @@ An unpriced route still reports unknown cost. Answered image requests use the pr
 This is estimated spend, not provider-reported billing; output is free. Cancellation before dispatch adds
 no charge. All three routes reach Typesafe, so an outage there can affect all three.
 
+The check for completed or refused actions encodes controls as a table with `columns` and ordered `rows` when its complete HTTP wire encoding
+is shorter than the list of objects. Each control keeps its label,
+context, role, value, checked state and selection when present; a null cell means that property is absent.
+Text extraction and other lists keep their object representation. Page text, notes and action history keep their existing representation.
+
+`python scripts/jev_state_size.py TRACE.jsonl` measures state characters by question set and top-level field;
+it also accepts bench cassettes (`.jsonl.gz`). It counts recorded HTTP exchanges, including retries. Its `input_tokens` are provider-reported totals for the state and
+questions together. Providers do not expose state-only token counts, so the report does not estimate them.
+
 ## Confidence is not correctness
 
 Typesafe says Jev's probabilities are calibrated: across many answers, frequencies match the stated

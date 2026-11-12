@@ -26,7 +26,7 @@ use super::state::{Extent, Flow, OutputIntent, RunState, SignInNeeds, Step, Stop
 use crate::memory::Notes;
 use crate::policy::{Ahead, Decision, HistoryEntry};
 use crate::retrieval::text::{SpanKind, Word, edge_options, spans, words};
-use crate::verification::page_state;
+use crate::verification::{page_state, page_verdict_state};
 use crate::writing::write_value;
 
 /// Why a conditional commit is refused when the page does not show its condition met.
@@ -1673,7 +1673,7 @@ impl Agent {
             ("carried".to_string(), Question::Noul(carried)),
             ("refused".to_string(), Question::Noul(refused)),
         ]);
-        let state_json = page_state(
+        let state_json = page_verdict_state(
             &page,
             &Notes::default(),
             &self.config.tokens,
