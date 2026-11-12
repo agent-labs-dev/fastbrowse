@@ -933,7 +933,14 @@ impl CdpPage {
             let generation = self.session.ax_generation(session_id);
             let fresh = self.state.lock().unwrap().ax.get(session_id).is_some_and(|index| index.generation == generation);
             if fresh { continue; }
-            let dirty = self.session.take_ax_dirty(session_id);
+            let mut dirty = self.session.take_ax_dirty(session_id);
+            for node_id in self.session.take_ax_dirty_dom(session_id) {
+                if let Ok(described) = self.session.send("DOM.describeNode", json!({"nodeId": node_id}), Some(session_id)).await
+                    && let Some(backend_id) = described["node"]["backendNodeId"].as_i64()
+                {
+                    dirty.push(backend_id);
+                }
+            }
             if !dirty.is_empty() {
                 let mut complete = true;
                 for backend_id in dirty {

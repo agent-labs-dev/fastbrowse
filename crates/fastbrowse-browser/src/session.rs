@@ -287,6 +287,7 @@ pub(crate) struct State {
     /// Consumers must compare the generation before and after a read and discard mixed results.
     pub(crate) ax_generations: HashMap<String, u64>,
     pub(crate) ax_dirty: HashMap<String, HashSet<i64>>,
+    pub(crate) ax_dirty_dom: HashMap<String, HashSet<i64>>,
     /// Insertion ordered: `tabs()` lists them in this order, and a closed active tab with neither
     /// an opener nor an earlier active tab still open hands over to the first.
     pub(crate) tabs: Vec<TabState>,
@@ -746,6 +747,7 @@ impl BrowserSession {
         let live_sessions: HashSet<String> = state.frame_sessions_of_active().into_iter().map(|(_, session)| session).collect();
         state.ax_generations.retain(|session, _| live_sessions.contains(session));
         state.ax_dirty.retain(|session, _| live_sessions.contains(session));
+        state.ax_dirty_dom.retain(|session, _| live_sessions.contains(session));
         (
             state.frame_sessions.iter().map(|(frame, _)| frame.clone()).collect(),
             live_sessions,
@@ -759,6 +761,10 @@ impl BrowserSession {
 
     pub(crate) fn take_ax_dirty(&self, session_id: &str) -> Vec<i64> {
         self.0.state.lock().unwrap().ax_dirty.remove(session_id).unwrap_or_default().into_iter().collect()
+    }
+
+    pub(crate) fn take_ax_dirty_dom(&self, session_id: &str) -> Vec<i64> {
+        self.0.state.lock().unwrap().ax_dirty_dom.remove(session_id).unwrap_or_default().into_iter().collect()
     }
 
     /// `frame_id` and every frame drawn inside it, whose sessions descend from that frame's session.
@@ -1538,6 +1544,9 @@ impl Shared {
             *state.ax_generations.entry(session.to_owned()).or_default() += 1;
             if let Some(backend_id) = event.params["backendNodeId"].as_i64() {
                 state.ax_dirty.entry(session.to_owned()).or_default().insert(backend_id);
+            }
+            if let Some(node_id) = event.params["nodeId"].as_i64() {
+                state.ax_dirty_dom.entry(session.to_owned()).or_default().insert(node_id);
             }
         }
         match event.method.as_str() {
