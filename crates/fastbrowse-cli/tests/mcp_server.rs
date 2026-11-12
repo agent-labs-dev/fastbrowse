@@ -358,7 +358,15 @@ fn test_configure_reads_secrets_and_ceilings_from_flags() {
     ]))
     .unwrap();
     let environ = HashMap::from([("SHOP_PASSWORD".to_string(), "hunter2".to_string())]);
-    let config = configure(&args, &settings(|s| s.ai_gateway_api_key = None), &environ).unwrap();
+    let config = configure(
+        &args,
+        &settings(|s| {
+            s.ai_gateway_api_key = None;
+            s.chrome = None;
+        }),
+        &environ,
+    )
+    .unwrap();
     assert_eq!(
         config.secrets,
         [DeclaredSecret {
@@ -371,6 +379,8 @@ fn test_configure_reads_secrets_and_ceilings_from_flags() {
     assert!(config.allow_authorize);
     // #1005: `--local` runs every call in the operator's own Chrome; `--launch` starts a separate one.
     assert!(config.extension);
+    let configured_binary = configure(&args, &settings(|_| {}), &environ).unwrap();
+    assert!(!configured_binary.extension, "an explicitly configured binary selects a launched browser");
     let launched = configure(&parse(&argv(&["--launch"])).unwrap(), &settings(|_| {}), &environ).unwrap();
     assert!(!launched.extension && launched.browser_api_key.is_none());
 }

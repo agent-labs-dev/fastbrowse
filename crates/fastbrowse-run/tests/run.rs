@@ -168,6 +168,7 @@ async fn an_initial_http_failure_keeps_task_judgments_when_the_browser_opens() {
         o.task = "Report the value in input format.".into();
         o.inputs = Some(IndexMap::from([("format".into(), "a screenshot".into())]));
         o.local = true;
+        o.launch = true;
         h.jev = Some(Arc::new(HandoffDecision {
             startup: startup.clone(),
             seen: seen.clone(),

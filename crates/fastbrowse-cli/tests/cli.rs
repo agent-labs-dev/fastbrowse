@@ -185,9 +185,15 @@ async fn test_browser_skips_the_read_first_and_refuses_fetch() {
 #[tokio::test]
 async fn test_local_runs_in_your_own_chrome_and_launch_starts_one() {
     // #1005: a signed-out Chrome cannot do a signed-in task, so `--local` reaches the extension.
-    let ran = cli(&["t", "--start", "https://example.com", "--local"]).await;
+    let mut settings = model_settings();
+    settings.chrome = None;
+    let ran =
+        cli_with(&["t", "--start", "https://example.com", "--local"], settings, &[], result(Status::Complete)).await;
     let call = ran.call.expect(&ran.err);
     assert!(call.task.wants_extension() && call.host.browser_api_key.is_none());
+    let ran = cli(&["t", "--start", "https://example.com", "--local"]).await;
+    let call = ran.call.expect(&ran.err);
+    assert!(!call.task.wants_extension(), "an explicitly configured Chrome binary selects a launched browser");
     let ran = cli(&["t", "--start", "https://example.com", "--launch"]).await;
     let call = ran.call.expect(&ran.err);
     assert!(call.task.launch && !call.task.wants_extension() && call.host.browser_api_key.is_none());
