@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Changed observations reuse unchanged control rows.** A control retains its base fields when its source, DOM, ancestor attributes, current name, form ownership and native values agree. Geometry and action guards remain current, including after a layout shift or scroll ([#943](https://github.com/agent-labs-dev/fastbrowse/issues/943)).
+
 - **Changed observations reuse the DOM element index.** Insertions, removals and moves rebuild element order through saved child lists, retaining unchanged sibling lists. Control membership stays current when attributes change, with live geometry and rendering checks preserved ([#943](https://github.com/agent-labs-dev/fastbrowse/issues/943)).
 
 - Hosted eval costs remain provisional after browser shutdown. Receipts keep exact provider amounts and their query time; incomplete totals stay unknown ([#1058](https://github.com/agent-labs-dev/fastbrowse/issues/1058)).

@@ -789,6 +789,86 @@ async fn test_a_changed_name_does_not_derive_an_unrelated_name_again() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_changed_control_does_not_derive_an_unrelated_base_row() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(&h.session, r#"document.body.innerHTML = '<button id=changed-row>First</button><button id=stable-row autocomplete=off>Second</button>';globalThis.stableRowReads = 0;const original = Element.prototype.getAttribute;Element.prototype.getAttribute = function(name) {if(this.id === 'stable-row' && name === 'aria-required') stableRowReads++;return original.call(this,name)};true"#).await;
+    h.observe().await;
+    // The guard reads autocomplete too, so count an attribute consumed only by the row builder.
+    assert!(eval_active(&h.session, "stableRowReads").await.as_u64().unwrap() > 0);
+    for script in [
+        "document.querySelector('#changed-row').firstChild.data = 'Updated'",
+        "document.querySelector('#changed-row').focus()",
+        "document.querySelector('#stable-row').focus()",
+    ] {
+        eval_active(&h.session, "stableRowReads = 0").await;
+        eval_active(&h.session, script).await;
+        let after = h.observe().await;
+        assert_eq!(eval_active(&h.session, "stableRowReads").await, json!(0), "{script}");
+        let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
+        let mut full = other.observe().await.expect("full read");
+        full.captured_at = after.captured_at;
+        assert_eq!(after, full, "{script}");
+        h.observe().await;
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cached_widget_keys_follow_virtual_focus_without_dom_changes() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(&h.session, r#"document.body.innerHTML = '<div id=grid role=grid tabindex=0 aria-label=Sheet aria-activedescendant=item><span id=item role=gridcell>Cell</span></div><button id=other>Other</button>';true"#).await;
+    let before = h.observe().await;
+    assert!(!find(&before, "Cell").operations.contains(&Operation::Press));
+    for target in ["grid", "grid", "other", "grid"] {
+        eval_active(&h.session, &format!("document.getElementById('{target}').focus()")).await;
+        let after = h.observe().await;
+        let cell = find(&after, "Cell");
+        assert_eq!(cell.focused, Some(target == "grid"));
+        assert_eq!(cell.operations.iter().filter(|op| **op == Operation::Press).count(), usize::from(target == "grid"));
+        let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
+        let mut full = other.observe().await.expect("full read");
+        full.captured_at = after.captured_at;
+        assert_eq!(after, full, "{target}");
+        h.observe().await;
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cached_base_rows_match_full_reads_when_external_dependencies_change() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(&h.session, r#"document.body.innerHTML = '<nav id=pager><a class=next href=/next>Continue</a></nav><span id=external-name>First name</span><input id=owned form=external-form aria-labelledby=external-name><form id=external-form><button>Send</button></form><select id=choices aria-label=Choice><option>One</option><option>Two</option></select><x-link id=relative-link role=link style=display:block>Relative destination</x-link>';document.querySelector('#relative-link').href='./target';globalThis.optionLabel='One';Object.defineProperty(document.querySelector('option'),'label',{get(){return optionLabel}});true"#).await;
+    h.observe().await;
+    for script in [
+        "document.querySelector('#pager').removeAttribute('id');document.querySelector('nav').replaceWith(Object.assign(document.createElement('div'),{id:'pager',innerHTML:document.querySelector('nav').innerHTML}))",
+        "document.querySelector('#pager').className = 'pagination'",
+        "document.querySelector('#external-name').firstChild.data = 'Changed name'",
+        "document.querySelector('#external-form').id = 'other-form'",
+        "document.querySelector('#other-form').id = 'external-form'",
+        "document.querySelector('#owned').required = true",
+        "document.querySelector('#owned').focus()",
+        "globalThis.optionLabel = 'Current option'",
+        "document.querySelector('#choices').selectedIndex = 1",
+        "history.pushState(null,'','/new-base/')",
+        "document.body.style.minHeight = '4000px';scrollTo(0,1000)",
+        "scrollTo(0,1500)",
+    ] {
+        eval_active(&h.session, script).await;
+        let after = h.observe().await;
+        let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
+        let mut full = other.observe().await.expect("full read");
+        full.captured_at = after.captured_at;
+        assert_eq!(after, full, "{script}");
+        h.observe().await;
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_cached_names_match_full_reads_when_dom_css_and_live_inputs_change() {
     let _turn = turn().await;
     let Some(h) = harness().await else { return };
