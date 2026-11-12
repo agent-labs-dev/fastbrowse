@@ -854,24 +854,27 @@ async fn test_a_page_that_needs_a_browser_ends_the_run_blocked_with_its_reason()
 
 #[tokio::test]
 async fn test_an_unreachable_opening_stays_unavailable_without_a_resume() {
-    for failure in
-        [BrowserError::NavigationTimeout("timed out".into()), BrowserError::SiteUnreachable("offline".into())]
-    {
-        let agent = Agent::new(
-            Arc::new(Unfetchable { failure: Some(failure), ..Default::default() }),
-            Arc::new(ScriptedJev::new(Vec::new())),
-            Arc::new(ScriptedLLM),
-        );
-        let sink: super::RecipeSink = Arc::default();
-        let options = super::RunOptions {
-            start: Some("https://example.test/".into()),
-            recipe_sink: Some(sink.clone()),
-            ..Default::default()
-        };
-        let result = agent.run("Read the price", options).await.unwrap();
-        assert_eq!(result.status, Status::Unavailable);
-        assert!(agent.resume().is_none(), "only a browser handoff keeps an unopened run");
-        assert!(sink.lock().unwrap().is_none(), "an unopened run has no recipe");
+    for max_jev_calls in [None, Some(0)] {
+        for failure in
+            [BrowserError::NavigationTimeout("timed out".into()), BrowserError::SiteUnreachable("offline".into())]
+        {
+            let agent = Agent::new(
+                Arc::new(Unfetchable { failure: Some(failure), ..Default::default() }),
+                Arc::new(ScriptedJev::new(Vec::new())),
+                Arc::new(ScriptedLLM),
+            );
+            let sink: super::RecipeSink = Arc::default();
+            let options = super::RunOptions {
+                start: Some("https://example.test/".into()),
+                recipe_sink: Some(sink.clone()),
+                limits: Some(Limits { max_jev_calls, ..Default::default() }),
+                ..Default::default()
+            };
+            let result = agent.run("Read the price", options).await.unwrap();
+            assert_eq!(result.status, Status::Unavailable);
+            assert!(agent.resume().is_none(), "only a browser handoff keeps an unopened run");
+            assert!(sink.lock().unwrap().is_none(), "an unopened run has no recipe");
+        }
     }
 }
 
