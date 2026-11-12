@@ -889,13 +889,20 @@ fn judged(answer: Option<&Answer>) -> Option<bool> {
 ///
 /// Jev reads a task literally, so "Answer with only JSON" judged a complete answer written as claims as missing what
 /// the task asks for, every draft of it (#898). Code writes every answer as claims, so the question says the form is
-/// not judged.
-fn coverage_question(task: &str, columns: Option<&[String]>, claims: &[Claim]) -> Question {
+/// not judged. Citation links use the answer renderer here too: text alone was rejected for a task asking for
+/// citations even though the caller's answer included them (#1041).
+fn coverage_question(
+    task: &str,
+    columns: Option<&[String]>,
+    claims: &[Claim],
+    notes: &Notes,
+    steps: &[Value],
+) -> Question {
     Question::Noul(NoulQuestion::new(
         format!(
             "{UNTRUSTED} Code writes every answer as a list of claims, whatever form the task asks it in, such as JSON or a layout: that form is not judged here, and an answer is not missing anything for being in another form. Does the written answer give every requested fact or value in the original task, without dropping a requested item while correcting its wording or citations? Judge the written answer, not whether unseen notes could answer it. Citation support and browser actions are checked separately. Judge only whether the written claims include the requested facts and values. A claim that a requested value is not shown or does not exist answers that request; whether it holds is checked separately. Task: {} Answer: {}",
             dumps(&json!(task)),
-            dumps(&json!({"columns": columns, "claims": claims.iter().map(|claim| &claim.text).collect::<Vec<_>>()}))
+            dumps(&json!({"columns": columns, "answer": assemble_answer(claims, notes, steps).linked_answer}))
         ),
         Some(
             "The written answer states every fact and value the task asks to be told, even if not in the form the task asks for.",
@@ -1107,7 +1114,7 @@ async fn review_composition(
     let state_chars = text::len(&dumps(&state)) as i64;
     let fits_one = questions.values().any(|question| state_chars <= tokens.input_chars(&[question.dump_json()]));
     if require_coverage && fits_one {
-        questions.insert("coverage".into(), coverage_question(task, columns, &claims));
+        questions.insert("coverage".into(), coverage_question(task, columns, &claims, notes, steps));
     }
     if !steps.is_empty() && fits_one {
         questions.insert("actions".into(), actions_question(steps, columns, &claims));
@@ -1621,7 +1628,7 @@ pub(crate) async fn draft_reviewed(
         return Ok(None);
     }
     let questions = IndexMap::from([
-        ("coverage".to_string(), coverage_question(task, None, &claims)),
+        ("coverage".to_string(), coverage_question(task, None, &claims, notes, &[])),
         ("exact".to_string(), exact_question(task, &claims)),
     ]);
     let state = json!({"task": task, "pages_read": pages_read(notes)});
@@ -3427,15 +3434,34 @@ mod tests {
         assert!(coverage.instructions.contains("Judge the written answer, not whether unseen notes could answer it."));
         assert!(coverage.instructions.contains("Citation support and browser actions are checked separately. Judge only whether the written claims include the requested facts and values."));
         assert!(coverage.instructions.contains("Report B and C"));
+        assert!(coverage.instructions.contains("[1](<https://example.test"), "{}", coverage.instructions);
+    }
+
+    #[test]
+    fn coverage_keeps_a_cited_step_and_does_not_invent_a_source_link() {
+        let notes = Notes::new([]);
+        let claims = [Claim::new("Typed N1", vec!["s1".into()])];
+        let steps = [json!({"operation": "fill", "target": "Postcode", "text": "N1"})];
+        let Question::Noul(coverage) =
+            coverage_question("Report what was typed with its evidence", None, &claims, &notes, &steps)
+        else {
+            panic!("coverage is yes-or-no")
+        };
+        assert!(coverage.instructions.contains("[fill 'Postcode' with 'N1']"));
+        assert!(!coverage.instructions.contains("[1]("));
     }
 
     /// A task that asks for its answer as JSON had a complete answer rejected as missing what it asks for, since code
     /// writes every answer as claims (#898).
     #[test]
     fn coverage_question_says_the_form_a_task_asks_for_is_not_judged() {
-        let Question::Noul(coverage) =
-            coverage_question("List each image. Answer with only JSON: {\"src\": \"...\"}", None, &[])
-        else {
+        let Question::Noul(coverage) = coverage_question(
+            "List each image. Answer with only JSON: {\"src\": \"...\"}",
+            None,
+            &[],
+            &Notes::new([]),
+            &[],
+        ) else {
             panic!("coverage is yes-or-no")
         };
         assert!(coverage.instructions.starts_with(&format!("{UNTRUSTED} Code writes every answer as a list of claims, whatever form the task asks it in, such as JSON or a layout: that form is not judged here, and an answer is not missing anything for being in another form.")));

@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Citation requests are checked against the linked answer.** Coverage now sees the source and step citations the caller receives, rather than rejecting a complete answer after its links were omitted from that check ([#1041](https://github.com/agent-labs-dev/fastbrowse/issues/1041)).
+
 - **Changed pages transfer fewer control rows.** The browser still reads the frame in full, but sends unchanged controls by their existing ids and transfers only changed rows and guards. A reader without the matching document and previous read receives the full frame. Context construction indexes peer labels once per read instead of scanning every control for each context ([#943](https://github.com/agent-labs-dev/fastbrowse/issues/943)).
 - **Hover targets follow stylesheet edits.** Changing a hover selector without adding or removing a CSS rule now replaces the offered target; the rule cache checks its selectors rather than its count.
 - **Jev can read a list through its next-page links.** Each page keeps its sign-in, bot-check and site-failure checks, citations and step limits. A different list, an unresolved page range or a page that needs another action returns to ordinary decisions ([#986](https://github.com/agent-labs-dev/fastbrowse/issues/986)).
