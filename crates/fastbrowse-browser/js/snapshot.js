@@ -258,7 +258,9 @@
     // reason to wait out.
     registry.lastMutation = performance.now();
     registry.lastInput = 0;
-    const input = () => {
+    const input = event => {
+      // Filling a field dispatches input and change, but a page's synthetic click is background work.
+      if (!event.isTrusted && event.type !== 'input' && event.type !== 'change') return;
       // `quiet` is set by a read and cleared by input, so the first input since a read is a new action's.
       if (registry.quiet) registry.action++;
       registry.inputTurn(registry.action);

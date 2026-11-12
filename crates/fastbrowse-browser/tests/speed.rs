@@ -499,6 +499,29 @@ async fn test_a_settle_does_not_re_read_for_each_of_the_pages_writes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_page_generated_click_does_not_claim_background_work_as_input() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        "document.body.innerHTML = '<button>Background</button>'; \
+         document.querySelector('button').onclick = () => { \
+           window.backgroundTimer = setTimeout(() => {}, 60000); };",
+    )
+    .await;
+    h.observe().await;
+    let before = eval_active(&h.session, "[__fastbrowse.action, __fastbrowse.lastInput]").await;
+    eval_active(&h.session, "document.querySelector('button').click()").await;
+    let after = eval_active(&h.session, "[__fastbrowse.action, __fastbrowse.lastInput]").await;
+    let pending = eval_active(&h.session, "__fastbrowse.pendingWork.size").await;
+    eval_active(&h.session, "clearTimeout(window.backgroundTimer)").await;
+    h.close().await;
+    assert_eq!(after, before, "a page-generated click is not the run's input");
+    assert_eq!(pending, json!(0), "background work must not become action work");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_settle_waits_for_work_the_click_scheduled_before_its_first_mutation() {
     let _turn = turn().await;
     let Some(h) = harness().await else { return };
