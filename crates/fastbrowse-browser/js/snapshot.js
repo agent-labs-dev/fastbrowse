@@ -224,7 +224,8 @@
       // innerText omits shadow trees and child documents even when their content is visible.
       for (const e of root.querySelectorAll('*')) {
         // A panel can move without changing any text or the document's own scroll position.
-        if (e.scrollLeft !== 0 || e.scrollTop !== 0) hashText(JSON.stringify([e.scrollLeft, e.scrollTop]));
+        if ((e.scrollLeft !== 0 || e.scrollTop !== 0) && e.checkVisibility({checkVisibilityCSS: true}))
+          hashText(JSON.stringify([e.scrollLeft, e.scrollTop]));
         // A filter can change only its checkmark, so text alone reported "Nonstop only" as a no-op.
         // Field values stay out: the run judges fills by the value it wrote, even when a popup changes.
         // Only rendered controls: a hidden carousel's aria-selected dots churn on their own and would read as
@@ -772,8 +773,12 @@
     for (const e of registry.selfUpdating) if (scope.contains(e)) text = text.replace(innerTextOf(e) || '', '');
     return digest(text.slice(0, GUARD_TEXT_CHARS));
   });
-  registry.guard = e => {
+  registry.guard = (e, id) => {
     if (!e?.isConnected || !visible(e)) return null;
+    const axis = registry.scrollAxes?.get(id);
+    if (axis) return [identity(e), 'scroll', axis,
+      e.getAttribute('aria-label'), e.getAttribute('aria-labelledby'), e.getAttribute('title'),
+      e.ownerDocument.location.origin, e.ownerDocument.defaultView.performance.timeOrigin, identity(e)];
     const source = sourceOf(e);
     if (source !== e && (source.matches(':disabled') || source.closest('[aria-disabled="true"],[inert]'))) return null;
     const scope = e.closest('form,dialog,[role="dialog"],article,li,tr,[role="row"]') || e.parentElement;
@@ -802,8 +807,8 @@
       identity(source),
     ];
   };
-  registry.guardKey = e => {
-    const guard = registry.guard(e);
+  registry.guardKey = (e, id) => {
+    const guard = registry.guard(e, id);
     return guard && digest(JSON.stringify(guard));
   };
 
@@ -1418,7 +1423,12 @@
         doc = frame.ownerDocument;
       }
       for (const axis of ['x', 'y']) {
-        const behavior = axis === 'x' ? style.overflowX : style.overflowY;
+        let behavior = axis === 'x' ? style.overflowX : style.overflowY;
+        // With visible root overflow, CSS propagates the body's overflow to the viewport, including modal locks.
+        if (page && behavior === 'visible' && e.ownerDocument.body) {
+          const bodyStyle = view.getComputedStyle(e.ownerDocument.body);
+          behavior = axis === 'x' ? bodyStyle.overflowX : bodyStyle.overflowY;
+        }
         if (overflow[axis] <= 0 || !(page && behavior === 'visible') && !['auto', 'scroll', 'overlay'].includes(behavior)) continue;
         const position = axis === 'x' ? e.scrollLeft : e.scrollTop;
         // CSSOM View's overflow direction follows the block and inline flow, including reversed flex axes.
@@ -1550,7 +1560,7 @@
   const guards = {},
     retarget_keys = {};
   for (const c of controls) {
-    const guard = registry.guard(registry.nodes.get(c.id));
+    const guard = registry.guard(registry.nodes.get(c.id), c.id);
     guards[c.id] = guard && digest(JSON.stringify(guard));
     // A redraw changes the node ids at either end of the guard. Everything between them, including the receiving
     // document's timeOrigin and form semantics, must survive before an action can follow it.

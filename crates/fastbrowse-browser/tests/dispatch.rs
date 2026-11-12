@@ -1610,6 +1610,7 @@ async fn scroll_targets_the_selected_container_and_axis() {
         let before = h.observe().await;
         let target = find(&before, label);
         assert!(target.operations.contains(&Operation::Scroll));
+        eval_active(&h.page, "document.querySelector('section > div').textContent += ' New record'").await;
         let result = h.page.act(&action(Operation::Scroll, target), &before).await.unwrap();
         assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
         assert!(result.page_changed, "container scrolling must count as observed progress: {result:?}");
@@ -1624,6 +1625,9 @@ async fn scroll_targets_the_selected_container_and_axis() {
             Some(0.0)
         );
     }
+    eval_active(&h.page, "document.body.style.overflow = 'hidden'").await;
+    let locked = h.observe().await;
+    assert!(!locked.controls.iter().any(|c| c.label == "Vertical scroll area: Page"));
     h.close().await;
 }
 
