@@ -61,6 +61,21 @@ target = "crates/fastbrowse-cli/src/mcp/mod.rs"
 sig = "dfd16e6ddd1d30c6"
 
 [[bindings]]
+doc = "blog/use-your-own-chrome.md"
+target = "crates/fastbrowse-browser/extension/background.js"
+sig = "67a79441c7c4acd2"
+
+[[bindings]]
+doc = "blog/use-your-own-chrome.md"
+target = "crates/fastbrowse-cli/src/cli.rs"
+sig = "62ed692ee5b94da1"
+
+[[bindings]]
+doc = "blog/use-your-own-chrome.md"
+target = "crates/fastbrowse-cli/src/extension.rs"
+sig = "14c14d53672c30f1"
+
+[[bindings]]
 doc = "blog/verify-browser-agent-results.md"
 target = "crates/fastbrowse-cli/src/cli.rs"
 sig = "62ed692ee5b94da1"

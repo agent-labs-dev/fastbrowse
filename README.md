@@ -28,8 +28,9 @@ credentials, irreversible actions and spending under the control of code.
   that scrolls to it. Pass a schema and get validated data back.
 - **Code holds the keys.** Submit, pay, delete and send stop until you allow them. A secret is typed only on the
   origin it was declared for, and models only see its name. Step, time and dollar limits are enforced in code.
-- **Any browser.** A Browser Use Cloud browser by default, local Chrome, or any Chromium browser or Electron app
-  that is already running.
+- **Your own Chrome.** The [Chrome extension](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop)
+  runs tasks where you are already signed in. You can also use a cloud browser, local Chrome, or a Chromium
+  browser or Electron app that is already running.
 - **Desktop apps too.** On Linux with Hyprland, `--desktop` starts a native app and drives it through its
   accessibility tree, in the background, with [deskpilot](https://github.com/cjber/deskpilot).
 - **One agent, every interface.** A CLI, a Python library, Node and Go SDKs that need no Python, an MCP
@@ -89,6 +90,34 @@ uvx fastbrowse "Log in as standard_user with the saved password and add the back
 
 The [command-line reference](docs/cli.md#flags) has every flag, signed-in profiles and Bitwarden logins, driving open
 windows, Electron and [desktop apps](docs/cli.md#desktop-apps), model and provider settings, and every status with its exit code.
+
+## Use your own Chrome
+
+Run fastbrowse in the Chrome you already use, where you are already signed in. You need
+[uv](https://docs.astral.sh/uv/), Chrome and an [OpenRouter](https://openrouter.ai/) API key. Model calls are
+billed by your provider; this mode needs no Browser Use Cloud key.
+
+1. Install the CLI and register it with your browser:
+
+   ```sh
+   uv tool install fastbrowse
+   export OPENROUTER_API_KEY=...  # replace with your key
+   fastbrowse extension install
+   ```
+
+2. [Add fastbrowse to Chrome](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop).
+   Open it from Chrome's Extensions menu to see runs and their **Stop** buttons.
+3. Start a task from your terminal:
+
+   ```sh
+   fastbrowse "What is the title of the top story?" --start https://news.ycombinator.com/ --extension --browser
+   ```
+
+A run that reaches the page confirms the connection. If it ends `unavailable` with no browser connected,
+[follow the setup checks](docs/troubleshooting.md#the-extension-is-not-connected). Chrome shows a debugging bar
+while fastbrowse works.
+The [setup and usage guide](docs/cli.md#your-own-chrome) covers signed-in tasks, browser selection,
+permissions and stopping a run.
 
 ## How it compares
 

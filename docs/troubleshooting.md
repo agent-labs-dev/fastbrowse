@@ -260,7 +260,8 @@ browser starts. When the run ends `unavailable` with `no browser has the fastbro
 
 - Check that `fastbrowse extension install` ran for this user, and run it again after moving or reinstalling
   fastbrowse, since it records where fastbrowse is.
-- Check that the extension is on at `chrome://extensions`, and that Chrome is open.
+- Check that the [store extension](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop)
+  is installed and on at `chrome://extensions`, and that Chrome is open.
 - After installing, restart Chrome or turn the extension off and on, so it connects.
 - The error names the directory the run looked in. A connected browser's host writes there too, and on Linux
   both use `$XDG_RUNTIME_DIR/fastbrowse-hosts`, or `/run/user/<uid>/fastbrowse-hosts` when the variable is
