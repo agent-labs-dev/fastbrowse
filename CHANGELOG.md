@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Scrolls target the page or a named vertical or horizontal scroll area, including panels and lists in open shadow roots. Container movement counts as progress ([#986](https://github.com/agent-labs-dev/fastbrowse/issues/986)).
+
 - Downloaded XLSX, DOCX and ZIP files provide citable text through the document helper. Worksheets keep cell coordinates, Word keeps text boundaries, and archives name unread members ([#1022](https://github.com/agent-labs-dev/fastbrowse/issues/1022), part of [#986](https://github.com/agent-labs-dev/fastbrowse/issues/986)).
 
 - Browserless reads accept JSON APIs and textual HTTP responses as citable blocks, preserving JSON values and delimited fields ([#1021](https://github.com/agent-labs-dev/fastbrowse/issues/1021), part of [#986](https://github.com/agent-labs-dev/fastbrowse/issues/986)).

@@ -1590,3 +1590,64 @@ async fn test_select_naming_no_option_of_a_multiple_select_fails_and_changes_not
     assert_eq!(eval_active(&h.page, SELECTED).await, json!(["Alpha"]));
     h.close().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn scroll_targets_the_selected_container_and_axis() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    eval_active(
+        &h.page,
+        r#"document.body.innerHTML = `
+      <section aria-label="Side panel" style="width:160px;height:120px;overflow:auto">
+        <div style="width:800px;height:900px">Scrollable records</div>
+      </section>
+      <div style="height:1800px">Main document</div>`"#,
+    )
+    .await;
+    for (label, coordinate) in
+        [("Vertical scroll area: Side panel", "scrollTop"), ("Horizontal scroll area: Side panel", "scrollLeft")]
+    {
+        let before = h.observe().await;
+        let target = find(&before, label);
+        assert!(target.operations.contains(&Operation::Scroll));
+        let result = h.page.act(&action(Operation::Scroll, target), &before).await.unwrap();
+        assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+        assert!(result.page_changed, "container scrolling must count as observed progress: {result:?}");
+        let moved = eval_active(&h.page, &format!("document.querySelector('section').{coordinate}")).await;
+        assert!(moved.as_f64().unwrap() > 0.0, "{coordinate}: {moved}");
+        assert_eq!(eval_active(&h.page, "window.scrollY").await.as_f64(), Some(0.0));
+        let before = h.observe().await;
+        let result = h.page.act(&action(Operation::ScrollUp, find(&before, label)), &before).await.unwrap();
+        assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+        assert_eq!(
+            eval_active(&h.page, &format!("document.querySelector('section').{coordinate}")).await.as_f64(),
+            Some(0.0)
+        );
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_shadow_roots_right_to_left_scroll_area_keeps_its_physical_direction() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    eval_active(
+        &h.page,
+        r#"document.body.innerHTML = '<div id="host"></div>';
+      document.querySelector('#host').attachShadow({mode:'open'}).innerHTML = `
+        <section aria-label="History" style="direction:rtl;width:160px;height:120px;overflow:auto">
+          <div style="width:800px;height:80px">Records</div>
+        </section>`"#,
+    )
+    .await;
+    let before = h.observe().await;
+    let target = find(&before, "Horizontal scroll area: History");
+    assert!(target.operations.contains(&Operation::ScrollUp));
+    assert!(!target.operations.contains(&Operation::Scroll));
+    let result = h.page.act(&action(Operation::ScrollUp, target), &before).await.unwrap();
+    assert!(result.page_changed, "{result:?}");
+    let left =
+        eval_active(&h.page, "document.querySelector('#host').shadowRoot.querySelector('section').scrollLeft").await;
+    assert!(left.as_f64().unwrap() < 0.0, "left is negative in a right-to-left area: {left}");
+    h.close().await;
+}

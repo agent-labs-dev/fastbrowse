@@ -179,6 +179,12 @@ Press on an editable field sends the key or key chord Jev copied from the task. 
 as one browser input, and a chord that can submit or save goes through the same irreversibility and authorization gates
 as Enter.
 
+Scrollable containers are indexed separately for each overflowing axis, including open shadow roots and accessible
+frames. Jev chooses a scroll area and an available direction. Code moves that container by its visible width or
+height; horizontal right-to-left areas retain physical left and right directions. Container offsets contribute to
+the page fingerprint, so a scroll that exposes content counts as progress even when its text is unchanged. A scroll
+without a target retains viewport scrolling.
+
 A read offers Jev one bounded choice over the page's quoted spans, with two more answers: the page does not hold the
 answer, or the answer must be composed from more than one fact. On a page with more spans than one choice can offer, a
 relevance pass narrows them first. If no value choice fits, a page that fits Jev's input limit can still supply
