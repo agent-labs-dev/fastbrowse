@@ -15,6 +15,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::reduction::Within;
 use super::tally::{self, COMPUTED, Op, Tally, Unworked};
 use crate::batches::evaluate_batches;
 use crate::error::{AgentError, Result};
@@ -215,6 +216,8 @@ struct DraftClaim {
     #[serde(default)]
     tally: Option<Tally>,
     #[serde(default)]
+    within: Option<Within>,
+    #[serde(default)]
     cells: Option<Vec<Vec<DraftPart>>>,
     text: Vec<DraftPart>,
 }
@@ -226,6 +229,7 @@ impl Schema for DraftClaim {
             vec![
                 Field::required("evidence_ids", Ty::list(Ty::Str)),
                 Field::default("tally", Ty::optional(Tally::ty()), Value::Null),
+                Field::default("within", Ty::optional(Within::ty()), Value::Null),
                 Field::default("cells", Ty::optional(Ty::list(Ty::list(DraftPart::ty()))), Value::Null),
                 Field::required("text", Ty::list(DraftPart::ty())),
             ],
@@ -274,6 +278,7 @@ impl Composition {
 struct BoundClaim {
     claim: Claim,
     composition: Option<Composition>,
+    within: Option<Within>,
 }
 
 impl std::ops::Deref for BoundClaim {
@@ -286,7 +291,7 @@ impl std::ops::Deref for BoundClaim {
 
 impl From<Claim> for BoundClaim {
     fn from(claim: Claim) -> Self {
-        Self { claim, composition: None }
+        Self { claim, composition: None, within: None }
     }
 }
 
@@ -341,10 +346,13 @@ impl BoundClaim {
                 "text": parts(&composition.text),
                 "cells": composition.cells.as_ref().map(|cells| cells.iter().map(|cell| parts(cell)).collect::<Vec<_>>()),
                 "tally": self.tally,
+                "within": self.within,
             })),
             None => match (&self.tally, &self.cells) {
-                (None, None) => self.text.clone(),
-                (tally, cells) => dumps(&json!({"text": self.text, "cells": cells, "tally": tally})),
+                (None, None) if self.within.is_none() => self.text.clone(),
+                (tally, cells) => {
+                    dumps(&json!({"text": self.text, "cells": cells, "tally": tally, "within": self.within}))
+                }
             },
         };
         (
@@ -366,6 +374,16 @@ impl BoundClaim {
 
 impl DraftClaim {
     fn bind(self, items: &[ComposeItem]) -> std::result::Result<BoundClaim, String> {
+        if self.within.is_some()
+            && !self.tally.as_ref().is_some_and(|tally| {
+                matches!(tally.op, Op::Min | Op::Max)
+                    && tally.field.is_some()
+                    && tally.by.is_none()
+                    && tally.group.is_none()
+            })
+        {
+            return Err("within requires a minimum or maximum tally with a field and no count grouping".into());
+        }
         let mut evidence_ids = self.evidence_ids;
         let mut computed = 0;
         let mut bind = |parts: Vec<DraftPart>| -> std::result::Result<Vec<BoundPart>, String> {
@@ -419,7 +437,7 @@ impl DraftClaim {
             .iter()
             .chain(composition.cells.iter().flatten().flatten())
             .any(|part| !matches!(part, BoundPart::Prose(_)));
-        Ok(BoundClaim { claim: rendered, composition: bound.then_some(composition) })
+        Ok(BoundClaim { claim: rendered, composition: bound.then_some(composition), within: self.within })
     }
 }
 
@@ -563,7 +581,7 @@ const STEPS_TAKEN: &str = "When the task lists the steps this run took, they are
 fn compose_messages(task: &str, written: &[String]) -> [Message; 2] {
     [
         Message::system(format!(
-            "{DESCRIPTIVE_VALUES}\n{SOURCE_STATE}\n{STEPS_TAKEN}\n\n{COMPOSER}{COMPOSITION}\n\n# Trust\n{UNTRUSTED}"
+            "{DESCRIPTIVE_VALUES}\n{SOURCE_STATE}\n{STEPS_TAKEN}\n\n{COMPOSER}{COMPOSITION}\nA nested numeric selection uses within: by names the grouping field, op is min or max, and field names the inner compared value. Code selects each group's tied extremes before the outer tally. tally.of names the ordinary record kind, without asking Jev to order dates or compare values in its membership rule. within requires an outer min or max tally with a field and no by or group count grouping.\n\n# Trust\n{UNTRUSTED}"
         )),
         Message::user(format!("# Task\n{task}\n\n# Notes\n{}", written.join("\n"))),
     ]
@@ -988,10 +1006,16 @@ async fn review_composition(
             })
         })
         .collect();
-    let worked = tally::work(jev, llm, task, &tallied, notes, &tokens, ledger).await?;
+    let selections: HashMap<usize, Within> = claims
+        .iter()
+        .enumerate()
+        .filter_map(|(index, claim)| claim.within.clone().map(|within| (index, within)))
+        .collect();
+    let worked = tally::work_selected(jev, llm, task, &tallied, &selections, notes, &tokens, ledger).await?;
     // A rewrite keeps a claim that passed as it was drafted: kept once worked, a tally lost its tally, and "The most
     // expensive book is A Year in Provence ..." citing that one book was judged as a plain claim, which it fails.
     let drafted: Vec<Claim> = claims.iter().map(|claim| claim.claim.clone()).collect();
+    let drafted_within: Vec<Option<Within>> = claims.iter().map(|claim| claim.within.clone()).collect();
     let drafted_composition: Vec<Option<Composition>> = claims.iter().map(|claim| claim.composition.clone()).collect();
     let mut untallied = Vec::new();
     let mut unjudged_tally = false;
@@ -1056,8 +1080,12 @@ async fn review_composition(
         // extreme is not Jev's to confirm: it judges only what the claim says besides it.
         if let (Some(tally), Some(Ok(done)), None) = (tallies.get(&index), worked.get(&index), columns) {
             // A quoted source keeps its citation, but only the computed basis can offer records at the extreme.
-            let basis = cited_quotes(&Claim::new("", done.evidence_ids.clone()), notes, !steps.is_empty());
-            for (check, question, reason) in tally_checks(tally, &shown.text, &basis) {
+            let basis = cited_quotes(
+                &Claim::new("", done.winner_ids.clone().unwrap_or_else(|| done.evidence_ids.clone())),
+                notes,
+                !steps.is_empty(),
+            );
+            for (check, question, reason) in tally_checks_selected(tally, selections.get(&index), &shown.text, &basis) {
                 let key = format!("claim{index}/{check}");
                 required[index].push(key.clone());
                 tally_reasons.insert(key.clone(), reason);
@@ -1068,8 +1096,11 @@ async fn review_composition(
         let records_rule = if sources.iter().any(|quote| quote["whole_record"] == true) { RECORDS } else { "" };
         let mut cited = json!({"columns": columns, "claim": shown.text, "quotes": sources});
         let computed_rule = if let Some(Ok(done)) = worked.get(&index) {
-            cited["computed_from"] =
-                json!(cited_quotes(&Claim::new("", done.evidence_ids.clone()), notes, !steps.is_empty()));
+            cited["computed_from"] = json!(cited_quotes(
+                &Claim::new("", done.winner_ids.clone().unwrap_or_else(|| done.evidence_ids.clone())),
+                notes,
+                !steps.is_empty()
+            ));
             " The computed_from records are the basis of the value code computed; judge its association with the row's record, without recomputing that value."
         } else {
             ""
@@ -1163,6 +1194,7 @@ async fn review_composition(
         "draft_claims": &claims,
         "drafted_claims": drafted,
         "drafted_composition": drafted_composition,
+        "drafted_within": drafted_within,
         "rejected_checks": rejected_checks,
     });
     if !uncited.is_empty() {
@@ -1259,6 +1291,27 @@ fn ordinal(place: u64) -> String {
 /// The questions a worked tally's claim is judged on: that it states only its tally, and for an extreme, that each
 /// record it names is one code found holding the extreme, which are the records it cites. Each comes with what the
 /// composer is told when it fails, since "does not follow from its notes" would send it looking for evidence it has.
+fn tally_checks_selected(
+    tally: &Tally,
+    within: Option<&Within>,
+    text: &str,
+    winners: &[Value],
+) -> Vec<(&'static str, Question, String)> {
+    let Some(within) = within else { return tally_checks(tally, text, winners) };
+    let mut outer = tally.clone();
+    let operation = match within.op {
+        super::reduction::Extreme::Min => "minimum",
+        super::reduction::Extreme::Max => "maximum",
+    };
+    outer.of = format!(
+        "records selected by code at each {} group's {operation} {} among {}",
+        text::repr(&within.by),
+        text::repr(&within.field),
+        text::repr(&tally.of)
+    );
+    tally_checks(&outer, text, winners)
+}
+
 fn tally_checks(tally: &Tally, text: &str, winners: &[serde_json::Value]) -> Vec<(&'static str, Question, String)> {
     let (of, field) = (text::repr(&tally.of), text::repr(tally.field.as_deref().unwrap_or("value")));
     let claim = text::repr(text);
@@ -1482,6 +1535,7 @@ fn passed_claims(feedback: &str, notes: &Notes, steps: &[Value]) -> Vec<(Claim, 
     let (Some(checked), Some(drafted)) = (claims("draft_claims"), claims("drafted_claims")) else { return Vec::new() };
     let compositions: Vec<Option<Composition>> =
         serde_json::from_value(feedback["drafted_composition"].clone()).unwrap_or_default();
+    let within: Vec<Option<Within>> = serde_json::from_value(feedback["drafted_within"].clone()).unwrap_or_default();
     checked
         .into_iter()
         .zip(drafted)
@@ -1495,7 +1549,14 @@ fn passed_claims(feedback: &str, notes: &Notes, steps: &[Value]) -> Vec<(Claim, 
                 })
         })
         .map(|(index, (checked, claim))| {
-            (checked, BoundClaim { claim, composition: compositions.get(index).cloned().flatten() })
+            (
+                checked,
+                BoundClaim {
+                    claim,
+                    composition: compositions.get(index).cloned().flatten(),
+                    within: within.get(index).cloned().flatten(),
+                },
+            )
         })
         .collect()
 }
@@ -1506,9 +1567,18 @@ fn passed_claims(feedback: &str, notes: &Notes, steps: &[Value]) -> Vec<(Claim, 
 fn relabeled(feedback: &str, items: &[ComposeItem]) -> String {
     let Ok(mut value) = serde_json::from_str::<serde_json::Value>(feedback) else { return feedback.to_string() };
     // The claims as drafted are for code to keep; the composer is shown them as they were checked.
+    let within = value.get("drafted_within").and_then(Value::as_array).cloned().unwrap_or_default();
+    if let Some(claims) = value.get_mut("draft_claims").and_then(Value::as_array_mut) {
+        for (claim, within) in claims.iter_mut().zip(within) {
+            if !within.is_null() {
+                claim["within"] = within;
+            }
+        }
+    }
     if let Some(feedback) = value.as_object_mut() {
         feedback.shift_remove("drafted_claims");
         feedback.shift_remove("drafted_composition");
+        feedback.shift_remove("drafted_within");
     }
     let label =
         |id: &str| items.iter().find(|item| item.sources.iter().any(|source| source == id)).map(|item| &item.label);
@@ -1695,6 +1765,88 @@ mod tests {
             citations: Vec::new(),
             problem: None,
         }
+    }
+
+    #[test]
+    fn a_draft_preserves_a_typed_inner_reduction() {
+        let draft = json!({
+            "evidence_ids": [],
+            "tally": {"op": "min", "of": "release", "field": "release date", "written": "2024-12-06"},
+            "within": {"by": "package", "op": "max", "field": "release date"},
+            "text": [{"computed": true}]
+        });
+        let parsed = serde_json::from_value::<DraftClaim>(draft);
+        assert!(parsed.is_ok(), "a nested comparison must survive the draft schema: {parsed:?}");
+    }
+
+    #[test]
+    fn inner_reduction_binds_only_to_extreme_value_tallies() {
+        let items = [ComposeItem {
+            label: "e0".into(),
+            text: "record".into(),
+            sources: vec!["f0".into()],
+            quotable: true,
+            superseded: None,
+            page: None,
+            headings: vec![],
+            links: vec![],
+            after_step: None,
+        }];
+        let within = json!({"by":"package", "op":"max", "field":"date"});
+        let draft = |tally: Option<Value>| {
+            let mut value = json!({"evidence_ids":[], "text":[{"computed":true}], "within":within.clone()});
+            value["tally"] = tally.unwrap_or(Value::Null);
+            serde_json::from_value::<DraftClaim>(value).unwrap().bind(&items)
+        };
+        assert!(draft(Some(json!({"op":"min","of":"release","field":"date","written":"2024"}))).is_ok());
+        assert!(draft(Some(json!({"op":"count","of":"release","field":null,"written":"2"}))).is_err());
+        assert!(draft(Some(json!({"op":"sum","of":"release","field":"date","written":"2"}))).is_err());
+        assert!(draft(None).is_err());
+        assert!(
+            draft(Some(json!({"op":"min","of":"release","field":"date","by":"package","group":"x","written":"2024"})))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn inner_reduction_survives_repack_and_public_claims_do_not_expose_it() {
+        let notes = Notes::new([fact(0, "record".into())]);
+        let items = initial_items(&notes, false);
+        let source_id = items[0].sources[0].clone();
+        let tally = json!({"op":"min","of":"release","field":"date","written":"2024"});
+        let within = Within { by: "package".into(), op: super::super::reduction::Extreme::Max, field: "date".into() };
+        let bound = serde_json::from_value::<DraftClaim>(json!({
+            "evidence_ids": [source_id], "text": ["latest: ", {"computed":true}], "tally": tally, "within": within.clone()
+        }))
+        .unwrap()
+        .bind(&items)
+        .unwrap();
+        assert_eq!(bound.within, Some(within.clone()));
+        let mut sources = IndexMap::new();
+        let packed = bound.repack(0, &mut sources).0;
+        let nested: Value = serde_json::from_str(&packed.text).unwrap();
+        assert_eq!(nested["within"], json!({"by":"package","op":"max","field":"date"}));
+        let public = serde_json::to_value(&bound.claim).unwrap();
+        assert!(public.get("within").is_none());
+        assert!(serde_json::from_value::<Claim>(json!({"evidence_ids":[],"text":"x","within":within})).is_err());
+
+        let feedback = json!({
+            "draft_claims": [bound.claim.clone()],
+            "drafted_claims": [bound.claim],
+            "drafted_composition": [null],
+            "drafted_within": [within.clone()],
+            "rejected_checks": []
+        });
+        let kept = passed_claims(&feedback.to_string(), &notes, &[]);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(
+            kept[0].1.within,
+            Some(Within { by: "package".into(), op: super::super::reduction::Extreme::Max, field: "date".into() })
+        );
+        let relabeled = relabeled(&feedback.to_string(), &items);
+        let relabeled: Value = serde_json::from_str(&relabeled).unwrap();
+        assert!(relabeled.get("drafted_within").is_none());
+        assert_eq!(relabeled["draft_claims"][0]["within"]["by"], "package");
     }
 
     #[test]

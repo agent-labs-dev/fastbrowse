@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::answers::{context_limit, request_bytes};
+use super::reduction::{GroupReads, Within, group_text, select_extremes};
 use super::text::{SpanKind, currency, spans};
 use crate::batches::evaluate_batches;
 use crate::error::{AgentError, Result};
@@ -111,6 +112,7 @@ impl Schema for Tally {
 pub struct Worked {
     pub value: String,
     pub evidence_ids: Vec<String>,
+    pub winner_ids: Option<Vec<String>>,
 }
 
 /// Why a tally has no value.
@@ -140,6 +142,7 @@ struct Candidate {
     /// Whether the saved capture proves that the quote covers an entire repeated item.
     whole_record: bool,
     source_kind: Option<BlockKind>,
+    occurrence: usize,
 }
 
 impl Candidate {
@@ -234,6 +237,10 @@ fn distinct(
 /// which of its page's tables it is in, counted by code, since a task names a table by its place on the page and a
 /// note alone does not show it.
 fn candidates(notes: &Notes) -> Vec<Candidate> {
+    candidates_from(notes, true)
+}
+
+fn candidates_from(notes: &Notes, deduplicate: bool) -> Vec<Candidate> {
     let live: Vec<(String, &fastbrowse_core::models::Evidence)> = notes
         .facts()
         .into_iter()
@@ -251,7 +258,7 @@ fn candidates(notes: &Notes) -> Vec<Candidate> {
         .filter(|(_, evidence)| {
             let quote = text::squash(&evidence.quote);
             let place = starts[&(evidence.capture_sha256.as_str(), quote.clone())].range(..evidence.start).count();
-            seen.insert((quote, place))
+            !deduplicate || seen.insert((quote, place))
         })
         .map(|(id, evidence)| {
             let span = (evidence.capture_sha256.clone(), evidence.start, evidence.end);
@@ -265,6 +272,9 @@ fn candidates(notes: &Notes) -> Vec<Candidate> {
                 page,
                 whole_record: notes.whole_record(evidence),
                 source_kind: notes.source_kind(evidence),
+                occurrence: starts[&(evidence.capture_sha256.as_str(), text::squash(&evidence.quote))]
+                    .range(..evidence.start)
+                    .count(),
             }
         })
         .collect()
@@ -530,7 +540,7 @@ fn per_group(
             )));
         }
     }
-    Ok(Worked { value: count.to_string(), evidence_ids })
+    Ok(Worked { winner_ids: None, value: count.to_string(), evidence_ids })
 }
 
 /// What narrowing a note's numbers to a choice Jev can hold found.
@@ -759,9 +769,147 @@ fn total(amounts: &[&Amount]) -> String {
     format!("{}{sum:.places$}", sign.map(String::from).unwrap_or_default())
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn select_records(
+    jev: &dyn DecisionClient,
+    llm: &dyn LLMClient,
+    state: &serde_json::Value,
+    tally: &Tally,
+    index: usize,
+    outer_fields: &HashMap<(usize, usize), FieldAnswer>,
+    within: &Within,
+    records: &[usize],
+    found: &[Candidate],
+    tokens: &TokenBudget,
+    ledger: Option<&Ledger>,
+) -> Result<std::result::Result<Vec<usize>, Unworked>> {
+    let schema = Typed::<GroupReads>::default();
+    let messages = |lines: &[String]| {
+        [
+            Message::system(format!(
+                "{UNTRUSTED}\nFor each record copy its {} exactly from its own quote or one of its captured headings. Set heading to null for the quote, or its zero-based heading index. Return every record once. Set text to null when no source states the field. Never invent, normalize or copy a value from another record.",
+                text::repr(&within.by)
+            )),
+            Message::user(lines.join("\n")),
+        ]
+    };
+    let limit = llm.context_tokens(LLMPurpose::Groups).await.map(context_limit).transpose()?;
+    let mut parts: Vec<Vec<String>> = Vec::new();
+    for note in records {
+        let mut shown = found[*note].note.clone();
+        if !found[*note].literal {
+            shown.as_object_mut().expect("candidate note is an object").remove("headings");
+        }
+        let line = format!("r{note}: {}", dumps(&shown));
+        let fits = |lines: &[String]| limit.is_none_or(|limit| request_bytes(&messages(lines), &schema) <= limit);
+        match parts.last_mut() {
+            Some(part) if fits(&[part.as_slice(), std::slice::from_ref(&line)].concat()) => part.push(line),
+            _ if fits(std::slice::from_ref(&line)) => parts.push(vec![line]),
+            _ => return Ok(Err(Unworked::Unjudged)),
+        }
+    }
+    let mut groups = HashMap::new();
+    for part in parts {
+        let generated = generate::<GroupReads>(llm, LLMPurpose::Groups, &messages(&part), ledger).await?;
+        if let Some(ledger) = ledger {
+            ledger.record([generated.cost])?;
+        }
+        for read in generated.data.records {
+            let Some(note) = read
+                .record
+                .strip_prefix('r')
+                .and_then(|value| value.parse::<usize>().ok())
+                .filter(|note| records.contains(note))
+            else {
+                return Ok(Err(Unworked::Unjudged));
+            };
+            let headings: Vec<String> = found[note].note["headings"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|value| value.as_str().map(str::to_owned))
+                .collect();
+            let Some(group) = group_text(&read, &found[note].quote, &headings, found[note].literal) else {
+                return Ok(Err(Unworked::Unjudged));
+            };
+            if groups.insert(note, text::squash(&group)).is_some() {
+                return Ok(Err(Unworked::Unjudged));
+            }
+        }
+    }
+    if groups.len() != records.len() {
+        return Ok(Err(Unworked::Unjudged));
+    }
+    let mut seen = HashSet::new();
+    let records: Vec<usize> = records
+        .iter()
+        .copied()
+        .filter(|note| seen.insert((groups[note].clone(), text::squash(&found[*note].quote), found[*note].occurrence)))
+        .collect();
+    let missing = |note: usize| Unworked::Notes {
+        reason: format!("This note is one {} but states no {}.", text::repr(&tally.of), text::repr(&within.field)),
+        notes: vec![found[note].id.clone()],
+    };
+    let inner = Tally { field: Some(within.field.clone()), ..tally.clone() };
+    let mut questions = IndexMap::new();
+    let mut offers = HashMap::new();
+    let mut known = HashMap::new();
+    for note in &records {
+        if tally.field.as_deref() == Some(within.field.as_str()) {
+            let value = match outer_fields.get(&(index, *note)) {
+                Some(FieldAnswer::Value(value)) => value,
+                Some(FieldAnswer::NoValue | FieldAnswer::NoRecord) => return Ok(Err(missing(*note))),
+                _ => return Ok(Err(Unworked::Unjudged)),
+            };
+            known.insert(*note, value.clone());
+            continue;
+        }
+        let mut shown = found[*note].note.clone();
+        if found[*note].whole_record {
+            shown["whole_record"] = true.into();
+        }
+        if let Some(kind) = found[*note].source_kind {
+            shown["source_kind"] = json!(kind);
+        }
+        match narrowed(jev, state, &inner, &shown, numbers(&found[*note].quote), tokens, ledger).await? {
+            Narrowed::Offer(values) => {
+                questions.insert(format!("inner/n{note}"), field_question(&inner, &shown, &values, false));
+                offers.insert(*note, values);
+            }
+            Narrowed::NoValue | Narrowed::NoRecord => return Ok(Err(missing(*note))),
+            Narrowed::Unjudged => return Ok(Err(Unworked::Unjudged)),
+        }
+    }
+    let answered = ask(jev, state, &questions, tokens, ledger).await?;
+    let mut dated = None;
+    let mut values = Vec::new();
+    for note in records {
+        let answer = answered.as_ref().and_then(|answers| answers.get(&format!("inner/n{note}")));
+        let value = match known.remove(&note) {
+            Some(value) => value,
+            None => match field_answer(answer, &offers[&note]) {
+                FieldAnswer::Value(value) => value,
+                FieldAnswer::NoValue | FieldAnswer::NoRecord => return Ok(Err(missing(note))),
+                FieldAnswer::Unjudged => return Ok(Err(Unworked::Unjudged)),
+            },
+        };
+        let Some(value) = amount(&value) else { return Ok(Err(missing(note))) };
+        if dated.is_some_and(|date| date != value.date) {
+            return Ok(Err(Unworked::Draft(format!(
+                "The inner {} mixes dates and numbers, which code cannot compare.",
+                text::repr(&within.field)
+            ))));
+        }
+        dated = Some(value.date);
+        values.push((note, groups[&note].clone(), value.value));
+    }
+    Ok(Ok(select_extremes(&values, within.op)))
+}
+
 /// Each claim's tally worked out, by the claim's index; a claim without a tally has no entry. Every note read is asked
 /// whether it is one record of the kind, rather than the notes the claim cites, so a record the composer left out is
 /// still counted.
+#[cfg(test)]
 pub async fn work(
     jev: &dyn DecisionClient,
     llm: &dyn LLMClient,
@@ -771,8 +919,23 @@ pub async fn work(
     tokens: &TokenBudget,
     ledger: Option<&Ledger>,
 ) -> Result<IndexMap<usize, std::result::Result<Worked, Unworked>>> {
+    work_selected(jev, llm, task, claims, &HashMap::new(), notes, tokens, ledger).await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn work_selected(
+    jev: &dyn DecisionClient,
+    llm: &dyn LLMClient,
+    task: &str,
+    claims: &[(usize, &Tally, &str, &[String])],
+    selections: &HashMap<usize, Within>,
+    notes: &Notes,
+    tokens: &TokenBudget,
+    ledger: Option<&Ledger>,
+) -> Result<IndexMap<usize, std::result::Result<Worked, Unworked>>> {
     let mut worked = IndexMap::new();
-    let found = candidates(notes);
+    let found = candidates_from(notes, selections.is_empty());
+    let flat_ids: HashSet<String> = candidates(notes).into_iter().map(|candidate| candidate.id).collect();
     let state = json!({"task": task});
     let mut members = IndexMap::new();
     let source_state = membership_state(task, notes);
@@ -855,6 +1018,9 @@ pub async fn work(
         }
         let example = example(notes, cited);
         for (note, candidate) in found.iter().enumerate() {
+            if !selections.contains_key(index) && !flat_ids.contains(&candidate.id) {
+                continue;
+            }
             if tally.op == Op::Count {
                 members.insert(format!("t{index}/n{note}"), member_question(tally, &candidate.note, example.as_ref()));
             } else {
@@ -892,6 +1058,9 @@ pub async fn work(
         fields.insert((index, note), field_answer(answer, &numbers));
     }
     let member = |index: usize, note: usize| {
+        if !selections.contains_key(&index) && !flat_ids.contains(&found[note].id) {
+            return Some(false);
+        }
         let index = led.get(&index).copied().unwrap_or(index);
         match fields.get(&(index, note)) {
             Some(FieldAnswer::Value(_) | FieldAnswer::NoValue) => Some(true),
@@ -944,7 +1113,7 @@ pub async fn work(
         }
         if tally.op == Op::Count {
             let evidence_ids = records.iter().map(|note| found[*note].id.clone()).collect();
-            worked.insert(*index, Ok(Worked { value: records.len().to_string(), evidence_ids }));
+            worked.insert(*index, Ok(Worked { winner_ids: None, value: records.len().to_string(), evidence_ids }));
             continue;
         }
         if records.is_empty() {
@@ -968,7 +1137,31 @@ pub async fn work(
         };
         worked.insert(*index, result);
     }
-    for (index, tally, records) in pending {
+    for (index, tally, mut records) in pending {
+        let basis = records.iter().map(|note| found[*note].id.clone()).collect::<Vec<_>>();
+        if let Some(within) = selections.get(&index) {
+            match select_records(
+                jev,
+                llm,
+                &source_state,
+                tally,
+                index,
+                &fields,
+                within,
+                &records,
+                &found,
+                tokens,
+                ledger,
+            )
+            .await?
+            {
+                Ok(selected) => records = selected,
+                Err(reason) => {
+                    worked.insert(index, Err(reason));
+                    continue;
+                }
+            }
+        }
         let mut amounts = Vec::new();
         for note in records {
             let chosen = match fields.get(&(index, note)) {
@@ -1007,11 +1200,11 @@ pub async fn work(
             worked.insert(index, Err(Unworked::Draft(reason)));
             continue;
         }
-        let result = match tally.op {
+        let mut result = match tally.op {
             Op::Sum => {
                 let all: Vec<&Amount> = amounts.iter().map(|(_, amount)| amount).collect();
                 let evidence_ids = amounts.iter().map(|(note, _)| found[*note].id.clone()).collect();
-                Worked { value: total(&all), evidence_ids }
+                Worked { winner_ids: None, value: total(&all), evidence_ids }
             }
             Op::Min | Op::Max => {
                 // Places count distinct values, so two records tied at the lowest are both first, and the next value
@@ -1034,25 +1227,30 @@ pub async fn work(
                 // Every record at that place is cited, so a tie is not settled by reading order.
                 let winners: Vec<&(usize, Amount)> = amounts.iter().filter(|(_, amount)| amount.value == at).collect();
                 let evidence_ids = winners.iter().map(|(note, _)| found[*note].id.clone()).collect();
-                if tally.names_record() {
-                    // The claim's answer is the record, which the record check judges, so its words stay.
-                    worked.insert(index, Ok(Worked { value: tally.written.clone(), evidence_ids }));
-                    continue;
-                }
                 let winner = &winners[0].1;
-                if winner.date {
-                    // A date is written whole, so the claim keeps its own form of the date when it is the one found.
+                let value = if tally.names_record() {
+                    tally.written.clone()
+                } else if winner.date {
                     let same =
                         amount(&tally.written).is_some_and(|claimed| claimed.date && claimed.value == winner.value);
-                    let value = if same { tally.written.clone() } else { winner.written.clone() };
-                    worked.insert(index, Ok(Worked { value, evidence_ids }));
-                    continue;
-                }
-                Worked { value: winner.written.clone(), evidence_ids }
+                    if same { tally.written.clone() } else { winner.written.clone() }
+                } else {
+                    winner.written.clone()
+                };
+                Worked { winner_ids: None, value, evidence_ids }
             }
             Op::Count => unreachable!("a count is worked out above"),
         };
-        worked.insert(index, Ok(Worked { value: as_written(&result.value, &tally.written), ..result }));
+        if selections.contains_key(&index) {
+            result.winner_ids = Some(result.evidence_ids.clone());
+            result.evidence_ids = basis;
+        }
+        let value = if tally.names_record() || amount(&result.value).is_some_and(|value| value.date) {
+            result.value.clone()
+        } else {
+            as_written(&result.value, &tally.written)
+        };
+        worked.insert(index, Ok(Worked { value, ..result }));
     }
     Ok(worked)
 }
@@ -1289,6 +1487,7 @@ mod tests {
             literal: true,
             whole_record: false,
             source_kind: None,
+            occurrence: 0,
             page: String::new(),
         };
         let found = [note("a", 0, 50), note("a", 0, 20), note("b", 0, 20), note("a", 60, 90)];
@@ -1308,8 +1507,17 @@ mod tests {
             _: Option<&'a Ledger>,
         ) -> BoxFuture<'a, std::result::Result<Generation<serde_json::Value>, LLMError>> {
             assert_eq!(purpose, LLMPurpose::Groups);
-            let records: Vec<serde_json::Value> =
-                self.0.iter().map(|(record, text)| json!({"record": record, "text": text})).collect();
+            let records: Vec<serde_json::Value> = self
+                .0
+                .iter()
+                .map(|(record, text)| {
+                    let mut value = json!({"record": record, "text": text});
+                    if schema.json_schema().to_string().contains("heading") {
+                        value["heading"] = serde_json::Value::Null;
+                    }
+                    value
+                })
+                .collect();
             Box::pin(async move {
                 let data = schema.validate_json(&json!({"records": records}).to_string()).map_err(LLMError::Failed)?;
                 let mut cost = CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.001));
@@ -1318,6 +1526,193 @@ mod tests {
                 Ok(Generation { data, cost })
             })
         }
+    }
+
+    struct FirstField;
+
+    impl DecisionClient for FirstField {
+        fn evaluate<'a>(
+            &'a self,
+            _: &'a serde_json::Value,
+            questions: &'a IndexMap<String, Question>,
+        ) -> fastbrowse_core::BoxFuture<
+            'a,
+            std::result::Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>,
+        > {
+            use fastbrowse_core::decision::{ChoiceAnswer, ChoiceTag, Evaluation};
+            let answers = questions
+                .iter()
+                .map(|(key, question)| {
+                    let Question::Choice(choice) = question else { panic!("only field choices expected") };
+                    assert!(choice.criteria.contains_key("n0"));
+                    let selected = if choice
+                        .criteria
+                        .values()
+                        .any(|value| value.as_str().is_some_and(|value| value.contains("is its 'price':")))
+                    {
+                        choice
+                            .criteria
+                            .iter()
+                            .find(|(_, value)| value.as_str().is_some_and(|value| value.starts_with("'£")))
+                            .map(|(key, _)| key.as_str())
+                            .unwrap_or(NO_VALUE)
+                    } else {
+                        "n0"
+                    };
+                    (
+                        key.clone(),
+                        Answer::Choice(ChoiceAnswer {
+                            kind: ChoiceTag,
+                            choice: selected.into(),
+                            probabilities: IndexMap::from([(selected.into(), 1.0)]),
+                            confidence: 1.0,
+                        }),
+                    )
+                })
+                .collect();
+            Box::pin(async move {
+                Ok(Evaluation {
+                    model: "fixture".into(),
+                    answers,
+                    input_tokens: 1,
+                    cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                    requests: 1,
+                })
+            })
+        }
+        fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+            fastbrowse_core::decision::DecisionProfile::jev()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_nested_comparison_works_through_the_actual_tally_path() {
+        let facts: Vec<_> = ["Release A Dec 6, 2019", "Release A Dec 6, 2024", "Release B Nov 8, 2026"].iter().enumerate().map(|(index, quote)| {
+            let evidence = serde_json::from_value(json!({"source_id": format!("s{index}"), "url": "https://example.test/releases", "frame_id": null, "captured_at": "2026-01-01T00:00:00Z", "capture_sha256": format!("sha{index}"), "start": 0, "end": quote.len(), "quote": quote})).unwrap();
+            crate::memory::Fact::read(quote, evidence, fastbrowse_core::models::FactReader::JevChoice)
+        }).collect();
+        let expected = fact_id(&facts[1]);
+        let basis: Vec<_> = facts.iter().map(fact_id).collect();
+        let notes = Notes::new(facts);
+        let tally = Tally {
+            op: Op::Min,
+            of: "release".into(),
+            field: Some("release date".into()),
+            rank: None,
+            by: None,
+            group: None,
+            written: "2024-12-06".into(),
+        };
+        let selections = HashMap::from([(
+            0,
+            Within { by: "package".into(), op: super::super::reduction::Extreme::Max, field: "release date".into() },
+        )]);
+        let reads = [("r0", Some("A")), ("r1", Some("A")), ("r2", Some("B"))];
+        let llm = ReadsGroups(&reads);
+        let tokens = FirstField.profile().fit(None).tokens;
+        let worked = work_selected(
+            &FirstField,
+            &llm,
+            "Which package has the older latest release?",
+            &[(0, &tally, "2024-12-06", &[])],
+            &selections,
+            &notes,
+            &tokens,
+            None,
+        )
+        .await
+        .unwrap();
+        let done = worked[&0].as_ref().unwrap();
+        assert_eq!(done.value, "2024-12-06");
+        assert_eq!(done.winner_ids, Some(vec![expected]));
+        assert_eq!(done.evidence_ids, basis);
+        let flat =
+            work(&FirstField, &llm, "Compare release dates", &[(0, &tally, "2024-12-06", &[])], &notes, &tokens, None)
+                .await
+                .unwrap();
+        assert_eq!(flat[&0].as_ref().unwrap().value, "Dec 6, 2019");
+
+        let found = candidates(&notes);
+        let mut fields = HashMap::from([
+            ((0, 0), FieldAnswer::NoValue),
+            ((0, 1), FieldAnswer::Value("Dec 6, 2024".into())),
+            ((0, 2), FieldAnswer::Value("Nov 8, 2026".into())),
+        ]);
+        let state = json!({"task": "compare releases"});
+        let failure = select_records(
+            &FirstField,
+            &llm,
+            &state,
+            &tally,
+            0,
+            &fields,
+            &selections[&0],
+            &[0, 1, 2],
+            &found,
+            &tokens,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(failure, Err(Unworked::Notes { notes, .. }) if notes == vec![found[0].id.clone()]));
+        fields.insert((0, 0), FieldAnswer::Value("12".into()));
+        let failure = select_records(
+            &FirstField,
+            &llm,
+            &state,
+            &tally,
+            0,
+            &fields,
+            &selections[&0],
+            &[0, 1, 2],
+            &found,
+            &tokens,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(failure, Err(Unworked::Draft(reason)) if reason.contains("mixes dates and numbers")));
+    }
+
+    #[tokio::test]
+    async fn different_inner_fields_select_before_requiring_an_outer_value() {
+        let facts: Vec<_> = ["Release A Dec 6, 2019", "Release A Dec 6, 2024 £9", "Release B Nov 8, 2026 £5"].iter().enumerate().map(|(index, quote)| {
+            let evidence = serde_json::from_value(json!({"source_id": format!("s{index}"), "url": "https://example.test/releases", "frame_id": null, "captured_at": "2026-01-01T00:00:00Z", "capture_sha256": format!("sha{index}"), "start": 0, "end": quote.len(), "quote": quote})).unwrap();
+            crate::memory::Fact::read(quote, evidence, fastbrowse_core::models::FactReader::JevChoice)
+        }).collect();
+        let expected = fact_id(&facts[1]);
+        let notes = Notes::new(facts);
+        let tally = Tally {
+            op: Op::Max,
+            of: "release".into(),
+            field: Some("price".into()),
+            rank: None,
+            by: None,
+            group: None,
+            written: "£9".into(),
+        };
+        let selections = HashMap::from([(
+            0,
+            Within { by: "package".into(), op: super::super::reduction::Extreme::Max, field: "release date".into() },
+        )]);
+        let reads = [("r0", Some("A")), ("r1", Some("A")), ("r2", Some("B"))];
+        let tokens = FirstField.profile().fit(None).tokens;
+        let worked = work_selected(
+            &FirstField,
+            &ReadsGroups(&reads),
+            "Compare the prices of latest releases",
+            &[(0, &tally, "£9", &[])],
+            &selections,
+            &notes,
+            &tokens,
+            None,
+        )
+        .await
+        .unwrap();
+        let done = worked[&0].as_ref().unwrap();
+        assert_eq!(done.value, "£9");
+        assert_eq!(done.winner_ids, Some(vec![expected]));
+        assert_eq!(done.evidence_ids.len(), 3);
     }
 
     #[tokio::test]
@@ -1330,6 +1725,7 @@ mod tests {
             literal: true,
             whole_record: false,
             source_kind: None,
+            occurrence: 0,
             page: String::new(),
         }];
         for (record, text, usable) in [("r0", Some("Ada"), true), ("r0", None, false), ("r1", Some("Ada"), false)] {
@@ -1364,6 +1760,7 @@ mod tests {
             literal: true,
             whole_record: false,
             source_kind: None,
+            occurrence: 0,
             page: String::new(),
         };
         let found = [note("One by Ada"), note("Two by Ada"), note("Three by Bo"), note("Four by Bo")];
