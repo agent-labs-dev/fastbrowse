@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **An older Chrome extension names what to update.** A copy without a supported-command list reports that extension 0.1.1 or later is required instead of listing every command as unsupported. The handshake reports the extension version when available and still refuses any missing required command.
+
 - Numeric tally checks qualify each record and select its quoted field in one decision. A missing field still withholds the result, while an unrelated date is not admitted by a separate membership verdict ([#977](https://github.com/agent-labs-dev/fastbrowse/issues/977)).
 
 - Legacy hosted dispatch outages can retain verified non-execution evidence without inventing a judge verdict or releasing their cost hold ([#1055](https://github.com/agent-labs-dev/fastbrowse/issues/1055)).
