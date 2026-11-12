@@ -197,6 +197,8 @@ public enum CostComponent
     Browser,
     [JsonStringEnumMemberName("proxy")]
     Proxy,
+    [JsonStringEnumMemberName("search")]
+    Search,
 }
 
 public sealed record CostLine
@@ -373,6 +375,8 @@ public enum LLMPurpose
     Dates,
     [JsonStringEnumMemberName("known_pages")]
     KnownPages,
+    [JsonStringEnumMemberName("search")]
+    Search,
     [JsonStringEnumMemberName("unobtainable")]
     Unobtainable,
     [JsonStringEnumMemberName("groups")]
@@ -489,6 +493,8 @@ public enum Operation
     Done,
     [JsonStringEnumMemberName("navigate")]
     Navigate,
+    [JsonStringEnumMemberName("search")]
+    Search,
 }
 
 /// <summary>

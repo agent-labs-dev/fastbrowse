@@ -42,5 +42,7 @@ public enum Operation {
     @JsonProperty("done")
     DONE,
     @JsonProperty("navigate")
-    NAVIGATE
+    NAVIGATE,
+    @JsonProperty("search")
+    SEARCH
 }

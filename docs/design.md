@@ -127,6 +127,14 @@ because an order total is gone once the order is placed. The step state's `page_
 and has not changed since, and when it changed after it was last read. Every READ Jev picks goes to the reader. A read
 that adds no new source quote counts toward the stall rule like any other step that moved nothing.
 
+With `EXA_API_KEY`, Jev can choose a web search at the start or during a run. The LLM proposes queries from the
+task, current page and evidence; Jev picks a query. Exa auto search returns up to ten results. Every returned result
+field is kept in a citable record, and result addresses become links that use the existing navigation and origin
+checks. The results view retains the current browser session. Repeating identical results counts as no progress.
+A quote from result metadata cites the API response address; open the result to obtain a citation from its page.
+The ledger reserves the documented search price before dispatch and records the provider receipt, or its bounded
+price when the receipt is unavailable. No key leaves search unavailable.
+
 Fetch reads the same way: by default a run reads pages over HTTP and follows links there, with the page's form controls
 offered as what it has. A disabled control (`disabled`, `aria-disabled="true"` or `inert` on the element) is not
 offered, as a browser capture leaves it out, so a disabled next link is no next page. A step only a browser can

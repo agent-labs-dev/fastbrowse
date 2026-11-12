@@ -305,6 +305,10 @@ impl Agent {
     ) -> Step<Action> {
         let target = decision.target.as_ref();
         match decision.operation {
+            Operation::Search => Ok(Action {
+                text: Some(self.search_query(state, observation).await?),
+                ..Action::new(Operation::Search)
+            }),
             Operation::Navigate => {
                 let Some(url) = decision.url.clone().filter(|url| {
                     task_urls(&state.task, state.caller_start.as_deref(), true).contains(url)
@@ -799,7 +803,7 @@ impl Agent {
     }
 
     /// Mask every string in `value`, however deeply it is nested.
-    fn mask_strings(&self, value: &mut JsonValue) {
+    pub(super) fn mask_strings(&self, value: &mut JsonValue) {
         match value {
             JsonValue::String(text) => *text = self.mask(text),
             JsonValue::Array(items) => items.iter_mut().for_each(|item| self.mask_strings(item)),
@@ -1417,7 +1421,7 @@ impl Agent {
         .into()
     }
 
-    async fn choose(
+    pub(super) async fn choose(
         &self,
         state: &mut RunState,
         observation: &Observation,

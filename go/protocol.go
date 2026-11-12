@@ -117,6 +117,7 @@ const (
 	CostComponentLLM     CostComponent = "llm"
 	CostComponentBrowser CostComponent = "browser"
 	CostComponentProxy   CostComponent = "proxy"
+	CostComponentSearch  CostComponent = "search"
 )
 
 type CostLine struct {
@@ -232,6 +233,7 @@ const (
 	LLMPurposePages        LLMPurpose = "pages"
 	LLMPurposeDates        LLMPurpose = "dates"
 	LLMPurposeKnownPages   LLMPurpose = "known_pages"
+	LLMPurposeSearch       LLMPurpose = "search"
 	LLMPurposeUnobtainable LLMPurpose = "unobtainable"
 	LLMPurposeGroups       LLMPurpose = "groups"
 )
@@ -299,6 +301,7 @@ const (
 	OperationRead      Operation = "read"
 	OperationDone      Operation = "done"
 	OperationNavigate  Operation = "navigate"
+	OperationSearch    Operation = "search"
 )
 
 // A method's params. An unknown field is refused, so a misspelled option is never dropped in silence.

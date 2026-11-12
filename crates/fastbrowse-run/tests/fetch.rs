@@ -15,6 +15,100 @@ use fastbrowse_run::fetch::html::blocks;
 use fastbrowse_run::fetch::{FetchedPage, NotFetched, eligible, fetch_document};
 use serde_json::Value;
 
+#[tokio::test]
+async fn search_results_keep_citable_fields_and_follow_real_links_through_the_existing_page() {
+    use fastbrowse_clients::environment::Secret;
+    use fastbrowse_clients::search::Exa;
+    use fastbrowse_core::models::{CostBasis, StepOutcome};
+    use fastbrowse_run::fetch::search::SearchPage;
+    let http = serving(|request| {
+        if request.url == "https://api.exa.ai/search" {
+            Response::json(
+                200,
+                &serde_json::json!({"results":[{"url":"https://shop.example.com/policy","title":"Returns policy","metadata":{"quote":"A  & B"}}],"costDollars":{"total":0.007}}),
+            )
+        } else {
+            assert_eq!(request.url, "https://shop.example.com/policy");
+            assert!(request.header("x-api-key").is_none());
+            Response::new(200, "<title>Returns</title><p>Thirty days.</p>").with_header("content-type", "text/html")
+        }
+    });
+    let inner = Arc::new(FetchedPage::new(http.clone(), None, None));
+    let page = SearchPage::new(
+        inner.clone(),
+        FetchedPage::new(http.clone(), None, None),
+        Exa::new(http, Secret::new("test-key")),
+    );
+    let result = page.search("returns policy", 30.0).await;
+    assert!(result.error.is_none());
+    assert!(result.page_changed);
+    assert!(!page.search("returns policy", 30.0).await.page_changed);
+    assert_eq!(result.cost.basis, CostBasis::Estimated);
+    let capture = page.capture().await.unwrap();
+    assert!(capture.text.contains("A  & B"));
+    assert_eq!(capture.sha256, sha256_hex(capture.text.as_bytes()));
+    let observed = page.observe().await.unwrap();
+    let link = observed.controls.iter().find(|control| control.label == "Returns policy").unwrap();
+    let action = Action { target_id: Some(link.id.clone()), ..Action::new(Operation::Click) };
+    assert_eq!(page.act(&action, &observed).await.unwrap().outcome, StepOutcome::Executed);
+    assert_eq!(page.address().await.unwrap(), "https://shop.example.com/policy");
+    assert_eq!(inner.address().await.unwrap(), "https://shop.example.com/policy");
+    assert!(page.capture().await.unwrap().text.contains("Thirty days."));
+}
+
+#[tokio::test]
+async fn search_result_navigation_respects_the_existing_origin_grant() {
+    use fastbrowse_clients::environment::Secret;
+    use fastbrowse_clients::search::Exa;
+    use fastbrowse_run::fetch::search::SearchPage;
+    let http = serving(|request| {
+        assert_eq!(request.url, "https://api.exa.ai/search");
+        Response::json(
+            200,
+            &serde_json::json!({"results":[{"url":"https://outside.example/result","title":"Result"}],"costDollars":{"total":0.007}}),
+        )
+    });
+    let origins = Some(vec!["https://allowed.example".into()]);
+    let inner = Arc::new(FetchedPage::new(http.clone(), origins.clone(), None));
+    let page = SearchPage::new(
+        inner.clone(),
+        FetchedPage::new(http.clone(), origins, None),
+        Exa::new(http, Secret::new("key")),
+    );
+    assert!(page.search("question", 30.0).await.error.is_none());
+    let observed = page.observe().await.unwrap();
+    let action = Action { target_id: Some(observed.controls[0].id.clone()), ..Action::new(Operation::Click) };
+    assert!(page.act(&action, &observed).await.is_err());
+    assert!(inner.needed_browser());
+}
+
+#[tokio::test]
+async fn search_keeps_the_selected_browser_destination_when_http_cannot_read_it() {
+    use fastbrowse_clients::environment::Secret;
+    use fastbrowse_clients::search::Exa;
+    use fastbrowse_run::fetch::search::SearchPage;
+    let http = serving(|request| {
+        if request.url == "https://api.exa.ai/search" {
+            Response::json(
+                200,
+                &serde_json::json!({"results":[{"url":"https://shop.example/app","title":"Shop"}],"costDollars":{"total":0.007}}),
+            )
+        } else {
+            Response::new(200, "<div id=app></div><script src=app.js></script>")
+                .with_header("content-type", "text/html")
+        }
+    });
+    let inner = Arc::new(FetchedPage::new(http.clone(), None, None));
+    let page =
+        SearchPage::new(inner.clone(), FetchedPage::new(http.clone(), None, None), Exa::new(http, Secret::new("key")));
+    assert!(page.search("shop", 30.0).await.error.is_none());
+    let observed = page.observe().await.unwrap();
+    let action = Action { target_id: Some(observed.controls[0].id.clone()), ..Action::new(Operation::Click) };
+    assert!(page.act(&action, &observed).await.is_err());
+    assert!(inner.needed_browser());
+    assert_eq!(page.browser_address().as_deref(), Some("https://shop.example/app"));
+}
+
 const PAGE: &str = r#"<!doctype html>
 <html><head><title>Orders report</title>
 <script>window.x = {"nested": "\"noise\""}</script>

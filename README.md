@@ -70,6 +70,10 @@ the automatically selected OpenRouter LLM moves to the gateway for the rest of t
 Jev can also run through the gateway as a last resort, or another decision host with `FASTBROWSE_DECISION_SOURCE`.
 [Jev routing](docs/jev.md#provider-failover) covers the order and [other hosts](docs/jev.md#other-decision-hosts).
 
+Set `EXA_API_KEY` to let Jev choose web search without opening a browser. The LLM proposes queries,
+and Exa returns result links and metadata that the run can cite or open. Each request has a `search` cost receipt;
+the run checks its dollar budget before sending it. A browser already in use stays open behind the results.
+
 Keys can live in a `.env` file in the working directory ([`.env.example`](.env.example) lists every setting), but
 values named by `--secret` must be in the process environment. `uv tool install fastbrowse` keeps the command on
 your PATH, `uv add fastbrowse` adds it to a project, and `npm install fastbrowse` gives Node.js the same agent with

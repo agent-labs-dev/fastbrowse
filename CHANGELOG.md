@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Web search can run without a browser.** With `EXA_API_KEY`, Jev picks LLM-proposed queries and opens links from Exa results. Returned fields remain citable, existing browsers stay open, and each search has a cost receipt checked against the run budget ([#986](https://github.com/agent-labs-dev/fastbrowse/issues/986)).
+
 - **Local runs use the browser attached through the extension.** `--local` now selects the extension; `--launch` opens a separate local Chrome. An explicit headed mode or profile also selects launched Chrome. A missing extension stops the run before model calls ([#1005](https://github.com/agent-labs-dev/fastbrowse/issues/1005)).
 
 - **A bench replay finds the answers to requests that cite a note.** A note's id ends with a digest of its page's address, the fixture server takes a new port each run, and the replay's port rule cannot reach a port inside a digest, so every request carrying a note missed its recorded answer. 9 of the 38 fixture cassettes failed on replay for that reason alone. The replay now numbers those digests by first appearance, along with the digest of a control's frame, whose key Chrome makes up anew for a cross-site frame, as it does Chrome target ids, and swaps them back into the recorded answer, so the cassettes already committed replay without a refill ([#768](https://github.com/agent-labs-dev/fastbrowse/issues/768)). Thanks to [@aakashpawar1999](https://github.com/aakashpawar1999) for the fix ([#845](https://github.com/agent-labs-dev/fastbrowse/pull/845)).

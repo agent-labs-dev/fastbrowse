@@ -101,6 +101,7 @@ class Operation(StrEnum):
     READ = "read"
     DONE = "done"
     NAVIGATE = "navigate"
+    SEARCH = "search"
 
 
 class Decider(StrEnum):
@@ -213,6 +214,7 @@ class CostComponent(StrEnum):
     LLM = "llm"
     BROWSER = "browser"
     PROXY = "proxy"
+    SEARCH = "search"
 
 
 class CostBasis(StrEnum):
@@ -237,6 +239,7 @@ class LLMPurpose(StrEnum):
     PAGES = "pages"
     DATES = "dates"
     KNOWN_PAGES = "known_pages"
+    SEARCH = "search"
     UNOBTAINABLE = "unobtainable"
     GROUPS = "groups"
 

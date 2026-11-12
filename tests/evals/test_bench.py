@@ -420,6 +420,7 @@ def test_record_forwards_the_routing_a_run_sends_for_its_model(monkeypatch: pyte
 
 
 def test_agent_gets_no_real_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EXA_API_KEY", "real")
     monkeypatch.setenv("OPENROUTER_API_KEY", "real")
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "real")
     monkeypatch.setenv("FASTBROWSE_HEADED", "1")

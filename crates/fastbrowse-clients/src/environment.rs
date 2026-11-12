@@ -196,6 +196,7 @@ pub struct Settings {
     pub ai_gateway_api_key: Option<Secret>,
     pub openrouter_api_key: Option<Secret>,
     pub browser_use_api_key: Option<Secret>,
+    pub exa_api_key: Option<Secret>,
     /// Bearer token for `fastbrowse-mcp --transport http`.
     pub mcp_token: Option<Secret>,
     pub decision_source: Option<DecisionSource>,
@@ -239,6 +240,7 @@ impl Default for Settings {
             ai_gateway_api_key: None,
             openrouter_api_key: None,
             browser_use_api_key: None,
+            exa_api_key: None,
             mcp_token: None,
             decision_source: None,
             decision_base_url: None,
@@ -265,11 +267,12 @@ impl Default for Settings {
 }
 
 /// Each setting's name as pydantic validates it, in declaration order, and the variable it is read from.
-const FIELDS: [(&str, &str); 23] = [
+const FIELDS: [(&str, &str); 24] = [
     ("TYPESAFE_API_KEY", "typesafe_api_key"),
     ("AI_GATEWAY_API_KEY", "ai_gateway_api_key"),
     ("OPENROUTER_API_KEY", "openrouter_api_key"),
     ("BROWSER_USE_API_KEY", "browser_use_api_key"),
+    ("EXA_API_KEY", "exa_api_key"),
     ("mcp_token", "fastbrowse_mcp_token"),
     ("decision_source", "fastbrowse_decision_source"),
     ("decision_base_url", "fastbrowse_decision_base_url"),
@@ -382,6 +385,7 @@ impl Settings {
             "AI_GATEWAY_API_KEY" => self.ai_gateway_api_key = secret(),
             "OPENROUTER_API_KEY" => self.openrouter_api_key = secret(),
             "BROWSER_USE_API_KEY" => self.browser_use_api_key = secret(),
+            "EXA_API_KEY" => self.exa_api_key = secret(),
             "mcp_token" => self.mcp_token = secret(),
             "decision_source" => self.decision_source = Some(DecisionSource::parse(value).ok_or(())?),
             "decision_base_url" => self.decision_base_url = text(),

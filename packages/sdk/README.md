@@ -96,6 +96,8 @@ starts one from the first step; the server refuses the two together. `allowedOri
 may open, read and control to those exact origins: navigations, redirects, frames and popups elsewhere are refused
 before they are sent, so a sign-in that redirects through another origin needs it listed too. It scopes documents,
 not the network, and a scoped run sends no frames and cannot `record`.
+Set `EXA_API_KEY` in the server environment to offer browserless web search. Jev picks among LLM-proposed queries;
+result fields become citable records and links use the same origin checks. Search charges appear under `search`.
 `env` in `Fastbrowse.start` adds to the environment the process inherits.
 Recipe paths name files on the server running fastbrowse. `saveRecipe` writes after a completed run; a write failure is logged without changing the task status, so check the file before replay;
 `recipe` reuses saved values for matching live actions with the same task.
