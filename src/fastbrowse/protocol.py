@@ -25,7 +25,7 @@ from fastbrowse.models import (
 
 # Changes only when the wire format does, so it is not the package version: a release that leaves the
 # messages alone leaves this alone, and an SDK can tell a binary it cannot talk to from one that is merely newer.
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 
 # Strict, because JSON-RPC echoes the id back and a `true` read as 1 would answer a request nobody sent.
 type RequestId = StrictInt | StrictStr

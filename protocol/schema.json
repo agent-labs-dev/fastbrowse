@@ -2070,7 +2070,7 @@
       "RUN_CANCEL": "run/cancel",
       "SHUTDOWN": "shutdown"
     },
-    "PROTOCOL_VERSION": 2,
+    "PROTOCOL_VERSION": 3,
     "ServerMethod": {
       "RUN_EVENT": "run/event",
       "RUN_FRAME": "run/frame",

@@ -17,7 +17,7 @@ use crate::schema::{Field, Mode, ModelTy, Schema, Ty, definitions};
 
 /// Changes only when the wire format does, so it is not the package version: a release that leaves the messages alone
 /// leaves this alone, and an SDK can tell a binary it cannot talk to from one that is merely newer.
-pub const PROTOCOL_VERSION: i64 = 2;
+pub const PROTOCOL_VERSION: i64 = 3;
 
 /// `StrictInt | StrictStr`. Strict, because JSON-RPC echoes the id back and a `true` read as 1 would answer a request
 /// nobody sent.

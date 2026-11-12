@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- SDK and binary pairs now use protocol 3. Older SDKs stop with a version mismatch before decoding new search operations and cost values.
+
 - **Citation requests are checked against the linked answer.** Coverage now sees the source and step citations the caller receives, rather than rejecting a complete answer after its links were omitted from that check ([#1041](https://github.com/agent-labs-dev/fastbrowse/issues/1041)).
 - **Jev can read a list through its next-page links.** Each page keeps its sign-in, bot-check and site-failure checks, citations and step limits. A different list, an unresolved page range or a page that needs another action returns to ordinary decisions ([#986](https://github.com/agent-labs-dev/fastbrowse/issues/986)).
 - **A scripted tile keeps its click when its decoration changes on hover.** A handler assigned through `element.onclick` now identifies the tile itself as clickable. Previously a child image that gained a pointer cursor could replace the tile in the capture and make the chosen click stale ([#900](https://github.com/agent-labs-dev/fastbrowse/issues/900)).
