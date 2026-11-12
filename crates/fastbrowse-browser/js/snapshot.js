@@ -1287,6 +1287,7 @@
     const offscreen = y < 0 || y >= innerHeight;
     const row = reusableRow(e, id, rname, offscreen, offscreen ? 1 + Math.abs(y - innerHeight / 2) : 0);
     if (row) {
+      registry.reuseCount = (registry.reuseCount || 0) + 1;
       // The context pass annotates rows in place. Copy the cached row so a later delta never mutates its oracle.
       controls.push({ ...row });
       if (!row.label) unnamed.add(id);
