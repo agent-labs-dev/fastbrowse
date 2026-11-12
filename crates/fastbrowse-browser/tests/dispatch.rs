@@ -1462,6 +1462,34 @@ async fn wait_watches(h: &common::Harness) -> Value {
     eval_active(&h.page, "(window.__fastbrowse ?? window).__fastbrowseWaits?.size ?? 0").await
 }
 
+// The wait installs its watch after the fingerprint taken before the dispatch. A page that changes in between used to
+// make the changed page the watch's baseline, so an unlimited wait on a page that never changed again blocked forever.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_ends_when_the_page_changes_between_the_pre_dispatch_read_and_the_watch() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    // The first read of the body's text after `window.armed` is set returns the old text and queues the rewrite as a
+    // microtask, which runs when that evaluation ends: after the pre-dispatch fingerprint, before the watch installs.
+    let script = "{ const line = document.createElement('p'); line.textContent = 'Status: pending'; \
+                  document.body.append(line); const read = Object.getOwnPropertyDescriptor(HTMLElement.prototype, \
+                  'innerText').get; let fired = false; Object.defineProperty(document.body, 'innerText', { get() { \
+                  const text = read.call(this); if (window.armed && !fired) { fired = true; \
+                  queueMicrotask(() => { line.textContent = 'Status: done'; }); } return text; } }); } true";
+    assert_eq!(eval_active(&h.page, script).await, json!(true));
+    let before = h.observe().await;
+    assert_eq!(eval_active(&h.page, "window.armed = true").await, json!(true));
+    let action = Action::new(Operation::Wait);
+    let wait = h.page.wait(&action, &before, f64::INFINITY);
+    let result = tokio::time::timeout(std::time::Duration::from_secs(20), wait)
+        .await
+        .expect("an unlimited wait never saw the change made before its watch was installed")
+        .expect("wait");
+    assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{result:?}");
+    assert!(result.page_changed, "{result:?}");
+    assert_eq!(wait_watches(&h).await, json!(0));
+    h.close().await;
+}
+
 // A status line rewritten every few seconds was waited on for five, and the run was told the page did not change.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_wait_outlasts_a_change_later_than_the_settle_bound() {
@@ -1556,6 +1584,7 @@ async fn test_an_unlimited_wait_sees_a_child_frame_change_and_its_player() {
             .unwrap_or_else(|_| panic!("{change}: an unlimited wait never saw the frame change"))
             .expect("wait");
         assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{change}: {result:?}");
+        assert!(result.page_changed, "{change}: {result:?}");
         assert_eq!(wait_watches(&h).await, json!(0), "{change}");
     }
     h.close().await;
@@ -1607,6 +1636,8 @@ async fn test_an_unlimited_wait_sees_a_cross_origin_frame_change_and_navigation(
             .unwrap_or_else(|_| panic!("{change}: an unlimited wait never saw the frame change"))
             .expect("wait");
         assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{change}: {result:?}");
+        // The tab's own fingerprint holds none of the frame, but the change is progress all the same.
+        assert!(result.page_changed, "{change}: {result:?}");
         assert_eq!(watches_everywhere(&h).await, vec![0, 0], "{change}");
     }
     h.close().await;
@@ -1641,6 +1672,61 @@ async fn test_a_wait_over_a_cross_origin_frame_ends_with_its_budget_and_a_cancel
         left = watches_everywhere(&h).await;
     }
     assert_eq!(left, vec![0, 0]);
+    h.close().await;
+}
+
+// A player's paused, ended or muted state is in the observation but not in the fingerprint the settle compares, so a
+// wait it ends is progress that only the wait itself knows. Only a moving clock is not.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_ended_by_a_player_state_change_is_progress() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    let script = "{ const player = document.createElement('audio'); player.controls = true; player.muted = true; \
+                  player.setAttribute('aria-label', 'Lesson audio'); document.body.append(player); \
+                  setTimeout(() => { player.muted = false; }, 900); } true";
+    assert_eq!(eval_active(&h.page, script).await, json!(true));
+    let before = h.observe().await;
+    let wait = Action::new(Operation::Wait);
+    let result = tokio::time::timeout(Duration::from_secs(20), h.page.wait(&wait, &before, f64::INFINITY))
+        .await
+        .expect("an unlimited wait never saw the player change")
+        .expect("wait");
+    assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{result:?}");
+    assert!(result.page_changed, "{result:?}");
+    assert_eq!(wait_watches(&h).await, json!(0));
+    h.close().await;
+}
+
+// A page that replaces its frames for as long as a wait lasts must not make the wait keep every document it saw.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_long_wait_over_replaced_frames_keeps_only_the_documents_in_the_page() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    let script = "{ const make = () => { const f = document.createElement('iframe'); f.srcdoc = '<body></body>'; \
+                  return f; }; document.body.append(make()); \
+                  window.replacing = setInterval(() => { document.querySelector('iframe').replaceWith(make()); }, 250); } \
+                  true";
+    assert_eq!(eval_active(&h.page, script).await, json!(true));
+    let before = h.observe().await;
+    let wait = Action::new(Operation::Wait);
+    let mut unbounded = Box::pin(h.page.wait(&wait, &before, f64::INFINITY));
+    assert!(tokio::time::timeout(Duration::from_millis(4000), &mut unbounded).await.is_err(), "empty frames woke it");
+    let held =
+        eval_active(&h.page, "[...(window.__fastbrowse ?? window).__fastbrowseWaits.values()].map(w => w.docs.size)")
+            .await;
+    // The page and the one frame it has now, plus at most a frame that is between its first document and its second.
+    assert!(held[0].as_i64().is_some_and(|n| (1..=3).contains(&n)), "{held}");
+    eval_active(&h.page, "clearInterval(window.replacing); true").await;
+    drop(unbounded);
+    let mut left = wait_watches(&h).await;
+    for _ in 0..50 {
+        if left == json!(0) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        left = wait_watches(&h).await;
+    }
+    assert_eq!(left, json!(0));
     h.close().await;
 }
 
