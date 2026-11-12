@@ -4,7 +4,8 @@
     uv run python -m fastbrowse.audit --tier 1 --tier 2 --spend --max-dollars 0.05
 
 Tier 0 spends nothing, so it is the default and is safe to run anywhere. Tiers 1 to 3 call paid models, so
-they are refused unless `--spend` is given.
+they are refused unless `--spend` is given. Local CLI cases use the connected fastbrowse extension;
+install it and connect the native host before running a paid tier.
 
 Every case yields one JSON row shaped as `{id, tier, command, exit_code, status, duration_s, cost_usd,
 assertions, evidence, budget_usd, timeout_s}`. The assertions array holds one entry per check, each naming
