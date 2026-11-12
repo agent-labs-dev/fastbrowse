@@ -241,7 +241,10 @@ async fn serve(http: &Http, url: &str, allowed_origins: Option<&[String]>, secon
     // A server refuses a client that does not name itself: Wikipedia answers 403 to a request with no User-Agent and
     // 200 to one that names it. The version is the crate's own.
     let headers = [
-        ("accept".to_string(), "text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8".to_string()),
+        (
+            "accept".to_string(),
+            "text/html,application/xhtml+xml;q=0.9,application/json;q=0.8,text/*;q=0.8,*/*;q=0.1".to_string(),
+        ),
         ("accept-encoding".to_string(), "gzip, deflate".to_string()),
         ("user-agent".to_string(), format!("fastbrowse/{}", env!("CARGO_PKG_VERSION"))),
     ];
