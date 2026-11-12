@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tempfile
 from collections import defaultdict
-from collections.abc import Awaitable, Callable, Collection, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -41,7 +41,7 @@ from parallax.track import sink
 from parallax.track.projection import ItemInput, ItemOutput
 from pydantic import BaseModel, ConfigDict
 
-from fastbrowse_evals import langfuse_runs, official, official_tracking, tracking
+from fastbrowse_evals import execution_receipts, langfuse_runs, official, official_tracking, tracking
 from fastbrowse_evals.adapters.browser_official_bridge import BillingError, judge_charge
 from fastbrowse_evals.attempt_clock import SESSION_OPEN_SECONDS, TIMING_BASIS
 from fastbrowse_evals.budget import POLICY
@@ -277,18 +277,38 @@ TIMING_NOTE = (
 )
 
 
+PHYSICAL_TIMING_NOTE = (
+    "Never-started attempts retain dispatch elapsed time; executed attempts retain session-ready-to-answer time. "
+    "Executed session opening and closing are excluded; complete phase totals are unavailable"
+)
+MIXED_TIMING_NOTE = (
+    "Rows state their clock; physical-attempt-wall-time includes dispatch and admission interruptions. "
+    "Times on different bases are not compared"
+)
+
+
 def timed(fields: dict[str, Any], where: str) -> None:
     """Refuse a row or a run whose seconds were not measured on the one clock every arm is compared on."""
     if fields.get("timing_basis") != TIMING_BASIS:
         raise PublicationError(f"{where}: its seconds are not measured from session ready to the answer")
 
 
-def timing_fields(tries: Iterable[dict[str, Any]]) -> dict[str, Any]:
+def timing_fields(
+    tries: Iterable[dict[str, Any]], execution: Mapping[str, execution_receipts.ValidatedExecution] | None = None
+) -> dict[str, Any]:
     """A public row's timing basis and session seconds, totalled as its seconds are. The pinned public contract may
     predate these fields, and it forbids any it does not name."""
     if "timing_basis" not in getattr(Row, "model_fields", {}):
         return {}
     tries = list(tries)
+    if execution and any(execution_receipts.key(t) in execution for t in tries):
+        # Admission failed before an agent ran, so its elapsed wait has no ready-to-answer clock or phase totals.
+        return {
+            "timing_basis": "physical-attempt-wall-time",
+            "timing_note": PHYSICAL_TIMING_NOTE,
+            "session_open_seconds": None,
+            "session_close_seconds": None,
+        }
     total = {
         key: math.fsum(values) if (values := [t[key] for t in tries if t.get(key) is not None]) else None
         for key in ("session_open_seconds", "session_close_seconds")
@@ -378,7 +398,13 @@ def attempt_dollars(row: dict[str, Any], where: str) -> float | None:
     return None if unknown else dollars
 
 
-def start_gate(journal: list[dict[str, Any]], physical: dict[str, dict[str, Any]], run: dict[str, Any], where: str):
+def start_gate(
+    journal: list[dict[str, Any]],
+    physical: dict[str, dict[str, Any]],
+    run: dict[str, Any],
+    where: str,
+    execution: dict[str, execution_receipts.ValidatedExecution] | None = None,
+):
     """Replay an internal campaign's budget journal against its recorded budget and hold. Each run held its agent,
     browser and judge reserves, and settled at its agent spend plus every priced judge attempt."""
     hold = run["reserve_dollars"] + run["browser_reserve_dollars"] + run["judge_reserve_dollars"]
@@ -388,6 +414,9 @@ def start_gate(journal: list[dict[str, Any]], physical: dict[str, dict[str, Any]
         if row.get("started") is False:
             # Its provider refused to start it, so nothing ran or was charged and the ledger settled it at zero.
             charges[key] = 0.0
+            continue
+        if key in (execution or {}):
+            charges[key] = hold
             continue
         judge_known, judge_unknown = tracking.SemanticReceipt.model_validate(row.get("semantic_judge")).judgment.cost()
         if judge_unknown:
@@ -538,7 +567,12 @@ class Invocation:
 
 
 def invocation(
-    group_id: str, results: Path, catalog: dict[str, Any], required: dict[str, Any], use: set[tuple[str, str]]
+    group_id: str,
+    results: Path,
+    catalog: dict[str, Any],
+    required: dict[str, Any],
+    use: set[tuple[str, str]],
+    execution_paths: Sequence[Path] = (),
 ) -> Invocation:
     """Check one invocation's ledger exactly as a single-run candidate is checked, its protocol, budget journal and
     judge receipts whole, and return the slots of the (arm, task) pairs in `use`, which it measured in full."""
@@ -616,7 +650,18 @@ def invocation(
     if len(physical) != len(attempts):
         raise PublicationError(f"{group_id}: every physical run requires one reservation and settlement")
     journal = [r for r in lines(results.with_suffix(".budget.jsonl")) if r.get("id") not in left_out]
-    start_gate(journal, physical, run, group_id)
+    from fastbrowse_evals.live import RUNNABLE, prompt
+
+    try:
+        execution = execution_receipts.load(
+            execution_paths, results, {t.id: prompt(t) for tasks in RUNNABLE.values() for t in tasks}
+        )
+        execution_receipts.coverage(physical, execution)
+    except ValueError as exc:
+        raise PublicationError(
+            f"{group_id}: every physical attempt needs its complete semantic judge receipt or validated non-execution coverage"
+        ) from exc
+    start_gate(journal, physical, run, group_id, execution)
 
     by_slot = {(r["arm"], r["task"], r["repeat"]): r for r in selected_rows}
     if len(by_slot) != len(selected_rows) or by_slot.keys() != slots.keys():
@@ -669,12 +714,12 @@ def invocation(
                 tokens_per_second=chosen.get("tokens_per_second") or 0.0,
                 input_tokens=sum(a.get("input_tokens") or 0 for a in tries),
                 output_tokens=sum(a.get("output_tokens") or 0 for a in tries),
-                **timing_fields(tries),
+                **timing_fields(tries, execution),
             )
         )
 
     campaign, receipts, ledger = internal_campaign(results, unmeasured)
-    if len(receipts) != len(campaign.attempts):
+    if len(receipts) + len(execution) != len(campaign.attempts):
         raise PublicationError(f"{group_id}: every physical attempt needs its complete semantic judge receipt")
     if any(receipt.judgment.policy != JUDGE_POLICY for receipt in receipts.values()):
         raise PublicationError(f"{group_id}: published figures are graded under {JUDGE_POLICY} ({OPUS_JUDGE} alone)")
@@ -694,12 +739,28 @@ def invocation(
         text_models={a["text_model"].strip() for a in attempts if isinstance(a.get("text_model"), str)},
         modes={arm: browser_identity(run, arm, group_id) for arm in arms},
         policies={receipt.policy_sha256 for receipt in receipts.values()},
-        tracked=tracking.project(campaign, Suite.INTERNAL, receipts=receipts, rows=ledger),
+        tracked=tracking.project(
+            campaign,
+            Suite.INTERNAL,
+            receipts=receipts,
+            rows=ledger,
+            execution={
+                a.id: execution[execution_receipts.key(ledger[a.id])]
+                for a in campaign.attempts
+                if execution_receipts.key(ledger[a.id]) in execution
+            },
+        ),
         physical_runs=len(attempts),
     )
 
 
-def internal_group(group_id: str, results: Path | Sequence[Path], catalog: dict[str, Any], digest: str) -> Collected:
+def internal_group(
+    group_id: str,
+    results: Path | Sequence[Path],
+    catalog: dict[str, Any],
+    digest: str,
+    execution_paths: Sequence[Path] = (),
+) -> Collected:
     """One internal group from the ledgers of one or more runs of a campaign, as the release gate scores it: each
     arm's rows at a task from the newest run that measured that arm at every repeat of it. So the head-to-head may
     take fastbrowse from a newer fastbrowse-only run, as the release gate pools them, while each competitor keeps its
@@ -720,7 +781,7 @@ def internal_group(group_id: str, results: Path | Sequence[Path], catalog: dict[
     for run, held, path in found:
         fresh = measured_in_full(run, held, required) - claimed
         if fresh:
-            item = invocation(group_id, path, catalog, required, fresh)
+            item = invocation(group_id, path, catalog, required, fresh, execution_paths)
             used.append(item)
             claimed |= item.claims
     used = [item for item in used if item.claims]
@@ -784,7 +845,7 @@ def internal_group(group_id: str, results: Path | Sequence[Path], catalog: dict[
         limits.append(UNCAPPED_NOTES[1])
     limits += [
         "Each slot totals physical runs including retries; an unresolved charge withholds its arm's complete cost",
-        TIMING_NOTE,
+        MIXED_TIMING_NOTE if any(row.timing_basis == "physical-attempt-wall-time" for row in rows) else TIMING_NOTE,
         f"Score is the recorded {OPUS_JUDGE.replace('/', ' ')} verdict; completion is the agent's own ending, recorded separately",
     ]
     models = {arm: sorted(set().union(*(item.models[arm] for item in used if arm in item.models))) for arm in arms}
@@ -1399,6 +1460,7 @@ def export(
     internal_fastbrowse: Ledgers = None,
     backend: Ledgers = None,
     reference: Path | None = None,
+    execution_paths: Sequence[Path] = (),
 ) -> Candidate:
     raw = catalog.read_bytes()
     if raw != render().encode():
@@ -1413,7 +1475,7 @@ def export(
         raise PublicationError("two official runs of one suite; pass one")
     collected = [
         *[
-            internal_group(name, source, catalog_data, digest)
+            internal_group(name, source, catalog_data, digest, execution_paths)
             for name, source in (
                 ("internal-fastbrowse", internal_fastbrowse),
                 # fastbrowse's rows at a head-to-head task may come from a newer fastbrowse-only run, as the release
@@ -1467,6 +1529,9 @@ def export(
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="fastbrowse-evals browser publish-candidate", description=__doc__)
+    parser.add_argument(
+        "--execution-receipts", nargs="*", type=Path, default=[], help="private hash-bound non-execution sidecars"
+    )
     parser.add_argument("--campaign-id", required=True)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--catalog", required=True, type=Path, help="the exported benchmark-catalog.json")
@@ -1532,6 +1597,7 @@ def main(argv: list[str] | None = None) -> None:
             fixture_run=args.fixture_run,
             checks=checks,
             reference=args.competitor_reference,
+            execution_paths=args.execution_receipts,
         )
         if args.write_reference is not None:
             refreshed = competitor_reference(candidate, json.loads(args.catalog.read_bytes()), args.measured_on)

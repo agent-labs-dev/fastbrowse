@@ -63,7 +63,7 @@ sig = "bf5c1ed03303c0a2"
 [[bindings]]
 doc = "blog/use-your-own-chrome.md"
 target = "crates/fastbrowse-browser/extension/background.js"
-sig = "67a79441c7c4acd2"
+sig = "3793a2a70ad5c406"
 
 [[bindings]]
 doc = "blog/use-your-own-chrome.md"
@@ -73,7 +73,7 @@ sig = "7f0be7087b920344"
 [[bindings]]
 doc = "blog/use-your-own-chrome.md"
 target = "crates/fastbrowse-cli/src/extension.rs"
-sig = "14c14d53672c30f1"
+sig = "1e4c0058e1c4543e"
 
 [[bindings]]
 doc = "blog/verify-browser-agent-results.md"

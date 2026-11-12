@@ -223,7 +223,10 @@ a claim of 9: a count is not a question for Jev.
 Tally membership questions share the current source notes, so a record's date or price can be read alongside
 separate page labels. Context retains identical labels from different pages even when record candidates are
 deduplicated. The provider's input limits still apply: a question whose complete context does not fit is unscored,
-not sent with missing notes. Later numeric extraction and comparisons do not receive this extra context.
+not sent with missing notes. For a total or extreme, one choice qualifies the record and selects its quoted
+numeric field together. A whole record with a missing field remains distinct from a note that is not a record,
+and withholds the result after deduplication. Questions narrowing large numeric offers receive the same source
+context; code computes the total or ordering.
 
 ## Unused primitives
 

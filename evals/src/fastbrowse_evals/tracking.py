@@ -20,6 +20,7 @@ from parallax.track import projection as tracking
 from parallax.track import sink
 from pydantic import BaseModel, Field
 
+from fastbrowse_evals.execution_receipts import ValidatedExecution, coverage
 from fastbrowse_evals.judging import browser_verdict
 from fastbrowse_evals.registry import BENCHMARKS, Suite
 
@@ -154,7 +155,7 @@ def judges_of(receipt: SemanticReceipt) -> set[str]:
 
 def run_metadata(runs: list[dict[str, Any]]) -> dict[str, object]:
     """Every field of the run records behind a row, under `run.`: one value when the runs agree, else each value.
-    A resumed campaign holds several runs; the first is the one that started it."""
+    A resumed campaign retains its run records; the first is the one that started it."""
     out: dict[str, object] = {}
     for key in dict.fromkeys(key for run in runs for key in run):
         values = list({json.dumps(run.get(key), sort_keys=True): run.get(key) for run in runs}.values())
@@ -169,11 +170,18 @@ def project(
     receipts: dict[str, SemanticReceipt] | None = None,
     rows: dict[str, dict[str, Any]] | None = None,
     extra: dict[str, object] | None = None,
+    execution: dict[str, ValidatedExecution] | None = None,
 ) -> Any:
     """`rows` are the attempts' raw ledger rows (`ledger_rows`), which carry what configured and ran each attempt;
     `extra` is run metadata from outside the ledger, such as the CI run that tracked it."""
     known_rows = {} if rows is None else rows
     known_receipts = {} if receipts is None else receipts
+    known_execution = {} if execution is None else execution
+    if known_execution:
+        coverage(
+            {a.id: {**(rows or {})[a.id], "semantic_judge": known_receipts.get(a.id)} for a in campaign.attempts},
+            known_execution,
+        )
     semantic = bool(known_receipts)
     benchmark = BENCHMARKS[suite]
     if any(a.arm not in benchmark.arms for a in campaign.attempts):
@@ -202,6 +210,11 @@ def project(
     identity = {
         **campaign.model_dump(),
         "semantic_receipts": {k: v.model_dump(mode="json") for k, v in known_receipts.items()},
+        **(
+            {"execution_receipts": {k: v.model_dump(mode="json") for k, v in known_execution.items()}}
+            if known_execution
+            else {}
+        ),
     }
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
 
@@ -242,6 +255,8 @@ def project(
             wall_ms=round(attempt.seconds * 1000) if attempt.seconds is not None else None,
             invalid_reason=None
             if semantic and value is not None
+            else "provider worker never started; no semantic judgment exists"
+            if attempt.id in known_execution
             else "semantic judgment unavailable"
             if semantic
             else "raw ledger result only; semantic receipt unavailable",
@@ -365,6 +380,16 @@ def project(
                 for a in task_attempts
                 if a.id in known_receipts
             )
+            evidence[row, iid] += tuple(
+                {
+                    "attempt": a.id,
+                    "repeat": a.repeat,
+                    "retry": a.retry,
+                    "execution_receipt": known_execution[a.id].model_dump(mode="json"),
+                }
+                for a in task_attempts
+                if a.id in known_execution
+            )
             traces.append(
                 tracking.TraceSpec(
                     item_id=iid,
@@ -396,6 +421,7 @@ def project(
             "projection_sha256": digest,
             "grading": "recorded-semantic-judge" if semantic else "recorded-unclassified-grade",
             "semantic_receipts": sum(a.id in known_receipts for a in attempts),
+            **({"non_execution_receipts": sum(a.id in known_execution for a in attempts)} if known_execution else {}),
             "campaign_scheduled_slots": campaign.scheduled_slots,
             "campaign_covered_slots": covered if campaign.scheduled_slots is not None else None,
             "campaign_missing_slots": max(0, campaign.scheduled_slots - covered)

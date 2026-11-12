@@ -264,6 +264,11 @@ browser starts. When the run ends `unavailable` with `no browser has the fastbro
   unset. A run started with `FASTBROWSE_EXTENSION_DIR` set, or with a different `XDG_RUNTIME_DIR` from
   Chrome's, looks somewhere else.
 
+If the error says the extension does not report its supported commands, it is too old for this build.
+Extension 0.1.1 or later must advertise every required command. Store 0.1.0 cannot do that. Update the
+extension, or run `fastbrowse extension path` and load its folder unpacked through **Developer mode** at
+`chrome://extensions`. A newer version number alone does not establish compatibility.
+
 ### Another extension's frame takes the tab away
 
 Chrome lets no extension debug a tab while the page holds a frame from another extension, and takes the tab

@@ -47,7 +47,11 @@ stopped is a failed row naming why, and a legacy `blocked` slot reads as one. Ea
 reason and counts as `repeats` failed attempts in every pass rate. A row whose agent connects to its browser where the
 harness cannot see (hosted Browser Use, Browser Harness) states what of that setup stayed in its seconds in
 `timing_note`. The site's parser (`src/lib/benchmark-feed.ts`) must accept these fields before a candidate that has
-them is published.
+them is published. A validated never-started retry uses `physical-attempt-wall-time`: its seconds sum the
+recorded dispatch elapsed time and the executed attempts' session-ready-to-answer time, without adding
+executed session opening or closing. Its note describes this accounting and its phase totals stay absent.
+Groups retain outcomes and every elapsed time across explicit bases, but consumers must suppress aggregate
+speed comparisons across bases. Legacy rows without a basis cannot be mixed with explicit clocks.
 
 `internal-hosted` is the head-to-head over the 53 tasks fastbrowse runs; figures approved at 46, 47 or 52 tasks still
 read. A campaign runs `fastbrowse` and `jev-ultrafast` live in one harness invocation, on Browser Use Cloud browsers
@@ -155,3 +159,20 @@ reason. A protocol change states its cause in its note, such as #356's uncapped 
 pull request became the approval. `python -m fastbrowse.evals.benchmarks --check-diff` still refuses any change to
 them, their archives or their protocol-change records that lacks the owner receipt they were approved with. A new
 campaign is not published there.
+
+Legacy hosted dispatches that lost their receipt can supply `--execution-receipts PATH ...` to
+`publish-candidate`. Each closed, versioned `ExecutionReceipt` sidecar binds the original selected,
+physical and budget ledger hashes, its canonical physical row, the complete stdout log and a separate
+provider archive. The archive records the run, every cursor page of terminal events and the stopped
+browser. Collection provenance names the API version, SDK version, collector and query time. These
+are hash-pinned provider observations, not provider-signed attestations or final billing receipts.
+
+The loader requires an exact unique join between WATCH browser IDs and physical attempts, an explicit
+`worker.never_started` event after dispatch failed at worker admission, present zero token usage and
+no execution events. Missing, unfamiliar or contradictory events reject the receipt. Only an
+unselected attempt preceding a genuinely graded selected retry may use it. Every physical attempt
+has exactly one semantic judgment or validated non-execution receipt; an ordinary missing judge
+still blocks publication. The non-execution detail remains ungraded in private tracking, with its
+reason and provider archive included in the evidence zip and run identity. Selected outcomes still
+come from real judgments. Raw ledgers, elapsed time and the full unknown-cost hold stay unchanged;
+provider IDs and detailed receipts stay out of the public candidate.

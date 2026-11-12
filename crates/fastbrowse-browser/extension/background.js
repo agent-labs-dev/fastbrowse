@@ -109,7 +109,7 @@ const ops = {
     runs.set(conn, run);
     updateBadge();
     // The methods it relays, so a run that needs one this copy predates fails before it starts instead of mid-task.
-    return { protocol: PROTOCOL, methods: [...(await allowedMethods())], ...(await identity()) };
+    return { protocol: PROTOCOL, extensionVersion: chrome.runtime.getManifest().version, methods: [...(await allowedMethods())], ...(await identity()) };
   },
   async ping() {
     return {};

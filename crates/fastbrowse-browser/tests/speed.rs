@@ -1081,6 +1081,42 @@ async fn test_render_changes_without_dom_mutations_match_full_observations() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_scroll_render_changes_without_dom_mutations_match_full_observations() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(&h.session, r#"document.head.insertAdjacentHTML('beforeend','<style>html{scrollbar-width:none}body::after{content:"";display:block;height:5000px}body:has(x-scroll:state(page-locked)){overflow:hidden}x-scroll{display:block;width:200px;height:100px;overflow:auto;scrollbar-width:none}x-scroll::after{content:"";display:block;width:400px;height:400px;flex-shrink:0}x-scroll:state(locked){overflow:hidden}x-scroll:state(short)::after{width:20px;height:20px}x-scroll:state(reverse){display:flex;flex-direction:column-reverse}x-scroll:state(rtl){direction:rtl}x-scroll:state(vertical){writing-mode:vertical-rl}x-scroll:state(moved){transform:translateY(2000px)}</style>');customElements.define('x-scroll',class extends HTMLElement{constructor(){super();this.internals=this.attachInternals()}});document.body.innerHTML='<x-scroll aria-label="Reviews"></x-scroll>';globalThis.scroller=document.querySelector('x-scroll');globalThis.domChanges=0;new MutationObserver(records=>domChanges+=records.length).observe(document,{subtree:true,attributes:true,childList:true,characterData:true});true"#).await;
+    let before = h.observe().await;
+    assert!(before.controls.iter().any(|control| control.label == "Vertical scroll area: Reviews"));
+    count_reads(&h).await;
+    for state in ["moved", "locked", "short", "reverse", "rtl", "vertical", "page-locked"] {
+        eval_active(&h.session, "scroller.internals.states.clear()").await;
+        let clean = h.observe().await;
+        assert!(clean.controls.iter().any(|control| control.label == "Vertical scroll area: Reviews"));
+        assert!(clean.controls.iter().any(|control| control.label == "Vertical scroll area: Page"));
+        eval_active(&h.session, "globalThis.__fbReads={total:0,unchanged:0,delta:0}").await;
+        let script = format!("scroller.internals.states.add('{state}')");
+        eval_active(&h.session, &script).await;
+        assert_eq!(eval_active(&h.session, "domChanges").await, json!(0), "{script}");
+        let after = h.observe().await;
+        assert_eq!(reads(&h).await, (1, 0), "{script}");
+        if state == "page-locked" {
+            assert!(!after.controls.iter().any(|control| control.label == "Vertical scroll area: Page"));
+        }
+        let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
+        let mut full = other.observe().await.expect("full read");
+        full.captured_at = after.captured_at;
+        assert_eq!(after, full, "{script}");
+        h.observe().await;
+        eval_active(&h.session, "globalThis.__fbReads={total:0,unchanged:0,delta:0}").await;
+        let mut unchanged = h.observe().await;
+        assert_eq!(reads(&h).await, (1, 1), "{script}");
+        unchanged.captured_at = after.captured_at;
+        assert_eq!(after, unchanged, "{script}");
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_custom_control_properties_without_events_match_full_observations() {
     let _turn = turn().await;
     let Some(h) = harness().await else { return };

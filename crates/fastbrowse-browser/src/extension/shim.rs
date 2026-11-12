@@ -519,22 +519,7 @@ pub async fn connect(record: &HostRecord, task: &str, trace: Trace) -> Result<En
         return Err(unavailable(error));
     }
     let hello = hello["result"].clone();
-    let theirs = hello["protocol"].as_u64().unwrap_or_default();
-    if theirs != u64::from(PROTOCOL) {
-        let update = if theirs < u64::from(PROTOCOL) { "the fastbrowse extension" } else { "fastbrowse" };
-        return Err(unavailable(&format!(
-            "the fastbrowse extension speaks relay protocol {theirs} and this fastbrowse speaks {PROTOCOL}: update \
-             {update}"
-        )));
-    }
-    let missing = missing_methods(&hello);
-    if !missing.is_empty() {
-        return Err(unavailable(&format!(
-            "the fastbrowse extension does not relay {} that this fastbrowse sends: update the fastbrowse extension \
-             (from the Chrome Web Store, or run `fastbrowse extension path` and click Reload on chrome://extensions)",
-            missing.join(", ")
-        )));
-    }
+    validate_hello(&hello)?;
     let (to_cdp, replies) = mpsc::unbounded_channel();
     let (commands, mut incoming) = mpsc::unbounded_channel::<String>();
     let relay = Arc::new(Relay {
@@ -597,8 +582,38 @@ fn unavailable(message: &str) -> BrowserError {
     BrowserError::Unavailable(message.to_owned())
 }
 
-/// The CDP methods this build sends that the extension's hello does not list. A copy older than the list sends none,
-/// so every method is missing; a newer copy relaying more passes.
+/// An older Store copy can speak the same protocol without advertising the commands this build needs.
+/// The version explains recovery; only the explicit command inventory establishes compatibility.
+fn validate_hello(hello: &Value) -> Result<(), BrowserError> {
+    let theirs = hello["protocol"].as_u64().unwrap_or_default();
+    if theirs != u64::from(PROTOCOL) {
+        let update = if theirs < u64::from(PROTOCOL) { "the fastbrowse extension" } else { "fastbrowse" };
+        return Err(unavailable(&format!(
+            "the fastbrowse extension speaks relay protocol {theirs} and this fastbrowse speaks {PROTOCOL}: update \
+             {update}"
+        )));
+    }
+    let version = hello["extensionVersion"].as_str().unwrap_or("(version not reported)");
+    if !hello["methods"].is_array() {
+        return Err(unavailable(&format!(
+            "the fastbrowse extension {version} does not report its supported commands: this fastbrowse needs \
+             extension 0.1.1 or newer with the required commands. Update it from the Chrome Web Store; if that \
+             update is not available yet, run `fastbrowse extension path` and load that unpacked copy from \
+             chrome://extensions"
+        )));
+    }
+    let missing = missing_methods(hello);
+    if !missing.is_empty() {
+        return Err(unavailable(&format!(
+            "the fastbrowse extension {version} does not relay {} that this fastbrowse sends: update the fastbrowse extension \
+             (from the Chrome Web Store, or run `fastbrowse extension path` and click Reload on chrome://extensions)",
+            missing.join(", ")
+        )));
+    }
+    Ok(())
+}
+
+/// The CDP methods this build sends that the extension's hello does not explicitly list.
 fn missing_methods(hello: &Value) -> Vec<String> {
     let theirs: HashSet<&str> = hello["methods"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
     allowed_methods().into_iter().filter(|method| !theirs.contains(method.as_str())).collect()
@@ -631,6 +646,32 @@ mod tests {
         let mut more: Vec<String> = ours.clone();
         more.push("Some.newerMethod".to_owned());
         assert!(missing_methods(&json!({"methods": more})).is_empty(), "a newer copy relaying more passes");
+    }
+
+    #[test]
+    fn an_old_store_copy_names_the_required_extension_before_the_run() {
+        let error = validate_hello(&json!({"protocol": PROTOCOL})).unwrap_err().to_string();
+        assert!(error.contains("version not reported"));
+        assert!(error.contains("extension 0.1.1 or newer"));
+        assert!(!error.contains("does not relay DOM"));
+        let error = validate_hello(&json!({
+            "protocol": PROTOCOL, "extensionVersion": "0.1.0", "methods": null
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("extension 0.1.0"));
+    }
+
+    #[test]
+    fn commands_are_required_even_when_the_extension_version_is_newer() {
+        let mut hello = json!({"protocol": PROTOCOL, "extensionVersion": "0.1.1", "methods": allowed_methods()});
+        assert!(validate_hello(&hello).is_ok());
+        hello["extensionVersion"] = json!("99.0.0");
+        hello["methods"] = json!([]);
+        assert!(validate_hello(&hello).unwrap_err().to_string().contains("does not relay"));
+        hello["methods"] = json!(allowed_methods());
+        hello["protocol"] = json!(PROTOCOL + 1);
+        assert!(validate_hello(&hello).unwrap_err().to_string().contains("relay protocol"));
     }
 
     fn relay() -> Relay {

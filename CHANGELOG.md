@@ -13,16 +13,19 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.11.0] - 2026-11-12
 
+- Eval publication retains dispatch interruption time under an explicit timing basis and refuses speed comparisons across different clocks ([#1055](https://github.com/agent-labs-dev/fastbrowse/issues/1055)).
+
+- **An older Chrome extension names what to update.** A copy without a supported-command list reports that extension 0.1.1 or later is required instead of listing every command as unsupported. The handshake reports the extension version when available and still refuses any missing required command.
+
+- Numeric tally checks qualify each record and select its quoted field in one decision. A missing field still withholds the result, while an unrelated date is not admitted by a separate membership verdict ([#977](https://github.com/agent-labs-dev/fastbrowse/issues/977)).
+
+- Legacy hosted dispatch outages can retain verified non-execution evidence without inventing a judge verdict or releasing their cost hold ([#1055](https://github.com/agent-labs-dev/fastbrowse/issues/1055)).
+
 - **Unchanged observations reuse their validated snapshot in Rust.** A matching document and read number shares the parsed snapshot instead of cloning and parsing its JSON again. Control deltas still reconstruct from the exact saved rows, and browser rendering checks remain current ([#943](https://github.com/agent-labs-dev/fastbrowse/issues/943)).
 
 - **Detached frames release their saved observations.** Removing an iframe now frees its retained full snapshots on the next frame read. Live frames retain their snapshots across tab switches ([#1062](https://github.com/agent-labs-dev/fastbrowse/issues/1062)).
 - Comparator eval outcomes and timings can publish while costs remain provisional. An unresolved physical charge withholds that arm's complete cost figures and retains its full budget hold; Fastbrowse costs and judge charges still require complete receipts ([#1058](https://github.com/agent-labs-dev/fastbrowse/issues/1058)).
 - Tally membership checks receive the source notes alongside each candidate, preserving separate page labels that qualify a date or price. Numeric extraction and comparisons remain unchanged ([#977](https://github.com/agent-labs-dev/fastbrowse/issues/977)).
-
-- Comparator eval outcomes and timings can publish while costs remain provisional. An unresolved physical charge withholds that arm's complete cost figures and retains its full budget hold; Fastbrowse costs and judge charges still require complete receipts ([#1058](https://github.com/agent-labs-dev/fastbrowse/issues/1058)).
-- Tally membership checks receive the source notes alongside each candidate, preserving separate page labels that qualify a date or price. Numeric extraction and comparisons remain unchanged ([#977](https://github.com/agent-labs-dev/fastbrowse/issues/977)).
-
-- **The live cursor follows extension runs.** `--cursor` brings the extension's tab forward and draws at the browser window identified by its native host. On X11, Cua Driver 0.45.4 or later draws fastbrowse's ember focus marker and keeps it visible between actions. The marker lands before input, and the control is checked again after the glide. Recordings use the same focus shape.
 
 - **The live cursor follows extension runs.** `--cursor` brings the extension's tab forward and draws at the browser window identified by its native host. On X11, Cua Driver 0.45.4 or later draws fastbrowse's ember focus marker and keeps it visible between actions. The marker lands before input, and the control is checked again after the glide. Recordings use the same focus shape.
 
@@ -40,7 +43,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Eval rows preserve provider cost precision instead of rounding totals to five decimal places ([#1058](https://github.com/agent-labs-dev/fastbrowse/issues/1058)).
 - Hosted dispatch outages retain their provider run, session and available billing receipt instead of losing that evidence when retrying ([#1055](https://github.com/agent-labs-dev/fastbrowse/issues/1055)).
 
-- **Saved observations notice rendering changes without DOM mutations.** A custom element changing its CSS state now refreshes controls, names, positions and hover targets. Reuse checks the rendering facts the saved read consumed, including live selector results, instead of relying on DOM changes alone ([#1050](https://github.com/agent-labs-dev/fastbrowse/issues/1050)).
+- **Saved observations notice rendering changes without DOM mutations.** A custom element changing its CSS state now refreshes controls, names, positions and hover targets. Reuse checks the rendering facts the saved read consumed, including live selector results and scroll dimensions, flow styles and positions, instead of relying on DOM changes alone ([#1050](https://github.com/agent-labs-dev/fastbrowse/issues/1050)).
 
 - The eval embedder forwards a configured Exa key to fastbrowse while keeping inherited provider keys out of isolated adapters ([#1054](https://github.com/agent-labs-dev/fastbrowse/issues/1054)).
 
