@@ -24,6 +24,13 @@ run-name: Benchmark campaign ${{ inputs.campaign_id || github.event.client_paylo
 #                 Cloud browser with the same settings (published as internal-hosted). Jev Ultrafast runs every task it
 #                 can attempt; the catalog states why it skips the others.
 #   all           both.
+# `extra_arms` adds arms beside them. `fastbrowse-pool` only in a smoke. `fastbrowse-hosted`, our own product's
+# public API as a customer calls it, may join a real campaign, and then always as its own group writing
+# `fastbrowse-hosted.jsonl`: publication's internal groups accept a fixed arm set, so its rows must never enter a
+# published ledger. It is a diagnostic - its dollars are the customer charge rather than metered provider cost, and
+# the API returns no copy of the final page, so the page half of a task is ungraded - and no step reads that ledger
+# into a candidate. A failure there is reported on the run but does not block publication, so it costs a rerun only
+# if its own rows are wanted; every published group still fails the campaign.
 # The budget gates new attempts; Parallax gives no task time, step or dollar limit to an active arm.
 # Browser Use (its default model and bu-ultrafast) and Browser Harness are not run by default: their figures come from
 # docs/results/competitor-reference.json,
@@ -43,6 +50,8 @@ run-name: Benchmark campaign ${{ inputs.campaign_id || github.event.client_paylo
 #            LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY (each ledger is sent there; the candidate reads them back,
 #            with the fixture run)
 #            BROWSER_USE_API_KEY
+#   secrets when `extra_arms` names fastbrowse-hosted: FASTBROWSE_HOSTED_API_KEY (its own submit would otherwise
+#            fail one attempt at a time, after the paid groups had started)
 #   secrets, optional: FASTBROWSE_SITE_TOKEN (publish-evals.yml checks it when it opens the site pull request;
 #            a campaign measured without it republishes with publish-evals.yml run_id)
 #   vars:    PARALLAX_JUDGE_BASE_URL, PARALLAX_JUDGE_MODELS
@@ -125,7 +134,7 @@ on:
         type: boolean
         default: false
       concurrency:
-        description: Smoke only. Runs in flight at once; empty keeps the default of 8
+        description: Runs in flight at once; empty keeps the default of 8. A smoke applies it to every group. A real campaign applies it to the fastbrowse-hosted group alone, because its ledger is a diagnostic no published group reads
         required: false
         type: string
         default: ""
@@ -135,7 +144,7 @@ on:
         type: string
         default: ""
       extra_arms:
-        description: Smoke only. Space separated arms added to every chosen group, from fastbrowse-pool and fastbrowse-hosted
+        description: Space separated arms added to every chosen group, from fastbrowse-pool and fastbrowse-hosted. fastbrowse-pool needs smoke; fastbrowse-hosted runs in a real campaign as its own diagnostic group
         required: false
         type: string
         default: ""
@@ -238,8 +247,24 @@ jobs:
           esac
           # A published comparison covers every task of its suites under one setting, so only a smoke changes the
           # setting. `only` may narrow a release run: the gate scores each task on its newest run (scripts/release_gate.py).
-          if test "$SMOKE" != true && { test -n "$RUN_CONCURRENCY" || test -n "$EXTRA_ARMS"; }; then
-            echo "::error::concurrency and extra_arms need smoke"; exit 1
+          # The one exception is `fastbrowse-hosted`, our own product's public API: its rows are a diagnostic (customer
+          # charge, and no copy of the final page, so the page half is ungraded) and it writes its own ledger that no
+          # published group reads, so a real campaign may add it and set its concurrency without moving a published
+          # setting. `fastbrowse-pool` keeps its rule: it drives the same browser a published group's rows name, so it
+          # stays a smoke-only probe. Any other arm is refused below.
+          if test "$SMOKE" != true && test -n "$RUN_CONCURRENCY"; then
+            case " $EXTRA_ARMS " in
+              *" fastbrowse-hosted "*) ;;
+              *) echo "::error::concurrency outside a smoke only sets the fastbrowse-hosted group, so it needs extra_arms fastbrowse-hosted"; exit 1 ;;
+            esac
+          fi
+          if test "$SMOKE" != true && test -n "$EXTRA_ARMS"; then
+            for arm in $EXTRA_ARMS; do
+              case "$arm" in
+                fastbrowse-hosted) ;;
+                *) echo "::error::extra_arms outside a smoke may only name fastbrowse-hosted, got '$arm'"; exit 1 ;;
+              esac
+            done
           fi
           if test -n "$HEAD_TO_HEAD_ARMS" && test "$GROUPS_CHOSEN" != head-to-head; then
             echo "::error::head_to_head_arms needs groups head-to-head"; exit 1
@@ -310,6 +335,7 @@ jobs:
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
           LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          FASTBROWSE_HOSTED_API_KEY: ${{ secrets.FASTBROWSE_HOSTED_API_KEY }}
         run: |
           missing=""
           need() { test -n "$2" || missing="$missing $1"; }
@@ -321,12 +347,19 @@ jobs:
           need LANGFUSE_PUBLIC_KEY "$LANGFUSE_PUBLIC_KEY"
           need LANGFUSE_SECRET_KEY "$LANGFUSE_SECRET_KEY"
           need BROWSER_USE_API_KEY "$BROWSER_USE_API_KEY"
+          # Only a campaign that named our hosted arm needs its key; it is what the hosted group's first submit
+          # would otherwise fail on, one attempt at a time, after the paid groups had already started.
+          case " $EXTRA_ARMS " in
+            *" fastbrowse-hosted "*) need FASTBROWSE_HOSTED_API_KEY "$FASTBROWSE_HOSTED_API_KEY" ;;
+          esac
           if test -n "$missing"; then
             echo "::error::missing repository configuration:$missing"
             exit 1
           fi
           groups=1
           if test "$GROUPS_CHOSEN" = all && test "$SMOKE" != true; then groups=2; fi
+          # The hosted diagnostic group spends too, on the same OpenRouter key for its steps and its judge.
+          case " $EXTRA_ARMS " in *" fastbrowse-hosted "*) groups=$((groups + 1)) ;; esac
           # Both keys must cover every group before browsers begin billing.
           for key in "$OPENROUTER_API_KEY" "$PARALLAX_JUDGE_API_KEY"; do
             KEY="$key" NEED="$(python3 -c "print($BUDGET * $groups)")" python3 - <<'PYTHON'
@@ -351,13 +384,25 @@ jobs:
           paired="fastbrowse $vendors"
           # Words only: the validation step admitted nothing but arm names.
           if test -n "$HEAD_TO_HEAD_ARMS"; then read -ra named <<< "$HEAD_TO_HEAD_ARMS"; paired="${named[*]}"; fi
-          extra="${EXTRA_ARMS:+ $EXTRA_ARMS}"
-          fastbrowse="{\"label\":\"fastbrowse\",\"key\":\"fastbrowse\",\"arms\":\"fastbrowse$extra\",\"out\":\"internal-fastbrowse.jsonl\"}"
-          head_to_head="{\"label\":\"head-to-head\",\"key\":\"head-to-head\",\"arms\":\"$paired$extra\",\"out\":\"head-to-head.jsonl\"}"
+          # `fastbrowse-hosted` never joins a published group: each internal group's arm set is fixed in the
+          # publication gate, so its rows would refuse the candidate. It always gets its own ledger, which no
+          # candidate step reads.
+          extra=""
+          hosted=""
+          for arm in $EXTRA_ARMS; do
+            if test "$arm" = fastbrowse-hosted; then hosted="fastbrowse-hosted"; else extra="$extra $arm"; fi
+          done
+          # A smoke sets every group's concurrency; a real campaign sets the hosted group's alone, because the
+          # published groups' concurrency is part of the setting a figure is measured under.
+          published_conc=""; test "$SMOKE" = true && published_conc="$RUN_CONCURRENCY"
+          fastbrowse="{\"label\":\"fastbrowse\",\"key\":\"fastbrowse\",\"arms\":\"fastbrowse$extra\",\"conc\":\"$published_conc\",\"out\":\"internal-fastbrowse.jsonl\"}"
+          head_to_head="{\"label\":\"head-to-head\",\"key\":\"head-to-head\",\"arms\":\"$paired$extra\",\"conc\":\"$published_conc\",\"out\":\"head-to-head.jsonl\"}"
+          hosted_group=""
+          test -z "$hosted" || hosted_group=",{\"label\":\"hosted\",\"key\":\"hosted\",\"arms\":\"fastbrowse-hosted\",\"conc\":\"$RUN_CONCURRENCY\",\"out\":\"fastbrowse-hosted.jsonl\"}"
           case "$GROUP_SET" in
-            fastbrowse) include="[$fastbrowse]" ;;
-            head-to-head) include="[$head_to_head]" ;;
-            *) include="[$fastbrowse,$head_to_head]" ;;
+            fastbrowse) include="[$fastbrowse$hosted_group]" ;;
+            head-to-head) include="[$head_to_head$hosted_group]" ;;
+            *) include="[$fastbrowse,$head_to_head$hosted_group]" ;;
           esac
           echo "matrix=$include" >> "$GITHUB_OUTPUT"
           {
@@ -368,6 +413,9 @@ jobs:
               fastbrowse) ;;
               *) echo "Head-to-head arms: \`$paired$extra\`." ;;
             esac
+            # Named as a diagnostic where a reader first sees the arms, so its ledger is never read as a
+            # like-for-like row: customer charge rather than metered cost, and the page half is ungraded.
+            test -z "$hosted" || echo "Diagnostic group \`hosted\`: \`fastbrowse-hosted\` (our own hosted API, customer charge, page half ungraded; not published)."
           } >> "$GITHUB_STEP_SUMMARY"
 
   campaign:
@@ -379,6 +427,9 @@ jobs:
     permissions: {contents: read, statuses: write, id-token: write}
     # A full campaign is hours, not minutes, but a stuck cloud browser must not hold a runner for a day.
     timeout-minutes: 350
+    # The hosted diagnostic never decides whether a campaign may publish: its ledger is in no candidate, so its
+    # failure is reported on the run and does not skip the stage job. Every published group still fails the run.
+    continue-on-error: ${{ matrix.label == 'hosted' }}
     strategy:
       fail-fast: false
       matrix:
@@ -448,11 +499,11 @@ jobs:
       # and read the pool's token, and leases through the forward.
       - name: Sign in to the browser pool's project
         if: ${{ contains(env.EXTRA_ARMS, 'fastbrowse-pool') }}
-        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: projects/173247957816/locations/global/workloadIdentityPools/github-pool/providers/github-fastbrowse
           service_account: fastbrowse-evals-pool@fastbrowse-hosted.iam.gserviceaccount.com
-      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
         if: ${{ contains(env.EXTRA_ARMS, 'fastbrowse-pool') }}
         with: {install_components: "gke-gcloud-auth-plugin,kubectl"}
       - name: Forward the browser pool
@@ -482,7 +533,9 @@ jobs:
           read -ra only <<< "$ONLY"
           narrow=()
           test "${#only[@]}" -eq 0 || narrow+=(--only "${only[@]}")
-          test -z "$RUN_CONCURRENCY" || narrow+=(--concurrency "$RUN_CONCURRENCY")
+          # Per group: a real campaign's published groups keep the default, and only the hosted diagnostic takes
+          # the dispatch's setting.
+          test -z "${{ matrix.conc }}" || narrow+=(--concurrency "${{ matrix.conc }}")
           uv run --no-sync fastbrowse-evals browser internal \
             --arms "${arms[@]}" \
             --suite "${suites[@]}" \
@@ -513,6 +566,9 @@ jobs:
     if: ${{ always() && needs.resolve.result == 'success' && needs.campaign.result != 'skipped' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {contents: read, actions: read}
+    # As in `campaign`: the stage job requires this job's success, so a failed send of the hosted diagnostic must not
+    # skip a candidate every published group measured.
+    continue-on-error: ${{ matrix.label == 'hosted' }}
     strategy:
       fail-fast: false
       matrix:

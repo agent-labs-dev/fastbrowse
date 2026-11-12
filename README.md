@@ -40,10 +40,15 @@ credentials, irreversible actions and spending under the control of code.
 Recorded on fastbrowse 0.10.0 and local Chrome against Sauce Demo, a public practice store: 16.4 seconds, 12 steps and
 $0.0149 in model calls. The full-resolution recording is [docs/assets/demo.mp4](docs/assets/demo.mp4).
 
-On 46 tasks run three times each against the hosted Browser Use agent, under the same limits on Browser Use
-Cloud browsers, fastbrowse passed 99.2% of runs to 96.3% and cost $0.0296 a run to $0.3180, 10.7x less. That
-is the published campaign, release-0.7.1, which records no run time for either arm, so no speed claim is made
-here. See [How it compares](#how-it-compares).
+On 53 live tasks run three times each, against three other agents under the same limits on Browser Use cloud
+browsers, fastbrowse 0.10.0 passed 89.9% of its 159 attempts to the hosted Browser Use agent's 94.1%, Browser
+Harness's 88.2% and Jev Ultrafast's 4.6%, and cost $0.0150 a run to the hosted agent's $0.5508, 36.6x less. It
+was fastest on 35 of the 50 tasks two or more agents passed, against 11 for the hosted agent. That is the
+published campaign, release-0.10.0: 53 tasks at three repeats, run 2026-11-09, fastbrowse-evals at commit
+`2e94d24`, judged by anthropic/claude-opus-5.5 through OpenRouter. The hosted agent passed more attempts than
+fastbrowse on this suite; cost and speed are the measures fastbrowse leads. See
+[How it compares](#how-it-compares) and [Benchmark results](docs/benchmarks.md) for the runs each arm's figure
+excludes.
 
 ## Try it
 
@@ -107,23 +112,27 @@ the version the eval runner pins.
 
 Benchmarking makes three comparisons:
 
-- **C1, agent against agent:** fastbrowse against the hosted Browser Use agent, the figures above, on Browser
-  Use cloud browsers under identical limits with the hosted agent at its defaults. On its own 53-task catalog,
-  fastbrowse passed 99.3% at $0.0268 a run.
+- **C1, agent against agent:** fastbrowse against the hosted Browser Use agent, Browser Harness and Jev
+  Ultrafast, the figures above, on the same tasks on Browser Use cloud browsers under identical limits with each
+  agent at its own defaults. On the same 53-task catalog, fastbrowse alone passed 90.5% of its 159 attempts at
+  $0.0149 a run. Jev Ultrafast, the fourth arm of that live suite, passed 4.6% of 129 attempts at $0.0017 a run
+  and was fastest on 2 of the 50 tasks two or more agents passed. It cannot return an answer, so every task that
+  asks a question fails, and 6 of the 53 tasks are counted as failures: five need login credentials it has no way
+  to be given, and saucedemo-pause needs a pause before an irreversible step, which it cannot make.
 - **C2, browser against browser:** the same fastbrowse build on its own browser pool and on a Browser Use Cloud
   browser. In an earlier record (release-0.5.25), not on the published page, the pool passed fewer tasks.
-- **C3, fastbrowse on its pool against `jev-ultrafast`,** over the 6 navigation tasks, since `jev-ultrafast`
-  returns no answer: not yet measured. Browser Use's own Ultrafast is not measured by us either: its vendor-reported
-  22 seconds and $0.0064 a task cover the model and the search only, with the browser and proxy billed separately, so
-  they are not comparable with our figures.
+- **C3, fastbrowse on its own browser pool against `jev-ultrafast`:** not yet measured. The pairing over the 6
+  navigation tasks both run has not been run; the Ultrafast figures above are C1's, on a Browser Use cloud browser
+  like every arm of that campaign. Browser Use's vendor-reported 22 seconds and $0.0064 a task for Ultrafast cover
+  the model and the search only, with the browser and proxy billed separately, so they are not comparable with our
+  figures.
 
-The [benchmark page](https://fastbrowse.ai/benchmarks) publishes campaign release-0.7.1 (agent commit `7b8b0e8f`,
-data sha256 `7d6ac26f23fa6d354128fa7e4bcc8190125c441f4f136dc39d0e3c35cec5d4e2`). 0.9.1 is the current release and
-no campaign measured on a 0.9.x build has been published, so nothing above describes 0.9.1;
-[Benchmark results](docs/benchmarks.md#why-the-published-campaign-lags-the-release) says why and what the next
-campaign measures.
-[Benchmark results](docs/benchmarks.md) gives the sources, cost basis and limitations, and
-[eval results and workflow](docs/evals.md) covers the diagnostic suites.
+The [benchmark page](https://fastbrowse.ai/benchmarks) publishes campaign release-0.10.0 (fastbrowse-evals at
+commit `2e94d24`, run 2026-11-09, judged by anthropic/claude-opus-5.5 through OpenRouter). 0.10.0, tagged
+2026-11-10, is the current release, so the published campaign measures the build that ships; no campaign
+measured on a 0.10.1 build has been published yet, so nothing above describes 0.10.1.
+[Benchmark results](docs/benchmarks.md) gives the sources, cost basis, each arm's excluded runs and the
+limitations, and [eval results and workflow](docs/evals.md) covers the diagnostic suites.
 
 ## How it works
 
