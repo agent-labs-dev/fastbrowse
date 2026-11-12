@@ -1881,3 +1881,32 @@ def test_selected_results_cannot_change_a_partial_receipts_unknown_flag(tmp_path
     ledger.write_text("".join(json.dumps(row) + "\n" for row in rows))
     with pytest.raises(PublicationError, match="differs from its selected attempt"):
         publication.internal_group("internal-hosted", ledger, CATALOG, DIGEST)
+
+
+@pytest.mark.parametrize("concurrency", [4, 8])
+def test_internal_publication_preserves_explicit_concurrency(tmp_path: Path, concurrency: int) -> None:
+    results = internal_fastbrowse_ledger(tmp_path, concurrency=concurrency)
+    group = publication.internal_group("internal-fastbrowse", results, CATALOG, DIGEST)
+    assert any(note.startswith(f"Concurrency {concurrency};") for note in group.group.limits)
+
+
+def test_internal_publication_rejects_relabeling_attempt_concurrency(tmp_path: Path) -> None:
+    results = internal_fastbrowse_ledger(tmp_path, concurrency=4)
+    attempts = results.with_suffix(".attempts.jsonl")
+    rows = publication.lines(attempts)
+    rows[0]["concurrency"] = 8
+    attempts.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    with pytest.raises(PublicationError, match="concurrency differs from the protocol"):
+        publication.internal_group("internal-fastbrowse", results, CATALOG, DIGEST)
+
+
+@pytest.mark.parametrize("new_concurrency,reported", [(4, "4"), (8, "4 or 8")])
+def test_internal_publication_reports_each_retained_invocation_concurrency(
+    tmp_path: Path, new_concurrency: int, reported: str
+) -> None:
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir(), second.mkdir()
+    duel = write_ledger(first, "hosted", ("fastbrowse", "browser-use"), concurrency=4)
+    alone = write_ledger(second, "internal-fastbrowse", ("fastbrowse",), concurrency=new_concurrency, **LATER)
+    group = publication.internal_group("internal-hosted", [duel, alone], CATALOG, DIGEST).group
+    assert any(note.startswith(f"Concurrency {reported};") for note in group.limits)

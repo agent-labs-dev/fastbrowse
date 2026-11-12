@@ -1555,7 +1555,7 @@ mod tests {
     #[test]
     fn sibling_records_do_not_inherit_an_earlier_records_heading() {
         for level in [3, 5] {
-            let html = include_str!("../../../../tests/browser/sites/sibling-record-headings.html")
+            let html = include_str!("../../../fastbrowse-browser/tests/fixtures/sibling-record-headings.html")
                 .replace("<h3>", &format!("<h{level}>"))
                 .replace("</h3>", &format!("</h{level}>"));
             let (_, found) = blocks(&html, "https://example.test/releases");
