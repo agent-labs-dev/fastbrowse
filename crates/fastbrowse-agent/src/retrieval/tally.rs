@@ -1474,6 +1474,17 @@ mod tests {
         other_page.url.push_str("/other");
         assert_eq!(notes.source_kind(&other_page), None);
         assert!(!notes.whole_record(&other_page));
+        // A list item that is only a link names a record elsewhere, as "Shop A" on a page of shops did.
+        let mut linked = capture(&[(BlockKind::ListItem, "Shop A")]);
+        let block = &linked.blocks[0];
+        linked.blocks[0].links = vec![fastbrowse_core::models::Link {
+            text: "Shop A".into(),
+            start: block.start,
+            end: block.end,
+            href: "https://shop.example.test/a".into(),
+        }];
+        notes.remember_capture(&linked, 0);
+        assert_eq!(notes.source_kind(&quote(&linked)), Some(BlockKind::Link));
     }
 
     #[test]

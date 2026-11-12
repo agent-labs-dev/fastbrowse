@@ -264,6 +264,8 @@ struct SourceBlock {
     end: i64,
     kind: BlockKind,
     whole_record: bool,
+    /// The span of each link's text inside the block.
+    links: Vec<(i64, i64)>,
 }
 
 #[derive(Clone, Default)]
@@ -315,6 +317,7 @@ impl Notes {
                 end: block.end,
                 kind: block.kind,
                 whole_record: block.whole_record,
+                links: block.links.iter().map(|link| (link.start, link.end)).collect(),
             });
         }
         for (identity, blocks) in sources {
@@ -330,9 +333,12 @@ impl Notes {
             .is_some_and(|block| block.whole_record && block.start == evidence.start && block.end == evidence.end)
     }
 
-    /// The uniquely containing block's type; unknown provenance must not invent a page structure.
+    /// The type of the element the quote is: a link when it lies within one link's text, such as a list item that is
+    /// only a link, otherwise its uniquely containing block's. Unknown provenance must not invent a page structure.
     pub fn source_kind(&self, evidence: &Evidence) -> Option<BlockKind> {
-        self.source_block(evidence).map(|block| block.kind)
+        let block = self.source_block(evidence)?;
+        let link = block.links.iter().any(|&(start, end)| start <= evidence.start && evidence.end <= end);
+        Some(if link { BlockKind::Link } else { block.kind })
     }
 
     fn source_block(&self, evidence: &Evidence) -> Option<&SourceBlock> {
