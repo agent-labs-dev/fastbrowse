@@ -202,6 +202,18 @@
     registry.revTracking = true;
     registry.rev = 0;
     const bumped = () => registry.rev++;
+    registry.bumpRevision = bumped;
+    registry.observeRoot = root => {
+      registry.observedRoots ||= new WeakSet();
+      if (registry.observedRoots.has(root)) return;
+      registry.observedRoots.add(root);
+      new MutationObserver(bumped).observe(root, {
+        subtree: true,
+        characterData: true,
+        childList: true,
+        attributes: true,
+      });
+    };
     for (const type of [
       'pointermove',
       'pointerover',
@@ -1125,6 +1137,7 @@
   let lightElements;
   function* walk(root) {
     // A document observer cannot see mutations inside shadow roots or child documents.
+    registry.observeRoot?.(root);
     const elements = indexedElements(root);
     if (root === document) lightElements = [...elements];
     for (const e of elements) {
@@ -2081,9 +2094,29 @@
       page_key,
     };
   } else if (registry.kept) {
-    // A deep read cannot be reused, and retaining its earlier shallow tree would pin detached page elements.
-    delete registry.kept[mode];
-    if (own.renderReads) delete own.renderReads[mode];
+    // Deep roots are observed while walking, so their baseline can be reused when every root remains unchanged.
+    own.renderReads ||= {};
+    own.renderReads[mode] = { read, document_key: String(performance.timeOrigin), inputs: [] };
+    registry.kept ||= {};
+    registry.kept[mode] = {
+      mode,
+      read,
+      rev: readRev,
+      live: readLive,
+      sheets: readSheets,
+      href: location.href,
+      title: document.title,
+      scrollX,
+      scrollY,
+      innerWidth,
+      innerHeight,
+      hidden: document.hidden,
+      readyState: document.readyState,
+      listenerAPI: Boolean(own.listeners),
+      url: location.href,
+      document_key: String(performance.timeOrigin),
+      page_key,
+    };
   }
   const result = {
     url: location.href,
