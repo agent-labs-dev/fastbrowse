@@ -283,13 +283,15 @@ async fn serve(http: &Http, url: &str, allowed_origins: Option<&[String]>, secon
     let final_url = url::Url::parse(&target).map_or(target.clone(), String::from);
     outside(&final_url, allowed_origins, "a redirect left for ")?;
     let body = decode(content_type, &body, HTML_TYPES.contains(&mime.as_str()));
-    if mime == "text/plain" {
+    let json = mime == "application/json" || (mime.starts_with("application/") && mime.ends_with("+json"));
+    if (mime.starts_with("text/") && !HTML_TYPES.contains(&mime.as_str())) || json {
         if text::strip(&body).is_empty() {
             return Err(refused("the document is empty"));
         }
         let found = Found {
             kind: BlockKind::Paragraph,
-            text: clean(&body),
+            // JSON strings and delimited fields carry significant whitespace, which HTML's cleanup would change.
+            text: if json || mime != "text/plain" { body } else { clean(&body) },
             heading_path: Vec::new(),
             href: None,
             links: Vec::new(),

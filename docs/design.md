@@ -136,6 +136,8 @@ build. So a run over HTTP that took no step cannot finish a task that asks for o
 browser does it.
 `fetch` forbids the browser, and `browser` starts one from the first step.
 Fetched documents have no pixels, so optional screenshots and step frames are skipped.
+JSON responses, including `application/*+json`, and other `text/*` responses are read as quoted text blocks.
+JSON and delimited data keep their whitespace and literal values, without HTML parsing or numeric conversion.
 
 Browser captures record an icon-only link's destination with nearby container text, passing through empty layout
 wrappers. The search stops at a paragraph even when it is empty, and never uses the page root as nearby text.
