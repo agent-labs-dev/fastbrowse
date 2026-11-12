@@ -39,3 +39,17 @@ rust:
     cp target/release/libfastbrowse_node.$(test "$(uname)" = Darwin && echo dylib || echo so) crates/fastbrowse-node/fastbrowse.node
     node --test crates/fastbrowse-node/test/core.test.ts
     FASTBROWSE_TEST_ADDON="$PWD/crates/fastbrowse-node/fastbrowse.node" npm run check:sdk
+
+# The extension as the zip a Chrome Web Store upload takes: the same nine files `fastbrowse extension path`
+# writes, at the archive's root. Bump `version` in the manifest before uploading a revision.
+extension-zip out="dist/fastbrowse-extension.zip":
+    #!/usr/bin/env sh
+    set -eu
+    dest={{quote(out)}}
+    case "$dest" in /*) ;; *) dest="$PWD/$dest" ;; esac
+    files="manifest.json background.js popup.html popup.js allowed-methods.json icon-16.png icon-32.png icon-48.png icon-128.png"
+    mkdir -p "$(dirname "$dest")"
+    rm -f "$dest"
+    cd crates/fastbrowse-browser/extension
+    zip -q -X "$dest" $files
+    echo "$dest"
