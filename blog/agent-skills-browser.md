@@ -44,6 +44,8 @@ Behind the skill, the agent calls the CLI or an MCP server. Either way the run r
 
 The skill does not authorize writes. For a form, give the agent the URL and the values, and say whether to stop before submitting or to submit. Without that, an irreversible action stops at the confirmation step.
 
+Optional `EXA_API_KEY` adds browserless web search. Its results offer links to open, and its charges count against the run's dollar cap.
+
 The skill sets no spending limits. Pass limits yourself, or put a budget in the task. A cloud browser's charge is added when it stops, separately from any cap on model spend.
 
 [Use fastbrowse with your agent](/docs/skill/) is the install reference. [MCP browser server with spending limits](/blog/mcp-browser-tool/) covers the same tool with its limits fixed on a server.

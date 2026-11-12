@@ -36,7 +36,7 @@ An action the judge is confident cannot be undone stops the run at `needs_confir
 For a run that clicked something unexpected, check whether the right control was in that list:
 
 - It was offered but not picked: reword the task.
-- It was never offered: inspect the page capture and check whether the control was visible and enabled before retrying.
+- It was never offered: inspect the capture to see whether the control was missing, hidden or left out of the index.
 
 The control the agent clicked and the quote a result is checked against come from one reading of the page. [How it works](/docs/design/) covers the loop, [run statuses and exit codes](/docs/results/) lists each ending, and [the comparison page](/compare/) shows how other agents read a page.
 
