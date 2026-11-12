@@ -208,19 +208,31 @@
     'tab',
     'menuitem',
     'menuitemradio',
+    'menuitemcheckbox',
+    'treeitem',
+    'listbox',
+    'tablist',
+    'grid',
+    'treegrid',
+    'tree',
+    'menu',
+    'menubar',
     'option',
     'gridcell',
     'combobox',
     'textbox',
     'searchbox',
     'spinbutton',
+    'slider',
   ];
   // jQuery UI's datepicker prev/next are anchors with no href, appended to <body> once the field is focused:
   // they carry no destination, only a click handler, so they need naming here to be walked at all.
   const SELECTOR =
     'a[href],a[data-handler][data-event="click"],a[onclick],a[role="button"],' +
     'button,input,textarea,select,summary,label,[contenteditable="true"],[draggable="true"],[ondrop],' +
-    ARIA_ROLES.map(role => `[role="${role}"]`).join(',');
+    ARIA_ROLES.map(role =>
+      `[role="${role}"]` + (['listbox', 'tablist', 'grid', 'treegrid', 'tree', 'menu', 'menubar'].includes(role) ? '[tabindex]' : ''),
+    ).join(',');
   // Elements a script gave a pointer listener, such as a Vue click handler on a bare span: the page's only sign that
   // it is pressed. Chrome's own `getEventListeners` reads them, but it exists only in an evaluate with the command line
   // API, so that evaluate (this mode, once per document) keeps it in `own`, the installed function's closure, where the
@@ -899,6 +911,8 @@
       if (['button', 'submit', 'reset', 'image'].includes(e.type)) return 'button';
       if (e.type === 'search') return 'searchbox';
       if (e.type === 'number') return 'spinbutton';
+      // HTML-AAM maps a range input to the slider role, whose keys step it.
+      if (e.type === 'range') return 'slider';
       if (['text', 'email', 'url', 'tel', 'password', ...DATE_TYPES].includes(e.type)) return 'textbox';
     }
     // A bare draggable element or a declared drop target has no ARIA role of its own, yet it is a real
@@ -1085,6 +1099,9 @@
     if (mode !== 'glance') registry.controls.add(e);
     const named = labelOf(e);
     if (!named) unnamed.add(id);
+    const root = e.getRootNode();
+    const focused = root.activeElement;
+    const activeDescendant = focused?.getAttribute('aria-activedescendant');
     const base = {
       id,
       role: rname,
@@ -1092,9 +1109,9 @@
       offscreen: y < 0 || y >= innerHeight,
       distance: y < 0 || y >= innerHeight ? 1 + Math.abs(y - innerHeight / 2) : 0,
       sensitive: secret(source),
-      // The root's own active element, so a field inside a shadow root reads as focused where the document names
-      // only its host.
-      focused: e.getRootNode().activeElement === e,
+      // A composite widget can keep DOM focus on its container while its active descendant moves between items.
+      // Read that virtual focus too, in the same root as the item, including a shadow root.
+      focused: focused === e || (!!activeDescendant && root.getElementById?.(activeDescendant) === e),
       input_type: source.type || null,
       input_name: source.getAttribute('name') || null,
       max_length: source.maxLength > 0 ? source.maxLength : null,
@@ -1162,8 +1179,22 @@
         (['textbox', 'searchbox', 'spinbutton'].includes(rname) ||
           (rname === 'combobox' && ['INPUT', 'TEXTAREA'].includes(e.tagName)));
       // reveal() is null for <li>, <progress> and <meter>, whose numeric `value`s are not field contents.
-      base.value = reveal(source) ?? (e.isContentEditable || rname === 'combobox' ? e.innerText.trim() : null);
+      // A scripted slider or spinbutton has no `value`: its current value is the one it announces, and a press of its
+      // keys is judged by it.
+      const announced = ['slider', 'spinbutton'].includes(rname)
+        ? (e.getAttribute('aria-valuetext') ?? e.getAttribute('aria-valuenow'))
+        : null;
+      base.value =
+        reveal(source) ?? announced ?? (e.isContentEditable || rname === 'combobox' ? e.innerText.trim() : null);
       base.operations = editable ? ['fill', 'click', 'enter'] : ['click'];
+      // The APG's composite widgets and value controls need keys beyond activation. A role alone cannot receive
+      // them: focus must reach the widget itself or its current active descendant. Native selects use Select.
+      if (
+        !editable &&
+        !['button', 'link', 'checkbox', 'switch', 'textbox', 'searchbox'].includes(rname) &&
+        ARIA_ROLES.includes(rname) &&
+        (e.tabIndex >= 0 || e.hasAttribute('tabindex') || base.focused)
+      ) base.operations.push('press');
       // Only an element that names itself draggable is offered as a drag source: `draggable` reports true for
       // every <a> and <img> by default, which would offer the whole page as draggable.
       if (e.getAttribute('draggable') === 'true') base.operations.push('drag');

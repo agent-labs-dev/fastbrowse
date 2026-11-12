@@ -23,7 +23,7 @@ credentials, irreversible actions and spending under the control of code.
 
 - **It picks, it does not invent.** Each page is indexed into the controls it has, and
   [Jev](https://typesafe.ai), a choice model, picks one. It cannot click something that is not on the page, and
-  there are no selectors to maintain.
+  there are no selectors to maintain. Widget keyboard actions are chosen from the keys their ARIA roles define.
 - **Answers you can check.** Every claim in a complete answer cites a verbatim quote from the page, with a link
   that scrolls to it. Pass a schema and get validated data back.
   Tasks over a whole list can follow its next-page links, checking each page and preserving its citations.

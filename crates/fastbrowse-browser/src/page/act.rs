@@ -1763,18 +1763,24 @@ fn focus_script(prepare_fill: bool, secret: bool) -> String {
     // A field that holds focus in a document the browser never focused within the wait answers null, as a document
     // without focus does up front: the window, not the field, is what lacks focus, and activating it is the remedy.
     format!(
-        "((id, activated) => {{ const e = window.__fastbrowse?.nodes.get(id); if (!e?.isConnected) return false; \
+        "((id, activated) => {{ const target = window.__fastbrowse?.nodes.get(id); if (!target?.isConnected) return false; \
+         const root = target.getRootNode(), owner = root.activeElement; \
+         const virtual = {virtual_focus} && owner && root.getElementById?.(owner.getAttribute('aria-activedescendant')) === target; \
+         const e = virtual ? owner : target; \
+         const valid = () => target.isConnected && e.isConnected && e.getRootNode().activeElement === e && \
+         (!virtual || root.getElementById?.(e.getAttribute('aria-activedescendant')) === target); \
          if (!activated && !e.ownerDocument.hasFocus()) return null; \
          {mask}e.ownerDocument.defaultView.focus(); e.focus({{preventScroll: true}}); \
-         if (!e.isConnected || e.getRootNode().activeElement !== e) return false; \
+         if (!valid()) return false; \
          return new Promise(resolve => {{ \
          const view = e.ownerDocument.defaultView; \
          const stop = done => {{ view.removeEventListener('focus', check); clearTimeout(timer); resolve(done); }}; \
-         const check = () => {{ if (!e.isConnected || e.getRootNode().activeElement !== e) \
+         const check = () => {{ if (!valid()) \
          {{ stop(false); return; }} \
          if (e.ownerDocument.hasFocus()) {{ {prepare}stop(true); }} }}; \
          view.addEventListener('focus', check); \
          const timer = setTimeout(() => stop(null), {deadline}); check(); }}); }})",
+        virtual_focus = !prepare_fill,
         deadline = py_float(FOCUS_SETTLE_SECONDS * 1000.0),
     )
 }
