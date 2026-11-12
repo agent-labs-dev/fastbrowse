@@ -74,7 +74,7 @@ Ultrafast returns no answer, only DONE or BLOCKED, so it runs only the six navig
 page a run ends on. The catalog states each reason and the site shows those tasks as not run. An arm that did not run has no rows and the site shows it as not measured. An arm
 that reports neither its model nor its spend carries `"dollars": null` and the site shows its pass rate and seconds with
 "cost not reported". Fastbrowse receipts retain known dollar figures, but an unknown or unsettled line marks
-the total incomplete. A provisional figure is a lower bound, not a settled bill.
+the total incomplete. A provisional figure is a lower bound, not a settled bill. Hosted session usage also remains provisional after its browser stops: the provider can report delayed charges and supplies no billing-finalized marker. The private `provisional_hosted_cost` receipt preserves the exact amount strings and host query time; `dollars` remains null and `unknown_cost` true. A later read is a separate usage observation, never a replacement for the original receipt. Publication requires complete costs and rejects these provisional totals.
 
 `browser-use` and `browser-harness` rows come from `docs/results/competitor-reference.json`, which only
 `publish-candidate` reads. It holds their public rows with the vendor, date, version, browser and campaign of the one

@@ -40,7 +40,7 @@ each run is saved as DIR/<arm>/<task>-<n>.mp4, n counting up from 1 past any vid
 Each task runs on every arm that can be graded on it on equal terms (`eligible`), and the catalog states why any
 head-to-head arm skips one (`excluded_because`). The hosted Browser Use run keeps its browser alive after its agent
 finishes (`HOSTED_KEEP_ALIVE_SECONDS`), so the harness reads the page it ended on through that browser, grades it on
-navigation tasks too, then stops it; its cost is read once the stop has settled the session. It skips only the task
+navigation tasks too, then stops it; its recorded usage is read after stopping and retained as provisional. It skips only the task
 that passes by stopping before an unauthorized step, since V4 takes no authorization setting and no pause.
 jev-ultrafast returns no answer, only DONE or BLOCKED, so it runs only the navigation tasks, which are graded on the
 page a run ends on. fastbrowse must also end with the task's expected status, and jev-ultrafast with DONE.
@@ -70,7 +70,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequenc
 from contextlib import asynccontextmanager, nullcontext, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from importlib.metadata import version as package_version
 from pathlib import Path
@@ -576,6 +576,20 @@ class Efficiency(TypedDict):
     tokens_per_second: float | None
 
 
+class ProvisionalHostedCost(BaseModel):
+    """Session usage at one query time; the provider exposes no billing-finalized signal."""
+
+    observed_at: datetime
+    session_id: str
+    run_id: str
+    browser_session_id: str | None
+    total_cost_usd: str
+    llm_cost_usd: str
+    search_cost_usd: str
+    browser_cost_usd: str
+    proxy_cost_usd: str
+
+
 class ArmReport(BaseModel):
     """What an arm says about one run beyond its outcome; a field belongs to the arms named beside it."""
 
@@ -606,6 +620,9 @@ class ArmReport(BaseModel):
     """`browser_transport` when the browser's own transport ended the attempt; see BROWSER_TRANSPORT."""
     trace: list[str] = []
     cost_by_component: dict[str, float] = {}
+    provisional_hosted_cost: ProvisionalHostedCost | None = Field(
+        default=None, exclude_if=lambda receipt: receipt is None
+    )
     # fastbrowse
     citations: list[JsonValue] = []
     step_log: list[JsonValue] = []
@@ -1497,8 +1514,7 @@ async def _hosted_finish(
     # The key is scrubbed too, should a page or a script ever echo it.
     step_log, trace = hosted_v4_steps(events, {**task.secrets, "browser_use_api_key": backend.browser_key()})
     outcome = Outcome(answer, data, final.url, None, final.controls, *_page_of(final))
-    # Stopping the browser settles its time, which a kept-alive browser accrues until then; the session's cost is
-    # read after, so a browser that could not be stopped leaves the charge unknown.
+    # Stopping ends browser time but does not finalize delayed usage, so this read is a timestamped snapshot.
     closing = time.monotonic()
     if browser_id is not None:
         with suppress(BrowserUseError, httpx.HTTPError):
@@ -1506,18 +1522,25 @@ async def _hosted_finish(
             stopped.append(True)
     closed = round(time.monotonic() - closing, 2)
     cost = None
+    observed_at = datetime.now(UTC)
     if stopped or browser_id is None:
         with suppress(BrowserUseError, httpx.HTTPError):
             cost = await client.sessions.cost(run.session_id)
-    components = (
-        {}
+            observed_at = datetime.now(UTC)
+    provisional = (
+        None
         if cost is None
-        else {
-            "llm": float(cost.llm_cost_usd),
-            "search": float(cost.search_cost_usd),
-            "browser": float(cost.browser_cost_usd),
-            "proxy": float(cost.proxy_cost_usd),
-        }
+        else ProvisionalHostedCost(
+            observed_at=observed_at,
+            session_id=str(run.session_id),
+            run_id=run_id,
+            browser_session_id=browser_id,
+            total_cost_usd=str(cost.total_cost_usd),
+            llm_cost_usd=str(cost.llm_cost_usd),
+            search_cost_usd=str(cost.search_cost_usd),
+            browser_cost_usd=str(cost.browser_cost_usd),
+            proxy_cost_usd=str(cost.proxy_cost_usd),
+        )
     )
     provider_error = _scrubbed(run.error, {**task.secrets, "browser_use_api_key": backend.browser_key()})
     report = ArmReport(
@@ -1526,9 +1549,10 @@ async def _hosted_finish(
         **hosted_timing(created_after, run, _hosted_event_at(events, BROWSER_READY), answered, wall),
         session_close_seconds=closed,
         session_seconds=round(wall, 2),
-        dollars=None if cost is None else float(cost.total_cost_usd),
-        unknown_cost=cost is None,
-        cost_by_component=components,
+        # A stopped browser can acquire delayed proxy charges, so this snapshot cannot price the whole attempt.
+        dollars=None,
+        unknown_cost=True,
+        provisional_hosted_cost=provisional,
         error=provider_error if isinstance(provider_error, str) else None,
         model=run.model,
         provenance={
@@ -1558,7 +1582,7 @@ async def _hosted_finish(
         observe_error=final.error,
     )
     if dispatch_failed:
-        # Dispatch can fail after opening a billable browser, so settle its receipt before retrying the outage.
+        # Dispatch can open a billable browser, so preserve its usage snapshot before retrying the outage.
         raise HostedUnavailable(report)
     if record is not None and browser_id is not None and stopped:
         await _hosted_recording(client, http, browser_id, record)
@@ -1716,7 +1740,10 @@ async def run_arm(
             record=record,
         )
         if isinstance(exc, HostedUnavailable):
-            return EvalRow.model_validate(crashed.model_dump() | exc.report.model_dump(exclude={"status"}))
+            receipt = exc.report.model_dump(exclude={"status"})
+            if request_session is not None:
+                receipt = request_session.public_json(json_value(receipt))
+            return EvalRow.model_validate(crashed.model_dump() | receipt)
         if isinstance(exc, SpendStop):
             return crashed.model_copy(
                 update={"execution_admission_stopped": True, "execution_admission_reason": str(exc)}

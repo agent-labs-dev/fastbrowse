@@ -13,6 +13,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - **Changed observations reuse the DOM element index.** Insertions, removals and moves rebuild element order through saved child lists, retaining unchanged sibling lists. Control membership stays current when attributes change, with live geometry and rendering checks preserved ([#943](https://github.com/agent-labs-dev/fastbrowse/issues/943)).
 
+- Hosted eval costs remain provisional after browser shutdown. Receipts keep exact provider amounts and their query time; incomplete totals stay unknown ([#1058](https://github.com/agent-labs-dev/fastbrowse/issues/1058)).
 - Eval rows preserve provider cost precision instead of rounding totals to five decimal places ([#1058](https://github.com/agent-labs-dev/fastbrowse/issues/1058)).
 - Hosted dispatch outages retain their provider run, session and available billing receipt instead of losing that evidence when retrying ([#1055](https://github.com/agent-labs-dev/fastbrowse/issues/1055)).
 
