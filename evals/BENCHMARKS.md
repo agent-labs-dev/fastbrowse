@@ -359,7 +359,10 @@ step, time or dollar limit, every row's agent limits recorded with each field em
 `.budget.jsonl`, official runs' `budget.jsonl`) is replayed to check that each run started only when the gate
 allowed it, and physical spend over all attempts must not exceed the budget.
 The public limits state that no arm was capped, the hosted cost override, the 4-hour provider session maximum,
-the browser of each arm and the concurrency.
+the browser of each arm and the concurrency. The campaign workflow accepts a positive `concurrency` for every
+group; leaving it empty keeps the harness default of 8. When a candidate keeps rows from earlier runs, pass
+their recorded concurrency. Publication checks each physical attempt against its invocation and states the
+concurrency of every contributing invocation: mixed settings publish as "Concurrency 4 or 8".
 
 - Internal slots total seconds and dollars over every physical run, retries included. An attempt with unknown
   cost or missing timing blocks export.
