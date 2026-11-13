@@ -21,7 +21,7 @@ use fastbrowse_browser::session::SessionOptions;
 use fastbrowse_browser::testing::safety as seams;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{BrowserConnection, LocalChrome, Operation, StepOutcome};
-use fastbrowse_core::page::Action;
+use fastbrowse_core::page::{Action, Observation};
 use safety_support::{CdpProxy, Reply, cdp_proxy, has, observe_until, serve_on};
 use serde_json::json;
 use tokio::time::{sleep, timeout};
@@ -688,8 +688,6 @@ async fn reads(h: &Harness) -> (i64, i64) {
 async fn test_an_unchanged_page_is_served_from_the_read_it_kept() {
     let _turn = turn().await;
     let Some(h) = harness().await else { return };
-    // A read that went into a shadow root or a child document is not kept, since a document observer sees neither, so
-    // this page has only what the observer covers.
     common::eval_active(&h.session, "document.body.innerHTML = '<button>One</button><button>Two</button>';").await;
     let first = h.observe().await;
     count_reads(&h).await;
@@ -974,11 +972,154 @@ async fn test_a_shadow_root_attached_without_a_mutation_renews_the_observation()
     let after = h.observe().await;
     assert!(after.controls.iter().any(|c| c.label == "Shadow buy"));
     assert_eq!(reads(&h).await, (1, 0));
-    assert_eq!(eval_active(&h.session, "globalThis.__fastbrowse.kept.snapshot == null").await, json!(true));
     let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
     let mut full = other.observe().await.expect("full read");
     full.captured_at = after.captured_at;
     assert_eq!(after, full);
+    h.close().await;
+}
+
+/// Let a change's own events land first: a scroll dispatches its event on the next frame, which would otherwise mark
+/// the read after the one under test as changed.
+async fn settle_events(h: &Harness) {
+    h.session
+        .send(
+            "Runtime.evaluate",
+            json!({"expression": "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r))))", "awaitPromise": true}),
+            Some(&h.session.active_session_id().unwrap()),
+        )
+        .await
+        .expect("frames");
+}
+
+/// `observed`, read in full by a handle that keeps nothing, so each field can be compared.
+async fn full_read(h: &Harness, observed: &Observation) -> Observation {
+    let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
+    let mut full = other.observe().await.expect("full read");
+    full.captured_at = observed.captured_at;
+    full
+}
+
+/// Make `script`'s change, then check the next read derives it in full and the one after is kept again.
+async fn assert_the_change_is_read(h: &Harness, script: &str) {
+    eval_active(&h.session, "globalThis.__fbReads = {total:0, unchanged:0, delta:0}").await;
+    h.session
+        .send(
+            "Runtime.evaluate",
+            json!({"expression": script, "awaitPromise": true}),
+            Some(&h.session.active_session_id().unwrap()),
+        )
+        .await
+        .expect("change");
+    settle_events(h).await;
+    let observed = h.observe().await;
+    assert_eq!(reads(h).await, (1, 0), "{script} was served from the kept read");
+    eval_active(&h.session, "globalThis.__fbReads = {total:0, unchanged:0, delta:0}").await;
+    h.observe().await;
+    assert_eq!(reads(h).await, (1, 1), "the read after {script} was not kept");
+    assert_eq!(observed, full_read(h, &observed).await, "{script}");
+    // Another handle's read replaced the one this handle kept, so the next change is judged against this one's.
+    h.observe().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_read_inside_shadow_roots_is_kept_and_never_serves_a_changed_tree() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(
+        &h.session,
+        "document.body.innerHTML = '<article id=host><button>Light</button></article>'; \
+         const root = document.querySelector('#host').attachShadow({mode:'open'}); \
+         root.innerHTML = '<button id=buy>Buy</button><input id=qty><div id=inner></div><div id=pane style=\"height:40px;overflow:auto\"><p style=\"height:400px\">Long</p></div><span id=later></span>'; \
+         root.querySelector('#inner').attachShadow({mode:'open'}).innerHTML = '<a href=#deep>Deep</a>'; true",
+    )
+    .await;
+    h.observe().await;
+    count_reads(&h).await;
+    let unchanged = h.observe().await;
+    assert_eq!(reads(&h).await, (1, 1), "an unchanged page with shadow roots was derived again");
+    assert_eq!(unchanged, full_read(&h, &unchanged).await);
+    h.observe().await;
+    let shadow = "document.querySelector('#host').shadowRoot";
+    for script in [
+        format!("{shadow}.querySelector('#buy').textContent = 'Buy now'"),
+        format!("{shadow}.querySelector('#buy').setAttribute('aria-label', 'Purchase')"),
+        format!("{shadow}.querySelector('#inner').shadowRoot.querySelector('a').textContent = 'Deeper'"),
+        // A value a script sets with no event, and a scroll inside the tree, which does not cross into the document.
+        format!("{shadow}.querySelector('#qty').value = '3'"),
+        format!("{shadow}.querySelector('#pane').scrollTop = 200"),
+        // A tree attached inside a shadow root, which no observer records.
+        format!(
+            "{shadow}.querySelector('#later').attachShadow({{mode:'open'}}).innerHTML = '<button>Inner buy</button>'"
+        ),
+    ] {
+        assert_the_change_is_read(&h, &script).await;
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_registry_an_earlier_version_set_up_is_set_up_again() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    // What an earlier version left on a page it read: change tracking with no watch on other roots.
+    eval_active(
+        &h.session,
+        "document.body.innerHTML = '<div id=host></div>'; \
+         document.querySelector('#host').attachShadow({mode:'open'}).innerHTML = '<button>Shadow</button>'; \
+         window.__fastbrowse = { ids: new WeakMap(), nodes: new Map(), next: 1, revTracking: true, rev: 7, reads: 3 }; true",
+    )
+    .await;
+    let first = h.observe().await;
+    assert!(first.controls.iter().any(|c| c.label == "Shadow"), "{:?}", first.controls);
+    count_reads(&h).await;
+    h.observe().await;
+    assert_eq!(reads(&h).await, (1, 1));
+    eval_active(
+        &h.session,
+        "document.querySelector('#host').shadowRoot.querySelector('button').textContent = 'Changed'",
+    )
+    .await;
+    let changed = h.observe().await;
+    assert!(changed.controls.iter().any(|c| c.label == "Changed"), "{:?}", changed.controls);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_read_inside_a_child_document_is_kept_and_never_serves_a_changed_frame() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    eval_active(
+        &h.session,
+        "new Promise(resolve => { document.body.innerHTML = '<button>Top</button><iframe id=child></iframe>'; \
+         const frame = document.querySelector('#child'); frame.onload = () => resolve(true); \
+         frame.srcdoc = '<button id=save>Save</button><input id=note><span id=later></span><p style=\"height:3000px\">Tall</p>'; })",
+    )
+    .await;
+    let first = h.observe().await;
+    assert!(first.controls.iter().any(|c| c.label == "Save"), "{:?}", first.controls);
+    count_reads(&h).await;
+    let unchanged = h.observe().await;
+    assert_eq!(reads(&h).await, (1, 1), "an unchanged page with a child document was derived again");
+    assert_eq!(unchanged, full_read(&h, &unchanged).await);
+    h.observe().await;
+    let child = "document.querySelector('#child').contentDocument";
+    for script in [
+        format!("{child}.querySelector('#save').textContent = 'Save draft'"),
+        format!("{child}.querySelector('#note').value = 'typed by script'"),
+        format!("{child}.defaultView.scrollTo(0, 500)"),
+        format!("{child}.title = 'Retitled'"),
+        format!(
+            "{child}.querySelector('#later').attachShadow({{mode:'open'}}).innerHTML = '<button>Shadow save</button>'"
+        ),
+        format!("{child}.open(); {child}.write('<button>Rewritten</button>'); {child}.close(); true"),
+        // The frame shows a new document with no mutation in its parent.
+        "new Promise(resolve => { const frame = document.querySelector('#child'); frame.onload = () => resolve(true); \
+         frame.contentWindow.location = 'about:blank'; })"
+            .to_owned(),
+    ] {
+        assert_the_change_is_read(&h, &script).await;
+    }
     h.close().await;
 }
 

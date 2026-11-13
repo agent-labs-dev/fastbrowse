@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A page whose controls sit inside shadow roots or a same-origin frame is no longer read again in full on every look while it stays the same. Such a read is now kept and checked as a plain page's is, so an unchanged look at the frames benchmark page takes about a quarter of the time it did.
+
 ## [0.11.0] - 2026-11-12
 
 - A count, total, minimum or maximum is checked against what the task asks for, so an answer no longer counts the orders where the task asks for their total.

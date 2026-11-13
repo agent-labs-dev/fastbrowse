@@ -198,11 +198,13 @@
   // change what a read would report without rewriting a node: pointer entry reveals a `:hover` rule, a font or image
   // that finishes loading shifts the layout under it, a document observer sees neither a shadow root nor a child
   // document, and a sheet inserted through the CSSOM changes what is shown with no record to observe.
-  if (!registry.revTracking) {
-    registry.revTracking = true;
-    registry.rev = 0;
+  // The page keeps one registry across fastbrowse versions, and an earlier one may have set it up without watching
+  // other roots: each version that changes what is tracked sets it up again, keeping the counters already handed out.
+  if (registry.revTracking !== 2) {
+    registry.revTracking = 2;
+    registry.rev ??= 0;
     const bumped = () => registry.rev++;
-    for (const type of [
+    const events = [
       'pointermove',
       'pointerover',
       'pointerout',
@@ -228,14 +230,21 @@
       'timeupdate',
       'ratechange',
       'volumechange',
-    ])
-      addEventListener(type, bumped, true);
-    new MutationObserver(bumped).observe(document, {
-      subtree: true,
-      characterData: true,
-      childList: true,
-      attributes: true,
-    });
+    ];
+    // A document observer sees neither a shadow root nor a child document, so each root a read walks into is watched
+    // on its own. A shadow root hears the events its tree dispatches, including those that do not cross into the
+    // document (`change`, `scroll`, `load`); a child document's window hears its own input, scrolling and resizing.
+    const observed = new WeakSet();
+    registry.observeRoot = root => {
+      if (observed.has(root)) return;
+      observed.add(root);
+      new MutationObserver(bumped).observe(root, { subtree: true, characterData: true, childList: true, attributes: true });
+      const target = root.nodeType === Node.DOCUMENT_NODE ? root.defaultView : root;
+      // Passive, as Chrome makes a wheel listener only on a window, document or body: one on a shadow root would hold
+      // every scroll inside it to the main thread.
+      for (const type of events) target.addEventListener(type, bumped, { capture: true, passive: true });
+    };
+    registry.observeRoot(document);
     // A short digest of a long text, so a fingerprint is kept and compared without holding the text itself.
     const hash = text => {
       let h = 0x811c9dc5;
@@ -245,9 +254,9 @@
     // The CSSOM edits a rule in place (`rule.style.display = 'none'`) with no record to observe and no rule added, so
     // every readable rule is fingerprinted by its text. A sheet another origin serves is not readable here, and its
     // rules are not what changed ours.
-    registry.sheets = () => {
+    registry.sheets = (doc = document) => {
       const parts = [];
-      for (const sheet of [...document.styleSheets, ...(document.adoptedStyleSheets || [])]) {
+      for (const sheet of [...doc.styleSheets, ...(doc.adoptedStyleSheets || [])]) {
         parts.push(`${sheet.disabled}|${sheet.media?.mediaText}`);
         try {
           for (const rule of sheet.cssRules) parts.push(rule.cssText);
@@ -259,16 +268,16 @@
     };
     // A form control's live state is a property, not an attribute: `input.value = ...`, `checkbox.checked = true` and
     // `setCustomValidity(...)` change what a read reports with no event and no record to observe.
-    registry.live = () => {
+    registry.live = (root = document) => {
       const parts = [];
-      for (const e of document.querySelectorAll('input,textarea,select,button')) {
+      for (const e of root.querySelectorAll('input,textarea,select,button')) {
         const chosen = e.type === 'select-multiple' ? [...e.selectedOptions].map(o => o.index).join() : e.selectedIndex;
         parts.push(JSON.stringify([e.value, e.checked, e.indeterminate, chosen, e.validationMessage]));
       }
       return hash(parts.join('\n'));
     };
     // Each kept read is numbered, so a caller answered "unchanged" can tell whether the read it holds is that one.
-    registry.reads = 0;
+    registry.reads ??= 0;
   }
   const ARIA_ROLES = [
     'button',
@@ -456,11 +465,22 @@
     };
   }
   if (!document.body) return null;
+  // A child document's address when it may be read, or null.
+  const readableFrame = inner => (inner?.body && granted(inner) ? inner.URL : null);
   // A page that has not moved since the read it last gave is not read again: the caller still holds that read, and
   // deriving it and sending it back is what an observation costs on a dense page. Anything that can change what a
   // read would say without rewriting a node is asked first, so a reuse is only a page that is provably still.
   const kept = registry.kept?.[mode];
   const rendered = own.renderReads?.[mode];
+  // What a tree says without rewriting a node: a script sets a field's value with no event, the CSSOM edits a rule in
+  // place, a child document's own history moves its address, scrolls or resizes. A transition or animation in flight
+  // moves what is on screen between one look and the next, so a read taken while one runs does not stand.
+  const rootState = root => {
+    if (root.nodeType !== Node.DOCUMENT_NODE) return [registry.live(root), root.getAnimations().length];
+    const view = root.defaultView;
+    return [registry.live(root), registry.sheets(root), root.URL, root.title, root.readyState, root.hidden,
+      view.scrollX, view.scrollY, view.innerWidth, view.innerHeight, root.getAnimations().length];
+  };
   const still =
     reuse &&
     kept &&
@@ -468,24 +488,14 @@
     rendered?.read === kept.read && rendered?.document_key === kept.document_key &&
     (!delta || (base?.document_key === kept.document_key && base?.read === kept.read)) &&
     kept.rev === registry.rev &&
-    kept.live === registry.live() &&
-    kept.sheets === registry.sheets() &&
-    kept.href === location.href &&
-    kept.title === document.title &&
-    kept.scrollX === scrollX &&
-    kept.scrollY === scrollY &&
-    kept.innerWidth === innerWidth &&
-    kept.innerHeight === innerHeight &&
-    kept.hidden === document.hidden &&
-    kept.readyState === document.readyState &&
-    // attachShadow emits no document mutation, so a previously shallow page must check its existing hosts.
-    kept.lightElements?.every(e => !e.shadowRoot) &&
+    // A frame shows another document, or one it could not read becomes readable, with no mutation in its parent.
+    kept.frames?.every(([frame, inner, url]) => childDocument(frame) === inner && readableFrame(inner) === url) &&
+    // attachShadow emits no mutation, so every element of every tree read must still hold only the roots walked.
+    kept.roots.every(([, elements]) => elements.every(e => !e.shadowRoot || kept.walked.has(e.shadowRoot))) &&
+    kept.roots.every(([root], i) => sameRenderValue(kept.states[i], rootState(root)) && kept.states[i].at(-1) === 0) &&
     kept.listenerAPI === Boolean(own.listeners) &&
     // Upgrading a form-associated custom element can change HTML label ownership without a DOM mutation.
     !kept.undefinedElements?.some(e => e.isConnected && e.matches(':defined')) &&
-    // A transition or animation in flight moves what is on screen between one look and the next, so a read taken
-    // while one runs does not stand.
-    document.getAnimations().length === 0 &&
     // Adding, removing or aborting a native listener writes no DOM node or attribute.
     kept.listenerStates?.every(([e, value]) => listened(e) === value) &&
     rendered.inputs.every(([kind, target, args, value]) =>
@@ -501,8 +511,6 @@
     };
   // Taken before the read, so a change made while it runs leaves the kept read unmatched rather than reused.
   const readRev = registry.rev;
-  const readLive = registry.live();
-  const readSheets = registry.sheets();
   const identity = e => {
     if (!registry.ids.has(e)) registry.ids.set(e, registry.next++);
     const id = registry.ids.get(e);
@@ -593,7 +601,6 @@
       } else {
         tree.undefinedElements = tree.undefinedElements.filter(node => !node.matches(':defined'));
       }
-      if (root === document) own.undefinedElements = tree.undefinedElements;
       flushedTrees.add(root);
     }
     return root;
@@ -653,7 +660,6 @@
     return entry.value;
   };
   flushTree(document);
-  const readUndefinedElements = own.undefinedElements;
   const innerTextOf = e => renderFact('text', e);
 
   const safe = e => nativeProperty(e, 'type') !== 'hidden';
@@ -1119,26 +1125,23 @@
 
   // Traverse light DOM plus any open shadow roots, and same-origin same-process nested iframes.
   let inaccessible = 0;
-  // A document observer sees neither a shadow root nor a child document, so a read that went into either cannot be
-  // told later whether it still holds, and is not reused.
-  let deep = false;
-  let lightElements;
+  // Every tree the walk read with its elements, and every frame with the document it showed and that document's
+  // address when it was read, so a later read can prove each still holds before answering unchanged.
+  const walkedRoots = [];
+  const walkedFrames = [];
   function* walk(root) {
-    // A document observer cannot see mutations inside shadow roots or child documents.
+    registry.observeRoot(root);
     const elements = indexedElements(root);
-    if (root === document) lightElements = [...elements];
+    walkedRoots.push([root, elements]);
     for (const e of elements) {
       if (listedControl(e) || pressable(e) || focusableText(e)) yield e;
-      if (e.shadowRoot) {
-        deep = true;
-        yield* walk(e.shadowRoot);
-      }
+      if (e.shadowRoot) yield* walk(e.shadowRoot);
       if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') {
         const inner = childDocument(e);
-        if (inner && inner.body && granted(inner)) {
-          deep = true;
-          yield* walk(inner);
-        } else inaccessible++;
+        const url = readableFrame(inner);
+        walkedFrames.push([e, inner, url]);
+        if (url !== null) yield* walk(inner);
+        else inaccessible++;
       }
     }
   }
@@ -2051,40 +2054,27 @@
       .trim();
   const modal = modals.length ? dialogName(modals.at(-1)) : null;
 
-  // The read number names a transport baseline. Only shallow reads can answer unchanged: a document observer
-  // cannot see mutations inside a shadow root or child document. Deep reads are still derived in full for deltas.
-  const read = !deep || delta ? ++registry.reads : null;
-  if (!deep) {
-    own.renderReads ||= {};
-    own.renderReads[mode] = { read, document_key: String(performance.timeOrigin), inputs: renderInputs };
-    registry.kept ||= {};
-    registry.kept[mode] = {
-      mode,
-      read,
-      rev: readRev,
-      live: readLive,
-      sheets: readSheets,
-      href: location.href,
-      title: document.title,
-      scrollX,
-      scrollY,
-      innerWidth,
-      innerHeight,
-      hidden: document.hidden,
-      readyState: document.readyState,
-      undefinedElements: readUndefinedElements,
-      lightElements,
-      listenerStates: [...listenerStates],
-      listenerAPI: Boolean(own.listeners),
-      url: location.href,
-      document_key: String(performance.timeOrigin),
-      page_key,
-    };
-  } else if (registry.kept) {
-    // A deep read cannot be reused, and retaining its earlier shallow tree would pin detached page elements.
-    delete registry.kept[mode];
-    if (own.renderReads) delete own.renderReads[mode];
-  }
+  // The read number names a transport baseline, and the read is kept to answer "unchanged" while the page stays.
+  const read = ++registry.reads;
+  own.renderReads ||= {};
+  own.renderReads[mode] = { read, document_key: String(performance.timeOrigin), inputs: renderInputs };
+  registry.kept ||= {};
+  registry.kept[mode] = {
+    mode,
+    read,
+    rev: readRev,
+    roots: walkedRoots,
+    walked: new Set(walkedRoots.map(([root]) => root)),
+    states: walkedRoots.map(([root]) => rootState(root)),
+    frames: walkedFrames,
+    undefinedElements: walkedRoots.flatMap(([root]) => own.queryTrees.get(root).undefinedElements),
+    listenerStates: [...listenerStates],
+    listenerAPI: Boolean(own.listeners),
+    url: location.href,
+    title: document.title,
+    document_key: String(performance.timeOrigin),
+    page_key,
+  };
   const result = {
     url: location.href,
     title: document.title,
@@ -2105,7 +2095,7 @@
   const previous = own.snapshots?.[mode];
   own.snapshots ||= {};
   own.snapshots[mode] = { read, document_key: result.document_key, controls: semantics, guards, retarget_keys };
-  if (delta && read !== null && previous?.read !== null && previous?.document_key === result.document_key &&
+  if (delta && previous?.document_key === result.document_key &&
       base?.document_key === previous.document_key && base?.read === previous.read) {
     // Layout, CSS and references can change controls outside a mutated subtree. Derive the whole read, then omit
     // only rows and guards that are exactly equal; action-time guards never read this transport baseline.
