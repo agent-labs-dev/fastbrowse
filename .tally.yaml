@@ -133,9 +133,9 @@ keys:
     owner: cjber
     locations:
       - github: LANGFUSE_SECRET_KEY
-    expires: none
+    expires: unknown
     limit: "none: Langfuse Cloud offers soft spend alerts only"
-    expiresNote: "no expiry option in the Langfuse API key docs (vendor docs, checked 2026-11-13)"
+    expiresNote: "set 2026-10-29. Langfuse added optional key expiry on 2026-10-07, and keys made before then have none (langfuse.com changelog, checked 2026-11-13), so read this key's expiry under Project Settings, API Keys"
   - id: site-deploy-hook
     service: vercel
     group: release
