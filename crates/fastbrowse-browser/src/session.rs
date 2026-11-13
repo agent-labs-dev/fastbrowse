@@ -24,6 +24,7 @@ use tokio::time::{Instant, timeout};
 
 use crate::cdp::{CDP_PAGE_SECONDS, Cdp, Event, secs};
 use crate::error::BrowserError;
+use crate::page::LOAD_AWAITED_SECONDS;
 use crate::urlsplit::urlsplit;
 use crate::warn;
 
@@ -346,10 +347,10 @@ pub(crate) struct State {
     pub(crate) input_navigations: u32,
     /// Top frames of each session with a navigation requested or a document loading that has not reached
     /// DOMContentLoaded.
-    pub(crate) navigating: HashSet<(String, String)>,
+    pub(crate) navigating: HashMap<(String, String), Instant>,
     /// The same for frames with a parent. A frame in a process of its own counts from its attach, under its own
     /// session.
-    pub(crate) frames_loading: HashSet<(String, String)>,
+    pub(crate) frames_loading: HashMap<(String, String), Instant>,
     /// Frames with a parent.
     pub(crate) subframes: HashSet<String>,
     /// The CAPTCHA each target's solver has taken on in its current document and not solved, by target id.
@@ -793,7 +794,7 @@ impl BrowserSession {
     /// Whether the active tab's page has a navigation on its way.
     pub fn navigating(&self) -> bool {
         let Ok(active) = self.active_session_id() else { return false };
-        self.0.state.lock().unwrap().navigating.iter().any(|(session, _)| *session == active)
+        self.0.state.lock().unwrap().navigating.keys().any(|(session, _)| *session == active)
     }
 
     /// Whether a frame in the active tab's page is still loading its document.
@@ -807,8 +808,26 @@ impl BrowserSession {
         let frames = state.frame_sessions_of_active();
         state
             .frames_loading
-            .iter()
+            .keys()
             .any(|(session, _)| *session == active || frames.iter().any(|(_, frame_session)| frame_session == session))
+    }
+
+    /// The seconds the active tab's page is still waited on to load: the most any of its navigations or frame loads
+    /// has left of [`LOAD_AWAITED_SECONDS`] from its start. `None` when nothing is loading or every load has had it.
+    pub fn loading_left(&self) -> Option<f64> {
+        let Ok(active) = self.active_session_id() else { return None };
+        let state = self.0.state.lock().unwrap();
+        let frames = state.frame_sessions_of_active();
+        let ours =
+            |session: &String| *session == active || frames.iter().any(|(_, frame_session)| frame_session == session);
+        state
+            .navigating
+            .iter()
+            .chain(&state.frames_loading)
+            .filter(|((session, _), _)| ours(session))
+            .map(|(_, started)| LOAD_AWAITED_SECONDS - started.elapsed().as_secs_f64())
+            .reduce(f64::max)
+            .filter(|left| *left > 0.0)
     }
 
     /// The CAPTCHA the browser's solver has taken on in the active tab's document and not solved.
@@ -1494,8 +1513,8 @@ impl Shared {
         let Some(session) = session else { return };
         let key = (session.to_owned(), str_of(&params["frameId"]));
         let mut state = self.state.lock().unwrap();
-        let top = state.navigating.remove(&key);
-        if state.frames_loading.remove(&key) || top {
+        let top = state.navigating.remove(&key).is_some();
+        if state.frames_loading.remove(&key).is_some() || top {
             drop(state);
             self.lifecycle.send_modify(|generation| *generation += 1);
         }
@@ -1546,9 +1565,9 @@ impl Shared {
                     let mut state = self.state.lock().unwrap();
                     let key = (session.to_owned(), frame);
                     if state.subframes.contains(&key.1) {
-                        state.frames_loading.insert(key);
+                        state.frames_loading.insert(key, Instant::now());
                     } else {
-                        state.navigating.insert(key);
+                        state.navigating.insert(key, Instant::now());
                     }
                 }
             }
@@ -1642,8 +1661,8 @@ impl Shared {
                 state.requests_open.retain(|(sid, _), _| *sid != child);
                 state.request_bytes_due.retain(|(sid, _), _| *sid != child);
                 state.documents.remove(&child);
-                state.navigating.retain(|(sid, _)| *sid != child);
-                state.frames_loading.retain(|(sid, _)| *sid != child);
+                state.navigating.retain(|(sid, _), _| *sid != child);
+                state.frames_loading.retain(|(sid, _), _| *sid != child);
                 state.clicked.remove(&child);
             }
             "Target.targetInfoChanged" => {
@@ -1753,7 +1772,7 @@ impl Shared {
                 state.frame_parents.insert(child.clone(), parent.to_owned());
                 // The frame's document may load before its session reports lifecycle events, so once it does, the
                 // document's own state says whether one is still to come.
-                state.frames_loading.insert((child.clone(), target.clone()));
+                state.frames_loading.insert((child.clone(), target.clone()), Instant::now());
                 let session = self.session();
                 self.spawn(&mut state, async move {
                     let prepared = session.prepare_session(&child, false).await.is_ok();

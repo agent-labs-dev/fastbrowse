@@ -43,4 +43,4 @@ webpki-roots = "1.0.11"
 libc = "0.2"
 
 [dev-dependencies]
-tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-thread", "macros", "test-util"] }

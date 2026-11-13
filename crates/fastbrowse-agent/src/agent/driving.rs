@@ -728,9 +728,10 @@ impl Agent {
     ///
     /// The page is waited on only while something says it is still on its way: the browser's CAPTCHA solver is working
     /// on it, or its document or a frame in it is still loading. Each wait is for the page's next lifecycle event, and
-    /// the run's browsing deadline `until` bounds them all; a run with no time limit waits for the event. With neither
-    /// signal the page is re-read once and the wait ends, and a CAPTCHA the solver gave up on ends it too: nothing
-    /// else will clear it.
+    /// the run's browsing deadline `until` bounds them all. A run with no time limit waits for the event, though for a
+    /// load no longer than a navigation is given: a server that never answers sends none. With neither signal the
+    /// page is re-read once and the wait ends, and a CAPTCHA the solver gave up on ends it too: nothing else will
+    /// clear it.
     pub(super) async fn outwait(&self, stuck: &Observation, until: Option<tokio::time::Instant>) -> Step<bool> {
         let mut mark = self.page.lifecycle_mark();
         let mut solving = false;
@@ -738,7 +739,7 @@ impl Agent {
             if self.observe().await?.page_key != stuck.page_key {
                 return Ok(true);
             }
-            match self.page.captcha_solve().filter(|solve| solve.url == stuck.url) {
+            let bound = match self.page.captcha_solve().filter(|solve| solve.url == stuck.url) {
                 Some(solve) if solve.working => {
                     if !solving {
                         self.event("captcha_solving", || {
@@ -746,6 +747,7 @@ impl Agent {
                         });
                     }
                     solving = true;
+                    f64::INFINITY
                 }
                 Some(solve) => {
                     self.event("captcha_unsolved", || {
@@ -753,13 +755,16 @@ impl Agent {
                     });
                     return Ok(false);
                 }
-                None if self.page.loading() => {}
-                None => return Ok(false),
-            }
+                None => match self.page.loading() {
+                    Some(left) => left,
+                    None => return Ok(false),
+                },
+            };
             let seconds = match until {
                 Some(until) => until.saturating_duration_since(tokio::time::Instant::now()).as_secs_f64(),
                 None => f64::INFINITY,
-            };
+            }
+            .min(bound);
             if seconds <= 0.0 {
                 return Ok(false);
             }

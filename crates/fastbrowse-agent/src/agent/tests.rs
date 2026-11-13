@@ -697,11 +697,13 @@ struct Stuck {
     /// When the solver finishes and whether it solved the CAPTCHA; `f64::INFINITY` never finishes.
     solve: Option<(f64, bool)>,
     loading_until: f64,
+    /// When the browser stops waiting on the load, as it does once a load has had as long as a navigation is given.
+    load_awaited: f64,
 }
 
 impl Stuck {
     fn new(moves_at: f64, solve: Option<(f64, bool)>, loading_until: f64) -> Self {
-        Stuck { began: tokio::time::Instant::now(), moves_at, solve, loading_until }
+        Stuck { began: tokio::time::Instant::now(), moves_at, solve, loading_until, load_awaited: f64::INFINITY }
     }
 
     fn now(&self) -> f64 {
@@ -790,8 +792,9 @@ impl Page for Stuck {
         })
     }
 
-    fn loading(&self) -> bool {
-        self.now() < self.loading_until
+    fn loading(&self) -> Option<f64> {
+        let left = self.loading_until.min(self.load_awaited) - self.now();
+        (left > 0.0).then_some(left)
     }
 }
 
@@ -837,6 +840,17 @@ async fn test_a_loading_page_is_waited_on_until_it_draws() {
     let began = tokio::time::Instant::now();
     assert!(waiting_on(Stuck::new(20.0, None, 20.0)).outwait(&stuck, None).await.expect("waited"));
     assert_eq!(began.elapsed().as_secs_f64().round(), 20.0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_a_load_that_never_ends_is_waited_on_only_as_long_as_a_navigation_is_given() {
+    // A server that never answers leaves Chrome loading with no further event: with no run deadline, the wait ends
+    // when the browser stops counting the load as on its way.
+    let stuck = at("https://shop.test/check", &[]);
+    let began = tokio::time::Instant::now();
+    let page = Stuck { load_awaited: 225.0, ..Stuck::new(f64::INFINITY, None, f64::INFINITY) };
+    assert!(!waiting_on(page).outwait(&stuck, None).await.expect("waited"));
+    assert_eq!(began.elapsed().as_secs_f64().round(), 225.0);
 }
 
 #[tokio::test]

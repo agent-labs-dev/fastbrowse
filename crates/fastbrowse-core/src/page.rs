@@ -633,10 +633,11 @@ pub trait Page: Send + Sync {
         None
     }
 
-    /// Whether a top-level navigation or a frame's document load is in flight in the active tab: the page is still on
-    /// its way, and the end of that load is a lifecycle event.
-    fn loading(&self) -> bool {
-        false
+    /// The seconds a top-level navigation or a frame's document load in flight in the active tab is still waited on:
+    /// the page is on its way, and the end of that load is a lifecycle event. `None` when no load is, including one
+    /// that has had as long as a navigation is given and so may never end.
+    fn loading(&self) -> Option<f64> {
+        None
     }
 }
 
