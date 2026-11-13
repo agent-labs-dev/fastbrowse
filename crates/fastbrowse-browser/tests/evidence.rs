@@ -85,6 +85,33 @@ async fn test_a_drawing_in_the_viewport_is_visual_content() {
     h.close().await;
 }
 
+/// A streamed remote browser draws its page as an image that takes clicks, and a canvas app draws on a canvas
+/// (#1084): each is marked drawn, so the run knows there are no elements inside it to act on. A button showing an icon
+/// is an element like any other.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_image_or_canvas_that_takes_input_is_a_drawn_control() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = '<img alt="Remote browser view" width="320" height="240" ' +
+          'src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">' +
+          '<canvas aria-label="Board" width="320" height="240"></canvas>' +
+          '<button><img alt="" width="16" height="16" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">Cart</button>';
+        document.querySelector('img').onclick = () => {};
+        document.querySelector('canvas').addEventListener('mousedown', () => {});
+        "#,
+    )
+    .await;
+    let obs = h.observe().await;
+    let drawn = |label: &str| obs.controls.iter().find(|c| c.label == label).map(|c| c.drawn);
+    assert_eq!(drawn("Remote browser view"), Some(Some(true)), "{:?}", obs.controls);
+    assert_eq!(drawn("Board"), Some(Some(true)), "{:?}", obs.controls);
+    assert_eq!(drawn("Cart"), Some(None), "{:?}", obs.controls);
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_an_open_modal_is_named_and_the_page_behind_it_leaves() {
     let Some(h) = harness().await else { return };

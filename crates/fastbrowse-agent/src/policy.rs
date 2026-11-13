@@ -45,6 +45,7 @@ pub(crate) mod keys {
     pub const BOT_CHECK: &str = "bot_check";
     pub const SHOWS_ANSWER: &str = "shows_answer";
     pub const UNOBTAINABLE: &str = "unobtainable";
+    pub const INSIDE_DRAWN: &str = "inside_drawn";
 
     /// The question that picks `operation`'s target.
     pub fn target(operation: Operation) -> String {
@@ -242,6 +243,9 @@ pub struct StepContext {
     /// passes a CAPTCHA, so a page is worth checking for one whether or not a secret is held for it.
     #[serde(deserialize_with = "lax::boolean")]
     pub check_bot: bool,
+    /// The run has not yet asked, in this document, whether the task needs an action inside a drawn surface.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub check_surface: bool,
     #[serde(deserialize_with = "lax::boolean")]
     pub has_attachments: bool,
     /// Names of stored secrets the current origin may receive; a fill can type one without Jev seeing it.
@@ -309,6 +313,7 @@ impl StepContext {
             check_login: false,
             check_answer: false,
             check_bot: false,
+            check_surface: false,
             has_attachments: false,
             secrets: Vec::new(),
             answered_in_notes: false,
@@ -410,6 +415,10 @@ pub struct Decision {
     /// Jev's probability that the page says an item the task requires cannot be bought, with no way here to get it.
     #[serde(default)]
     pub unobtainable: Option<f64>,
+    /// Jev's probability that the task needs an action on something shown inside a drawn surface in view, which the
+    /// run cannot act inside.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inside_drawn: Option<f64>,
     /// Drop target of a drag: the control the element Jev chose to drag is released onto.
     #[serde(default)]
     pub destination: Option<Control>,
@@ -1152,6 +1161,19 @@ pub fn build_request(
             ),
         );
     }
+    // Only the task says whether what it needs is inside a drawn surface, where the run cannot act, or among the
+    // page's elements (#1084). Asked once per document that shows one, whenever one comes into view: a streamed view
+    // shows a spinner before its picture, in the same document.
+    if context.check_surface && !drawn_surfaces(controls).is_empty() {
+        questions.insert(
+            keys::INSIDE_DRAWN.into(),
+            noul(
+                "An element marked `drawn` is a drawn surface: it shows its content as pixels, with no elements inside it. Does the task need an action on something shown inside such a surface, such as typing into a field or pressing a button drawn in it? Pressing a surface as a whole, as one element, is not such an action, and neither is reading what it shows.",
+                "The task needs an action on something drawn inside a surface.",
+                "The task needs only this page's elements, a surface pressed as a whole, or what a surface shows read.",
+            ),
+        );
+    }
     if context.plan_ahead {
         for control in controls {
             if offered.contains(&Operation::Fill) && control.operations.contains(&Operation::Fill) {
@@ -1369,6 +1391,7 @@ async fn evaluate(
         shows_answer: noul_probability(&evaluation, keys::SHOWS_ANSWER),
         site_failure: noul_probability(&evaluation, "site_failure"),
         unobtainable: noul_probability(&evaluation, keys::UNOBTAINABLE),
+        inside_drawn: noul_probability(&evaluation, keys::INSIDE_DRAWN),
         destination,
         replayed: false,
         by_code: false,
@@ -1520,6 +1543,7 @@ pub fn element(control: &Control) -> Map<String, Value> {
         ("href", control.href.clone().map(Value::from)),
         ("next_page", pager_link(control).then_some(true.into())),
         ("already_read", control.already_read.filter(|read| *read).map(Value::from)),
+        ("drawn", control.drawn.filter(|drawn| *drawn).map(Value::from)),
         ("checked", control.checked.map(Value::from)),
         ("selected", control.selected.map(Value::from)),
         ("expanded", control.expanded.map(Value::from)),
@@ -1613,6 +1637,12 @@ pub(crate) fn login_question() -> Question {
         "The page's main content asks the visitor to sign in or verify an account.",
         "The page's main content is something else, with or without a sign-in link or box beside it, or it refuses access with no way to sign in.",
     )
+}
+
+/// The drawn surfaces in view that the page takes input on, as snapshot.js marks them: an image, canvas or video
+/// whose content has no page elements to act on.
+pub fn drawn_surfaces(controls: &[Control]) -> Vec<&Control> {
+    controls.iter().filter(|control| control.drawn == Some(true) && !control.offscreen).collect()
 }
 
 fn noul(instructions: &str, yes: &str, no: &str) -> Question {
@@ -1843,6 +1873,32 @@ mod tests {
         let jev = fake(&[("operation", "click"), ("click_target", "b1"), (keys::UNOBTAINABLE, "yes")], "");
         let decision = block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
         assert_eq!(decision.unobtainable, Some(0.9));
+    }
+
+    /// A page that takes input on a drawn surface asks whether the task needs an action inside one (#1084); a page
+    /// with none, with the surface out of view, or in a document already asked about, does not.
+    #[test]
+    fn test_inside_drawn_is_asked_of_a_page_with_a_drawn_surface_in_view() {
+        let view = Control { drawn: Some(true), ..button(1) };
+        let page = observation(vec![button(2), view.clone()]);
+        let context = StepContext { check_surface: true, ..StepContext::new("Type tomsmith into the Username field") };
+        let config = Config::default();
+        let asked = |controls: Vec<Control>, context: &StepContext| {
+            let page = observation(controls);
+            build_request(&page, &page.controls, context, &config, MAX_CHOICE_OPTIONS)
+                .questions
+                .contains_key(keys::INSIDE_DRAWN)
+        };
+        assert!(asked(vec![button(2), view.clone()], &context));
+        assert!(
+            !asked(vec![view.clone()], &StepContext::new("t")),
+            "a document already asked about is not asked again"
+        );
+        assert!(!asked(vec![button(1)], &context));
+        assert!(!asked(vec![Control { offscreen: true, ..view }], &context));
+        let jev = fake(&[("operation", "click"), ("click_target", "b1"), (keys::INSIDE_DRAWN, "yes")], "");
+        let decision = block_on(decide(&jev, &page, &context, &config, None, &Trace::disabled())).unwrap();
+        assert_eq!(decision.inside_drawn, Some(0.9));
     }
 
     #[test]
