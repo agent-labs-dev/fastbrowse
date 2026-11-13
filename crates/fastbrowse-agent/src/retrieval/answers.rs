@@ -1396,10 +1396,6 @@ fn ordinal(place: u64) -> String {
 /// besides the other. Returns the question, that choice's key and the reason a failure gives the composer.
 fn asks_check(task: &str, tally: &Tally, given: &[Op]) -> (Question, &'static str, String) {
     let (of, field) = (text::repr(&tally.of), text::repr(tally.field.as_deref().unwrap_or("value")));
-    let side = |extreme: &str| match tally.place() {
-        1 => extreme.to_string(),
-        place => format!("{} {extreme}", ordinal(place)),
-    };
     let own = match tally.op {
         Op::Count => "count",
         Op::Sum => "sum",
@@ -1409,9 +1405,11 @@ fn asks_check(task: &str, tally: &Tally, given: &[Op]) -> (Question, &'static st
     let worded = match tally.op {
         Op::Count => counted(tally, &of),
         Op::Sum => format!("the total {field} of every {of}, added together"),
+        // A place is checked against the records' order elsewhere, so this asks only which end the task orders from.
+        // Worded as one place, "the second highest" read as other to a task asking for the three most expensive.
         Op::Min | Op::Max => {
-            let side = side(if tally.op == Op::Min { "lowest" } else { "highest" });
-            format!("the {of} with the {side} {field}, or that {field}")
+            let side = if tally.op == Op::Min { "lowest" } else { "highest" };
+            format!("the {of} in order from the {side} {field}, one or several of them, or their {field}")
         }
     };
     let mut choices = IndexMap::new();
@@ -3484,6 +3482,26 @@ mod tests {
         assert_eq!(count.criteria.keys().collect::<Vec<_>>(), ["count", "lowest", "highest", OTHER]);
         let Question::Choice(sum) = &jev.asked()["claim1/asks"] else { panic!("asks is a choice") };
         assert_eq!(sum.criteria.keys().collect::<Vec<_>>(), ["sum", "lowest", "highest", OTHER]);
+    }
+
+    /// Asked whether a task for the three most expensive phones wants "the phone with the second highest price", Jev
+    /// said it asks for something else, so a correct second place was rejected: the question asks only which end the
+    /// task orders from, since the place is checked against the records' order.
+    #[test]
+    fn an_extreme_past_the_first_place_is_asked_by_the_end_it_orders_from() {
+        let mut tally = tallied("The second is X at $1299.", "$1299", tally::Op::Max, "phone", Some("price"), vec![])
+            .tally
+            .unwrap();
+        tally.rank = Some(2);
+        let (Question::Choice(asks), own, _) = asks_check("Tell me the three most expensive phones.", &tally, &[])
+        else {
+            panic!("asks is a choice")
+        };
+        assert_eq!(own, "highest");
+        assert_eq!(
+            asks.criteria["highest"],
+            "The 'phone' in order from the highest 'price', one or several of them, or their 'price'."
+        );
     }
 
     /// A tally whose value is not written once in its text has no place for code's value: the draft's fault, so the
