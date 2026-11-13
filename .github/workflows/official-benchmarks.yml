@@ -1,68 +1,28 @@
 name: Official benchmarks
 
-# Runs the upstream browser benchmarks, BU Bench and Online-Mind2Web, on one fastbrowse build with the official
-# runner of `evals/` in this repository at `harness_sha` (`fastbrowse-evals browser official`, a Parallax plugin).
-# Each suite is graded by its own upstream judge at a pinned commit, run from that checkout's own virtualenv; the
-# harness only meters the judge's provider calls. Dispatch only, by
-# hand or by the release workflow on a minor release: every task drives a real browser and real model calls, so it
-# spends money and is never triggered by a push or a pull request.
+# Runs the upstream BU Bench and Online-Mind2Web task sources from Parallax on one fastbrowse build. The harness
+# checkout at `harness_sha` supplies the plugin, while Parallax supplies task loading, browser evidence, retries,
+# upstream grading, timing, costs and the run directory.
 #
-# Each task runs `repeat` times (at least 1; a release runs 3). A task's figure is the mean of its repeats' upstream
-# scores, and the group records its repeat count.
-# A slot the site kept from any outcome on every retry is listed as blocked: outside the score, neither a pass nor a
-# failure, and it does not fail the run.
+# Dispatch only, by hand or by the release workflow. Every task drives a real browser and real model calls, so this
+# workflow spends money and is never triggered by a push or a pull request.
 #
-# Every run goes to the private Langfuse project, finished or not. A finished run also leaves `official-rows-*`, its
-# public rows (`fastbrowse-evals browser official-rows`): opaque task ids, scores, seconds, dollars and protocol facts, and
-# nothing else. Pass this run's id to benchmark-campaign.yml as `official_runs`, with the same `fastbrowse_ref` and
-# `harness_sha`, to publish them: the site reads one candidate, so every group in it must come from one build.
-# `campaign_id` does that itself: when every suite has passed, this workflow dispatches the campaign with this
-# run's id, which is how a release publishes every group from one candidate. A failed run dispatches nothing.
+# A successful non-smoke job leaves two artifacts. `official-<suite>` is the encrypted private run. `official-run-<suite>`
+# contains only the manifest, provenance, results and budget journal needed by benchmark-campaign.yml. Publication reads
+# that run through the same TrialResult-to-Row mapping as internal campaigns and chooses the public group from the
+# official task source recorded in the selection.
 #
-# `smoke` finds bugs before a release: one repeat of 10 sampled tasks per suite, traces sent to Langfuse marked as
-# smoke, and no public rows or campaign dispatch, so it can never publish. `task_ids` runs only the named tasks, one
-# repeat each, as a smoke run does: pick the one suite they belong to.
+# `smoke` selects ten deterministic tasks from the source, one repeat each. `task_ids` selects the named task ids and
+# also runs one repeat each. Both modes are diagnostic and never dispatch publication.
 #
-# No arm is capped (Parallax's "No caps on any arm"): the agent has no step, time, dollar or model-call limit. The
-# approved `budget` only decides whether the next task may start (`start-gate-v1`).
+# Repository configuration checked before any paid call:
+#   secrets: OPENROUTER_BENCHMARKS_API_KEY, OPENROUTER_JUDGE_API_KEY, PARALLAX_UPSTREAM_OPENAI_KEY,
+#            LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, BROWSER_USE_API_KEY, HF_TOKEN
+#   vars:    PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT, PARALLAX_JUDGE_BASE_URL, PARALLAX_JUDGE_MODELS
 #
-# A run directory holds the decrypted BU Bench goals, upstream judge records, screenshots and provider receipts,
-# which Parallax keeps private. This repository is public, so each run directory is encrypted with age to
-# PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT before it is uploaded; only the holder of the matching identity can read it.
-#
-# Repository configuration this file needs (checked before any paid call):
-#   secrets: OPENROUTER_BENCHMARKS_API_KEY (the benchmark key, as OPENROUTER_API_KEY: the agent's LLM and Jev)
-#            OPENROUTER_JUDGE_API_KEY (as PARALLAX_JUDGE_API_KEY: the key for the upstream judges' endpoint, handed to them as OPENAI_API_KEY)
-#            LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY (the run's record in the fastbrowse-evals project)
-#            BROWSER_USE_API_KEY (every task runs on a Browser Use Cloud browser)
-#            HF_TOKEN (only for online-mind2web: a token whose account accepted the dataset's access conditions)
-#   vars:    PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT (an age public key)
-#            PARALLAX_BU_BENCH_JUDGE, PARALLAX_MIND2WEB_JUDGE (the judge of each suite run, as JSON; see below)
-#            PARALLAX_JUDGE_BASE_URL, PARALLAX_JUDGE_MODELS (Parallax's own pre-check judge, keyed by PARALLAX_JUDGE_API_KEY)
-#
-# Both upstream judges call OpenAI directly. Here they call the OpenAI-compatible endpoint in `base_url`
-# (`fastbrowse-evals browser official --judge-base-url`); the run records the route, and a published group says it
-# differs from the upstream's.
-#
-# Each judge variable is one JSON object with every price checked against that endpoint's listing:
-#   {"base_url": "https://...", "model": "...", "reasoning": "...", "pricing_checked": "YYYY-MM-DD",
-#    "input_usd_per_mtok": 0, "output_usd_per_mtok": 0, "image_tokens": 0,
-#    "max_requests": 0, "max_input_tokens": 0, "max_output_tokens": 0, "budget_usd": 0}
-# plus, for a model with a long-context price tier, all three of
-#   "context_threshold_tokens", "context_input_usd_per_mtok", "context_output_usd_per_mtok".
-# The ceilings bound the judge meter's reservations, not the agent: set them to the provider's documented limits.
-# The two variables name the judge model, and published figures use one judge model for every suite
-# (docs/agents/publish-evals.md). Upstream labels results by their judge model, so figures judged by another model
-# than the upstream's are not directly comparable with the upstream's own.
-#
-# This runs fastbrowse alone. The site shows Browser Use's own published figures on these suites, labelled with their
-# judge, so its agent is not run again here. Ultrafast returns no answer, so it is not run on them.
-#
-# `budget` is each suite's approved total. It only gates whether the next task may start: a task holds its agent
-# reserve (1 dollar), browser reserve (1) and the judge variable's `budget_usd` while in flight.
-# With the judge variables' 20 (BU Bench) and 60 (Online-Mind2Web) dollars, 8 workers on cloud browsers hold at
-# most 8 x 62 = 496 dollars on Online-Mind2Web. The 600 dollar default keeps all 8 workers running until 104
-# dollars is spent, and a suite stops early only if its actual spend passes 538 dollars (BU Bench: 578).
+# `PARALLAX_UPSTREAM_OPENAI_KEY` is the preferred secret for the pinned upstream judge. The existing
+# `OPENROUTER_JUDGE_API_KEY` remains the fallback. Parallax passes the selected value to each upstream checkout as
+# OPENAI_API_KEY and OPENAI_BASE_URL.
 
 on:
   workflow_dispatch:
@@ -86,57 +46,50 @@ on:
         required: true
         default: "3"
       budget:
-        description: Approved total dollars for each suite, agent and judge together; it only gates new tasks
+        description: Approved total dollars for each suite; it gates new trials
         required: true
         default: "600"
+      reserve:
+        description: Dollars Parallax reserves before each trial starts
+        required: true
+        default: "3"
       concurrency:
-        description: Task workers per suite, sharing one start-gate ledger
+        description: Task workers per suite, sharing one Parallax budget ledger
         required: true
         default: "8"
       smoke:
-        description: One repeat of 10 sampled tasks per suite to find bugs from traces. Never publishable
+        description: One repeat of 10 sampled tasks per suite to find bugs from traces; never publishable
         required: true
         type: boolean
         default: false
       task_ids:
-        description: Space-separated task ids of one suite to run alone, one repeat each, as a smoke run. Never publishable
+        description: Space-separated task ids of one suite to run alone, one repeat each, as a smoke run; never publishable
         required: false
         type: string
         default: ""
       campaign_id:
-        description: When set, dispatch the benchmark campaign of this name with these rows once every job has passed
+        description: When set, dispatch the benchmark campaign of this name after every suite passes
         required: false
         type: string
         default: ""
 
 permissions: {}
 
-# One run at a time: the suites share the approved spend and the cloud browser quota.
 concurrency:
   group: official-benchmarks
   cancel-in-progress: false
 
 env:
   UV_PYTHON: "3.13"
-  # A run of named tasks is a smoke run: it finds bugs and never publishes.
   SMOKE: ${{ inputs.smoke || inputs.task_ids != '' }}
   REPEAT: ${{ (inputs.smoke || inputs.task_ids != '') && '1' || inputs.repeat }}
   BUDGET: ${{ inputs.budget }}
+  RESERVE: ${{ inputs.reserve }}
   WORKERS: ${{ inputs.concurrency }}
-  # The upstream pins. BU Bench's task file ships inside its repository, encrypted, so its digest is the file at
-  # the pinned commit. Online-Mind2Web's tasks are the gated Hugging Face file fastbrowse pins
-  # (src/fastbrowse/evals/sources.py). That file is not in LFS, so Hugging Face lists only its Git blob; the
-  # digest is of bytes that matched that blob and size, and the fetch below checks both again.
-  BU_BENCH_UPSTREAM: browser-use/benchmark
-  BU_BENCH_UPSTREAM_COMMIT: 77b4df339fe8fc293fb48896cfa1c73dd743af42
-  BU_BENCH_DATASET_SHA256: 0c014b056192e261b06f04ed6da6dcf37f2135150cf58c87ea839bd4e150e5c3
-  MIND2WEB_UPSTREAM: OSU-NLP-Group/Online-Mind2Web
-  MIND2WEB_UPSTREAM_COMMIT: b422075b059f0bba670ddda168444eb1d326aa45
-  MIND2WEB_DATASET_SHA256: 7dedf381531d423dc0fc48d21dc1d425655dd75f38b10211a880fa09102f257f
 
 jobs:
   resolve:
-    name: Resolve the pins and the credentials
+    name: Resolve the pins and credentials
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {contents: read}
     outputs:
@@ -146,25 +99,24 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {fetch-depth: 0, persist-credentials: false}
-      - name: Require the full comparison protocol
+      - name: Validate the dispatch
         env:
           SUITE_SET: ${{ inputs.suites }}
           TASK_IDS: ${{ inputs.task_ids }}
         run: |
           if [ -n "$TASK_IDS" ] && [ "$SUITE_SET" = all ]; then
-            echo "::error::task_ids name tasks of one suite; choose that suite, not all"
+            echo "::error::task_ids names tasks of one suite; choose that suite, not all"
             exit 1
           fi
+          case "$SUITE_SET" in all|bu-bench|online-mind2web) ;; *) echo "::error::unknown suite '$SUITE_SET'"; exit 1 ;; esac
           for pair in "repeat:$REPEAT" "concurrency:$WORKERS"; do
-            case "${pair#*:}" in
-              ''|*[!0-9]*) echo "::error::${pair%%:*} must be an integer, got '${pair#*:}'"; exit 1 ;;
-            esac
+            case "${pair#*:}" in ''|*[!0-9]*) echo "::error::${pair%%:*} must be an integer"; exit 1 ;; esac
           done
-          test "$REPEAT" -ge 1 || { echo "::error::repeat must be at least 1, got $REPEAT"; exit 1; }
+          test "$REPEAT" -ge 1 || { echo "::error::repeat must be at least 1"; exit 1; }
           test "$WORKERS" -ge 1 || { echo "::error::concurrency must be at least 1"; exit 1; }
-          case "$BUDGET" in
-            ''|*[!0-9.]*) echo "::error::budget must be a number, got '$BUDGET'"; exit 1 ;;
-          esac
+          for pair in "budget:$BUDGET" "reserve:$RESERVE"; do
+            case "${pair#*:}" in ''|*[!0-9.]*) echo "::error::${pair%%:*} must be a number"; exit 1 ;; esac
+          done
       - name: Resolve the pins
         id: pins
         env:
@@ -183,7 +135,8 @@ jobs:
       - name: Check the credentials
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_BENCHMARKS_API_KEY }}
-          PARALLAX_JUDGE_API_KEY: ${{ secrets.OPENROUTER_JUDGE_API_KEY }}
+          PARALLAX_UPSTREAM_OPENAI_KEY: ${{ secrets.PARALLAX_UPSTREAM_OPENAI_KEY || secrets.OPENROUTER_JUDGE_API_KEY }}
+          PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_UPSTREAM_OPENAI_KEY || secrets.OPENROUTER_JUDGE_API_KEY }}
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
@@ -195,92 +148,41 @@ jobs:
         run: |
           missing=""
           need() { test -n "$2" || missing="$missing $1"; }
-          need PARALLAX_JUDGE_API_KEY "$PARALLAX_JUDGE_API_KEY"
+          need OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
+          need PARALLAX_UPSTREAM_OPENAI_KEY "$PARALLAX_UPSTREAM_OPENAI_KEY"
+          need BROWSER_USE_API_KEY "$BROWSER_USE_API_KEY"
           need LANGFUSE_PUBLIC_KEY "$LANGFUSE_PUBLIC_KEY"
           need LANGFUSE_SECRET_KEY "$LANGFUSE_SECRET_KEY"
+          need PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT "$PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT"
           need PARALLAX_JUDGE_BASE_URL "$PARALLAX_JUDGE_BASE_URL"
           need PARALLAX_JUDGE_MODELS "$PARALLAX_JUDGE_MODELS"
-          need PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT "$PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT"
-          need OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
-          need BROWSER_USE_API_KEY "$BROWSER_USE_API_KEY"
-          # Online-Mind2Web is gated: HF_TOKEN's account must also have accepted the dataset's access conditions.
           if test "$SUITE_SET" != bu-bench; then need HF_TOKEN "$HF_TOKEN"; fi
           if test -n "$missing"; then
             echo "::error::missing repository configuration:$missing"
             exit 1
           fi
-          # A key that runs dry mid-run leaves every later attempt ungraded while browsers keep billing.
-          suites=1; if test "$SUITE_SET" = all; then suites=2; fi
-          for key in "$OPENROUTER_API_KEY" "$PARALLAX_JUDGE_API_KEY"; do
-            KEY="$key" NEED="$(python3 -c "print($BUDGET * $suites)")" python3 - <<'PY'
-          import json, os, sys, urllib.request
-
-          request = urllib.request.Request("https://openrouter.ai/api/v1/key",
-                                           headers={"Authorization": f"Bearer {os.environ['KEY']}"})
-          with urllib.request.urlopen(request, timeout=30) as reply:
-              left = json.load(reply)["data"].get("limit_remaining")
-          need = float(os.environ["NEED"])
-          if left is not None and left < need:
-              sys.exit(f"::error::the OpenRouter key has {left:.2f} dollars left, the approved budget needs {need:.2f}")
-          PY
-          done
       - name: Build the suite matrix
         id: matrix
-        # Runs after a credential failure too, so one dispatch names everything that is missing.
-        if: ${{ !cancelled() && steps.pins.outcome == 'success' }}
         env:
           SUITE_SET: ${{ inputs.suites }}
-          BU_BENCH_JUDGE: ${{ vars.PARALLAX_BU_BENCH_JUDGE }}
-          MIND2WEB_JUDGE: ${{ vars.PARALLAX_MIND2WEB_JUDGE }}
-        # Each entry carries its upstream pins and the judge flags built from its variable. A missing pin, digest
-        # or judge field is named here, before any paid call.
         run: |
           python3 - <<'PY'
-          import json, os, re, sys
+          import json, os
 
-          PRICES = ("input_usd_per_mtok", "output_usd_per_mtok", "max_requests", "max_input_tokens",
-                    "max_output_tokens", "image_tokens", "budget_usd")
-          CONTEXT = ("context_threshold_tokens", "context_input_usd_per_mtok", "context_output_usd_per_mtok")
           suites = {
-              "bu-bench": ("BU_BENCH", "PARALLAX_BU_BENCH_JUDGE"),
-              "online-mind2web": ("MIND2WEB", "PARALLAX_MIND2WEB_JUDGE"),
+              "bu-bench": {
+                  "repository": "browser-use/benchmark",
+                  "commit": "77b4df339fe8fc293fb48896cfa1c73dd743af42",
+              },
+              "online-mind2web": {
+                  "repository": "OSU-NLP-Group/Online-Mind2Web",
+                  "commit": "b422075b059f0bba670ddda168444eb1d326aa45",
+              },
           }
           chosen = list(suites) if os.environ["SUITE_SET"] == "all" else [os.environ["SUITE_SET"]]
-          missing, include = [], []
-          for suite in chosen:
-              prefix, variable = suites[suite]
-              commit = os.environ[f"{prefix}_UPSTREAM_COMMIT"]
-              digest = os.environ[f"{prefix}_DATASET_SHA256"]
-              if not re.fullmatch(r"[0-9a-f]{40}", commit):
-                  missing.append(f"{prefix}_UPSTREAM_COMMIT (pin in this workflow)")
-              if not re.fullmatch(r"[0-9a-f]{64}", digest):
-                  missing.append(f"{prefix}_DATASET_SHA256 (pin in this workflow once the file is verified)")
-              try:
-                  judge = json.loads(os.environ[f"{prefix}_JUDGE"] or "null")
-              except ValueError:
-                  judge = None
-              if not isinstance(judge, dict):
-                  missing.append(f"{variable} (repository variable, a JSON object)")
-                  continue
-              absent = [k for k in ("base_url", "model", "reasoning", "pricing_checked", *PRICES)
-                        if judge.get(k) in (None, "")]
-              tier = [k for k in CONTEXT if k in judge]
-              if tier and len(tier) != len(CONTEXT):
-                  absent += [k for k in CONTEXT if k not in judge]
-              if absent:
-                  missing.append(f"{variable} fields {', '.join(absent)}")
-                  continue
-              flags = ["--judge-base-url", judge["base_url"], "--judge-model", judge["model"], "--judge-reasoning", judge["reasoning"],
-                       "--judge-pricing-checked", judge["pricing_checked"]]
-              for key in (*PRICES, *tier):
-                  flags += ["--judge-" + key.removesuffix("_usd").replace("_", "-"), str(judge[key])]
-              include.append({"suite": suite, "prefix": prefix, "judge": json.dumps(flags)})
-          if missing:
-              for item in missing:
-                  print(f"::error::missing {item}")
-              sys.exit(1)
-          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
-              out.write(f"matrix={json.dumps(include)}\n")
+          matrix = [{"suite": name, **suites[name]} for name in chosen]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"matrix={json.dumps(matrix)}\n")
           PY
 
   official:
@@ -288,7 +190,6 @@ jobs:
     needs: resolve
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {contents: read, statuses: write}
-    # A full suite is hours, not minutes, but a stuck cloud browser must not hold a runner for a day.
     timeout-minutes: 350
     strategy:
       fail-fast: false
@@ -297,6 +198,7 @@ jobs:
     env:
       SUITE: ${{ matrix.suite }}
       OUT: ${{ github.workspace }}/runs/${{ matrix.suite }}
+      PRIVATE_RUN: ${{ github.workspace }}/private-runs/${{ matrix.suite }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -311,30 +213,26 @@ jobs:
         with:
           ref: ${{ needs.resolve.outputs.harness_sha }}
           path: harness
+          fetch-depth: 0
           persist-credentials: false
       - name: Install the harness and fastbrowse
         env:
           FASTBROWSE_SHA: ${{ needs.resolve.outputs.fastbrowse_sha }}
         run: |
           cd harness/evals
-          # The lock pins fastbrowse to the harness checkout; the measured build replaces it. Every later command runs
-          # with --no-sync: a syncing `uv run` would put the harness's own fastbrowse back.
           uv sync --locked --no-install-package fastbrowse
-          # A git+file install records the commit in direct_url.json, so the run names the measured build
-          # (fastbrowse.evals.versions.provenance); a plain directory install records none and publication refuses it.
+          # Install the measured commit after the harness environment, preserving its provenance for publication.
           uv pip install "fastbrowse @ git+file://$GITHUB_WORKSPACE/fastbrowse@$FASTBROWSE_SHA"
-          # Publication imports the measured build's public contract: a mismatch stops here, before any paid run.
           uv run --no-sync python -c "import fastbrowse, fastbrowse_evals.publication"
-      - name: Check out the pinned upstream
+      - name: Check out the pinned upstream judge
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: ${{ env[format('{0}_UPSTREAM', matrix.prefix)] }}
-          ref: ${{ env[format('{0}_UPSTREAM_COMMIT', matrix.prefix)] }}
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.commit }}
           path: upstream
+          fetch-depth: 0
           persist-credentials: false
-      - name: Prepare the upstream judge
-        # The runner requires a clean checkout at the exact commit and a judge Python inside it, so the virtualenv
-        # is excluded locally rather than through a tracked file.
+      - name: Install the upstream judge in its own environment
         run: |
           cd upstream
           echo ".venv/" >> .git/info/exclude
@@ -344,134 +242,149 @@ jobs:
             uv venv --python 3.11 .venv
             uv pip install --python .venv/bin/python -r requirements.txt
           fi
-          test -z "$(git status --porcelain)" || { echo "::error::preparing the judge changed the upstream checkout"; exit 1; }
+          test -z "$(git status --porcelain)" || {
+            echo "::error::preparing the judge changed the pinned checkout"
+            exit 1
+          }
       - name: Check the artifact recipient
-        # Encrypting is the only way a run directory leaves the runner, so a recipient age cannot use stops the job
-        # here, before any paid call, not after the suite has spent its budget.
         env:
           RECIPIENT: ${{ vars.PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT }}
         run: |
           sudo apt-get install -y -qq age
           echo probe | age -r "$RECIPIENT" > /dev/null \
             || { echo "::error::PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT is not an age recipient"; exit 1; }
-      - name: Fetch the Online-Mind2Web tasks
-        if: matrix.suite == 'online-mind2web'
-        # The harness's loader checks the bytes against the digest and the pinned upstream Git blob before keeping them.
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          cd harness/evals
-          uv run --no-sync python - "$MIND2WEB_DATASET_SHA256" "$RUNNER_TEMP/Online_Mind2Web.json" <<'PY'
-          import asyncio, os, sys
-          from pathlib import Path
-
-          import httpx
-          from fastbrowse.evals.sources import SOURCES
-          from fastbrowse_evals.datasets import fetch
-
-          source = SOURCES["online-mind2web"].model_copy(update={"sha256": sys.argv[1]})
-
-          async def main() -> bytes:
-              async with httpx.AsyncClient(timeout=120) as http:
-                  return await fetch(source, http, cache=Path(os.environ["RUNNER_TEMP"]), token=os.environ["HF_TOKEN"])
-
-          Path(sys.argv[2]).write_bytes(asyncio.run(main()))
-          PY
-      - name: Fetch the progress reporter
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          path: ci
-          sparse-checkout: scripts/eval_progress.py
-          persist-credentials: false
-      # The token stays out of the suite's step: a job's logs are unreadable until it ends, so this is the live view.
-      - name: Report progress
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: nohup python3 ci/scripts/eval_progress.py "$OUT" "${{ matrix.suite }}" > /dev/null 2>&1 &
-      - name: Run the suite
+      - name: Run the Parallax official suite
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_BENCHMARKS_API_KEY }}
-          # The upstream judge reads its key as OPENAI_API_KEY whatever endpoint it calls.
-          OPENAI_API_KEY: ${{ secrets.OPENROUTER_JUDGE_API_KEY }}
-          # Parallax's own pre-check judge, which runs before the upstream judge.
-          PARALLAX_JUDGE_API_KEY: ${{ secrets.OPENROUTER_JUDGE_API_KEY }}
-          PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
-          PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
-          JUDGE: ${{ matrix.judge }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          PARALLAX_LANGFUSE_PROJECT: fastbrowse-evals
+          PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
+          PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_UPSTREAM_OPENAI_KEY || secrets.OPENROUTER_JUDGE_API_KEY }}
+          PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
+          PARALLAX_OFFICIAL_ONLINE_JUDGE_MODEL: ${{ vars.PARALLAX_OFFICIAL_ONLINE_JUDGE_MODEL }}
+          PARALLAX_OFFICIAL_BU_BENCH_ROOT: ${{ github.workspace }}/upstream
+          PARALLAX_OFFICIAL_BU_BENCH_JUDGE_PYTHON: ${{ github.workspace }}/upstream/.venv/bin/python
+          PARALLAX_OFFICIAL_ONLINE_MIND2WEB_ROOT: ${{ github.workspace }}/upstream
+          PARALLAX_OFFICIAL_ONLINE_MIND2WEB_JUDGE_PYTHON: ${{ github.workspace }}/upstream/.venv/bin/python
+          FASTBROWSE_SHA: ${{ needs.resolve.outputs.fastbrowse_sha }}
+          HARNESS_SHA: ${{ needs.resolve.outputs.harness_sha }}
           TASK_IDS: ${{ inputs.task_ids }}
-          DIGEST: ${{ env[format('{0}_DATASET_SHA256', matrix.prefix)] }}
-          COMMIT: ${{ env[format('{0}_UPSTREAM_COMMIT', matrix.prefix)] }}
-          DATASET: ${{ matrix.suite == 'bu-bench' && format('{0}/upstream/BU_Bench_V2.enc', github.workspace) || format('{0}/Online_Mind2Web.json', runner.temp) }}
         run: |
           cd harness/evals
-          mapfile -t judge < <(jq -r '.[]' <<< "$JUDGE")
           read -ra ids <<< "$TASK_IDS"
-          selection=()
-          for id in "${ids[@]}"; do selection+=(--task-id "$id"); done
-          if [ ${#ids[@]} -eq 0 ] && [ "$SMOKE" = true ]; then selection=(--sample 10); fi
-          mkdir -p "$(dirname "$OUT")"
-          uv run --no-sync fastbrowse-evals browser official "$SUITE" \
-            --upstream-root "$GITHUB_WORKSPACE/upstream" \
-            --upstream-commit "$COMMIT" \
-            --judge-python "$GITHUB_WORKSPACE/upstream/.venv/bin/python" \
-            --dataset "$DATASET" \
-            --dataset-sha256 "$DIGEST" \
-            "${judge[@]}" \
-            --repeat "$REPEAT" \
-            "${selection[@]}" \
+          if [ "${#ids[@]}" -gt 0 ]; then
+            selection=("${ids[@]}")
+          elif [ "$SMOKE" = true ]; then
+            mapfile -t selection < <(uv run --no-sync python - "$SUITE" <<'PY'
+          import sys
+          from parallax.task import source_tasks
+
+          for task in source_tasks(source_names=(sys.argv[1],))[:10]:
+              print(task.id)
+          PY
+          )
+          else
+            selection=("$SUITE")
+          fi
+          # A full selection is `parallax run bu-bench ...` or `parallax run online-mind2web ...`.
+          mkdir -p "$(dirname "$OUT")" "$PRIVATE_RUN"
+          # `parallax run` uploads and removes a successful local run. Hard links preserve the private evidence while
+          # the command is running, and a later step encrypts the mirror before it leaves the runner.
+          python3 - "$OUT" "$PRIVATE_RUN" <<'PY' &
+          import os
+          import shutil
+          import sys
+          import time
+          from pathlib import Path
+
+          source, target = map(Path, sys.argv[1:])
+          target.mkdir(parents=True, exist_ok=True)
+
+          def mirror() -> None:
+              if not source.is_dir():
+                  return
+              for path in source.rglob("*"):
+                  if not path.is_file():
+                      continue
+                  destination = target / path.relative_to(source)
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  if destination.exists():
+                      try:
+                          if destination.stat().st_ino == path.stat().st_ino:
+                              continue
+                      except FileNotFoundError:
+                          continue
+                      temporary = destination.with_suffix(destination.suffix + ".tmp")
+                      try:
+                          shutil.copy2(path, temporary)
+                          temporary.replace(destination)
+                      except FileNotFoundError:
+                          temporary.unlink(missing_ok=True)
+                      continue
+                  try:
+                      os.link(path, destination)
+                  except FileNotFoundError:
+                      continue
+                  except OSError:
+                      try:
+                          shutil.copy2(path, destination)
+                      except FileNotFoundError:
+                          pass
+
+          while not source.exists():
+              time.sleep(0.25)
+          while source.exists():
+              mirror()
+              time.sleep(0.25)
+          mirror()
+          PY
+          mirror_pid=$!
+          set +e
+          uv run --no-sync parallax run "${selection[@]}" \
+            --harness fastbrowse \
+            --repeats "$REPEAT" \
             --concurrency "$WORKERS" \
             --budget "$BUDGET" \
-            --out "$OUT" \
-            --execute
-      - name: Report the final progress
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 ci/scripts/eval_progress.py "$OUT" "${{ matrix.suite }}" --final
-      - name: Send the run to Langfuse
-        # A stopped run is tracked too: its experiment lists what ran, and the secrets stay out of its traces.
-        if: always()
-        env:
-          LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
-          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
-          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
-          PARALLAX_LANGFUSE_PROJECT: fastbrowse-evals
+            --reserve "$RESERVE" \
+            --retry-invalid 2 \
+            --retry-wait 60 \
+            --provenance fastbrowse.agent_sha="$FASTBROWSE_SHA" \
+            --provenance fastbrowse.runner_sha="$HARNESS_SHA" \
+            --out "$OUT"
+          status=$?
+          kill "$mirror_pid" 2> /dev/null || true
+          wait "$mirror_pid" 2> /dev/null || true
+          set -e
+          exit "$status"
+      - name: Write the public run projection
+        if: ${{ env.SMOKE != 'true' && success() }}
         run: |
-          test -f "$OUT/manifest.json" || { echo "::warning::no run to track"; exit 0; }
-          cd harness/evals
-          smoke=(); if [ "$SMOKE" = true ]; then smoke=(--smoke); fi
-          uv run --no-sync fastbrowse-evals browser track-official "$OUT" --push "${smoke[@]}"
-      - name: Write the public rows
-        if: ${{ env.SMOKE != 'true' }}
-        # Refuses a run publication would refuse, here where the plaintext is, so the run still uploads below.
-        env:
-          LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
-          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
-          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
-          PARALLAX_LANGFUSE_PROJECT: fastbrowse-evals
-          DATASET: ${{ matrix.suite == 'bu-bench' && format('{0}/upstream/BU_Bench_V2.enc', github.workspace) || format('{0}/Online_Mind2Web.json', runner.temp) }}
-        run: |
-          cd harness/evals
-          uv run --no-sync fastbrowse-evals browser official-rows "$SUITE" "$OUT" \
-            --dataset "$DATASET" \
-            --upstream-root "$GITHUB_WORKSPACE/upstream" \
-            --judge-python "$GITHUB_WORKSPACE/upstream/.venv/bin/python" \
-            --out "$RUNNER_TEMP/$SUITE.rows.json"
+          public="$RUNNER_TEMP/public-runs/$SUITE"
+          mkdir -p "$public"
+          for name in manifest.json provenance.json results.jsonl budget.jsonl; do
+            test -f "$PRIVATE_RUN/$name" && cp "$PRIVATE_RUN/$name" "$public/$name"
+          done
+          test -f "$public/manifest.json" || { echo "::error::Parallax did not leave a manifest"; exit 1; }
+          test -f "$public/results.jsonl" || { echo "::error::Parallax did not leave results"; exit 1; }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: ${{ env.SMOKE != 'true' }}
+        if: ${{ env.SMOKE != 'true' && success() }}
         with:
-          name: official-rows-${{ matrix.suite }}
-          path: ${{ runner.temp }}/${{ matrix.suite }}.rows.json
+          name: official-run-${{ matrix.suite }}
+          path: ${{ runner.temp }}/public-runs/${{ matrix.suite }}/
           if-no-files-found: error
           retention-days: 90
-      - name: Encrypt the run directory
+      - name: Encrypt the private run mirror
         if: always()
         env:
           RECIPIENT: ${{ vars.PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT }}
         run: |
-          test -d "$OUT" || { echo "::warning::no run directory was written"; exit 0; }
-          tar -C "$(dirname "$OUT")" -czf - "$SUITE" | age -r "$RECIPIENT" -o "$RUNNER_TEMP/$SUITE.tar.gz.age"
+          test -d "$PRIVATE_RUN" || { echo "::warning::no private run mirror was written"; exit 0; }
+          tar -C "$(dirname "$PRIVATE_RUN")" -czf - "$(basename "$PRIVATE_RUN")" \
+            | age -r "$RECIPIENT" -o "$RUNNER_TEMP/$SUITE.tar.gz.age"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -481,7 +394,7 @@ jobs:
           retention-days: 30
 
   campaign:
-    name: Dispatch the campaign with these rows
+    name: Dispatch the campaign with these runs
     needs: [resolve, official]
     if: ${{ inputs.campaign_id != '' && !inputs.smoke && inputs.task_ids == '' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404

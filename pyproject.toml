@@ -21,6 +21,7 @@ Issues = "https://github.com/agent-labs-dev/fastbrowse/issues"
 
 [project.optional-dependencies]
 eval-data = ["pyyaml>=6.0.3,<7"]
+evals = ["parallax-evals==2.0.0.dev20"]
 
 [project.scripts]
 fastbrowse = "fastbrowse.commands:fastbrowse"

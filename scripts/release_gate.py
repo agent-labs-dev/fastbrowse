@@ -193,7 +193,7 @@ def official_candidate(raw: dict[str, Any], campaign: str, agent_sha: str) -> Ca
 
 def official_receipts(repo: str, candidate: Candidate) -> list[str]:
     """The producer's public artifacts bind the candidate to checked task sources and upstream grades."""
-    from fastbrowse_evals.publication import OfficialRows, official_collected
+    from fastbrowse_evals.publication import candidate_from_runs
 
     expected = {group.id: group for group in candidate.groups if group.id in {"bu-bench", "online-mind2web"}}
     found: dict[str, int] = {}
@@ -209,20 +209,32 @@ def official_receipts(repo: str, candidate: Candidate) -> list[str]:
             continue
         with tempfile.TemporaryDirectory(prefix="release-official-") as directory:
             try:
-                _gh("run", "download", str(run_id), "-R", repo, "-D", directory, "-p", "official-rows-*")
+                _gh("run", "download", str(run_id), "-R", repo, "-D", directory, "-p", "official-run-*")
             except subprocess.CalledProcessError:
                 continue
-            for path in sorted(Path(directory).rglob("*.rows.json")):
-                part = OfficialRows.model_validate_json(path.read_bytes())
-                if (
-                    part.agent_sha != candidate.agent_sha
-                    or part.runner_sha != candidate.runner_sha
-                    or part.repeats != MIN_RUNS
-                    or part.group not in expected
+            run_dirs = sorted({path.parent for path in Path(directory).rglob("manifest.json")})
+            if not run_dirs or any(not (path / "provenance.json").is_file() for path in run_dirs):
+                continue
+            try:
+                provenance = [json.loads((path / "provenance.json").read_text(encoding="utf-8")) for path in run_dirs]
+                if any(
+                    data.get("extra", {}).get("fastbrowse.agent_sha") != candidate.agent_sha
+                    or data.get("extra", {}).get("fastbrowse.runner_sha") != candidate.runner_sha
+                    for data in provenance
                 ):
                     continue
-                if official_collected(part).group == expected[part.group]:
-                    found.setdefault(part.group, run_id)
+                produced = candidate_from_runs(
+                    run_dirs,
+                    campaign_id=candidate.campaign_id,
+                    agent_sha=candidate.agent_sha,
+                    runner_sha=candidate.runner_sha,
+                )
+            except (OSError, TypeError, ValueError):
+                continue
+            produced_groups = {group.id: group for group in produced.groups}
+            for group_id in expected:
+                if produced_groups.get(group_id) == expected[group_id]:
+                    found.setdefault(group_id, run_id)
         if found.keys() == expected.keys():
             return [f"{name}: verified official producer run {found[name]}" for name in sorted(found)]
     raise GateError("both official groups require matching public receipts from successful exact-runner workflows")

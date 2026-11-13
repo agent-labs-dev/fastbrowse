@@ -5,11 +5,20 @@ which case it reads those alone. The harness passes them, so the Jev route is on
 environment is read as fastbrowse reads it (`environment`).
 """
 
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from typing import Literal
 
 import httpx
 from fastbrowse.evals import harness
+from fastbrowse.models import Authorization, Limits
+from fastbrowse.run import run_task
+from fastbrowse.safety import ScopedSecrets, origin_of
+from parallax.harnesses.browser import BrowserHarness
+from parallax.harnesses.browser.cloud import Browser, cloud_browser
+from parallax.models import Capability, CostSource, HarnessInfo, HarnessKind, Isolation, TurnInput
+
+from fastbrowse_evals.task_specs import secret_values
 
 type JevSource = Literal["openrouter", "typesafe"]
 
@@ -96,3 +105,93 @@ def run_settings(overrides: Mapping[str, str] | None = None) -> dict[str, str]:
         }
         return chosen | dict(overrides)
     return chosen | {"FASTBROWSE_DECISION_SOURCE": jev_source(env)}
+
+
+class FastbrowseHarness(BrowserHarness):
+    """Run the public fastbrowse embedder inside Parallax's browser protocol."""
+
+    info = HarnessInfo(
+        name="fastbrowse",
+        kind=HarnessKind.OPEN,
+        capabilities=frozenset({Capability.BROWSER}),
+        pins_model=False,
+        cost_source=CostSource.HARNESS,
+        isolation=Isolation.HOST,
+        credential_env=("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "EXA_API_KEY"),
+        source_url="https://github.com/agent-labs-dev/fastbrowse",
+    )
+
+    def __init__(self, *, observer: str | None = None) -> None:
+        super().__init__(observer=observer)
+        self._task_data: Mapping[str, object] = {}
+
+    def bind_task(self, task: object) -> None:
+        data = getattr(task, "data", {})
+        self._task_data = data if isinstance(data, Mapping) else {}
+
+    @asynccontextmanager
+    async def browser(self, http: httpx.AsyncClient) -> AsyncIterator[Browser]:
+        async with cloud_browser(http, screen=(1120, 780)) as browser:
+            yield browser
+
+    async def execute(self, turn: TurnInput) -> dict[str, object]:
+        start_url = self._task_data.get("start_url")
+        if not isinstance(start_url, str):
+            raise ValueError("browser task has no start_url")
+        task_id = self.trial.task_id
+        secrets = ScopedSecrets(secret_values(task_id), origin_of(start_url)) if secret_values(task_id) else None
+        authorization = Authorization(irreversible_actions=bool(self._task_data.get("authorize")))
+        async with httpx.AsyncClient() as http, self.browser(http) as browser:
+            self._browser = browser
+            self._details["browser"] = "cloud" if browser.browser_id else "pool"
+            self._agent_started(browser.open_seconds)
+            output = await run_task(
+                turn.text,
+                start=start_url,
+                open_browser=lambda: _ready_browser(browser),
+                output_schema=None,
+                limits=Limits(),
+                authorization=authorization,
+                secrets=secrets,
+                http=http,
+                settings=run_settings(),
+            )
+            page = await self.observe(browser.cdp_url, url=output.final_url)
+            return _run_result(output, page, browser)
+
+
+async def _ready_browser(browser: Browser) -> str:
+    return browser.cdp_url
+
+
+def _run_result(output: object, page: dict[str, object], browser: Browser) -> dict[str, object]:
+    status = getattr(getattr(output, "status", None), "value", getattr(output, "status", "error"))
+    if status == "complete":
+        ending = "done"
+    elif status == "unavailable":
+        ending = "unavailable"
+    else:
+        ending = "stopped"
+    cost = getattr(output, "cost", None)
+    lines = [line.model_dump(mode="json") for line in getattr(cost, "lines", ())]
+    lines.extend(browser.cost)
+    steps = []
+    for step in getattr(output, "steps", ()):
+        item = {"action": step.operation.value, "url": step.url}
+        if step.target:
+            item["value"] = step.target
+        if step.facts:
+            item["quote"] = step.facts[0].quote or step.facts[0].text
+        steps.append(item)
+    citations = [citation.model_dump(mode="json") for citation in getattr(output, "citations", ())]
+    return {
+        "status": ending,
+        "answer": getattr(output, "answer", None),
+        "error": getattr(output, "error", None),
+        "final_page": page,
+        "final_url": getattr(output, "final_url", None),
+        "step_log": steps,
+        "citations": citations,
+        "cost_lines": lines,
+        "actual_model": None,
+    }

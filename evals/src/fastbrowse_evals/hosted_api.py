@@ -1,13 +1,11 @@
-"""The fastbrowse-hosted arm: a task sent to the hosted product's public API, as a customer sends it.
+"""Parallax harness for the fastbrowse hosted API.
 
-This measures what a customer buys, not the agent alone: the API's queue, its worker's pinned fastbrowse build, its
-own browser pool and its price. The run is submitted with `POST /v1/runs` and polled with `GET /v1/runs/{id}` until it
-leaves `queued` and `running` (fastbrowse-hosted docs/api.md). The API returns the answer, its quotes and where the
-browser ended, but no copy of that page, so the page half of a task is not graded for this arm (`unobservable`).
-
-`dollars` is the customer charge (`usage.charged_micros`), not the metered provider cost the other fastbrowse arms
-report: the two are different quantities, so this arm is a diagnostic, in no publication group.
+The API owns the browser session, so this harness reports the answer and
+citations returned by the service. It does not invent final-page evidence when
+the service did not expose the page to the caller.
 """
+
+from __future__ import annotations
 
 import asyncio
 import contextlib
@@ -20,19 +18,18 @@ from urllib.parse import urlsplit
 
 import httpx
 from fastbrowse.models import Unavailable
+from parallax.harnesses.browser import BrowserHarness
+from parallax.models import Capability, CostSource, HarnessInfo, HarnessKind, Isolation, TurnInput
 
-from fastbrowse_evals.attempt_clock import SESSION_INCLUDED, session_answered, session_ready
 from fastbrowse_evals.backend import RETRYABLE_STATUS, TRANSIENT_TRANSPORT
-from fastbrowse_evals.live_tasks import LiveTask, Outcome
 
 DEFAULT_URL = "https://api.fastbrowse.ai"
 POLL_SECONDS = 2.0
-_log = logging.getLogger("fastbrowse_evals.hosted")
 RUNNING = frozenset({"queued", "running"})
+_log = logging.getLogger("fastbrowse_evals.hosted")
 
 
 def settings() -> tuple[str, str]:
-    """The API's base URL and key. The key is never logged or recorded."""
     key = os.environ.get("FASTBROWSE_HOSTED_API_KEY")
     if not key:
         raise RuntimeError("fastbrowse-hosted needs FASTBROWSE_HOSTED_API_KEY")
@@ -44,23 +41,19 @@ def settings() -> tuple[str, str]:
 
 
 def host() -> str | None:
-    """The API's hostname alone, what provenance records of it."""
     return urlsplit(os.environ.get("FASTBROWSE_HOSTED_URL") or DEFAULT_URL).hostname
 
 
 def test_key() -> bool:
-    """A `fbh_test_` key runs the API's simulator: the same shapes, no browser, no charge."""
     return os.environ.get("FASTBROWSE_HOSTED_API_KEY", "").startswith("fbh_test_")
 
 
 def _failure(what: str, status: int | None = None, error: Exception | None = None) -> Exception:
-    """An API failure as an outage when a repeat can clear it, else as the harness's own error; never echoes a body,
-    which can quote the request."""
     if error is not None:
-        failed = Unavailable if isinstance(error, TRANSIENT_TRANSPORT) else RuntimeError
-        return failed(f"fastbrowse-hosted {what} failed ({type(error).__name__})")
-    failed = Unavailable if status in RETRYABLE_STATUS else RuntimeError
-    return failed(f"fastbrowse-hosted {what} returned HTTP {status}")
+        failure = Unavailable if isinstance(error, TRANSIENT_TRANSPORT) else RuntimeError
+        return failure(f"fastbrowse-hosted {what} failed ({type(error).__name__})")
+    failure = Unavailable if status in RETRYABLE_STATUS else RuntimeError
+    return failure(f"fastbrowse-hosted {what} returned HTTP {status}")
 
 
 async def _call(http: httpx.AsyncClient, method: str, url: str, what: str, **kwargs: Any) -> dict[str, Any]:
@@ -73,14 +66,21 @@ async def _call(http: httpx.AsyncClient, method: str, url: str, what: str, **kwa
     return response.json()
 
 
-async def submit_and_wait(http: httpx.AsyncClient, task: LiveTask) -> tuple[dict[str, Any], float]:
-    """The finished run and the wall seconds from submitting it to seeing it finish. A run the API accepted is
-    cancelled when the attempt is, even when the cancellation lands before its reply, so it is not left charging.
+def _task_value(task: object, name: str, default: object = None) -> object:
+    value = getattr(task, name, default)
+    if value is not default:
+        return value
+    data = getattr(task, "data", {})
+    return data.get(name, default) if isinstance(data, dict) else default
 
-    The service opens its own browser where the harness cannot see it, so the session is ready once the run is
-    accepted: only the submission is bounded as opening, and the run itself has no deadline but the service's."""
+
+async def submit_and_wait(http: httpx.AsyncClient, task: object) -> tuple[dict[str, Any], float]:
+    """Submit one TaskRecord and wait for its terminal API result."""
     base, key = settings()
     headers = {"Authorization": f"Bearer {key}"}
+    task_id = str(_task_value(task, "id", "task"))
+    prompt = str(_task_value(task, "task", _task_value(task, "prompt", "")))
+    start_url = str(_task_value(task, "start_url", ""))
     began = time.monotonic()
     submit = asyncio.ensure_future(
         _call(
@@ -88,30 +88,27 @@ async def submit_and_wait(http: httpx.AsyncClient, task: LiveTask) -> tuple[dict
             "POST",
             f"{base}/v1/runs",
             "submit",
-            headers=headers | {"Idempotency-Key": f"parallax-{task.id}-{uuid.uuid4().hex}"},
-            json={"task": task.task, "start": task.start, "webhook_events": False, "metadata": {"source": "parallax"}},
+            headers=headers | {"Idempotency-Key": f"parallax-{task_id}-{uuid.uuid4().hex}"},
+            json={"task": prompt, "start": start_url, "webhook_events": False, "metadata": {"source": "parallax"}},
         )
     )
     try:
         run = await asyncio.shield(submit)
     except asyncio.CancelledError:
-        # The service may have accepted the run before its reply arrived: wait for the reply, and cancel that run.
         with contextlib.suppress(Exception):
             accepted = await submit
-            if accepted["state"] in RUNNING:
+            if accepted.get("state") in RUNNING:
                 await _cancel(http, f"{base}/v1/runs/{accepted['id']}", headers)
         raise
-    session_ready()
     run_url = f"{base}/v1/runs/{run['id']}"
     try:
-        while run["state"] in RUNNING:
+        while run.get("state") in RUNNING:
             await asyncio.sleep(POLL_SECONDS)
             run = await _call(http, "GET", run_url, "poll", headers=headers)
     except BaseException:
-        if run["state"] in RUNNING:
+        if run.get("state") in RUNNING:
             await asyncio.shield(_cancel(http, run_url, headers))
         raise
-    session_answered()
     return run, time.monotonic() - began
 
 
@@ -124,20 +121,20 @@ async def _cancel(http: httpx.AsyncClient, run_url: str, headers: dict[str, str]
         )
 
 
-def outcome_of(run: dict[str, Any]) -> Outcome:
-    quotes = tuple((str(c["url"]), str(c["quote"])) for c in run.get("citations") or [] if c.get("quote"))
-    return Outcome(run.get("answer"), run.get("data"), run.get("final_url"), quotes, None, None, True)
+def outcome_of(run: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "answer": run.get("answer"),
+        "data": run.get("data"),
+        "final_url": run.get("final_url"),
+        "citations": run.get("citations") or [],
+    }
 
 
 def status_of(run: dict[str, Any]) -> str:
-    """The agent's own status when it finished; the API's state when the worker failed the run outside the agent
-    (`failed`, `canceled`, `expired`), which the shared vocabulary reads as an error."""
-    return run.get("status") or run["state"]
+    return str(run.get("status") or run.get("state") or "error")
 
 
 def report_fields(run: dict[str, Any], wall: float) -> dict[str, Any]:
-    """The ArmReport fields this arm can fill. `seconds` is the worker's own duration of the final attempt; the wall
-    time from submit includes the queue and the browser start, so it is kept apart as `session_seconds`."""
     usage = run.get("usage") or {}
     components = usage.get("components") or {}
     duration = usage.get("duration_ms")
@@ -145,7 +142,7 @@ def report_fields(run: dict[str, Any], wall: float) -> dict[str, Any]:
     return {
         "status": status_of(run),
         "seconds": round(duration / 1000, 2) if duration is not None else round(wall, 2),
-        "timing_basis": None if duration is not None else SESSION_INCLUDED,
+        "timing_basis": "session-included" if duration is None else None,
         "session_seconds": round(wall, 2),
         "dollars": None if charged is None else charged / 1_000_000,
         "error": run.get("error"),
@@ -153,8 +150,69 @@ def report_fields(run: dict[str, Any], wall: float) -> dict[str, Any]:
         "citations": run.get("citations") or [],
         "step_log": run.get("steps") or [],
         "final_page_url": run.get("final_url"),
-        "session_id": run["id"],
+        "session_id": run.get("id"),
         "input_tokens": sum(c.get("input_tokens") or 0 for c in components.values()) or None,
         "output_tokens": sum(c.get("output_tokens") or 0 for c in components.values()) or None,
-        "provenance": {"api": host(), "run_id": run["id"], "simulator": test_key()},
+        "provenance": {"api": host(), "run_id": run.get("id"), "simulator": test_key()},
     }
+
+
+class FastbrowseHostedHarness(BrowserHarness):
+    info = HarnessInfo(
+        name="fastbrowse-hosted",
+        kind=HarnessKind.PRODUCT,
+        capabilities=frozenset({Capability.BROWSER}),
+        pins_model=True,
+        cost_source=CostSource.HARNESS,
+        isolation=Isolation.REMOTE,
+        credential_env=("FASTBROWSE_HOSTED_API_KEY",),
+        source_url="https://github.com/agent-labs-dev/fastbrowse",
+    )
+
+    def __init__(self, *, observer: str | None = None) -> None:
+        super().__init__(observer=observer)
+        self._task: object | None = None
+
+    def bind_task(self, task: object) -> None:
+        self._task = task
+
+    async def execute(self, turn: TurnInput) -> dict[str, Any]:
+        if self._task is None:
+            raise RuntimeError("fastbrowse-hosted harness has no task")
+        async with httpx.AsyncClient() as http:
+            run, wall = await submit_and_wait(http, self._task)
+        state = status_of(run)
+        if state in {"complete", "completed", "idle", "stopped"}:
+            result_status = "done"
+        elif state in {"unavailable", "expired"}:
+            result_status = "unavailable"
+        else:
+            result_status = "error"
+        fields = report_fields(run, wall)
+        dollars = fields.get("dollars")
+        lines = [] if dollars is None else [{"component": "agent", "basis": "metered", "dollars": dollars}]
+        return {
+            "status": result_status,
+            "answer": run.get("answer"),
+            "error": fields.get("error"),
+            "final_url": run.get("final_url"),
+            "citations": run.get("citations") or [],
+            "step_log": run.get("steps") or [],
+            "cost_lines": lines,
+            "actual_model": run.get("model"),
+            "latency_ms": fields.get("seconds", wall) * 1000,
+            "session_id": run.get("id"),
+        }
+
+
+__all__ = [
+    "FastbrowseHostedHarness",
+    "_call",
+    "host",
+    "outcome_of",
+    "report_fields",
+    "settings",
+    "status_of",
+    "submit_and_wait",
+    "test_key",
+]

@@ -4,8 +4,10 @@
   "origin": "fastbrowse-internal",
   "owner": "parallax",
   "task_sources": {
-    "live_tasks.py": "9896ae38dbe720bca70c8258bd771230437734ef3e91bbac926cf982f12bfa70",
-    "more_tasks.py": "7bced0cb86327c1414492dae46635ffb70da3d2b34f1c0f25e74aa9e0b56349b",
+    "live_tasks.py": "f38f85fb15765c6740f59875c7ccbc3a252a76b3e66e698877830ee6bfa24892",
+    "more_tasks.py": "f4fd910a5a939052aa88e7450d0e65f0b6c34c44048805b61010d856fec502fe",
+    "sweep_tasks.py": "794208a46b1ed4603869cc94a0a5d98264858b3c5b51f04901cc9f637867f643",
+    "task_specs.py": "23e19e144afcc392577dfaae87af25838d5df2bb10cab5c173d6cafc465ed576",
     "versions.json": "31494e95de013ed8c1bfae2df7eb93d9c50286aaf06475a8c244c26cebc9f49e"
   },
   "suites": {
@@ -965,37 +967,37 @@
       "default": true
     },
     "fastbrowse-pool": {
-      "pin": "run.fastbrowse_version + run.git_sha; fastbrowse-hosted browser pool",
+      "pin": "fastbrowse plugin + Parallax browser pool",
       "tier": "A",
       "default": false
     },
     "fastbrowse-hosted": {
-      "pin": "api.fastbrowse.ai at its deployed build; customer charge, not metered cost",
+      "pin": "api.fastbrowse.ai at its deployed build",
       "tier": "hosted",
       "default": false
     },
     "browser-use": {
-      "pin": "browser-use-sdk==3.12.1 API v4; default model, reported per row",
+      "pin": "browser-use-sdk==3.12.1 API v4, default model",
       "tier": "hosted",
       "default": true
     },
     "browser-use-ultrafast": {
-      "pin": "browser-use-sdk==3.12.1 API v4; model bu-ultrafast, reported per row",
+      "pin": "browser-use-sdk==3.12.1 API v4, model bu-ultrafast",
       "tier": "hosted",
       "default": true
     },
     "browser-use-oss": {
-      "pin": "browser-use==1.0.3; default model bu-fast, default mode (ultrafast on bu-fast)",
+      "pin": "browser-use==1.0.3, default model",
       "tier": "A",
       "default": false
     },
     "cua-codex": {
-      "pin": "cua-driver==0.47.19; codex-cli==0.169.0",
+      "pin": "cua-codex pin from Parallax",
       "tier": "local",
       "default": false
     },
     "browser-harness": {
-      "pin": "browser-harness==0.1.13; codex-cli==0.169.0; cli+skill",
+      "pin": "browser-harness pin from Parallax, Codex CLI",
       "tier": "A",
       "default": false
     }
