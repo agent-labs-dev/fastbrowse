@@ -1682,7 +1682,7 @@ impl fastbrowse_core::decision::DecisionClient for RequestedRecorder {
 #[tokio::test]
 async fn test_a_requested_press_is_asked_about_its_chord() {
     let tab = Control::new("t", "tab", "Billing", [Operation::Press]);
-    let page = observation(&[tab.clone()]);
+    let page = observation(std::slice::from_ref(&tab));
     let jev = Arc::new(RequestedRecorder::default());
     let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
     let mut state = run_state();
