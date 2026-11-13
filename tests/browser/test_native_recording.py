@@ -102,7 +102,7 @@ async def test_a_run_cancelled_during_the_result_card_still_writes_both_videos(
             finished.set()
         return await evaluate(state, questions)
 
-    jev.evaluate = judged  # ty: ignore[invalid-assignment]
+    jev.evaluate = judged
     record = tmp_path / "run.mp4"
     run = asyncio.create_task(
         run_task(
