@@ -120,7 +120,10 @@ The browser visits each changed frame, then transfers unchanged control rows by 
 ids and sends only changed rows and guards. The receiver reconstructs the ordered controls against the exact
 document and previous read named by the delta. Each request names the receiver's baseline; a missing or mismatched
 baseline returns a full read directly. Each frame read releases saved snapshots of detached child frames, preserving live child snapshots across tab switches. Rust retains the raw rows with their validated snapshot, so an unchanged response reuses that parse. A delta that cannot be reconstructed requests a full read. Page text,
-modal state and other frame metadata travel in full. An inline child document or shadow root is still read each time.
+modal state and other frame metadata travel in full. A read that enters open shadow roots or same-origin child
+documents is kept like any other: each root it walks gets its own mutation observer and event listeners, and the
+saved read records every frame's document and address, so a frame that shows another document, or becomes readable,
+renews it.
 Captures and citation spans keep their own read path. Context construction indexes peer labels once per read,
 preserving shared labels when excluding a control.
 
@@ -129,8 +132,9 @@ match. A mutation invalidates the affected subtree and its ancestors. A name rec
 label associations, visibility and native values it used, and checks those dependencies before reuse. Queries
 are also tied to their document or shadow root. Layout and event listeners are read afresh, and action guards
 query current state. Each saved snapshot or glance keeps its own pending custom-element definitions, since an
-upgrade can change label ownership without a DOM mutation. Before reusing a shallow read, the browser checks
-its visited elements for newly attached shadow roots, which also produce no document mutation. It also
+upgrade can change label ownership without a DOM mutation. Before reusing a read, the browser checks the
+elements of every tree it visited for newly attached shadow roots, which also produce no mutation, and compares
+each tree's live values, stylesheets, address, scroll, size and running animations. It also
 compares the native pointer-listener checks used by the saved read. Each atomic read asks for a node's listeners
 once; later action guards ask again. A saved read also compares the rendering facts it consumed: computed
 style properties, visibility, element and text-node boxes, rendered text, live selector matches, focus and
@@ -142,7 +146,9 @@ The frame keeps each document or shadow root's element order and static control 
 change renews order through saved element-child edges; unchanged siblings keep those edges. Attribute changes
 renew membership, while geometry, listeners and render facts are read fresh. Full reads rebuild the index.
 Text spans still come from the text walker and capture path. Each control's fields and context decisions
-are derived from the current page. Saved reads compare fresh boxes and selector results directly with their
+are derived from the current page. Reusing the rows of untouched controls was measured and does not pay: a changed
+read is dominated by the native style, visibility, box and text reads that would prove a row unchanged, and the
+hover, scroll and guard passes read the same facts again when the walk no longer has them. Saved reads compare fresh boxes and selector results directly with their
 snapshots, without allocating new comparison arrays. Repeated heading and scope text reuses its normalized
 lines only when a fresh native read returns the exact same text.
 

@@ -1039,8 +1039,8 @@ impl CdpPage {
             Some(parsed) => parsed,
             None => Arc::new(parse(raw.clone(), T::SHAPE)?),
         };
-        // Numbered reads are transport baselines, including deep reads the producer must derive again. Only a
-        // shallow read whose revision still matches can answer unchanged; both paths name this exact baseline.
+        // Numbered reads are transport baselines. A read whose page has not moved answers unchanged, and a changed
+        // one sends a delta against it; both name this exact baseline.
         if let Some((slot, _)) = retry
             && !was_served
         {
