@@ -20,7 +20,7 @@ def spec() -> RequestSessionSpec:
         judge=profile(
             shape="chat_completions",
             endpoint="https://openrouter.ai/api/v1/chat/completions",
-            model="deepseek/deepseek-v4.1-flash",
+            model="deepseek/deepseek-v4.1-flash-1017",
             credential_id="PARALLAX_JUDGE_API_KEY",
         ),
     )
@@ -55,7 +55,10 @@ async def test_rust_route_and_canonical_judge_share_one_durable_wallet(tmp_path:
         async with session.judge_client() as client:
             response = await client.post(
                 "https://openrouter.ai/api/v1/chat/completions",
-                json={"model": "deepseek/deepseek-v4.1-flash", "messages": [{"role": "user", "content": "Grade."}]},
+                json={
+                    "model": "deepseek/deepseek-v4.1-flash-1017",
+                    "messages": [{"role": "user", "content": "Grade."}],
+                },
             )
             assert response.status_code == 200
         assert session.wallet.committed == Decimal("0.0002")
@@ -115,7 +118,7 @@ async def test_judge_exhaustion_keeps_complete_agent_evidence(tmp_path: Path, mo
     from fastbrowse_evals import live
     from fastbrowse_evals.live_tasks import TASKS, Outcome, PageEvidence
 
-    monkeypatch.setenv("PARALLAX_JUDGE_MODELS", "deepseek/deepseek-v4.1-flash")
+    monkeypatch.setenv("PARALLAX_JUDGE_MODELS", "deepseek/deepseek-v4.1-flash-1017")
     monkeypatch.setenv("PARALLAX_JUDGE_BASE_URL", "https://openrouter.ai/api/v1")
     monkeypatch.setenv("PARALLAX_JUDGE_API_KEY", "caller-must-not-forward")
     calls = []
@@ -261,7 +264,7 @@ async def test_cli_persists_exhaustion_and_separate_wallet_evidence(
     source = tmp_path / "profiles.json"
     source.write_text(spec().model_dump_json())
     out = tmp_path / "rows.jsonl"
-    monkeypatch.setenv("PARALLAX_JUDGE_MODELS", "deepseek/deepseek-v4.1-flash")
+    monkeypatch.setenv("PARALLAX_JUDGE_MODELS", "deepseek/deepseek-v4.1-flash-1017")
     monkeypatch.setenv("PARALLAX_JUDGE_BASE_URL", "https://openrouter.ai/api/v1")
     monkeypatch.setenv("PARALLAX_JUDGE_API_KEY", "judge-owned")
     monkeypatch.setattr(
@@ -536,7 +539,7 @@ async def test_partial_judge_receipt_survives_retry_admission_stop(
             client=client,
         )
 
-    monkeypatch.setenv("PARALLAX_JUDGE_MODELS", "deepseek/deepseek-v4.1-flash")
+    monkeypatch.setenv("PARALLAX_JUDGE_MODELS", "deepseek/deepseek-v4.1-flash-1017")
     monkeypatch.setenv("PARALLAX_JUDGE_BASE_URL", "https://openrouter.ai/api/v1")
     monkeypatch.setenv("PARALLAX_JUDGE_API_KEY", "judge-owned")
     monkeypatch.setitem(live.ARMS, "fastbrowse", live.ARMS["fastbrowse"].model_copy(update={"runner": agent}))

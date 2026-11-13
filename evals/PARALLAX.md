@@ -1,28 +1,28 @@
 # Parallax pin
 
-The harness pins the published `parallax-evals==2.0.0.dev17` release in
+The harness pins the published `parallax-evals==2.0.0.dev18` release in
 `evals/pyproject.toml` and `evals/uv.lock`. The wheel and source archive are
 served by PyPI and their downloaded bytes match the lock's SHA-256 hashes:
 
-- Wheel: `1e8d14a3b1bff11e2f46793e0c1d9e1d262e620c03f5170febcfbf1950f224fd`.
-- Source archive: `f6e5a81c4b3a75f5b494a5e021df00d1693abb02471d29a53184e5ba93c8c52a`.
+- Wheel: `db667c6f5839b906815877be2d955528dfedf3e8b511d4c08bd833ee2eb6ccfc`.
+- Source archive: `fa4b2da070e7145f4b6662e0abdf7fe128faef2a2700244a43add2339d6849be`.
 
-The release tag is `v2.0.0.dev17`, on Parallax commit
-`a778f9c258819215c63ccc92eda98c7b9f40feb9`. The private repository is not a
+The release tag is `v2.0.0.dev18`, on Parallax commit
+`1fa841788c18ebaa584b3e8f63d7c64e561adde3`. The private repository is not a
 consumer dependency source. `uv lock --check` passes with the published lock.
 
-dev17 verifies `deepseek/deepseek-v4.1-flash` as a fallback judge and asks for
-each answer's reason before its verdict. That changes the identity of any
-fallback policy graded from now on, so `browser-internal-deepseek-v6` and
-`browser-official-deepseek-v3` are new policies. Recorded receipts keep the
+dev18 verifies `deepseek/deepseek-v4.1-flash-1017` as the fallback judge, and
+no other V4.1 Flash id. A policy's identity names its judge model, so the
+1017 judge grades under new policies: `browser-internal-deepseek-v7` and
+`browser-official-deepseek-v4`. v7 also tells the judge to grade the answer
+the run delivered, not a draft it rejected. Recorded receipts keep the
 `policy_sha256` they were graded under: publication compares those recorded
-hashes within a group and never recomputes them, so Opus v5 and official v2
-ledgers publish unchanged. A v5 campaign resumed under dev17 is refused as two
-policies.
+hashes within a group and never recomputes them. A campaign resumed under a
+different policy is refused as two policies.
 
 ## Compatibility
 
-The published `browser-internal-deepseek-v6` policy and `browser-internal-opus-v5`
+The published `browser-internal-deepseek-v7` policy and `browser-internal-opus-v5`
 before it explicitly disable Jev. Their identity retains the historical inactive Jev fields from dev13. This is a
 serialization contract for existing receipts, not a description of the current
 Jev transport. Jev-enabled identities name the OpenRouter System One transport

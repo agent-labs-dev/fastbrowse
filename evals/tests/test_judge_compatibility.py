@@ -15,7 +15,7 @@ def test_a_new_verified_model_leaves_the_published_identity_unchanged(monkeypatc
 
     def identity() -> str:
         panel, llm, primary = judging._route(False)
-        return judging._identity(live.JUDGE_POLICY, judging.EVIDENCE_QUESTIONS, panel, llm, primary, use_jev=False)
+        return judging._identity(live.JUDGE_POLICY, judging.JUDGE_QUESTIONS, panel, llm, primary, use_jev=False)
 
     before = identity()
     other = "example/verified-later"

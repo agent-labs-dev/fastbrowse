@@ -2,6 +2,7 @@
 
 import contextlib
 import dataclasses
+import os
 from collections.abc import Mapping
 from typing import Any
 
@@ -18,9 +19,10 @@ from parallax.judging import (
 )
 from pydantic import JsonValue
 
-JUDGE_MODEL = "deepseek/deepseek-v4.1-flash"
+JUDGE_MODEL = "deepseek/deepseek-v4.1-flash-1017"
 """The only judge of a published figure, through OpenRouter (`OPENROUTER_BASE_URL`): the owner's decision. Opus is not
-an eval judge; on the 21 rows #1075 compared, this model alone matched all 21 Opus v5 verdicts for $0.18 in total."""
+an eval judge. On the 21 rows #1075 compared, this model alone under `JUDGE_QUESTIONS` matched all 21 Opus v5 verdicts
+in each of two judgings, for about $0.11 a judging (2026-11-13)."""
 OPUS_JUDGE = "anthropic/claude-opus-5.5"
 """The model the earlier `browser-internal-opus-v*` policies name, kept only so their recorded receipts stay readable.
 No published figure accepts it."""
@@ -37,7 +39,10 @@ def require_judges(*, use_jev: bool = True, model: str = JUDGE_MODEL) -> None:
     A missing fallback does not fail a row: every question Jev leaves unsettled is recorded unknown, so a whole
     campaign can spend its budget and come back ungraded. Checked before the first run starts instead. Without Jev
     the judge is exactly `model`, the one the policy names, through OpenRouter, as PARALLAX_JUDGE_MODELS and
-    PARALLAX_JUDGE_BASE_URL say."""
+    PARALLAX_JUDGE_BASE_URL say. The judge's key is required by name: Parallax would otherwise fall back to
+    OPENROUTER_API_KEY, the agent's key, and judging would be billed to the agent's project."""
+    if not os.environ.get("PARALLAX_JUDGE_API_KEY"):
+        raise JudgeConfigError("the judge needs $PARALLAX_JUDGE_API_KEY, its own key, not the agent's")
     if not use_jev:
         panel, llm = panel_from_env(), config_from_env()
         if panel is None or panel.models != (model,):
@@ -105,6 +110,15 @@ EVIDENCE_QUESTIONS = {
     "task_satisfied": _TASK_SATISFIED + _RECORD_RULE,
 }
 """`SITE_FAILURE_QUESTIONS` for a state showing what the run saw, whose richness varies with what its arm records."""
+JUDGE_QUESTIONS = {
+    **EVIDENCE_QUESTIONS,
+    "task_satisfied": EVIDENCE_QUESTIONS["task_satisfied"]
+    + " The run's answer is `answer`, whatever the run's ending; grade it as given. A draft quoted only in "
+    "`report.error` is not part of it.",
+}
+"""`EVIDENCE_QUESTIONS` with the graded answer named by its field. Without it a run whose correct draft was rejected,
+and which then returned a partial `answer`, passed in one judging and failed in the next (`pypi-newer`, 2026-11-13).
+Worded as "the answer the run delivered", it failed a correct `answer` because the run then stopped (`frame-heading`)."""
 _PART_RULE = (
     " This is one part of a run too long for one request: `pages` holds only some of what it saw. Return null when "
     "this part neither settles the question nor contradicts the answer."
