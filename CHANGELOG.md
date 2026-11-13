@@ -11,11 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Benchmarks are judged by DeepSeek V4.1 Flash.** Internal grading uses policy `browser-internal-deepseek-v6`, and the official suites default to the same judge. Each page goes to the judge once, so a 2 MB Hacker News thread costs about $0.05 to judge instead of $23, and screenshots go to the judge as images. On 48 recorded rows, DeepSeek agreed with Opus on 47 and left one ungraded, which it graded the same as Opus on a rerun ([#1075](https://github.com/agent-labs-dev/fastbrowse/issues/1075)).
+
 ## [0.11.0] - 2026-11-12
-
-- A task that asks for a change and says to change nothing else, such as posting one reply, now makes that change: each edit goes ahead when the task asks for it and only the others are refused. A task that rules out every change still refuses every edit, authorized or not, and the fields stay offered so the run no longer falls back to the site's search box and ends asking for a value the task never needed ([#879](https://github.com/agent-labs-dev/fastbrowse/issues/879)).
-
-- A reply copied from the task is typed exactly and goes under the comment it answers. A reply ending "75 or 100%." was offered only as "75 or 100", so the run took the copy running on to the task's closing instructions and posted those too; each end touching punctuation is now offered at every cut of it, so one choice settles the reply's own punctuation. Two comments by one author posted at the same time gave their Reply buttons the same name, and each is now also named by its comment's own text ([#881](https://github.com/agent-labs-dev/fastbrowse/issues/881)).
 
 - A count, total, minimum or maximum is checked against what the task asks for, so an answer no longer counts the orders where the task asks for their total.
 
@@ -26,10 +24,6 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Browserless runs read a JSON response by its structure, so a single value such as a package's name can be selected and cited alone, under its key path. Field choices and read passages also show the headings a value sits under, and a page with more candidates than one Jev request can describe is chosen over a series of requests that each fit, instead of failing as too large ([#1069](https://github.com/agent-labs-dev/fastbrowse/issues/1069)).
 
 - A JSON response's array items are read as whole records, one per item, so a page such as a PyPI release list is a few hundred records rather than thousands of separate keys and values. Counts, totals and comparisons judge each record beside its own page's labels, so they are worked out on large pages instead of being left unanswered.
-
-- A browser run that opens a JSON document reads it as a browserless run does: each value is its own block under its key path, so a single value such as a package's name can be selected and cited, instead of the whole document reading as one code block. Text served as JSON that does not all parse, and a JSON example inside an HTML page, still read as code ([#1070](https://github.com/agent-labs-dev/fastbrowse/issues/1070)).
-
-- A task that asks whether a page needs signing in, or whether it is signed in, and gives no credentials is answered by the sign-in page itself: the run reads it and finishes, instead of signing in through a saved account or accepting an SSO consent the task never asked for ([#1020](https://github.com/agent-labs-dev/fastbrowse/issues/1020)).
 
 - A comparison across records no longer rejects a correct answer because a record's name heading was judged a record without the compared value: a heading or link, including a list item that is only a link, names its record and is never judged as all of it. A composed answer can quote just the part of a note it needs, such as an email from "Signed in as …", and the text it copies from the page is checked for holding no page information the task neither asks for nor names, such as another field's value or an identifier, so it no longer pastes a whole record where the task asks for one value. Connecting prose is its own kind of part, so the composer no longer writes it as page text that a source part cannot find. A structured result's fields are chosen to agree with the checked answer, so data no longer names a different record than the answer does.
 
@@ -73,7 +67,6 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Hosted eval costs remain provisional after browser shutdown. Receipts keep exact provider amounts and their query time; incomplete totals stay unknown ([#1058](https://github.com/agent-labs-dev/fastbrowse/issues/1058)).
 - Eval rows preserve provider cost precision instead of rounding totals to five decimal places ([#1058](https://github.com/agent-labs-dev/fastbrowse/issues/1058)).
-- Comparator arms report Browser Use Cloud browser, proxy and LLM costs, and their totals, at the precision the provider reported, instead of rounding them to five decimal places first ([#1058](https://github.com/agent-labs-dev/fastbrowse/issues/1058)).
 - Hosted dispatch outages retain their provider run, session and available billing receipt instead of losing that evidence when retrying ([#1055](https://github.com/agent-labs-dev/fastbrowse/issues/1055)).
 
 - **Saved observations notice rendering changes without DOM mutations.** A custom element changing its CSS state now refreshes controls, names, positions and hover targets. Reuse checks the rendering facts the saved read consumed, including live selector results and scroll dimensions, flow styles and positions, instead of relying on DOM changes alone ([#1050](https://github.com/agent-labs-dev/fastbrowse/issues/1050)).
