@@ -13,6 +13,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.11.0] - 2026-11-12
 
+- A task that asks for a change and says to change nothing else, such as posting one reply, now makes that change: each edit goes ahead when the task asks for it and only the others are refused. A task that rules out every change still refuses every edit, authorized or not, and the fields stay offered so the run no longer falls back to the site's search box and ends asking for a value the task never needed ([#879](https://github.com/agent-labs-dev/fastbrowse/issues/879)).
+
 - A count, total, minimum or maximum is checked against what the task asks for, so an answer no longer counts the orders where the task asks for their total.
 
 - A run with no time limit no longer waits forever on a page whose server never answers. Chrome reports such a load as in flight and sends no further event, so a run waiting out a bot check or a blank page waited until the browser was closed, four hours on a Browser Use Cloud browser. A load is now waited on for as long as a navigation is given, 225 s from that load's start, and a page that keeps navigating, such as a challenge, starts a new load and a new wait each time.

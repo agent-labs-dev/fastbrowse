@@ -1949,15 +1949,21 @@
    {
     "jev": {
      "state": "{\"task\":\"Search books.test for dune and tell me who wrote it\"}",
-     "questions": "{\"edits\":{\"type\":\"noul\",\"instructions\":\"The agent is doing this task: Search books.test for dune and tell me who wrote it\\nDoes the task rule out changing what the page's fields and settings hold, by telling the agent to change nothing, to leave the form or settings as they are, or not to tick, select or type anything?\",\"true\":\"The task says to change nothing on the page, or to leave its fields and settings as they are.\",\"false\":\"The task allows changing fields, or rules out only committing something such as saving, buying or sending. A task that has to search or filter to find its answer does not rule out typing that search.\"}}"
+     "questions": "{\"edits\":{\"type\":\"choice\",\"instructions\":\"The agent is doing this task: Search books.test for dune and tell me who wrote it\\nWhich changes to what the page's fields and settings hold does the task allow, such as typing into a field, ticking a box or choosing an option?\",\"criteria\":{\"allowed\":\"The task allows changing fields, or rules out only committing something such as saving, buying or sending. A task that has to search or filter to find its answer does not rule out typing that search.\",\"requested_only\":\"The task asks for some changes, such as typing a reply or setting an option, and says to change nothing else or to leave everything else as it is.\",\"none\":\"The task asks for no change at all: it says to change nothing on the page, to leave its fields and settings as they are, not to tick, select or type anything, or calls the work read-only.\"}}}"
     },
     "response": {
      "evaluation": {
       "model": "test",
       "answers": {
        "edits": {
-        "type": "noul",
-        "probability": 0.1
+        "type": "choice",
+        "choice": "allowed",
+        "probabilities": {
+         "allowed": 1.0,
+         "requested_only": 0.0,
+         "none": 0.0
+        },
+        "confidence": 0.9
        }
       },
       "input_tokens": 0,
@@ -3691,15 +3697,21 @@
    {
     "jev": {
      "state": "{\"task\":\"Fill the contact form on forms.test as Ada Lovelace\"}",
-     "questions": "{\"edits\":{\"type\":\"noul\",\"instructions\":\"The agent is doing this task: Fill the contact form on forms.test as Ada Lovelace\\nDoes the task rule out changing what the page's fields and settings hold, by telling the agent to change nothing, to leave the form or settings as they are, or not to tick, select or type anything?\",\"true\":\"The task says to change nothing on the page, or to leave its fields and settings as they are.\",\"false\":\"The task allows changing fields, or rules out only committing something such as saving, buying or sending. A task that has to search or filter to find its answer does not rule out typing that search.\"}}"
+     "questions": "{\"edits\":{\"type\":\"choice\",\"instructions\":\"The agent is doing this task: Fill the contact form on forms.test as Ada Lovelace\\nWhich changes to what the page's fields and settings hold does the task allow, such as typing into a field, ticking a box or choosing an option?\",\"criteria\":{\"allowed\":\"The task allows changing fields, or rules out only committing something such as saving, buying or sending. A task that has to search or filter to find its answer does not rule out typing that search.\",\"requested_only\":\"The task asks for some changes, such as typing a reply or setting an option, and says to change nothing else or to leave everything else as it is.\",\"none\":\"The task asks for no change at all: it says to change nothing on the page, to leave its fields and settings as they are, not to tick, select or type anything, or calls the work read-only.\"}}}"
     },
     "response": {
      "evaluation": {
       "model": "test",
       "answers": {
        "edits": {
-        "type": "noul",
-        "probability": 0.1
+        "type": "choice",
+        "choice": "allowed",
+        "probabilities": {
+         "allowed": 1.0,
+         "requested_only": 0.0,
+         "none": 0.0
+        },
+        "confidence": 0.9
        }
       },
       "input_tokens": 0,
@@ -4446,15 +4458,21 @@
    {
     "jev": {
      "state": "{\"task\":\"Fill the contact form on forms.test as Ada Lovelace\"}",
-     "questions": "{\"edits\":{\"type\":\"noul\",\"instructions\":\"The agent is doing this task: Fill the contact form on forms.test as Ada Lovelace\\nDoes the task rule out changing what the page's fields and settings hold, by telling the agent to change nothing, to leave the form or settings as they are, or not to tick, select or type anything?\",\"true\":\"The task says to change nothing on the page, or to leave its fields and settings as they are.\",\"false\":\"The task allows changing fields, or rules out only committing something such as saving, buying or sending. A task that has to search or filter to find its answer does not rule out typing that search.\"}}"
+     "questions": "{\"edits\":{\"type\":\"choice\",\"instructions\":\"The agent is doing this task: Fill the contact form on forms.test as Ada Lovelace\\nWhich changes to what the page's fields and settings hold does the task allow, such as typing into a field, ticking a box or choosing an option?\",\"criteria\":{\"allowed\":\"The task allows changing fields, or rules out only committing something such as saving, buying or sending. A task that has to search or filter to find its answer does not rule out typing that search.\",\"requested_only\":\"The task asks for some changes, such as typing a reply or setting an option, and says to change nothing else or to leave everything else as it is.\",\"none\":\"The task asks for no change at all: it says to change nothing on the page, to leave its fields and settings as they are, not to tick, select or type anything, or calls the work read-only.\"}}}"
     },
     "response": {
      "evaluation": {
       "model": "test",
       "answers": {
        "edits": {
-        "type": "noul",
-        "probability": 0.1
+        "type": "choice",
+        "choice": "allowed",
+        "probabilities": {
+         "allowed": 1.0,
+         "requested_only": 0.0,
+         "none": 0.0
+        },
+        "confidence": 0.9
        }
       },
       "input_tokens": 0,
@@ -5078,15 +5096,21 @@
    {
     "jev": {
      "state": "{\"task\":\"Log in to acme.test\"}",
-     "questions": "{\"edits\":{\"type\":\"noul\",\"instructions\":\"The agent is doing this task: Log in to acme.test\\nDoes the task rule out changing what the page's fields and settings hold, by telling the agent to change nothing, to leave the form or settings as they are, or not to tick, select or type anything?\",\"true\":\"The task says to change nothing on the page, or to leave its fields and settings as they are.\",\"false\":\"The task allows changing fields, or rules out only committing something such as saving, buying or sending. A task that has to search or filter to find its answer does not rule out typing that search.\"}}"
+     "questions": "{\"edits\":{\"type\":\"choice\",\"instructions\":\"The agent is doing this task: Log in to acme.test\\nWhich changes to what the page's fields and settings hold does the task allow, such as typing into a field, ticking a box or choosing an option?\",\"criteria\":{\"allowed\":\"The task allows changing fields, or rules out only committing something such as saving, buying or sending. A task that has to search or filter to find its answer does not rule out typing that search.\",\"requested_only\":\"The task asks for some changes, such as typing a reply or setting an option, and says to change nothing else or to leave everything else as it is.\",\"none\":\"The task asks for no change at all: it says to change nothing on the page, to leave its fields and settings as they are, not to tick, select or type anything, or calls the work read-only.\"}}}"
     },
     "response": {
      "evaluation": {
       "model": "test",
       "answers": {
        "edits": {
-        "type": "noul",
-        "probability": 0.1
+        "type": "choice",
+        "choice": "allowed",
+        "probabilities": {
+         "allowed": 1.0,
+         "requested_only": 0.0,
+         "none": 0.0
+        },
+        "confidence": 0.9
        }
       },
       "input_tokens": 0,
@@ -5552,15 +5576,21 @@
    {
     "jev": {
      "state": "{\"task\":\"Choose business class on travel.test\"}",
-     "questions": "{\"edits\":{\"type\":\"noul\",\"instructions\":\"The agent is doing this task: Choose business class on travel.test\\nDoes the task rule out changing what the page's fields and settings hold, by telling the agent to change nothing, to leave the form or settings as they are, or not to tick, select or type anything?\",\"true\":\"The task says to change nothing on the page, or to leave its fields and settings as they are.\",\"false\":\"The task allows changing fields, or rules out only committing something such as saving, buying or sending. A task that has to search or filter to find its answer does not rule out typing that search.\"}}"
+     "questions": "{\"edits\":{\"type\":\"choice\",\"instructions\":\"The agent is doing this task: Choose business class on travel.test\\nWhich changes to what the page's fields and settings hold does the task allow, such as typing into a field, ticking a box or choosing an option?\",\"criteria\":{\"allowed\":\"The task allows changing fields, or rules out only committing something such as saving, buying or sending. A task that has to search or filter to find its answer does not rule out typing that search.\",\"requested_only\":\"The task asks for some changes, such as typing a reply or setting an option, and says to change nothing else or to leave everything else as it is.\",\"none\":\"The task asks for no change at all: it says to change nothing on the page, to leave its fields and settings as they are, not to tick, select or type anything, or calls the work read-only.\"}}}"
     },
     "response": {
      "evaluation": {
       "model": "test",
       "answers": {
        "edits": {
-        "type": "noul",
-        "probability": 0.1
+        "type": "choice",
+        "choice": "allowed",
+        "probabilities": {
+         "allowed": 1.0,
+         "requested_only": 0.0,
+         "none": 0.0
+        },
+        "confidence": 0.9
        }
       },
       "input_tokens": 0,
@@ -8980,15 +9010,21 @@
    {
     "jev": {
      "state": "{\"task\":\"Sign up for the newsletter on https://news.test/signup\"}",
-     "questions": "{\"edits\":{\"type\":\"noul\",\"instructions\":\"The agent is doing this task: Sign up for the newsletter on https://news.test/signup\\nDoes the task rule out changing what the page's fields and settings hold, by telling the agent to change nothing, to leave the form or settings as they are, or not to tick, select or type anything?\",\"true\":\"The task says to change nothing on the page, or to leave its fields and settings as they are.\",\"false\":\"The task allows changing fields, or rules out only committing something such as saving, buying or sending. A task that has to search or filter to find its answer does not rule out typing that search.\"}}"
+     "questions": "{\"edits\":{\"type\":\"choice\",\"instructions\":\"The agent is doing this task: Sign up for the newsletter on https://news.test/signup\\nWhich changes to what the page's fields and settings hold does the task allow, such as typing into a field, ticking a box or choosing an option?\",\"criteria\":{\"allowed\":\"The task allows changing fields, or rules out only committing something such as saving, buying or sending. A task that has to search or filter to find its answer does not rule out typing that search.\",\"requested_only\":\"The task asks for some changes, such as typing a reply or setting an option, and says to change nothing else or to leave everything else as it is.\",\"none\":\"The task asks for no change at all: it says to change nothing on the page, to leave its fields and settings as they are, not to tick, select or type anything, or calls the work read-only.\"}}}"
     },
     "response": {
      "evaluation": {
       "model": "test",
       "answers": {
        "edits": {
-        "type": "noul",
-        "probability": 0.1
+        "type": "choice",
+        "choice": "allowed",
+        "probabilities": {
+         "allowed": 1.0,
+         "requested_only": 0.0,
+         "none": 0.0
+        },
+        "confidence": 0.9
        }
       },
       "input_tokens": 0,
@@ -9426,15 +9462,21 @@
    {
     "jev": {
      "state": "{\"task\":\"Log in to https://bank.test/login\"}",
-     "questions": "{\"edits\":{\"type\":\"noul\",\"instructions\":\"The agent is doing this task: Log in to https://bank.test/login\\nDoes the task rule out changing what the page's fields and settings hold, by telling the agent to change nothing, to leave the form or settings as they are, or not to tick, select or type anything?\",\"true\":\"The task says to change nothing on the page, or to leave its fields and settings as they are.\",\"false\":\"The task allows changing fields, or rules out only committing something such as saving, buying or sending. A task that has to search or filter to find its answer does not rule out typing that search.\"}}"
+     "questions": "{\"edits\":{\"type\":\"choice\",\"instructions\":\"The agent is doing this task: Log in to https://bank.test/login\\nWhich changes to what the page's fields and settings hold does the task allow, such as typing into a field, ticking a box or choosing an option?\",\"criteria\":{\"allowed\":\"The task allows changing fields, or rules out only committing something such as saving, buying or sending. A task that has to search or filter to find its answer does not rule out typing that search.\",\"requested_only\":\"The task asks for some changes, such as typing a reply or setting an option, and says to change nothing else or to leave everything else as it is.\",\"none\":\"The task asks for no change at all: it says to change nothing on the page, to leave its fields and settings as they are, not to tick, select or type anything, or calls the work read-only.\"}}}"
     },
     "response": {
      "evaluation": {
       "model": "test",
       "answers": {
        "edits": {
-        "type": "noul",
-        "probability": 0.1
+        "type": "choice",
+        "choice": "allowed",
+        "probabilities": {
+         "allowed": 1.0,
+         "requested_only": 0.0,
+         "none": 0.0
+        },
+        "confidence": 0.9
        }
       },
       "input_tokens": 0,
@@ -12023,15 +12065,21 @@
    {
     "jev": {
      "state": "{\"task\":\"Log in to acme.test\"}",
-     "questions": "{\"edits\":{\"type\":\"noul\",\"instructions\":\"The agent is doing this task: Log in to acme.test\\nDoes the task rule out changing what the page's fields and settings hold, by telling the agent to change nothing, to leave the form or settings as they are, or not to tick, select or type anything?\",\"true\":\"The task says to change nothing on the page, or to leave its fields and settings as they are.\",\"false\":\"The task allows changing fields, or rules out only committing something such as saving, buying or sending. A task that has to search or filter to find its answer does not rule out typing that search.\"}}"
+     "questions": "{\"edits\":{\"type\":\"choice\",\"instructions\":\"The agent is doing this task: Log in to acme.test\\nWhich changes to what the page's fields and settings hold does the task allow, such as typing into a field, ticking a box or choosing an option?\",\"criteria\":{\"allowed\":\"The task allows changing fields, or rules out only committing something such as saving, buying or sending. A task that has to search or filter to find its answer does not rule out typing that search.\",\"requested_only\":\"The task asks for some changes, such as typing a reply or setting an option, and says to change nothing else or to leave everything else as it is.\",\"none\":\"The task asks for no change at all: it says to change nothing on the page, to leave its fields and settings as they are, not to tick, select or type anything, or calls the work read-only.\"}}}"
     },
     "response": {
      "evaluation": {
       "model": "test",
       "answers": {
        "edits": {
-        "type": "noul",
-        "probability": 0.1
+        "type": "choice",
+        "choice": "allowed",
+        "probabilities": {
+         "allowed": 1.0,
+         "requested_only": 0.0,
+         "none": 0.0
+        },
+        "confidence": 0.9
        }
       },
       "input_tokens": 0,
@@ -12457,15 +12505,21 @@
    {
     "jev": {
      "state": "{\"task\":\"Log in to acme.test\"}",
-     "questions": "{\"edits\":{\"type\":\"noul\",\"instructions\":\"The agent is doing this task: Log in to acme.test\\nDoes the task rule out changing what the page's fields and settings hold, by telling the agent to change nothing, to leave the form or settings as they are, or not to tick, select or type anything?\",\"true\":\"The task says to change nothing on the page, or to leave its fields and settings as they are.\",\"false\":\"The task allows changing fields, or rules out only committing something such as saving, buying or sending. A task that has to search or filter to find its answer does not rule out typing that search.\"}}"
+     "questions": "{\"edits\":{\"type\":\"choice\",\"instructions\":\"The agent is doing this task: Log in to acme.test\\nWhich changes to what the page's fields and settings hold does the task allow, such as typing into a field, ticking a box or choosing an option?\",\"criteria\":{\"allowed\":\"The task allows changing fields, or rules out only committing something such as saving, buying or sending. A task that has to search or filter to find its answer does not rule out typing that search.\",\"requested_only\":\"The task asks for some changes, such as typing a reply or setting an option, and says to change nothing else or to leave everything else as it is.\",\"none\":\"The task asks for no change at all: it says to change nothing on the page, to leave its fields and settings as they are, not to tick, select or type anything, or calls the work read-only.\"}}}"
     },
     "response": {
      "evaluation": {
       "model": "test",
       "answers": {
        "edits": {
-        "type": "noul",
-        "probability": 0.1
+        "type": "choice",
+        "choice": "allowed",
+        "probabilities": {
+         "allowed": 1.0,
+         "requested_only": 0.0,
+         "none": 0.0
+        },
+        "confidence": 0.9
        }
       },
       "input_tokens": 0,

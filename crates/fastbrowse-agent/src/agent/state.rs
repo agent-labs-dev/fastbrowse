@@ -324,9 +324,8 @@ pub(crate) struct RunState {
     pub acted_from: Option<Observation>,
     /// Jev's word that the task rules out downloading, asked once a control the page says downloads is in play.
     pub downloads_forbidden: Option<bool>,
-    /// Jev's word that the task rules out changing what the page's fields and settings hold, asked once an edit is in
-    /// play.
-    pub edits_forbidden: Option<bool>,
+    /// Jev's word on which changes to the page's fields and settings the task allows, asked once an edit is in play.
+    pub edits: Option<Edits>,
     /// Pages read, by `read_key`, each with whether an action changed it since it was last read.
     pub read_documents: HashMap<(String, String), bool>,
     /// Reads begun on each page, by `read_key`, since its last finished read, so a read that did not finish is retried
@@ -757,7 +756,7 @@ impl RunState {
             idle: Vec::new(),
             acted_from: None,
             downloads_forbidden: None,
-            edits_forbidden: None,
+            edits: None,
             read_documents: HashMap::new(),
             read_tries: HashMap::new(),
             unanswered_images: HashSet::new(),
@@ -863,6 +862,16 @@ mod tests {
             IndexMap::from([("a".to_string(), "see input b".to_string()), ("b".to_string(), "two".to_string())]);
         assert_eq!(with_inputs("Use input a", &inputs), "Use input a (see input b)");
     }
+}
+
+/// Which changes to what the page's fields and settings hold a task allows, as Jev reads the task alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edits {
+    Allowed,
+    /// The task asks for some changes and rules out the rest, so each edit goes ahead only if the task asks for it.
+    RequestedOnly,
+    /// The task rules out every change, authorized or not (#838).
+    Forbidden,
 }
 
 /// Jev's reading of the task at a sign-in wall, each a question of its own, so code decides what the wall means.

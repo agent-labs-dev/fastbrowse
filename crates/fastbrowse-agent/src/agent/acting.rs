@@ -12,10 +12,11 @@ use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::text;
 use fastbrowse_core::recipe::RecipeText;
 use fastbrowse_core::safety::{
-    CredentialField, DONE, HAPPENED, LATER_VALUES, MET, asks_for_credentials, changes_a_value, changes_credentials,
-    conditional_question, control_action, credential_field, downloads_question, edits_question, happened_question,
-    irreversible_question, is_password, lasting_question, may_be_irreversible, met_question, offers_passkey, origin_of,
-    requested_question, resolve_secret, sets_new_password, starts_download, values_question,
+    CredentialField, DONE, EDITS_ALLOWED, EDITS_NONE, EDITS_REQUESTED_ONLY, HAPPENED, LATER_VALUES, MET,
+    asks_for_credentials, changes_a_value, changes_credentials, conditional_question, control_action, credential_field,
+    downloads_question, edits_question, happened_question, irreversible_question, is_password, lasting_question,
+    may_be_irreversible, met_question, offers_passkey, origin_of, requested_question, resolve_secret,
+    sets_new_password, starts_download, values_question,
 };
 use indexmap::IndexMap;
 use serde_json::{Map, Value as JsonValue, json};
@@ -23,7 +24,7 @@ use serde_json::{Map, Value as JsonValue, json};
 use super::Agent;
 use super::driving::require;
 use super::helpers::{caller_link, describe, dialog_question, empty_fields_fact, navigation_question, unsent_fact};
-use super::state::{Extent, Flow, OutputIntent, RunState, SignInNeeds, Step, Stop, Unsure};
+use super::state::{Edits, Extent, Flow, OutputIntent, RunState, SignInNeeds, Step, Stop, Unsure};
 use crate::memory::Notes;
 use crate::policy::{Ahead, Decision, HistoryEntry};
 use crate::retrieval::text::{SpanKind, Word, edge_options, spans, words};
@@ -552,7 +553,9 @@ impl Agent {
         self.refuse_once(state, observation, decision, &describe(control), why).await
     }
 
-    /// Refuse an action that changes a value on the page when the task rules out changing anything (#838).
+    /// Refuse an action that changes a value on the page when the task does not allow it: every edit when the task rules
+    /// out changing anything (#838), and an edit the task does not ask for when it asks for some and rules out the rest
+    /// (#879).
     ///
     /// An unsaved toggle is reversible, so the irreversible gate lets it through. Authorization does not lift this
     /// either, for the reason it does not lift the download rule.
@@ -563,11 +566,19 @@ impl Agent {
         decision: &Decision,
         control: &Control,
     ) -> Step {
-        if !changes_a_value(decision.operation, control) || !self.edits_forbidden(state).await? {
+        if !changes_a_value(decision.operation, control) {
             return Ok(());
         }
-        let why = "changes a value on the page, and the task rules out changing anything";
-        self.refuse_once(state, observation, decision, &describe(control), why).await
+        let edits = self.edits(state).await?;
+        if edits == Edits::Allowed {
+            return Ok(());
+        }
+        let mut questions = IndexMap::new();
+        if edits == Edits::RequestedOnly {
+            let action = control_action(decision.operation, control, None, &observation.controls);
+            questions.insert("requested".to_string(), Question::Noul(requested_question(&action)));
+        }
+        self.gate_asked_edit(state, observation, decision, control, edits, questions).await
     }
 
     async fn gate_key_edit(
@@ -578,7 +589,11 @@ impl Agent {
         control: &Control,
         key: &str,
     ) -> Step {
-        if !changes_a_value(Operation::Press, control) || !self.edits_forbidden(state).await? {
+        if !changes_a_value(Operation::Press, control) {
+            return Ok(());
+        }
+        let edits = self.edits(state).await?;
+        if edits == Edits::Allowed {
             return Ok(());
         }
         // A role's arrow can move focus or change a stored setting. The selected chord supplies the distinction
@@ -593,23 +608,49 @@ impl Agent {
             Some("The key changes a value or setting, types or deletes text, or commits a change."),
             Some("The key only moves focus, scrolls, or opens or closes navigation without changing a value."),
         );
-        let questions = IndexMap::from([("changes_value".into(), Question::Noul(question))]);
-        state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
-        let context = json!({"task": state.task, "page": {"origin": origin_of(&observation.url)}});
-        let evaluation = jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&context, &questions)).await?;
-        state.ledger.record([evaluation.cost])?;
-        if matches!(evaluation.answers.get("changes_value"), Some(Answer::Noul(answer)) if answer.probability <= EVEN_ODDS)
-        {
-            return Ok(());
+        let mut questions = IndexMap::from([("changes_value".into(), Question::Noul(question))]);
+        if edits == Edits::RequestedOnly {
+            let action = control_action(Operation::Press, control, None, &observation.controls);
+            questions.insert("requested".to_string(), Question::Noul(requested_question(&action)));
         }
-        self.refuse_once(
-            state,
-            observation,
-            decision,
-            &describe(control),
-            "changes a value on the page, and the task rules out changing anything",
-        )
-        .await
+        self.gate_asked_edit(state, observation, decision, control, edits, questions).await
+    }
+
+    /// Ask `questions` about an edit the task may not allow, never with the page's content, and refuse the edit unless
+    /// Jev says it changes no value or, when the task rules out only the changes it does not ask for, that the task
+    /// asks for it. No question to ask refuses at once.
+    async fn gate_asked_edit(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        decision: &Decision,
+        control: &Control,
+        edits: Edits,
+        questions: IndexMap<String, Question>,
+    ) -> Step {
+        if !questions.is_empty() {
+            state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+            let context = json!({"task": state.task, "page": {"origin": origin_of(&observation.url)}});
+            let evaluation = jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&context, &questions)).await?;
+            state.ledger.record([evaluation.cost])?;
+            let noul = |key: &str| match evaluation.answers.get(key) {
+                Some(Answer::Noul(answer)) => Some(answer.probability),
+                _ => None,
+            };
+            if questions.contains_key("changes_value") && noul("changes_value").is_some_and(|p| p <= EVEN_ODDS) {
+                return Ok(());
+            }
+            if noul("requested").is_some_and(|p| p > self.config.thresholds.requested_above) {
+                return Ok(());
+            }
+        }
+        let why = match edits {
+            Edits::RequestedOnly => {
+                "changes a value on the page that the task does not ask to change, and the task rules out other changes"
+            }
+            _ => "changes a value on the page, and the task rules out changing anything",
+        };
+        self.refuse_once(state, observation, decision, &describe(control), why).await
     }
 
     /// Whether the task rules out downloading, asked of Jev about the task alone and kept for the run.
@@ -622,15 +663,29 @@ impl Agent {
         Ok(forbidden.unwrap_or(true))
     }
 
-    /// Whether the task rules out changing what the page's fields and settings hold, asked of Jev about the task alone
-    /// and kept for the run.
-    pub(super) async fn edits_forbidden(&self, state: &mut RunState) -> Step<bool> {
-        if let Some(forbidden) = state.edits_forbidden {
-            return Ok(forbidden);
+    /// Which changes to what the page's fields and settings hold the task allows, asked of Jev about the task alone and
+    /// kept for the run. No answer rules out every change for this action and keeps nothing, as an unanswered download
+    /// question does.
+    pub(super) async fn edits(&self, state: &mut RunState) -> Step<Edits> {
+        if let Some(edits) = state.edits {
+            return Ok(edits);
         }
-        let forbidden = self.task_rules_out(state, "edits", edits_question(&state.task)).await?;
-        state.edits_forbidden = forbidden;
-        Ok(forbidden.unwrap_or(true))
+        state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+        let questions = IndexMap::from([("edits".to_string(), Question::Choice(edits_question(&state.task)))]);
+        let evaluation =
+            jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&json!({"task": state.task}), &questions)).await?;
+        state.ledger.record([evaluation.cost.clone()])?;
+        let edits = match evaluation.answers.get("edits") {
+            Some(Answer::Choice(answer)) => match answer.choice.as_str() {
+                EDITS_ALLOWED => Some(Edits::Allowed),
+                EDITS_REQUESTED_ONLY => Some(Edits::RequestedOnly),
+                EDITS_NONE => Some(Edits::Forbidden),
+                _ => None,
+            },
+            _ => None,
+        };
+        state.edits = edits;
+        Ok(edits.unwrap_or(Edits::Forbidden))
     }
 
     /// Jev's word, from the task alone, that it rules out what `question` asks about. No answer is None: the caller

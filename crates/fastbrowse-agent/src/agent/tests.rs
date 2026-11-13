@@ -27,7 +27,7 @@ use super::acting::{Carried, IN_RECORD};
 use super::driving::edit_progress;
 use super::helpers::{describe, doing, read_sources, unsent_fact};
 use super::state::Written;
-use super::state::{Extent, FailureCause, Flow, RunState, SiteFailure};
+use super::state::{Edits, Extent, FailureCause, Flow, RunState, SiteFailure};
 use crate::memory::{Fact, Notes};
 use crate::policy::{Decision, HistoryEntry};
 use crate::retrieval::testing::capture;
@@ -1164,7 +1164,8 @@ struct Gatekeeper {
     irreversible: f64,
     requested: f64,
     lasting: f64,
-    edits: f64,
+    /// The [`fastbrowse_core::safety::edits_question`] option picked.
+    edits: &'static str,
     calls: std::sync::atomic::AtomicUsize,
     /// How many times the edits question was asked.
     edits_asked: std::sync::atomic::AtomicUsize,
@@ -1176,7 +1177,7 @@ impl fastbrowse_core::decision::DecisionClient for Gatekeeper {
         _: &'a serde_json::Value,
         questions: &'a IndexMap<String, fastbrowse_core::decision::Question>,
     ) -> BoxFuture<'a, Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>> {
-        use fastbrowse_core::decision::{Answer, NoulAnswer};
+        use fastbrowse_core::decision::{Answer, ChoiceAnswer, NoulAnswer};
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let answers = questions
             .keys()
@@ -1187,7 +1188,13 @@ impl fastbrowse_core::decision::DecisionClient for Gatekeeper {
                     "conditional" => 0.0,
                     "edits" => {
                         self.edits_asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        self.edits
+                        let answer = ChoiceAnswer {
+                            kind: Default::default(),
+                            choice: self.edits.into(),
+                            probabilities: IndexMap::from([(self.edits.to_string(), 1.0)]),
+                            confidence: 1.0,
+                        };
+                        return (key.clone(), Answer::Choice(answer));
                     }
                     _ => self.irreversible,
                 };
@@ -1230,7 +1237,7 @@ async fn test_a_commit_proceeds_when_jev_calls_it_reversible_or_the_authorized_t
             irreversible,
             requested,
             lasting: 0.0,
-            edits: 0.0,
+            edits: "allowed",
             calls: Default::default(),
             edits_asked: Default::default(),
         });
@@ -1273,7 +1280,7 @@ async fn test_an_authorized_run_does_not_keep_a_change_the_task_did_not_ask_for(
             irreversible,
             requested,
             lasting,
-            edits: 0.0,
+            edits: "allowed",
             calls: Default::default(),
             edits_asked: Default::default(),
         });
@@ -1540,7 +1547,7 @@ async fn test_a_task_that_rules_out_changes_refuses_edits_and_asks_once() {
             irreversible: 0.1,
             requested: 0.0,
             lasting: 0.0,
-            edits: 0.95,
+            edits: "none",
             calls: Default::default(),
             edits_asked: Default::default(),
         });
@@ -1568,7 +1575,7 @@ async fn test_a_task_that_rules_out_changes_refuses_edits_and_asks_once() {
         irreversible: 0.1,
         requested: 0.0,
         lasting: 0.0,
-        edits: 0.05,
+        edits: "allowed",
         calls: Default::default(),
         edits_asked: Default::default(),
     });
@@ -1581,6 +1588,49 @@ async fn test_a_task_that_rules_out_changes_refuses_edits_and_asks_once() {
     assert_eq!(jev.calls.load(Ordering::SeqCst), 2, "the irreversible question is still asked");
 }
 
+/// A reply task ending "Change nothing else." had its reply refused as ruling out every change (#879). A task that
+/// asks for some changes and rules out the rest lets an edit through only when Jev says the task asks for it,
+/// authorized or not, and Jev is asked about the task once.
+#[tokio::test]
+async fn test_a_task_that_rules_out_only_other_changes_makes_the_requested_one() {
+    use std::sync::atomic::Ordering;
+    let checkbox = Control::new("c", "checkbox", "Email me", [Operation::Click]);
+    let reply = Control::new("r", "textbox", "Reply", [Operation::Fill]);
+    let size =
+        Control { options: vec!["S".into(), "M".into()], ..Control::new("s", "combobox", "Size", [Operation::Select]) };
+    let page = observation(&[checkbox.clone(), reply.clone(), size.clone()]);
+    for authorized in [false, true] {
+        for (requested, allowed) in [(0.9, true), (0.1, false)] {
+            let jev = Arc::new(Gatekeeper {
+                irreversible: 0.1,
+                requested,
+                lasting: 0.0,
+                edits: "requested_only",
+                calls: Default::default(),
+                edits_asked: Default::default(),
+            });
+            let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+            let mut state = run_state();
+            state.task = "Reply 'Thanks' to the first comment. Change nothing else.".into();
+            state.authorization = Authorization { irreversible_actions: authorized };
+            for (operation, control) in
+                [(Operation::Click, &checkbox), (Operation::Fill, &reply), (Operation::Select, &size)]
+            {
+                let decision = code_decision(operation, Some(control.clone()));
+                let gated = agent.gate_edit(&mut state, &page, &decision, control).await;
+                let case = format!("authorized {authorized}, requested {requested}: {operation} {}", control.role);
+                assert_eq!(gated.is_ok(), allowed, "{case}: {gated:?}");
+                if let Err(Flow::Unsure(unsure)) = gated {
+                    assert!(unsure.reason.contains("does not ask to change"), "{case}: {}", unsure.reason);
+                }
+            }
+            assert_eq!(state.edits, Some(Edits::RequestedOnly));
+            assert_eq!(jev.edits_asked.load(Ordering::SeqCst), 1, "authorized {authorized}");
+            assert_eq!(jev.calls.load(Ordering::SeqCst), 4, "one request check per edit");
+        }
+    }
+}
+
 /// Once the task rules edits out, the step and recovery stop offering them: each refusal spends a recovery, so a page
 /// of checkboxes would otherwise end the run stuck.
 #[test]
@@ -1591,11 +1641,14 @@ fn test_forbidden_edits_are_not_offered() {
         Control::new("q", "searchbox", "Search", [Operation::Fill]),
         button("Next"),
     ]);
-    for (forbidden, kept, told) in
-        [(Some(true), vec!["Search", "Next"], true), (None, vec!["Email me", "Name", "Search", "Next"], false)]
-    {
+    let all = vec!["Email me", "Name", "Search", "Next"];
+    for (forbidden, kept, told) in [
+        (Some(Edits::Forbidden), vec!["Search", "Next"], true),
+        (Some(Edits::RequestedOnly), all.clone(), false),
+        (None, all, false),
+    ] {
         let mut state = run_state();
-        state.edits_forbidden = forbidden;
+        state.edits = forbidden;
         let mut offered = page.clone();
         let mut context = crate::policy::StepContext::new(&state.task);
         super::recovery::leave_out_idle(&state, &mut offered, &mut context);
@@ -3588,7 +3641,7 @@ async fn a_value_typed_as_an_input_gave_it_is_saved_as_that_input() {
     );
     assert_eq!(state.task, "Book a table for input date (2026-11-04)");
     // Booking a table allows typing into its fields.
-    state.edits_forbidden = Some(false);
+    state.edits = Some(Edits::Allowed);
     let target = field("Date");
     let fill = code_decision(Operation::Fill, Some(target));
     let action = agent.action(&mut state, &observation(&[]), &fill).await.unwrap();
@@ -3844,7 +3897,7 @@ async fn test_a_required_field_the_task_gives_no_value_for_ends_the_run_needing_
         let jev = Arc::new(FirstChoice { wants: Some("nothing given states it"), ..Default::default() });
         let agent = Agent::new(Arc::new(NoPage), jev, Arc::new(ScriptedLLM));
         let mut state = run_state();
-        state.edits_forbidden = Some(false);
+        state.edits = Some(Edits::Allowed);
         let acted = agent.action(&mut state, &page, &code_decision(Operation::Select, Some(country))).await;
         let stopped = matches!(&acted, Err(Flow::Stop(stop)) if stop.status == Status::NeedsInput);
         assert_eq!(stopped, required, "{acted:?}");
@@ -6563,7 +6616,7 @@ fn authorized_jev() -> Arc<Gatekeeper> {
         irreversible: 0.95,
         requested: 0.97,
         lasting: 0.0,
-        edits: 0.0,
+        edits: "allowed",
         calls: Default::default(),
         edits_asked: Default::default(),
     })
@@ -6798,7 +6851,7 @@ fn pager_agent(page: Arc<HungPage>) -> Agent {
         irreversible: 0.0,
         requested: 0.0,
         lasting: 0.0,
-        edits: 0.0,
+        edits: "allowed",
         calls: Default::default(),
         edits_asked: Default::default(),
     });
@@ -6916,7 +6969,7 @@ async fn test_a_bot_check_that_does_not_clear_ends_the_route_not_the_run() {
             irreversible: 0.0,
             requested: 0.0,
             lasting: 0.0,
-            edits: 0.0,
+            edits: "allowed",
             calls: Default::default(),
             edits_asked: Default::default(),
         });
@@ -7431,7 +7484,7 @@ async fn test_the_select_question_names_the_section_of_an_unlabelled_select() {
     let jev = Arc::new(FirstChoice::default());
     let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
     let mut state = run_state();
-    state.edits_forbidden = Some(false);
+    state.edits = Some(Edits::Allowed);
     let acted = agent.action(&mut state, &page, &code_decision(Operation::Select, Some(select))).await;
     assert!(acted.is_ok(), "{acted:?}");
     let asked = jev.asked.lock().unwrap();
@@ -7448,7 +7501,7 @@ async fn test_a_select_longer_than_one_choice_still_offers_its_last_options() {
     let jev = Arc::new(FirstChoice { wants: Some("Airport 597"), ..Default::default() });
     let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
     let mut state = run_state();
-    state.edits_forbidden = Some(false);
+    state.edits = Some(Edits::Allowed);
     let acted = agent.action(&mut state, &page, &code_decision(Operation::Select, Some(select))).await;
     let action = acted.expect("an action");
     assert_eq!(jev.asked.lock().unwrap().len(), 2, "a group, then an option inside it");
@@ -7471,7 +7524,7 @@ async fn test_a_select_the_task_gives_no_option_for_is_a_missing_input() {
         let jev = Arc::new(FirstChoice { wants: Some(wants), ..Default::default() });
         let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
         let mut state = run_state();
-        state.edits_forbidden = Some(false);
+        state.edits = Some(Edits::Allowed);
         let acted = agent.action(&mut state, &page, &code_decision(Operation::Select, Some(select))).await;
         assert!(matches!(&acted, Err(Flow::Unsure(unsure)) if unsure.gives_up_as == gives_up_as), "{wants}: {acted:?}");
         assert_eq!(state.missing.len(), usize::from(kept), "{wants}");
@@ -7493,7 +7546,7 @@ async fn test_a_required_select_the_task_asks_nothing_of_ends_the_run_needing_it
     let jev = Arc::new(FirstChoice { wants: Some("asks nothing of this field"), ..Default::default() });
     let agent = Agent::new(Arc::new(NoPage), jev, Arc::new(ScriptedLLM));
     let mut state = run_state();
-    state.edits_forbidden = Some(false);
+    state.edits = Some(Edits::Allowed);
     let acted = agent.action(&mut state, &page, &code_decision(Operation::Select, Some(select))).await;
     assert!(
         matches!(&acted, Err(Flow::Stop(stop)) if stop.status == Status::NeedsInput
@@ -7527,7 +7580,7 @@ async fn test_the_select_question_on_a_multiple_select_asks_which_option_to_togg
         let jev = Arc::new(FirstChoice::default());
         let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
         let mut state = run_state();
-        state.edits_forbidden = Some(false);
+        state.edits = Some(Edits::Allowed);
         let acted = agent.action(&mut state, &page, &code_decision(Operation::Select, Some(select))).await;
         assert!(acted.is_ok(), "{acted:?}");
         let asked = jev.asked.lock().unwrap();
@@ -7544,7 +7597,7 @@ async fn test_a_task_that_rules_out_changes_refuses_a_toggle_on_a_multiple_selec
         irreversible: 0.1,
         requested: 0.0,
         lasting: 0.0,
-        edits: 0.95,
+        edits: "none",
         calls: Default::default(),
         edits_asked: Default::default(),
     });
@@ -8154,7 +8207,7 @@ async fn test_a_press_on_a_slider_picks_one_of_the_keys_its_role_supports() {
     let jev = Arc::new(FirstChoice { wants: Some("ArrowRight"), noul: Some(0.0), ..Default::default() });
     let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
     let mut state = run_state();
-    state.edits_forbidden = Some(false);
+    state.edits = Some(Edits::Allowed);
     let action = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(slider))).await.expect("action");
     assert_eq!((action.operation, action.text.as_deref()), (Operation::Press, Some("ArrowRight")));
     assert_eq!(state.text_source, Some(fastbrowse_core::recipe::RecipeText::Literal("ArrowRight".into())));
@@ -8172,7 +8225,7 @@ async fn test_a_press_on_a_role_with_keys_still_takes_a_chord_the_task_gives() {
     let jev = Arc::new(FirstChoice { wants: Some("The task gives the key"), ..Default::default() });
     let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
     let mut state = run_state();
-    state.edits_forbidden = Some(false);
+    state.edits = Some(Edits::Allowed);
     let _ = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(slider))).await;
     let asked = jev.asked.lock().unwrap();
     let picked = asked.iter().position(|q| q.contains("Which key should be pressed in")).expect("the key question");
@@ -8187,7 +8240,7 @@ async fn test_a_role_key_is_classified_before_an_unauthorized_press() {
     let jev = Arc::new(FirstChoice { wants: Some("Delete"), noul: Some(1.0), ..Default::default() });
     let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
     let mut state = run_state();
-    state.edits_forbidden = Some(false);
+    state.edits = Some(Edits::Allowed);
     let result = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(tab))).await;
     assert!(matches!(result, Err(Flow::Stop(ref stop)) if stop.status == Status::NeedsConfirmation));
     let asked = jev.asked.lock().unwrap();
@@ -8203,7 +8256,7 @@ async fn test_a_read_only_task_can_press_a_navigation_key_but_not_change_a_value
         let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
         let mut state = run_state();
         state.task = "Read the page without changing any values or settings".into();
-        state.edits_forbidden = Some(true);
+        state.edits = Some(Edits::Forbidden);
         let result = agent.action(&mut state, &page, &code_decision(Operation::Press, Some(control))).await;
         assert_eq!(result.is_ok(), allowed, "{role}: {result:?}");
         assert!(
