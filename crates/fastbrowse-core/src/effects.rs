@@ -124,6 +124,35 @@ fn shows(control: &Control, choice: &str) -> bool {
     shown.iter().filter(|t| !t.is_empty()).any(|t| t.contains(choice) || t == first)
 }
 
+/// The text the page shows after a step and did not before, each piece once per time it was added, in the order the
+/// page lists them. Of a piece the page already showed and shows once more, the last one listed is the one named.
+///
+/// The viewport's text and the text outside it are read together, so scrolling a piece into view adds nothing. A
+/// piece that is the label of a control in `shown` is left to that control's own mention.
+fn added_text(before: &Observation, after: &Observation, shown: &[&Control]) -> Vec<String> {
+    fn pieces(observation: &Observation) -> impl Iterator<Item = &str> {
+        [&observation.viewport_text, &observation.offscreen_text]
+            .into_iter()
+            .flat_map(|text| text.lines())
+            .map(text::strip)
+            .filter(|piece| !piece.is_empty())
+    }
+    let mut told: IndexMap<&str, usize> = IndexMap::new();
+    for piece in pieces(before).chain(shown.iter().map(|c| text::strip(&c.label))) {
+        *told.entry(piece).or_default() += 1;
+    }
+    pieces(after)
+        .filter(|piece| match told.get_mut(piece) {
+            Some(left) if *left > 0 => {
+                *left -= 1;
+                false
+            }
+            _ => true,
+        })
+        .map(str::to_string)
+        .collect()
+}
+
 /// What changed from `before` to `after`. With `chosen`, the option clicked in between, a field showing it counts as
 /// a value set: an autocomplete choice can leave the text that was typed exactly as it was. `waited` is a step that only
 /// let time pass, a Wait.
@@ -260,6 +289,16 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
         parts.push(format!("opened {} over the page; {} went behind it", dialog(name), counted(hidden.len())));
     } else if !hidden.is_empty() {
         parts.push(format!("removed {}", listed(&hidden)));
+    }
+    // A step that stays on its page can answer in text alone, and that text is the only record that the step is what
+    // put it there: a comment form that posted showed the new comment, the effect said only that the box emptied, and
+    // the run posted the same comment twice more. Another document or address is all new, and the page text shows it.
+    if !navigated && !replaced {
+        let added = added_text(before, after, &shown);
+        if !added.is_empty() {
+            let quoted: Vec<String> = added.iter().map(|piece| format!("{piece:?}")).collect();
+            parts.push(format!("added the text: {}", quoted.join(", ")));
+        }
     }
     if let Some(chosen) = chosen.filter(|_| !replaced) {
         let choice = plain(&chosen.label);
@@ -508,7 +547,7 @@ mod tests {
         let form = observation(vec![Control::new("s", "button", "Continue", [Operation::Click])]);
         let refused = Observation { viewport_text: "Error: First Name is required".into(), ..form.clone() };
         let done = effect(&form, &refused, None, false);
-        assert_eq!(done.summary, "only the page text changed");
+        assert_eq!(done.summary, "added the text: \"Error: First Name is required\"");
         assert!(!done.set_something);
         assert!(done.added, "text-only changes remain observable without claiming added records");
     }
@@ -523,7 +562,44 @@ mod tests {
         let done = effect(&before, &after, before.controls.first(), false);
         assert!(done.changed);
         assert!(done.added);
-        assert_eq!(done.summary, "only the page text changed");
+        assert_eq!(done.summary, "added the text: \"Record B\"");
+    }
+
+    #[test]
+    fn test_a_step_that_stays_on_its_page_names_the_text_it_added() {
+        let reply = Control::new("r1", "button", "Reply", [Operation::Click]);
+        let before = Observation {
+            viewport_text: "Comments\nPost".into(),
+            offscreen_text: "Serzath\nWorks great.\nReply".into(),
+            ..observation(vec![with(&reply, |c| c.id = "r0".into())])
+        };
+        // The new comment's own Reply button is named as a control, and the older comment only moved out of view.
+        let after = Observation {
+            viewport_text: "Comments\nPost\ncjber\njust now\nVersion 2.4.1 is out.\nReply".into(),
+            offscreen_text: "Serzath\nWorks great.\nReply".into(),
+            controls: vec![reply.clone(), with(&reply, |c| c.id = "r0".into())],
+            ..before.clone()
+        };
+        assert_eq!(
+            effect(&before, &after, None, false).summary,
+            "showed 1 control: Reply; added the text: \"cjber\", \"just now\", \"Version 2.4.1 is out.\""
+        );
+        // Text scrolled into view was on the page already.
+        let scrolled = Observation {
+            viewport_text: "Serzath\nWorks great.\nReply".into(),
+            offscreen_text: "Comments\nPost".into(),
+            ..before.clone()
+        };
+        assert_eq!(effect(&before, &scrolled, None, false).summary, "only the page text changed");
+        // A second copy of a line already there is still added.
+        let again =
+            Observation { offscreen_text: "Serzath\nWorks great.\nReply\nWorks great.".into(), ..before.clone() };
+        assert_eq!(effect(&before, &again, None, false).summary, "added the text: \"Works great.\"");
+        // Another document is all new: the page text shows it, and the step's effect is the address.
+        let moved = Observation { url: "https://example.test/next".into(), ..after.clone() };
+        assert!(!effect(&before, &moved, None, false).summary.contains("added the text"));
+        let replaced = Observation { document_key: "next".into(), ..after };
+        assert!(!effect(&before, &replaced, None, false).summary.contains("added the text"));
     }
 
     fn field(focused: Option<bool>) -> Control {
