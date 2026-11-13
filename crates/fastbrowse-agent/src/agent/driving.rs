@@ -1353,6 +1353,11 @@ impl Agent {
                 changed: false,
                 shown: Vec::new(),
             }
+        } else if state.committing && last.outcome == StepOutcome::Executed && observation.dialog.is_none() {
+            // Still set from the gate that let this step go: the next decision is what takes it. Only a commit that
+            // was sent has a reply: one the page redrew or covered before it went, or one waiting on a dialog, did
+            // not put there the text a page added meanwhile.
+            fastbrowse_core::effects::effect_of_commit(&before, observation, None, waited)
         } else {
             effect(&before, observation, None, waited)
         };
