@@ -1699,10 +1699,12 @@ impl CdpPage {
         let script = self.settle_script(seconds);
         let result = self.evaluate(&self.session.active_session_id()?, &script).await?;
         match result.as_array().map(Vec::as_slice) {
-            Some([Value::Bool(stable), fingerprint]) if fingerprint.is_string() || fingerprint.is_null() => {
+            Some([Value::Bool(stable), fingerprint, Value::String(_end)])
+                if fingerprint.is_string() || fingerprint.is_null() =>
+            {
                 Ok((*stable, fingerprint.as_str().map(str::to_owned)))
             }
-            _ => Err(BrowserError::Failed("page script returned an unexpected tuple[bool, str | None]".into())),
+            _ => Err(BrowserError::Failed("page script returned an unexpected tuple[bool, str | None, str]".into())),
         }
     }
 
@@ -1711,18 +1713,24 @@ impl CdpPage {
     /// shown one for `SETTLE_LOADING_SECONDS`) and has run the timers and frame callbacks the action's input scheduled
     /// that are due before the deadline, then samples the fingerprint in the same call. `seconds` bounds it.
     ///
+    /// The promise answers `[stable, fingerprint, end]`. `end` is the page's record of why it answered: `idle` when
+    /// nothing moved after the input, so no quiet window was due, `quiet` once a mutation after the input had a quiet
+    /// window behind it, `loading` for a progress indicator held past its bound, `deadline`, or `unwatched` for a page
+    /// with no registry or a hidden tab. Nothing here acts on it; the integration tests read it from the CDP reply
+    /// so they assert what the settle decided rather than how long the machine took.
+    ///
     /// The `fastbrowse:settle` marker is what the integration test matches to count settle reads.
     fn settle_script(&self, seconds: f64) -> String {
         format!(
             "/* fastbrowse:settle */ new Promise(resolve => {{ const r = window.__fastbrowse; \
              const sample = {page_js}; \
-             const finish = () => {{ const s = sample('fingerprint'); \
-             resolve([Boolean(s && s.ready), s && s.ready ? s.fingerprint : null]); }}; \
-             if (!r || document.hidden) {{ finish(); return; }} \
+             const finish = end => {{ const s = sample('fingerprint'); \
+             resolve([Boolean(s && s.ready), s && s.ready ? s.fingerprint : null, end]); }}; \
+             if (!r || document.hidden) {{ finish('unwatched'); return; }} \
              const started = performance.now(); const deadline = started + {deadline}; \
              const quiet = {quiet}; const loading = {loading}; \
              let settled = false, frameAt = 0; \
-             const done = () => {{ if (settled) return; settled = true; r.nativeClearTimeout(timer); finish(); }}; \
+             const done = end => {{ if (settled) return; settled = true; r.nativeClearTimeout(timer); finish(end); }}; \
              const busy = () => {{ \
                for (const e of document.querySelectorAll('[aria-busy=\"true\"],[role=\"progressbar\"],progress')) {{ \
                  try {{ if (e.checkVisibility({{checkOpacity: true, checkVisibilityCSS: true}})) return true; }} catch {{}} \
@@ -1734,10 +1742,12 @@ impl CdpPage {
                const moved = last >= (r.lastInput || 0); \
                const drawing = now - Math.max(last, r.lastInput || 0) < quiet; \
                const pending = Boolean(r.pendingBefore && r.pendingBefore(deadline, drawing)); \
-               if (ready && !held && !pending && (!moved || now - last >= quiet) && frameAt >= last) return done(); \
-               if (now >= deadline || (held && now - started >= loading)) return done(); \
+               if (ready && !held && !pending && (!moved || now - last >= quiet) && frameAt >= last) \
+                 return done(moved ? 'quiet' : 'idle'); \
+               if (now >= deadline) return done('deadline'); \
+               if (held && now - started >= loading) return done('loading'); \
                r.nativeRequestAnimationFrame(t => {{ frameAt = t; check(); }}); }}; \
-             const timer = r.nativeSetTimeout(done, {deadline}); \
+             const timer = r.nativeSetTimeout(() => done('deadline'), {deadline}); \
              r.nativeRequestAnimationFrame(t => {{ frameAt = t; check(); }}); }})",
             page_js = self.page_js,
             deadline = py_float(seconds.max(0.0) * 1000.0),
