@@ -156,6 +156,7 @@ impl Agent {
                 Some(picked) => picked,
                 None => {
                     let mut context = self.context(state, &observation, secrets, check_login, fresh)?;
+                    context.check_surface = state.surface_judged.as_ref() != Some(&page) || state.page_failed;
                     context.list_read = if list_walk.is_some() {
                         ListRead::Continue
                     } else if output_schema.is_none()
@@ -204,9 +205,8 @@ impl Agent {
                     }
                     let redecided = state.redecided;
                     let deciding = self.trace.phase("decide", async {
-                        let (ledger, cache) = (Some(&*state.ledger), Some(&state.relevance_cache));
-                        let config = &self.config;
-                        Ok(decide(&*self.jev, &offered, &context, config, ledger, cache, &self.trace).await?)
+                        let (ledger, config) = (Some(&*state.ledger), &self.config);
+                        Ok(decide(&*self.jev, &offered, &context, config, ledger, &self.trace).await?)
                     });
                     let decided = self.unless_redrawn(redecided, deciding, &observation, None).await?;
                     let Watched::Done(mut decision) = decided else {
@@ -236,6 +236,9 @@ impl Agent {
                             state.missing.contains(&(offered.url.clone(), target.label.clone(), target.context.clone()))
                         });
                         replay.confirm(&offered.url, &offered.controls, &mut decision, missing);
+                    }
+                    if decision.inside_drawn.is_some() {
+                        state.surface_judged = Some(page.clone());
                     }
                     state.last_page = Some(page);
                     decision
@@ -354,6 +357,13 @@ impl Agent {
             // could still be done (#960). Jev judges it from the page and the task; this ends the run on that answer.
             if decision.unobtainable.is_some_and(|probability| probability >= EVEN_ODDS) {
                 return Err(self.unobtainable(state, &observation).await?.into());
+            }
+            // A streamed remote browser draws its page as a picture: a run asked to type into it pressed the picture,
+            // reloaded it and ended blaming the site (#1084). The snapshot marks the surface and Jev judges that the
+            // task needs an action inside it; the run cannot make one, so it ends saying so.
+            if decision.inside_drawn.is_some_and(|probability| probability >= EVEN_ODDS) {
+                let surfaces = crate::policy::drawn_surfaces(&observation.controls);
+                return Err(drawn_surface_stop(&observation.url, &surfaces).into());
             }
             if decision.read_scope == ReadScope::Return {
                 list_walk = None;
@@ -481,6 +491,7 @@ impl Agent {
                 shows_answer: None,
                 site_failure: None,
                 unobtainable: None,
+                inside_drawn: None,
                 destination: None,
                 replayed: false,
                 by_code: false,
@@ -1342,6 +1353,11 @@ impl Agent {
                 changed: false,
                 shown: Vec::new(),
             }
+        } else if state.committing && last.outcome == StepOutcome::Executed && observation.dialog.is_none() {
+            // Still set from the gate that let this step go: the next decision is what takes it. Only a commit that
+            // was sent has a reply: one the page redrew or covered before it went, or one waiting on a dialog, did
+            // not put there the text a page added meanwhile.
+            fastbrowse_core::effects::effect_of_commit(&before, observation, None, waited)
         } else {
             effect(&before, observation, None, waited)
         };
@@ -1640,6 +1656,21 @@ pub(super) fn edit_progress(decision: &Decision, action: &Action, written: &Writ
 fn held_value(action: &Action) -> Option<String> {
     let text = action.text.as_ref()?;
     Some(if action.secret { "\u{2022}".repeat(text.chars().count()) } else { text.clone() })
+}
+
+/// The stop of a run whose task needs an action inside a drawn surface: the run's own limit, which no retry changes.
+/// One surface in view is named; of several, Jev's answer does not say which.
+pub(super) fn drawn_surface_stop(url: &str, surfaces: &[&Control]) -> Stop {
+    let inside = match surfaces {
+        [surface] => format!("{} at {url}, a drawn surface", text::repr(&surface.label)),
+        _ => format!("a drawn surface at {url}"),
+    };
+    Stop::new(
+        Status::Stuck,
+        format!(
+            "Could not complete the task: it needs an action inside {inside}: fastbrowse acts on page elements and cannot act inside a streamed or canvas view."
+        ),
+    )
 }
 
 pub(super) fn require(target: Option<&Control>) -> Step<&Control> {

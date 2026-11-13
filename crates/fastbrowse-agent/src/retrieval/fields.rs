@@ -685,7 +685,7 @@ pub async fn choose_candidate(
             // A candidate that alone exceeds Jev's input cannot be offered, as an oversized batch question goes
             // unscored.
         }
-        let answered = evaluate_batches(JevPurpose::Read, jev, state, &questions, &tokens, ledger, None, false).await?;
+        let answered = evaluate_batches(JevPurpose::Read, jev, state, &questions, &tokens, ledger, false).await?;
         let chosen: std::collections::HashSet<String> = answered
             .into_iter()
             .flat_map(|answered| answered.answers.into_values())
