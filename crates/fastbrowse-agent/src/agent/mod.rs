@@ -892,6 +892,8 @@ impl Agent {
             check_login,
             check_answer: check_bot && !state.read_pages.contains(&observation.page_key),
             check_bot,
+            // Set by the step loop, which knows the document it last asked in.
+            check_surface: false,
             has_attachments: !state.attachments.is_empty(),
             secrets,
             start_url: state.caller_start.clone(),
@@ -1026,11 +1028,8 @@ impl Agent {
         if observation.controls.is_empty() {
             facts.push("This page offers no links or controls: nothing on it leads anywhere else.".into());
         }
-        if let Some(surface) = crate::policy::drawn_surface(&observation.controls) {
-            facts.push(format!(
-                "{} is a drawn surface, such as a streamed remote browser or a canvas: what it shows is pixels, with no elements inside it for this run to fill or press. A click on it lands on the surface as one element, not on a field or button drawn inside it.",
-                fastbrowse_core::py::text::repr(&surface.label)
-            ));
+        if !crate::policy::drawn_surfaces(&observation.controls).is_empty() {
+            facts.push("An element marked `drawn` is a drawn surface, such as a streamed remote browser or a canvas: what it shows is pixels, with no elements inside it for this run to fill or press. A click on it lands on the surface as one element, not on a field or button drawn inside it.".into());
         }
         let document = &observation.document_key;
         let read = state.read_documents.get(&state::read_key(observation)).copied();

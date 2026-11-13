@@ -3887,7 +3887,7 @@ async fn test_a_run_that_gives_up_on_a_drawn_page_it_could_not_read_says_so() {
 #[test]
 fn test_the_stop_on_a_drawn_surface_names_it_and_the_limitation() {
     let view = Control { drawn: Some(true), ..button("Remote browser view") };
-    let stop = super::driving::drawn_surface_stop("https://live.test/view", &view);
+    let stop = super::driving::drawn_surface_stop("https://live.test/view", &[&view]);
     assert_eq!(stop.status, Status::Stuck);
     assert_eq!(
         stop.error.as_deref(),
@@ -3897,13 +3897,21 @@ fn test_the_stop_on_a_drawn_surface_names_it_and_the_limitation() {
     );
 }
 
+/// Of several surfaces in view Jev's answer does not say which, so the stop names none.
+#[test]
+fn test_the_stop_with_several_drawn_surfaces_in_view_names_none() {
+    let (map, chart) = (button("Map"), button("Chart"));
+    let error = super::driving::drawn_surface_stop("https://x.test/", &[&map, &chart]).error.unwrap_or_default();
+    assert!(error.contains("inside a drawn surface at https://x.test/: fastbrowse"), "{error}");
+}
+
 /// Jev is told what a drawn surface is, from the control snapshot.js marked, on the page that has one.
 #[test]
 fn test_a_drawn_surface_in_view_is_stated_as_a_fact() {
     let state = run_state();
     let view = Control { drawn: Some(true), ..button("Remote browser view") };
     let facts = Agent::page_facts(&state, &observation(std::slice::from_ref(&view)));
-    assert!(facts.iter().any(|fact| fact.starts_with("'Remote browser view' is a drawn surface")), "{facts:?}");
+    assert!(facts.iter().any(|fact| fact.starts_with("An element marked `drawn` is a drawn surface")), "{facts:?}");
     let hidden = Control { offscreen: true, ..view };
     let facts = Agent::page_facts(&state, &observation(&[hidden, button("Next")]));
     assert!(facts.iter().all(|fact| !fact.contains("drawn surface")), "{facts:?}");

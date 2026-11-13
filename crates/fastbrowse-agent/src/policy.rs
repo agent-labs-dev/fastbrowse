@@ -243,6 +243,9 @@ pub struct StepContext {
     /// passes a CAPTCHA, so a page is worth checking for one whether or not a secret is held for it.
     #[serde(deserialize_with = "lax::boolean")]
     pub check_bot: bool,
+    /// The run has not yet asked, in this document, whether the task needs an action inside a drawn surface.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub check_surface: bool,
     #[serde(deserialize_with = "lax::boolean")]
     pub has_attachments: bool,
     /// Names of stored secrets the current origin may receive; a fill can type one without Jev seeing it.
@@ -310,6 +313,7 @@ impl StepContext {
             check_login: false,
             check_answer: false,
             check_bot: false,
+            check_surface: false,
             has_attachments: false,
             secrets: Vec::new(),
             answered_in_notes: false,
@@ -413,7 +417,7 @@ pub struct Decision {
     pub unobtainable: Option<f64>,
     /// Jev's probability that the task needs an action on something shown inside a drawn surface in view, which the
     /// run cannot act inside.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inside_drawn: Option<f64>,
     /// Drop target of a drag: the control the element Jev chose to drag is released onto.
     #[serde(default)]
@@ -1211,21 +1215,19 @@ pub fn build_request(
                 "The page says no such thing, or the task does not require buying anything.",
             ),
         );
-        // Asked of a page that takes input on a drawn surface, once per page state: only the task says whether what it
-        // needs is inside the surface, where the run cannot act, or among the page's elements (#1084).
-        if let Some(surface) = drawn_surface(controls) {
-            questions.insert(
-                keys::INSIDE_DRAWN.into(),
-                noul(
-                    &format!(
-                        "Element {} is a drawn surface: it shows its content as pixels, with no elements inside it. Does the task need an action on something shown inside that surface, such as typing into a field or pressing a button drawn in it? Pressing the surface as a whole, as one element, is not such an action, and neither is reading what it shows.",
-                        text::repr(&surface.id)
-                    ),
-                    "The task needs an action on something drawn inside the surface.",
-                    "The task needs only this page's elements, the surface pressed as a whole, or what the surface shows read.",
-                ),
-            );
-        }
+    }
+    // Only the task says whether what it needs is inside a drawn surface, where the run cannot act, or among the
+    // page's elements (#1084). Asked once per document that shows one, whenever one comes into view: a streamed view
+    // shows a spinner before its picture, in the same document.
+    if context.check_surface && !drawn_surfaces(controls).is_empty() {
+        questions.insert(
+            keys::INSIDE_DRAWN.into(),
+            noul(
+                "An element marked `drawn` is a drawn surface: it shows its content as pixels, with no elements inside it. Does the task need an action on something shown inside such a surface, such as typing into a field or pressing a button drawn in it? Pressing a surface as a whole, as one element, is not such an action, and neither is reading what it shows.",
+                "The task needs an action on something drawn inside a surface.",
+                "The task needs only this page's elements, a surface pressed as a whole, or what a surface shows read.",
+            ),
+        );
     }
     if context.plan_ahead {
         for control in controls {
@@ -1692,10 +1694,10 @@ pub(crate) fn login_question() -> Question {
     )
 }
 
-/// The drawn surface in view that the page takes input on, as snapshot.js marks it: an image, canvas or video whose
-/// content has no page elements to act on.
-pub fn drawn_surface(controls: &[Control]) -> Option<&Control> {
-    controls.iter().find(|control| control.drawn == Some(true) && !control.offscreen)
+/// The drawn surfaces in view that the page takes input on, as snapshot.js marks them: an image, canvas or video
+/// whose content has no page elements to act on.
+pub fn drawn_surfaces(controls: &[Control]) -> Vec<&Control> {
+    controls.iter().filter(|control| control.drawn == Some(true) && !control.offscreen).collect()
 }
 
 fn noul(instructions: &str, yes: &str, no: &str) -> Question {
@@ -1926,13 +1928,13 @@ mod tests {
         assert_eq!(decision.unobtainable, Some(0.9));
     }
 
-    /// A page that takes input on a drawn surface asks whether the task needs an action inside it (#1084); a page
-    /// with none, or with the surface out of view, does not.
+    /// A page that takes input on a drawn surface asks whether the task needs an action inside one (#1084); a page
+    /// with none, with the surface out of view, or in a document already asked about, does not.
     #[test]
     fn test_inside_drawn_is_asked_of_a_page_with_a_drawn_surface_in_view() {
         let view = Control { drawn: Some(true), ..button(1) };
-        let page = observation(vec![view.clone()]);
-        let context = StepContext { check_bot: true, ..StepContext::new("Type tomsmith into the Username field") };
+        let page = observation(vec![button(2), view.clone()]);
+        let context = StepContext { check_surface: true, ..StepContext::new("Type tomsmith into the Username field") };
         let config = Config::default();
         let asked = |controls: Vec<Control>, context: &StepContext| {
             let page = observation(controls);
@@ -1940,8 +1942,11 @@ mod tests {
                 .questions
                 .contains_key(keys::INSIDE_DRAWN)
         };
-        assert!(asked(vec![view.clone()], &context));
-        assert!(!asked(vec![view.clone()], &StepContext::new("t")), "a page state already judged is not asked again");
+        assert!(asked(vec![button(2), view.clone()], &context));
+        assert!(
+            !asked(vec![view.clone()], &StepContext::new("t")),
+            "a document already asked about is not asked again"
+        );
         assert!(!asked(vec![button(1)], &context));
         assert!(!asked(vec![Control { offscreen: true, ..view }], &context));
         let jev = fake(&[("operation", "click"), ("click_target", "b1"), (keys::INSIDE_DRAWN, "yes")], "");

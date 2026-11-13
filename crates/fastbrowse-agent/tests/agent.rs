@@ -669,14 +669,39 @@ async fn a_task_inside_a_streamed_view_ends_the_run_naming_the_limitation() {
         let log = log.lock().unwrap();
         let asked = |call: &&Value| call["jev"]["questions"].as_str().is_some_and(|q| q.contains("\"inside_drawn\":"));
         let call = log.iter().find(asked).expect("Jev was asked about the surface");
-        assert!(call["jev"]["questions"].as_str().unwrap().contains("Element 'view' is a drawn surface"), "{call}");
+        assert!(
+            call["jev"]["questions"].as_str().unwrap().contains("An element marked `drawn` is a drawn surface"),
+            "{call}"
+        );
         let state = call["jev"]["state"].as_str().unwrap();
-        assert!(state.contains("'Remote browser view' is a drawn surface"), "{state}");
+        assert!(
+            state.contains("An element marked `drawn` is a drawn surface") && state.contains("\"drawn\":true"),
+            "{state}"
+        );
     }
     // A task that needs only the page's own elements runs on.
     let (outcome, _) = play(&live_view_case(0.05), Some(Arc::default())).await;
     assert_ne!(outcome["status"], "stuck", "{outcome}");
     assert!(!outcome["error"].as_str().unwrap_or_default().contains("drawn surface"), "{outcome}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_surface_that_appears_in_a_document_already_seen_is_still_asked_about() {
+    // A live view shows a Retry button while its screencast starts, then its picture, in the same document.
+    let mut case = live_view_case(0.95);
+    // A page read as failed is judged afresh anyway, so this one is read as working.
+    case["jev"]["nouls"]["site_failure"] = 0.0.into();
+    let live = case["site"]["screens"]["home"].clone();
+    case["site"]["screens"]["live"] = live;
+    case["site"]["screens"]["home"]["observation"]["controls"] = serde_json::json!([
+        {"id": "retry", "frame_id": null, "role": "button", "label": "Retry", "operations": ["click"]}
+    ]);
+    case["site"]["actions"] =
+        serde_json::json!([{"screen": "home", "operation": "click", "target": "retry", "next": "live"}]);
+    let (outcome, _) = play(&case, Some(Arc::default())).await;
+    assert_eq!(outcome["status"], "stuck", "{outcome}");
+    assert_eq!(outcome["steps"].as_array().unwrap().len(), 1, "{outcome}");
+    assert!(outcome["error"].as_str().unwrap().contains("'Remote browser view'"), "{outcome}");
 }
 
 #[tokio::test(start_paused = true)]
