@@ -132,7 +132,8 @@ impl DecisionClient for HandoffDecision {
             let task = state["task"].as_str().unwrap();
             let Question::Choice(output) = &questions["pick"] else { panic!("output choice is present") };
             assert!(task.contains("input format (a screenshot)"));
-            assert!(output.instructions.contains(task), "all startup questions use the task with its inputs");
+            // The state carries the task with its inputs once; the questions name it rather than restating it.
+            assert!(output.instructions.contains("`task`") && !output.instructions.contains(task));
         }
         if state.get("page").is_some() {
             self.seen.lock().unwrap().push(state.clone());

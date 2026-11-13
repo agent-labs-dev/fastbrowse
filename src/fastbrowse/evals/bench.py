@@ -621,6 +621,9 @@ async def run_suite(args: argparse.Namespace) -> int:
     run: dict[str, Any] = {"meta": _meta(mode, args.agent, None if mode == "record" else latency), "tasks": []}
     logs = args.out.with_suffix("") / "logs"
     logs.mkdir(parents=True, exist_ok=True)
+    # A reused --out holds an earlier run's request logs, and profiling the directory would count them as this run's.
+    for stale in logs.glob("*.requests.jsonl"):
+        stale.unlink()
     spent = 0.0
     for task in tasks:
         path = _cassette_path(args.cassettes, task.id)
@@ -660,6 +663,9 @@ async def run_suite(args: argparse.Namespace) -> int:
             entry["unpriced_exchanges"] = unpriced
         run["tasks"].append(entry)
         _write(args.out, run)
+        # The requests the last pass sent, for scripts/jev_state_size.py to measure.
+        with (logs / f"{task.id}.requests.jsonl").open("w", encoding="utf-8") as out:
+            out.writelines(json.dumps(line, ensure_ascii=False) + "\n" for line in proxy.sent)
         if entry["misses"]:
             with (logs / f"{task.id}.misses.txt").open("w", encoding="utf-8") as out:
                 for miss in entry["misses"]:

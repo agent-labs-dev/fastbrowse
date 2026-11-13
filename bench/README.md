@@ -113,6 +113,9 @@ Timings come from a shared laptop and vary run to run. Compare medians from runs
 
 ## Files
 
+- `<out>/logs/<task>.requests.jsonl`, written by every run: each request the agent sent, with the response it got,
+  as trace lines for `scripts/jev_state_size.py`. A fill writes its last pass only, since each pass runs the task
+  again from the start and summing them would count one run's requests once per pass.
 - `cassettes/<task>.jsonl.gz`: one gzip JSONL file per task. The first line holds the recording date, version and
   models; every other line is one request and its response, in the order they arrived. When selected exchanges are
   recorded again, `rerecorded_exchanges` names their request keys, models and request timestamps. Their response
