@@ -242,6 +242,11 @@ impl SiteFailure {
     }
 }
 
+/// The known pages request a run sent while its first page opened, answered with its cost unrecorded: the run that
+/// takes the answer records it, which after an escalation to a browser is the browser run's ledger.
+pub(crate) type KnownAsked =
+    tokio::task::JoinHandle<crate::error::Result<fastbrowse_core::llm::Generation<crate::start::KnownPages>>>;
+
 pub(crate) struct RunState {
     pub task: String,
     /// The recipe this run replays, while it has steps left to offer.
@@ -267,6 +272,9 @@ pub(crate) struct RunState {
     /// Pages the site is known to serve for the items the task names, offered as places to navigate until each has
     /// been open (#983).
     pub known_pages: Vec<String>,
+    /// The request for `known_pages` while it is out. A run decides its first step while it is, and waits for it only
+    /// before acting on a decision or proposing another route, so the request is not on every run's first step.
+    pub known_asked: Option<KnownAsked>,
     /// The known pages the run has been on: each stays one the run may navigate to, and is not offered again.
     pub reached_known_pages: Vec<String>,
     pub steps: Vec<StepResult>,
@@ -685,6 +693,15 @@ impl RunState {
         }
     }
 
+    /// Records what the known pages request cost, for a run that ends without taking its answer.
+    pub async fn known_pages_unused(&mut self) {
+        if let Some(asked) = self.known_asked.take()
+            && let Ok(Ok(answer)) = asked.await
+        {
+            let _ = self.ledger.record([answer.cost]);
+        }
+    }
+
     pub fn carried_on(self, ledger: Arc<Ledger>) -> RunState {
         RunState {
             ledger,
@@ -730,6 +747,7 @@ impl RunState {
             walled: Vec::new(),
             routes: HashSet::new(),
             known_pages: Vec::new(),
+            known_asked: None,
             reached_known_pages: Vec::new(),
             steps: Vec::new(),
             choices: Vec::new(),

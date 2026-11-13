@@ -8318,6 +8318,32 @@ fn a_read_the_step_chose_keeps_the_steps_word_that_the_page_holds_evidence() {
 }
 
 #[tokio::test]
+async fn known_pages_answered_beside_the_first_step_redecide_only_when_they_offer_a_page() {
+    // The known-pages question runs beside the first decision instead of before it. Its answer is taken before the
+    // first act: a page the run is not on is offered, so the step is decided again, and the page it is on offers nothing.
+    let agent = agent();
+    let mut state = run_state();
+    let asked = |urls: Vec<&str>| {
+        let urls = urls.into_iter().map(String::from).collect();
+        tokio::spawn(async move {
+            Ok(Generation {
+                data: crate::start::KnownPages { urls },
+                cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)),
+            })
+        })
+    };
+    let here = "https://pypi.org/project/httpx/";
+    state.known_asked = Some(asked(vec![here]));
+    assert!(!agent.known_pages_arrived(&mut state, here).await.unwrap(), "the page the run is on offers nothing");
+    assert_eq!(state.known_pages, vec![here.to_string()]);
+    state.known_asked = Some(asked(vec!["https://pypi.org/project/requests/"]));
+    assert!(agent.known_pages_arrived(&mut state, here).await.unwrap(), "another page is offered");
+    assert_eq!(state.known_pages.len(), 2);
+    assert!(state.known_asked.is_none());
+    assert!(!agent.known_pages_arrived(&mut state, here).await.unwrap(), "an answer is taken once");
+}
+
+#[tokio::test]
 async fn a_known_page_may_be_navigated_to_after_it_was_reached() {
     // Offered PyPI's httpx page as a known page, Jev chose to open it and the navigation gate stopped the run stuck,
     // as an address the caller had not supplied.

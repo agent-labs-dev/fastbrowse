@@ -406,6 +406,13 @@ impl Agent {
                 }
                 continue;
             }
+            // The known pages were asked beside the run's first decision. A decision made before their answer, which
+            // offers a page it was not offered, is made again with that page before the run acts on it.
+            if self.known_pages_arrived(state, &observation.url).await? {
+                state.built = None;
+                state.committing = false;
+                continue;
+            }
             match Box::pin(self.step(state, &observation, &decision)).await {
                 Err(Flow::Unsure(unsure)) => {
                     let left_out = withheld(&decision);
@@ -612,15 +619,42 @@ impl Agent {
     }
 
     /// The pages the site is known to serve for the items the task names, asked while the first page opens (#983).
+    /// Only a run with no runtime to send the request beside its first step waits for them here.
     pub(super) async fn known_pages(
         &self,
         task: &str,
         start: Option<&str>,
         ledger: &fastbrowse_core::telemetry::Ledger,
     ) -> Step<Vec<String>> {
+        self.known_pages_from(crate::start::known_pages(&*self.llm, task, start, Some(ledger)).await, ledger)
+    }
+
+    /// Takes the answer to the known pages request the run sent beside its first step, once it is out: whether it
+    /// offers a page the decision just made was not offered, which that decision is then made again with.
+    pub(super) async fn known_pages_arrived(&self, state: &mut RunState, here: &str) -> Step<bool> {
+        let Some(asked) = state.known_asked.take() else { return Ok(false) };
+        let answer = asked
+            .await
+            .unwrap_or_else(|error| Err(crate::error::AgentError::Invalid(format!("not answered: {error}"))));
+        let mut offered = false;
+        for url in self.known_pages_from(answer, &state.ledger)? {
+            if !state.known_pages.contains(&url) {
+                offered |=
+                    !state.reached_known_pages.contains(&url) && !fastbrowse_core::navigation::same_address(&url, here);
+                state.known_pages.push(url);
+            }
+        }
+        Ok(offered)
+    }
+
+    fn known_pages_from(
+        &self,
+        answer: crate::error::Result<fastbrowse_core::llm::Generation<crate::start::KnownPages>>,
+        ledger: &fastbrowse_core::telemetry::Ledger,
+    ) -> Step<Vec<String>> {
         // As with the task's dates, a run whose known pages could not be asked for runs on without them: a provider
         // error on this hint ended a run before its first page was read. Only the budget stops the run here.
-        let proposal = match crate::start::known_pages(&*self.llm, task, start, Some(ledger)).await {
+        let proposal = match answer {
             Ok(proposal) => proposal,
             Err(crate::error::AgentError::Budget(budget)) => return Err(budget.into()),
             Err(error) => {
