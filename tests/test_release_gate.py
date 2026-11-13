@@ -1,6 +1,7 @@
 """`scripts/release_gate.py`: a release passes only when no task got worse and runs got faster and cheaper."""
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -346,17 +347,34 @@ def test_candidate_keeps_valid_original_fixture_after_new_same_tree_dispatch(mon
     assert "verified original rows" in notes
 
 
+def write_baseline(tmp_path, campaign: str):
+    """A release-baseline.json naming `campaign`, as docs/results/ holds."""
+    path = tmp_path / "release-baseline.json"
+    path.write_text(
+        json.dumps({"version": "9.8.0", "campaign": campaign, "tasks": ["core/a", "core/b"]}), encoding="utf-8"
+    )
+    return path
+
+
 @pytest.mark.parametrize("tag", ["v9.9.0", "v9.9.1"])
 @pytest.mark.parametrize(("lines", "official"), [([], False), (["Benchmarks: official"], True)])
-def test_official_coverage_is_required_only_when_the_tag_claims_it(monkeypatch, tag, lines, official):
+def test_official_coverage_is_required_only_when_the_tag_claims_it(monkeypatch, tmp_path, tag, lines, official):
     asked = []
     monkeypatch.setattr(gate, "_tree", lambda *_: "tree")
     monkeypatch.setattr(gate, "fixture_run", lambda *_: 7)
     monkeypatch.setattr(gate, "tag_lines", lambda *_: lines)
     monkeypatch.setattr(gate, "campaign_candidate", lambda *_: asked.append(True) or (None, ["official receipts"]))
     candidate = [row(task, True, 5.0, 0.01) for task in ("a", "b")]
-    monkeypatch.setattr(gate, "campaign_rows", lambda *_: (candidate, ["run 1"]))
-    monkeypatch.setattr(gate, "ledger_rows", lambda *_: BASELINE)
+    campaigns = {f"release-{tag[1:]}": (candidate, ["run 1"]), "release-0.10.0": (BASELINE, ["run 0"])}
+    monkeypatch.setattr(gate, "campaign_rows", lambda _repo, campaign: campaigns[campaign])
+    monkeypatch.setattr(gate, "BASELINE", write_baseline(tmp_path, "release-0.10.0"))
     assert gate.main([tag]) == 0
     # A patch that claims official scores is measured too, so its claim is checked.
     assert asked == ([True] if official else [])
+
+
+def test_a_baseline_whose_campaign_lost_a_task_refuses_to_compare(monkeypatch) -> None:
+    # Run 1's ledger expired, so only run 2's task "a" is left; comparing on "a" alone would skip "b" unseen.
+    monkeypatch.setattr(gate, "campaign_rows", lambda *_: ([row("a", True)] * 3, ["run 2"]))
+    with pytest.raises(gate.GateError, match="no longer supplies 1 baseline tasks: core/b"):
+        gate.baseline_rows("o/r", {"campaign": "release-0.10.0", "tasks": ["core/a", "core/b"]})
