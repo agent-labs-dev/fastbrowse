@@ -78,24 +78,6 @@ keys:
       - github: BROWSER_USE_API_KEY
     expires: unknown
     limit: unknown
-  - id: claude-code-oauth-token
-    service: anthropic
-    group: ci
-    owner: cjber
-    locations:
-      - github: CLAUDE_CODE_OAUTH_TOKEN
-    expires: unknown
-    limit: unknown
-    note: "claude-issue-pr.yml reads it, but no repository, environment or organization secret of this name is set"
-  - id: claude-pr-token
-    service: github
-    group: ci
-    owner: cjber
-    locations:
-      - github: CLAUDE_PR_TOKEN
-    expires: unknown
-    limit: unknown
-    note: claude-issue-pr.yml falls back to github.token; no secret of this name is set
   - id: fastbrowse-hosted-api-key
     service: fastbrowse-hosted
     group: benchmarks
@@ -148,42 +130,6 @@ keys:
       - github: LANGFUSE_SECRET_KEY
     expires: unknown
     limit: unknown
-  - id: maven-central-password
-    service: maven-central
-    group: release
-    owner: cjber
-    locations:
-      - github: env:maven-central/MAVEN_CENTRAL_PASSWORD
-    expires: unknown
-    limit: unknown
-    note: the maven-central environment holds no secrets yet
-  - id: maven-central-username
-    service: maven-central
-    group: release
-    owner: cjber
-    locations:
-      - github: env:maven-central/MAVEN_CENTRAL_USERNAME
-    expires: unknown
-    limit: unknown
-    note: the maven-central environment holds no secrets yet
-  - id: maven-gpg-passphrase
-    service: gpg
-    group: release
-    owner: cjber
-    locations:
-      - github: env:maven-central/MAVEN_GPG_PASSPHRASE
-    expires: unknown
-    limit: none
-    note: the maven-central environment holds no secrets yet
-  - id: maven-gpg-private-key
-    service: gpg
-    group: release
-    owner: cjber
-    locations:
-      - github: env:maven-central/MAVEN_GPG_PRIVATE_KEY
-    expires: unknown
-    limit: none
-    note: the maven-central environment holds no secrets yet
   - id: site-deploy-hook
     service: vercel
     group: release
