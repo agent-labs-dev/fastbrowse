@@ -54,7 +54,7 @@ from packaging.requirements import Requirement
 from pydantic import ValidationError
 
 from fastbrowse.evals.harness import TaskSecrets, chrome, find_chrome, origin_of
-from fastbrowse.evals.judge import Jev, judge
+from fastbrowse.evals.judge import OPENROUTER_MODEL, Jev, judge
 from fastbrowse.evals.local import fixture_server
 from fastbrowse.evals.mock import mock_site
 from fastbrowse.evals.mock_tasks import TASKS as MOCK_TASKS
@@ -158,12 +158,7 @@ def _jev(http: httpx.AsyncClient, proxy: str) -> Jev:
     the provider would leave a benchmark irreproducible from its cassette, and one with no key in the environment
     would fail grading outright. A placeholder key and the proxy's Jev mount keep the judge inside the cassette.
     """
-    return Jev(
-        http,
-        api_key=PLACEHOLDER_KEY,
-        base_url=proxy + JEV_MOUNT + "/v1",
-        model="jev-1.14",
-    )
+    return Jev(http, api_key=PLACEHOLDER_KEY, base_url=proxy + JEV_MOUNT, model=OPENROUTER_MODEL)
 
 
 def _serve[T](

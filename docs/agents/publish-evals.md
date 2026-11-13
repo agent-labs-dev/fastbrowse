@@ -35,7 +35,7 @@ the source for publication.
 
 A narrowed rerun can use the workflow's `only` input for affected task ids. `candidate_only`
 skips new trials and builds from the campaign's downloaded run artifacts. The
-stage selects the newest run that measured each task and repeat completely.
+stage selects, for each task and repeat, the newest run that measured it in full.
 
 ## Arms and task coverage
 
