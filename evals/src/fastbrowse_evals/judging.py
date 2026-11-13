@@ -18,25 +18,30 @@ from parallax.judging import (
 )
 from pydantic import JsonValue
 
+JUDGE_MODEL = "deepseek/deepseek-v4.1-flash"
+"""The only judge of a published figure, through OpenRouter (`OPENROUTER_BASE_URL`): the owner's decision. Opus is not
+an eval judge; on the 21 rows #1075 compared, this model alone matched all 21 Opus v5 verdicts for $0.18 in total."""
 OPUS_JUDGE = "anthropic/claude-opus-5.5"
-"""The only judge of a published figure, through OpenRouter (`OPENROUTER_BASE_URL`): the owner's decision."""
+"""The model the earlier `browser-internal-opus-v*` policies name, kept only so their recorded receipts stay readable.
+No published figure accepts it."""
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 THRESHOLDS = "exclusive"
 """How `ADMIT_AT` and `REJECT_AT` bound Jev, as Parallax 1 named it in every policy identity. Parallax 2.0 dropped the
 label; it stays here so a browser policy's identity, and every recorded receipt's `policy_sha256`, is unchanged."""
-OPUS_ONLY = "graded by the pinned judge alone; this policy never asks Jev"
+PINNED_ONLY = "graded by the pinned judge alone; this policy never asks Jev"
 
 
-def require_judges(*, use_jev: bool = True) -> None:
+def require_judges(*, use_jev: bool = True, model: str = JUDGE_MODEL) -> None:
     """Refuse a campaign whose judges are not all configured.
 
     A missing fallback does not fail a row: every question Jev leaves unsettled is recorded unknown, so a whole
     campaign can spend its budget and come back ungraded. Checked before the first run starts instead. Without Jev
-    the judge is exactly `OPUS_JUDGE` through OpenRouter, as PARALLAX_JUDGE_MODELS and PARALLAX_JUDGE_BASE_URL say."""
+    the judge is exactly `model`, the one the policy names, through OpenRouter, as PARALLAX_JUDGE_MODELS and
+    PARALLAX_JUDGE_BASE_URL say."""
     if not use_jev:
         panel, llm = panel_from_env(), config_from_env()
-        if panel is None or panel.models != (OPUS_JUDGE,):
-            raise JudgeConfigError(f"$PARALLAX_JUDGE_MODELS must be exactly {OPUS_JUDGE}")
+        if panel is None or panel.models != (model,):
+            raise JudgeConfigError(f"$PARALLAX_JUDGE_MODELS must be exactly {model}")
         if llm.base_url.rstrip("/") != OPENROUTER_BASE_URL:
             raise JudgeConfigError(f"$PARALLAX_JUDGE_BASE_URL must be OpenRouter ({OPENROUTER_BASE_URL})")
         return
@@ -123,6 +128,7 @@ def _route(use_jev: bool) -> tuple[Any, Any, Any]:
 
 def _identity(policy: str, questions: Mapping[str, str], panel: Any, llm: Any, primary: Any, *, use_jev: bool) -> str:
     """The policy's identity: what it asks and how it routes, hashed. Every receipt of the policy records it."""
+    fallback = panel.models if panel else ()
     return jev.state_sha(
         {
             "policy": policy,
@@ -142,10 +148,14 @@ def _identity(policy: str, questions: Mapping[str, str], panel: Any, llm: Any, p
             "jev_endpoint": primary.base_url if primary else None,
             "fallback_models": list(panel.models) if panel else None,
             "fallback_endpoint": llm.base_url if llm else None,
-            "fallback_context_tokens": judging.FALLBACK_CONTEXT_TOKENS,
+            # Only the panel's own entries: Parallax adding a model it verified must not change the identity of a
+            # policy that never asks that model.
+            "fallback_context_tokens": {
+                m: judging.FALLBACK_CONTEXT_TOKENS[m] for m in fallback if m in judging.FALLBACK_CONTEXT_TOKENS
+            },
             "fallback_tokens_per_byte": [judging.FALLBACK_TOKENS_PER_TEXT_BYTE, judging.FALLBACK_TOKENS_PER_IMAGE_BYTE],
             "fallback_unbilled_rejections": list(judging.UNBILLED_FALLBACK_REJECTIONS),
-            "fallback_vision": {model: dataclasses.asdict(spec) for model, spec in images.VISION.items()},
+            "fallback_vision": {m: dataclasses.asdict(images.VISION[m]) for m in fallback if m in images.VISION},
             "attached_images": judging.ATTACHED_IMAGES,
         }
     )
@@ -167,7 +177,7 @@ async def judge_browser(
     way is fixed by its name."""
     panel, llm, primary = _route(use_jev)
     if not use_jev:
-        fallback_only = fallback_only or OPUS_ONLY
+        fallback_only = fallback_only or PINNED_ONLY
     identity = _identity(policy, questions, panel, llm, primary, use_jev=use_jev)
     if unjudgeable is not None:
         decisions = {key: Decision(passed=None, source="harness", reason=unjudgeable) for key in questions}

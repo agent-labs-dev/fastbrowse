@@ -8,8 +8,8 @@ The release workflow runs this before it publishes anything. A release passes wh
   in `docs/results/release-baseline.json` no task's pass rate fell, and the median run time and the mean cost per
   run are both lower.
 - for a release whose tag message has the line `Benchmarks: official`, both official suites ran three times on its
-  build, every cost known. Their judge reads every run with Opus, which costs far more than the internal campaign, so
-  a release claims official scores only when it says so.
+  build, every cost known. Their judge reads every screenshot of every run, which costs far more than the internal
+  campaign, so a release claims official scores only when it says so.
 
 Fixtures are cheap, so they must pass on the exact tree. Live tasks are not, so a fix late in a release reruns only
 the tasks it affects (the campaign's `only` input): each task is scored on the newest campaign run that measured it

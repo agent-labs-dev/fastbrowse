@@ -18,7 +18,7 @@ Versions are patch-by-patch unless the maintainer says otherwise, and every one 
    The comparison requires valid timing and known cost receipts for every fastbrowse attempt on both sides;
    missing or provisional totals cannot prove an improvement.
    A release that claims official scores says so with the line `Benchmarks: official` in its tag message (`--official`
-   with `--ref`). Their judge reads every run with Opus, so the official suites cost far more than the internal
+   with `--ref`). Their judge reads every screenshot of every run, so the official suites cost far more than the internal
    campaign, and a release without the line is gated on the internal campaign alone.
    Such a campaign also needs the `benchmark-candidate` artifact with both official suites: all 200 BU Bench and
    300 Online-Mind2Web tasks, each repeated three times. Their groups must match public rows exported by successful
