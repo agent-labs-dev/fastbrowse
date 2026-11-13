@@ -1,7 +1,7 @@
 {
   "browser-use": {
     "registry": "pypi",
-    "version": "1.0.2"
+    "version": "1.0.3"
   },
   "browser-harness": {
     "registry": "pypi",
@@ -9,10 +9,10 @@
   },
   "cua-driver": {
     "registry": "pypi",
-    "version": "0.46.1"
+    "version": "0.47.19"
   },
   "@openai/codex": {
     "registry": "npm",
-    "version": "0.167.2"
+    "version": "0.169.0"
   }
 }
