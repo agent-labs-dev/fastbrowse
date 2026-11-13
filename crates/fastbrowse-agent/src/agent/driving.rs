@@ -355,6 +355,14 @@ impl Agent {
             if decision.unobtainable.is_some_and(|probability| probability >= EVEN_ODDS) {
                 return Err(self.unobtainable(state, &observation).await?.into());
             }
+            // A streamed remote browser draws its page as a picture: a run asked to type into it pressed the picture,
+            // reloaded it and ended blaming the site (#1084). The snapshot marks the surface and Jev judges that the
+            // task needs an action inside it; the run cannot make one, so it ends saying so.
+            if decision.inside_drawn.is_some_and(|probability| probability >= EVEN_ODDS)
+                && let Some(surface) = crate::policy::drawn_surface(&observation.controls)
+            {
+                return Err(drawn_surface_stop(&observation.url, surface).into());
+            }
             if decision.read_scope == ReadScope::Return {
                 list_walk = None;
                 continue;
@@ -481,6 +489,7 @@ impl Agent {
                 shows_answer: None,
                 site_failure: None,
                 unobtainable: None,
+                inside_drawn: None,
                 destination: None,
                 replayed: false,
                 by_code: false,
@@ -1640,6 +1649,15 @@ pub(super) fn edit_progress(decision: &Decision, action: &Action, written: &Writ
 fn held_value(action: &Action) -> Option<String> {
     let text = action.text.as_ref()?;
     Some(if action.secret { "\u{2022}".repeat(text.chars().count()) } else { text.clone() })
+}
+
+/// The stop of a run whose task needs an action inside a drawn surface: the run's own limit, which no retry changes.
+pub(super) fn drawn_surface_stop(url: &str, surface: &Control) -> Stop {
+    let error = format!(
+        "Could not complete the task: it needs an action inside {} at {url}, a drawn surface: fastbrowse acts on page elements and cannot act inside a streamed or canvas view.",
+        text::repr(&surface.label)
+    );
+    Stop::new(Status::Stuck, error)
 }
 
 pub(super) fn require(target: Option<&Control>) -> Step<&Control> {

@@ -17,6 +17,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.11.0] - 2026-11-12
 
+- A task that needs an action inside a streamed or canvas view, such as a field drawn in a remote browser's live preview, ends `stuck` at once and says that fastbrowse acts on page elements and cannot act inside the view. Such a run pressed the view, reloaded the page and ended `unavailable`, reporting that the site failed to deliver ([#1084](https://github.com/agent-labs-dev/fastbrowse/issues/1084)).
+
 - A count, total, minimum or maximum is checked against what the task asks for, so an answer no longer counts the orders where the task asks for their total.
 
 - A run with no time limit no longer waits forever on a page whose server never answers. Chrome reports such a load as in flight and sends no further event, so a run waiting out a bot check or a blank page waited until the browser was closed, four hours on a Browser Use Cloud browser. A load is now waited on for as long as a navigation is given, 225 s from that load's start, and a page that keeps navigating, such as a challenge, starts a new load and a new wait each time.

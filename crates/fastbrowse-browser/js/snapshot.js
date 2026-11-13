@@ -1313,6 +1313,9 @@
       const value = e.getAttribute('aria-' + key);
       if (value !== null) base[key] = value === 'true';
     }
+    // Input on an image, canvas or video lands on pixels: a streamed remote browser draws its page as a picture
+    // that takes clicks, and what it shows has no elements here to read or act on (#1084).
+    if (['IMG', 'CANVAS', 'VIDEO'].includes(e.tagName)) base.drawn = true;
     if (['checkbox', 'radio'].includes(nativeProperty(source, 'type'))) base.checked = nativeProperty(source, 'checked');
     // What the page says about the field. A custom widget marks the element the user sees, not the input
     // underneath it, so both are asked.

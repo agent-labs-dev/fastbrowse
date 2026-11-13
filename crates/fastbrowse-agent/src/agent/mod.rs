@@ -1026,6 +1026,12 @@ impl Agent {
         if observation.controls.is_empty() {
             facts.push("This page offers no links or controls: nothing on it leads anywhere else.".into());
         }
+        if let Some(surface) = crate::policy::drawn_surface(&observation.controls) {
+            facts.push(format!(
+                "{} is a drawn surface, such as a streamed remote browser or a canvas: what it shows is pixels, with no elements inside it for this run to fill or press. A click on it lands on the surface as one element, not on a field or button drawn inside it.",
+                fastbrowse_core::py::text::repr(&surface.label)
+            ));
+        }
         let document = &observation.document_key;
         let read = state.read_documents.get(&state::read_key(observation)).copied();
         if !document.is_empty() && read == Some(true) {

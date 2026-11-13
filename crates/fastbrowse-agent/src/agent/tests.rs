@@ -231,6 +231,7 @@ pub(super) fn code_decision(operation: Operation, target: Option<Control>) -> De
         shows_answer: None,
         site_failure: None,
         unobtainable: None,
+        inside_drawn: None,
         destination: None,
         offered: Vec::new(),
         ahead: IndexMap::new(),
@@ -3879,6 +3880,34 @@ async fn test_a_run_that_gives_up_on_a_drawn_page_it_could_not_read_says_so() {
     let drawn = gives_up(true).await;
     assert!(drawn.starts_with("no_progress (3) ") && drawn.contains("shows a canvas, picture or video"), "{drawn}");
     assert_eq!(gives_up(false).await, "no_progress (3)");
+}
+
+/// A streamed remote browser draws its page as a picture that takes clicks (#1084). The stop of a run whose task
+/// needs an action inside it names the surface and the limit, as `stuck`, and does not blame the site.
+#[test]
+fn test_the_stop_on_a_drawn_surface_names_it_and_the_limitation() {
+    let view = Control { drawn: Some(true), ..button("Remote browser view") };
+    let stop = super::driving::drawn_surface_stop("https://live.test/view", &view);
+    assert_eq!(stop.status, Status::Stuck);
+    assert_eq!(
+        stop.error.as_deref(),
+        Some(
+            "Could not complete the task: it needs an action inside 'Remote browser view' at https://live.test/view, a drawn surface: fastbrowse acts on page elements and cannot act inside a streamed or canvas view."
+        )
+    );
+}
+
+/// Jev is told what a drawn surface is, from the control snapshot.js marked, on the page that has one.
+#[test]
+fn test_a_drawn_surface_in_view_is_stated_as_a_fact() {
+    let state = run_state();
+    let view = Control { drawn: Some(true), ..button("Remote browser view") };
+    let facts = Agent::page_facts(&state, &observation(std::slice::from_ref(&view)));
+    assert!(facts.iter().any(|fact| fact.starts_with("'Remote browser view' is a drawn surface")), "{facts:?}");
+    let hidden = Control { offscreen: true, ..view };
+    let facts = Agent::page_facts(&state, &observation(&[hidden, button("Next")]));
+    assert!(facts.iter().all(|fact| !fact.contains("drawn surface")), "{facts:?}");
+    assert_eq!(crate::policy::element(&button("Next")).get("drawn"), None);
 }
 
 #[tokio::test]

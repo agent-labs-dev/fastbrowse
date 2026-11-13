@@ -159,6 +159,8 @@ struct SnapshotControl {
     validation_message: Option<String>,
     next_page: Option<bool>,
     download: Option<bool>,
+    #[serde(default)]
+    drawn: Option<bool>,
 }
 
 pub(crate) trait FrameText: DeserializeOwned {
@@ -490,6 +492,7 @@ fn control_from_raw(
         focused: c.focused,
         next_page: c.next_page,
         download: c.download,
+        drawn: c.drawn,
         already_read: None,
         shown_by: None,
     }
