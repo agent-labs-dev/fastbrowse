@@ -1438,6 +1438,10 @@
     if (aria && aria !== label) return aria;
     const section = sectionOf(scope, element, label, nearest);
     if (section) return section;
+    return firstLine(linesOf(scope, element, label, own).join('\n'));
+  };
+  // The lines of `scope` that can name `element`, in reading order.
+  const linesOf = (scope, element, label, own = null) => {
     // A line that is another control of the same kind names that control, not the section: a calendar's day cells were
     // named "31" and "7" after their neighbours in the same week row, so a picker showing November was offered with
     // contexts that pointed at other days. A card's title keeps its line, since the control it names there is another
@@ -1452,9 +1456,9 @@
     const onlyPeers = line => line.split(' ').every(word => word === label || peer(word));
     const lines = renderedLines(scope)
       .filter(line => !repeated.has(line) && !peer(line) && !onlyPeers(line) && !own?.has(line));
-    return firstLine(lines.map(line => (label ? ` ${line} `.split(` ${label} `).join(' ') : line)).join('\n'));
+    return lines.map(line => (label ? ` ${line} `.split(` ${label} `).join(' ') : line).trim()).filter(Boolean);
   };
-  const contextOf = (element, holding, label, nearest = true) => {
+  const scopeOf = (element, holding) => {
     // The widest twin-free ancestor is the card, row or section the twins repeat over. A narrower one names
     // the button's own wrapper, which on a shop is its price rather than the product it belongs to.
     let scope = null;
@@ -1465,6 +1469,10 @@
       if (e.matches('article,li,[role="listitem"]') ||
         (e.matches('tr,[role="row"]') && e.querySelector('input,textarea,select,[role="textbox"]'))) break;
     }
+    return scope;
+  };
+  const contextOf = (element, holding, label, nearest = true) => {
+    const scope = scopeOf(element, holding);
     return scope ? nameOf(scope, element, label, nearest) : '';
   };
   // Content a stylesheet shows only under the pointer (`.card:hover .caption`) is out of reach of every other
@@ -1649,6 +1657,23 @@
       const shared = nearest.indexOf(nearest[i]) !== nearest.lastIndexOf(nearest[i]);
       const context = shared ? contextOf(registry.nodes.get(c.id), holding, c.label, false) : nearest[i];
       if (context) c.context = context;
+    });
+    // Two comments by one author posted at the same time begin with the same lines, so their Reply buttons were named
+    // alike and a reply went under the wrong comment (#881). A twin whose context another twin shares adds the first
+    // line of its own card that none of those twins' cards shows, its own text.
+    const lines = group.map((c, i) => {
+      const scope = scopeOf(twins[i], holding);
+      return scope ? linesOf(scope, twins[i], c.label) : [];
+    });
+    const told = group.map((c, i) => {
+      const alike = group.map((d, j) => j).filter(j => j !== i && c.context && group[j].context === c.context);
+      if (!alike.length) return c.context;
+      const others = new Set(alike.flatMap(j => lines[j]));
+      const line = lines[i].find(line => line !== c.context && !others.has(line));
+      return line ? `${c.context} / ${line}` : c.context;
+    });
+    group.forEach((c, i) => {
+      if (told[i]) c.context = told[i];
     });
     // Options that are direct children of one list share every ancestor, and their aria-label hides the text
     // inside them, so "Springfield" twice read alike even when one says "City in Illinois" and the other

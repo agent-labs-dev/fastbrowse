@@ -11,7 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- A page whose controls sit inside shadow roots or a same-origin frame is no longer read again in full on every look while it stays the same. Such a read is now kept and checked as a plain page's is, so an unchanged look at the frames benchmark page takes about a quarter of the time it did.
+- **Benchmarks are judged by DeepSeek V4.1 Flash.** Internal grading uses policy `browser-internal-deepseek-v6`, and the official suites default to the same judge. Each page goes to the judge once, so a 2 MB Hacker News thread costs about $0.05 to judge instead of $23, and screenshots go to the judge as images. On 48 recorded rows, DeepSeek agreed with Opus on 47 and left one ungraded, which it graded the same as Opus on a rerun ([#1075](https://github.com/agent-labs-dev/fastbrowse/issues/1075)).
 
 ## [0.11.0] - 2026-11-12
 

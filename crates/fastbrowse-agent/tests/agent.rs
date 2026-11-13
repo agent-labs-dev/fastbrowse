@@ -886,6 +886,56 @@ fn status_case() -> Value {
     case
 }
 
+/// A task asking whether a page is signed in, on an SSO wall whose pick is its "Log in with Google" button: `credentials`
+/// is the task's answer to whether it gives anything to sign in with.
+async fn play_sign_in_check(credentials: f64) -> Value {
+    let mut case = status_case();
+    case["name"] = "sign-in check".into();
+    case["task"] = "Read only: open https://status.test/ and report whether the editor loads and is logged in.".into();
+    case["limits"] = serde_json::json!({"max_steps": 3});
+    case["jev"]["pick"] = serde_json::json!({"operation": "click", "click_target": "google"});
+    case["jev"]["nouls"] = serde_json::json!({
+        "login_required": 1.0, "account": 1.0, "inspects": 1.0, "credentials": credentials,
+        "claim0": 0.9, "coverage": 0.9
+    });
+    case["llm"]["AnswerDraft"] = serde_json::json!([{"claims": [{"text": [{"prose": "The editor shows a sign-in page."}], "evidence_ids": ["e0"]}]}]);
+    let text = "Welcome back. Log in with Google";
+    let wall = &mut case["site"]["screens"]["early"];
+    wall["observation"]["viewport_text"] = text.into();
+    wall["observation"]["controls"] = serde_json::json!([
+        {"id": "google", "frame_id": null, "role": "button", "label": "Log in with Google", "operations": ["click"]}
+    ]);
+    wall["capture"]["text"] = text.into();
+    wall["capture"]["sha256"] = fastbrowse_core::py::sha256_hex(text.as_bytes()).into();
+    wall["capture"]["blocks"] =
+        serde_json::json!([{"source_id": "s0", "kind": "paragraph", "frame_id": null, "start": 0, "end": text.len()}]);
+    case["site"]["actions"] =
+        serde_json::json!([{"screen": "early", "operation": "click", "target": "google", "next": "later"}]);
+    play(&case, Some(Arc::default())).await.0
+}
+
+/// A sign-in check that gives no credentials is answered by the wall: the run reads it and finishes, and never clicks
+/// through to an SSO account or its consent (#1020).
+#[tokio::test(start_paused = true)]
+async fn a_sign_in_check_without_credentials_reads_the_wall_and_never_signs_in() {
+    let outcome = play_sign_in_check(0.0).await;
+    assert!(outcome["steps"].as_array().unwrap().iter().all(|step| step["operation"] != "click"), "{outcome}");
+    assert_eq!(outcome["status"], "complete", "{outcome}");
+    assert_eq!(outcome["evidence"][0]["quote"], "Welcome back. Log in with Google", "{outcome}");
+}
+
+/// The same check with credentials to sign in with still acts on the wall's sign-in controls.
+#[tokio::test(start_paused = true)]
+async fn a_sign_in_check_with_credentials_still_signs_in() {
+    let outcome = play_sign_in_check(1.0).await;
+    assert!(
+        outcome["steps"].as_array().unwrap().iter().any(|step| step["operation"] == "click"
+            && step["target"] == "Log in with Google"
+            && step["outcome"] == "executed"),
+        "{outcome}"
+    );
+}
+
 /// A task that reads a value, waits and reads it again finishes: Jev can pick a wait, the page moves on under it, and
 /// the second read cites what the page shows afterwards.
 #[tokio::test(start_paused = true)]
