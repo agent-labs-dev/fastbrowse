@@ -25,8 +25,8 @@
 //! }
 //! ```
 //!
-//! The crates beneath this one (`fastbrowse-core`, `-run` and the rest) are published so this one can be, and carry
-//! no promise of their own: what is meant to be used is re-exported here.
+//! The crates beneath this one (`fastbrowse-core`, `-run` and the rest) carry publishable metadata so this one can be
+//! published, and no promise of their own: what is meant to be used is re-exported here.
 
 pub use fastbrowse_core::config::Config;
 pub use fastbrowse_core::models::{

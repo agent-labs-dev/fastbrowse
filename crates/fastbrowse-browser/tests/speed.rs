@@ -23,7 +23,7 @@ use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{BrowserConnection, LocalChrome, Operation, StepOutcome};
 use fastbrowse_core::page::{Action, Observation};
 use safety_support::{CdpProxy, Reply, cdp_proxy, has, observe_until, serve_on};
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::time::{sleep, timeout};
 
 fn targeted(operation: Operation, target_id: &str) -> Action {
@@ -466,6 +466,21 @@ fn settle_reads_since(proxy: &CdpProxy, start: usize) -> usize {
         .count()
 }
 
+/// Why each settle read from the log's `start` answered, as the page recorded it (`settle_script`'s `end`), in order.
+fn settle_ends_since(proxy: &CdpProxy, start: usize) -> Vec<String> {
+    let ids: Vec<Value> = proxy
+        .sent_since(start, "Runtime.evaluate")
+        .iter()
+        .filter(|m| m["params"]["expression"].as_str().is_some_and(|e| e.contains("fastbrowse:settle")))
+        .map(|m| m["id"].clone())
+        .collect();
+    let log = proxy.log.lock().unwrap();
+    ids.iter()
+        .filter_map(|id| log[start..].iter().find(|l| !l.sent && l.message["id"] == *id))
+        .map(|l| l.message["result"]["result"]["value"][2].as_str().unwrap_or_default().to_owned())
+        .collect()
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_settle_does_not_re_read_for_each_of_the_pages_writes() {
     let _turn = turn().await;
@@ -622,7 +637,8 @@ async fn test_a_settle_reads_a_write_two_frames_after_the_click() {
 async fn test_a_settle_does_not_wait_for_a_timer_due_after_its_deadline() {
     let _turn = turn().await;
     // A timer due after the settle's deadline cannot change what the settle reads, so it holds nothing.
-    let Some(h) = harness().await else { return };
+    // Asserted on what the settle recorded, not on wall time, which a loaded runner stretches (#1085).
+    let Some((h, proxy)) = proxied().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");
     eval_active(
         &h.session,
@@ -631,11 +647,10 @@ async fn test_a_settle_does_not_wait_for_a_timer_due_after_its_deadline() {
     )
     .await;
     let obs = h.observe().await;
-    let begun = Instant::now();
+    let start = proxy.len();
     let result = h.page.act(&targeted(Operation::Click, &find(&obs, "Later").id), &obs).await.expect("act");
-    let elapsed = begun.elapsed().as_secs_f64();
     assert!(!result.page_changed, "{result:?}");
-    assert!(elapsed < 0.25, "a timer due after the deadline held the settle: {elapsed}");
+    assert_eq!(settle_ends_since(&proxy, start), ["idle"], "a timer due after the deadline held the settle");
     assert_eq!(eval_active(&h.session, "window.__fastbrowse.pendingWork.size").await, json!(1));
     h.close().await;
 }
@@ -644,20 +659,18 @@ async fn test_a_settle_does_not_wait_for_a_timer_due_after_its_deadline() {
 async fn test_a_settle_of_an_idle_page_pays_no_quiet_window() {
     let _turn = turn().await;
     // A page that was already quiet before the click has nothing to wait for, so the settle answers at once rather
-    // than charging every action a fixed quiet window.
+    // than charging every action a fixed quiet window. Asserted on what the settle recorded, not on wall time, which a
+    // loaded runner stretches (#1085).
     let Some((h, proxy)) = proxied().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");
     eval_active(&h.session, "document.body.innerHTML = '<button>Idle</button>'; setTimeout(() => {}, 10000);").await;
     let obs = h.observe().await;
     sleep(Duration::from_millis(300)).await;
     let start = proxy.len();
-    let begun = Instant::now();
     let result = h.page.act(&targeted(Operation::Click, &find(&obs, "Idle").id), &obs).await.expect("act");
-    let elapsed = begun.elapsed().as_secs_f64();
     assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
     assert!(!result.page_changed, "{result:?}");
-    assert!(elapsed < 0.25, "an idle page paid a quiet window: {elapsed}");
-    assert_eq!(settle_reads_since(&proxy, start), 1, "the settle re-read the page");
+    assert_eq!(settle_ends_since(&proxy, start), ["idle"], "an idle page paid a quiet window, or was read again");
     h.close().await;
 }
 

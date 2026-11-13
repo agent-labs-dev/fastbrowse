@@ -337,16 +337,7 @@ impl Agent {
         let reason = context.problem.take().unwrap_or_default();
         withhold(&mut offered, &mut context, &reason, &withheld);
         context.screenshot = self.viewport().await?;
-        let decision = decide(
-            &*self.jev,
-            &offered,
-            &context,
-            &self.config,
-            Some(&state.ledger),
-            Some(&state.relevance_cache),
-            &self.trace,
-        )
-        .await?;
+        let decision = decide(&*self.jev, &offered, &context, &self.config, Some(&state.ledger), &self.trace).await?;
         self.event("recover", || {
             Map::from_iter([
                 ("reason".into(), reason.into()),

@@ -124,6 +124,10 @@ pub struct Control {
     /// A link the page marks with a `download` attribute: activating it saves a file instead of opening a page.
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub download: Option<bool>,
+    /// An image, canvas or video the page takes input on: what it shows is pixels, with no page elements inside it
+    /// to read or act on, such as a streamed remote browser or a canvas app.
+    #[serde(default, deserialize_with = "lax::opt_boolean", skip_serializing_if = "Option::is_none")]
+    pub drawn: Option<bool>,
     /// A link to a page the run has already read, as a browser styles a visited link: the agent marks it, the page
     /// never does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -167,6 +171,7 @@ impl Control {
             validation_message: None,
             next_page: None,
             download: None,
+            drawn: None,
             already_read: None,
             shown_by: None,
         }
