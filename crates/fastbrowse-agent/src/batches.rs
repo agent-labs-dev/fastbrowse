@@ -26,6 +26,8 @@ pub struct Answered {
     pub cost: Vec<CostLine>,
     pub input_tokens: i64,
     pub requests: i64,
+    /// How many of the answers came from what the run already knew, with no request.
+    pub known: usize,
 }
 
 /// Called with each answer as its batch comes back, for a caller that keeps answers a cancelled pass already paid for.
@@ -162,6 +164,7 @@ pub async fn evaluate_batches(
     }
     if batches.is_empty() {
         return Ok((!answered.is_empty()).then(|| Answered {
+            known: answered.len(),
             answers: answered,
             cost: Vec::new(),
             input_tokens: 0,
@@ -235,8 +238,10 @@ pub async fn evaluate_batches(
     if spent.paid.is_empty() && answered.is_empty() {
         return Ok(None);
     }
+    let known = answered.len();
     answered.extend(results.into_iter().flatten().flatten());
     Ok(Some(Answered {
+        known,
         answers: answered,
         cost: spent.paid.clone(),
         input_tokens: spent.input_tokens,

@@ -188,6 +188,11 @@ and where fastbrowse follows it:
 - **Question ids are invisible to the model.** Everything the model needs is in the instruction text.
 - **Batch independent questions that share one state; answers cannot see each other.** The policy batches
   operation and target choices and applicable sign-in and bot checks. Grouped targets need a second choice.
+- **Content goes in the state once ([State](https://docs.typesafe.ai/concepts/state)).** A question about the page
+  reads the task from the state's `task` rather than restating it. Each field is asked where its value begins and
+  where it ends among the task's words: the state's `task_words` describes each word once, and those choices offer the
+  words by id with no description, as TypeSafe's [line search](https://docs.typesafe.ai/cookbooks/semantic_find)
+  offers line ids. A field whose length limit cuts a word into pieces is offered its own pieces, described inline.
 - **Filter before choosing on a dense page.** The Jev 1.13 jaggedness notes say accuracy falls with a large
   state full of irrelevant detail, and suggest a Noul to filter for relevance. When a page has more controls than
   one group step can offer (`group_size` times the model's options per Choice) or its request does not fit Jev's

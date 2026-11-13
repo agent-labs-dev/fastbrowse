@@ -3,13 +3,15 @@
 mod common;
 
 use common::*;
-use fastbrowse_agent::policy::{RelevanceCache, StepContext, build_request, decide, fits};
+use fastbrowse_agent::batches::{Known, knowing};
+use fastbrowse_agent::policy::{StepContext, build_request, decide, fits};
 use fastbrowse_core::config::Config;
 use fastbrowse_core::page::Observation;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{Style, write};
 use fastbrowse_core::telemetry::Trace;
 use serde_json::{Map, Value, json};
+use std::sync::Arc;
 
 /// Both tests read and re-record policy.json whole, so under `FASTBROWSE_UPDATE_GOLDEN=1` one running beside the other
 /// would save over its update.
@@ -25,15 +27,19 @@ fn decisions_ask_and_choose_as_python_does() {
     for case in cases.iter_mut() {
         let jev = ReplayJev::new(case);
         let ledger = ledger(&case["ledger"]);
-        let cache = case["cache"].as_bool().unwrap().then(RelevanceCache::default);
+        // A case recorded with relevance scores kept across its steps runs as a run does, knowing its answers.
+        let known = case["cache"].as_bool().unwrap().then(|| Arc::new(Known::default()));
         let mut outcomes = Vec::new();
         for step in case["steps"].as_array().unwrap() {
             let observation: Observation = parse(&step["observation"]);
             let context: StepContext = parse(&step["context"]);
             let config: Config = parse(&step["config"]);
             let trace = Trace::collecting();
-            let result =
-                block_on(decide(&jev, &observation, &context, &config, ledger.as_ref(), cache.as_ref(), &trace));
+            let deciding = decide(&jev, &observation, &context, &config, ledger.as_ref(), &trace);
+            let result = match &known {
+                Some(known) => block_on(knowing(known.clone(), deciding)),
+                None => block_on(deciding),
+            };
             let result = match result {
                 Ok(decision) => json!({"decision": decision.dump()}),
                 Err(error) => error_outcome(&error),

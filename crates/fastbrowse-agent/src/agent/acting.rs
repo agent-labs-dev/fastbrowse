@@ -26,7 +26,7 @@ use super::driving::require;
 use super::helpers::{caller_link, describe, dialog_question, empty_fields_fact, navigation_question, unsent_fact};
 use super::state::{Edits, Extent, Flow, OutputIntent, RunState, SignInNeeds, Step, Stop, Unsure};
 use crate::memory::Notes;
-use crate::policy::{Ahead, Decision, HistoryEntry};
+use crate::policy::{Ahead, Decision, HistoryEntry, TASK_WORDS};
 use crate::retrieval::text::{SpanKind, Word, edge_options, spans, words};
 use crate::verification::{page_state, page_verdict_state};
 use crate::writing::write_value;
@@ -77,6 +77,9 @@ enum Chosen {
 }
 /// Words shown either side of one Jev may pick, so a word the task repeats reads as a different place.
 const WORD_CONTEXT: usize = 3;
+/// Said in a choice whose options are words the state's [`TASK_WORDS`] describes.
+const TASK_WORDS_SAID: &str =
+    " Each option is the id of one of the task's words, described in the state's `task_words`.";
 /// A long source is cut into a few broad parts: as hundreds of overlapping fragments, a 330-word request lost the one
 /// city it named (#636).
 const VALUE_SOURCE_PARTS: usize = 4;
@@ -141,7 +144,8 @@ pub(super) struct Value {
 type Asked<'a> = (&'a str, String, IndexMap<String, JsonValue>);
 
 /// What Jev is asked about a field: where its value comes from, where among `begins` it begins and where among `ends`
-/// it ends.
+/// it ends, with the task's words those questions offer by id, for the state to describe once. Words cut to a field's
+/// limit are not the task's words as the state describes them, and stay described in the questions.
 fn value_questions<'a>(
     state: &RunState,
     target: &Control,
@@ -150,7 +154,7 @@ fn value_questions<'a>(
     (begins, ends): (&[Word], &[Word]),
     source_question: String,
     mut sources: IndexMap<String, JsonValue>,
-) -> Vec<Asked<'a>> {
+) -> (Vec<Asked<'a>>, IndexMap<String, JsonValue>) {
     // With no words left to copy, saying the task states the value leaves the field empty; it can still be written.
     if begins.is_empty() || ends.is_empty() {
         sources.shift_remove(IN_TASK);
@@ -162,12 +166,29 @@ fn value_questions<'a>(
         if source_question.is_empty() { source_question } else { format!("{source_question}{holds}") };
     let tried = field_history(state, target);
     let mut asked = vec![("source", source_question, sources)];
+    let mut described = IndexMap::new();
     if !begins.is_empty() && !ends.is_empty() {
         let several = several_values(target);
-        asked.push(("first", word_question((holder, label), "begins", &several, &tried), word_options(text, begins)));
-        asked.push(("last", word_question((holder, label), "ends", &several, &tried), word_options(text, ends)));
+        let mut first = word_question((holder, label), "begins", &several, &tried);
+        let mut last = word_question((holder, label), "ends", &several, &tried);
+        let (mut begun, mut ended) = (word_options(text, begins), word_options(text, ends));
+        if text == state.task {
+            let task_words = word_options(text, &words(text, None));
+            let described_so = |options: &IndexMap<String, JsonValue>| {
+                options.iter().all(|(key, option)| task_words.get(key) == Some(option))
+            };
+            if described_so(&begun) && described_so(&ended) {
+                for (key, option) in begun.iter_mut().chain(ended.iter_mut()) {
+                    described.insert(key.clone(), std::mem::take(option));
+                }
+                first.push_str(TASK_WORDS_SAID);
+                last.push_str(TASK_WORDS_SAID);
+            }
+        }
+        asked.push(("first", first, begun));
+        asked.push(("last", last, ended));
     }
-    asked
+    (asked, described)
 }
 
 /// Which of `holder`'s words `end` the value for `label`, with which of several values it takes, as `several_values`
@@ -214,9 +235,10 @@ fn typed_into(state: &RunState, target: &Control) -> Vec<String> {
         .collect()
 }
 
-fn page_question(task: &str, question: &str, criteria: IndexMap<String, JsonValue>) -> Question {
-    let content = format!("{UNTRUSTED}\n\n# Task\n{task}\n\n{question}");
-    Question::Choice(ChoiceQuestion::new(content, criteria))
+/// A choice about the page, asked beside a state that holds the task: restated in each question, a form's fields
+/// carried the task once a question (#903).
+fn page_question(question: &str, criteria: IndexMap<String, JsonValue>) -> Question {
+    Question::Choice(ChoiceQuestion::new(format!("{UNTRUSTED}\n\n{question}"), criteria))
 }
 
 /// Jev's picks from the decision's own request, when it answered all of `asked` there.
@@ -301,14 +323,14 @@ impl Agent {
         let max = self.jev.profile().max_choice_options;
         let mut ahead = Vec::new();
         for control in &observation.controls {
-            let mut add = |operation: Operation, name: &str, question: Question| {
+            let mut add = |operation: Operation, name: &str, question: Question, words| {
                 let (control, name) = (control.id.clone(), name.to_string());
-                ahead.push(Ahead { operation, control, name, question });
+                ahead.push(Ahead { operation, control, name, question, words });
             };
             if control.operations.contains(&Operation::Fill) && !is_password(control) {
                 let Value { task, label, group, sources, source_question, .. } = self.value(state, control);
                 if group.len() <= max {
-                    for (name, question, criteria) in value_questions(
+                    let (asked, described) = value_questions(
                         state,
                         control,
                         (&task, "the task"),
@@ -316,8 +338,15 @@ impl Agent {
                         (&group, &group),
                         source_question,
                         sources,
-                    ) {
-                        add(Operation::Fill, name, page_question(&state.task, &question, criteria));
+                    );
+                    for (name, question, criteria) in asked {
+                        // The task's words this question offers by id alone.
+                        let words = criteria
+                            .iter()
+                            .filter(|(_, option)| option.is_null())
+                            .filter_map(|(key, _)| described.get_key_value(key).map(|(k, v)| (k.clone(), v.clone())))
+                            .collect();
+                        add(Operation::Fill, name, page_question(&question, criteria), words);
                     }
                 }
             }
@@ -1084,11 +1113,11 @@ impl Agent {
             sources.retain(|source, _| source == IN_TASK);
         }
         let (mut begins, mut ends) = self.located(state, observation, &task, &label, group).await?;
-        let asked =
+        let (asked, described) =
             value_questions(state, target, (&task, "the task"), &label, (&begins, &ends), source_question, sources);
         let mut picks = match ahead_picks(decision, &asked) {
             Some(picks) => picks,
-            None => self.ask_choices(state, Some(observation), asked).await?,
+            None => self.ask_choices_in(state, Some(observation), asked, described).await?,
         };
         let source = picks.get("source").cloned().unwrap_or_else(|| NO_VALUE.into());
         if source == LEAVE {
@@ -1124,7 +1153,7 @@ impl Agent {
             state.text_source = Some(RecipeText::Live);
             task = read;
             (begins, ends) = self.located(state, observation, &task, &label, words(&task, target.max_length)).await?;
-            let mut asked = value_questions(
+            let (mut asked, _) = value_questions(
                 state,
                 target,
                 (&task, "what was read"),
@@ -1195,13 +1224,12 @@ impl Agent {
                     (index.parse::<usize>().ok(), kept.parse::<usize>().ok().filter(|_| every))
                 };
                 let holder = if source == IN_READ { "what was read" } else { "the task" };
-                let run_task = state.task.clone();
                 let several = several_values(target);
                 let exact = |bound: &str, options: &[(String, String)], elsewhere: &str| {
                     let question = format!(
                         "Which exact text belongs in {label}? Each choice is the complete value that would be copied from {holder}, {bound}. Choose only the field's value, without surrounding task instructions. When {holder} gives this field several values, {several}"
                     );
-                    let (question, mut options) = self.offered_copies(&run_task, question, options);
+                    let (question, mut options) = self.offered_copies(question, options);
                     options.insert(ELSEWHERE.into(), JsonValue::from(elsewhere));
                     (question, options)
                 };
@@ -1347,7 +1375,7 @@ impl Agent {
             .into_iter()
             .map(|(edge, options)| {
                 let options: Vec<_> = options.into_iter().map(|(kept, value)| (kept.to_string(), value)).collect();
-                let (question, options) = self.offered_copies(&state.task, question.to_string(), &options);
+                let (question, options) = self.offered_copies(question.to_string(), &options);
                 (edge, question, options)
             })
             .collect();
@@ -1358,15 +1386,10 @@ impl Agent {
 
     /// `options`, copies of a value keyed by what each keeps, as a choice offers them: whole when the question then
     /// fits one decision request, and otherwise each by its ends, said in the question.
-    fn offered_copies(
-        &self,
-        task: &str,
-        question: String,
-        options: &[(String, String)],
-    ) -> (String, IndexMap<String, JsonValue>) {
+    fn offered_copies(&self, question: String, options: &[(String, String)]) -> (String, IndexMap<String, JsonValue>) {
         let whole: IndexMap<String, JsonValue> =
             options.iter().map(|(key, value)| (key.clone(), JsonValue::from(value.as_str()))).collect();
-        if self.config.tokens.input_chars(&[page_question(task, &question, whole.clone()).dump_json()]) > 0 {
+        if self.config.tokens.input_chars(&[page_question(&question, whole.clone()).dump_json()]) > 0 {
             return (question, whole);
         }
         let ends = options.iter().map(|(key, value)| (key.clone(), JsonValue::from(value_ends(value))));
@@ -1973,31 +1996,33 @@ impl Agent {
         observation: Option<&Observation>,
         asked: Vec<Asked<'_>>,
     ) -> Step<IndexMap<String, String>> {
-        self.ask_choices_in(state, observation, asked, None).await
+        self.ask_choices_in(state, observation, asked, IndexMap::new()).await
     }
 
-    /// `ask_choices`, asked with `context` in place of the notes when it is given: what was read is left out of a
-    /// question about what was done.
+    /// `ask_choices`, with the state describing the task's words in `described` that the questions offer by id.
     async fn ask_choices_in(
         &self,
         state: &mut RunState,
         observation: Option<&Observation>,
         asked: Vec<Asked<'_>>,
-        context: Option<&Map<String, JsonValue>>,
+        described: IndexMap<String, JsonValue>,
     ) -> Step<IndexMap<String, String>> {
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
         let questions: IndexMap<String, Question> = asked
             .into_iter()
-            .map(|(key, question, criteria)| (key.to_string(), page_question(&state.task, &question, criteria)))
+            .map(|(key, question, criteria)| (key.to_string(), page_question(&question, criteria)))
             .collect();
         let dumped: Vec<String> = questions.values().map(Dump::dump_json).collect();
+        let mut held = Map::from_iter([("task".to_string(), JsonValue::from(state.task.as_str()))]);
+        if !described.is_empty() {
+            held.insert(TASK_WORDS.into(), JsonValue::Object(described.into_iter().collect()));
+        }
         let page = match observation {
             Some(observation) => {
-                let notes = if context.is_some() { &Notes::default() } else { &state.notes };
-                page_state(observation, notes, &self.config.tokens, &dumped, context, &state.dates)?
+                page_state(observation, &state.notes, &self.config.tokens, &dumped, Some(&held), &state.dates)?
             }
             // Output format is a requirement of the task, independent of what the page or notes say.
-            None => JsonValue::Object(Map::new()),
+            None => JsonValue::Object(held),
         };
         let evaluation = jev_purpose(JevPurpose::Action, self.jev.evaluate(&page, &questions)).await?;
         state.ledger.record([evaluation.cost.clone()])?;
