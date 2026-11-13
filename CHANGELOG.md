@@ -65,6 +65,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Hosted eval costs remain provisional after browser shutdown. Receipts keep exact provider amounts and their query time; incomplete totals stay unknown ([#1058](https://github.com/agent-labs-dev/fastbrowse/issues/1058)).
 - Eval rows preserve provider cost precision instead of rounding totals to five decimal places ([#1058](https://github.com/agent-labs-dev/fastbrowse/issues/1058)).
+- Comparator arms report Browser Use Cloud browser, proxy and LLM costs, and their totals, at the precision the provider reported, instead of rounding them to five decimal places first ([#1058](https://github.com/agent-labs-dev/fastbrowse/issues/1058)).
 - Hosted dispatch outages retain their provider run, session and available billing receipt instead of losing that evidence when retrying ([#1055](https://github.com/agent-labs-dev/fastbrowse/issues/1055)).
 
 - **Saved observations notice rendering changes without DOM mutations.** A custom element changing its CSS state now refreshes controls, names, positions and hover targets. Reuse checks the rendering facts the saved read consumed, including live selector results and scroll dimensions, flow styles and positions, instead of relying on DOM changes alone ([#1050](https://github.com/agent-labs-dev/fastbrowse/issues/1050)).

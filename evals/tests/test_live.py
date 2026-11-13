@@ -2141,6 +2141,26 @@ async def test_every_ultrafast_exit_stops_its_cloud_browser(ending: str, monkeyp
     assert cloud.stops == 1
 
 
+async def test_cloud_browser_costs_keep_provider_precision(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Browser Use Cloud reports six-decimal amounts; an arm's components and total carry them unrounded."""
+    lines = (_line("browser", 0.003127), _line("browser", 0.000001), _line("proxy", 0.015709))
+    assert live._known_components(lines) == {"browser": 0.003127 + 0.000001, "proxy": 0.015709}
+
+    @asynccontextmanager
+    async def cloud(*_: object, **__: object):
+        yield Browser("ws://fixture", cost=lines)
+
+    async def invoke(*_: object) -> bytes:
+        return _runner_line("done")
+
+    _ultrafast_fixture(monkeypatch, invoke)
+    monkeypatch.setattr(live, "cloud_browser", cloud)
+    async with httpx.AsyncClient() as http:
+        _, report = await live.ultrafast_arm(task("flights-search"), http, record=None)
+    browser = sum(line.dollars for line in lines)
+    assert report.cost_by_component["browser"] == browser and report.dollars == browser
+
+
 async def test_a_wrong_browser_harness_tool_opens_no_browser(monkeypatch: pytest.MonkeyPatch) -> None:
     """A Codex the arm does not pin failed every attempt alike, each after its cloud browser was billed, so each kept
     its whole budget reserve as unknown cost and the campaign ran out on about $10 of spend. The tools are checked
