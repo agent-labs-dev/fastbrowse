@@ -1897,7 +1897,7 @@ mod tests {
         assert!(!asked(vec![button(1)], &context));
         assert!(!asked(vec![Control { offscreen: true, ..view }], &context));
         let jev = fake(&[("operation", "click"), ("click_target", "b1"), (keys::INSIDE_DRAWN, "yes")], "");
-        let decision = block_on(decide(&jev, &page, &context, &config, None, None, &Trace::disabled())).unwrap();
+        let decision = block_on(decide(&jev, &page, &context, &config, None, &Trace::disabled())).unwrap();
         assert_eq!(decision.inside_drawn, Some(0.9));
     }
 
