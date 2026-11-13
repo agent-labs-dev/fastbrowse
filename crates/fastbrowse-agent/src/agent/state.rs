@@ -14,7 +14,7 @@ use indexmap::IndexMap;
 use super::recovery::{Idle, Withheld};
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes, address, fact_id};
-use crate::policy::{Decision, HistoryEntry, RelevanceCache};
+use crate::policy::{Decision, HistoryEntry};
 use crate::retrieval::ComposedAnswer;
 use crate::retrieval::whole_page_facts;
 
@@ -269,7 +269,6 @@ pub(crate) struct RunState {
     pub known_pages: Vec<String>,
     /// The known pages the run has been on: each stays one the run may navigate to, and is not offered again.
     pub reached_known_pages: Vec<String>,
-    pub relevance_cache: RelevanceCache,
     pub steps: Vec<StepResult>,
     /// What Jev was offered for the latest decision, for the next step recorded, which is the one that decision led to.
     pub choices: Vec<StepChoice>,
@@ -732,7 +731,6 @@ impl RunState {
             routes: HashSet::new(),
             known_pages: Vec::new(),
             reached_known_pages: Vec::new(),
-            relevance_cache: RelevanceCache::default(),
             steps: Vec::new(),
             choices: Vec::new(),
             history: Vec::new(),

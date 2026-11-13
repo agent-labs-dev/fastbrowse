@@ -276,7 +276,7 @@ async fn focus<'a>(
         "date": date,
         "page": {"url": capture.url, "title": capture.title},
     });
-    let answered = evaluate_batches(JevPurpose::Read, jev, &state, &questions, tokens, ledger, None, true).await?;
+    let answered = evaluate_batches(JevPurpose::Read, jev, &state, &questions, tokens, ledger, true).await?;
     let lost = answered.as_ref().is_none_or(|answered| answered.answers.len() < questions.len());
     let (answers, cost) = match answered {
         Some(answered) => (answered.answers, answered.cost),
