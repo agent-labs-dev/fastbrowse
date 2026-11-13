@@ -111,9 +111,10 @@ jobs:
       - run: uv run pytest -q
 
   # The fastbrowse-hosted arm against the live public API with a test key: real submit, poll and run body, no
-  # browser and no charge. Forks get no secrets, so it runs only on this repository's own branches.
+  # browser and no charge. Forks and Dependabot pull requests get no Actions secrets, so it runs only on this
+  # repository's own branches and skips pull requests Dependabot opened. `check` does not need this job.
   hosted-simulator:
-    if: ${{ !inputs.task && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ !inputs.task && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]')) }}
     permissions: {contents: read}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     defaults: {run: {working-directory: evals}}
@@ -225,7 +226,7 @@ jobs:
       - run: cargo nextest run --workspace --locked --no-fail-fast
       # nextest does not run doctests.
       - run: cargo test --workspace --locked --doc
-      # What the release publishes to crates.io, built from the packaged sources alone: a crate that reaches a file
+      # The crates as `cargo publish` would package them, built from the packaged sources alone: a crate that reaches a file
       # outside its own directory, or names another without a version, fails here instead of at a release.
       # cargo treats a crate it verifies against as an immutable registry crate: it reuses an unpacked copy in
       # ~/.cargo/registry/src and a build in the target directory keyed on name and version alone. The cache above

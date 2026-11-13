@@ -52,7 +52,6 @@ async fn an_exhausted_split_keeps_its_answered_receipt_once_for_each_caller() {
                     &questions,
                     &TokenBudget::default(),
                     Some(&ledger),
-                    None,
                     true,
                 )
                 .await
@@ -99,7 +98,7 @@ async fn cancelling_a_split_batch_keeps_answered_and_inflight_receipts_once() {
     let tokens = TokenBudget::default();
     tokio::select! {
         _ = jev_spend(Lines::Ledger(ledger.clone()), Some(ledger.clone()),
-            evaluate_batches(JevPurpose::Verify, &client, &page, &questions, &tokens, Some(&ledger), None, true)) => panic!("cancelled"),
+            evaluate_batches(JevPurpose::Verify, &client, &page, &questions, &tokens, Some(&ledger), true)) => panic!("cancelled"),
         _ = sent.notified() => {}
     }
     let paid = ledger.state().lines.clone();
@@ -144,7 +143,6 @@ async fn failover_receipts_match_direct_and_batched_callers() {
                         &questions,
                         &TokenBudget::default(),
                         Some(&ledger),
-                        None,
                         true,
                     )
                     .await
@@ -210,7 +208,6 @@ async fn a_custom_clients_distinct_equal_cost_receipts_are_both_retained() {
         &questions(),
         &TokenBudget::default(),
         Some(&ledger),
-        None,
         true,
     )
     .await
@@ -232,7 +229,6 @@ async fn partial_receipts_are_returned_without_a_run_ledger() {
             &json!("page"),
             &questions(),
             &TokenBudget::default(),
-            None,
             None,
             true,
         )

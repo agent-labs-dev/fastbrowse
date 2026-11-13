@@ -1165,12 +1165,24 @@ async fn review_composition(
         // Code worked a tally's value out from every note Jev judged one of its records, so the count, total or
         // extreme is not Jev's to confirm: it judges only what the claim says besides it.
         if let (Some(tally), Some(Ok(done)), None) = (tallies.get(&index), worked.get(&index), columns) {
-            // A quoted source keeps its citation, but only the computed basis can offer records at the extreme.
-            let basis = cited_quotes(
-                &Claim::new("", done.winner_ids.clone().unwrap_or_else(|| done.evidence_ids.clone())),
-                notes,
-                !steps.is_empty(),
-            );
+            // A quoted source keeps its citation, but only the computed basis can offer records at the extreme. Each is
+            // one option, with the notes it was read with beside it: offered as options of their own, the heading above
+            // a list was named as the product at the maximum (#1082), while a price read alone needs its record's text
+            // to say which record it is.
+            let records = done.winner_ids.as_ref().unwrap_or(&done.evidence_ids);
+            let basis: Vec<Value> = records
+                .iter()
+                .flat_map(|id| {
+                    let read_with: Vec<String> =
+                        notes.expand_evidence_ids([id.as_str()]).into_iter().filter(|other| other != id).collect();
+                    quote_states([id].into_iter(), notes, !steps.is_empty()).into_iter().map(move |mut record| {
+                        if !read_with.is_empty() {
+                            record["read_with"] = json!(quote_states(read_with.iter(), notes, !steps.is_empty()));
+                        }
+                        record
+                    })
+                })
+                .collect();
             for (check, question, reason) in tally_checks_selected(tally, selections.get(&index), &shown.text, &basis) {
                 let key = format!("claim{index}/{check}");
                 required[index].push(key.clone());
@@ -1251,7 +1263,7 @@ async fn review_composition(
     let (answered, failure) = if questions.is_empty() {
         (None, None)
     } else {
-        match evaluate_batches(JevPurpose::Verify, jev, &state, &questions, &tokens, ledger, None, false).await {
+        match evaluate_batches(JevPurpose::Verify, jev, &state, &questions, &tokens, ledger, false).await {
             Ok(answered) => (answered, None),
             Err(AgentError::Jev(error)) => (None, Some(format!("Jev could not judge composed claims: {error}"))),
             Err(error) => return Err(error),
@@ -1619,10 +1631,12 @@ fn cited_steps(claim: &Claim, steps: &[Value]) -> Vec<Value> {
 /// The quotes a claim cites, each with whether a later read superseded it and, when the run took steps, how many of
 /// them it was read after.
 fn cited_quotes(claim: &Claim, notes: &Notes, steps: bool) -> Vec<serde_json::Value> {
-    notes
-        .expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str))
-        .iter()
-        .filter_map(|id| notes.facts_by_id().get(id))
+    quote_states(notes.expand_evidence_ids(claim.evidence_ids.iter().map(String::as_str)).iter(), notes, steps)
+}
+
+/// The quotes of these notes, each as `cited_quotes` gives it, without the notes they were read with.
+fn quote_states<'a>(ids: impl Iterator<Item = &'a String>, notes: &Notes, steps: bool) -> Vec<serde_json::Value> {
+    ids.filter_map(|id| notes.facts_by_id().get(id))
         .filter_map(|fact| {
             fact.evidence.as_ref().map(|quote| {
                 let after_step = notes.steps_taken(quote).filter(|_| steps);
@@ -1892,12 +1906,11 @@ pub(crate) async fn draft_reviewed(
         let answer = ComposedAnswer { problem: Some(problem.into()), ..assemble_answer(&claims, notes, &[]) };
         return Ok(Some(Draft::Reviewed(ReviewedComposition { answer, rejection: None })));
     }
-    let answered =
-        match evaluate_batches(JevPurpose::Verify, jev, &state, &questions, &tokens, ledger, None, false).await {
-            Ok(answered) => answered,
-            Err(AgentError::Jev(_)) => None,
-            Err(error) => return Err(error),
-        };
+    let answered = match evaluate_batches(JevPurpose::Verify, jev, &state, &questions, &tokens, ledger, false).await {
+        Ok(answered) => answered,
+        Err(AgentError::Jev(_)) => None,
+        Err(error) => return Err(error),
+    };
     let holds = |key: &str| answered.as_ref().and_then(|pass| judged(pass.answers.get(key)));
     let (problem, rejection) = match holds("coverage") {
         Some(true) => match holds("exact") {
@@ -3040,6 +3053,28 @@ mod tests {
                 .await
                 .unwrap();
         assert!(checked.claims.is_empty(), "a claim naming a book not at the extreme is not shown");
+    }
+
+    /// #1082: the top record of a list was read with the list's heading as its context, and the record check offered
+    /// that heading as a product beside it, which the rejection then named as the product at the extreme. The context
+    /// stays with its record, which a price read alone needs to say which record it is.
+    #[tokio::test]
+    async fn an_extreme_offers_its_records_without_their_context() {
+        let heading = page_fact(0, "https://shop.test/p1", "Shop");
+        let top = Fact { basis: vec![fact_id(&heading)], ..page_fact(1, "https://shop.test/p1", "Book X £10.69") };
+        let notes = Notes::new([heading, top, page_fact(2, "https://shop.test/p1", "Book Y £12.00")]);
+        let claim =
+            tallied("The cheapest is Book X at £10.69.", "£10.69", tally::Op::Min, "book", Some("price"), vec![]);
+        let jev = Tallying::new("Book ", "£");
+        review_claims(&jev, &READS, "Find the cheapest book", None, vec![claim], &notes, None, true, &[])
+            .await
+            .unwrap();
+        let Question::Choice(record) = &jev.asked()["claim0/record"] else { panic!("record is a choice") };
+        let options: Vec<&str> = record.criteria.keys().map(String::as_str).collect();
+        assert_eq!(options, ["none", "r0", OTHER]);
+        let offered = record.criteria["r0"].as_str().unwrap();
+        assert!(offered.contains("\"quote\": \"Book X"), "{offered}");
+        assert!(offered.contains("\"read_with\": [{") && offered.contains("\"quote\": \"Shop\""), "{offered}");
     }
 
     /// Asked for the two cheapest phones, the composer cited one phone for "the second cheapest", which no tally could

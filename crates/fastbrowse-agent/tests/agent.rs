@@ -315,14 +315,16 @@ fn scripted_jev(script: &Value, state: &Value, questions: &Value, log: &[Value])
     for (key, question) in questions.as_object().unwrap() {
         if question["type"] == "noul" {
             // A case's answer is the one it expects to stand, so the checks of that answer pass unless it scripts them.
-            let default =
-                if matches!(key.as_str(), "login_required" | "bot_check" | "site_failure" | "unobtainable" | "dates") {
-                    0.0
-                } else if matches!(key.as_str(), "coverage" | "exact" | "carried") || key.starts_with("claim") {
-                    1.0
-                } else {
-                    script["noul"].as_f64().unwrap_or(0.0)
-                };
+            let default = if matches!(
+                key.as_str(),
+                "login_required" | "bot_check" | "site_failure" | "unobtainable" | "inside_drawn" | "dates"
+            ) {
+                0.0
+            } else if matches!(key.as_str(), "coverage" | "exact" | "carried") || key.starts_with("claim") {
+                1.0
+            } else {
+                script["noul"].as_f64().unwrap_or(0.0)
+            };
             let probability = nth(&script["nouls"][key], answered(key)).and_then(Value::as_f64).unwrap_or(default);
             answers.insert(key.clone(), serde_json::json!({"type": "noul", "probability": probability}));
             continue;
@@ -625,6 +627,81 @@ fn sold_out_case(quote: &str) -> Value {
     case["site"]["urls"] = serde_json::json!({"https://shop.test/pico-2-w": "home"});
     case["start"] = "https://shop.test/pico-2-w".into();
     case
+}
+
+/// A live view of a remote browser: its page is one picture that takes clicks, beside a Reload button (#1084).
+fn live_view_case(inside: f64) -> Value {
+    let mut case = cases().into_iter().find(|case| case["name"] == "a step limit ends budget_exceeded").unwrap();
+    case["name"] = "a task inside a streamed remote browser".into();
+    case["task"] = "Inside the remote view, type tomsmith into the Username field, then click Login.".into();
+    case["calls"] = serde_json::json!([]);
+    case["limits"]["max_steps"] = 3.into();
+    case["jev"]["pick"] = serde_json::json!({"operation": "click"});
+    // Jev, seeing none of the task's fields among the page's elements, also read the page as a placeholder.
+    case["jev"]["nouls"]["site_failure"] = 0.9.into();
+    case["jev"]["nouls"]["inside_drawn"] = inside.into();
+    let home = &mut case["site"]["screens"]["home"];
+    home["observation"]["url"] = "https://live.test/view".into();
+    home["observation"]["controls"] = serde_json::json!([
+        {"id": "view", "frame_id": null, "role": "button", "label": "Remote browser view", "operations": ["click"],
+         "drawn": true},
+        {"id": "reload", "frame_id": null, "role": "button", "label": "Reload", "operations": ["click"]}
+    ]);
+    home["capture"]["url"] = "https://live.test/view".into();
+    case["site"]["urls"] = serde_json::json!({"https://live.test/view": "home"});
+    case["start"] = "https://live.test/view".into();
+    case
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_task_inside_a_streamed_view_ends_the_run_naming_the_limitation() {
+    // #1084: the run pressed the view, reloaded it for 12 steps and ended `unavailable`, "the site failed to deliver".
+    let log: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let (outcome, _) = play(&live_view_case(0.95), Some(log.clone())).await;
+    assert_eq!(outcome["status"], "stuck", "{outcome}");
+    assert!(outcome["steps"].as_array().unwrap().is_empty(), "{outcome}");
+    let error = outcome["error"].as_str().unwrap();
+    assert!(error.contains("'Remote browser view'"), "{error}");
+    assert!(error.contains("cannot act inside a streamed or canvas view"), "{error}");
+    assert!(!error.contains("failed to deliver"), "{error}");
+    // Jev was told what the surface is, and asked about the element the snapshot marked.
+    {
+        let log = log.lock().unwrap();
+        let asked = |call: &&Value| call["jev"]["questions"].as_str().is_some_and(|q| q.contains("\"inside_drawn\":"));
+        let call = log.iter().find(asked).expect("Jev was asked about the surface");
+        assert!(
+            call["jev"]["questions"].as_str().unwrap().contains("An element marked `drawn` is a drawn surface"),
+            "{call}"
+        );
+        let state = call["jev"]["state"].as_str().unwrap();
+        assert!(
+            state.contains("An element marked `drawn` is a drawn surface") && state.contains("\"drawn\":true"),
+            "{state}"
+        );
+    }
+    // A task that needs only the page's own elements runs on.
+    let (outcome, _) = play(&live_view_case(0.05), Some(Arc::default())).await;
+    assert_ne!(outcome["status"], "stuck", "{outcome}");
+    assert!(!outcome["error"].as_str().unwrap_or_default().contains("drawn surface"), "{outcome}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_surface_that_appears_in_a_document_already_seen_is_still_asked_about() {
+    // A live view shows a Retry button while its screencast starts, then its picture, in the same document.
+    let mut case = live_view_case(0.95);
+    // A page read as failed is judged afresh anyway, so this one is read as working.
+    case["jev"]["nouls"]["site_failure"] = 0.0.into();
+    let live = case["site"]["screens"]["home"].clone();
+    case["site"]["screens"]["live"] = live;
+    case["site"]["screens"]["home"]["observation"]["controls"] = serde_json::json!([
+        {"id": "retry", "frame_id": null, "role": "button", "label": "Retry", "operations": ["click"]}
+    ]);
+    case["site"]["actions"] =
+        serde_json::json!([{"screen": "home", "operation": "click", "target": "retry", "next": "live"}]);
+    let (outcome, _) = play(&case, Some(Arc::default())).await;
+    assert_eq!(outcome["status"], "stuck", "{outcome}");
+    assert_eq!(outcome["steps"].as_array().unwrap().len(), 1, "{outcome}");
+    assert!(outcome["error"].as_str().unwrap().contains("'Remote browser view'"), "{outcome}");
 }
 
 #[tokio::test(start_paused = true)]
