@@ -256,6 +256,25 @@ fn same_record(
         .collect()
 }
 
+/// The records a tally counts once each, and for each the notes without its field that give the same record.
+struct Distinct {
+    records: Vec<usize>,
+    /// A note naming its record may hold no field while the note it takes the field from does not name it, so each
+    /// stays cited beside that note: the claim names the record, and its value alone cannot show which one it is.
+    borrowed: HashMap<usize, Vec<usize>>,
+}
+
+impl Distinct {
+    /// The ids of `notes` and of the notes that take their field from them.
+    fn cited(&self, notes: impl IntoIterator<Item = usize>, found: &[Candidate]) -> Vec<String> {
+        notes
+            .into_iter()
+            .flat_map(|note| std::iter::once(note).chain(self.borrowed.get(&note).into_iter().flatten().copied()))
+            .map(|note| found[note].id.clone())
+            .collect()
+    }
+}
+
 /// `records` less each one Jev said repeats another, or None when Jev left one of those questions unanswered.
 fn distinct(
     index: usize,
@@ -263,24 +282,28 @@ fn distinct(
     found: &[Candidate],
     questions: &IndexMap<String, Question>,
     answered: Option<&IndexMap<String, Answer>>,
-) -> Option<Vec<usize>> {
-    let mut kept = Vec::new();
+) -> Option<Distinct> {
+    let mut kept = Distinct { records: Vec::new(), borrowed: HashMap::new() };
     for note in records {
-        let prefixes = [format!("t{index}/s{note}c"), format!("t{index}/v{note}c")];
-        let mut repeats = false;
-        for key in questions.keys().filter(|key| prefixes.iter().any(|prefix| key.starts_with(prefix))) {
+        let (reading, unvalued) = (format!("t{index}/s{note}c"), format!("t{index}/v{note}c"));
+        let mut repeated = None;
+        for key in questions.keys().filter(|key| key.starts_with(&reading) || key.starts_with(&unvalued)) {
             let Some(Answer::Choice(answer)) = answered.and_then(|answered| answered.get(key)) else {
                 return None;
             };
             let picked = answer.choice.strip_prefix('m').and_then(|n| n.parse::<usize>().ok());
             match picked.filter(|n| *n < found.len()) {
-                Some(_) => repeats = true,
+                Some(record) => {
+                    repeated.get_or_insert((record, key.starts_with(&unvalued)));
+                }
                 None if answer.choice == NO_VALUE => {}
                 None => return None,
             }
         }
-        if !repeats {
-            kept.push(note);
+        match repeated {
+            None => kept.records.push(note),
+            Some((record, true)) => kept.borrowed.entry(record).or_default().push(note),
+            Some((_, false)) => {}
         }
     }
     Some(kept)
@@ -1220,13 +1243,14 @@ pub(super) async fn work_selected(
         }
         let asking = led.get(index).copied().unwrap_or(*index);
         let records = judged.remove(index).flatten();
-        let Some(records) = records.and_then(|records| distinct(asking, records, &found, &repeats, repeated.as_ref()))
+        let Some(kept) = records.and_then(|records| distinct(asking, records, &found, &repeats, repeated.as_ref()))
         else {
             let prefix = format!("t{asking}/");
             let unasked = oversized.iter().any(|key| key.starts_with(&prefix));
             worked.insert(*index, Err(if unasked { Unworked::Oversized } else { Unworked::Unjudged }));
             continue;
         };
+        let records = kept.records.clone();
         if let Some((by, _)) = tally.grouped() {
             let leader = led[index];
             if leader == *index {
@@ -1244,7 +1268,7 @@ pub(super) async fn work_selected(
             worked.insert(*index, Err(Unworked::Draft(reason)));
             continue;
         }
-        pending.push((*index, *tally, records));
+        pending.push((*index, *tally, kept));
     }
     for (index, tally, _, _) in claims {
         let Some((by, group)) = tally.grouped() else { continue };
@@ -1260,8 +1284,9 @@ pub(super) async fn work_selected(
         };
         worked.insert(*index, result);
     }
-    for (index, tally, mut records) in pending {
-        let basis = records.iter().map(|note| found[*note].id.clone()).collect::<Vec<_>>();
+    for (index, tally, kept) in pending {
+        let basis = kept.cited(kept.records.iter().copied(), &found);
+        let mut records = kept.records.clone();
         if let Some(within) = selections.get(&index) {
             match select_records(jev, llm, &states, tally, index, &fields, within, &records, &found, tokens, ledger)
                 .await?
@@ -1314,7 +1339,7 @@ pub(super) async fn work_selected(
         let mut result = match tally.op {
             Op::Sum => {
                 let all: Vec<&Amount> = amounts.iter().map(|(_, amount)| amount).collect();
-                let evidence_ids = amounts.iter().map(|(note, _)| found[*note].id.clone()).collect();
+                let evidence_ids = kept.cited(amounts.iter().map(|(note, _)| *note), &found);
                 Worked { winner_ids: None, value: total(&all), evidence_ids }
             }
             Op::Min | Op::Max => {
@@ -1337,7 +1362,7 @@ pub(super) async fn work_selected(
                 };
                 // Every record at that place is cited, so a tie is not settled by reading order.
                 let winners: Vec<&(usize, Amount)> = amounts.iter().filter(|(_, amount)| amount.value == at).collect();
-                let evidence_ids = winners.iter().map(|(note, _)| found[*note].id.clone()).collect();
+                let evidence_ids = kept.cited(winners.iter().map(|(note, _)| *note), &found);
                 let winner = &winners[0].1;
                 let value = if tally.names_record() {
                     tally.written.clone()
@@ -1937,7 +1962,7 @@ mod tests {
             work(&PypiPages { same: true }, &ReadsGroups(&[]), task, &claims, &notes, &tokens, None).await.unwrap();
         let done = worked[&0].as_ref().unwrap();
         assert_eq!(done.value, "May 14, 2026");
-        assert_eq!(done.evidence_ids, vec![ids[2].clone()]);
+        assert_eq!(done.evidence_ids, vec![ids[2].clone(), ids[3].clone()], "the card names the record it dates");
         let worked =
             work(&PypiPages { same: false }, &ReadsGroups(&[]), task, &claims, &notes, &tokens, None).await.unwrap();
         assert!(
