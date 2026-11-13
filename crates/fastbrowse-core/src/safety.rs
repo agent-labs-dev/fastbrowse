@@ -367,7 +367,8 @@ pub const EDITS_NONE: &str = "none";
 /// Which changes to what the page's fields and settings hold the task allows: asked of the task alone, once an action
 /// would change one. Asked only whether the task rules out changing them, Jev read "fill in this reply. Change nothing
 /// else." as ruling out the reply itself (#879), so a task that asks for a change and forbids the others has an answer
-/// of its own.
+/// of its own. "No change" needs the task's own words: worded as asking for no change, it took "Confirm the reference
+/// in the form" as asking for none.
 pub fn edits_question(task: &str) -> ChoiceQuestion {
     ChoiceQuestion::new(
         format!(
@@ -380,7 +381,7 @@ pub fn edits_question(task: &str) -> ChoiceQuestion {
                 Value::from(
                     "The task allows changing fields, or rules out only committing something such as saving, buying \
                      or sending. A task that has to search or filter to find its answer does not rule out typing that \
-                     search.",
+                     search. A task that says nothing against changing the page allows it.",
                 ),
             ),
             (
@@ -393,8 +394,9 @@ pub fn edits_question(task: &str) -> ChoiceQuestion {
             (
                 EDITS_NONE.to_string(),
                 Value::from(
-                    "The task asks for no change at all: it says to change nothing on the page, to leave its fields \
-                     and settings as they are, not to tick, select or type anything, or calls the work read-only.",
+                    "The task says in words not to change anything on the page: to change nothing, to leave its \
+                     fields and settings as they are, not to tick, select or type anything, or that the work is \
+                     read-only.",
                 ),
             ),
         ]),
