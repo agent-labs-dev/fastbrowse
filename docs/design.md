@@ -299,7 +299,9 @@ tally. For a minimum or maximum both questions are choices: whether the claim st
 both, or something else as well, and which record it names, none, one of those code found at the extreme, or another.
 Jev is also asked what the task asks to be told about the tally's records, offered every operation a tally does with
 the tally's own among them, and the claim holds only when Jev chooses that one: the composer chooses the operation, and
-code then works out exactly a count where the task asked for a total.
+code then works out exactly a count where the task asked for a total. An operation another tally of the same records
+gives is not offered, so a task asking for the number of orders and their total is answered by a count and a sum, and
+a table row's tally is asked the same.
 A failed check tells the composer which it was, such as a claim that also lists each record's value, which then goes in
 a claim of its own.
 Packing continues only when fewer requests are needed or the rewritten claim text shrinks. Removing source-state

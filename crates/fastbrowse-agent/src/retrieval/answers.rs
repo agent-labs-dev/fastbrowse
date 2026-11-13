@@ -1146,6 +1146,22 @@ async fn review_composition(
             continue;
         }
         let shown = &shown[index];
+        // A table row's tally is checked against the task as a claim's is: its cells are judged without recomputing it.
+        if let (Some(tally), Some(Ok(_))) = (tallies.get(&index), worked.get(&index)) {
+            let given: Vec<Op> = tallies
+                .iter()
+                .filter(|(other, sibling)| {
+                    **other != index && sibling.of == tally.of && worked.get(*other).is_some_and(Result::is_ok)
+                })
+                .map(|(_, sibling)| sibling.op)
+                .collect();
+            let (question, own, reason) = asks_check(task, tally, &given);
+            let key = format!("claim{index}/asks");
+            required[index].push(key.clone());
+            tally_reasons.insert(key.clone(), reason);
+            asked_ops.insert(key.clone(), own);
+            questions.insert(key, question);
+        }
         // Code worked a tally's value out from every note Jev judged one of its records, so the count, total or
         // extreme is not Jev's to confirm: it judges only what the claim says besides it.
         if let (Some(tally), Some(Ok(done)), None) = (tallies.get(&index), worked.get(&index), columns) {
@@ -1161,12 +1177,6 @@ async fn review_composition(
                 tally_reasons.insert(key.clone(), reason);
                 questions.insert(key, question);
             }
-            let (question, own, reason) = asks_check(task, tally);
-            let key = format!("claim{index}/asks");
-            required[index].push(key.clone());
-            tally_reasons.insert(key.clone(), reason);
-            asked_ops.insert(key.clone(), own);
-            questions.insert(key, question);
             continue;
         }
         let records_rule = if sources.iter().any(|quote| quote["whole_record"] == true) { RECORDS } else { "" };
@@ -1381,8 +1391,10 @@ fn ordinal(place: u64) -> String {
 /// worded as its states check words it. The composer chooses the operation, and read "the total of the orders" as how
 /// many there are; asked yes or no whether the task asks for that count, Jev agreed (0.63), while offered the count
 /// beside the total of a field it chose the total (0.77 to 0.88, and 9 of 9 recorded readings). The check holds only
-/// on the tally's own choice. Returns the question, that choice's key and the reason a failure gives the composer.
-fn asks_check(task: &str, tally: &Tally) -> (Question, &'static str, String) {
+/// on the tally's own choice. An operation another tally of the same records gives is not offered: a task asking for
+/// the number of orders and their total is answered by a count and a sum, and each is asked what the task wants
+/// besides the other. Returns the question, that choice's key and the reason a failure gives the composer.
+fn asks_check(task: &str, tally: &Tally, given: &[Op]) -> (Question, &'static str, String) {
     let (of, field) = (text::repr(&tally.of), text::repr(tally.field.as_deref().unwrap_or("value")));
     let side = |extreme: &str| match tally.place() {
         1 => extreme.to_string(),
@@ -1403,13 +1415,17 @@ fn asks_check(task: &str, tally: &Tally) -> (Question, &'static str, String) {
         }
     };
     let mut choices = IndexMap::new();
-    for (key, other) in [
-        ("count", format!("How many {of} there are.")),
-        ("sum", format!("A value each {of} has, added up across them.")),
-        ("lowest", format!("The {of} with the lowest value, or that value.")),
-        ("highest", format!("The {of} with the highest value, or that value.")),
+    for (op, key, other) in [
+        (Op::Count, "count", format!("How many {of} there are.")),
+        (Op::Sum, "sum", format!("A value each {of} has, added up across them.")),
+        (Op::Min, "lowest", format!("The {of} with the lowest value, or that value.")),
+        (Op::Max, "highest", format!("The {of} with the highest value, or that value.")),
     ] {
-        choices.insert(key.to_string(), json!(if key == own { sentence(&worded) } else { other }));
+        if key == own {
+            choices.insert(key.to_string(), json!(sentence(&worded)));
+        } else if !given.contains(&op) {
+            choices.insert(key.to_string(), json!(other));
+        }
     }
     choices.insert(OTHER.into(), json!("Something else, such as a value stated as it is."));
     let question = Question::Choice(ChoiceQuestion::new(
@@ -2825,7 +2841,10 @@ mod tests {
                         Some("record") => named.to_string(),
                         Some("states") => stated.to_string(),
                         // The task asks for the tally's own operation: the one option not worded generically.
-                        Some("asks") if self.asks.is_some() => self.asks.unwrap().to_string(),
+                        // A task asking for an operation the question does not offer is answered by the tally's own.
+                        Some("asks") if self.asks.is_some_and(|op| choice.criteria.contains_key(op)) => {
+                            self.asks.unwrap().to_string()
+                        }
                         Some("asks") => choice
                             .criteria
                             .iter()
@@ -3442,6 +3461,29 @@ mod tests {
         let Question::Choice(asks) = &jev.asked()["claim0/asks"] else { panic!("asks is a choice") };
         assert_eq!(asks.criteria.keys().collect::<Vec<_>>(), ["count", "sum", "lowest", "highest", OTHER]);
         assert!(asks.instructions.ends_with(&format!("Task: {}", text::repr(task))), "{}", asks.instructions);
+    }
+
+    /// A task asking for the number of orders and their total is answered by a count and a sum: each is asked what the
+    /// task wants of the orders besides the other, so neither is rejected for being only one of the two.
+    #[tokio::test]
+    async fn tallies_of_the_same_records_are_each_asked_besides_the_others() {
+        let notes = Notes::new([
+            page_fact(0, "https://shop.test/report", "Order A-1001 total £34.50"),
+            page_fact(1, "https://shop.test/report", "Order A-1002 total £89.99"),
+        ]);
+        let task = "Open the orders report and tell me how many orders it holds and their total value.";
+        let claims = vec![
+            tallied("The report holds 2 orders.", "2", tally::Op::Count, "order in the report", None, vec![]),
+            tallied("They total £124.49.", "£124.49", tally::Op::Sum, "order in the report", Some("total"), vec![]),
+        ];
+        let jev = Tallying { asks: Some("sum"), ..Tallying::new("Order A-10", "£") };
+        let checked = review_claims(&jev, &READS, task, None, claims, &notes, None, true, &[]).await.unwrap();
+        assert_eq!(checked.rejection, None);
+        assert_eq!(checked.claims.len(), 2);
+        let Question::Choice(count) = &jev.asked()["claim0/asks"] else { panic!("asks is a choice") };
+        assert_eq!(count.criteria.keys().collect::<Vec<_>>(), ["count", "lowest", "highest", OTHER]);
+        let Question::Choice(sum) = &jev.asked()["claim1/asks"] else { panic!("asks is a choice") };
+        assert_eq!(sum.criteria.keys().collect::<Vec<_>>(), ["sum", "lowest", "highest", OTHER]);
     }
 
     /// A tally whose value is not written once in its text has no place for code's value: the draft's fault, so the
