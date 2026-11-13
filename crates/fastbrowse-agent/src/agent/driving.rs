@@ -1341,6 +1341,9 @@ impl Agent {
                 changed: false,
                 shown: Vec::new(),
             }
+        } else if state.committing {
+            // Still set from the gate that let this step go: the next decision is what takes it.
+            fastbrowse_core::effects::effect_of_commit(&before, observation, None, waited)
         } else {
             effect(&before, observation, None, waited)
         };
