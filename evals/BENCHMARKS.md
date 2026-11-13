@@ -77,8 +77,6 @@ Parallax run directories and does not rewrite `docs/results` history.
 uv run fastbrowse-evals browser publish-candidate \
     runs/internal-fastbrowse \
     --campaign-id release-0.11.0 \
-    --agent-sha "$FASTBROWSE_SHA" \
-    --runner-sha "$HARNESS_SHA" \
     --out benchmark-candidate.json
 ```
 

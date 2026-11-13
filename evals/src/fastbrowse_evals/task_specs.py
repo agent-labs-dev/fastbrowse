@@ -1,15 +1,16 @@
 """Parallax task records for the live browser catalog.
 
-The old task functions graded answers in fastbrowse. These records describe the task and leave evidence grading to
-Parallax's browser-evidence-v1 policy. Secret values stay private to the harness and never enter a TaskRecord.
+Each record describes a task and leaves grading to Parallax's browser-evidence-v1 policy. A record names the
+environment variables that hold its site login; the values are read at trial start and never enter a TaskRecord.
 """
 
 from __future__ import annotations
 
-from datetime import date, timedelta
 from typing import NamedTuple
 
+from fastbrowse.evals.live_tasks import Release
 from parallax.models import Area, Capability, Maturity, Provenance, TaskRecord
+from pydantic import BaseModel
 
 from fastbrowse_evals.versions import task_version
 
@@ -187,7 +188,7 @@ _SPECS_RAW: tuple[tuple[str, str, str, str, str, str, bool, tuple[str, ...], tup
     (
         "google-flights",
         "https://www.google.com/travel/flights",
-        "Find the cheapest nonstop flight from London to New York on {four_weeks_out} and tell me the airline and price.",
+        "Find the cheapest nonstop flight from London to New York on {today+28} and tell me the airline and price.",
         "widget",
         "core",
         "complete",
@@ -259,7 +260,7 @@ _SPECS_RAW: tuple[tuple[str, str, str, str, str, str, bool, tuple[str, ...], tup
     (
         "flights-search",
         "https://www.google.com/travel/flights",
-        "Search for one-way nonstop flights from London to New York on {four_weeks_out}.",
+        "Search for one-way nonstop flights from London to New York on {today+28}.",
         "navigate",
         "core",
         "complete",
@@ -706,13 +707,25 @@ _SPECS_RAW: tuple[tuple[str, str, str, str, str, str, bool, tuple[str, ...], tup
 _SPECS = tuple(TaskSpec(*spec) for spec in _SPECS_RAW)
 
 
-_SECRET_VALUES = {
-    "saucedemo-cart": {"password": "secret_sauce"},
-    "saucedemo-locked-out": {"password": "secret_sauce"},
-    "expandtesting-login": {"username": "practice", "password": "SuperSecretPassword!"},
-    "practice-login": {"username": "student", "password": "Password123"},
-    "saucedemo-checkout": {"username": "standard_user", "password": "secret_sauce"},
-    "saucedemo-pause": {"username": "standard_user", "password": "secret_sauce"},
+_SECRET_ENV = {
+    "saucedemo-cart": {"password": "FASTBROWSE_EVAL_SAUCEDEMO_PASSWORD"},
+    "saucedemo-locked-out": {"password": "FASTBROWSE_EVAL_SAUCEDEMO_PASSWORD"},
+    "expandtesting-login": {
+        "username": "FASTBROWSE_EVAL_EXPANDTESTING_USERNAME",
+        "password": "FASTBROWSE_EVAL_EXPANDTESTING_PASSWORD",
+    },
+    "practice-login": {
+        "username": "FASTBROWSE_EVAL_PRACTICE_USERNAME",
+        "password": "FASTBROWSE_EVAL_PRACTICE_PASSWORD",
+    },
+    "saucedemo-checkout": {
+        "username": "FASTBROWSE_EVAL_SAUCEDEMO_USERNAME",
+        "password": "FASTBROWSE_EVAL_SAUCEDEMO_PASSWORD",
+    },
+    "saucedemo-pause": {
+        "username": "FASTBROWSE_EVAL_SAUCEDEMO_USERNAME",
+        "password": "FASTBROWSE_EVAL_SAUCEDEMO_PASSWORD",
+    },
 }
 
 
@@ -724,14 +737,21 @@ def spec_for(task_id: str) -> TaskSpec:
     return next(spec for spec in _SPECS if spec.id == task_id)
 
 
-def secret_values(task_id: str) -> dict[str, str]:
-    return dict(_SECRET_VALUES.get(task_id, {}))
+def secret_env(spec_or_task: TaskSpec | str) -> dict[str, str]:
+    task_id = spec_or_task.id if isinstance(spec_or_task, TaskSpec) else spec_or_task
+    return dict(_SECRET_ENV.get(task_id, {}))
+
+
+_ANSWER_MODELS: dict[str, type[BaseModel]] = {"pypi-structured": Release}
+
+
+def answer_model(task_id: str) -> type[BaseModel] | None:
+    """The model a task's answer must fill; its JSON Schema is the record's `answer_schema`."""
+    return _ANSWER_MODELS.get(task_id)
 
 
 def _task_prompt(spec: TaskSpec) -> str:
-    four_weeks_out = date.today() + timedelta(days=28)
-    task = spec.task.replace("{four_weeks_out}", f"{four_weeks_out.day} {four_weeks_out:%B %Y}")
-    return f"Start at {spec.start_url}. {task}"
+    return f"Start at {spec.start_url}. {spec.task}"
 
 
 def record(spec: TaskSpec) -> TaskRecord:
@@ -746,16 +766,24 @@ def record(spec: TaskSpec) -> TaskRecord:
     }
     if spec.bitwarden_item is not None:
         data["bitwarden_item"] = spec.bitwarden_item
+    secrets = secret_env(spec)
+    requires = {Capability.BROWSER}
+    if secrets:
+        requires.add(Capability.CREDENTIALS)
+    if spec.authorize:
+        requires.add(Capability.AUTHORIZATION)
     return TaskRecord(
         id=spec.id,
-        version=task_version(spec.id) or 1,
+        version=task_version(spec.id),
         area=Area.BROWSER,
         summary=spec.task,
         prompt=_task_prompt(spec),
         grading="browser-evidence-v1",
-        requires=frozenset({Capability.BROWSER}),
+        requires=frozenset(requires),
         maturity=Maturity.ASPIRATIONAL if spec.suite == "sweep" else Maturity.CANDIDATE,
         provenance=Provenance.CONVERTED,
+        secrets=secrets,
+        answer_schema=model.model_json_schema() if (model := answer_model(spec.id)) else None,
         data=data,
     )
 

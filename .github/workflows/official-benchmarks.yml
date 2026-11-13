@@ -229,12 +229,12 @@ jobs:
         with:
           repository: ${{ matrix.repository }}
           ref: ${{ matrix.commit }}
-          path: upstream
+          path: upstream/${{ matrix.suite }}
           fetch-depth: 0
           persist-credentials: false
       - name: Install the upstream judge in its own environment
         run: |
-          cd upstream
+          cd "upstream/$SUITE"
           echo ".venv/" >> .git/info/exclude
           if test "$SUITE" = bu-bench; then
             uv sync --frozen --python 3.12
@@ -266,10 +266,10 @@ jobs:
           PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_UPSTREAM_OPENAI_KEY || secrets.OPENROUTER_JUDGE_API_KEY }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
           PARALLAX_OFFICIAL_ONLINE_JUDGE_MODEL: ${{ vars.PARALLAX_OFFICIAL_ONLINE_JUDGE_MODEL }}
-          PARALLAX_OFFICIAL_BU_BENCH_ROOT: ${{ github.workspace }}/upstream
-          PARALLAX_OFFICIAL_BU_BENCH_JUDGE_PYTHON: ${{ github.workspace }}/upstream/.venv/bin/python
-          PARALLAX_OFFICIAL_ONLINE_MIND2WEB_ROOT: ${{ github.workspace }}/upstream
-          PARALLAX_OFFICIAL_ONLINE_MIND2WEB_JUDGE_PYTHON: ${{ github.workspace }}/upstream/.venv/bin/python
+          PARALLAX_OFFICIAL_BU_BENCH_ROOT: ${{ github.workspace }}/upstream/bu-bench
+          PARALLAX_OFFICIAL_BU_BENCH_JUDGE_PYTHON: ${{ github.workspace }}/upstream/bu-bench/.venv/bin/python
+          PARALLAX_OFFICIAL_ONLINE_MIND2WEB_ROOT: ${{ github.workspace }}/upstream/online-mind2web
+          PARALLAX_OFFICIAL_ONLINE_MIND2WEB_JUDGE_PYTHON: ${{ github.workspace }}/upstream/online-mind2web/.venv/bin/python
           FASTBROWSE_SHA: ${{ needs.resolve.outputs.fastbrowse_sha }}
           HARNESS_SHA: ${{ needs.resolve.outputs.harness_sha }}
           TASK_IDS: ${{ inputs.task_ids }}
@@ -277,9 +277,9 @@ jobs:
           cd harness/evals
           read -ra ids <<< "$TASK_IDS"
           if [ "${#ids[@]}" -gt 0 ]; then
-            selection=("${ids[@]}")
+            selection=("source=$SUITE" "${ids[@]}")
           elif [ "$SMOKE" = true ]; then
-            mapfile -t selection < <(uv run --no-sync python - "$SUITE" <<'PY'
+            mapfile -t task_ids < <(uv run --no-sync python - "$SUITE" <<'PY'
           import sys
           from parallax.task import source_tasks
 
@@ -287,6 +287,7 @@ jobs:
               print(task.id)
           PY
           )
+            selection=("source=$SUITE" "${task_ids[@]}")
           else
             selection=("$SUITE")
           fi
@@ -352,12 +353,15 @@ jobs:
             --reserve "$RESERVE" \
             --retry-invalid 2 \
             --retry-wait 60 \
-            --provenance fastbrowse.agent_sha="$FASTBROWSE_SHA" \
-            --provenance fastbrowse.runner_sha="$HARNESS_SHA" \
+            --provenance "fastbrowse.group=$SUITE" \
             --out "$OUT"
           status=$?
           kill "$mirror_pid" 2> /dev/null || true
           wait "$mirror_pid" 2> /dev/null || true
+          if test "$status" -eq 0; then
+            run_id="$(jq -r .run_id "$PRIVATE_RUN/manifest.json")"
+            jq -n --arg run_id "$run_id" '{verified: true, run_id: $run_id}' > "$PRIVATE_RUN/parallax-verify.json"
+          fi
           set -e
           exit "$status"
       - name: Write the public run projection
@@ -365,7 +369,7 @@ jobs:
         run: |
           public="$RUNNER_TEMP/public-runs/$SUITE"
           mkdir -p "$public"
-          for name in manifest.json provenance.json results.jsonl budget.jsonl; do
+          for name in manifest.json provenance.json results.jsonl budget.jsonl parallax-verify.json; do
             test -f "$PRIVATE_RUN/$name" && cp "$PRIVATE_RUN/$name" "$public/$name"
           done
           test -f "$public/manifest.json" || { echo "::error::Parallax did not leave a manifest"; exit 1; }

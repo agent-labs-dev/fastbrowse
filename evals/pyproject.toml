@@ -5,14 +5,12 @@ description = "Fastbrowse's browser benchmarks on Parallax: the internal campaig
 requires-python = ">=3.13"
 dependencies = [
     # One Parallax release for every campaign; bump it deliberately, it moves the evaluator.
-    "parallax-evals[browser]==2.0.0.dev20",
+    "parallax-evals[browser]==2.0.0.dev22",
     # The measured agent and the eval contracts it shares with this harness. A campaign installs the build it
     # measures over this one (see .github/workflows/benchmark-campaign.yml).
     "fastbrowse[eval-data]",
     # The hosted Browser Use agent and the Browser Use Cloud browsers the harness starts for its arms.
     "browser-use-sdk==3.12.1",
-    # Parallax's plain-CDP observer reads each arm's final page.
-    "websockets>=15,<16",
     "httpx",
     "pydantic>=2.12",
     # Uploading a tracked run to Langfuse.
@@ -26,6 +24,9 @@ fastbrowse-evals = "fastbrowse_evals.cli:main"
 fastbrowse = "fastbrowse_evals.backend:FastbrowseHarness"
 fastbrowse-pool = "fastbrowse_evals.live:FastbrowsePoolHarness"
 fastbrowse-hosted = "fastbrowse_evals.hosted_api:FastbrowseHostedHarness"
+
+[project.entry-points."parallax.provenance"]
+fastbrowse = "fastbrowse_evals.provenance:fields"
 
 [project.entry-points."parallax.task_sources"]
 fastbrowse = "fastbrowse_evals.live_tasks:task_records"
@@ -72,8 +73,6 @@ ignore = ["E501"]
 
 [tool.ty.src]
 include = ["src"]
-# These standalone transports execute under each pinned upstream environment, not this project's dependencies.
-exclude = ["src/fastbrowse_evals/adapters"]
 
 [tool.ty.rules]
 blanket-ignore-comment = "error"

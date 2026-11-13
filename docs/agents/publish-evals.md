@@ -23,7 +23,8 @@ Each campaign group runs Parallax with an approved total and per-trial reserve:
 ```sh
 uv run --project evals --no-sync parallax run fastbrowse \
   --harness fastbrowse --repeats 3 --budget 300 --reserve 3 \
-  --retry-invalid 2 --retry-wait 60 --out runs/internal-fastbrowse
+  --budget-journal runs/budget.jsonl --retry-invalid 2 --retry-wait 60 \
+  --out runs/internal-fastbrowse
 ```
 
 Parallax writes `manifest.json`, `results.jsonl`, `budget.jsonl`, and private
@@ -66,8 +67,6 @@ The adapter reads one or more Parallax run directories:
 uv run fastbrowse-evals browser publish-candidate \
   runs/internal-fastbrowse runs/internal-hosted \
   --campaign-id release-0.11.0 \
-  --agent-sha "$FASTBROWSE_SHA" \
-  --runner-sha "$HARNESS_SHA" \
   --out benchmark-candidate.json
 ```
 
@@ -97,7 +96,7 @@ the old figures as recorded history.
 
 ## Official suites
 
-The official workflow runs Parallax dev20's `bu-bench` and
+The official workflow runs Parallax dev21's `bu-bench` and
 `online-mind2web` sources with policies `bu-bench-upstream-v1` and
 `online-mind2web-upstream-v1`. It clones each pinned upstream judge at the
 revision named by Parallax, installs its own dependencies in its own virtual

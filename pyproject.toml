@@ -21,7 +21,7 @@ Issues = "https://github.com/agent-labs-dev/fastbrowse/issues"
 
 [project.optional-dependencies]
 eval-data = ["pyyaml>=6.0.3,<7"]
-evals = ["parallax-evals==2.0.0.dev20"]
+evals = ["parallax-evals==2.0.0.dev22"]
 
 [project.scripts]
 fastbrowse = "fastbrowse.commands:fastbrowse"
@@ -58,6 +58,7 @@ cache-keys = [
 
 [dependency-groups]
 dev = [
+    "parallax-evals==2.0.0.dev22",
     "pytest>=9.2,<10",
     "pytest-asyncio>=1.4.1,<2",
     "ruff>=0.17.3,<1",
@@ -95,3 +96,5 @@ include = ["src", "tests", "benchmarks"]
 
 [tool.ty.environment]
 python-version = "3.13"
+# The release gate and its tests reach the eval plugin, which lives in its own project under evals/.
+extra-paths = ["evals/src"]

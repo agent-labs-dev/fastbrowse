@@ -47,13 +47,20 @@ class Judge(Protocol):
 
 
 class Jev:
-    """Lazy compatibility adapter for the fixture bench's old judge interface.
+    """Lazy adapter for the fixture bench's judge interface.
 
     Parallax owns typed Jev transport and retries. Importing it only inside the
     call keeps the published fastbrowse wheel free of an eval dependency.
     """
 
-    def __init__(self, http: httpx.AsyncClient, *, api_key: str, base_url: str, model: str) -> None:
+    def __init__(
+        self,
+        http: httpx.AsyncClient,
+        *,
+        api_key: str,
+        base_url: str,
+        model: str,
+    ) -> None:
         self._http = http
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
@@ -66,13 +73,21 @@ class Jev:
         def question(value: JsonValue) -> Any:
             raw = value if isinstance(value, dict) else {}
             instructions = raw.get("instructions")
-            prompt = instructions.get("question", "") if isinstance(instructions, dict) else str(instructions or "")
+
+            def text_value(value: JsonValue) -> str:
+                return value if isinstance(value, str) else ""
+
+            prompt = (
+                text_value(instructions.get("question")) if isinstance(instructions, dict) else text_value(instructions)
+            )
             criteria = raw.get("criteria")
             if not isinstance(criteria, dict):
                 return jev.BoolQuestion(instructions=jev.Instructions(question=prompt))
 
             def criterion(name: str, fallback: str) -> str:
                 value = criteria.get(name)
+                if isinstance(value, str):
+                    return value
                 return str(value.get("what", fallback)) if isinstance(value, dict) else fallback
 
             return jev.BoolQuestion(

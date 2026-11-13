@@ -239,8 +239,41 @@ def translate_response_origin(response: str, recorded_origin: str | None, reques
     return json.dumps(translated, ensure_ascii=False, separators=(",", ":")) if changed else response
 
 
+def _recorded_jev_body(path: str, body: Any) -> Any:
+    """Normalize typed Jev requests for the checked-in `bench/cassettes/*.jsonl.gz` fixtures.
+
+    Those cassettes were recorded before Jev requests became typed. Re-recording them into the current shape needs
+    live provider calls, so the offline fixture bench keeps this narrow compatibility shim until its fixtures can be
+    regenerated from recorded responses.
+    """
+    if not path.startswith(JEV_MOUNT + "/") or not isinstance(body, dict):
+        return body
+    recorded = dict(body)
+    recorded.pop("provider", None)
+    questions = recorded.get("questions")
+    if not isinstance(questions, dict):
+        return recorded
+    normalized: dict[str, Any] = {}
+    for name, value in questions.items():
+        if not isinstance(value, dict):
+            normalized[name] = value
+            continue
+        question = dict(value)
+        instructions = question.get("instructions")
+        if isinstance(instructions, dict):
+            question["instructions"] = instructions.get("question", "")
+        criteria = question.get("criteria")
+        if isinstance(criteria, dict):
+            question["criteria"] = {
+                key: option.get("what", "") if isinstance(option, dict) else option for key, option in criteria.items()
+            }
+        normalized[name] = question
+    recorded["questions"] = normalized
+    return recorded
+
+
 def request_key(path: str, body: bytes | str | Any) -> str:
-    return hashlib.sha256(f"{path}\n{canonical_json(body)}".encode()).hexdigest()
+    return hashlib.sha256(f"{path}\n{canonical_json(_recorded_jev_body(path, body))}".encode()).hexdigest()
 
 
 def describe_request(path: str, body: Any) -> tuple[str, str | None]:

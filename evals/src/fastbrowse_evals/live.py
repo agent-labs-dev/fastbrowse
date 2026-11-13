@@ -18,11 +18,11 @@ from dataclasses import dataclass
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
-from fastbrowse.models import Unavailable
 from parallax.harnesses.browser.cloud import Browser
-from parallax.models import Capability, CostSource, HarnessInfo, HarnessKind, Isolation
+from parallax.harnesses.browser.site import Unavailable, retryable_status, transient_transport
+from parallax.models import CostSource, HarnessInfo, HarnessKind, Isolation
 
-from fastbrowse_evals.backend import RETRYABLE_STATUS, TRANSIENT_TRANSPORT, FastbrowseHarness
+from fastbrowse_evals.backend import FastbrowseHarness
 
 POOL_ORGANIZATION = "parallax-benchmark"
 POOL_LEASE_MINUTES = 120
@@ -66,9 +66,9 @@ def on_pool_origin(url: str, pool: str) -> str:
 
 def _pool_failure(what: str, status: int | None = None, error: Exception | None = None) -> Exception:
     if error is not None:
-        failure = Unavailable if isinstance(error, TRANSIENT_TRANSPORT) else RuntimeError
+        failure = Unavailable if transient_transport(error) else RuntimeError
         return failure(f"browser pool {what} failed ({type(error).__name__})")
-    failure = Unavailable if status in RETRYABLE_STATUS else RuntimeError
+    failure = Unavailable if retryable_status(status) else RuntimeError
     return failure(f"browser pool {what} returned HTTP {status}")
 
 
@@ -156,7 +156,7 @@ class FastbrowsePoolHarness(FastbrowseHarness):
     info = HarnessInfo(
         name="fastbrowse-pool",
         kind=HarnessKind.OPEN,
-        capabilities=frozenset({Capability.BROWSER}),
+        capabilities=FastbrowseHarness.info.capabilities,
         pins_model=False,
         cost_source=CostSource.HARNESS,
         isolation=Isolation.HOST,
@@ -172,12 +172,8 @@ class FastbrowsePoolHarness(FastbrowseHarness):
             try:
                 yield browser
             finally:
-                self._details.update(
-                    {
-                        "pool_extend_failures": lease.extend_failures,
-                        "pool_close_seconds": lease.released,
-                    }
-                )
+                self._details.update({"pool_extend_failures": lease.extend_failures})
+        self._details["pool_close_seconds"] = lease.released
 
 
 __all__ = [
