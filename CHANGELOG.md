@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **Benchmarks are judged by DeepSeek V4.1 Flash.** Internal grading uses policy `browser-internal-deepseek-v6`, and the official suites default to the same judge. Each page goes to the judge once, so a 2 MB Hacker News thread costs about $0.05 to judge instead of $23, and screenshots go to the judge as images. On 48 recorded rows, DeepSeek agreed with Opus on 47 and left one ungraded, which it graded the same as Opus on a rerun ([#1075](https://github.com/agent-labs-dev/fastbrowse/issues/1075)).
+
 ## [0.11.0] - 2026-11-12
 
 - A count, total, minimum or maximum is checked against what the task asks for, so an answer no longer counts the orders where the task asks for their total.

@@ -10,7 +10,7 @@ use serde_json::{Map, json};
 
 use super::Agent;
 use super::helpers::{decision_label, describe};
-use super::state::{RunState, Step, Stop};
+use super::state::{Edits, RunState, Step, Stop};
 use crate::policy::{Decision, StepContext, decide, takes};
 use crate::start::{accept_start, propose_route, recovery_pages};
 
@@ -135,7 +135,7 @@ pub(super) fn leave_out_idle(state: &RunState, offered: &mut Observation, contex
             .any(|(url, label, field)| *url == offered.url && control.label == *label && control.context == *field)
     });
     // A refused edit spends a recovery, so a page of checkboxes offered one at a time would end the run stuck (#838).
-    if state.edits_forbidden == Some(true) {
+    if state.edits == Some(Edits::Forbidden) {
         let mut left_out = false;
         offered.controls.retain_mut(|control| {
             let edits: Vec<Operation> =

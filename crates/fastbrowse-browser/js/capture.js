@@ -582,5 +582,18 @@
   }
 
   scope(document.body, null, '');
-  return { url: location.href, title: document.title, blocks, inaccessible_frames: inaccessible };
+  // A JSON document is read by its structure, which its rendered blocks do not keep: Chrome shows the served text in
+  // the body's first `pre`, so that text is sent with the document's type, and Rust reads it when both are JSON
+  // (`fastbrowse_core::page::json`, whose `is_json` this check mirrors only to leave other pages' text unsent).
+  const type = document.contentType.toLowerCase();
+  const served = document.querySelector('body > pre');
+  const json = type === 'application/json' || (type.startsWith('application/') && type.endsWith('+json'));
+  return {
+    url: location.href,
+    title: document.title,
+    blocks,
+    inaccessible_frames: inaccessible,
+    content_type: document.contentType,
+    ...(json && served ? { json_text: served.textContent } : {}),
+  };
 })

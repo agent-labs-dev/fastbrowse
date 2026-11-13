@@ -642,6 +642,20 @@ pub struct Found {
     pub whole_record: bool,
 }
 
+impl From<fastbrowse_core::page::json::Found> for Found {
+    fn from(block: fastbrowse_core::page::json::Found) -> Self {
+        Found {
+            kind: block.kind,
+            text: block.text,
+            heading_path: block.heading_path,
+            href: None,
+            links: Vec::new(),
+            frame_id: None,
+            whole_record: block.whole_record,
+        }
+    }
+}
+
 /// A rendered frame: the document it shows, the number of blocks read before it, which is where its own go, and the
 /// headings it stands under, which its own blocks sit under too.
 #[derive(Debug, Clone, PartialEq)]

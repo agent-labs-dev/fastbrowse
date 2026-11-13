@@ -46,9 +46,10 @@ jev-ultrafast returns no answer, only DONE or BLOCKED, so it runs only the navig
 page a run ends on. fastbrowse must also end with the task's expected status, and jev-ultrafast with DONE.
 fastbrowse-pool runs every task fastbrowse runs.
 
-Every run is graded by `anthropic/claude-opus-5.5` through OpenRouter alone (`JUDGE_POLICY`, the only policy
-publication accepts); `--judge-policy browser-internal-jev-v4` grades Jev first with that model as its fallback, and
-`--judge-policy browser-internal-opus-v1` or `browser-internal-opus-v2` keeps an earlier policy.
+Every run is graded by `deepseek/deepseek-v4.1-flash` through OpenRouter alone (`JUDGE_POLICY`, the only policy
+publication accepts); `--judge-policy browser-internal-jev-v4` grades Jev first with a verified fallback. The earlier
+`browser-internal-opus-v*` policies name Opus, which is no longer an eval judge; they remain only so their recorded
+receipts stay readable.
 """
 
 import argparse
@@ -129,10 +130,12 @@ from fastbrowse_evals.browsers import (
     stop_cloud_browser,
 )
 from fastbrowse_evals.budget import POLICY, BudgetStop, CampaignBudget
-from fastbrowse_evals.evidence import parts, run_evidence, shared_step
+from fastbrowse_evals.evidence import once, parts, parts_v5, run_evidence, shared_step
 from fastbrowse_evals.final_page import EVIDENCE, VIEWPORT, FinalPage, FrameViewport, observe_browser, prepared_tab
 from fastbrowse_evals.judging import (
     EVIDENCE_QUESTIONS,
+    JUDGE_MODEL,
+    OPUS_JUDGE,
     QUESTIONS,
     SITE_FAILURE_QUESTIONS,
     browser_verdict,
@@ -291,20 +294,32 @@ thresholds, states over its input budget skip it, safety tasks
 (`fallback_only`) go straight to the pinned fallback, a state over the fallback's window is never sent, and a run a
 site's bot check stopped before it answered is UNKNOWN without a judge (`bot_check_block`). Selected only with
 --judge-policy; no published figure accepts it."""
-JUDGE_POLICY = "browser-internal-opus-v5"
-"""The default, and the only policy a published figure accepts: every page the run saw, each action, typed values, and
-citations with their quotes, in one form for every arm (`evidence.run_evidence`), so no run is graded on its answer
-alone: one with no record at all is UNKNOWN without a judge (`NO_EVIDENCE`). The source text of a task's check is gone
-from the state. Any recorded or rebuilt row can be regraded under it, from the full report the row keeps."""
+OPUS_V5_POLICY = "browser-internal-opus-v5"
+"""Every page the run saw, each action, typed values, and citations with their quotes, in one form for every arm
+(`evidence.run_evidence`), so no run is graded on its answer alone: one with no record at all is UNKNOWN without a judge
+(`NO_EVIDENCE`). The source text of a task's check is gone from the state. A state too long for one request is divided
+by `evidence.parts_v5`, which sends a long page's whole controls with every slice of its text: one Hacker News thread
+took 16 requests and $23 to judge (#1075). Selected only with --judge-policy; no published figure accepts it."""
+JUDGE_POLICY = "browser-internal-deepseek-v6"
+"""The default, and the only policy a published figure accepts, graded by `judging.JUDGE_MODEL` alone: v5's evidence
+with each page listed once
+(`evidence.once`), its controls beside its text, and a state too long for one request divided by `evidence.parts`, which
+sends every byte of every page once. Nothing the judge read under v5 is left out. A state that fits one request differs
+from v5's only where v5 listed a page twice. Any v5 row can be regraded under it from its recorded state."""
+EVIDENCE_POLICIES = (OPUS_V5_POLICY, JUDGE_POLICY)
+"""The policies that show the judge `evidence.run_evidence` in place of the arm's report."""
 POLICY_QUESTIONS = {
     OPUS_V1_POLICY: QUESTIONS,
     OPUS_V2_POLICY: SITE_FAILURE_QUESTIONS,
     OPUS_V3_POLICY: SITE_FAILURE_QUESTIONS,
     OPUS_V4_POLICY: SITE_FAILURE_QUESTIONS,
+    OPUS_V5_POLICY: EVIDENCE_QUESTIONS,
     JUDGE_POLICY: EVIDENCE_QUESTIONS,
     JEV_JUDGE_POLICY: QUESTIONS,
 }
 JUDGE_POLICIES = tuple(POLICY_QUESTIONS)
+POLICY_JUDGE = {policy: OPUS_JUDGE for policy in POLICY_QUESTIONS} | {JUDGE_POLICY: JUDGE_MODEL}
+"""The one model each policy that never asks Jev is graded by; the Jev policy's fallback is any verified model."""
 BOT_CHECK_POLICIES = (OPUS_V1_POLICY, JEV_JUDGE_POLICY)
 """The earlier policies, which keep a bot check fastbrowse named UNKNOWN without a judge (`bot_check_block`)."""
 _judge_policy: ContextVar[str] = ContextVar("judge_policy", default=JUDGE_POLICY)
@@ -428,27 +443,28 @@ def no_evidence(state: Mapping[str, JsonValue]) -> bool:
 
 def shown_to(policy: str, state: dict[str, JsonValue], ending: Ending) -> dict[str, JsonValue]:
     """`state` as `policy`'s judge is shown it; `ending` is how the run ended in every arm's shared vocabulary. Under
+    `JUDGE_POLICY` it is `OPUS_V5_POLICY`'s state with each page listed once (`evidence.once`). Under
     `OPUS_V4_POLICY` every arm's evidence takes one form (`shared_step`), from a run's state or a state recorded under
     `OPUS_V3_POLICY` alike, with `quotes` empty for every arm because each quote stays on its step. Under
     `OPUS_V3_POLICY` the report is `blind_report`, with the expected ending in the same vocabulary. Under
     `OPUS_V2_POLICY` the report leaves out the agent's own model traffic: those request and response
     bodies are not task evidence, no vendor arm exposes them, and they took one row's state from 19 KB to 1.8 MB, past
     the judge's window. The ledger row keeps everything, and earlier policies are shown the state as they always were."""
-    if policy != JUDGE_POLICY and FINAL_CAPTURE_FIELDS.intersection(state):
+    if policy not in EVIDENCE_POLICIES and FINAL_CAPTURE_FIELDS.intersection(state):
         state = {k: v for k, v in state.items() if k not in FINAL_CAPTURE_FIELDS}
     report = state.get("report")
-    if policy == JUDGE_POLICY:
-        if "pages" in state or not isinstance(report, dict):
-            return state
-        hidden = ("requirements", "report", "quotes")
-        kept = {k: v for k, v in state.items() if k not in hidden}
-        outcome = {field: report.get(field) for field in ("error", "observe_error", "failure_class", "steps")}
-        return {
-            **kept,
-            "expected_ending": normalize(str(state["expected_ending"])).value,
-            "report": {"ending": ending.value, **outcome},
-            **run_evidence(report, state.get("quotes")),
-        }
+    if policy in EVIDENCE_POLICIES:
+        if "pages" not in state and isinstance(report, dict):
+            hidden = ("requirements", "report", "quotes")
+            kept = {k: v for k, v in state.items() if k not in hidden}
+            outcome = {field: report.get(field) for field in ("error", "observe_error", "failure_class", "steps")}
+            state = {
+                **kept,
+                "expected_ending": normalize(str(state["expected_ending"])).value,
+                "report": {"ending": ending.value, **outcome},
+                **run_evidence(report, state.get("quotes")),
+            }
+        return once(state) if policy == JUDGE_POLICY else state
     if policy in (OPUS_V4_POLICY, OPUS_V3_POLICY) and isinstance(report, dict) and "ending" not in report:
         expected = normalize(str(state["expected_ending"])).value
         state = {**state, "expected_ending": expected, "report": blind_report(report, ending)}
@@ -486,12 +502,12 @@ async def grade_state(
     """Judge `state` under `policy`, preserving abstentions and provider receipts. The receipt keeps the exact state
     judged, so a later policy can grade the row again without running it (`regrade`)."""
     state = shown_to(policy, state, ending)
-    if policy == JUDGE_POLICY:
+    if policy in EVIDENCE_POLICIES:
         scrubbed = _scrubbed(state, task.secrets)
         assert isinstance(scrubbed, dict)
         state = scrubbed
         unjudgeable = unjudgeable or (NO_EVIDENCE if no_evidence(state) else None)
-    divided = parts(state) if policy == JUDGE_POLICY else [state]
+    divided = parts(state) if policy == JUDGE_POLICY else parts_v5(state) if policy == OPUS_V5_POLICY else [state]
     route: _JudgeRoute = {
         "policy": policy,
         "questions": POLICY_QUESTIONS[policy],
@@ -975,7 +991,7 @@ def _browser_dollars(cost: Sequence[CostLine]) -> tuple[float, bool]:
 def _known_components(lines: Sequence[CostLine]) -> dict[str, float]:
     """Dollars by component; a component with an unpriced line has no figure, which a zero would misstate."""
     known = {line.component for line in lines} - {line.component for line in lines if line.dollars is None}
-    return {c.value: round(sum(line.dollars or 0 for line in lines if line.component == c), 5) for c in known}
+    return {c.value: sum(line.dollars or 0 for line in lines if line.component == c) for c in known}
 
 
 async def ultrafast_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | None) -> tuple[Outcome, ArmReport]:
@@ -1020,13 +1036,13 @@ async def ultrafast_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path
         seconds=round(ran.seconds, 2),
         session_open_seconds=round((cloud.open_seconds or 0.0) + ran.setup_seconds, 2),
         session_close_seconds=cloud.close_seconds,
-        dollars=None if unknown else round(dollars, 5),
+        dollars=None if unknown else dollars,
         unknown_cost=unknown,
         error=ran.error,
         steps=ran.steps,
         trace=ran.trace,
         cost_by_component=({} if ran.unmetered_requests else {"jev": ran.jev_dollars, "llm": ran.text_dollars})
-        | ({} if unpriced else {"browser": round(browser, 5)}),
+        | ({} if unpriced else {"browser": browser}),
         actions=ran.actions,
         **ran.model_dump(
             include={
@@ -2335,8 +2351,8 @@ async def oss_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | Non
         provenance={"llm_cost_basis": OSS_LLM_COST}
         | ({} if ran.step_ceiling is None else {"upstream_max_steps": ran.step_ceiling})
         | ({} if ran.timeout_ceiling is None else {"upstream_timeout_seconds": ran.timeout_ceiling}),
-        cost_by_component=({} if unpriced else {"browser": round(browser, 5)})
-        | ({} if ran.dollars is None else {"llm": round(ran.dollars, 5)}),
+        cost_by_component=({} if unpriced else {"browser": browser})
+        | ({} if ran.dollars is None else {"llm": ran.dollars}),
     )
 
 
@@ -2418,8 +2434,8 @@ async def harness_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path |
         final_page_capture_viewport=final.frame_viewport,
         final_page_capture_withheld=final.frame_withheld,
         artifact=str(artifact),
-        cost_by_component=({} if unpriced else {"browser": round(browser, 5)})
-        | ({} if ran.dollars is None else {"llm": round(ran.dollars, 5)}),
+        cost_by_component=({} if unpriced else {"browser": browser})
+        | ({} if ran.dollars is None else {"llm": ran.dollars}),
     )
 
 
@@ -3012,7 +3028,7 @@ async def main(argv: list[str]) -> int:
         "--judge-policy",
         choices=JUDGE_POLICIES,
         default=JUDGE_POLICY,
-        help=f"how rows are graded; only the default {JUDGE_POLICY} (the pinned Opus judge alone) can be published",
+        help=f"how rows are graded; only the default {JUDGE_POLICY} ({JUDGE_MODEL} alone) can be published",
     )
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--record", type=Path, metavar="DIR", help="save each run as DIR/<arm>/<task>-<n>.mp4")
@@ -3072,7 +3088,7 @@ async def main(argv: list[str]) -> int:
         if count <= 0:
             parser.error(f"{flag} must be positive")
     try:
-        require_judges(use_jev=args.judge_policy == JEV_JUDGE_POLICY)
+        require_judges(use_jev=args.judge_policy == JEV_JUDGE_POLICY, model=POLICY_JUDGE[args.judge_policy])
     except JudgeConfigError as exc:
         parser.error(f"every row is judged, so the judges must be configured before any run starts: {exc}")
 
