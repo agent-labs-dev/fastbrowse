@@ -32,8 +32,7 @@ updates:
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
 
-  # The Java client is published to Maven Central, so Jackson and the Maven plugins are a shipped surface, not
-  # build furniture: a bump here reaches everyone who depends on the jar.
+  # The Java client's Jackson and Maven plugins, kept current with the rest of the clients.
   - package-ecosystem: maven
     directory: /java
     schedule: {interval: weekly}
