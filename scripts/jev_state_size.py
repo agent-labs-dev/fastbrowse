@@ -1,7 +1,9 @@
-"""Measure recorded decision states without sending their contents to a provider.
+"""Measure recorded decision requests without sending their contents to a provider.
 
-Read bench cassettes or run traces. Report exact serialized state characters by question set and top-level field,
-beside the provider's input tokens for the whole request. Providers do not report a state-only token count.
+Read run traces, or the `logs/<task>.requests.jsonl` files a `bench replay` writes: the requests that run sent. A bench
+cassette keeps every exchange ever recorded for its task, including ones the agent no longer sends, so profiling one
+measures past builds too. Report exact serialized characters of the state by top-level field and of the questions by
+key, per question set, beside the provider's input tokens for the whole request. Providers report no per-part count.
 """
 
 import argparse
@@ -45,7 +47,15 @@ def profile(paths: list[Path]) -> dict[str, Any]:
                 kind = ",".join(request["questions"])
                 group = groups.setdefault(
                     kind,
-                    {"requests": 0, "state_chars": 0, "input_tokens": 0, "metered_requests": 0, "fields": Counter()},
+                    {
+                        "requests": 0,
+                        "state_chars": 0,
+                        "question_chars": 0,
+                        "input_tokens": 0,
+                        "metered_requests": 0,
+                        "fields": Counter(),
+                        "questions": Counter(),
+                    },
                 )
                 group["requests"] += 1
                 state = request["state"]
@@ -53,11 +63,14 @@ def profile(paths: list[Path]) -> dict[str, Any]:
                 if isinstance(state, dict):
                     for key, value in state.items():
                         group["fields"][key] += characters(value)
+                group["question_chars"] += characters(request["questions"])
+                for key, value in request["questions"].items():
+                    group["questions"][key] += characters(value)
                 tokens = usage.get("input_tokens", usage.get("inputTokens"))
                 if isinstance(tokens, int) and not isinstance(tokens, bool):
                     group["input_tokens"] += tokens
                     group["metered_requests"] += 1
-    return {"kinds": groups, "token_scope": "input_tokens includes the state and questions"}
+    return {"kinds": groups, "token_scope": "input_tokens covers the whole request: the state and the questions"}
 
 
 def main() -> None:

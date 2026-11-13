@@ -171,7 +171,7 @@ pub fn accept_start(proposed: Option<&str>) -> Option<String> {
 /// are kept there while the run carries on with banners refused.
 pub async fn answers_consent_itself(jev: &dyn DecisionClient, task: &str, ledger: &Arc<Ledger>) -> Result<bool> {
     ledger.reserve(CostComponent::Jev, 0.0, 1)?;
-    let questions = IndexMap::from([("consent".to_string(), Question::Noul(consent_question(task)))]);
+    let questions = IndexMap::from([("consent".to_string(), Question::Noul(consent_question()))]);
     let state = json!({"task": task});
     let asked = jev_purpose(JevPurpose::Authorization, jev.evaluate(&state, &questions));
     let evaluation = jev_spend(Lines::Ledger(ledger.clone()), Some(ledger.clone()), asked).await?;
