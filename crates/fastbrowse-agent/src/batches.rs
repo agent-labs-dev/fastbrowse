@@ -1,6 +1,8 @@
 //! Many independent questions against one shared state, packed under Jev's input limits and sent together.
 
-use std::sync::{Mutex, MutexGuard};
+use std::collections::HashMap;
+use std::future::Future;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use fastbrowse_clients::validation::{Lines, Paid, jev_purpose, jev_spend};
 use fastbrowse_core::BoxFuture;
@@ -66,6 +68,38 @@ fn lock(spent: &Mutex<Spent>) -> MutexGuard<'_, Spent> {
     spent.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// The answers a run has had from Jev, by the exact state and question it sent.
+///
+/// A question asked again beside the same state is the same input, so its answer is already known: a tally checked
+/// again after its claim was sent back re-asked fifty requests of identical questions on PyPI. The state is the whole
+/// input beside the question, so a page that changed, even outside the viewport, is a different state and asked anew.
+#[derive(Debug, Default)]
+pub struct Known(Mutex<HashMap<String, HashMap<String, Answer>>>);
+
+impl Known {
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, HashMap<String, Answer>>> {
+        // A panic while the lock was held leaves answers that are still what Jev said.
+        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn get(&self, state: &str, question: &str) -> Option<Answer> {
+        self.lock().get(state)?.get(question).cloned()
+    }
+
+    fn insert(&self, state: &str, question: String, answer: Answer) {
+        self.lock().entry(state.to_string()).or_default().insert(question, answer);
+    }
+}
+
+tokio::task_local! {
+    static KNOWN: Arc<Known>;
+}
+
+/// Run `future` with `known` answering the questions its passes repeat. A run holds one for its whole length.
+pub async fn knowing<F: Future>(known: Arc<Known>, future: F) -> F::Output {
+    KNOWN.scope(known, future).await
+}
+
 /// None when no batch was answered; a question too large to send with the state alone goes unscored.
 #[allow(clippy::too_many_arguments)]
 pub async fn evaluate_batches(
@@ -79,8 +113,12 @@ pub async fn evaluate_batches(
     allow_failed_batches: bool,
 ) -> Result<Option<Answered>> {
     let ratio = tokens.chars_per_token;
-    let state_chars = text::len(&dumps(state)) as i64;
+    let written_state = dumps(state);
+    let state_chars = text::len(&written_state) as i64;
     let state_size = state_chars as f64 / ratio;
+    let known = KNOWN.try_with(Arc::clone).ok();
+    // Answers already had for this state.
+    let mut answered: IndexMap<String, Answer> = IndexMap::new();
     let mut batches: Vec<IndexMap<String, Question>> = Vec::new();
     let mut batch: IndexMap<String, Question> = IndexMap::new();
     let mut written: Vec<String> = Vec::new();
@@ -93,6 +131,10 @@ pub async fn evaluate_batches(
     let most = profile.max_questions.unwrap_or(usize::MAX);
     for (key, question) in questions {
         let json = question.dump_json();
+        if let Some(answer) = known.as_ref().and_then(|known| known.get(&written_state, &json)) {
+            answered.insert(key.clone(), answer);
+            continue;
+        }
         let size = text::len(&json) as f64 / ratio;
         if state_chars > tokens.input_chars(&[&json]) {
             continue;
@@ -116,7 +158,12 @@ pub async fn evaluate_batches(
         batches.push(batch);
     }
     if batches.is_empty() {
-        return Ok(None);
+        return Ok((!answered.is_empty()).then(|| Answered {
+            answers: answered,
+            cost: Vec::new(),
+            input_tokens: 0,
+            requests: 0,
+        }));
     }
 
     if let Some(ledger) = ledger {
@@ -132,7 +179,7 @@ pub async fn evaluate_batches(
     for questions in &batches {
         let receipt = Paid::default();
         lock(&spent).receipts.push(receipt.clone());
-        let spent = &spent;
+        let (spent, known, written_state) = (&spent, &known, &written_state);
         tasks.push(Box::pin(async move {
             let evaluation = match jev_purpose(
                 purpose,
@@ -161,11 +208,14 @@ pub async fn evaluate_batches(
                 spent.input_tokens += evaluation.input_tokens;
                 spent.requests += evaluation.requests;
             }
-            if let Some(on_answer) = on_answer {
-                for (key, answer) in &evaluation.answers {
-                    if questions.contains_key(key) {
-                        on_answer(key, answer);
-                    }
+            // Kept as each batch comes back, so a pass cancelled partway still knows what it paid for.
+            for (key, answer) in &evaluation.answers {
+                let Some(question) = questions.get(key) else { continue };
+                if let Some(known) = known {
+                    known.insert(written_state, question.dump_json(), answer.clone());
+                }
+                if let Some(on_answer) = on_answer {
+                    on_answer(key, answer);
                 }
             }
             Ok(Some(evaluation.answers))
@@ -179,11 +229,12 @@ pub async fn evaluate_batches(
         ledger.check(0.0)?;
     }
     let spent = lock(&spent);
-    if spent.paid.is_empty() {
+    if spent.paid.is_empty() && answered.is_empty() {
         return Ok(None);
     }
+    answered.extend(results.into_iter().flatten().flatten());
     Ok(Some(Answered {
-        answers: results.into_iter().flatten().flatten().collect(),
+        answers: answered,
         cost: spent.paid.clone(),
         input_tokens: spent.input_tokens,
         requests: spent.requests,
@@ -375,6 +426,51 @@ mod tests {
             None
         );
         assert!(jev.sent.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_pass_asked_again_beside_the_same_state_sends_no_request() {
+        // A tally checked again after its claim was sent back asked every member question a second time.
+        let jev = fake("");
+        let ledger = Ledger::new(Limits::default());
+        let asked = questions(&[("a", "first"), ("b", "second")]);
+        let tokens = one_per_batch();
+        let state = json!({"notes": ["Released: Dec 6, 2024"]});
+        let pass = || evaluate_batches(JevPurpose::Verify, &jev, &state, &asked, &tokens, Some(&ledger), None, false);
+        let (first, again, changed) = block_on(knowing(Default::default(), async {
+            let first = pass().await.unwrap().unwrap();
+            let again = pass().await.unwrap().unwrap();
+            let other = json!({"notes": ["Released: May 14, 2026"]});
+            let changed =
+                evaluate_batches(JevPurpose::Verify, &jev, &other, &asked, &tokens, Some(&ledger), None, false).await;
+            (first, again, changed.unwrap().unwrap())
+        }));
+        assert_eq!((again.answers.len(), again.requests, again.cost.len()), (2, 0, 0));
+        assert_eq!(again.answers, first.answers);
+        assert_eq!(changed.requests, 2, "another state is asked anew");
+        assert_eq!((jev.sent.lock().unwrap().len(), ledger.state().jev_calls), (4, 4));
+    }
+
+    #[test]
+    fn a_cancelled_pass_keeps_the_answers_it_paid_for() {
+        let jev = fake("b");
+        let asked = questions(&[("a", "first"), ("b", "second")]);
+        let tokens = one_per_batch();
+        let state = json!({});
+        let known = Arc::new(Known::default());
+        let mut pass = Box::pin(knowing(
+            known.clone(),
+            evaluate_batches(JevPurpose::Verify, &jev, &state, &asked, &tokens, None, None, true),
+        ));
+        assert!(pass.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
+        drop(pass);
+        let only_a = questions(&[("a", "first")]);
+        let again = block_on(knowing(
+            known,
+            evaluate_batches(JevPurpose::Verify, &jev, &state, &only_a, &tokens, None, None, true),
+        ));
+        assert_eq!(again.unwrap().unwrap().requests, 0);
+        assert_eq!(jev.sent.lock().unwrap().len(), 2);
     }
 
     struct Failing;
