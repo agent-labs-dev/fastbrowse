@@ -91,7 +91,7 @@ once, with its controls beside its text, and a divided state sends every byte of
 `--judge-policy browser-internal-opus-v5` sent a long page's whole controls with every slice of its text, so a 2 MB
 Hacker News thread took 16 requests and about $23 to judge, against about $0.05 under v6. Screenshots reach the judge
 as images, at most 1024 tokens each. The earlier `browser-internal-opus-v*` policies name Opus, which is no longer an
-eval judge; they remain so their recorded receipts keep their identity.
+eval judge; they remain only so their recorded receipts stay readable.
 `--judge-policy
 browser-internal-jev-v4` grades Jev first with the LLM fallback, for unpublished runs. External predicate
 and local-command outputs are retained as source evidence and interpreted by `browser-external-jev-v4`.

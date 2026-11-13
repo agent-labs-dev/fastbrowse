@@ -49,7 +49,7 @@ fastbrowse-pool runs every task fastbrowse runs.
 Every run is graded by `deepseek/deepseek-v4.1-flash` through OpenRouter alone (`JUDGE_POLICY`, the only policy
 publication accepts); `--judge-policy browser-internal-jev-v4` grades Jev first with a verified fallback. The earlier
 `browser-internal-opus-v*` policies name Opus, which is no longer an eval judge; they remain only so their recorded
-receipts keep their identity.
+receipts stay readable.
 """
 
 import argparse

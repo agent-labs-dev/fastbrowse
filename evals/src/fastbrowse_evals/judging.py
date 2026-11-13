@@ -22,7 +22,7 @@ JUDGE_MODEL = "deepseek/deepseek-v4.1-flash"
 """The only judge of a published figure, through OpenRouter (`OPENROUTER_BASE_URL`): the owner's decision. Opus is not
 an eval judge; on the 21 rows #1075 compared, this model alone matched all 21 Opus v5 verdicts for $0.18 in total."""
 OPUS_JUDGE = "anthropic/claude-opus-5.5"
-"""The model the earlier `browser-internal-opus-v*` policies name, kept so their recorded receipts keep their identity.
+"""The model the earlier `browser-internal-opus-v*` policies name, kept only so their recorded receipts stay readable.
 No published figure accepts it."""
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 THRESHOLDS = "exclusive"

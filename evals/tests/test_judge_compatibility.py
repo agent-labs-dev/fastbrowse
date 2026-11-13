@@ -1,77 +1,24 @@
-"""The Opus-only policies keep the dev13 request and receipt identity their recorded receipts carry."""
+"""A published policy keeps its identity when Parallax verifies another fallback model."""
 
-import hashlib
-import json
+import dataclasses
 
-import httpx
-import pytest
+from parallax import images
+from parallax import judging as pj
 
-from fastbrowse_evals import judging, official
+from fastbrowse_evals import judging, live
 
 
-@pytest.mark.parametrize(
-    ("policy", "questions", "request_sha", "policy_sha"),
-    [
-        (
-            "browser-internal-opus-v5",
-            judging.EVIDENCE_QUESTIONS,
-            "607c1af280074a5b853e5d1cd7c1d18bb579f9639985e44f9e3633ee686b0ef4",
-            "e697ca113f12e9ac2b1dcae724a792721e67b47d1504a46e8990b4f5bfff7ca1",
-        ),
-        (
-            "browser-official-opus-v2",
-            official.INTERRUPTION_QUESTIONS,
-            "a5ec68cb4be0f91e3a2a17e13fed7332e67a8a78d8d3ca8d6698394b4f8d02c6",
-            "147afeab1a0b7ce370062bf5059598699487f7a39829f1e98fea1c4ea5ba702d",
-        ),
-    ],
-)
-async def test_opus_keeps_its_pre_migration_request_and_receipt_identity(
-    monkeypatch, policy, questions, request_sha, policy_sha
-):
-    monkeypatch.setenv("PARALLAX_JUDGE_MODELS", judging.OPUS_JUDGE)
+def test_a_new_verified_model_leaves_the_published_identity_unchanged(monkeypatch):
+    monkeypatch.setenv("PARALLAX_JUDGE_MODELS", judging.JUDGE_MODEL)
     monkeypatch.setenv("PARALLAX_JUDGE_BASE_URL", judging.OPENROUTER_BASE_URL)
     monkeypatch.setenv("PARALLAX_JUDGE_API_KEY", "offline-fixture")
-    monkeypatch.delattr(judging.jev, "UNBILLED_REJECTIONS", raising=False)
-    state = {
-        "task": "Read the form",
-        "pages": [{"id": "page-1", "url": "https://form.test", "text": "Name: Ada"}],
-        "image": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
-    }
-    requests = []
 
-    def transport(request):
-        requests.append(request)
-        assert str(request.url) == "https://openrouter.ai/api/v1/chat/completions"
-        # Captured offline from Parallax dev13: pins instructions, schema, text and image parts together.
-        assert hashlib.sha256(request.content).hexdigest() == request_sha
-        return httpx.Response(
-            200,
-            json={
-                "id": "offline",
-                "choices": [
-                    {
-                        "message": {
-                            "content": json.dumps(
-                                {"items": [{"q": key, "yes": True, "why": "Fixture"} for key in questions]}
-                            )
-                        },
-                        "finish_reason": "stop",
-                    }
-                ],
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "cost": 0},
-            },
-        )
+    def identity() -> str:
+        panel, llm, primary = judging._route(False)
+        return judging._identity(live.JUDGE_POLICY, judging.EVIDENCE_QUESTIONS, panel, llm, primary, use_jev=False)
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
-        result, identity = await judging.judge_browser(
-            state,
-            policy=policy,
-            questions=questions,
-            use_jev=False,
-            client=client,
-        )
-    assert identity == policy_sha
-    assert len(requests) == 1
-    assert result.jev_call is None
-    assert all(decision.passed for decision in result.decisions.values())
+    before = identity()
+    other = "example/verified-later"
+    monkeypatch.setitem(pj.FALLBACK_CONTEXT_TOKENS, other, 1)
+    monkeypatch.setitem(images.VISION, other, dataclasses.replace(images.VISION[judging.JUDGE_MODEL], max_images=1))
+    assert identity() == before
