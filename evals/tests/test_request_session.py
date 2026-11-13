@@ -349,19 +349,19 @@ async def test_request_profile_mode_refuses_cloud_and_unbudgeted_paths(arguments
 
 
 @pytest.mark.parametrize(
-    "remaining,account,accepted",
+    "remaining,account,recorded",
     [
         ("2", ("3", "0"), True),
-        ("0.5", ("3", "0"), False),
+        ("0.5", ("3", "0"), True),
         (None, ("3", "1"), True),
-        (None, ("1", "0.5"), False),
+        (None, ("1", "0.5"), True),
         (True, ("3", "0"), False),
-        ("2", ("1", "0.5"), False),
+        ("2", ("1", "0.5"), True),
     ],
 )
 @pytest.mark.asyncio
-async def test_credit_preflight_is_read_only_and_requires_whole_campaign(
-    tmp_path: Path, remaining, account, accepted
+async def test_credit_preflight_records_credit_without_refusing_a_campaign(
+    tmp_path: Path, remaining, account, recorded
 ) -> None:
     import json
 
@@ -391,7 +391,7 @@ async def test_credit_preflight_is_read_only_and_requires_whole_campaign(
         credentials={"OPENROUTER_API_KEY": "agent-owned", "PARALLAX_JUDGE_API_KEY": "judge-owned"},
         transport_factory=lambda: httpx.MockTransport(upstream),
     )
-    if accepted:
+    if recorded:
         await session.verify_credit()
         receipt = (tmp_path / "wallet.credit.json").read_text()
         assert json.loads(receipt)["approved_usd"] == "1"
@@ -401,7 +401,7 @@ async def test_credit_preflight_is_read_only_and_requires_whole_campaign(
             await session.verify_credit()
         assert not (tmp_path / "wallet.credit.json").exists()
     assert calls and not (tmp_path / "wallet").exists()
-    if accepted:
+    if recorded:
         import hashlib
 
         with session:
@@ -411,8 +411,8 @@ async def test_credit_preflight_is_read_only_and_requires_whole_campaign(
 
 
 @pytest.mark.asyncio
-async def test_credit_preflight_respects_lower_effective_provider_budget(tmp_path: Path) -> None:
-    from fastbrowse_evals.spend import SpendStop
+async def test_credit_preflight_records_lower_effective_provider_budget(tmp_path: Path) -> None:
+    import json
 
     upstream = httpx.MockTransport(
         lambda request: httpx.Response(
@@ -432,8 +432,9 @@ async def test_credit_preflight_respects_lower_effective_provider_budget(tmp_pat
         credentials={"OPENROUTER_API_KEY": "agent-owned", "PARALLAX_JUDGE_API_KEY": "judge-owned"},
         transport_factory=lambda: upstream,
     )
-    with pytest.raises(SpendStop, match="fund"):
-        await session.verify_credit()
+    await session.verify_credit()
+    receipt = json.loads((tmp_path / "wallet.credit.json").read_text())
+    assert [provider["available_usd"] for provider in receipt["providers"]] == ["0.5", "0.5"]
 
 
 def test_agent_settings_pin_one_custom_route_and_strip_inherited_keys(

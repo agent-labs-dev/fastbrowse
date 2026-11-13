@@ -53,9 +53,10 @@ removed from the denominator.
 
 Before the first paid call of a campaign:
 
-- Check that each provider key has credit for the whole campaign. A key that reaches its limit mid-run turns
-  every later call into an HTTP 403 and invalidates the runs after it. OpenRouter reports a key's remaining
-  limit at `GET https://openrouter.ai/api/v1/key`.
+- The key's own cap is the spend control. Neither a workflow nor the request session refuses to start because a
+  key reports less credit left than the approved total: the session records what each key answered at
+  `GET https://openrouter.ai/api/v1/key` in `wallet.credit.json`, as evidence, and the wallet still bounds what
+  the run may commit. A key that reaches its limit mid-run turns every later call into an HTTP 403.
 - Check every secret and variable the workflow names in its header. The campaign workflows check theirs
   before any paid call; a new workflow does the same.
 

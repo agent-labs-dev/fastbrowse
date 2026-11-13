@@ -208,8 +208,8 @@ class RequestSession:
                     if not isinstance(budget, dict) or "remaining_usd" not in budget:
                         raise SpendStop("the provider returned invalid budget evidence")
                     available = min(available, TypeAdapter(Money).validate_python(budget["remaining_usd"]))
-                if available < self.limit:
-                    raise SpendStop("a provider key cannot fund the approved campaign total")
+                # Recorded, never a refusal: the key's own cap is the spend control, so a campaign starts
+                # whatever the provider says is left and the wallet bounds what it may actually commit.
                 checked.append({"credential_id": identity, "available_usd": str(available)})
         self.journal.parent.mkdir(parents=True, exist_ok=True)
         self._write_receipt(
