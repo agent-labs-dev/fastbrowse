@@ -350,7 +350,9 @@ def test_candidate_keeps_valid_original_fixture_after_new_same_tree_dispatch(mon
 def write_baseline(tmp_path, campaign: str):
     """A release-baseline.json naming `campaign`, as docs/results/ holds."""
     path = tmp_path / "release-baseline.json"
-    path.write_text(json.dumps({"version": "9.8.0", "campaign": campaign}), encoding="utf-8")
+    path.write_text(
+        json.dumps({"version": "9.8.0", "campaign": campaign, "tasks": ["core/a", "core/b"]}), encoding="utf-8"
+    )
     return path
 
 
@@ -369,3 +371,10 @@ def test_official_coverage_is_required_only_when_the_tag_claims_it(monkeypatch, 
     assert gate.main([tag]) == 0
     # A patch that claims official scores is measured too, so its claim is checked.
     assert asked == ([True] if official else [])
+
+
+def test_a_baseline_whose_campaign_lost_a_task_refuses_to_compare(monkeypatch) -> None:
+    # Run 1's ledger expired, so only run 2's task "a" is left; comparing on "a" alone would skip "b" unseen.
+    monkeypatch.setattr(gate, "campaign_rows", lambda *_: ([row("a", True)] * 3, ["run 2"]))
+    with pytest.raises(gate.GateError, match="no longer supplies 1 baseline tasks: core/b"):
+        gate.baseline_rows("o/r", {"campaign": "release-0.10.0", "tasks": ["core/a", "core/b"]})

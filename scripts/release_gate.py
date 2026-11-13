@@ -290,6 +290,17 @@ def campaign_rows(repo: str, campaign: str) -> tuple[list[dict[str, Any]], list[
     return [row for rows in chosen.values() for row in rows], used
 
 
+def baseline_rows(repo: str, baseline: dict[str, Any]) -> list[dict[str, Any]]:
+    """The baseline campaign's rows, refused unless they still cover every task the baseline file lists: `compare`
+    checks only the tasks it is given, so a run whose ledger is gone would drop its tasks from the gate unseen."""
+    rows, _ = campaign_rows(repo, baseline["campaign"])
+    missing = set(baseline["tasks"]) - {f"{task.suite}/{task.task}" for task in rows_by_task(rows)}
+    if missing:
+        names = ", ".join(sorted(missing))
+        raise GateError(f"campaign {baseline['campaign']} no longer supplies {len(missing)} baseline tasks: {names}")
+    return rows
+
+
 def tag_lines(repo: str, tag: str) -> list[str]:
     """The lines of `tag`'s annotated message; a lightweight tag has none."""
     ref = json.loads(_gh("api", f"repos/{repo}/git/ref/tags/{tag}"))["object"]
@@ -332,7 +343,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             official_notes = ["official benchmarks: not claimed (no 'Benchmarks: official' line)"]
         candidate, used = campaign_rows(args.repo, f"release-{version}")
-        before, _ = campaign_rows(args.repo, baseline["campaign"])
+        before = baseline_rows(args.repo, baseline)
         failures, notes = compare(candidate, before)
     except (GateError, ValueError, subprocess.CalledProcessError) as error:
         print(f"::error::{error}", file=sys.stderr)
