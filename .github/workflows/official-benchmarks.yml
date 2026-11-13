@@ -32,7 +32,7 @@ name: Official benchmarks
 #
 # Repository configuration this file needs (checked before any paid call):
 #   secrets: OPENROUTER_BENCHMARKS_API_KEY (the benchmark key, as OPENROUTER_API_KEY: the agent's LLM and Jev)
-#            PARALLAX_JUDGE_API_KEY (the key for the upstream judges' endpoint, handed to them as OPENAI_API_KEY)
+#            OPENROUTER_JUDGE_API_KEY (as PARALLAX_JUDGE_API_KEY: the key for the upstream judges' endpoint, handed to them as OPENAI_API_KEY)
 #            LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY (the run's record in the fastbrowse-evals project)
 #            BROWSER_USE_API_KEY (every task runs on a Browser Use Cloud browser)
 #            HF_TOKEN (only for online-mind2web: a token whose account accepted the dataset's access conditions)
@@ -183,7 +183,7 @@ jobs:
       - name: Check the credentials
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_BENCHMARKS_API_KEY }}
-          PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
+          PARALLAX_JUDGE_API_KEY: ${{ secrets.OPENROUTER_JUDGE_API_KEY }}
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
@@ -392,9 +392,9 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_BENCHMARKS_API_KEY }}
           # The upstream judge reads its key as OPENAI_API_KEY whatever endpoint it calls.
-          OPENAI_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENROUTER_JUDGE_API_KEY }}
           # Parallax's own pre-check judge, which runs before the upstream judge.
-          PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_JUDGE_API_KEY }}
+          PARALLAX_JUDGE_API_KEY: ${{ secrets.OPENROUTER_JUDGE_API_KEY }}
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
