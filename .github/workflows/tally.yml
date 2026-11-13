@@ -1,0 +1,27 @@
+name: Tally
+
+# Files an issue here before a key in .tally.yaml expires, or when a workflow or env template names a secret nobody
+# declared. tally reads names and dates only, never a secret value.
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+# Two overlapping syncs would both see an issue as missing and file it twice.
+concurrency:
+  group: tally-issues
+  cancel-in-progress: false
+
+jobs:
+  tally:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: agent-labs-dev/tally@9aee976a0e2c6204036c0da5629021dd704d386d # v0.4.1
