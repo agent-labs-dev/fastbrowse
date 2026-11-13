@@ -1631,6 +1631,70 @@ async fn test_a_task_that_rules_out_only_other_changes_makes_the_requested_one()
     }
 }
 
+/// Records the instructions of every `requested` question, and answers the edits question `requested_only`.
+#[derive(Default)]
+struct RequestedRecorder(std::sync::Mutex<Vec<String>>);
+
+impl fastbrowse_core::decision::DecisionClient for RequestedRecorder {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        questions: &'a IndexMap<String, fastbrowse_core::decision::Question>,
+    ) -> BoxFuture<'a, Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>> {
+        use fastbrowse_core::decision::{Answer, ChoiceAnswer, NoulAnswer, Question};
+        let answers = questions
+            .iter()
+            .map(|(key, question)| {
+                if let ("requested", Question::Noul(q)) = (key.as_str(), question) {
+                    self.0.lock().unwrap().push(q.instructions.clone());
+                }
+                let answer = if key == "edits" {
+                    Answer::Choice(ChoiceAnswer {
+                        kind: Default::default(),
+                        choice: "requested_only".into(),
+                        probabilities: IndexMap::from([("requested_only".to_string(), 1.0)]),
+                        confidence: 1.0,
+                    })
+                } else {
+                    Answer::Noul(NoulAnswer { kind: Default::default(), probability: 0.9 })
+                };
+                (key.clone(), answer)
+            })
+            .collect();
+        Box::pin(async move {
+            Ok(fastbrowse_core::decision::Evaluation {
+                model: "jev".into(),
+                answers,
+                input_tokens: 0,
+                cost: free(),
+                requests: 1,
+            })
+        })
+    }
+
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        ScriptedJev::new(Vec::new()).profile()
+    }
+}
+
+/// ArrowRight can select a tab where Delete closes it, so a task that asks for one press and rules out the rest is
+/// asked about the exact chord, not a press on the control.
+#[tokio::test]
+async fn test_a_requested_press_is_asked_about_its_chord() {
+    let tab = Control::new("t", "tab", "Billing", [Operation::Press]);
+    let page = observation(&[tab.clone()]);
+    let jev = Arc::new(RequestedRecorder::default());
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "Select the next tab after Billing. Change nothing else.".into();
+    let decision = code_decision(Operation::Press, Some(tab.clone()));
+    let gated = agent.gate_key_edit(&mut state, &page, &decision, &tab, "ArrowRight").await;
+    assert!(gated.is_ok(), "{gated:?}");
+    let asked = jev.0.lock().unwrap();
+    assert_eq!(asked.len(), 1);
+    assert!(asked[0].contains("The exact key chord to press is 'ArrowRight'."), "{}", asked[0]);
+}
+
 /// Once the task rules edits out, the step and recovery stop offering them: each refusal spends a recovery, so a page
 /// of checkboxes would otherwise end the run stuck.
 #[test]

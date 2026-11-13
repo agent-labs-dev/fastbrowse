@@ -879,7 +879,8 @@ pub enum Edits {
 pub struct SignInNeeds {
     /// The task needs a signed-in account: its own orders, messages, settings or other private pages.
     pub account: bool,
-    /// The task itself gives the credentials to sign in with.
+    /// The task gives the credentials to sign in with, or says to sign in with saved or configured ones: asked only
+    /// whether it gives them, a task to sign in with the saved password and report a 2FA prompt read the wall instead.
     pub credentials: bool,
     /// The task asks about the access restriction itself, which the wall shows.
     pub inspects: bool,

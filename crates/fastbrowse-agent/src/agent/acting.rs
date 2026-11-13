@@ -583,7 +583,7 @@ impl Agent {
         self.gate_asked_edit(state, observation, decision, control, edits, questions).await
     }
 
-    async fn gate_key_edit(
+    pub(super) async fn gate_key_edit(
         &self,
         state: &mut RunState,
         observation: &Observation,
@@ -612,7 +612,9 @@ impl Agent {
         );
         let mut questions = IndexMap::from([("changes_value".into(), Question::Noul(question))]);
         if edits == Edits::RequestedOnly {
-            let action = control_action(Operation::Press, control, None, &observation.controls);
+            // As at the irreversible gate, the chord tells a requested press from another on the same control.
+            let mut action = control_action(Operation::Press, control, None, &observation.controls);
+            action.push_str(&format!("\nThe exact key chord to press is {}.\n", text::repr(key)));
             questions.insert("requested".to_string(), Question::Noul(requested_question(&action)));
         }
         self.gate_asked_edit(state, observation, decision, control, edits, questions).await
@@ -725,9 +727,9 @@ impl Agent {
             (
                 "credentials".to_string(),
                 noul(
-                    "Does `task` give the username, email, password or code to sign in with?",
-                    "The task gives credentials to sign in with.",
-                    "The task gives no credentials.",
+                    "Does `task` give the username, email, password or code to sign in with, or tell the agent to sign in with a saved or configured account or password?",
+                    "The task gives credentials to sign in with, or says to sign in with saved or configured ones.",
+                    "The task gives no credentials and does not say to sign in.",
                 ),
             ),
             (
