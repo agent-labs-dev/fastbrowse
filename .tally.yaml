@@ -69,7 +69,7 @@ keys:
     expires: 2027-11-12
     limit: none
     rotated: 2026-11-13
-    note: "fine-grained PAT with contents and pull request write on agent-labs-dev/fastbrowse only"
+    note: fine-grained PAT with contents and pull request write on agent-labs-dev/fastbrowse only
   - id: browser-use-api-key
     service: browser-use
     group: benchmarks
@@ -86,16 +86,18 @@ keys:
     owner: cjber
     locations:
       - github: FASTBROWSE_HOSTED_API_KEY
-    expires: unknown
-    limit: unknown
+    expires: none
+    limit: "none: spends the organization's prepaid balance; the key has no cap of its own"
+    expiresNote: "The console API reports expires_at null for the nebula org live key \"parallax-evals\" (checked 2026-11-13); the same value is pass dev/FASTBROWSE_HOSTED_API_KEY"
   - id: fastbrowse-hosted-test-key
     service: fastbrowse-hosted
     group: ci
     owner: cjber
     locations:
       - github: FASTBROWSE_HOSTED_TEST_KEY
-    expires: unknown
-    limit: unknown
+    expires: none
+    limit: "none: a test key runs against the mock browser and is never charged"
+    expiresNote: "The console API reports expires_at null for the nebula org test key \"parallax-evals\" (checked 2026-11-13)"
   - id: fastbrowse-site-token
     service: github
     group: release
@@ -122,8 +124,9 @@ keys:
     owner: cjber
     locations:
       - github: HF_TOKEN
-    expires: unknown
-    limit: unknown
+    expires: none
+    limit: "none: prepaid credits only, a hard stop unless auto-recharge is on"
+    expiresNote: "no expiry option in the Hugging Face user token docs (vendor docs, checked 2026-11-13)"
   - id: langfuse-secret-key
     service: langfuse
     group: ci
@@ -131,12 +134,14 @@ keys:
     locations:
       - github: LANGFUSE_SECRET_KEY
     expires: unknown
-    limit: unknown
+    limit: "none: Langfuse Cloud offers soft spend alerts only"
+    expiresNote: "set 2026-10-29. Langfuse added optional key expiry on 2026-10-07, and keys made before then have none (langfuse.com changelog, checked 2026-11-13), so read this key's expiry under Project Settings, API Keys"
   - id: site-deploy-hook
     service: vercel
     group: release
     owner: cjber
     locations:
       - github: SITE_DEPLOY_HOOK
-    expires: unknown
-    limit: unknown
+    expires: none
+    limit: "none: rate limited to 60 triggers an hour per project"
+    expiresNote: "Vercel deploy hooks are valid until revoked (vendor docs, checked 2026-11-13)"

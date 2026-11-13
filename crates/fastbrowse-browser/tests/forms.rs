@@ -747,3 +747,33 @@ async fn test_a_select_clipped_after_it_was_observed_is_stale() {
     assert_eq!(result.outcome, StepOutcome::Stale, "{:?}", result.detail);
     assert_eq!(value, json!("Free"));
 }
+
+/// A comment form that posts answers in text alone: it empties its box and lists the new comment. A run told only
+/// that the box emptied filled it and posted again, twice, so a commit's effect names the text the page added.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_posted_comment_is_named_in_the_effect_of_the_click_that_posted_it() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    let html = "<section aria-label=Comments><textarea id=box aria-label='Comment text area'></textarea>\
+                <button type=button id=post>Post</button><div id=list>\
+                <article><b>Serzath</b> <time>2 days ago</time><p>Works great, thanks.</p>\
+                <button type=button>Reply</button></article></div></section>";
+    let script = "document.getElementById('post').onclick = () => { \
+                  const box = document.getElementById('box'), a = document.createElement('article'); \
+                  a.innerHTML = '<b>cjber</b> <time>just now</time><p></p><button type=button>Reply</button>'; \
+                  a.querySelector('p').textContent = box.value; document.getElementById('list').prepend(a); \
+                  box.value = ''; }";
+    eval_active(&h.page, &format!("document.body.innerHTML = {}; {script}", serde_json::to_string(html).unwrap()))
+        .await;
+    let before = h.observe().await;
+    h.page.act(&fill(find(&before, "Comment text area"), "Version 2.4.1 is out."), &before).await.unwrap();
+    let typed = h.observe().await;
+    h.page.act(&action(Operation::Click, find(&typed, "Post")), &typed).await.unwrap();
+    let posted = h.observe().await;
+    let summary = fastbrowse_core::effects::effect_of_commit(&typed, &posted, None, false).summary;
+    assert!(
+        summary.ends_with("added the text: \"cjber\", \"just now\", \"Version 2.4.1 is out.\", \"Reply\""),
+        "the click's effect is {summary:?}"
+    );
+    h.close().await;
+}

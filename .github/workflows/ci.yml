@@ -226,7 +226,7 @@ jobs:
       - run: cargo nextest run --workspace --locked --no-fail-fast
       # nextest does not run doctests.
       - run: cargo test --workspace --locked --doc
-      # What the release publishes to crates.io, built from the packaged sources alone: a crate that reaches a file
+      # The crates as `cargo publish` would package them, built from the packaged sources alone: a crate that reaches a file
       # outside its own directory, or names another without a version, fails here instead of at a release.
       # cargo treats a crate it verifies against as an immutable registry crate: it reuses an unpacked copy in
       # ~/.cargo/registry/src and a build in the target directory keyed on name and version alone. The cache above

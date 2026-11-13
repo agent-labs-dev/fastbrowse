@@ -198,6 +198,7 @@ impl Agent {
             shows_answer: None,
             site_failure: None,
             unobtainable: None,
+            inside_drawn: None,
             destination: None,
             replayed: false,
             by_code: true,

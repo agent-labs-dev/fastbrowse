@@ -14,7 +14,7 @@ use indexmap::IndexMap;
 use super::recovery::{Idle, Withheld};
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes, address, fact_id};
-use crate::policy::{Decision, HistoryEntry, RelevanceCache};
+use crate::policy::{Decision, HistoryEntry};
 use crate::retrieval::ComposedAnswer;
 use crate::retrieval::whole_page_facts;
 
@@ -269,7 +269,6 @@ pub(crate) struct RunState {
     pub known_pages: Vec<String>,
     /// The known pages the run has been on: each stays one the run may navigate to, and is not offered again.
     pub reached_known_pages: Vec<String>,
-    pub relevance_cache: RelevanceCache,
     pub steps: Vec<StepResult>,
     /// What Jev was offered for the latest decision, for the next step recorded, which is the one that decision led to.
     pub choices: Vec<StepChoice>,
@@ -298,6 +297,8 @@ pub(crate) struct RunState {
     /// The one renderer hang this run may recover without risking a replay of the action.
     pub hung_page_reopened: bool,
     pub last_page: Option<(String, String)>,
+    /// The document in which Jev was last asked whether the task needs an action inside a drawn surface.
+    pub surface_judged: Option<(String, String)>,
     /// The source of the latest navigation, scoped to the destination that followed it.
     pub navigation_from: Option<((String, String), Observation)>,
     /// Jev's sign-in readings stay with the document they described, not with every later route.
@@ -700,6 +701,7 @@ impl RunState {
             commits: 0,
             redecided: false,
             last_page: None,
+            surface_judged: None,
             navigation_from: None,
             ..self
         }
@@ -729,7 +731,6 @@ impl RunState {
             routes: HashSet::new(),
             known_pages: Vec::new(),
             reached_known_pages: Vec::new(),
-            relevance_cache: RelevanceCache::default(),
             steps: Vec::new(),
             choices: Vec::new(),
             history: Vec::new(),
@@ -746,6 +747,7 @@ impl RunState {
             blank_waited: HashSet::new(),
             hung_page_reopened: false,
             last_page: None,
+            surface_judged: None,
             navigation_from: None,
             login_readings: HashMap::new(),
             reached: HashMap::new(),
