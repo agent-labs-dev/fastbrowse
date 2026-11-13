@@ -204,9 +204,8 @@ impl Agent {
                     }
                     let redecided = state.redecided;
                     let deciding = self.trace.phase("decide", async {
-                        let (ledger, cache) = (Some(&*state.ledger), Some(&state.relevance_cache));
-                        let config = &self.config;
-                        Ok(decide(&*self.jev, &offered, &context, config, ledger, cache, &self.trace).await?)
+                        let (ledger, config) = (Some(&*state.ledger), &self.config);
+                        Ok(decide(&*self.jev, &offered, &context, config, ledger, &self.trace).await?)
                     });
                     let decided = self.unless_redrawn(redecided, deciding, &observation, None).await?;
                     let Watched::Done(mut decision) = decided else {

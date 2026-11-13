@@ -7,13 +7,13 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::sync::{LazyLock, Mutex, MutexGuard};
+use std::sync::LazyLock;
 
 use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::{
-    Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, EVEN_ODDS, Evaluation, Images, NoulAnswer,
-    NoulQuestion, Question,
+    Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, EVEN_ODDS, Evaluation, Images, NoulQuestion,
+    Question,
 };
 use fastbrowse_core::effects::leavable;
 use fastbrowse_core::keys::role_keys;
@@ -21,7 +21,7 @@ use fastbrowse_core::models::{CostComponent, CostLine, JevPurpose, Operation, St
 use fastbrowse_core::navigation::navigation_urls;
 use fastbrowse_core::page::{Control, Observation, cut_text, cut_with, pager_link};
 use fastbrowse_core::py::dump::Dump;
-use fastbrowse_core::py::json::{Style, dumped_len, dumps, write};
+use fastbrowse_core::py::json::{dumped_len, dumps};
 use fastbrowse_core::py::{lax, sha256_hex, text};
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
@@ -489,41 +489,6 @@ pub struct Request {
     pub target_rules: String,
 }
 
-/// Completed relevance scores for one document and exact task context, including cancelled passes.
-///
-/// Shared behind a lock so the batches of one pass can each store what they were billed for as they come back.
-#[derive(Debug, Default)]
-pub struct RelevanceCache {
-    inner: Mutex<CacheState>,
-}
-
-#[derive(Debug, Default)]
-struct CacheState {
-    context: Option<(String, String)>,
-    answers: HashMap<String, NoulAnswer>,
-}
-
-impl RelevanceCache {
-    fn lock(&self) -> MutexGuard<'_, CacheState> {
-        self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
-    /// Clears the scores when the document or the context changed; the scores kept for this one.
-    fn prepare(&self, document: &str, state: &Value) -> HashMap<String, NoulAnswer> {
-        let key = (document.to_string(), write(state, Style::DUMPS.sorted()));
-        let mut cache = self.lock();
-        if cache.context.as_ref() != Some(&key) {
-            cache.context = Some(key);
-            cache.answers.clear();
-        }
-        cache.answers.clone()
-    }
-
-    fn remember(&self, question: String, answer: NoulAnswer) {
-        self.lock().answers.insert(question, answer);
-    }
-}
-
 /// Ask Jev for the next action, reducing the observation when it will not fit.
 pub async fn decide(
     jev: &dyn DecisionClient,
@@ -531,7 +496,6 @@ pub async fn decide(
     context: &StepContext,
     config: &Config,
     ledger: Option<&Ledger>,
-    relevance_cache: Option<&RelevanceCache>,
     trace: &Trace,
 ) -> Result<Decision> {
     let options = jev.profile().max_choice_options;
@@ -545,8 +509,7 @@ pub async fn decide(
     let max_offered = fitting.group_size() * options;
     let mut shortlist_tried = context.list_read != ListRead::Continue && controls.len() > max_offered;
     if shortlist_tried {
-        let shortlisted =
-            shortlist(jev, &observation, &controls, &context, fitting, ledger, relevance_cache, trace).await?;
+        let shortlisted = shortlist(jev, &observation, &controls, &context, fitting, ledger, trace).await?;
         if let Some((kept, paid, used)) = shortlisted {
             (controls, cost, tokens) = (kept, paid, used);
             reduction = Reduction::Relevance;
@@ -597,8 +560,7 @@ pub async fn decide(
         }
         if !shortlist_tried {
             shortlist_tried = true;
-            let shortlisted =
-                shortlist(jev, &observation, &controls, &context, fitting, ledger, relevance_cache, trace).await?;
+            let shortlisted = shortlist(jev, &observation, &controls, &context, fitting, ledger, trace).await?;
             if let Some((kept, paid, used)) = shortlisted {
                 (controls, cost, tokens) = (kept, paid, used);
                 reduction = Reduction::Relevance;
@@ -826,7 +788,6 @@ async fn shortlist(
     context: &StepContext,
     fitting: Fitting<'_>,
     ledger: Option<&Ledger>,
-    cache: Option<&RelevanceCache>,
     trace: &Trace,
 ) -> Result<Option<Shortlist>> {
     let config = fitting.config;
@@ -851,37 +812,21 @@ async fn shortlist(
             (format!("r{i}"), (question, written))
         })
         .collect();
-    let cached = cache.map_or_else(HashMap::new, |cache| cache.prepare(&observation.document_key, &state));
-    let mut answers: IndexMap<String, Answer> = questions
-        .iter()
-        .filter_map(|(key, (_, written))| cached.get(written).map(|a| (key.clone(), Answer::Noul(a.clone()))))
-        .collect();
-    // A redraw cancels unfinished batches, but scores already paid for remain valid for an identical question and
-    // context. Action selection still sees the fresh page; relevance never authorizes or chooses an action.
+    // A redraw cancels unfinished batches, but the run's `Known` answers keep the scores already paid for, by the exact
+    // state and question. Action selection still sees the fresh page; relevance never authorizes or chooses an action.
     let mut pending: IndexMap<String, Question> = IndexMap::new();
     let mut representatives: HashMap<&str, &str> = HashMap::new();
     let mut aliases: IndexMap<String, String> = IndexMap::new();
     // Twin controls can ask the same relevance question; one score suffices, but action targets stay distinct.
     for (key, (question, written)) in &questions {
-        if !answers.contains_key(key) {
-            let representative = *representatives.entry(written.as_str()).or_insert(key.as_str());
-            aliases.insert(key.clone(), representative.to_string());
-            if representative == key {
-                pending.insert(key.clone(), question.clone());
-            }
+        let representative = *representatives.entry(written.as_str()).or_insert(key.as_str());
+        aliases.insert(key.clone(), representative.to_string());
+        if representative == key {
+            pending.insert(key.clone(), question.clone());
         }
     }
-    let remember = |key: &str, answer: &Answer| {
-        if let (Some(cache), Answer::Noul(noul), Some((_, written))) = (cache, answer, questions.get(key)) {
-            cache.remember(written.clone(), noul.clone());
-        }
-    };
-    let answered =
-        evaluate_batches(JevPurpose::Relevance, jev, &state, &pending, &config.tokens, ledger, Some(&remember), true)
-            .await?;
-    if let Some(answered) = &answered {
-        answers.extend(answered.answers.iter().map(|(k, a)| (k.clone(), a.clone())));
-    }
+    let answered = evaluate_batches(JevPurpose::Relevance, jev, &state, &pending, &config.tokens, ledger, true).await?;
+    let mut answers: IndexMap<String, Answer> = answered.as_ref().map(|a| a.answers.clone()).unwrap_or_default();
     for (key, representative) in &aliases {
         if let Some(answer) = answers.get(representative).cloned() {
             answers.insert(key.clone(), answer);
@@ -929,7 +874,7 @@ async fn shortlist(
         fields.insert("offered".into(), (protected_set.len() + low).into());
         fields.insert("scored".into(), scores.len().into());
         fields.insert("requests".into(), answered.as_ref().map_or(0, |a| a.requests).into());
-        fields.insert("reused".into(), (questions.len() - aliases.len()).into());
+        fields.insert("reused".into(), answered.as_ref().map_or(0, |a| a.known).into());
         fields.insert("duplicates".into(), (aliases.len() - pending.len()).into());
         fields
     });
@@ -1724,7 +1669,10 @@ mod tests {
     use fastbrowse_core::py::datetime::DateTime;
 
     use super::*;
+    use crate::batches::{Known, knowing};
     use crate::support::testing::block_on;
+    use fastbrowse_core::decision::NoulAnswer;
+    use std::sync::{Arc, Mutex};
 
     fn grouped() -> Config {
         Config { observation: ObservationLimits { group_size: 4 }, ..Config::default() }
@@ -1893,8 +1841,7 @@ mod tests {
         let fresh = build_request(&page, &page.controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
         assert!(fresh.questions.contains_key(keys::UNOBTAINABLE));
         let jev = fake(&[("operation", "click"), ("click_target", "b1"), (keys::UNOBTAINABLE, "yes")], "");
-        let decision =
-            block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        let decision = block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
         assert_eq!(decision.unobtainable, Some(0.9));
     }
 
@@ -1922,16 +1869,14 @@ mod tests {
         ]);
         let context = StepContext { plan_ahead: true, ..StepContext::new("check out as Ada Lovelace, 12345") };
         let jev = answers("fill", ("fill_target", "first"));
-        let decision =
-            block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        let decision = block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
         assert_eq!(decision.target.map(|t| t.id), Some("first".into()));
         let plan: Vec<_> = decision.plan.iter().map(|p| p.target.id.as_str()).collect();
         assert_eq!(plan, ["last", "zip"]);
         assert_eq!(jev.requests.lock().unwrap().len(), 1, "the plan is asked in the decision's own request");
 
         let jev = answers("click", ("click_target", "b1"));
-        let decision =
-            block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        let decision = block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
         assert!(decision.plan.is_empty(), "fields are never filled after a press");
     }
 
@@ -1951,8 +1896,7 @@ mod tests {
             "",
         );
         let context = StepContext { plan_ahead: true, ..StepContext::new("reply to Ada: thanks") };
-        let decision =
-            block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        let decision = block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
         assert!(decision.plan.is_empty(), "{:?}", decision.plan);
     }
 
@@ -2048,8 +1992,7 @@ mod tests {
         let jev = fake(&[("operation", "blur"), ("blur_target", "typing")], "");
         let page = observation(vec![field("left", Some(false)), field("typing", Some(true))]);
         let context = StepContext::new("leave the field");
-        let decision =
-            block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        let decision = block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
         assert_eq!((decision.operation, decision.target.map(|t| t.id)), (Operation::Blur, Some("typing".into())));
     }
 
@@ -2067,12 +2010,10 @@ mod tests {
         let jev = fake(&[("operation", "scroll"), ("scroll_target", "panel")], "");
         let page =
             observation(vec![Control::new("panel", "region", "Vertical scroll area: Side panel", [Operation::Scroll])]);
-        let decision =
-            block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        let decision = block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
         assert_eq!(decision.target.unwrap().id, "panel");
         let page = observation(vec![]);
-        let decision =
-            block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        let decision = block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
         assert_eq!(decision.operation, Operation::Scroll);
         assert!(decision.target.is_none());
     }
@@ -2083,8 +2024,7 @@ mod tests {
         let mut context = StepContext::new("press button 3");
         context.history = vec![HistoryEntry::new(Some(Operation::Scroll), None, StepOutcome::Executed, true)];
         let page = observation((0..5).map(button).collect());
-        let decision =
-            block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        let decision = block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
         assert_eq!((decision.operation, decision.target.map(|t| t.id)), (Operation::Click, Some("b3".to_string())));
         assert_eq!(decision.login_required, None);
     }
@@ -2096,7 +2036,7 @@ mod tests {
             Fake { options: 10, ..fake(&[("operation", "click"), ("click_group", "2"), ("click_target", "b9")], "") };
         let page = observation((0..12).map(button).collect());
         let context = StepContext::new("press button 3");
-        let decision = block_on(decide(&jev, &page, &context, &config, None, None, &Trace::disabled())).unwrap();
+        let decision = block_on(decide(&jev, &page, &context, &config, None, &Trace::disabled())).unwrap();
         assert_eq!(decision.target.as_ref().unwrap().id, "b9");
         let requests = jev.requests.lock().unwrap();
         let Question::Choice(inner) = &requests[1]["click_target"] else { panic!("a choice") };
@@ -2112,7 +2052,7 @@ mod tests {
         let ledger = Ledger::new(Limits { max_jev_calls: Some(1), ..Limits::default() });
         let page = observation((0..12).map(button).collect());
         let context = StepContext::new("press button 3");
-        let result = block_on(decide(&jev, &page, &context, &config, Some(&ledger), None, &Trace::disabled()));
+        let result = block_on(decide(&jev, &page, &context, &config, Some(&ledger), &Trace::disabled()));
         assert!(matches!(result, Err(AgentError::Budget(_))));
         assert_eq!((jev.requests.lock().unwrap().len(), ledger.state().jev_calls), (1, 1));
     }
@@ -2122,14 +2062,14 @@ mod tests {
         // Two options of two controls offer four at most, so five are shortlisted first.
         let mut config = Config { observation: ObservationLimits { group_size: 2 }, ..Config::default() };
         config.tokens.batch_tokens = 1;
-        let cache = RelevanceCache::default();
+        let known = Arc::new(Known::default());
         let mut jev = Fake { options: 2, ..fake(&[("operation", "click")], "Button 0") };
         jev.interrupt = true;
         let page = observation((0..5).map(button).collect());
         let context = StepContext::new("press button 3");
         let trace = Trace::disabled();
         {
-            let mut pending = Box::pin(decide(&jev, &page, &context, &config, None, Some(&cache), &trace));
+            let mut pending = Box::pin(knowing(known.clone(), decide(&jev, &page, &context, &config, None, &trace)));
             assert!(pending.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
             assert_eq!(jev.requests.lock().unwrap().len(), 5);
             // Dropped where a redraw cancels the step.
@@ -2141,7 +2081,7 @@ mod tests {
         fresh.page_key = "redrawn".into();
         fresh.controls =
             page.controls.iter().rev().map(|c| Control { id: format!("fresh-{}", c.id), ..c.clone() }).collect();
-        let result = block_on(decide(&jev, &fresh, &context, &config, None, Some(&cache), &trace)).unwrap();
+        let result = block_on(knowing(known, decide(&jev, &fresh, &context, &config, None, &trace))).unwrap();
         let retries: Vec<_> = relevance_requests(&jev).into_iter().skip(before).collect();
         assert_eq!(retries.len(), 4);
         assert!(!retries.iter().flat_map(|r| r.values()).any(|q| match q {
@@ -2169,7 +2109,7 @@ mod tests {
         ];
         let mut page = observation((0..3).map(button).collect());
         page.viewport_text = "Current account sign-in page".into();
-        let decision = block_on(decide(&jev, &page, &context, &tight(), None, None, &Trace::disabled())).unwrap();
+        let decision = block_on(decide(&jev, &page, &context, &tight(), None, &Trace::disabled())).unwrap();
         assert_eq!(decision.reduction, Reduction::Trimmed);
         let states = jev.states.lock().unwrap();
         assert_eq!(states[0]["page"]["text"], "Current account sign-in page");
@@ -2190,7 +2130,7 @@ mod tests {
             }))
             .collect();
         let page = observation((0..3).map(button).collect());
-        let decision = block_on(decide(&jev, &page, &context, &tight(), None, None, &Trace::disabled())).unwrap();
+        let decision = block_on(decide(&jev, &page, &context, &tight(), None, &Trace::disabled())).unwrap();
         assert_eq!(decision.reduction, Reduction::Trimmed);
         let states = jev.states.lock().unwrap();
         let actions = states[0]["recent_actions"].as_array().unwrap();
@@ -2208,7 +2148,7 @@ mod tests {
         page.viewport_text = "word ".repeat(4000);
         let mut context = StepContext::new("press button 3");
         context.history = vec![HistoryEntry::new(Some(Operation::Scroll), None, StepOutcome::Executed, true)];
-        let decision = block_on(decide(&jev, &page, &context, &tight(), None, None, &Trace::disabled())).unwrap();
+        let decision = block_on(decide(&jev, &page, &context, &tight(), None, &Trace::disabled())).unwrap();
         assert_eq!(decision.reduction, Reduction::Trimmed);
         let states = jev.states.lock().unwrap();
         let text = states[0]["page"]["text"].as_str().unwrap();
@@ -2225,8 +2165,7 @@ mod tests {
         let mut page = observation((0..3).map(button).collect());
         page.viewport_text = "word ".repeat(4000);
         let context = StepContext::new("press button 3");
-        let decision =
-            block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        let decision = block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
         assert_eq!(decision.reduction, Reduction::None);
         assert_eq!(jev.states.lock().unwrap()[0]["page"]["text"], page.viewport_text);
     }
@@ -2238,7 +2177,7 @@ mod tests {
         let mut page = observation((0..3).map(button).collect());
         page.offscreen_text = "Mongolia".into();
         let context = StepContext::new("Find the population listed for the last row");
-        block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
         let states = jev.states.lock().unwrap();
         assert_eq!(states[0]["page"]["offscreen_text"], "Mongolia");
         assert!(operation_label(Operation::Read).contains("the whole page including text outside the viewport"));
@@ -2259,13 +2198,13 @@ mod tests {
         let jev = fake(&[("operation", "read")], "");
         let mut page = observation(vec![button(1)]);
         let context = StepContext::new("Confirm the lesson audio plays");
-        block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
         page.media = vec![
             serde_json::from_value(json!({"kind": "audio", "label": "Lesson one", "paused": false,
             "ended": false, "muted": false, "elapsed_seconds": 12.0, "duration_seconds": 30.0}))
             .unwrap(),
         ];
-        block_on(decide(&jev, &page, &context, &Config::default(), None, None, &Trace::disabled())).unwrap();
+        block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
         let states = jev.states.lock().unwrap();
         assert!(states[0]["page"].get("media").is_none());
         assert_eq!(states[1]["page"]["media"][0]["paused"], false);
@@ -2382,8 +2321,7 @@ mod tests {
         let page = observation(vec![]);
         let context = StepContext::new("t");
         let config = Config::default();
-        let cache = RelevanceCache::default();
         let trace = Trace::disabled();
-        assert_send(&decide(&jev, &page, &context, &config, None, Some(&cache), &trace));
+        assert_send(&decide(&jev, &page, &context, &config, None, &trace));
     }
 }
