@@ -20,7 +20,8 @@ license = "MIT"
 repository = "https://github.com/agent-labs-dev/fastbrowse"
 homepage = "https://github.com/agent-labs-dev/fastbrowse"
 
-# The crates are published together at one version, each pinned to the others' exact one, as the npm packages are.
+# The crates share one version, each pinned to the others' exact one, as the npm packages are, so they can be
+# published together once a crates.io release lane exists (none does yet).
 # `scripts/npm_versions.py --write` moves these with the workspace version.
 [workspace.dependencies]
 fastbrowse-core = { path = "crates/fastbrowse-core", version = "=0.11.0" }
