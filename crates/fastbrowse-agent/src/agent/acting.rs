@@ -52,6 +52,8 @@ const IN_TASK: &str = "task";
 /// The field's value is words of what was read, which Jev marks. Offered with the task's words, a word read from the
 /// page was typed into every field of a form whose values the task gave.
 pub(super) const IN_READ: &str = "read";
+/// Joins a word's index to the punctuation characters kept past it, in a choice of where a value ends or begins.
+const KEPT: &str = "+";
 /// The task asks for the value without stating it word for word, as a search box's query, so the LLM writes it.
 const WRITTEN: &str = "write";
 /// The task asks for the field's value, and nothing given states it.
@@ -1162,7 +1164,34 @@ impl Agent {
                 // end is asked again knowing where this value begins, then the beginning knowing where it ends, since
                 // a beginning picked alone can take in the request around the value.
                 let chars: Vec<char> = task.chars().collect();
-                let copied = |from: &Word, to: &Word| chars[from.start..to.end].iter().collect::<String>();
+                let text = |from: usize, to: usize| chars[from..to].iter().collect::<String>();
+                // An end touching punctuation is offered at each cut of it, from its letters and digits to the whole
+                // run, keyed `N`, `N+1`, ..., so the choice of that end also settles its punctuation. Offered only
+                // cut, a reply ending "or 100%." read "or 100", which is not the exact text, and Jev took the copy
+                // running on to the task's closing instructions instead (#881); a separate punctuation question after
+                // it dropped the reply's stop about half the time. Offered only whole, a postcode at a sentence's end
+                // read as "SW1A 1AA." and lost its second word. Past what one choice can offer, with one left for
+                // "none of these", the copies stay cut and the punctuation is asked after.
+                let max = self.jev.profile().max_choice_options;
+                let offered = |forms: Vec<(usize, Vec<String>)>| {
+                    let every = forms.iter().map(|(_, cuts)| cuts.len()).sum::<usize>() < max;
+                    let options: Vec<(String, String)> = forms
+                        .into_iter()
+                        .flat_map(|(index, cuts)| {
+                            let cuts = cuts.into_iter().enumerate().take(if every { usize::MAX } else { 1 });
+                            cuts.map(move |(kept, shown)| {
+                                let key = if kept == 0 { index.to_string() } else { format!("{index}{KEPT}{kept}") };
+                                (key, shown)
+                            })
+                        })
+                        .collect();
+                    (options, every)
+                };
+                // The word index a choice names, and the punctuation it keeps when every cut was offered.
+                let picked_cut = |picked: &str, every: bool| {
+                    let (index, kept) = picked.split_once(KEPT).unwrap_or((picked, "0"));
+                    (index.parse::<usize>().ok(), kept.parse::<usize>().ok().filter(|_| every))
+                };
                 let holder = if source == IN_READ { "what was read" } else { "the task" };
                 let run_task = state.task.clone();
                 let several = several_values(target);
@@ -1181,17 +1210,22 @@ impl Agent {
                 // at "Reply" offered only copies starting "Reply", and the end then picked among them ran on to the
                 // task's last word. Jev can say the value does not run from there, and that end is picked again
                 // without the word, so each round drops a word and the rounds end.
-                let (first, last) = loop {
+                let (first, last, lead, trail) = loop {
+                    let mut trail = None;
                     let ending: Vec<_> = ends
                         .iter()
                         .filter(|word| word.index >= first.index)
-                        .map(|word| (word.index.to_string(), copied(&first, word)))
+                        .map(|word| {
+                            let cuts = (0..=word.outer_end - word.end).map(|kept| text(first.start, word.end + kept));
+                            (word.index, cuts.collect())
+                        })
                         .collect();
                     // The end was picked among words where the value may end; when none of them comes after the
                     // beginning, the value is the one word it begins at, as a crossed pick is.
                     if ending.is_empty() {
                         last = first.clone();
                     } else if first.index != last.index {
+                        let (ending, every) = offered(ending);
                         let (question, options) = exact(
                             "beginning at the selected word",
                             &ending,
@@ -1205,20 +1239,25 @@ impl Agent {
                                 .await?;
                             continue;
                         }
-                        last = ends
-                            .iter()
-                            .find(|word| word.index >= first.index && word.index.to_string() == picked)
-                            .unwrap_or(&first)
-                            .clone();
+                        let (index, kept) = picked_cut(&picked, every);
+                        match ends.iter().find(|word| word.index >= first.index && Some(word.index) == index) {
+                            Some(word) => (last, trail) = (word.clone(), kept),
+                            None => last = first.clone(),
+                        }
                     }
                     if first.index >= last.index {
-                        break (first, last);
+                        break (first, last, None, trail);
                     }
+                    let end = last.end + trail.unwrap_or(0);
                     let starting: Vec<_> = begins
                         .iter()
                         .filter(|word| word.index <= last.index)
-                        .map(|word| (word.index.to_string(), copied(word, &last)))
+                        .map(|word| {
+                            let cuts = (0..=word.start - word.outer_start).map(|kept| text(word.start - kept, end));
+                            (word.index, cuts.collect())
+                        })
                         .collect();
+                    let (starting, every) = offered(starting);
                     let (question, options) = exact(
                         "ending where the value ends",
                         &starting,
@@ -1230,22 +1269,25 @@ impl Agent {
                         ends.retain(|word| word.index != last.index);
                         continue;
                     }
-                    let start = begins
-                        .iter()
-                        .find(|word| word.index <= last.index && Some(&word.index.to_string()) == picks.get("start"))
-                        .unwrap_or(&first)
-                        .clone();
-                    break (start, last);
+                    let (index, kept) = picks.get("start").map_or((None, None), |picked| picked_cut(picked, every));
+                    match begins.iter().find(|word| word.index <= last.index && Some(word.index) == index) {
+                        Some(start) => break (start.clone(), last, kept, trail),
+                        None => break (first, last, None, trail),
+                    }
                 };
                 let (first, last) = (&first, &last);
                 // Words keep only their letters and digits, so punctuation the value starts or ends with, such as
-                // a handle's sign or a sentence's stop, is offered as part of it for Jev to keep or leave.
-                let max = self.jev.profile().max_choice_options;
+                // a handle's sign or a sentence's stop, is offered as part of it for Jev to keep or leave, where the
+                // choice of that end did not already settle it.
                 let question = format!(
                     "Which exact text belongs in {label}? Each choice is the complete value copied from {holder}; choose whether the punctuation next to it is part of the value."
                 );
                 let edges = edge_options(&chars, (first, last), (0, 0), target.max_length, max);
-                let (lead, mut trail) = self.edges(state, observation, &question, edges).await?;
+                let edges = edges
+                    .into_iter()
+                    .filter(|(edge, _)| if *edge == "lead" { lead.is_none() } else { trail.is_none() });
+                let asked = self.edges(state, observation, &question, edges.collect()).await?;
+                let (lead, mut trail) = (lead.unwrap_or(asked.0), trail.unwrap_or(asked.1));
                 // Each edge was offered as it fits the field alone; when the two together do not, the end is asked
                 // again with what fits after the beginning Jev kept.
                 if target.max_length.is_some_and(|limit| last.end - first.start + lead + trail > limit) {

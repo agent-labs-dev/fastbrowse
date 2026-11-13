@@ -1817,6 +1817,34 @@ async fn test_twins_keep_their_card_names_past_shared_hidden_and_control_labels(
     h.close().await;
 }
 
+/// Two comments by one author posted at the same time began with the same lines, so their Reply buttons read alike and
+/// a reply went under the wrong comment (#881).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reply_buttons_under_one_authors_comments_are_told_apart_by_their_text() {
+    let _turn = turn().await;
+    let comment = |text: &str| {
+        format!(
+            "<div class=\"comment\"><div><span>cjber</span> <span>2 days ago</span></div><p>{text}</p>\
+             <button>Reply</button></div>"
+        )
+    };
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        &format!("document.body.innerHTML = '<div>{}{}</div>'", comment("Is 75 enough?"), comment("Works on 100%")),
+    )
+    .await;
+    let obs = observe_until(&h.page, "Reply").await;
+    let contexts: Vec<Option<String>> =
+        obs.controls.iter().filter(|c| c.label == "Reply").map(|c| c.context.clone()).collect();
+    assert_eq!(
+        contexts,
+        vec![Some("cjber 2 days ago / Is 75 enough?".into()), Some("cjber 2 days ago / Works on 100%".into())]
+    );
+    h.close().await;
+}
+
 /// Options that are direct children of one list share every ancestor, and an aria-label hides the text inside
 /// them, so two "Springfield" options read as "1 of 2" and "2 of 2" and the run picked one blind.
 #[tokio::test(flavor = "multi_thread")]

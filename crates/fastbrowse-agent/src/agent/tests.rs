@@ -2273,10 +2273,11 @@ async fn test_a_value_whose_beginning_takes_in_the_request_asks_for_the_beginnin
 
 #[tokio::test]
 async fn test_a_value_copied_from_the_task_keeps_the_punctuation_jev_picks() {
-    // The words: Post 0, x 1, y 2, now 3. The task quotes "@x y." and words keep only their letters and digits.
-    const SPAN: [(&str, &str); 5] = [("source", "task"), ("first", "1"), ("last", "2"), ("pick", "2"), ("start", "1")];
-    const WHOLE: [(&str, &str); 7] = [SPAN[0], SPAN[1], SPAN[2], SPAN[3], SPAN[4], ("lead", "1"), ("trail", "1")];
-    const TRIMMED: [(&str, &str); 7] = [SPAN[0], SPAN[1], SPAN[2], SPAN[3], SPAN[4], ("lead", "0"), ("trail", "0")];
+    // The words: Post 0, x 1, y 2, now 3. The task quotes "@x y." and words keep only their letters and digits, so the
+    // choice of each end names how much punctuation past it is kept.
+    const SPAN: [(&str, &str); 3] = [("source", "task"), ("first", "1"), ("last", "2")];
+    const WHOLE: [(&str, &str); 5] = [SPAN[0], SPAN[1], SPAN[2], ("pick", "2+1"), ("start", "1+1")];
+    const TRIMMED: [(&str, &str); 5] = [SPAN[0], SPAN[1], SPAN[2], ("pick", "2"), ("start", "1")];
     for (picks, expected) in [(Picks(&WHOLE), "@x y."), (Picks(&TRIMMED), "x y")] {
         let agent = Agent::new(Arc::new(NoPage), Arc::new(picks), Arc::new(ScriptedLLM));
         let mut state = run_state();
@@ -2293,15 +2294,7 @@ async fn test_a_value_copied_from_the_task_keeps_the_punctuation_jev_picks() {
 #[tokio::test]
 async fn test_a_value_copied_from_what_was_read_keeps_the_punctuation_jev_picks() {
     // The words read: Code 0, x 1, y 2.
-    let picks = Picks(&[
-        ("source", "read"),
-        ("first", "1"),
-        ("last", "2"),
-        ("pick", "2"),
-        ("start", "1"),
-        ("lead", "1"),
-        ("trail", "1"),
-    ]);
+    let picks = Picks(&[("source", "read"), ("first", "1"), ("last", "2"), ("pick", "2+1"), ("start", "1+1")]);
     let agent = Agent::new(Arc::new(NoPage), Arc::new(picks), Arc::new(ScriptedLLM));
     let mut state = run_state();
     state.task = "Fill the reference".into();
@@ -2362,6 +2355,79 @@ async fn test_edges_that_do_not_fit_a_field_together_ask_the_end_again() {
     assert_eq!(text, "@@x");
     let asked = jev.1.lock().unwrap().clone();
     assert_eq!(asked, [vec![json!("x"), json!("x."), json!("x..")], vec![json!("@@x"), json!("@@x.")]]);
+}
+
+/// Jev picking, for the exact-text questions, the choice that reads as `.0`, and answering the rest as `.1` does.
+struct Exact(&'static str, Picks);
+
+impl DecisionClient for Exact {
+    fn evaluate<'a>(
+        &'a self,
+        page: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        let picked = ["pick", "start"].iter().find_map(|key| match questions.get(*key) {
+            Some(Question::Choice(choice)) => Some((*key, choice.criteria.iter().find(|(_, v)| **v == json!(self.0)))),
+            _ => None,
+        });
+        match picked {
+            Some((key, found)) => {
+                let (choice, _) = found.unwrap_or_else(|| panic!("{:?} is not offered for {key}", self.0));
+                let answer = ChoiceAnswer {
+                    kind: Default::default(),
+                    choice: choice.clone(),
+                    probabilities: IndexMap::new(),
+                    confidence: 1.0,
+                };
+                let answers = IndexMap::from([(key.to_string(), Answer::Choice(answer))]);
+                Box::pin(async move {
+                    Ok(Evaluation { model: "jev".into(), answers, input_tokens: 0, cost: free(), requests: 1 })
+                })
+            }
+            None => self.1.evaluate(page, questions),
+        }
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        ScriptedJev::new(Vec::new()).profile()
+    }
+}
+
+/// The text typed for `task` when Jev takes `exact` as the exact value and answers the rest as `picks`.
+async fn exact_value(task: &str, exact: &'static str, picks: &'static [(&'static str, &'static str)]) -> String {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(Exact(exact, Picks(picks))), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = task.into();
+    agent
+        .text(&mut state, &observation(&[]), &code_decision(Operation::Fill, None), &field("Comment"))
+        .await
+        .expect("a value")
+}
+
+#[tokio::test]
+async fn test_an_end_touching_punctuation_is_offered_both_whole_and_cut() {
+    // The words: Reply 0, with 1, It 2, is 3, at 4, 100 5, Do 6, nothing 7, else 8. Offered only cut, "It is at 100%."
+    // read as "It is at 100", and Jev took the choice running on to "else" (#881).
+    assert_eq!(
+        exact_value(
+            "Reply with:\nIt is at 100%.\nDo nothing else.",
+            "It is at 100%.",
+            &[("source", "task"), ("first", "2"), ("last", "8"), ("lead", "0"), ("trail", "2")]
+        )
+        .await,
+        "It is at 100%."
+    );
+    // The words: Use 0, postcode 1, SW1A 2, 1AA 3, then 4. Offered only whole, "SW1A 1AA." read as a postcode with a
+    // stop, and Jev took "SW1A".
+    assert_eq!(
+        exact_value(
+            "Use postcode SW1A 1AA. then stop",
+            "SW1A 1AA",
+            &[("source", "task"), ("first", "2"), ("last", "4"), ("lead", "0"), ("trail", "0")]
+        )
+        .await,
+        "SW1A 1AA"
+    );
 }
 
 struct TypingAttempts;
