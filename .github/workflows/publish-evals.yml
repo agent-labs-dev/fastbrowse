@@ -110,8 +110,10 @@ jobs:
           git commit -m "feat(benchmarks): publish campaign $campaign"
           # A rerun replaces its own branch; nothing else writes to it.
           git push --force "https://x-access-token:$GH_TOKEN@github.com/agent-labs-dev/fastbrowse-site.git" "HEAD:refs/heads/$branch"
-          # REST for both calls: the GraphQL bucket this token shares runs dry first.
-          if gh api -X GET repos/agent-labs-dev/fastbrowse-site/pulls -f "head=agent-labs-dev:$branch" -f state=open --jq '.[0].number' | grep -q .; then
+          # REST for both calls: the GraphQL bucket this token shares runs dry first. The lookup is assigned before it
+          # is tested so a failed request stops the step: `gh api` prints an error body to stdout.
+          open="$(gh api -X GET repos/agent-labs-dev/fastbrowse-site/pulls -f "head=agent-labs-dev:$branch" -f state=open --jq '.[0].number')"
+          if [ -n "$open" ]; then
             echo "the pull request for $branch is already open"
             exit 0
           fi
