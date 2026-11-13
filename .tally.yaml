@@ -117,6 +117,15 @@ keys:
       - github: FASTBROWSE_SITE_TOKEN
     expires: unknown
     limit: unknown
+  - id: fbh-browser-pool-token
+    service: fastbrowse-hosted
+    group: benchmarks
+    owner: cjber
+    locations:
+      - gcp: fastbrowse-hosted/FBH_BROWSER_POOL_TOKEN
+    expires: unknown
+    limit: unknown
+    note: benchmark-campaign.yml reads it with gcloud for the fastbrowse-pool arm, so the workflow scan cannot see it
   - id: hf-token
     service: huggingface
     group: benchmarks
