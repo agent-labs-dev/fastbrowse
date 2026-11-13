@@ -617,7 +617,7 @@ impl Agent {
         if let Some(forbidden) = state.downloads_forbidden {
             return Ok(forbidden);
         }
-        let forbidden = self.task_rules_out(state, "downloads", downloads_question(&state.task)).await?;
+        let forbidden = self.task_rules_out(state, "downloads", downloads_question()).await?;
         state.downloads_forbidden = forbidden;
         Ok(forbidden.unwrap_or(true))
     }
@@ -628,7 +628,7 @@ impl Agent {
         if let Some(forbidden) = state.edits_forbidden {
             return Ok(forbidden);
         }
-        let forbidden = self.task_rules_out(state, "edits", edits_question(&state.task)).await?;
+        let forbidden = self.task_rules_out(state, "edits", edits_question()).await?;
         state.edits_forbidden = forbidden;
         Ok(forbidden.unwrap_or(true))
     }
@@ -1623,7 +1623,9 @@ impl Agent {
         Ok(picks["pick"].clone())
     }
 
-    pub(super) fn output_questions(&self, task: &str) -> IndexMap<String, Question> {
+    /// What the task asks for, asked of the task alone: each question names the state's `task`, which the request sends
+    /// once, as the sign-in questions do.
+    pub(super) fn output_questions(&self) -> IndexMap<String, Question> {
         let criteria = IndexMap::from([
             (
                 "text".to_string(),
@@ -1681,9 +1683,9 @@ impl Agent {
         let mut asked: Vec<Asked<'static>> = vec![
             // Asked what output the task wants, Jev named the page a task to open ends on as its output, and
             // "Open the httpx repository." was answered with composed text it never asked for (#910).
-            ("pick", "Does the task ask to be told something, and in what form?".into(), criteria),
-            ("evidence", "Where can what the task asks about be seen?".into(), evidence),
-            ("extent", "How much of a list does the task cover?".into(), extent),
+            ("pick", "Does `task` ask to be told something, and in what form?".into(), criteria),
+            ("evidence", "Where can what `task` asks about be seen?".into(), evidence),
+            ("extent", "How much of a list does `task` cover?".into(), extent),
         ];
         // Over HTTP, also asked of the task alone: whether it asks for any step a served page cannot take. The output
         // does not say so: a task to post a reply and report whether the page confirms it wants text, and its read
@@ -1701,11 +1703,13 @@ impl Agent {
                     JsonValue::from("The task asks only to open pages and find, read or report something."),
                 ),
             ]);
-            asked.push(("steps", "What does the task ask to be done on a page?".into(), steps));
+            asked.push(("steps", "What does `task` ask to be done on a page?".into(), steps));
         }
         asked
             .into_iter()
-            .map(|(key, question, criteria)| (key.to_string(), page_question(task, &question, criteria)))
+            .map(|(key, question, criteria)| {
+                (key.to_string(), Question::Choice(ChoiceQuestion::new(question, criteria)))
+            })
             .collect()
     }
 
@@ -1713,13 +1717,13 @@ impl Agent {
         if state.output_intent != OutputIntent::Unknown {
             return Ok(state.output_intent);
         }
-        let questions = self.output_questions(&state.task);
+        let questions = self.output_questions();
         let answers = match state.output_answers.take() {
             Some(answers) => *answers,
             None => {
                 state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
                 let evaluation =
-                    jev_purpose(JevPurpose::Action, self.jev.evaluate(&JsonValue::Object(Map::new()), &questions))
+                    jev_purpose(JevPurpose::Action, self.jev.evaluate(&json!({"task": state.task}), &questions))
                         .await?;
                 state.ledger.record([evaluation.cost])?;
                 evaluation.answers

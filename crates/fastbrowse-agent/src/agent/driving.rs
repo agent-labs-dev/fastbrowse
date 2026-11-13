@@ -624,8 +624,8 @@ impl Agent {
         use fastbrowse_core::decision::{Answer, DecisionError, Question};
         ledger.reserve(fastbrowse_core::models::CostComponent::Jev, 0.0, 1)?;
         // These judgments all read the task alone. Sending them separately reread the same task on every run.
-        let mut questions = self.output_questions(given);
-        questions.insert("dates".to_string(), Question::Noul(crate::dates::dates_question(given)));
+        let mut questions = self.output_questions();
+        questions.insert("dates".to_string(), Question::Noul(crate::dates::dates_question()));
         let state = json!({"task": given});
         let asked = self.jev.evaluate(&state, &questions);
         // As with the consent question, a task whose dates could not be asked about runs on with today's date alone:

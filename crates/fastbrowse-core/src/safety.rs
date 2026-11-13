@@ -342,13 +342,13 @@ pub fn starts_download(control: &Control) -> bool {
     name.rsplit_once('.').is_some_and(|(_, suffix)| DOWNLOADED_SUFFIXES.contains(&suffix.to_lowercase().as_str()))
 }
 
-/// Whether the task rules out downloading: asked of the task alone, once a control would download a file.
-pub fn downloads_question(task: &str) -> NoulQuestion {
+/// Whether the task rules out downloading: asked of the task alone, once a control would download a file. Like every
+/// question asked of the task alone, it names the state's `task` rather than restating it: the request already sends
+/// the task as its state, and Jev bills every copy.
+pub fn downloads_question() -> NoulQuestion {
     NoulQuestion::new(
-        format!(
-            "The agent is doing this task: {task}\nDoes the task rule out downloading files, either by telling the \
-             agent not to download anything or by saying the work is read-only?"
-        ),
+        "Does `task` rule out downloading files, either by telling the agent not to download anything or by saying the \
+         work is read-only?",
         Some("The task says not to download files, or calls the work read-only."),
         Some("The task says nothing against downloading, even if it only asks for information."),
     )
@@ -356,13 +356,10 @@ pub fn downloads_question(task: &str) -> NoulQuestion {
 
 /// Whether the task rules out changing what the page's fields and settings hold: asked of the task alone, once an
 /// action would change one.
-pub fn edits_question(task: &str) -> NoulQuestion {
+pub fn edits_question() -> NoulQuestion {
     NoulQuestion::new(
-        format!(
-            "The agent is doing this task: {task}\nDoes the task rule out changing what the page's fields and settings \
-             hold, by telling the agent to change nothing, to leave the form or settings as they are, or not to tick, \
-             select or type anything?"
-        ),
+        "Does `task` rule out changing what the page's fields and settings hold, by telling the agent to change \
+         nothing, to leave the form or settings as they are, or not to tick, select or type anything?",
         Some("The task says to change nothing on the page, or to leave its fields and settings as they are."),
         Some(
             "The task allows changing fields, or rules out only committing something such as saving, buying or \
@@ -388,12 +385,10 @@ pub fn changes_a_value(operation: Operation, control: &Control) -> bool {
 
 /// Whether the task has the agent answer a cookie or consent banner itself: asked of the task alone, before the
 /// browser opens, since the browser otherwise refuses such banners before the agent sees them.
-pub fn consent_question(task: &str) -> NoulQuestion {
+pub fn consent_question() -> NoulQuestion {
     NoulQuestion::new(
-        format!(
-            "The agent is doing this task: {task}\nDoes the task ask the agent itself to answer a cookie or consent \
-             banner, such as accepting or rejecting cookies or choosing consent settings?"
-        ),
+        "Does `task` ask the agent itself to answer a cookie or consent banner, such as accepting or rejecting cookies \
+         or choosing consent settings?",
         Some("The task asks the agent to accept, reject or set cookie or consent choices."),
         Some("The task says nothing about answering a cookie or consent banner."),
     )
@@ -1046,8 +1041,8 @@ mod tests {
 
     #[test]
     fn test_the_edits_question_is_about_the_task_and_states_both_sides() {
-        let question = edits_question("Change nothing; list the options.");
-        assert!(question.instructions.contains("Change nothing; list the options."));
+        let question = edits_question();
+        assert!(question.instructions.contains("Does `task` rule out"), "the state carries the task once");
         assert!(question.instructions.contains("rule out changing what the page's fields and settings hold"));
         assert!(question.r#true.as_deref().is_some_and(|yes| yes.contains("change nothing")));
         assert!(question.r#false.as_deref().is_some_and(|no| no.contains("search or filter")));
