@@ -117,8 +117,10 @@ keys:
     owner: cjber
     locations:
       - github: FASTBROWSE_SITE_TOKEN
-    expires: unknown
-    limit: unknown
+    expires: 2026-11-29
+    expiresNote: "inferred: secret set 2026-10-30, 30 days before the PAT's expiry; publish-evals.yml uses it"
+    limit: none
+    note: very likely the fine-grained PAT fastbrowse-evals
   - id: fbh-browser-pool-token
     service: fastbrowse-hosted
     group: benchmarks
