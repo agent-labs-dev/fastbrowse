@@ -1,8 +1,9 @@
 """What a judge reads of a run under `JUDGE_POLICY`: the same fields for every arm, from each arm's own record.
 
 An arm records a page it saw either as a trace event (`page`, `read`) or as the text a step returned (`observation`,
-`output`). `run_evidence` puts them all in one list, each distinct page once, and points the timeline's steps at it.
-Nothing is shortened: a state too large for one request is divided by `parts`.
+`output`). `run_evidence` puts them all in one list, each distinct record once, and points the timeline's steps at it;
+`once` then joins a page recorded with its controls and again without them. Nothing is shortened: a state too large
+for one request is divided by `parts`, or by `parts_v5` under `browser-internal-opus-v5`.
 """
 
 import hashlib
@@ -115,9 +116,122 @@ def run_evidence(report: Mapping[str, Any], quotes: JsonValue) -> dict[str, Json
     }
 
 
+def once(state: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    """`state` with each page it saw listed once. A run records the same page more than once when one event carries
+    its controls and another, such as a read, only its text; those become one page with its controls, and every step
+    that saw either sees it. Pages whose controls differ stay apart. Nothing is dropped, and applying it twice changes
+    nothing."""
+    pages = state.get("pages")
+    if not isinstance(pages, list):
+        return state
+    kept: list[dict[str, JsonValue]] = []
+    by_text: dict[str, dict[str, JsonValue]] = {}
+    alias: dict[JsonValue, dict[str, JsonValue]] = {}
+    for page in pages:
+        assert isinstance(page, dict)
+        key = json.dumps({k: v for k, v in page.items() if k not in ("id", "controls")}, sort_keys=True)
+        same = by_text.get(key)
+        if same is not None and page.get("controls") in (None, same.get("controls")):
+            alias[page["id"]] = same
+            continue
+        if same is not None and same.get("controls") is None:
+            same["controls"] = page["controls"]
+            alias[page["id"]] = same
+            continue
+        copy = dict(page)
+        by_text.setdefault(key, copy)
+        alias[page["id"]] = copy
+        kept.append(copy)
+    for number, page in enumerate(kept, 1):
+        page["id"] = f"page-{number}"
+    timeline = state.get("timeline")
+    steps = [
+        {**step, "saw": list(dict.fromkeys(alias[seen]["id"] if seen in alias else seen for seen in step["saw"]))}
+        if isinstance(step, dict) and isinstance(step.get("saw"), list)
+        else step
+        for step in (timeline if isinstance(timeline, list) else ())
+    ]
+    return {**state, "pages": kept, **({"timeline": steps} if isinstance(timeline, list) else {})}
+
+
 def parts(state: dict[str, JsonValue], limit: int = PART_BYTES) -> list[dict[str, JsonValue]]:
     """`state` as requests that each fit `limit` bytes. Everything but the pages goes in every part; the pages are
-    shared out in order, a page too long for one part continuing in the next, so no text is left out."""
+    shared out in order, filling each part before the next. A page too long for the room left continues in the next
+    part, its text sliced and then its controls, so every byte of every page is sent once and none is left out."""
+    if _size(state) <= limit:
+        return [state]
+    pages = state["pages"]
+    assert isinstance(pages, list)
+    room = limit - _size({**state, "pages": []})
+    grouped: list[list[dict[str, JsonValue]]] = [[]]
+    used = 0
+
+    def free(overhead: int) -> int:
+        """Bytes a piece with `overhead` bytes of its own fields can still carry in the current part, opening the next
+        part when this one has no room even for those fields."""
+        nonlocal used
+        if used + overhead * 2 > room:
+            grouped.append([])
+            used = 0
+        return room - used - overhead
+
+    def place(piece: dict[str, JsonValue], label: int = 0) -> None:
+        """Put `piece` in the current part, holding `label` bytes for the `continues` it is given later."""
+        nonlocal used
+        grouped[-1].append(piece)
+        used += _size(piece) + label + 2
+
+    for page in pages:
+        assert isinstance(page, dict)
+        if used + _size(page) + 2 > room and _size(page) + 2 <= room:
+            grouped.append([])
+            used = 0
+        if used + _size(page) + 2 <= room:
+            place(page)
+            continue
+        head = {k: v for k, v in page.items() if k not in ("text", "controls")}
+        # A piece's own fields, its `continues` label at its longest with the ", " before it, and the ", " that
+        # `json.dumps` writes before the next piece.
+        label = _size({"continues": f"{room} of {room}"})
+        overhead = _size({**head, "controls": []}) + label + 2
+        pieces: list[dict[str, JsonValue]] = []
+        text = str(page.get("text") or "")
+        at = 0
+        while at < len(text):
+            space = free(overhead)
+            # Most text encodes a character in one byte; shrink a slice whose escapes or multibyte characters overflow.
+            take = min(len(text) - at, space)
+            while (size := _size(text[at : at + take]) - 2) > space:
+                take = max(1, take * space // size - 1)
+            pieces.append({**head, "text": text[at : at + take]})
+            place(pieces[-1], label)
+            at += take
+        controls = page.get("controls")
+        run: list[JsonValue] = []
+        space = 0
+        for control in controls if isinstance(controls, list) else ():
+            size = _size(control) + 2
+            if not run:
+                space = free(overhead)
+            elif size > space:
+                pieces.append({**head, "controls": run})
+                place(pieces[-1], label)
+                run, space = [], free(overhead)
+            run.append(control)
+            space -= size
+        if run:
+            pieces.append({**head, "controls": run})
+            place(pieces[-1], label)
+        if not pieces:
+            place(head)
+        for number, piece in enumerate(pieces if len(pieces) > 1 else (), 1):
+            piece["continues"] = f"{number} of {len(pieces)}"
+    return [{**state, "pages": group} for group in grouped]
+
+
+def parts_v5(state: dict[str, JsonValue], limit: int = PART_BYTES) -> list[dict[str, JsonValue]]:
+    """`parts` as `browser-internal-opus-v5` divides a state, kept so that policy judges as it always did: a page's
+    text is cut into slices of a twelfth of a part, and every slice carries the page's whole `controls`."""
     if _size(state) <= limit:
         return [state]
     pages = state["pages"]

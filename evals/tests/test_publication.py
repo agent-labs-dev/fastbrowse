@@ -1156,6 +1156,7 @@ def test_an_official_run_missing_one_repeat_cannot_publish(tmp_path: Path) -> No
         "browser-internal-opus-v2",
         "browser-internal-opus-v3",
         "browser-internal-opus-v4",
+        "browser-internal-opus-v5",
     ],
 )
 def test_an_internal_ledger_graded_under_another_policy_cannot_publish(tmp_path: Path, policy: str) -> None:
@@ -1164,7 +1165,7 @@ def test_an_internal_ledger_graded_under_another_policy_cannot_publish(tmp_path:
             a["semantic_judge"]["judgment"]["policy"] = policy
 
     h = Harness(tmp_path, hosted=other)
-    with pytest.raises(PublicationError, match="browser-internal-opus-v5"):
+    with pytest.raises(PublicationError, match="browser-internal-opus-v6"):
         h.export(ultrafast=None, bu_bench=None, mind2web=None)
 
 

@@ -81,12 +81,16 @@ Each catalog task lists the head-to-head arms it leaves out under `excluded`, ea
 A comparison scores both arms on the tasks both ran.
 
 Source grades are imported evidence. They are not Parallax's semantic quality verdicts. Internal browser grading
-uses policy `browser-internal-opus-v5` by default: every verdict comes from `anthropic/claude-opus-5.5` through
+uses policy `browser-internal-opus-v6` by default: every verdict comes from `anthropic/claude-opus-5.5` through
 OpenRouter, with no Jev, and the run refuses to start unless `PARALLAX_JUDGE_MODELS` is exactly that model and
 `PARALLAX_JUDGE_BASE_URL` is OpenRouter. Publication accepts only this policy. The judge reads, in one form for every
 arm, each page the run saw, each action with its typed values, and the citations with their quotes, in the ending
 vocabulary every arm shares; a run with no record at all is UNKNOWN without a judge. A state past the judge's
-documented context window is shared across requests and the verdicts combined, so nothing is cut. Earlier `--judge-policy` values keep judging as they did.
+documented context window is shared across requests and the verdicts combined, so nothing is cut. Each page is listed
+once, with its controls beside its text, and a divided state sends every byte of every page once.
+`--judge-policy browser-internal-opus-v5` sent a long page's whole controls with every slice of its text, so a 2 MB
+Hacker News thread took 16 requests and about $23 to judge, against about $3.30 under v6. Earlier `--judge-policy`
+values keep judging as they did.
 `--judge-policy
 browser-internal-jev-v4` grades Jev first with the LLM fallback, for unpublished runs. External predicate
 and local-command outputs are retained as source evidence and interpreted by `browser-external-jev-v4`.
