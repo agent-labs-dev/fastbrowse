@@ -286,6 +286,18 @@ class CostBreakdown(Frozen):
                 totals[line.label] = round(totals.get(line.label, 0.0) + line.seconds, 2)
         return totals
 
+    def jev_calls_by_purpose(self) -> dict[str, int]:
+        """Jev requests per decision purpose, the requests a line represents or one where it records none. A line that
+        names no purpose counts under "unnamed", so the counts always add up to the run's Jev calls."""
+        counts: dict[str, int] = {}
+        for line in self.lines:
+            if line.component is CostComponent.JEV:
+                purpose = "unnamed" if line.decision_purpose is None else line.decision_purpose.value
+                counts[purpose] = counts.get(purpose, 0) + (
+                    1 if line.physical_requests is None else line.physical_requests
+                )
+        return counts
+
     @property
     def known_dollars(self) -> float:
         return sum(line.dollars for line in self.lines if line.dollars is not None)

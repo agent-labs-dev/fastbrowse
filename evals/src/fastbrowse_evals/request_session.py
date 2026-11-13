@@ -18,7 +18,7 @@ from fastbrowse.evals.replay import Cassette, Exchange, request_key
 from parallax.models import Model
 from pydantic import JsonValue, SecretStr, TypeAdapter, model_validator
 
-from fastbrowse_evals.judging import OPUS_JUDGE
+from fastbrowse_evals.judging import JUDGE_MODEL
 from fastbrowse_evals.request_quotes import RequestPriceProfile, json_object
 from fastbrowse_evals.spend import POLICY, Money, RequestWallet, SpendStop
 from fastbrowse_evals.spend_proxy import ProviderResponseStop, SpendProxy, actual_cost
@@ -53,7 +53,7 @@ class RequestSessionSpec(Model):
             for p in (self.text, self.judge)
         ):
             raise ValueError("the initial request protocol requires OpenRouter chat completions")
-        if self.judge.model != OPUS_JUDGE:
+        if self.judge.model != JUDGE_MODEL:
             raise ValueError("the request protocol preserves the pinned browser judge")
         return self
 

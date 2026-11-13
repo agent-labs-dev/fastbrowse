@@ -21,6 +21,7 @@ use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::JEV_IMAGE_SIDE;
 use fastbrowse_core::models::{Artifact, ArtifactKind, Link, Operation, SourceControl};
 use fastbrowse_core::origins::origin_of;
+use fastbrowse_core::page::json as json_document;
 use fastbrowse_core::page::{
     ActResult, Action, Block, BlockKind, CaptchaSolve, Capture, Control, Dialog, Media, Observation, Page, PageResult,
 };
@@ -278,6 +279,23 @@ struct CaptureSnapshot {
     #[serde(default)]
     inaccessible_frames: usize,
     blocks: Vec<SnapshotBlock>,
+    /// The frame document's MIME type, as `document.contentType` gives it.
+    #[serde(default)]
+    content_type: String,
+    /// The served text of a JSON document, as Chrome renders it into the body's first `pre`.
+    #[serde(default)]
+    json_text: Option<String>,
+}
+
+impl CaptureSnapshot {
+    /// A JSON document's blocks by its structure, as a browserless fetch reads it, when the document's type is JSON
+    /// and all of its served text parses. Any other document is read by its rendered blocks.
+    fn json_blocks(&self) -> Option<Vec<json_document::Found>> {
+        if !json_document::is_json(&self.content_type) {
+            return None;
+        }
+        json_document::blocks(self.json_text.as_deref()?).filter(|found| !found.is_empty())
+    }
 }
 
 impl FrameText for CaptureSnapshot {
@@ -1021,8 +1039,8 @@ impl CdpPage {
             Some(parsed) => parsed,
             None => Arc::new(parse(raw.clone(), T::SHAPE)?),
         };
-        // Numbered reads are transport baselines, including deep reads the producer must derive again. Only a
-        // shallow read whose revision still matches can answer unchanged; both paths name this exact baseline.
+        // Numbered reads are transport baselines. A read whose page has not moved answers unchanged, and a changed
+        // one sends a delta against it; both name this exact baseline.
         if let Some((slot, _)) = retry
             && !was_served
         {
@@ -1132,6 +1150,31 @@ impl CdpPage {
             match coverage.iter_mut().find(|(s, _)| *s == frame.session_id) {
                 Some(entry) => entry.1 = frame.raw.inaccessible_frames,
                 None => coverage.push((frame.session_id.clone(), frame.raw.inaccessible_frames)),
+            }
+            if let Some(found) = frame.raw.json_blocks() {
+                for block in found {
+                    let start = offset;
+                    text.push_str(&block.text);
+                    offset += text::len(&block.text);
+                    let end = offset;
+                    text.push_str("\n\n");
+                    offset += 2;
+                    blocks.push(Block {
+                        source_id: format!("{frame_key}/json:{}", blocks.len()),
+                        source_url: None,
+                        complete_source: false,
+                        kind: block.kind,
+                        frame_id: frame.frame_id.clone(),
+                        start: int(start),
+                        end: int(end),
+                        heading_path: block.heading_path,
+                        control_context: None,
+                        href: None,
+                        links: Vec::new(),
+                        whole_record: block.whole_record,
+                    });
+                }
+                continue;
             }
             for block in &frame.raw.blocks {
                 let start = offset;

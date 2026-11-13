@@ -354,20 +354,52 @@ pub fn downloads_question(task: &str) -> NoulQuestion {
     )
 }
 
-/// Whether the task rules out changing what the page's fields and settings hold: asked of the task alone, once an
-/// action would change one.
-pub fn edits_question(task: &str) -> NoulQuestion {
-    NoulQuestion::new(
+/// The [`edits_question`] option for a task that allows changing the page's fields and settings.
+pub const EDITS_ALLOWED: &str = "allowed";
+
+/// The [`edits_question`] option for a task that asks for some changes and rules out the rest ("post this reply.
+/// Change nothing else."), so only an edit the task asks for goes ahead (#879).
+pub const EDITS_REQUESTED_ONLY: &str = "requested_only";
+
+/// The [`edits_question`] option for a task that rules out every change, such as a read-only one (#838).
+pub const EDITS_NONE: &str = "none";
+
+/// Which changes to what the page's fields and settings hold the task allows: asked of the task alone, once an action
+/// would change one. Asked only whether the task rules out changing them, Jev read "fill in this reply. Change nothing
+/// else." as ruling out the reply itself (#879), so a task that asks for a change and forbids the others has an answer
+/// of its own. "No change" needs the task's own words: worded as asking for no change, it took "Confirm the reference
+/// in the form" as asking for none.
+pub fn edits_question(task: &str) -> ChoiceQuestion {
+    ChoiceQuestion::new(
         format!(
-            "The agent is doing this task: {task}\nDoes the task rule out changing what the page's fields and settings \
-             hold, by telling the agent to change nothing, to leave the form or settings as they are, or not to tick, \
-             select or type anything?"
+            "The agent is doing this task: {task}\nWhich changes to what the page's fields and settings hold does the \
+             task allow, such as typing into a field, ticking a box or choosing an option?"
         ),
-        Some("The task says to change nothing on the page, or to leave its fields and settings as they are."),
-        Some(
-            "The task allows changing fields, or rules out only committing something such as saving, buying or \
-             sending. A task that has to search or filter to find its answer does not rule out typing that search.",
-        ),
+        IndexMap::from([
+            (
+                EDITS_ALLOWED.to_string(),
+                Value::from(
+                    "The task allows changing fields, or rules out only committing something such as saving, buying \
+                     or sending. A task that has to search or filter to find its answer does not rule out typing that \
+                     search. A task that says nothing against changing the page allows it.",
+                ),
+            ),
+            (
+                EDITS_REQUESTED_ONLY.to_string(),
+                Value::from(
+                    "The task asks for some changes, such as typing a reply or setting an option, and says to change \
+                     nothing else or to leave everything else as it is.",
+                ),
+            ),
+            (
+                EDITS_NONE.to_string(),
+                Value::from(
+                    "The task says in words not to change anything on the page: to change nothing, to leave its \
+                     fields and settings as they are, not to tick, select or type anything, or that the work is \
+                     read-only.",
+                ),
+            ),
+        ]),
     )
 }
 
@@ -1045,12 +1077,17 @@ mod tests {
     }
 
     #[test]
-    fn test_the_edits_question_is_about_the_task_and_states_both_sides() {
-        let question = edits_question("Change nothing; list the options.");
-        assert!(question.instructions.contains("Change nothing; list the options."));
-        assert!(question.instructions.contains("rule out changing what the page's fields and settings hold"));
-        assert!(question.r#true.as_deref().is_some_and(|yes| yes.contains("change nothing")));
-        assert!(question.r#false.as_deref().is_some_and(|no| no.contains("search or filter")));
+    fn test_the_edits_question_is_about_the_task_and_tells_a_requested_change_from_none() {
+        let question = edits_question("Post the reply 'Thanks'. Change nothing else.");
+        assert!(question.instructions.contains("Post the reply 'Thanks'. Change nothing else."));
+        assert_eq!(
+            question.criteria.keys().map(String::as_str).collect::<Vec<_>>(),
+            [EDITS_ALLOWED, EDITS_REQUESTED_ONLY, EDITS_NONE]
+        );
+        let says = |key: &str, text: &str| question.criteria[key].as_str().is_some_and(|c| c.contains(text));
+        assert!(says(EDITS_ALLOWED, "search or filter"));
+        assert!(says(EDITS_REQUESTED_ONLY, "change nothing else"));
+        assert!(says(EDITS_NONE, "read-only"));
     }
 
     #[test]

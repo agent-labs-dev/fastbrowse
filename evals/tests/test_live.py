@@ -1949,7 +1949,7 @@ async def test_the_judge_decides_a_bot_check_alike_for_every_arm(
 
 JUDGE_ENV = {
     "OPENROUTER_API_KEY": "openrouter-test-key",
-    "PARALLAX_JUDGE_MODELS": "anthropic/claude-opus-5.5",
+    "PARALLAX_JUDGE_MODELS": "deepseek/deepseek-v4.1-flash",
     "PARALLAX_JUDGE_BASE_URL": "https://openrouter.ai/api/v1",
     "PARALLAX_JUDGE_API_KEY": "fallback-test-key",
 }
@@ -1993,7 +1993,7 @@ def test_every_judge_configured_passes_the_start_check(monkeypatch):
 
 
 @pytest.mark.real_judge_check
-def test_the_opus_policy_needs_no_jev_key(monkeypatch):
+def test_the_default_policy_needs_no_jev_key(monkeypatch):
     for name, value in JUDGE_ENV.items():
         monkeypatch.setenv(name, value)
     monkeypatch.delenv("OPENROUTER_API_KEY")
@@ -2004,12 +2004,12 @@ def test_the_opus_policy_needs_no_jev_key(monkeypatch):
 @pytest.mark.parametrize(
     ("name", "value", "message"),
     [
-        ("PARALLAX_JUDGE_MODELS", "anthropic/claude-opus-5.4", "must be exactly anthropic/claude-opus-5.5"),
-        ("PARALLAX_JUDGE_MODELS", "anthropic/claude-opus-5.5,openai/gpt-6", "must be exactly"),
+        ("PARALLAX_JUDGE_MODELS", "anthropic/claude-opus-5.4", "must be exactly deepseek/deepseek-v4.1-flash"),
+        ("PARALLAX_JUDGE_MODELS", "deepseek/deepseek-v4.1-flash,openai/gpt-6", "must be exactly"),
         ("PARALLAX_JUDGE_BASE_URL", "https://api.openai.com/v1", "must be OpenRouter"),
     ],
 )
-async def test_the_opus_policy_refuses_any_other_judge(name, value, message, monkeypatch, tmp_path, capsys):
+async def test_the_default_policy_refuses_any_other_judge(name, value, message, monkeypatch, tmp_path, capsys):
     for key, setting in JUDGE_ENV.items():
         monkeypatch.setenv(key, setting)
     monkeypatch.setenv(name, value)
@@ -2024,7 +2024,7 @@ async def test_the_opus_policy_refuses_any_other_judge(name, value, message, mon
 
 
 @pytest.mark.real_judge_check
-@pytest.mark.parametrize("models", ["anthropic/claude-opus-5.4", "anthropic/claude-opus-5.5,openai/gpt-unverified"])
+@pytest.mark.parametrize("models", ["anthropic/claude-opus-5.4", "deepseek/deepseek-v4.1-flash,openai/gpt-unverified"])
 async def test_a_campaign_with_an_unverified_fallback_model_refuses_to_start(models, monkeypatch, tmp_path, capsys):
     for name, value in JUDGE_ENV.items():
         monkeypatch.setenv(name, value)
@@ -2038,7 +2038,7 @@ async def test_a_campaign_with_an_unverified_fallback_model_refuses_to_start(mod
     with pytest.raises(SystemExit):
         await live.main(["--arms", "fastbrowse", "--budget", "10", "--out", str(out), *JEV_POLICY])
     err = capsys.readouterr().err
-    assert "not a verified fallback" in err and "anthropic/claude-opus-5.5" in err
+    assert "not a verified fallback" in err and "deepseek/deepseek-v4.1-flash" in err
     assert not out.exists()
 
 
@@ -2139,6 +2139,26 @@ async def test_every_ultrafast_exit_stops_its_cloud_browser(ending: str, monkeyp
         else:
             assert report.status == ("error" if ending == "browser killed" else ending)
     assert cloud.stops == 1
+
+
+async def test_cloud_browser_costs_keep_provider_precision(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Browser Use Cloud reports six-decimal amounts; an arm's components and total carry them unrounded."""
+    lines = (_line("browser", 0.003127), _line("browser", 0.000001), _line("proxy", 0.015709))
+    assert live._known_components(lines) == {"browser": 0.003127 + 0.000001, "proxy": 0.015709}
+
+    @asynccontextmanager
+    async def cloud(*_: object, **__: object):
+        yield Browser("ws://fixture", cost=lines)
+
+    async def invoke(*_: object) -> bytes:
+        return _runner_line("done")
+
+    _ultrafast_fixture(monkeypatch, invoke)
+    monkeypatch.setattr(live, "cloud_browser", cloud)
+    async with httpx.AsyncClient() as http:
+        _, report = await live.ultrafast_arm(task("flights-search"), http, record=None)
+    browser = sum(line.dollars for line in lines)
+    assert report.cost_by_component["browser"] == browser and report.dollars == browser
 
 
 async def test_a_wrong_browser_harness_tool_opens_no_browser(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2779,7 +2799,7 @@ async def test_a_state_past_the_judges_window_is_ungraded_and_kept_whole(monkeyp
     page = "x" * 3_000_000
     evidence = PageEvidence(url="https://a.test", status=200, text=page, text_length=len(page))
     outcome = Outcome("42", None, "https://a.test", evidence=evidence)
-    monkeypatch.setenv("PARALLAX_JUDGE_MODELS", "anthropic/claude-opus-5.5")
+    monkeypatch.setenv("PARALLAX_JUDGE_MODELS", "deepseek/deepseek-v4.1-flash")
     monkeypatch.setenv("PARALLAX_JUDGE_BASE_URL", "https://openrouter.ai/api/v1")
     monkeypatch.setenv("PARALLAX_JUDGE_API_KEY", "key")
     monkeypatch.setenv("OPENROUTER_API_KEY", "key")
