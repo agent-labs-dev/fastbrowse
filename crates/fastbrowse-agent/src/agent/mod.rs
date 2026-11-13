@@ -438,31 +438,28 @@ impl Agent {
                 return Ok::<_, Flow>(state);
             }
             let given = state::with_inputs(task, &options.inputs);
-            // The known pages are asked beside the first page's open, observation and decision, and taken where the
-            // run first acts or proposes a route (`known_pages_arrived`). Awaited here, the text LLM's answer held
-            // every run's first step, for about a second and up to 3.4 s.
-            let asked = tokio::runtime::Handle::try_current().ok().map(|runtime| {
-                let (llm, given, start, ledger) =
-                    (self.llm.clone(), given.clone(), start.map(String::from), ledger.clone());
-                runtime.spawn(
-                    async move { crate::start::known_pages(&*llm, &given, start.as_deref(), Some(&ledger)).await },
-                )
-            });
+            // The known pages are asked beside the first page's open, observation and decision, and taken before the
+            // run first reads for, builds or acts on a decision, or proposes a route (`known_pages_arrived`). Awaited
+            // here, the text LLM's answer held every run's first step, for about a second and up to 3.4 s. A capped run
+            // still waits: a call checks the cap against the receipts already recorded, and this one's comes later.
+            let asked =
+                (!ledger.capped()).then(|| tokio::runtime::Handle::try_current().ok()).flatten().map(|runtime| {
+                    let (llm, given, start, ledger) =
+                        (self.llm.clone(), given.clone(), start.map(String::from), ledger.clone());
+                    state::KnownAsked::new(runtime.spawn(async move {
+                        crate::start::known_pages(&*llm, &given, start.as_deref(), Some(&ledger)).await
+                    }))
+                });
             let (judgments, known) = if asked.is_some() {
+                // Polled once, the request reserves its call and leaves now, as it did when it was awaited here: a
+                // current-thread runtime would otherwise first poll it when the run waits on I/O.
+                tokio::task::yield_now().await;
                 (self.task_judgments(&given, ledger).await, Ok(Vec::new()))
             } else {
                 tokio::join!(self.task_judgments(&given, ledger), self.known_pages(&given, start, ledger))
             };
-            let (judgments, known) = match (judgments, known) {
-                (Ok(judgments), Ok(known)) => (judgments, known),
-                (Err(error), _) | (_, Err(error)) => {
-                    // Dropped, the request records what it was billed so far in the ledger.
-                    if let Some(asked) = &asked {
-                        asked.abort();
-                    }
-                    return Err(error);
-                }
-            };
+            // Dropped on an error, the request is aborted and records what it was billed so far.
+            let (judgments, known) = (judgments?, known?);
             let mut state = RunState::new(
                 task.to_string(),
                 options.inputs.clone(),

@@ -8325,12 +8325,12 @@ async fn known_pages_answered_beside_the_first_step_redecide_only_when_they_offe
     let mut state = run_state();
     let asked = |urls: Vec<&str>| {
         let urls = urls.into_iter().map(String::from).collect();
-        tokio::spawn(async move {
+        super::state::KnownAsked::new(tokio::spawn(async move {
             Ok(Generation {
                 data: crate::start::KnownPages { urls },
                 cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)),
             })
-        })
+        }))
     };
     let here = "https://pypi.org/project/httpx/";
     state.known_asked = Some(asked(vec![here]));
@@ -8341,6 +8341,10 @@ async fn known_pages_answered_beside_the_first_step_redecide_only_when_they_offe
     assert_eq!(state.known_pages.len(), 2);
     assert!(state.known_asked.is_none());
     assert!(!agent.known_pages_arrived(&mut state, here).await.unwrap(), "an answer is taken once");
+    // A run that ends with the request still out does not wait for it, so a time limit still ends the run on time.
+    state.known_asked = Some(super::state::KnownAsked::new(tokio::spawn(std::future::pending())));
+    let ending = tokio::time::timeout(std::time::Duration::from_secs(5), state.known_pages_unused());
+    assert!(ending.await.is_ok(), "an ending run waited on its known pages request");
 }
 
 #[tokio::test]

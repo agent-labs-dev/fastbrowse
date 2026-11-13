@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use fastbrowse_core::decision::{Answer, DecisionError};
-use fastbrowse_core::llm::LLMError;
+use fastbrowse_core::llm::{Generation, LLMError};
 use fastbrowse_core::models::{Attachment, Authorization, Evidence, Status, StepChoice, StepResult, WallKind};
 use fastbrowse_core::page::{BrowserError, Capture, Control, Observation};
 use fastbrowse_core::py::dump::Dump;
@@ -17,6 +17,7 @@ use crate::memory::{Fact, Notes, address, fact_id};
 use crate::policy::{Decision, HistoryEntry};
 use crate::retrieval::ComposedAnswer;
 use crate::retrieval::whole_page_facts;
+use crate::start::KnownPages;
 
 /// Reads a page gets between finished reads: one that did not finish is tried once more, then the page counts as read.
 const READ_TRIES: u8 = 2;
@@ -243,9 +244,25 @@ impl SiteFailure {
 }
 
 /// The known pages request a run sent while its first page opened, answered with its cost unrecorded: the run that
-/// takes the answer records it, which after an escalation to a browser is the browser run's ledger.
-pub(crate) type KnownAsked =
-    tokio::task::JoinHandle<crate::error::Result<fastbrowse_core::llm::Generation<crate::start::KnownPages>>>;
+/// takes the answer records it, which after an escalation to a browser is the browser run's ledger. Dropped, the request
+/// is aborted, so a cancelled run's request stops with it and records what it was billed.
+pub(crate) struct KnownAsked(tokio::task::JoinHandle<crate::error::Result<Generation<KnownPages>>>);
+
+impl KnownAsked {
+    pub fn new(asked: tokio::task::JoinHandle<crate::error::Result<Generation<KnownPages>>>) -> KnownAsked {
+        KnownAsked(asked)
+    }
+
+    pub async fn answer(mut self) -> crate::error::Result<Generation<KnownPages>> {
+        (&mut self.0).await.unwrap_or_else(|error| Err(AgentError::Invalid(format!("not answered: {error}"))))
+    }
+}
+
+impl Drop for KnownAsked {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 
 pub(crate) struct RunState {
     pub task: String,
@@ -693,12 +710,14 @@ impl RunState {
         }
     }
 
-    /// Records what the known pages request cost, for a run that ends without taking its answer.
+    /// Records what the known pages request cost, for a run that ends without taking its answer. An ending run does not
+    /// wait for it, so a time limit still ends the run on time: one still out is aborted.
     pub async fn known_pages_unused(&mut self) {
         if let Some(asked) = self.known_asked.take()
-            && let Ok(Ok(answer)) = asked.await
+            && asked.0.is_finished()
+            && let Ok(answer) = asked.answer().await
         {
-            let _ = self.ledger.record([answer.cost]);
+            let _ = self.ledger.for_answer().record([answer.cost]);
         }
     }
 
