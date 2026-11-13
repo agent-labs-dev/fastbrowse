@@ -83,7 +83,7 @@
   <profiles>
     <!--
       The release: sources, javadoc, one `natives-<target>` jar per platform from the binaries staged under ${natives},
-      all signed and sent to Maven Central. `mvn -P release deploy` from the release workflow.
+      all signed for Maven Central. No workflow runs it: the release does not publish the Java client.
     -->
     <profile>
       <id>release</id>
