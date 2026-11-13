@@ -18,7 +18,7 @@ keys:
       - github: AI_GATEWAY_API_KEY
       - pass: ai/ai-gateway/fastbrowse-ci
     expires: 2027-11-13
-    expiresNote: expiresAt from vercel ai-gateway api-keys list, read 2026-11-13
+    expiresNote: "expiresAt from vercel ai-gateway api-keys list, read 2026-11-13"
     limit: $50/day
   - id: openrouter-fastbrowse-ci
     service: openrouter
@@ -28,7 +28,7 @@ keys:
       - github: OPENROUTER_API_KEY
       - pass: openrouter/fastbrowse-ci
     expires: 2027-02-11
-    expiresNote: expires_at from the OpenRouter key endpoint, read 2026-11-13
+    expiresNote: "expires_at from the OpenRouter key endpoint, read 2026-11-13"
     limit: $50/day
   - id: openrouter-fastbrowse-benchmarks
     service: openrouter
@@ -38,7 +38,7 @@ keys:
       - github: OPENROUTER_BENCHMARKS_API_KEY
       - pass: openrouter/fastbrowse-benchmarks
     expires: 2027-02-11
-    expiresNote: expires_at from the OpenRouter key endpoint, read 2026-11-13
+    expiresNote: "expires_at from the OpenRouter key endpoint, read 2026-11-13"
     limit: $100/day
   - id: openrouter-fastbrowse-judge
     service: openrouter
@@ -48,7 +48,7 @@ keys:
       - github: OPENROUTER_JUDGE_API_KEY
       - pass: openrouter/fastbrowse-judge
     expires: 2027-02-11
-    expiresNote: expires_at from the OpenRouter key endpoint, read 2026-11-13
+    expiresNote: "expires_at from the OpenRouter key endpoint, read 2026-11-13"
     limit: $50/day
   - id: aur-ssh-private-key
     service: aur
@@ -67,7 +67,7 @@ keys:
     locations:
       - github: AUR_SYNC_TOKEN
     expires: 2026-12-11
-    expiresNote: fine-grained PAT on cjber, resource owner agent-labs-dev; expiry read from github.com/settings/personal-access-tokens
+    expiresNote: "fine-grained PAT on cjber, resource owner agent-labs-dev; expiry read from github.com/settings/personal-access-tokens"
     limit: none
   - id: browser-use-api-key
     service: browser-use
@@ -85,7 +85,7 @@ keys:
       - github: CLAUDE_CODE_OAUTH_TOKEN
     expires: unknown
     limit: unknown
-    note: claude-issue-pr.yml reads it, but no repository, environment or organization secret of this name is set
+    note: "claude-issue-pr.yml reads it, but no repository, environment or organization secret of this name is set"
   - id: claude-pr-token
     service: github
     group: ci
@@ -115,12 +115,13 @@ keys:
     service: github
     group: release
     owner: cjber
+    label: fastbrowse-evals
     locations:
       - github: FASTBROWSE_SITE_TOKEN
-    expires: 2026-11-29
-    expiresNote: "inferred: secret set 2026-10-30, 30 days before the PAT's expiry; publish-evals.yml uses it"
+    expires: 2027-11-12
     limit: none
-    note: very likely the fine-grained PAT fastbrowse-evals
+    rotated: 2026-11-13
+    note: "fine-grained PAT with repository access to agent-labs-dev/fastbrowse-site only"
   - id: fbh-browser-pool-token
     service: fastbrowse-hosted
     group: benchmarks
@@ -129,7 +130,7 @@ keys:
       - gcp: fastbrowse-hosted/FBH_BROWSER_POOL_TOKEN
     expires: unknown
     limit: unknown
-    note: benchmark-campaign.yml reads it with gcloud for the fastbrowse-pool arm, so the workflow scan cannot see it
+    note: "benchmark-campaign.yml reads it with gcloud for the fastbrowse-pool arm, so the workflow scan cannot see it"
   - id: hf-token
     service: huggingface
     group: benchmarks
