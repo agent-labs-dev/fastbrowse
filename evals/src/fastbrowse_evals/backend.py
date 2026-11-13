@@ -1,24 +1,18 @@
 """The keys and model backend every fastbrowse arm runs with, chosen here and passed to `run_task(settings=...)`.
 
 fastbrowse reads its configuration from the process environment and `.env` unless the caller passes `settings`, in
-which case it reads those alone. The harness passes them, so the Jev route is one Parallax chose and recorded, and
-jev-ultrafast, which cannot import fastbrowse, is given the same route by construction rather than by agreeing on an
-environment. The environment is read as fastbrowse reads it (`environment`).
+which case it reads those alone. The harness passes them, so the Jev route is one Parallax chose and recorded. The
+environment is read as fastbrowse reads it (`environment`).
 """
 
-import importlib
 from collections.abc import Mapping
-from typing import Any, Literal
+from typing import Literal
 
 import httpx
 from fastbrowse.evals import harness
 
 type JevSource = Literal["openrouter", "typesafe"]
 
-# Values of the pinned fastbrowse build's Rust core: crates/fastbrowse-clients/src/system_one.rs.
-OPENROUTER_URL = "https://openrouter.ai/api"
-TYPESAFE_URL = "https://api.typesafe.ai"
-JEV_DOLLARS_PER_INPUT_TOKEN = 0.042 / 1_000_000
 RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529})
 """Statuses that say nothing about the request, so a repeat can clear them (crates/fastbrowse-clients/src/validation.rs
 `RETRYABLE_STATUS`)."""
@@ -102,28 +96,3 @@ def run_settings(overrides: Mapping[str, str] | None = None) -> dict[str, str]:
         }
         return chosen | dict(overrides)
     return chosen | {"FASTBROWSE_DECISION_SOURCE": jev_source(env)}
-
-
-def jev_models() -> dict[str, str]:
-    """The Jev model each source sends unless a run names another, as the measured fastbrowse build's Rust core
-    defines it, so jev-ultrafast runs the Jev release fastbrowse runs and no copy here can fall behind."""
-    core: Any = importlib.import_module("fastbrowse._native")  # compiled, so the checker has no types for it
-    return dict(core.jev_models())
-
-
-def jev_route() -> tuple[str, str, str, str]:
-    """(key variable, base URL, model, key) of `jev_source()`, for jev-ultrafast's isolated runner. A base URL or
-    model set for fastbrowse (FASTBROWSE_DECISION_BASE_URL, FASTBROWSE_DECISION_MODEL) applies to it too."""
-    env = environment()
-    source = jev_source(env)
-    match source:
-        case "openrouter":
-            name, url, key = "TYPESAFE_API_KEY", OPENROUTER_URL, env.get("OPENROUTER_API_KEY")
-        case "typesafe":
-            name, url, key = "TYPESAFE_API_KEY", TYPESAFE_URL, env.get("TYPESAFE_API_KEY")
-    if not key:
-        raise MissingKey(f"set {'OPENROUTER_API_KEY' if source == 'openrouter' else 'TYPESAFE_API_KEY'}")
-    model = jev_models()[source]
-    url = env.get("FASTBROWSE_DECISION_BASE_URL") or env.get("FASTBROWSE_JEV_BASE_URL") or url
-    model = env.get("FASTBROWSE_DECISION_MODEL") or env.get("FASTBROWSE_JEV_MODEL") or model
-    return name, url, model, key

@@ -367,19 +367,19 @@ def test_separate_outage_retry_keeps_original_pair_and_actual_run_provenance() -
 
 
 def test_every_comparison_sets_arms_on_the_same_tasks() -> None:
-    """Pooled, core set fastbrowse on 21 tasks beside Browser Use on 14 and jev-ultrafast on 6."""
+    """Pooled, core set fastbrowse beside Browser Use on some tasks and Browser Harness on others."""
     rows = [
-        _row("pypi-version"),
-        _row("pypi-version", arm="browser-use"),
+        _row("saucedemo-cart"),
+        _row("saucedemo-cart", arm="browser-use"),
         _row("hn-comments"),
-        _row("hn-comments", arm="jev-ultrafast"),
+        _row("hn-comments", arm="browser-harness"),
         _row("wiki-open", passed=False),
     ]
     feed = versions.summary([("1.0.0", rows)])
     assert [(r.compared, r.tasks, r.arms["fastbrowse"].total) for r in feed.releases] == [
-        # jev-ultrafast cannot run the lookup, so it is compared there too, failing it.
-        (["fastbrowse", "browser-use", "jev-ultrafast"], 1, 1),
-        (["fastbrowse", "jev-ultrafast"], 1, 1),
+        # browser-harness cannot run the login task, so it is compared there too, failing it.
+        (["fastbrowse", "browser-use", "browser-harness"], 1, 1),
+        (["fastbrowse", "browser-harness"], 1, 1),
         (["fastbrowse"], 1, 1),
     ]
 

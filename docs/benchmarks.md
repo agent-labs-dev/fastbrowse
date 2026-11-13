@@ -25,9 +25,9 @@ Benchmarking compares exactly three things, and nothing else is a headline:
 
 | | Comparison | Arms | Publication group | Status |
 |:--|:--|:--|:--|:--|
-| C1 | agent against agent | `fastbrowse` and `jev-ultrafast` live, `browser-use` and `browser-harness` from the competitor reference | `internal-hosted` | published record below |
+| C1 | agent against agent | `fastbrowse` live, `browser-use`, `browser-use-ultrafast` and `browser-harness` from the competitor reference | `internal-hosted` | published record below |
 | C2 | backend against backend | `fastbrowse-pool`, fastbrowse on its own browser pool, against `fastbrowse` on a Browser Use Cloud browser | `internal-backend` | earlier campaign record below; not on the published page |
-| C3 | fastbrowse and its backend against Browser Use Ultrafast | `fastbrowse-pool` against `jev-ultrafast`, over the 6 navigation tasks both run | `internal-ultrafast` | Ultrafast measured on the page as an arm of C1's live suite (below); the 6-task own-pool pairing is not yet measured |
+| C3 | fastbrowse and its backend against BU Ultrafast | `fastbrowse-pool` against `browser-use-ultrafast`, the hosted agent on `bu-ultrafast`, over the 52 tasks both run | `internal-ultrafast` | not yet measured |
 
 The Codex with Cua Driver arm and the upstream suites (BU Bench, Online-Mind2Web) are diagnostics, described in
 [measuring fastbrowse](evals.md); none of them is one of the three comparisons.
@@ -154,16 +154,17 @@ the campaigns above. One billed Browser Use Cloud browser minute ($0.0003 at the
 a fraction of that, so on fastbrowse's own cost scale the browser backend is not the cost driver: model
 routing is. Source: the campaign rows and Browser Use's published cloud pricing, checked 2026-10-18.
 
-## C3: fastbrowse on its own browser pool against Browser Use Ultrafast (`jev-ultrafast`)
+## C3: fastbrowse on its own browser pool against BU Ultrafast (`browser-use-ultrafast`)
 
-Ultrafast is measured on the published page, as the fourth arm of the C1 live suite above: 4.6% of 129
-attempts, $0.0017 a run, fastest on 2 of the 50 tasks two or more agents passed. That arm ran on a Browser Use
-Cloud browser like every other arm of the campaign, so it is the agent comparison, not this one.
+The published page's Jev Ultrafast arm is a different agent: Browser Use's open source `jev-ultrafast`, the fourth
+arm of the C1 live suite above (4.6% of 129 attempts, $0.0017 a run, fastest on 2 of the 50 tasks two or more agents
+passed). It ran on a Browser Use Cloud browser like every other arm of the campaign, so it is the agent comparison,
+not this one, and no comparison runs it any more.
 
 The `internal-ultrafast` pairing this section owns is not yet measured. It compares the two products whole,
-each on its own backend: fastbrowse on its browser pool against `jev-ultrafast`, on the 6 navigation tasks both
-run, three repeats each; `jev-ultrafast` returns no answer. From publication schema 5 the gate holds every new
-candidate to that pairing.
+each on its own backend: fastbrowse on its browser pool against the hosted Browser Use agent on `bu-ultrafast`
+(Browser Use Cloud API V4), on the 52 tasks both run, three repeats each. From publication schema 7 the gate holds
+every new candidate to that pairing.
 
 The earlier record is not a C3 figure: the 0.5.14 core suite ran fastbrowse on a Browser Use Cloud browser, not on
 its own pool, against `jev-ultrafast` (fastbrowse 58 of 60, median 8.6s; `jev-ultrafast` 40 of 60, median 12.6s;
@@ -179,16 +180,9 @@ $0.02 a browser-hour and proxy traffic at $5/GB are billed separately. They are 
 are not the same kind of number as our `dollars` (metered provider spend, browser included), and this file puts
 them in no column above.
 
-What we do measure under that name is the open source `jev-ultrafast` agent at the pinned commit, which the page
-carries as the Jev Ultrafast arm. The vendor's hosted `bu-ultrafast` model has no arm of its own: the runner's
-arm set is `fastbrowse`, `fastbrowse-pool`, `browser-use`, `jev-ultrafast` and `browser-harness`, fixed by
-`src/fastbrowse/evals/benchmarks.py`, and each publication group validates the arms it may carry -
-`internal-hosted` carries all four head-to-head arms, with `jev-ultrafast` and `browser-harness` partial to the
-tasks each can attempt, and `internal-ultrafast` pairs `fastbrowse-pool` with `jev-ultrafast` at the commit
-pinned in `evals/src/fastbrowse_evals/adapters/arm-pins.json`. Measuring the vendor's hosted model therefore
-still takes an arm added to the arm set and to a group, a patch pin of the revision it runs, and a cost meter
-that adds its browser-hour and proxy GB, so its per-task cost is the same quantity as ours. Until that exists
-its vendor figures stay labelled as the vendor's.
+The `browser-use-ultrafast` arm runs that hosted model, and its `dollars` are the session's metered total, browser and
+proxy included, as Browser Use reports it. Until a C3 campaign is published, the vendor figures stay labelled as the
+vendor's.
 
 ## What is not claimed here
 

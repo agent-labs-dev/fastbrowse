@@ -14,9 +14,5 @@
   "@openai/codex": {
     "registry": "npm",
     "version": "0.167.2"
-  },
-  "browser-use/jev-ultrafast": {
-    "registry": "github",
-    "version": "cf3c406f0fc4becff8986ed4d4d37b7b9f102e45"
   }
 }

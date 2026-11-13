@@ -20,9 +20,8 @@ run-name: Benchmark campaign ${{ inputs.campaign_id || github.event.client_paylo
 #
 # Groups:
 #   fastbrowse    fastbrowse alone on every live suite task (internal-fastbrowse).
-#   head-to-head  fastbrowse and Jev Ultrafast (jev-ultrafast) in one Parallax invocation, each on a Browser Use
-#                 Cloud browser with the same settings (published as internal-hosted). Jev Ultrafast runs every task it
-#                 can attempt; the catalog states why it skips the others.
+#   head-to-head  fastbrowse in one Parallax invocation with any competitor run live beside it (published as
+#                 internal-hosted). Each arm runs every task it can attempt; the catalog states why it skips the others.
 #   all           both.
 # `extra_arms` adds arms beside them. `fastbrowse-pool` only in a smoke. `fastbrowse-hosted`, our own product's
 # public API as a customer calls it, may join a real campaign, and then always as its own group writing
@@ -139,7 +138,7 @@ on:
         type: string
         default: ""
       head_to_head_arms:
-        description: Space separated arms the head-to-head group runs instead of its default ones, from fastbrowse, browser-use, browser-use-ultrafast, jev-ultrafast, browser-harness and browser-use-oss (browser-use 1.0 on its defaults, never a default arm); the candidate takes the others from the campaign's earlier runs
+        description: Space separated arms the head-to-head group runs instead of its default ones, from fastbrowse, browser-use, browser-use-ultrafast, browser-harness and browser-use-oss (browser-use 1.0 on its defaults, never a default arm); the candidate takes the others from the campaign's earlier runs
         required: false
         type: string
         default: ""
@@ -261,8 +260,8 @@ jobs:
           fi
           for arm in $HEAD_TO_HEAD_ARMS; do
             case "$arm" in
-              fastbrowse|browser-use|browser-use-ultrafast|jev-ultrafast|browser-harness|browser-use-oss) ;;
-              *) echo "::error::head_to_head_arms takes fastbrowse, browser-use, browser-use-ultrafast, jev-ultrafast, browser-harness and browser-use-oss, got '$arm'"; exit 1 ;;
+              fastbrowse|browser-use|browser-use-ultrafast|browser-harness|browser-use-oss) ;;
+              *) echo "::error::head_to_head_arms takes fastbrowse, browser-use, browser-use-ultrafast, browser-harness and browser-use-oss, got '$arm'"; exit 1 ;;
             esac
           done
           for arm in $EXTRA_ARMS; do
@@ -373,9 +372,8 @@ jobs:
         env:
           GROUP_SET: ${{ env.SMOKE == 'true' && env.GROUPS_CHOSEN == 'all' && 'head-to-head' || env.GROUPS_CHOSEN }}
         run: |
-          vendors="jev-ultrafast"
-          if test "$REFRESH" = true; then vendors="$vendors browser-use browser-use-ultrafast browser-harness"; fi
-          paired="fastbrowse $vendors"
+          paired="fastbrowse"
+          if test "$REFRESH" = true; then paired="$paired browser-use browser-use-ultrafast browser-harness"; fi
           # Words only: the validation step admitted nothing but arm names.
           if test -n "$HEAD_TO_HEAD_ARMS"; then read -ra named <<< "$HEAD_TO_HEAD_ARMS"; paired="${named[*]}"; fi
           # `fastbrowse-hosted` never joins a published group: each internal group's arm set is fixed in the

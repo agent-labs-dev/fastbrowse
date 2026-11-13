@@ -10,7 +10,6 @@ LATEST = {
     "https://pypi.org/pypi/browser-harness/json": {"info": {"version": "0.1.13"}},
     "https://pypi.org/pypi/browser-use-sdk/json": {"info": {"version": "3.12.1"}},
     "https://registry.npmjs.org/@openai/codex/latest": {"version": "0.167.1"},
-    "https://api.github.com/repos/browser-use/jev-ultrafast/commits/HEAD": {"sha": "abc"},
 }
 
 
@@ -23,7 +22,6 @@ def pins(tmp_path, monkeypatch):
                 "browser-use": {"registry": "pypi", "version": "1.0.0"},
                 "browser-harness": {"registry": "pypi", "version": "0.1.13"},
                 "@openai/codex": {"registry": "npm", "version": "0.167.1"},
-                "browser-use/jev-ultrafast": {"registry": "github", "version": "abc"},
             }
         )
     )
@@ -49,12 +47,11 @@ def test_update_moves_the_pin_and_check_then_passes(pins):
 def test_every_arm_pin_comes_from_the_pin_file():
     pinned = arm_pins.load()
     assert f"browser-use=={pinned['browser-use']['version']}" == live.OSS_PACKAGE
-    assert pinned["browser-use/jev-ultrafast"]["version"] in live.ULTRAFAST
     assert pinned["@openai/codex"]["version"] in live.HARNESS_PIN and pinned["cua-driver"]["version"] in live.CUA_PIN
 
 
 def test_check_with_arms_ignores_pins_those_arms_do_not_install(pins):
-    assert arm_pins.main(["check", "--arms", "fastbrowse", "browser-harness", "jev-ultrafast"]) == 0
+    assert arm_pins.main(["check", "--arms", "fastbrowse", "browser-harness"]) == 0
     assert arm_pins.main(["check", "--arms", "browser-use-oss"]) == 1
 
 

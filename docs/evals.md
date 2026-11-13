@@ -6,9 +6,9 @@ The [benchmark page](https://fastbrowse.ai/benchmarks) describes these measureme
 
 | Comparison | Arms | Measurement |
 |---|---|---|
-| C1, agent against agent (`internal-hosted`) | fastbrowse and Jev Ultrafast live, Browser Use hosted default and Browser Harness from the competitor reference | Source task success on each task an agent can attempt |
+| C1, agent against agent (`internal-hosted`) | fastbrowse live, Browser Use hosted default, BU Ultrafast and Browser Harness from the competitor reference | Source task success on each task an agent can attempt |
 | C2, backend against backend (`internal-backend`) | fastbrowse on its own browser pool, fastbrowse on a Browser Use Cloud browser | Source task success on matched tasks |
-| C3, against Ultrafast (`internal-ultrafast`) | fastbrowse on its own browser pool, Jev Ultrafast | Source task success on the tasks both run |
+| C3, against BU Ultrafast (`internal-ultrafast`) | fastbrowse on its own browser pool, the hosted Browser Use agent on `bu-ultrafast` (`browser-use-ultrafast`) | Source task success on the tasks both run |
 
 These three are the only comparisons; [benchmark results](benchmarks.md) records the figures each has. The
 upstream suites below and the Codex with Cua Driver arm are diagnostics, not comparisons:

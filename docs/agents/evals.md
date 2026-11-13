@@ -12,8 +12,8 @@ Fix the general cause (the no eval tuning rule in [AGENTS.md](../../AGENTS.md)) 
 
 The internal live suite, external corpora, comparator adapters and the official runner live in `evals/`
 (`fastbrowse_evals`, a Parallax plugin). Run `uv run fastbrowse-evals browser internal --help`, `official --help`,
-`track-ledger --help` and `track-official --help` from `evals/`. The internal comparison runs fastbrowse and Jev Ultrafast live and
-reads Browser Use hosted default and Browser Harness from the competitor reference; label the Python SDK agent
+`track-ledger --help` and `track-official --help` from `evals/`. The internal comparison runs fastbrowse live and
+reads Browser Use hosted default, BU Ultrafast and Browser Harness from the competitor reference; label the Python SDK agent
 separately when used. An agent shows tasks it cannot attempt as not run. Never pool the best score from separate agents.
 
 Parallax imports source benchmark grades as source reports. Its own semantic judgments use Jev with an LLM

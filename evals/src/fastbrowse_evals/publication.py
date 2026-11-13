@@ -23,6 +23,7 @@ from typing import Any, Literal
 
 from fastbrowse.evals.benchmarks import (
     LINK,
+    SCHEMA,
     Candidate,
     CompetitorReference,
     ExcludedTask,
@@ -76,7 +77,7 @@ class PublicationError(ValueError):
 GROUPS: dict[str, tuple[int, int, str, set[str]]] = {
     "internal-fastbrowse": (53, 3, "task-success", {"fastbrowse"}),
     "internal-hosted": (53, 3, "task-success", {"fastbrowse"}),
-    "internal-ultrafast": (6, 3, "task-success", {"fastbrowse-pool", "jev-ultrafast"}),
+    "internal-ultrafast": (52, 3, "task-success", {"fastbrowse-pool", "browser-use-ultrafast"}),
     "internal-backend": (53, 3, "task-success", {"fastbrowse", "fastbrowse-pool"}),
     # Official groups take whatever repeat count their runs recorded (`official_group`).
     "bu-bench": (200, 1, "weighted-rubric", {"fastbrowse"}),
@@ -205,7 +206,7 @@ def exclusions(arms: Iterable[str], task_ids: Iterable[str], catalog: dict[str, 
 INTERNAL = {
     "internal-fastbrowse": None,
     "internal-hosted": "browser-use",
-    "internal-ultrafast": "jev-ultrafast",
+    "internal-ultrafast": "browser-use-ultrafast",
     "internal-backend": "fastbrowse-pool",
 }
 SLOT_FIELDS = (
@@ -218,7 +219,6 @@ HOSTED_ARMS = (
     "fastbrowse",
     "browser-use",
     "browser-use-ultrafast",
-    "jev-ultrafast",
     "browser-harness",
     "browser-use-oss",
 )
@@ -226,7 +226,6 @@ HOSTED_ARMS = (
 BROWSER_MODES = {
     "fastbrowse": {"local-chrome", "browser-use-cloud"},
     "fastbrowse-pool": {"fastbrowse-pool"},
-    "jev-ultrafast": {"browser-use-cloud"},
     "browser-use": {"browser-use-hosted"},
     "browser-use-ultrafast": {"browser-use-hosted"},
     "browser-harness": {"browser-use-cloud"},
@@ -327,7 +326,7 @@ def timing_fields(
 
 def timed_schema(schema: int) -> Any:
     """`schema`, or the contract's schema for rows that record their timing basis when the pinned contract has them."""
-    return 6 if "timing_basis" in getattr(Row, "model_fields", {}) else schema
+    return SCHEMA if "timing_basis" in getattr(Row, "model_fields", {}) else schema
 
 
 def reference_basis(row: Row) -> str | None:
@@ -828,7 +827,7 @@ def internal_group(
     agents = {
         None: "Fastbrowse only; competitor results are separate references",
         "browser-use": hosted,
-        "jev-ultrafast": "Fastbrowse on its own browser pool against Browser Use Ultrafast (Jev Ultrafast)",
+        "browser-use-ultrafast": "Fastbrowse on its own browser pool against the hosted Browser Use agent on bu-ultrafast",
         "fastbrowse-pool": "Backend against backend: Fastbrowse on the Browser Use Cloud browser and on its own pool",
     }[other]
     limits = [
@@ -851,15 +850,11 @@ def internal_group(
     models = {arm: sorted(set().union(*(item.models[arm] for item in used if arm in item.models))) for arm in arms}
     # One note for every arm's models keeps a pairing within the public contract's twelve notes.
     recorded = [f"{arm} {', '.join(found)}" for arm, found in sorted(models.items()) if found]
-    if other == "browser-use" and "jev-ultrafast" in arms:
-        recorded.append(f"jev-ultrafast text helper {catalog['ultrafast_text_model']}")
     if recorded:
         limits.append("Recorded models: " + "; ".join(recorded))
     if other is None:
         text_models = sorted(set().union(*(item.text_models for item in used)))
         limits += [f"Recorded text models for fastbrowse: {model}" for model in text_models]
-    if other == "jev-ultrafast":
-        limits.append(f"Ultrafast text helper {catalog['ultrafast_text_model']}; spend is its provider metered cost")
     limits.append(f"Semantic judge policy {next(iter(policies))}")
     if len(limits) > 12:
         raise PublicationError(f"{group_id}: more protocol notes than the public contract holds")
@@ -1516,8 +1511,9 @@ def export(
     # The receipt claims every fixture slot passed; `checks.fixture` holds it to the run's own rows.
     slots = len(fixture_slots())
     candidate = Candidate(
-        # 5 is internal-ultrafast pairing fastbrowse-pool (not fastbrowse) with jev-ultrafast; 4 is the uncapped
-        # start-gate protocol with the internal-backend group.
+        # A contract whose rows record their timing basis writes its own schema, which from 7 pairs fastbrowse-pool
+        # with browser-use-ultrafast; 5 paired it with jev-ultrafast, and 4 is the uncapped start-gate protocol with
+        # the internal-backend group.
         schema_version=timed_schema(5 if ultrafast else 4 if backend else 3 if internal_fastbrowse else 2),
         langfuse_verified=True,
         campaign_id=campaign_id,
@@ -1562,7 +1558,7 @@ def main(argv: list[str] | None = None) -> None:
         "--ultrafast",
         nargs="+",
         type=Path,
-        help="fastbrowse on its pool against Ultrafast: fastbrowse-pool against jev-ultrafast" + runs,
+        help="fastbrowse on its pool against BU Ultrafast: fastbrowse-pool against browser-use-ultrafast" + runs,
     )
     parser.add_argument(
         "--official-rows",

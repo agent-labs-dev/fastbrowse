@@ -93,10 +93,9 @@ def ledger_rows(campaign: Campaign, root: Path) -> dict[str, dict[str, Any]]:
 
 PARALLAX = f"parallax-evals=={importlib.metadata.version('parallax-evals')}"
 
-ROW_CONFIG = ("model", "text_model", "text_helpers", "step_cap", "step_cap_unit", "decision_cap")
+ROW_CONFIG = ("model", "text_model", "step_cap", "step_cap_unit")
 RUN_CONFIG = (
     "providers",
-    "jev_ultrafast",
     "timing_basis",
     "session_open_limit_seconds",
     "max_steps",
@@ -105,7 +104,6 @@ RUN_CONFIG = (
     "agent_limits",
     "hosted_max_cost_usd",
     "cloud_browser_timeout_minutes",
-    "text_max_output_tokens",
 )
 """What configures an arm, as a ledger row and its run record it. Concurrency, budget and argv choose how a campaign
 runs, not what an arm is, so two campaigns of one arm compare whatever they were scheduled with."""

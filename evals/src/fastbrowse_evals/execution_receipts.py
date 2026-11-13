@@ -204,7 +204,6 @@ def _load(paths: Sequence[Path], results: Path, prompts: Mapping[str, str]) -> d
                     "output_tokens",
                     "artifact",
                     "step_log",
-                    "decision_log",
                 )
             )
             or row.get("unpriced_judge_attempts") != 0

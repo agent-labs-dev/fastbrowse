@@ -89,8 +89,8 @@ from fastbrowse_evals.registry import BENCHMARKS, Suite
 from fastbrowse_evals.versions import local_browser_identity, provenance
 
 OFFICIAL_ARMS = ("fastbrowse", "browser-use")
-"""Agents the official suites can run. Ultrafast is not one: it returns no answer and records no step frames, and
-both official judges grade the agent's answer and its action history (evals/BENCHMARKS.md)."""
+"""Agents the official suites can run; both official judges grade the agent's answer and its action history
+(evals/BENCHMARKS.md)."""
 HOSTED_RUNTIME: dict[str, dict[str, Any]] = {
     "browser-use": {"browser": {"mode": "browser-use-hosted"}, "product": "Browser Use hosted agent (SDK v3)"},
 }

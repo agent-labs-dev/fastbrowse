@@ -27,8 +27,6 @@ jobs:
         with: {python-version: "3.13"}
       - name: Move every pin to its latest release
         working-directory: evals
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: |
           uv sync --locked
           uv run --no-sync python -m fastbrowse_evals.arm_pins update

@@ -37,7 +37,6 @@ def test_every_head_to_head_exclusion_is_exported_with_its_reason() -> None:
     assert skipped["browser-use"] == {"saucedemo-pause"}
     assert skipped["fastbrowse"] == set()
     assert len(skipped["browser-harness"]) == len(rendered) - 47
-    assert len(skipped["jev-ultrafast"]) == len(rendered) - 6
     lookup = next(t for t in live.TASKS if t.id == "pypi-version")
     with pytest.raises(ValueError, match="without a stated reason"):
         live.excluded_because("browser-use", dataclasses.replace(lookup, arms=("fastbrowse",)))

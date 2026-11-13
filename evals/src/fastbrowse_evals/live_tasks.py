@@ -501,7 +501,6 @@ TASKS: tuple[LiveTask, ...] = (
         lambda _: _constant(None),
         _path_is("/wiki/Gödel's_incompleteness_theorems"),
         Category.NAVIGATE,
-        arms=("fastbrowse", "browser-use", "jev-ultrafast"),
     ),
     LiveTask(
         "pypi-open",
@@ -510,7 +509,6 @@ TASKS: tuple[LiveTask, ...] = (
         lambda _: _constant(None),
         _path_is("/project/httpx"),
         Category.NAVIGATE,
-        arms=("fastbrowse", "browser-use", "jev-ultrafast"),
     ),
     LiveTask(
         "github-open",
@@ -519,7 +517,6 @@ TASKS: tuple[LiveTask, ...] = (
         lambda _: _constant(None),
         _path_is("/encode/httpx"),
         Category.NAVIGATE,
-        arms=("fastbrowse", "browser-use", "jev-ultrafast"),
     ),
     LiveTask(
         "arxiv-open",
@@ -528,7 +525,6 @@ TASKS: tuple[LiveTask, ...] = (
         lambda _: _constant(None),
         _arrived(lambda url: _ended_under(Outcome(None, None, url), "/abs/1706.03762")),
         Category.NAVIGATE,
-        arms=("fastbrowse", "browser-use", "jev-ultrafast"),
     ),
     LiveTask(
         "hn-comments",
@@ -537,7 +533,6 @@ TASKS: tuple[LiveTask, ...] = (
         _hn_top_ids,
         _hn_comments,
         Category.NAVIGATE,
-        arms=("fastbrowse", "browser-use", "jev-ultrafast"),
     ),
     LiveTask(
         "flights-search",
@@ -546,7 +541,6 @@ TASKS: tuple[LiveTask, ...] = (
         lambda _: _constant(None),
         _flight_search_run,
         Category.NAVIGATE,
-        arms=("fastbrowse", "browser-use", "jev-ultrafast"),
         rolling={_FLIGHT_DATE: "<four weeks out>"},
     ),
 )

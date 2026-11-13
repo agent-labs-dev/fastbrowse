@@ -31,11 +31,13 @@ SYSTEMS = {
     "fastbrowse": "fastbrowse",
     "browser-use": "browser-use",
     "browser-use-ultrafast": "browser-use-ultrafast",
-    "jev-ultrafast": "jev-ultrafast",
+    "jev-ultrafast": "jev-ultrafast",  # figures approved before schema 7 carry it
     "browser-harness": "browser-harness",
     "browser-use-oss": "browser-use-oss",
 }
 """The site system each candidate arm is shown as (`SYSTEM_ARMS` in the site's benchmark-groups.ts)."""
+RETIRED = frozenset({"jev-ultrafast"})
+"""Systems no current group measures: shown where approved figures carry them, never listed as not measured."""
 
 SOURCES: dict[SiteGroup, tuple[GroupId, ...]] = {
     "live-suite": ("internal-hosted",),
@@ -142,7 +144,7 @@ def group_files(content: bytes, facts: RunFacts, current: dict[str, dict]) -> di
                 **facts.shown(site_group),
                 "systems": {SYSTEMS[arm]: arm for arm in arms},
                 "cost_not_reported": [SYSTEMS[arm] for arm in arms if arm in unpriced],
-                "not_measured": [system for arm, system in SYSTEMS.items() if arm not in arms],
+                "not_measured": [system for arm, system in SYSTEMS.items() if arm not in arms and arm not in RETIRED],
                 **({"setups": ran} if (ran := setups(source, arms)) else {}),
             },
             "published": published,

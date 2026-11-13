@@ -1,7 +1,7 @@
 {
   "arxiv-open": {
-    "fingerprint": "6516b0eaf67737d5",
-    "version": 11
+    "fingerprint": "c3942c4794ea13ce",
+    "version": 12
   },
   "arxiv-title": {
     "fingerprint": "00c3c34245a15f0f",
@@ -48,8 +48,8 @@
     "version": 8
   },
   "flights-search": {
-    "fingerprint": "80d5242b25e8945f",
-    "version": 11
+    "fingerprint": "609beb3d81843e94",
+    "version": 12
   },
   "frame-heading": {
     "fingerprint": "43ac9ffd9200b7cc",
@@ -60,16 +60,16 @@
     "version": 8
   },
   "github-open": {
-    "fingerprint": "1a7f63477397d5e7",
-    "version": 11
+    "fingerprint": "adddbd9db3c78c3e",
+    "version": 12
   },
   "google-flights": {
     "fingerprint": "9448b40bccff7458",
     "version": 8
   },
   "hn-comments": {
-    "fingerprint": "7064b3846456084e",
-    "version": 11
+    "fingerprint": "297c00e1c43b97f5",
+    "version": 12
   },
   "hn-top": {
     "fingerprint": "ba733c9b3d12954f",
@@ -256,8 +256,8 @@
     "version": 8
   },
   "pypi-open": {
-    "fingerprint": "2911a912fedfe9d3",
-    "version": 11
+    "fingerprint": "990dc21e627c169c",
+    "version": 12
   },
   "pypi-structured": {
     "fingerprint": "3ca8c54655938a9e",
@@ -372,7 +372,7 @@
     "version": 8
   },
   "wiki-open": {
-    "fingerprint": "c49dfb335a964acd",
-    "version": 11
+    "fingerprint": "6c22ee9eaf7828f1",
+    "version": 12
   }
 }

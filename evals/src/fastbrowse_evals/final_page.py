@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from fastbrowse_evals.live_tasks import PageEvidence
 
 VIEWPORT = cast(SetDeviceMetricsOverrideParameters, observe.VIEWPORT)
-"""jev-ultrafast's own viewport (fastbrowse.evals.observe), which every arm that can be given a viewport runs at."""
+"""The viewport every arm that can be given one runs at (fastbrowse.evals.observe)."""
 
 # Read-only and run before UNHIDE, so the evidence is the page as the run left it. responseStatus is the document's own
 # navigation response (0 or absent when the browser withholds it), so an error page served at the right address shows.

@@ -32,7 +32,6 @@ LOCAL_CHROME = {
 BROWSERS = {
     "fastbrowse": {"mode": "browser-use-cloud", "timeout_minutes": 240},
     "fastbrowse-pool": {"mode": "fastbrowse-pool", "host": "pool.internal"},
-    "jev-ultrafast": {"mode": "browser-use-cloud", "timeout_minutes": 240},
     "browser-use": {"mode": "browser-use-hosted"},
     "browser-use-ultrafast": {"mode": "browser-use-hosted"},
     "browser-harness": {"mode": "browser-use-cloud", "timeout_minutes": 240},
@@ -306,7 +305,7 @@ class Harness:
             edits.get("hosted"),
             **{"budget_usd": 1000.0} | edits.get("hosted_run", {}),
         )
-        self.fast = write_ledger(tmp_path, "ultra", ("fastbrowse-pool", "jev-ultrafast"), edits.get("ultra"))
+        self.fast = write_ledger(tmp_path, "ultra", ("fastbrowse-pool", "browser-use-ultrafast"), edits.get("ultra"))
         self.bu, bu_ids = write_official(tmp_path, "bu-bench", 200, edits.get("bu"))
         self.m2w, m2w_ids = write_official(tmp_path, "online-mind2web", 300, edits.get("m2w"))
         self.ids = {"bu-bench": bu_ids, "online-mind2web": m2w_ids}
@@ -399,9 +398,9 @@ def test_export_counts_every_physical_run_and_keeps_source_grades_separate(tmp_p
     assert (retried.seconds, retried.dollars, retried.score, retried.completed) == (7.0, 0.75, 1.0, True)
     assert retried.llm_calls == 5
     assert sum(r.physical_runs for r in groups["internal-hosted"].rows) == (53 + 52 + 52 + 47) * 3 + 1
-    # internal-ultrafast is fastbrowse on its own pool against Ultrafast, which only schema 5 admits.
-    assert candidate.schema_version == publication.timed_schema(5)
-    assert {r.arm for r in groups["internal-ultrafast"].rows} == {"fastbrowse-pool", "jev-ultrafast"}
+    # internal-ultrafast is fastbrowse on its own pool against the hosted agent on bu-ultrafast, from schema 7.
+    assert candidate.schema_version == publication.timed_schema(5) == 7
+    assert {r.arm for r in groups["internal-ultrafast"].rows} == {"fastbrowse-pool", "browser-use-ultrafast"}
     bu = groups["bu-bench"]
     assert {r.score for r in bu.rows} == {0.0, 0.5} and all(r.completed for r in bu.rows)
     assert bu.rows[0].dollars == pytest.approx(0.1) and bu.source_sha256 == "d" * 64
@@ -1038,7 +1037,7 @@ def test_backend_candidate_is_schema_four(tmp_path: Path) -> None:
     [
         {"browsers": {"fastbrowse": BROWSERS["fastbrowse"]}},
         {"browsers": {"fastbrowse": BROWSERS["fastbrowse"], "fastbrowse-pool": {"mode": "fastbrowse-pool"}}},
-        {"browsers": {"fastbrowse": BROWSERS["fastbrowse"], "fastbrowse-pool": BROWSERS["jev-ultrafast"]}},
+        {"browsers": {"fastbrowse": BROWSERS["fastbrowse"], "fastbrowse-pool": BROWSERS["browser-harness"]}},
         {"max_seconds": 300},
     ],
 )
@@ -1180,17 +1179,17 @@ def test_each_measured_arm_records_the_version_and_models_it_ran(tmp_path: Path)
         for a in attempts:
             if a["arm"] == "browser-use":
                 a["model"] = "anthropic/claude-opus-4.7"
-            if a["arm"] == "jev-ultrafast":
-                a["model"], a["text_model"] = "jev-model", live.ULTRAFAST_TEXT_MODEL
+            if a["arm"] == "browser-use-ultrafast":
+                a["model"] = "bu-ultrafast"
 
-    arms = ("fastbrowse", "browser-use", "jev-ultrafast")
+    arms = ("fastbrowse", "browser-use", "browser-use-ultrafast")
     ledger = write_ledger(tmp_path, "hosted", arms, report, task_arms=HOSTED_TASKS, budget_usd=1000.0)
     group = publication.internal_group("internal-hosted", ledger, CATALOG, DIGEST).group
     sources = {s.arm: s for s in group.sources}
     assert sources["browser-use"].version == "browser-use-sdk==3.12.1 API v4; default model, reported per row"
     assert sources["browser-use"].models == ["anthropic:claude-opus-4.7"]
-    assert sources["jev-ultrafast"].version == f"jev-ultrafast commit {live.ULTRAFAST_COMMIT}"
-    assert sources["jev-ultrafast"].models == ["google:gemini-3.1-flash-lite", "jev-model"]
+    assert sources["browser-use-ultrafast"].version == live.ARMS["browser-use-ultrafast"].pin
+    assert sources["browser-use-ultrafast"].models == ["bu-ultrafast"]
     # fastbrowse's build is the source's agent commit.
     assert sources["fastbrowse"].version is None
 
@@ -1228,22 +1227,21 @@ def test_a_slot_whose_tries_ran_on_different_clocks_cannot_publish(tmp_path: Pat
 
 
 def test_the_hosted_group_measures_whichever_hosted_arms_ran_on_one_task_set(tmp_path: Path) -> None:
-    arms = ("fastbrowse", "browser-use", "jev-ultrafast")
+    arms = ("fastbrowse", "browser-use", "browser-use-ultrafast")
     ledger = write_ledger(tmp_path, "hosted", arms, task_arms=HOSTED_TASKS, budget_usd=1000.0)
     group = publication.internal_group("internal-hosted", ledger, CATALOG, DIGEST).group
     assert len(group.task_ids) == 53
     counts = {arm: sum(r.arm == arm for r in group.rows) for arm in arms}
     # Each arm runs every task it can attempt, three times each.
-    assert counts == {"fastbrowse": 159, "browser-use": 156, "jev-ultrafast": 18}
+    assert counts == {"fastbrowse": 159, "browser-use": 156, "browser-use-ultrafast": 156}
     # Each task an arm cannot run is listed with the catalog's reason, and stands for three failed attempts.
     assert [(e.arm, e.task) for e in group.excluded] == sorted(
         (arm, t["id"]) for arm in arms for t in entries(HOSTED_TASKS) if arm not in t["arms"]
     )
-    assert len(group.excluded) == 1 + 47
+    assert len(group.excluded) == 1 + 1
     pause = next(e for e in group.excluded if e.arm == "browser-use")
     assert pause.reason == next(t for t in entries(HOSTED_TASKS) if t["id"] == pause.task)["excluded"]["browser-use"]
-    assert any("failed where it cannot run: browser-use 1, jev-ultrafast 47" in n for n in group.limits)
-    assert any("jev-ultrafast text helper" in n for n in group.limits)
+    assert any("failed where it cannot run: browser-use 1, browser-use-ultrafast 1" in n for n in group.limits)
 
     # browser-harness, a coding agent given no credentials, runs only the set's credential-free completion tasks.
     harness = write_ledger(tmp_path, "harness", ("fastbrowse", "browser-harness"), task_arms=HOSTED_TASKS)
@@ -1302,13 +1300,13 @@ def refuse_arm(arm: str, keep: int) -> Callable[[list[dict[str, Any]]], None]:
 def test_an_arm_that_never_started_is_not_measured_and_blocks_nothing(tmp_path: Path) -> None:
     """An arm whose key is refused refuses every start: it is left out like an arm that never ran, and the others
     publish."""
-    arms = ("fastbrowse", "browser-use", "jev-ultrafast")
+    arms = ("fastbrowse", "browser-use", "browser-use-ultrafast")
     ledger = write_ledger(
-        tmp_path, "hosted", arms, refuse_arm("jev-ultrafast", 0), task_arms=HOSTED_TASKS, budget_usd=1000.0
+        tmp_path, "hosted", arms, refuse_arm("browser-use-ultrafast", 0), task_arms=HOSTED_TASKS, budget_usd=1000.0
     )
     group = publication.internal_group("internal-hosted", ledger, CATALOG, DIGEST).group
     assert {r.arm for r in group.rows} == {"fastbrowse", "browser-use"}
-    assert any("jev-ultrafast not measured, no run started" in n for n in group.limits)
+    assert any("browser-use-ultrafast not measured, no run started" in n for n in group.limits)
 
 
 def test_one_refused_start_among_started_runs_still_blocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1460,7 +1458,7 @@ def refreshed(tmp_path: Path) -> tuple[Any, Any]:
     arms = ("fastbrowse", "browser-use", "browser-use-ultrafast", "browser-harness")
     ledger = write_ledger(tmp_path, "refresh", arms, task_arms=HOSTED_TASKS, budget_usd=1000.0)
     group = publication.internal_group("internal-hosted", ledger, CATALOG, DIGEST).group
-    live = write_ledger(tmp_path, "live", ("fastbrowse", "jev-ultrafast"), task_arms=HOSTED_TASKS, budget_usd=1000.0)
+    live = write_ledger(tmp_path, "live", ("fastbrowse",), task_arms=HOSTED_TASKS, budget_usd=1000.0)
     return SimpleNamespace(group=group), publication.internal_group("internal-hosted", live, CATALOG, DIGEST)
 
 
@@ -1508,11 +1506,10 @@ def test_a_default_campaign_publishes_on_the_reference_and_a_refresh_writes_it(
     made = publication.competitor_reference(refresh, json.loads(h.catalog.read_bytes()), "2026-11-01")
     path = tmp_path / "competitor-reference.json"
     path.write_text(made.model_dump_json())
-    live = write_ledger(tmp_path, "live", ("fastbrowse", "jev-ultrafast"), task_arms=HOSTED_TASKS, budget_usd=1000.0)
+    live = write_ledger(tmp_path, "live", ("fastbrowse",), task_arms=HOSTED_TASKS, budget_usd=1000.0)
     group = h.export(hosted=live, ultrafast=None, bu_bench=None, mind2web=None, reference=path).groups[0]
     assert {r.arm for r in group.rows} == {
         "fastbrowse",
-        "jev-ultrafast",
         "browser-use",
         "browser-use-ultrafast",
         "browser-harness",
@@ -1553,7 +1550,7 @@ def test_export_retains_a_physical_reference_clock(tmp_path: Path) -> None:
     physical.pop("session_close_seconds", None)
     path = tmp_path / "reference.json"
     path.write_text(json.dumps(body))
-    live = write_ledger(tmp_path, "live", ("fastbrowse", "jev-ultrafast"), task_arms=HOSTED_TASKS, budget_usd=1000.0)
+    live = write_ledger(tmp_path, "live", ("fastbrowse",), task_arms=HOSTED_TASKS, budget_usd=1000.0)
     candidate = h.export(hosted=live, ultrafast=None, bu_bench=None, mind2web=None, reference=path)
     group = Candidate.model_validate_json(candidate.model_dump_json()).groups[0]
     retained = [row.model_dump(mode="json") for row in group.rows if row.arm in publication.REFERENCE_ARMS]
@@ -1734,11 +1731,11 @@ def test_an_arm_remeasured_on_a_new_pin_leaves_the_earlier_runs_other_arms_publi
         for row in rows:
             row["run"]["arms"]["browser-use"] = old
         line.write_text("".join(json.dumps(r) + "\n" for r in rows))
-    competitors = ("fastbrowse", "browser-use", "browser-use-ultrafast", "jev-ultrafast")
+    competitors = ("fastbrowse", "browser-use", "browser-use-ultrafast")
     newer = write_ledger(second, "hosted", competitors, task_arms=HOSTED_TASKS, budget_usd=1000.0, **LATER)
     group = publication.internal_group("internal-hosted", [earlier, newer], CATALOG, DIGEST).group
     assert {(s.run_id, s.arm) for s in group.sources} == {
-        ("r2", "fastbrowse"), ("r2", "browser-use"), ("r2", "browser-use-ultrafast"), ("r2", "jev-ultrafast"),
+        ("r2", "fastbrowse"), ("r2", "browser-use"), ("r2", "browser-use-ultrafast"),
         ("r1", "browser-harness"),
     }  # fmt: skip
     # Alone, the earlier run would publish browser-use on a pin the catalog no longer names.
