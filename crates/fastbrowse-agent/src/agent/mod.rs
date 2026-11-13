@@ -286,6 +286,13 @@ impl Agent {
                     (result, false, false)
                 }
             };
+            // A run that ends before it acts still records what its known pages request cost. One handed on to a
+            // browser takes the request with it, and the browser run records it.
+            if !ended.2
+                && let Some(state) = slot.as_mut()
+            {
+                state.known_pages_unused().await;
+            }
             requested_frame = slot.as_ref().is_some_and(|state| {
                 matches!(state.output_intent, state::OutputIntent::Image | state::OutputIntent::TextAndImage)
             });
@@ -431,8 +438,27 @@ impl Agent {
                 return Ok::<_, Flow>(state);
             }
             let given = state::with_inputs(task, &options.inputs);
-            let (judgments, known) =
-                tokio::join!(self.task_judgments(&given, ledger), self.known_pages(&given, start, ledger));
+            // The known pages are asked beside the first page's open, observation and decision, and taken before the
+            // run first reads for, builds or acts on a decision, or proposes a route (`known_pages_arrived`). Awaited
+            // here, the text LLM's answer held every run's first step, for about a second and up to 3.4 s. A capped run
+            // still waits: a call checks the cap against the receipts already recorded, and this one's comes later.
+            let asked =
+                (!ledger.capped()).then(|| tokio::runtime::Handle::try_current().ok()).flatten().map(|runtime| {
+                    let (llm, given, start, ledger) =
+                        (self.llm.clone(), given.clone(), start.map(String::from), ledger.clone());
+                    state::KnownAsked::new(runtime.spawn(async move {
+                        crate::start::known_pages(&*llm, &given, start.as_deref(), Some(&ledger)).await
+                    }))
+                });
+            let (judgments, known) = if asked.is_some() {
+                // Polled once, the request reserves its call and leaves now, as it did when it was awaited here: a
+                // current-thread runtime would otherwise first poll it when the run waits on I/O.
+                tokio::task::yield_now().await;
+                (self.task_judgments(&given, ledger).await, Ok(Vec::new()))
+            } else {
+                tokio::join!(self.task_judgments(&given, ledger), self.known_pages(&given, start, ledger))
+            };
+            // Dropped on an error, the request is aborted and records what it was billed so far.
             let (judgments, known) = (judgments?, known?);
             let mut state = RunState::new(
                 task.to_string(),
@@ -444,6 +470,7 @@ impl Agent {
             state.dates = judgments.dates;
             state.output_answers = judgments.output;
             state.known_pages = known;
+            state.known_asked = asked;
             state.replay = options.recipe.clone().map(replay::Replay::new);
             state.context = options.context.clone();
             state.caller_start = start.map(String::from);
@@ -457,10 +484,12 @@ impl Agent {
         // HTTP can need a browser before any capture exists. Keep task judgments for that handoff, without
         // treating other opening failures as a run that reached its first page.
         if let Err(flow) = opened {
-            if matches!(&flow, Flow::Browser(BrowserError::NeedsBrowser(_)))
-                && let Ok(state) = prepared
-            {
-                self.seen().resume = Some(Resume { state, url: None });
+            match prepared {
+                Ok(state) if matches!(&flow, Flow::Browser(BrowserError::NeedsBrowser(_))) => {
+                    self.seen().resume = Some(Resume { state, url: None });
+                }
+                Ok(mut state) => state.known_pages_unused().await,
+                Err(_) => {}
             }
             return Err(flow);
         }

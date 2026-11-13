@@ -11,14 +11,13 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- **A run takes its first step about a second sooner.** The question of which pages are already known to hold the item a task names is asked beside the first decision instead of before it, and its answer is taken before the first action. When it names a page the run is not on, that step is decided again with the page on offer.
 - **A list read again after leaving it keeps its first record.** A page the run left and came back to, unchanged, is now taken as it stood at the later read, so the record at its top is no longer treated as gone from it and a most expensive or cheapest answer names the right one. When a named record is not the one at the extreme, the answer is told only the records there, each with the text it was read beside, not the heading they were listed under as another record ([#1082](https://github.com/agent-labs-dev/fastbrowse/issues/1082)).
 - **Benchmarks are judged by DeepSeek V4.1 Flash 1017.** Internal grading uses policy `browser-internal-deepseek-v7`, and the official suites default to the same judge, `deepseek/deepseek-v4.1-flash-1017`. Each page goes to the judge once, so a 2 MB Hacker News thread costs about $0.05 to judge instead of $23, and screenshots go to the judge as images. The judge grades the run's `answer` as given, whatever the run's ending, and not a draft its error quotes. On 21 recorded rows, it agreed with Opus on all 21 in each of two judgings ([#1075](https://github.com/agent-labs-dev/fastbrowse/issues/1075)).
 
 - **The Ultrafast comparison runs BU Ultrafast.** C3 (`internal-ultrafast`) pairs fastbrowse on its own browser pool with the hosted Browser Use agent on `bu-ultrafast` (`browser-use-ultrafast`, Browser Use Cloud API V4) over the 52 tasks both run, and the `jev-ultrafast` arm is gone from the harness, the catalog and the campaign workflow. New publication candidates are schema 7, which refuses `jev-ultrafast` rows; published figures keep their own schema and still read. The six navigation tasks moved to task version 12, since their arm list changed.
 
 ## [0.11.0] - 2026-11-12
-
-- The text a composed answer copies from the page is checked claim by claim, so a claim that copies more than the task asks is the only one left out and rewritten. Checked as one answer, it left out every claim, and the rewrite of all of them could lose one that had passed ([#1052](https://github.com/agent-labs-dev/fastbrowse/issues/1052)).
 
 - A commit's recorded effect names the text the page added in reply, so a posted comment is no longer posted again ([#1109](https://github.com/agent-labs-dev/fastbrowse/issues/1109)).
 
