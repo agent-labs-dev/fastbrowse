@@ -309,7 +309,23 @@ impl Agent {
                 // What the wall means is the task's to say, asked of the task alone and combined here: credentials it
                 // gives are a sign-in to carry out, and a question about the restriction is answered by the wall.
                 match self.sign_in_needs(state).await? {
-                    Some(needs) if needs.inspects => {}
+                    Some(needs) if needs.inspects && needs.credentials => {}
+                    // A question about the restriction with no credentials to sign in with is answered by the wall
+                    // itself: passing it could only use a session or saved account the task did not give, as a
+                    // read-only login check once clicked through Google SSO and its consent (#1020). The wall is read
+                    // and the run finishes on it, never acting on its sign-in controls.
+                    Some(needs) if needs.inspects => {
+                        let capture = self.capture().await?;
+                        self.trace.phase("read", self.read(state, capture, &observation, true)).await?;
+                        if let Some(result) = self
+                            .trace
+                            .phase("finish", Box::pin(self.finish(state, &observation, output_schema, until)))
+                            .await?
+                        {
+                            return Ok(result);
+                        }
+                        continue;
+                    }
                     Some(needs) if needs.credentials => {
                         if list_walk.is_some() && decision.read_scope == ReadScope::List {
                             list_walk = None;

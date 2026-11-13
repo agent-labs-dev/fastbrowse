@@ -13,6 +13,8 @@ use crate::py::datetime::DateTime;
 use crate::py::json::dumped_len;
 use crate::py::{lax, text};
 
+pub mod json;
+
 pub fn cut_marker(omitted_chars: usize) -> String {
     format!("\n[Viewport text cut: {omitted_chars} characters omitted; read the page for the rest]")
 }

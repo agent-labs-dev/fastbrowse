@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -431,7 +431,7 @@ requires-dist = [
     { name = "fastbrowse", extras = ["eval-data"], directory = "../" },
     { name = "httpx" },
     { name = "langfuse", specifier = ">=5.0.4,<6" },
-    { name = "parallax-evals", specifier = "==2.0.0.dev16" },
+    { name = "parallax-evals", specifier = "==2.0.0.dev17" },
     { name = "pydantic", specifier = ">=2.12" },
 ]
 
@@ -805,7 +805,7 @@ wheels = [
 
 [[package]]
 name = "parallax-evals"
-version = "2.0.0.dev16"
+version = "2.0.0.dev17"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "croniter" },
@@ -821,9 +821,9 @@ dependencies = [
     { name = "tzdata" },
     { name = "uvicorn" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7a/2c/6c518c06585131d95676b734385242103540ee30cd1b149aabc58fc05cfa/parallax_evals-2.0.0.dev16.tar.gz", hash = "sha256:156df0f6cd0e1b83e02102ac7c391d01b8056ac9d04d1faedc3b1259bfad956f", size = 996517, upload-time = "2026-11-12T14:10:24.712Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2f/37/1270189ce5740ed5398d39ce3d267adde6c5b528e86bbe28729d31f05e89/parallax_evals-2.0.0.dev17.tar.gz", hash = "sha256:f6e5a81c4b3a75f5b494a5e021df00d1693abb02471d29a53184e5ba93c8c52a", size = 998325, upload-time = "2026-11-13T11:11:14.781Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/af/75/5b4447f2b690b84f1a65ebf59e1fc6da95cd82934f7b1b12cc2e53c86978/parallax_evals-2.0.0.dev16-py3-none-any.whl", hash = "sha256:e08a4c64a54d247c86567dc4b9b308d992942a8af43bff2afc4c3d5aa9a33921", size = 1037663, upload-time = "2026-11-12T14:10:23.108Z" },
+    { url = "https://files.pythonhosted.org/packages/ef/a1/1c81608da53317faf4d203cf6192206c09c6b8399763cbdee453a2a5e1c4/parallax_evals-2.0.0.dev17-py3-none-any.whl", hash = "sha256:1e8d14a3b1bff11e2f46793e0c1d9e1d262e620c03f5170febcfbf1950f224fd", size = 1038517, upload-time = "2026-11-13T11:11:13.23Z" },
 ]
 
 [[package]]

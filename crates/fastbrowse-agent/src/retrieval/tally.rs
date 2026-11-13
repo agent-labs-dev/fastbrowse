@@ -310,7 +310,9 @@ fn membership_state(task: &str, notes: &Notes, page: &str) -> serde_json::Value 
         .filter(|evidence| address(&evidence.url) == page && !notes.whole_record(evidence))
         .map(|evidence| shown(notes, evidence))
         .collect();
-    json!({"task": task, "notes": context})
+    // Named for what it holds: listed as the page's "notes", the labels left once its records were taken out read as
+    // the records, and Jev called "Login" one quote and every quote none.
+    json!({"task": task, "labels_on_the_page": context})
 }
 
 type Answers = IndexMap<String, Answer>;
@@ -366,15 +368,15 @@ fn member_question(tally: &Tally, note: &serde_json::Value, example: Option<&ser
     // claim cites, it said no 10 times of 10, and still said yes to every quote record.
     let example = example.map_or(String::new(), |example| {
         format!(
-            " The claim cites records such as this one: {}. A note is a record only when it is an entry of that same kind, not a passage that mentions or quotes one.",
+            " The claim counts entries such as this one: {}. A note is one only when it is an entry of that same kind, not a passage that mentions one.",
             dumps(example)
         )
     });
     let question = format!(
-        "Is this note exactly one whole record among {of}? A note holding several records is not one, and nor is a record's tags, label or heading alone, or a value a page states across several records, such as a total.{example}"
+        "Is this note exactly one whole {of}? A note holding several is not one, and nor is its tags, label or heading alone, or a value a page states across several, such as a total.{example}"
     );
-    let yes = format!("The note is exactly one whole record among {of}.");
-    let no = format!("The note is no record among {of}, several, or only part of one.");
+    let yes = format!("The note is exactly one whole {of}.");
+    let no = format!("The note is no {of}, several, or only part of one.");
     Question::Noul(NoulQuestion::new(format!("{UNTRUSTED}\n{question} Note: {}", dumps(note)), Some(&yes), Some(&no)))
 }
 
@@ -410,7 +412,7 @@ fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], gr
     }
     Question::Choice(ChoiceQuestion::new(
         format!(
-            "{UNTRUSTED}\nDoes this note give exactly one whole record among {of}, or its {field}? If it does, which quoted value is that record's {field}? source_kind is the captured block type. When it is heading or link, the quote is that heading or link, not the whole record it names. A field absent from a heading or link is not thereby absent from its record. whole_record true proves that this quote contains all text rendered for one repeated item; without that proof the quote may still describe a whole record. Absence from a fragment does not prove absence from its record. Note: {}",
+            "{UNTRUSTED}\nDoes this note give exactly one whole {of}, or its {field}? If it does, which quoted value is that record's {field}? source_kind is the captured block type. When it is heading or link, the quote is that heading or link, not the whole record it names. A field absent from a heading or link is not thereby absent from its record. whole_record true proves that this quote contains all text rendered for one repeated item; without that proof the quote may still describe a whole record. Absence from a fragment does not prove absence from its record. Note: {}",
             dumps(note)
         ),
         criteria,
@@ -1395,7 +1397,7 @@ mod tests {
         assert_eq!(ambiguous_notes.source_kind(&whole), None);
         assert!(found.iter().all(|candidate| candidate.note.get("whole_record").is_none()));
         let state = membership_state("Total the product prices", &notes, &found[0].page);
-        assert!(state["notes"].as_array().unwrap().iter().all(|note| note.get("whole_record").is_none()));
+        assert!(state["labels_on_the_page"].as_array().unwrap().iter().all(|note| note.get("whole_record").is_none()));
         let tally = Tally {
             op: Op::Sum,
             of: "product".into(),
@@ -1514,13 +1516,13 @@ mod tests {
         // Each page's notes are judged beside that page's labels alone.
         let state = membership_state("Compare current offers", &notes, &address("https://b.test"));
         assert_eq!(state["task"], "Compare current offers");
-        let context = state["notes"].as_array().unwrap();
+        let context = state["labels_on_the_page"].as_array().unwrap();
         let quotes: Vec<_> = context.iter().map(|note| note["quote"].as_str().unwrap()).collect();
         assert_eq!(quotes, ["Current offer", "25"]);
         assert!(context.iter().all(|note| note["page"] == "https://b.test"));
         assert_eq!(context[1]["headings"], json!(["Product", "Offer"]));
         let state = membership_state("Compare current offers", &notes, &address("https://a.test"));
-        assert_eq!(state["notes"].as_array().unwrap().len(), 1);
+        assert_eq!(state["labels_on_the_page"].as_array().unwrap().len(), 1);
     }
 
     /// Two PyPI responses read whole were thousands of notes, and every membership question was sent beside all of

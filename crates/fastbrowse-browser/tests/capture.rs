@@ -29,6 +29,58 @@ async fn test_a_pdf_with_no_helper_to_read_it_is_kept_and_said_unread() {
     h.close().await;
 }
 
+const PACKAGE_JSON: &str =
+    r#"{"info":{"name":"httpx","version":"0.28.1"},"urls":[{"filename":"httpx-0.28.1.tar.gz"}]}"#;
+
+/// A JSON document is read by its structure, as a browserless fetch reads it, so a single value is its own block (#1070).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_json_document_reads_each_value_under_its_keys() {
+    let Some(h) = harness().await else { return };
+    h.goto("/package.json").await;
+    let capture = content_capture(&h.page).await;
+    let read: Vec<_> = capture.blocks.iter().map(|b| (b.kind, text_of(&capture, b), path(b).join("/"))).collect();
+    let (heading, paragraph) = (BlockKind::Heading, BlockKind::Paragraph);
+    assert_eq!(
+        read,
+        [
+            (heading, "info".into(), String::new()),
+            (heading, "name".into(), "info".into()),
+            (paragraph, "httpx".into(), "info/name".into()),
+            (heading, "version".into(), "info".into()),
+            (paragraph, "0.28.1".into(), "info/version".into()),
+            (heading, "urls".into(), String::new()),
+            (BlockKind::Record, "filename: httpx-0.28.1.tar.gz".into(), "urls/0".into()),
+        ]
+    );
+    assert!(capture.blocks.iter().all(|b| b.source_id.starts_with("main/json:") && b.frame_id.is_none()));
+    assert!(capture.blocks.last().unwrap().whole_record);
+    h.close().await;
+}
+
+/// Text served as JSON that does not all parse is read as Chrome renders it, so none of it is lost.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_json_typed_document_that_does_not_parse_is_read_as_rendered() {
+    let Some(h) = harness().await else { return };
+    h.goto("/package.json?broken").await;
+    let capture = content_capture(&h.page).await;
+    let code: Vec<_> = capture.blocks.iter().filter(|b| b.kind == BlockKind::Code).collect();
+    assert_eq!(code.iter().map(|b| text_of(&capture, b)).collect::<Vec<_>>(), [r#"{"info":{"name":"httpx"}"#]);
+    assert!(capture.blocks.iter().all(|b| !b.source_id.contains("/json:")));
+    h.close().await;
+}
+
+/// A JSON example inside an HTML page is the page's code, not a JSON document.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_json_in_an_html_pre_stays_one_code_block() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    set_body(&h.session, &format!("<pre>{PACKAGE_JSON}</pre>")).await;
+    let capture = content_capture(&h.page).await;
+    assert_eq!(texts(&capture), [PACKAGE_JSON]);
+    assert_eq!(capture.blocks[0].kind, BlockKind::Code);
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_quote_cards_are_whole_records_with_local_titles() {
     let Some(h) = harness().await else { return };

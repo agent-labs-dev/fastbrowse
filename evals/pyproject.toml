@@ -5,7 +5,7 @@ description = "Fastbrowse's browser benchmarks on Parallax: the internal campaig
 requires-python = ">=3.13"
 dependencies = [
     # One Parallax release for every campaign; bump it deliberately, it moves the evaluator.
-    "parallax-evals==2.0.0.dev16",
+    "parallax-evals==2.0.0.dev17",
     # The measured agent and the eval contracts it shares with this harness. A campaign installs the build it
     # measures over this one (see .github/workflows/benchmark-campaign.yml).
     "fastbrowse[eval-data]",

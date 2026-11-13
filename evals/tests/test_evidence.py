@@ -1,11 +1,12 @@
 """The judge's view of a run under the evidence policy: one form for every arm, nothing cut."""
 
 import asyncio
+import json
 
 from parallax.judging import Decision, Judgment
 
 from fastbrowse_evals import judging
-from fastbrowse_evals.evidence import parts, run_evidence
+from fastbrowse_evals.evidence import once, parts, parts_v5, run_evidence
 from fastbrowse_evals.live import JUDGE_POLICY, Ending, no_evidence, shown_to
 
 
@@ -70,6 +71,41 @@ def test_a_state_over_the_window_is_divided_without_losing_text():
     assert "".join(p["text"] for part in divided for p in part["pages"] if p["id"] == "page-1") == long
     assert any(p["id"] == "page-2" for part in divided for p in part["pages"])
     assert parts(state) == [state]
+
+
+def test_a_divided_page_sends_each_byte_of_its_text_and_controls_once():
+    controls = [{"label": "reply " * (n % 53), "value": None} for n in range(400)]
+    page = {"id": "page-1", "url": "https://a.test", "text": "é\n" * 3000, "controls": controls}
+    state = {"task": "t", "pages": [page, {"id": "page-2", "text": "short"}]}
+    divided = parts(state, limit=8192)
+    assert all(len(json.dumps(part).encode()) <= 8192 for part in divided)
+    pieces = [p for part in divided for p in part["pages"] if p["id"] == "page-1"]
+    assert "".join(p.get("text", "") for p in pieces) == page["text"]
+    assert [c for p in pieces for c in p.get("controls", [])] == controls
+    assert {p["continues"] for p in pieces} == {f"{n} of {len(pieces)}" for n in range(1, len(pieces) + 1)}
+    assert parts({**state, "answer": "a" * 9000}, limit=8192) == [{**state, "answer": "a" * 9000}]
+    # v5 kept: every slice of the page's text carries all of its controls.
+    assert all(
+        p["controls"] == controls for part in parts_v5(state, limit=8192) for p in part["pages"] if "continues" in p
+    )
+
+
+def test_a_page_read_again_without_its_controls_is_listed_once():
+    state = {
+        "timeline": [{"index": 0, "saw": ["page-1", "page-2"]}, {"index": 1, "saw": ["page-3", "page-4", "page-5"]}],
+        "pages": [
+            {"id": "page-1", "url": "u", "text": "list"},
+            {"id": "page-2", "url": "u", "text": "list", "controls": [{"label": "Open", "value": None}]},
+            {"id": "page-3", "url": "u", "text": "form", "controls": [{"label": "Name", "value": ""}]},
+            {"id": "page-4", "url": "u", "text": "form", "controls": [{"label": "Name", "value": "Ada"}]},
+            {"id": "page-5", "url": "u", "text": "form"},
+        ],
+    }
+    shown = once(state)
+    assert [p["id"] for p in shown["pages"]] == ["page-1", "page-2", "page-3"]
+    assert shown["pages"][0]["controls"] == [{"label": "Open", "value": None}]
+    assert [s["saw"] for s in shown["timeline"]] == [["page-1"], ["page-2", "page-3"]]
+    assert once(shown) == shown
 
 
 def test_part_verdicts_combine_any_false_then_any_true(monkeypatch):

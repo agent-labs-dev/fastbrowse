@@ -13,9 +13,10 @@ a provider imposes and no request can lift, such as Browser Use's 4 hour session
 
 - Only a figure we measured, on the build the candidate names. A vendor's own figure appears only as a
   reference, labelled vendor-published with its source, never beside ours as if measured the same way.
-- Claude Opus 5.5 through OpenRouter is the one judge model behind published figures: Parallax's LLM fallback
-  (`PARALLAX_JUDGE_MODELS`) and the official suites' judges (`PARALLAX_BU_BENCH_JUDGE`,
-  `PARALLAX_MIND2WEB_JUDGE`) all name it, and a group judged by any other model is not published.
+- DeepSeek V4.1 Flash (`deepseek/deepseek-v4.1-flash`) through OpenRouter is the one judge model behind published
+  figures: Parallax's LLM fallback (`PARALLAX_JUDGE_MODELS`) and the official suites' judges
+  (`PARALLAX_BU_BENCH_JUDGE`, `PARALLAX_MIND2WEB_JUDGE`) all name it, and a group judged by any other model is not
+  published.
 
 ## The candidate contract
 

@@ -12,7 +12,6 @@
 //! exactly that: [`NotFetched`], with the browser left as the only reader.
 
 pub mod html;
-mod json;
 pub mod search;
 
 use std::borrow::Cow;
@@ -288,15 +287,19 @@ async fn serve(http: &Http, url: &str, allowed_origins: Option<&[String]>, secon
     let final_url = url::Url::parse(&target).map_or(target.clone(), String::from);
     outside(&final_url, allowed_origins, "a redirect left for ")?;
     let body = decode(content_type, &body, HTML_TYPES.contains(&mime.as_str()));
-    let json = mime == "application/json" || (mime.starts_with("application/") && mime.ends_with("+json"));
+    let json = fastbrowse_core::page::json::is_json(&mime);
     if (mime.starts_with("text/") && !HTML_TYPES.contains(&mime.as_str())) || json {
         if text::strip(&body).is_empty() {
             return Err(refused("the document is empty"));
         }
         // A JSON document is read by its structure, so each value can be quoted alone; text that is not entirely JSON
         // is read whole.
-        let found =
-            json.then(|| json::blocks(&body)).flatten().filter(|found| !found.is_empty()).unwrap_or_else(|| {
+        let found = json
+            .then(|| fastbrowse_core::page::json::blocks(&body))
+            .flatten()
+            .filter(|found| !found.is_empty())
+            .map(|found| found.into_iter().map(Found::from).collect())
+            .unwrap_or_else(|| {
                 vec![Found {
                     kind: BlockKind::Paragraph,
                     // Delimited fields carry significant whitespace, which HTML's cleanup would change.

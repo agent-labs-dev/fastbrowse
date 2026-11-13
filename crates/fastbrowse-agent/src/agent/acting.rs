@@ -12,10 +12,11 @@ use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::text;
 use fastbrowse_core::recipe::RecipeText;
 use fastbrowse_core::safety::{
-    CredentialField, DONE, HAPPENED, LATER_VALUES, MET, asks_for_credentials, changes_a_value, changes_credentials,
-    conditional_question, control_action, credential_field, downloads_question, edits_question, happened_question,
-    irreversible_question, is_password, lasting_question, may_be_irreversible, met_question, offers_passkey, origin_of,
-    requested_question, resolve_secret, sets_new_password, starts_download, values_question,
+    CredentialField, DONE, EDITS_ALLOWED, EDITS_NONE, EDITS_REQUESTED_ONLY, HAPPENED, LATER_VALUES, MET,
+    asks_for_credentials, changes_a_value, changes_credentials, conditional_question, control_action, credential_field,
+    downloads_question, edits_question, happened_question, irreversible_question, is_password, lasting_question,
+    may_be_irreversible, met_question, offers_passkey, origin_of, requested_question, resolve_secret,
+    sets_new_password, starts_download, values_question,
 };
 use indexmap::IndexMap;
 use serde_json::{Map, Value as JsonValue, json};
@@ -23,7 +24,7 @@ use serde_json::{Map, Value as JsonValue, json};
 use super::Agent;
 use super::driving::require;
 use super::helpers::{caller_link, describe, dialog_question, empty_fields_fact, navigation_question, unsent_fact};
-use super::state::{Extent, Flow, OutputIntent, RunState, SignInNeeds, Step, Stop, Unsure};
+use super::state::{Edits, Extent, Flow, OutputIntent, RunState, SignInNeeds, Step, Stop, Unsure};
 use crate::memory::Notes;
 use crate::policy::{Ahead, Decision, HistoryEntry};
 use crate::retrieval::text::{SpanKind, Word, edge_options, spans, words};
@@ -51,6 +52,8 @@ const IN_TASK: &str = "task";
 /// The field's value is words of what was read, which Jev marks. Offered with the task's words, a word read from the
 /// page was typed into every field of a form whose values the task gave.
 pub(super) const IN_READ: &str = "read";
+/// Joins a word's index to the punctuation characters kept past it, in a choice of where a value ends or begins.
+const KEPT: &str = "+";
 /// The task asks for the value without stating it word for word, as a search box's query, so the LLM writes it.
 const WRITTEN: &str = "write";
 /// The task asks for the field's value, and nothing given states it.
@@ -552,7 +555,9 @@ impl Agent {
         self.refuse_once(state, observation, decision, &describe(control), why).await
     }
 
-    /// Refuse an action that changes a value on the page when the task rules out changing anything (#838).
+    /// Refuse an action that changes a value on the page when the task does not allow it: every edit when the task rules
+    /// out changing anything (#838), and an edit the task does not ask for when it asks for some and rules out the rest
+    /// (#879).
     ///
     /// An unsaved toggle is reversible, so the irreversible gate lets it through. Authorization does not lift this
     /// either, for the reason it does not lift the download rule.
@@ -563,14 +568,22 @@ impl Agent {
         decision: &Decision,
         control: &Control,
     ) -> Step {
-        if !changes_a_value(decision.operation, control) || !self.edits_forbidden(state).await? {
+        if !changes_a_value(decision.operation, control) {
             return Ok(());
         }
-        let why = "changes a value on the page, and the task rules out changing anything";
-        self.refuse_once(state, observation, decision, &describe(control), why).await
+        let edits = self.edits(state).await?;
+        if edits == Edits::Allowed {
+            return Ok(());
+        }
+        let mut questions = IndexMap::new();
+        if edits == Edits::RequestedOnly {
+            let action = control_action(decision.operation, control, None, &observation.controls);
+            questions.insert("requested".to_string(), Question::Noul(requested_question(&action)));
+        }
+        self.gate_asked_edit(state, observation, decision, control, edits, questions).await
     }
 
-    async fn gate_key_edit(
+    pub(super) async fn gate_key_edit(
         &self,
         state: &mut RunState,
         observation: &Observation,
@@ -578,7 +591,11 @@ impl Agent {
         control: &Control,
         key: &str,
     ) -> Step {
-        if !changes_a_value(Operation::Press, control) || !self.edits_forbidden(state).await? {
+        if !changes_a_value(Operation::Press, control) {
+            return Ok(());
+        }
+        let edits = self.edits(state).await?;
+        if edits == Edits::Allowed {
             return Ok(());
         }
         // A role's arrow can move focus or change a stored setting. The selected chord supplies the distinction
@@ -593,23 +610,51 @@ impl Agent {
             Some("The key changes a value or setting, types or deletes text, or commits a change."),
             Some("The key only moves focus, scrolls, or opens or closes navigation without changing a value."),
         );
-        let questions = IndexMap::from([("changes_value".into(), Question::Noul(question))]);
-        state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
-        let context = json!({"task": state.task, "page": {"origin": origin_of(&observation.url)}});
-        let evaluation = jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&context, &questions)).await?;
-        state.ledger.record([evaluation.cost])?;
-        if matches!(evaluation.answers.get("changes_value"), Some(Answer::Noul(answer)) if answer.probability <= EVEN_ODDS)
-        {
-            return Ok(());
+        let mut questions = IndexMap::from([("changes_value".into(), Question::Noul(question))]);
+        if edits == Edits::RequestedOnly {
+            // As at the irreversible gate, the chord tells a requested press from another on the same control.
+            let mut action = control_action(Operation::Press, control, None, &observation.controls);
+            action.push_str(&format!("\nThe exact key chord to press is {}.\n", text::repr(key)));
+            questions.insert("requested".to_string(), Question::Noul(requested_question(&action)));
         }
-        self.refuse_once(
-            state,
-            observation,
-            decision,
-            &describe(control),
-            "changes a value on the page, and the task rules out changing anything",
-        )
-        .await
+        self.gate_asked_edit(state, observation, decision, control, edits, questions).await
+    }
+
+    /// Ask `questions` about an edit the task may not allow, never with the page's content, and refuse the edit unless
+    /// Jev says it changes no value or, when the task rules out only the changes it does not ask for, that the task
+    /// asks for it. No question to ask refuses at once.
+    async fn gate_asked_edit(
+        &self,
+        state: &mut RunState,
+        observation: &Observation,
+        decision: &Decision,
+        control: &Control,
+        edits: Edits,
+        questions: IndexMap<String, Question>,
+    ) -> Step {
+        if !questions.is_empty() {
+            state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+            let context = json!({"task": state.task, "page": {"origin": origin_of(&observation.url)}});
+            let evaluation = jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&context, &questions)).await?;
+            state.ledger.record([evaluation.cost])?;
+            let noul = |key: &str| match evaluation.answers.get(key) {
+                Some(Answer::Noul(answer)) => Some(answer.probability),
+                _ => None,
+            };
+            if questions.contains_key("changes_value") && noul("changes_value").is_some_and(|p| p <= EVEN_ODDS) {
+                return Ok(());
+            }
+            if noul("requested").is_some_and(|p| p > self.config.thresholds.requested_above) {
+                return Ok(());
+            }
+        }
+        let why = match edits {
+            Edits::RequestedOnly => {
+                "changes a value on the page that the task does not ask to change, and the task rules out other changes"
+            }
+            _ => "changes a value on the page, and the task rules out changing anything",
+        };
+        self.refuse_once(state, observation, decision, &describe(control), why).await
     }
 
     /// Whether the task rules out downloading, asked of Jev about the task alone and kept for the run.
@@ -622,15 +667,29 @@ impl Agent {
         Ok(forbidden.unwrap_or(true))
     }
 
-    /// Whether the task rules out changing what the page's fields and settings hold, asked of Jev about the task alone
-    /// and kept for the run.
-    pub(super) async fn edits_forbidden(&self, state: &mut RunState) -> Step<bool> {
-        if let Some(forbidden) = state.edits_forbidden {
-            return Ok(forbidden);
+    /// Which changes to what the page's fields and settings hold the task allows, asked of Jev about the task alone and
+    /// kept for the run. No answer rules out every change for this action and keeps nothing, as an unanswered download
+    /// question does.
+    pub(super) async fn edits(&self, state: &mut RunState) -> Step<Edits> {
+        if let Some(edits) = state.edits {
+            return Ok(edits);
         }
-        let forbidden = self.task_rules_out(state, "edits", edits_question()).await?;
-        state.edits_forbidden = forbidden;
-        Ok(forbidden.unwrap_or(true))
+        state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+        let questions = IndexMap::from([("edits".to_string(), Question::Choice(edits_question()))]);
+        let evaluation =
+            jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&json!({"task": state.task}), &questions)).await?;
+        state.ledger.record([evaluation.cost.clone()])?;
+        let edits = match evaluation.answers.get("edits") {
+            Some(Answer::Choice(answer)) => match answer.choice.as_str() {
+                EDITS_ALLOWED => Some(Edits::Allowed),
+                EDITS_REQUESTED_ONLY => Some(Edits::RequestedOnly),
+                EDITS_NONE => Some(Edits::Forbidden),
+                _ => None,
+            },
+            _ => None,
+        };
+        state.edits = edits;
+        Ok(edits.unwrap_or(Edits::Forbidden))
     }
 
     /// Jev's word, from the task alone, that it rules out what `question` asks about. No answer is None: the caller
@@ -668,9 +727,9 @@ impl Agent {
             (
                 "credentials".to_string(),
                 noul(
-                    "Does `task` give the username, email, password or code to sign in with?",
-                    "The task gives credentials to sign in with.",
-                    "The task gives no credentials.",
+                    "Does `task` give the username, email, password or code to sign in with, or tell the agent to sign in with a saved or configured account or password?",
+                    "The task gives credentials to sign in with, or says to sign in with saved or configured ones.",
+                    "The task gives no credentials and does not say to sign in.",
                 ),
             ),
             (
@@ -1107,7 +1166,34 @@ impl Agent {
                 // end is asked again knowing where this value begins, then the beginning knowing where it ends, since
                 // a beginning picked alone can take in the request around the value.
                 let chars: Vec<char> = task.chars().collect();
-                let copied = |from: &Word, to: &Word| chars[from.start..to.end].iter().collect::<String>();
+                let text = |from: usize, to: usize| chars[from..to].iter().collect::<String>();
+                // An end touching punctuation is offered at each cut of it, from its letters and digits to the whole
+                // run, keyed `N`, `N+1`, ..., so the choice of that end also settles its punctuation. Offered only
+                // cut, a reply ending "or 100%." read "or 100", which is not the exact text, and Jev took the copy
+                // running on to the task's closing instructions instead (#881); a separate punctuation question after
+                // it dropped the reply's stop about half the time. Offered only whole, a postcode at a sentence's end
+                // read as "SW1A 1AA." and lost its second word. Past what one choice can offer, with one left for
+                // "none of these", the copies stay cut and the punctuation is asked after.
+                let max = self.jev.profile().max_choice_options;
+                let offered = |forms: Vec<(usize, Vec<String>)>| {
+                    let every = forms.iter().map(|(_, cuts)| cuts.len()).sum::<usize>() < max;
+                    let options: Vec<(String, String)> = forms
+                        .into_iter()
+                        .flat_map(|(index, cuts)| {
+                            let cuts = cuts.into_iter().enumerate().take(if every { usize::MAX } else { 1 });
+                            cuts.map(move |(kept, shown)| {
+                                let key = if kept == 0 { index.to_string() } else { format!("{index}{KEPT}{kept}") };
+                                (key, shown)
+                            })
+                        })
+                        .collect();
+                    (options, every)
+                };
+                // The word index a choice names, and the punctuation it keeps when every cut was offered.
+                let picked_cut = |picked: &str, every: bool| {
+                    let (index, kept) = picked.split_once(KEPT).unwrap_or((picked, "0"));
+                    (index.parse::<usize>().ok(), kept.parse::<usize>().ok().filter(|_| every))
+                };
                 let holder = if source == IN_READ { "what was read" } else { "the task" };
                 let run_task = state.task.clone();
                 let several = several_values(target);
@@ -1126,17 +1212,22 @@ impl Agent {
                 // at "Reply" offered only copies starting "Reply", and the end then picked among them ran on to the
                 // task's last word. Jev can say the value does not run from there, and that end is picked again
                 // without the word, so each round drops a word and the rounds end.
-                let (first, last) = loop {
+                let (first, last, lead, trail) = loop {
+                    let mut trail = None;
                     let ending: Vec<_> = ends
                         .iter()
                         .filter(|word| word.index >= first.index)
-                        .map(|word| (word.index.to_string(), copied(&first, word)))
+                        .map(|word| {
+                            let cuts = (0..=word.outer_end - word.end).map(|kept| text(first.start, word.end + kept));
+                            (word.index, cuts.collect())
+                        })
                         .collect();
                     // The end was picked among words where the value may end; when none of them comes after the
                     // beginning, the value is the one word it begins at, as a crossed pick is.
                     if ending.is_empty() {
                         last = first.clone();
                     } else if first.index != last.index {
+                        let (ending, every) = offered(ending);
                         let (question, options) = exact(
                             "beginning at the selected word",
                             &ending,
@@ -1150,20 +1241,25 @@ impl Agent {
                                 .await?;
                             continue;
                         }
-                        last = ends
-                            .iter()
-                            .find(|word| word.index >= first.index && word.index.to_string() == picked)
-                            .unwrap_or(&first)
-                            .clone();
+                        let (index, kept) = picked_cut(&picked, every);
+                        match ends.iter().find(|word| word.index >= first.index && Some(word.index) == index) {
+                            Some(word) => (last, trail) = (word.clone(), kept),
+                            None => last = first.clone(),
+                        }
                     }
                     if first.index >= last.index {
-                        break (first, last);
+                        break (first, last, None, trail);
                     }
+                    let end = last.end + trail.unwrap_or(0);
                     let starting: Vec<_> = begins
                         .iter()
                         .filter(|word| word.index <= last.index)
-                        .map(|word| (word.index.to_string(), copied(word, &last)))
+                        .map(|word| {
+                            let cuts = (0..=word.start - word.outer_start).map(|kept| text(word.start - kept, end));
+                            (word.index, cuts.collect())
+                        })
                         .collect();
+                    let (starting, every) = offered(starting);
                     let (question, options) = exact(
                         "ending where the value ends",
                         &starting,
@@ -1175,22 +1271,25 @@ impl Agent {
                         ends.retain(|word| word.index != last.index);
                         continue;
                     }
-                    let start = begins
-                        .iter()
-                        .find(|word| word.index <= last.index && Some(&word.index.to_string()) == picks.get("start"))
-                        .unwrap_or(&first)
-                        .clone();
-                    break (start, last);
+                    let (index, kept) = picks.get("start").map_or((None, None), |picked| picked_cut(picked, every));
+                    match begins.iter().find(|word| word.index <= last.index && Some(word.index) == index) {
+                        Some(start) => break (start.clone(), last, kept, trail),
+                        None => break (first, last, None, trail),
+                    }
                 };
                 let (first, last) = (&first, &last);
                 // Words keep only their letters and digits, so punctuation the value starts or ends with, such as
-                // a handle's sign or a sentence's stop, is offered as part of it for Jev to keep or leave.
-                let max = self.jev.profile().max_choice_options;
+                // a handle's sign or a sentence's stop, is offered as part of it for Jev to keep or leave, where the
+                // choice of that end did not already settle it.
                 let question = format!(
                     "Which exact text belongs in {label}? Each choice is the complete value copied from {holder}; choose whether the punctuation next to it is part of the value."
                 );
                 let edges = edge_options(&chars, (first, last), (0, 0), target.max_length, max);
-                let (lead, mut trail) = self.edges(state, observation, &question, edges).await?;
+                let edges = edges
+                    .into_iter()
+                    .filter(|(edge, _)| if *edge == "lead" { lead.is_none() } else { trail.is_none() });
+                let asked = self.edges(state, observation, &question, edges.collect()).await?;
+                let (lead, mut trail) = (lead.unwrap_or(asked.0), trail.unwrap_or(asked.1));
                 // Each edge was offered as it fits the field alone; when the two together do not, the end is asked
                 // again with what fits after the beginning Jev kept.
                 if target.max_length.is_some_and(|limit| last.end - first.start + lead + trail > limit) {

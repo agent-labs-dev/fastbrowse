@@ -14,11 +14,28 @@
 //! and `true`, `false` and `null` as those words. An empty object or array reads as `{}` or `[]`. Members keep their
 //! order and a repeated key keeps every value. A document that is not entirely valid JSON is no structure, and its
 //! caller reads it whole.
+//!
+//! A browserless fetch and a browser capture both read a JSON document here, so a value has the same blocks either way.
 
-use fastbrowse_core::page::BlockKind;
-use fastbrowse_core::py::text;
+use super::BlockKind;
+use crate::py::text;
 
-use super::html::Found;
+/// One block of a JSON document: its kind, its text and the keys and indices that lead to it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Found {
+    pub kind: BlockKind,
+    pub text: String,
+    pub heading_path: Vec<String>,
+    /// The block is an array item's whole text, its textless values named.
+    pub whole_record: bool,
+}
+
+/// Whether a `Content-Type` names a JSON document: `application/json` or a `+json` type such as
+/// `application/ld+json`. Parameters such as a charset are ignored and the type is case-insensitive.
+pub fn is_json(content_type: &str) -> bool {
+    let mime = content_type.split(';').next().unwrap_or_default().trim().to_ascii_lowercase();
+    mime == "application/json" || (mime.starts_with("application/") && mime.ends_with("+json"))
+}
 
 /// The blocks of `body`, when all of it is one JSON value.
 pub fn blocks(body: &str) -> Option<Vec<Found>> {
@@ -113,15 +130,7 @@ fn push(found: &mut Vec<Found>, kind: BlockKind, text: String, path: &[String]) 
 }
 
 fn block(kind: BlockKind, text: String, path: &[String]) -> Found {
-    Found {
-        kind,
-        text,
-        heading_path: path.to_vec(),
-        href: None,
-        links: Vec::new(),
-        frame_id: None,
-        whole_record: false,
-    }
+    Found { kind, text, heading_path: path.to_vec(), whole_record: false }
 }
 
 struct Reader<'a> {
@@ -275,8 +284,8 @@ impl Reader<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::blocks;
-    use fastbrowse_core::page::BlockKind;
+    use super::{blocks, is_json};
+    use crate::page::BlockKind;
 
     fn read(body: &str) -> Vec<(BlockKind, String, Vec<String>)> {
         blocks(body).expect("valid JSON").into_iter().map(|b| (b.kind, b.text, b.heading_path)).collect()
@@ -346,6 +355,18 @@ mod tests {
         assert_eq!(read(" \"x\" "), [(BlockKind::Paragraph, "x".to_string(), path(&[]))]);
         let deep = format!("{}1{}", "[".repeat(100_000), "]".repeat(100_000));
         assert_eq!(read(&deep).len(), 1);
+    }
+
+    #[test]
+    fn a_json_content_type_is_application_json_or_a_json_suffix() {
+        for json in
+            ["application/json", "Application/JSON; charset=utf-8", "application/ld+json", "application/vnd.api+json"]
+        {
+            assert!(is_json(json), "{json}");
+        }
+        for other in ["", "text/html", "text/plain", "text/json", "application/jsonp", "application/json-seq"] {
+            assert!(!is_json(other), "{other}");
+        }
     }
 
     #[test]
