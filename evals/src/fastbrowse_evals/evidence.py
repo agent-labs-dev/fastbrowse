@@ -163,6 +163,10 @@ def parts(state: dict[str, JsonValue], limit: int = PART_BYTES) -> list[dict[str
     pages = state["pages"]
     assert isinstance(pages, list)
     room = limit - _size({**state, "pages": []})
+    if room <= 0:
+        # The evidence beside the pages fills a request alone. Sent whole, the judge's own window check records it
+        # unjudged ("not sent") instead of a division that cannot fit.
+        return [state]
     grouped: list[list[dict[str, JsonValue]]] = [[]]
     used = 0
 
@@ -211,12 +215,16 @@ def parts(state: dict[str, JsonValue], limit: int = PART_BYTES) -> list[dict[str
         space = 0
         for control in controls if isinstance(controls, list) else ():
             size = _size(control) + 2
-            if not run:
-                space = free(overhead)
-            elif size > space:
+            if run and size > space:
                 pieces.append({**head, "controls": run})
                 place(pieces[-1], label)
-                run, space = [], free(overhead)
+                run = []
+            if not run:
+                space = free(overhead)
+                if size > space and used:
+                    grouped.append([])
+                    used = 0
+                    space = room - overhead
             run.append(control)
             space -= size
         if run:

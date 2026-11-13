@@ -74,7 +74,7 @@ def test_a_state_over_the_window_is_divided_without_losing_text():
 
 
 def test_a_divided_page_sends_each_byte_of_its_text_and_controls_once():
-    controls = [{"label": f"reply {n}", "value": None} for n in range(400)]
+    controls = [{"label": "reply " * (n % 53), "value": None} for n in range(400)]
     page = {"id": "page-1", "url": "https://a.test", "text": "é\n" * 3000, "controls": controls}
     state = {"task": "t", "pages": [page, {"id": "page-2", "text": "short"}]}
     divided = parts(state, limit=8192)
@@ -83,6 +83,7 @@ def test_a_divided_page_sends_each_byte_of_its_text_and_controls_once():
     assert "".join(p.get("text", "") for p in pieces) == page["text"]
     assert [c for p in pieces for c in p.get("controls", [])] == controls
     assert {p["continues"] for p in pieces} == {f"{n} of {len(pieces)}" for n in range(1, len(pieces) + 1)}
+    assert parts({**state, "answer": "a" * 9000}, limit=8192) == [{**state, "answer": "a" * 9000}]
     # v5 kept: every slice of the page's text carries all of its controls.
     assert all(
         p["controls"] == controls for part in parts_v5(state, limit=8192) for p in part["pages"] if "continues" in p
