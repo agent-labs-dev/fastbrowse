@@ -76,8 +76,10 @@ keys:
     owner: cjber
     locations:
       - github: BROWSER_USE_API_KEY
-    expires: unknown
-    limit: unknown
+    label: fastbrowse-ci
+    expires: 2027-11-13
+    limit: "none: Browser Use offers no per-key spend cap"
+    rotated: 2026-11-13
   - id: fastbrowse-hosted-api-key
     service: fastbrowse-hosted
     group: benchmarks
