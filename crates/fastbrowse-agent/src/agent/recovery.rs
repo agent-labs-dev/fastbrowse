@@ -219,6 +219,7 @@ impl Agent {
                     self.read_drawn_page(state, observation).await?;
                 }
                 if status == Status::Stuck && state.recoveries == self.config.stall.max_recoveries + 1 {
+                    self.known_pages_arrived(state, &observation.url).await?;
                     let mut routes: Vec<_> = state.routes.iter().collect();
                     routes.sort();
                     let mut visited: Vec<_> = state.visited_addresses.iter().collect();
