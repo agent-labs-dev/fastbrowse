@@ -7,7 +7,7 @@ in `src/fastbrowse` are the shapes a caller passes and gets back. A behaviour ch
 
 The run loop is [crates/fastbrowse-agent/src/agent](../../crates/fastbrowse-agent/src/agent), and everything else is a seam it calls.
 
-- **[fastbrowse](../../crates/fastbrowse/src/lib.rs)** is the crate on crates.io a Rust caller depends on: `run_task` and the
+- **[fastbrowse](../../crates/fastbrowse/src/lib.rs)** is the crate a Rust caller depends on: `run_task` and the
   result's types, re-exported. The crates under it are published at the same version so it can be.
 - **[fastbrowse-run](../../crates/fastbrowse-run/src/lib.rs)** opens the browser and builds the Jev and LLM clients from the
   environment, then hands control to the loop. Python's `run_task(...)` is this, in process. The browser is one of
