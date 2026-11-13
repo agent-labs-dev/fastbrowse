@@ -254,7 +254,7 @@ impl Agent {
         let mut requested_frame = false;
         let mut changed: Option<String> = None;
         let resume = options.resume.take();
-        let scoped = jev_spend(Lines::Ledger(ledger.clone()), Some(ledger.clone()), async {
+        let spending = jev_spend(Lines::Ledger(ledger.clone()), Some(ledger.clone()), async {
             let running = Box::pin(async {
                 let body = Box::pin(self.body(task, &options, resume, &ledger, &mut slot));
                 match body.await {
@@ -299,6 +299,8 @@ impl Agent {
             }
             ended
         });
+        // A question the run already asked beside the same state is answered from what Jev said then.
+        let scoped = crate::batches::knowing(Default::default(), spending);
         let (mut result, mut loop_returned, needs_browser) = self.trace.phase("run", scoped).await;
         let result = if needs_browser {
             // A run that needs a browser reports what the ledger spent and nothing else: no budget check and no ending
