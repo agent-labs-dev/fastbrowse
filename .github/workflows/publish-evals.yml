@@ -110,10 +110,12 @@ jobs:
           git commit -m "feat(benchmarks): publish campaign $campaign"
           # A rerun replaces its own branch; nothing else writes to it.
           git push --force "https://x-access-token:$GH_TOKEN@github.com/agent-labs-dev/fastbrowse-site.git" "HEAD:refs/heads/$branch"
-          if gh pr list --repo agent-labs-dev/fastbrowse-site --head "$branch" --state open --json number --jq '.[0].number' | grep -q .; then
+          # REST for both calls: the GraphQL bucket this token shares runs dry first.
+          if gh api -X GET repos/agent-labs-dev/fastbrowse-site/pulls -f "head=agent-labs-dev:$branch" -f state=open --jq '.[0].number' | grep -q .; then
             echo "the pull request for $branch is already open"
             exit 0
           fi
-          gh pr create --repo agent-labs-dev/fastbrowse-site --base main --head "$branch" \
-            --title "feat(benchmarks): publish campaign $campaign" \
-            --body "Campaign \`$campaign\`, measured by $source. \`data/benchmark-$campaign.json\` is the candidate byte for byte (sha256 \`$digest\`), and the site computes every figure from its per-attempt rows. The group files under \`data/benchmarks/\` bind each card to it. Merging this pull request publishes the figures; it is the approval."
+          gh api -X POST repos/agent-labs-dev/fastbrowse-site/pulls -f base=main -f "head=$branch" \
+            -f "title=feat(benchmarks): publish campaign $campaign" \
+            -f "body=Campaign \`$campaign\`, measured by $source. \`data/benchmark-$campaign.json\` is the candidate byte for byte (sha256 \`$digest\`), and the site computes every figure from its per-attempt rows. The group files under \`data/benchmarks/\` bind each card to it. Merging this pull request publishes the figures; it is the approval." \
+            --jq .html_url
