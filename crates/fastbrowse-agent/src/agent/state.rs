@@ -297,6 +297,8 @@ pub(crate) struct RunState {
     /// The one renderer hang this run may recover without risking a replay of the action.
     pub hung_page_reopened: bool,
     pub last_page: Option<(String, String)>,
+    /// The document in which Jev was last asked whether the task needs an action inside a drawn surface.
+    pub surface_judged: Option<(String, String)>,
     /// The source of the latest navigation, scoped to the destination that followed it.
     pub navigation_from: Option<((String, String), Observation)>,
     /// Jev's sign-in readings stay with the document they described, not with every later route.
@@ -699,6 +701,7 @@ impl RunState {
             commits: 0,
             redecided: false,
             last_page: None,
+            surface_judged: None,
             navigation_from: None,
             ..self
         }
@@ -744,6 +747,7 @@ impl RunState {
             blank_waited: HashSet::new(),
             hung_page_reopened: false,
             last_page: None,
+            surface_judged: None,
             navigation_from: None,
             login_readings: HashMap::new(),
             reached: HashMap::new(),
