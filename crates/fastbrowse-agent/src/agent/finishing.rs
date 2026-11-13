@@ -623,6 +623,7 @@ fn rejected_parts(rejection: &str) -> Vec<String> {
                 }
             }
             "citations" => failed.push(format!("{claim} cites no note it can be checked against")),
+            "exact" => failed.push(format!("{claim} copies page information the task neither asks for nor names")),
             cell if cell.starts_with("cell") => {
                 let column = cell[4..].parse::<usize>().ok().and_then(|cell| feedback["columns"].get(cell)?.as_str());
                 match column {
@@ -678,7 +679,7 @@ mod tests {
                 {"text": "The total is 175.00 (A 120.00, B 55.00).", "evidence_ids": ["e4"]},
             ],
             "columns": ["Name", "Shape"],
-            "rejected_checks": ["claim1", "claim0/tally", "claim2/citations", "coverage", "claim2/cell1", "actions", "claim3/states"],
+            "rejected_checks": ["claim1", "claim0/tally", "claim2/citations", "coverage", "claim2/cell1", "actions", "claim3/states", "claim1/exact"],
             "tally_reasons": {"claim3/states": "it states something besides its total"},
             "untallied_claims": [{"claim": 0, "reason": "No note read is one 'quote by Albert Einstein'."}],
         });
@@ -691,6 +692,7 @@ mod tests {
             "'Y costs £12.': its 'Shape' cell does not follow from the notes it cites",
             "the answer says something was not done or already existed that a step this run took may have done",
             "'The total is 175.00 (A 120.00, B 55.00).': it states something besides its total",
+            "'The cheapest is X at £10.69.' copies page information the task neither asks for nor names",
         ] {
             assert!(reason.contains(part), "{reason}");
         }

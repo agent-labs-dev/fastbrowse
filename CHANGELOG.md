@@ -18,6 +18,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.11.0] - 2026-11-12
 
+- The text a composed answer copies from the page is checked claim by claim, so a claim that copies more than the task asks is the only one left out and rewritten. Checked as one answer, it left out every claim, and the rewrite of all of them could lose one that had passed ([#1052](https://github.com/agent-labs-dev/fastbrowse/issues/1052)).
+
 - A commit's recorded effect names the text the page added in reply, so a posted comment is no longer posted again ([#1109](https://github.com/agent-labs-dev/fastbrowse/issues/1109)).
 
 - A count, total, minimum or maximum is checked against what the task asks for, so an answer no longer counts the orders where the task asks for their total.
