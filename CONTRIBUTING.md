@@ -85,7 +85,7 @@ a committed file differs from what the types produce, and `tests/test_protocol_s
 models in `src/fastbrowse/protocol.py` no longer describe the same schema.
 
 The npm packages and the crates on crates.io are published at the Python package's version, and the Rust binary
-reports it too, as do the Java client on Maven Central and the .NET client on NuGet. `scripts/npm_versions.py` fails
+reports it too, as do the Java client's jar and the .NET client on NuGet. `scripts/npm_versions.py` fails
 when `packages/sdk/package.json`, the `[workspace.package]` version in `Cargo.toml`, a crate's pin in
 `[workspace.dependencies]`, the version in `java/pom.xml` or the one in `dotnet/src/Fastbrowse/Fastbrowse.csproj` holds
 another number, and with `--write` sets them all from
