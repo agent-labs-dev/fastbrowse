@@ -203,7 +203,12 @@
   if (registry.revTracking !== 2) {
     registry.revTracking = 2;
     registry.rev ??= 0;
-    const bumped = () => registry.rev++;
+    // A kept read stands only while the counter has not moved, so a change also lets go of it: otherwise it would hold
+    // the roots, frames and elements it walked, a removed child document among them, until the next read.
+    const bumped = () => {
+      registry.rev++;
+      registry.kept = null;
+    };
     const events = [
       'pointermove',
       'pointerover',
@@ -498,7 +503,7 @@
     !kept.undefinedElements?.some(e => e.isConnected && e.matches(':defined')) &&
     // Adding, removing or aborting a native listener writes no DOM node or attribute.
     kept.listenerStates?.every(([e, value]) => listened(e) === value) &&
-    rendered.inputs.every(([kind, target, args, value]) =>
+    kept.inputs.every(([kind, target, args, value]) =>
       sameRenderFact(kind, value, readRenderFact(kind, target, args)));
   if (still)
     return {
@@ -2057,7 +2062,7 @@
   // The read number names a transport baseline, and the read is kept to answer "unchanged" while the page stays.
   const read = ++registry.reads;
   own.renderReads ||= {};
-  own.renderReads[mode] = { read, document_key: String(performance.timeOrigin), inputs: renderInputs };
+  own.renderReads[mode] = { read, document_key: String(performance.timeOrigin) };
   registry.kept ||= {};
   registry.kept[mode] = {
     mode,
@@ -2070,6 +2075,7 @@
     undefinedElements: walkedRoots.flatMap(([root]) => own.queryTrees.get(root).undefinedElements),
     listenerStates: [...listenerStates],
     listenerAPI: Boolean(own.listeners),
+    inputs: renderInputs,
     url: location.href,
     title: document.title,
     document_key: String(performance.timeOrigin),

@@ -1120,6 +1120,10 @@ async fn test_a_read_inside_a_child_document_is_kept_and_never_serves_a_changed_
     ] {
         assert_the_change_is_read(&h, &script).await;
     }
+    // A change lets go of the kept read, so a removed child document is not held until the next look.
+    eval_active(&h.session, "document.querySelector('#child').remove(); true").await;
+    settle_events(&h).await;
+    assert_eq!(eval_active(&h.session, "globalThis.__fastbrowse.kept == null").await, json!(true));
     h.close().await;
 }
 
@@ -1286,8 +1290,10 @@ async fn test_a_changed_frame_sends_control_deltas() {
     eval_active(&h.session, "document.body.innerHTML = '<button>Before</button><button>Stable</button>'").await;
     h.observe().await;
     let function = h.session.snapshot().function.clone();
+    // Taken before the change, which lets go of the kept read.
+    eval_active(&h.session, "const {document_key, read} = globalThis.__fastbrowse.kept.snapshot; globalThis.__fbBase = {document_key, read}; true").await;
     eval_active(&h.session, "document.querySelector('button').textContent = 'After'").await;
-    let delta = eval_active(&h.session, &format!("{function}('snapshot-delta', {{document_key: globalThis.__fastbrowse.kept.snapshot.document_key, read: globalThis.__fastbrowse.kept.snapshot.read}})")).await;
+    let delta = eval_active(&h.session, &format!("{function}('snapshot-delta', globalThis.__fbBase)")).await;
     let rows = delta["control_delta"]["controls"].as_array().expect("a control delta");
     assert_eq!(rows.iter().filter(|row| row.is_object()).count(), 1, "{delta}");
     assert_eq!(rows.iter().filter(|row| row.is_i64()).count(), 1, "{delta}");
