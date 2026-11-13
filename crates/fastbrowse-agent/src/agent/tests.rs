@@ -7878,6 +7878,24 @@ impl DecisionClient for LongValue {
     }
 }
 
+/// The copy question no longer carries the task, which the request's state holds, so whether copies are offered whole
+/// counts the task beside them: counted alone, a task that fit by itself but not beside whole copies sent a request no
+/// state could fit.
+#[test]
+fn test_copies_are_offered_whole_only_when_the_task_fits_beside_them() {
+    let mut agent = agent();
+    let value = (0..40).map(|n| format!("word{n}")).collect::<Vec<_>>().join(" ");
+    let options = [("0".to_string(), value.clone())];
+    let question = "Which exact text belongs in 'Description'?".to_string();
+    let whole = IndexMap::from([("0".to_string(), serde_json::Value::from(value.as_str()))]);
+    let asked = super::acting::page_question(&question, whole).dump_json().chars().count() as i64;
+    agent.config.tokens.decision_chars = Some((asked + 500, asked + 500));
+    let (_, offered) = agent.offered_copies(&"a".repeat(100), question.clone(), &options);
+    assert_eq!(offered["0"], value, "a short task fits beside the whole copy");
+    let (said, offered) = agent.offered_copies(&"a".repeat(1000), question, &options);
+    assert_ne!(offered["0"], value, "{said}");
+}
+
 /// A push gave about 10 KB of markdown to put in a description, longer than any one part a long task is cut into. No
 /// part held the whole value, so the task was no longer offered as its source, and the field got a written first
 /// sentence, or a note the run had read: "Save: disabled" (#939). A value is copied whole however many parts it spans.

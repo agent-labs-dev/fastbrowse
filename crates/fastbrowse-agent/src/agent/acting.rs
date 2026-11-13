@@ -237,7 +237,7 @@ fn typed_into(state: &RunState, target: &Control) -> Vec<String> {
 
 /// A choice about the page, asked beside a state that holds the task: restated in each question, a form's fields
 /// carried the task once a question (#903).
-fn page_question(question: &str, criteria: IndexMap<String, JsonValue>) -> Question {
+pub(super) fn page_question(question: &str, criteria: IndexMap<String, JsonValue>) -> Question {
     Question::Choice(ChoiceQuestion::new(format!("{UNTRUSTED}\n\n{question}"), criteria))
 }
 
@@ -1224,12 +1224,13 @@ impl Agent {
                     (index.parse::<usize>().ok(), kept.parse::<usize>().ok().filter(|_| every))
                 };
                 let holder = if source == IN_READ { "what was read" } else { "the task" };
+                let run_task = state.task.clone();
                 let several = several_values(target);
                 let exact = |bound: &str, options: &[(String, String)], elsewhere: &str| {
                     let question = format!(
                         "Which exact text belongs in {label}? Each choice is the complete value that would be copied from {holder}, {bound}. Choose only the field's value, without surrounding task instructions. When {holder} gives this field several values, {several}"
                     );
-                    let (question, mut options) = self.offered_copies(question, options);
+                    let (question, mut options) = self.offered_copies(&run_task, question, options);
                     options.insert(ELSEWHERE.into(), JsonValue::from(elsewhere));
                     (question, options)
                 };
@@ -1375,7 +1376,7 @@ impl Agent {
             .into_iter()
             .map(|(edge, options)| {
                 let options: Vec<_> = options.into_iter().map(|(kept, value)| (kept.to_string(), value)).collect();
-                let (question, options) = self.offered_copies(question.to_string(), &options);
+                let (question, options) = self.offered_copies(&state.task, question.to_string(), &options);
                 (edge, question, options)
             })
             .collect();
@@ -1386,10 +1387,17 @@ impl Agent {
 
     /// `options`, copies of a value keyed by what each keeps, as a choice offers them: whole when the question then
     /// fits one decision request, and otherwise each by its ends, said in the question.
-    fn offered_copies(&self, question: String, options: &[(String, String)]) -> (String, IndexMap<String, JsonValue>) {
+    /// The request's state holds `task`, so the copies are offered whole only when the task fits beside them.
+    pub(super) fn offered_copies(
+        &self,
+        task: &str,
+        question: String,
+        options: &[(String, String)],
+    ) -> (String, IndexMap<String, JsonValue>) {
         let whole: IndexMap<String, JsonValue> =
             options.iter().map(|(key, value)| (key.clone(), JsonValue::from(value.as_str()))).collect();
-        if self.config.tokens.input_chars(&[page_question(&question, whole.clone()).dump_json()]) > 0 {
+        let held = text::len(&json!({"task": task}).dump_json()) as i64;
+        if self.config.tokens.input_chars(&[page_question(&question, whole.clone()).dump_json()]) > held {
             return (question, whole);
         }
         let ends = options.iter().map(|(key, value)| (key.clone(), JsonValue::from(value_ends(value))));
