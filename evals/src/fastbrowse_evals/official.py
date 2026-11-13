@@ -2,7 +2,7 @@
 
 `--arm` picks the agent: fastbrowse (the default and the only one published) or the hosted Browser Use agent
 (`OFFICIAL_ARMS`). Every arm gets the same tasks and the same upstream judge request. The judge
-model is `anthropic/claude-opus-5.5` through `--judge-base-url` (OpenRouter unless set), keyed by OPENAI_API_KEY. A run may repeat each
+model is `deepseek/deepseek-v4.1-flash` through `--judge-base-url` (OpenRouter unless set), keyed by OPENAI_API_KEY. A run may repeat each
 task (`--repeat`); every repeat is graded, and a task's figure is the mean of its repeats. Before the upstream judge,
 Parallax's own judge checks each run for a site-side interruption (`INTERRUPTION_POLICY`) and runs such an attempt
 again rather than score it."""
@@ -70,8 +70,8 @@ from fastbrowse_evals.browsers import (
 )
 from fastbrowse_evals.budget import POLICY
 from fastbrowse_evals.judging import (
+    JUDGE_MODEL,
     OPENROUTER_BASE_URL,
-    OPUS_JUDGE,
     SITE_FAILURE_QUESTIONS,
     judge_browser,
     judge_receipt,
@@ -139,9 +139,9 @@ agent, so by one rule for every arm and suite the attempt runs again as an inter
 graded on what was recorded, and the group states how many runs had no capture."""
 
 
-INTERRUPTION_POLICY = "browser-official-opus-v2"
+INTERRUPTION_POLICY = "browser-official-deepseek-v3"
 """Parallax's own check of every official run before the upstream judge sees it: the internal policy's evidence
-question (`judging.SITE_FAILURE_QUESTIONS`) alone, asked of `judging.OPUS_JUDGE`. Upstream scoring has no ungraded
+question (`judging.SITE_FAILURE_QUESTIONS`) alone, asked of `judging.JUDGE_MODEL`. Upstream scoring has no ungraded
 outcome, so a run the check finds interrupted by the site (an error page, a rate limit, an outage, a network failure
 the agent did not cause) is never sent upstream: the attempt is run again, as an internal outage is, and the
 interrupted run is kept beside it with the reason. A slot still interrupted after every retry is blocked by the site
@@ -1100,7 +1100,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset", required=True, type=Path)
     parser.add_argument("--dataset-sha256", required=True)
     parser.add_argument(
-        "--judge-model", default=OPUS_JUDGE, help="model id on the judge route; a published run uses the default"
+        "--judge-model", default=JUDGE_MODEL, help="model id on the judge route; a published run uses the default"
     )
     parser.add_argument("--judge-reasoning", default="medium")
     parser.add_argument(

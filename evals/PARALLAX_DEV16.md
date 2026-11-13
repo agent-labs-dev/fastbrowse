@@ -13,7 +13,7 @@ consumer dependency source. `uv lock --check` passes with the published lock.
 
 ## Compatibility
 
-The published `browser-internal-opus-v6` policy and `browser-internal-opus-v5`
+The published `browser-internal-deepseek-v6` policy and `browser-internal-opus-v5`
 before it explicitly disable Jev. Their identity retains the historical inactive Jev fields from dev13. This is a
 serialization contract for existing receipts, not a description of the current
 Jev transport. Jev-enabled identities name the OpenRouter System One transport

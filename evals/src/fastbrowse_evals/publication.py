@@ -46,7 +46,7 @@ from fastbrowse_evals.adapters.browser_official_bridge import BillingError, judg
 from fastbrowse_evals.attempt_clock import SESSION_OPEN_SECONDS, TIMING_BASIS
 from fastbrowse_evals.budget import POLICY
 from fastbrowse_evals.catalog import render
-from fastbrowse_evals.judging import OPENROUTER_BASE_URL, OPUS_JUDGE
+from fastbrowse_evals.judging import JUDGE_MODEL, OPENROUTER_BASE_URL
 from fastbrowse_evals.live import (
     AGENT_LIMITS,
     HOSTED_MODELS,
@@ -722,7 +722,7 @@ def invocation(
     if len(receipts) + len(execution) != len(campaign.attempts):
         raise PublicationError(f"{group_id}: every physical attempt needs its complete semantic judge receipt")
     if any(receipt.judgment.policy != JUDGE_POLICY for receipt in receipts.values()):
-        raise PublicationError(f"{group_id}: published figures are graded under {JUDGE_POLICY} ({OPUS_JUDGE} alone)")
+        raise PublicationError(f"{group_id}: published figures are graded under {JUDGE_POLICY} ({JUDGE_MODEL} alone)")
     return Invocation(
         run=run,
         arms=frozenset(arms),
@@ -846,7 +846,7 @@ def internal_group(
     limits += [
         "Each slot totals physical runs including retries; an unresolved charge withholds its arm's complete cost",
         MIXED_TIMING_NOTE if any(row.timing_basis == "physical-attempt-wall-time" for row in rows) else TIMING_NOTE,
-        f"Score is the recorded {OPUS_JUDGE.replace('/', ' ')} verdict; completion is the agent's own ending, recorded separately",
+        f"Score is the recorded {JUDGE_MODEL.replace('/', ' ')} verdict; completion is the agent's own ending, recorded separately",
     ]
     models = {arm: sorted(set().union(*(item.models[arm] for item in used if arm in item.models))) for arm in arms}
     # One note for every arm's models keeps a pairing within the public contract's twelve notes.
@@ -1029,8 +1029,8 @@ async def official_group(
     arm = manifest.get("arm", "fastbrowse")
     if arm != "fastbrowse":
         raise PublicationError(f"{group_id}: {arm} cannot be published, only fastbrowse's official runs are")
-    if manifest.get("judge_model") != OPUS_JUDGE or manifest.get("judge_base_url") != OPENROUTER_BASE_URL:
-        raise PublicationError(f"{group_id}: a published grade comes from {OPUS_JUDGE} through OpenRouter alone")
+    if manifest.get("judge_model") != JUDGE_MODEL or manifest.get("judge_base_url") != OPENROUTER_BASE_URL:
+        raise PublicationError(f"{group_id}: a published grade comes from {JUDGE_MODEL} through OpenRouter alone")
     config = {k: v for k, v in manifest.items() if k not in CONFIG_EXTRAS}
     if official.config_fingerprint(config) != identity.config_sha256:
         raise PublicationError(f"{group_id}: the manifest differs from its recorded configuration fingerprint")

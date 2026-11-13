@@ -1,4 +1,4 @@
-"""Opus-only v5 retains the dev13 request contract across the OpenRouter Jev migration."""
+"""The Opus-only policies keep the dev13 request and receipt identity their recorded receipts carry."""
 
 import hashlib
 import json
@@ -19,7 +19,7 @@ from fastbrowse_evals import judging, official
             "e697ca113f12e9ac2b1dcae724a792721e67b47d1504a46e8990b4f5bfff7ca1",
         ),
         (
-            official.INTERRUPTION_POLICY,
+            "browser-official-opus-v2",
             official.INTERRUPTION_QUESTIONS,
             "a5ec68cb4be0f91e3a2a17e13fed7332e67a8a78d8d3ca8d6698394b4f8d02c6",
             "147afeab1a0b7ce370062bf5059598699487f7a39829f1e98fea1c4ea5ba702d",

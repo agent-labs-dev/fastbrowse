@@ -46,9 +46,10 @@ jev-ultrafast returns no answer, only DONE or BLOCKED, so it runs only the navig
 page a run ends on. fastbrowse must also end with the task's expected status, and jev-ultrafast with DONE.
 fastbrowse-pool runs every task fastbrowse runs.
 
-Every run is graded by `anthropic/claude-opus-5.5` through OpenRouter alone (`JUDGE_POLICY`, the only policy
-publication accepts); `--judge-policy browser-internal-jev-v4` grades Jev first with that model as its fallback, and
-`--judge-policy browser-internal-opus-v5` (or an earlier `browser-internal-opus-v*`) keeps an earlier policy.
+Every run is graded by `deepseek/deepseek-v4.1-flash` through OpenRouter alone (`JUDGE_POLICY`, the only policy
+publication accepts); `--judge-policy browser-internal-jev-v4` grades Jev first with a verified fallback. The earlier
+`browser-internal-opus-v*` policies name Opus, which is no longer an eval judge; they remain only so their recorded
+receipts keep their identity.
 """
 
 import argparse
@@ -133,6 +134,8 @@ from fastbrowse_evals.evidence import once, parts, parts_v5, run_evidence, share
 from fastbrowse_evals.final_page import EVIDENCE, VIEWPORT, FinalPage, FrameViewport, observe_browser, prepared_tab
 from fastbrowse_evals.judging import (
     EVIDENCE_QUESTIONS,
+    JUDGE_MODEL,
+    OPUS_JUDGE,
     QUESTIONS,
     SITE_FAILURE_QUESTIONS,
     browser_verdict,
@@ -297,8 +300,9 @@ OPUS_V5_POLICY = "browser-internal-opus-v5"
 (`NO_EVIDENCE`). The source text of a task's check is gone from the state. A state too long for one request is divided
 by `evidence.parts_v5`, which sends a long page's whole controls with every slice of its text: one Hacker News thread
 took 16 requests and $23 to judge (#1075). Selected only with --judge-policy; no published figure accepts it."""
-JUDGE_POLICY = "browser-internal-opus-v6"
-"""The default, and the only policy a published figure accepts: v5's evidence with each page listed once
+JUDGE_POLICY = "browser-internal-deepseek-v6"
+"""The default, and the only policy a published figure accepts, graded by `judging.JUDGE_MODEL` alone: v5's evidence
+with each page listed once
 (`evidence.once`), its controls beside its text, and a state too long for one request divided by `evidence.parts`, which
 sends every byte of every page once. Nothing the judge read under v5 is left out. A state that fits one request differs
 from v5's only where v5 listed a page twice. Any v5 row can be regraded under it from its recorded state."""
@@ -314,6 +318,8 @@ POLICY_QUESTIONS = {
     JEV_JUDGE_POLICY: QUESTIONS,
 }
 JUDGE_POLICIES = tuple(POLICY_QUESTIONS)
+POLICY_JUDGE = {policy: OPUS_JUDGE for policy in POLICY_QUESTIONS} | {JUDGE_POLICY: JUDGE_MODEL}
+"""The one model each policy that never asks Jev is graded by; the Jev policy's fallback is any verified model."""
 BOT_CHECK_POLICIES = (OPUS_V1_POLICY, JEV_JUDGE_POLICY)
 """The earlier policies, which keep a bot check fastbrowse named UNKNOWN without a judge (`bot_check_block`)."""
 _judge_policy: ContextVar[str] = ContextVar("judge_policy", default=JUDGE_POLICY)
@@ -3015,7 +3021,7 @@ async def main(argv: list[str]) -> int:
         "--judge-policy",
         choices=JUDGE_POLICIES,
         default=JUDGE_POLICY,
-        help=f"how rows are graded; only the default {JUDGE_POLICY} (the pinned Opus judge alone) can be published",
+        help=f"how rows are graded; only the default {JUDGE_POLICY} ({JUDGE_MODEL} alone) can be published",
     )
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--record", type=Path, metavar="DIR", help="save each run as DIR/<arm>/<task>-<n>.mp4")
@@ -3075,7 +3081,7 @@ async def main(argv: list[str]) -> int:
         if count <= 0:
             parser.error(f"{flag} must be positive")
     try:
-        require_judges(use_jev=args.judge_policy == JEV_JUDGE_POLICY)
+        require_judges(use_jev=args.judge_policy == JEV_JUDGE_POLICY, model=POLICY_JUDGE[args.judge_policy])
     except JudgeConfigError as exc:
         parser.error(f"every row is judged, so the judges must be configured before any run starts: {exc}")
 

@@ -22,7 +22,7 @@ TOOL_NAME = re.compile(r"browser[-_]harness", re.IGNORECASE)
 TIMELINE_STEP = ("index", "operation", "outcome", "url", "target", "choice", "command", "exit_code", "note", "file")
 """What a step says the run did. What it saw goes to `pages`; anything else on a step is that arm's own bookkeeping."""
 PART_BYTES = 1_000_000
-"""The most state one request carries. Opus 5.5 reads 1,000,000 tokens (`FALLBACK_CONTEXT_TOKENS`), and a token covers
+"""The most state one request carries. The judge reads 1,000,000 tokens (`FALLBACK_CONTEXT_TOKENS`), and a token covers
 at least one byte of text, so a part this size fits whatever the text is."""
 
 

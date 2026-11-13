@@ -114,10 +114,14 @@ def test_settled_receipt_names_the_model_the_endpoint_served(tmp_path):
     m = meter(tmp_path)
     request = chat()
     m.before(request)
-    body = {"id": "gen-1", "model": "anthropic/claude-opus-5.5", "usage": {"prompt_tokens": 10, "completion_tokens": 1}}
+    body = {
+        "id": "gen-1",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "usage": {"prompt_tokens": 10, "completion_tokens": 1},
+    }
     m.after(httpx.Response(200, json=body, request=request))
     settled = rows(tmp_path / "receipts.jsonl")[-1]
-    assert (settled["model"], settled["response_id"]) == ("anthropic/claude-opus-5.5", "gen-1")
+    assert (settled["model"], settled["response_id"]) == ("deepseek/deepseek-v4.1-flash", "gen-1")
 
 
 @pytest.mark.parametrize("tokens,expected", [(999, 0.001199), (1000, 0.0012), (1001, 0.002302)])
@@ -1372,9 +1376,9 @@ REQUIRED = ["--upstream-root", "r", "--upstream-commit", "c", "--judge-python", 
 REQUIRED += ["--dataset-sha256", "s", "--out", "o"]
 
 
-def test_the_official_judge_is_opus_through_openrouter_by_default():
+def test_the_official_judge_is_deepseek_through_openrouter_by_default():
     args = official.build_parser().parse_args(["bu-bench", *REQUIRED])
-    assert (args.judge_model, args.judge_base_url) == ("anthropic/claude-opus-5.5", OPENROUTER)
+    assert (args.judge_model, args.judge_base_url) == ("deepseek/deepseek-v4.1-flash", OPENROUTER)
 
 
 def test_an_unknown_charge_commits_at_least_what_it_states() -> None:
@@ -1777,7 +1781,7 @@ def test_mind2web_judge_asks_again_at_the_ceiling_when_512_tokens_cut_the_answer
         return SimpleNamespace(choices=[SimpleNamespace(finish_reason=finish, message=message)])
 
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
-    model = SimpleNamespace(model="anthropic/claude-opus-5.5", client=client)
+    model = SimpleNamespace(model="deepseek/deepseek-v4.1-flash", client=client)
     request = {"billing": {"max_output_tokens": 8192}}
     assert bridge_module.uncut_generate(model, request)([]) == ["Score: 5"]
     assert sent == [512, 8192]

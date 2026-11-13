@@ -13,7 +13,7 @@ from fastbrowse.models import Limits
 from fastbrowse_evals import live, official, official_rows, publication
 from fastbrowse_evals.attempt_clock import SESSION_OPEN_SECONDS, TIMING_BASIS
 from fastbrowse_evals.catalog import render
-from fastbrowse_evals.judging import OPENROUTER_BASE_URL, OPUS_JUDGE
+from fastbrowse_evals.judging import JUDGE_MODEL, OPENROUTER_BASE_URL
 from fastbrowse_evals.live import AGENT_LIMITS, JUDGE_POLICY
 from fastbrowse_evals.publication import Candidate, Checks, OfficialSource, PublicationError
 
@@ -187,7 +187,7 @@ def write_official(
         "arm": "fastbrowse",
         "upstream_commit": "c" * 40,
         "dataset_sha256": "d" * 64,
-        "judge_model": OPUS_JUDGE,
+        "judge_model": JUDGE_MODEL,
         "judge_base_url": OPENROUTER_BASE_URL,
         "judge_reasoning": "medium",
         "score_threshold": 3,
@@ -409,7 +409,7 @@ def test_export_counts_every_physical_run_and_keeps_source_grades_separate(tmp_p
     assert bu.rows[0].llm_calls_basis == "physical_requests"
     assert groups["internal-hosted"].source_sha256 == DIGEST
     assert 1 <= len(bu.limits) <= 12
-    assert any("Judge anthropic claude-opus-5.5 via OpenRouter, reasoning medium" in n for n in bu.limits)
+    assert any("Judge deepseek deepseek-v4.1-flash via OpenRouter, reasoning medium" in n for n in bu.limits)
     assert any("model-x" in n for n in groups["internal-hosted"].limits)
     # the closed public shape survives a round trip through its own strict contract
     Candidate.model_validate_json(json.dumps(candidate.model_dump(mode="json")))
@@ -1165,7 +1165,7 @@ def test_an_internal_ledger_graded_under_another_policy_cannot_publish(tmp_path:
             a["semantic_judge"]["judgment"]["policy"] = policy
 
     h = Harness(tmp_path, hosted=other)
-    with pytest.raises(PublicationError, match="browser-internal-opus-v6"):
+    with pytest.raises(PublicationError, match="browser-internal-deepseek-v6"):
         h.export(ultrafast=None, bu_bench=None, mind2web=None)
 
 
@@ -1854,7 +1854,7 @@ def test_an_unknown_agent_charge_cannot_hide_an_unpriced_judge(tmp_path: Path) -
         rows = [json.loads(line) for line in path.read_text().splitlines()]
         row = next(r for r in rows if r["unknown_cost"])
         row["semantic_judge"]["judgment"]["fallback_calls"] = [
-            {"model": OPUS_JUDGE, "attempt": 1, "latency_ms": 1, "cost_usd": None}
+            {"model": JUDGE_MODEL, "attempt": 1, "latency_ms": 1, "cost_usd": None}
         ]
         path.write_text("".join(json.dumps(r) + "\n" for r in rows))
     with pytest.raises(PublicationError, match="unpriced judge"):
