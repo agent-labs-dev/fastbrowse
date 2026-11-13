@@ -1564,11 +1564,14 @@ impl Shared {
                     let frame = str_of(&params["frameId"]);
                     let mut state = self.state.lock().unwrap();
                     let key = (session.to_owned(), frame);
-                    if state.subframes.contains(&key.1) {
-                        state.frames_loading.insert(key, Instant::now());
+                    // A load keeps the start it was first seen at until it lands: a navigation's request and its start,
+                    // or a later navigation that replaces it unfinished, are not new time to wait.
+                    let loads = if state.subframes.contains(&key.1) {
+                        &mut state.frames_loading
                     } else {
-                        state.navigating.insert(key, Instant::now());
-                    }
+                        &mut state.navigating
+                    };
+                    loads.entry(key).or_insert_with(Instant::now);
                 }
             }
             // A frame removed before it loaded, or handed to a process of its own, whose session then reports it.
@@ -1772,7 +1775,7 @@ impl Shared {
                 state.frame_parents.insert(child.clone(), parent.to_owned());
                 // The frame's document may load before its session reports lifecycle events, so once it does, the
                 // document's own state says whether one is still to come.
-                state.frames_loading.insert((child.clone(), target.clone()), Instant::now());
+                state.frames_loading.entry((child.clone(), target.clone())).or_insert_with(Instant::now);
                 let session = self.session();
                 self.spawn(&mut state, async move {
                     let prepared = session.prepare_session(&child, false).await.is_ok();
