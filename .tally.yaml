@@ -39,7 +39,7 @@ keys:
       - pass: openrouter/fastbrowse-benchmarks
     expires: 2027-02-11
     expiresNote: "expires_at from the OpenRouter key endpoint, read 2026-11-13"
-    limit: $300/day
+    limit: $100/day
   - id: openrouter-fastbrowse-judge
     service: openrouter
     group: benchmarks
@@ -49,7 +49,7 @@ keys:
       - pass: openrouter/fastbrowse-judge
     expires: 2027-02-11
     expiresNote: "expires_at from the OpenRouter key endpoint, read 2026-11-13"
-    limit: $150/day
+    limit: $50/day
   - id: aur-ssh-private-key
     service: aur
     group: release
