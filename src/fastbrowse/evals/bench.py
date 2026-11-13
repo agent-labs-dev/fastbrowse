@@ -621,6 +621,9 @@ async def run_suite(args: argparse.Namespace) -> int:
     run: dict[str, Any] = {"meta": _meta(mode, args.agent, None if mode == "record" else latency), "tasks": []}
     logs = args.out.with_suffix("") / "logs"
     logs.mkdir(parents=True, exist_ok=True)
+    # A reused --out holds an earlier run's request logs, and profiling the directory would count them as this run's.
+    for stale in logs.glob("*.requests.jsonl"):
+        stale.unlink()
     spent = 0.0
     for task in tasks:
         path = _cassette_path(args.cassettes, task.id)
