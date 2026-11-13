@@ -342,13 +342,13 @@ pub fn starts_download(control: &Control) -> bool {
     name.rsplit_once('.').is_some_and(|(_, suffix)| DOWNLOADED_SUFFIXES.contains(&suffix.to_lowercase().as_str()))
 }
 
-/// Whether the task rules out downloading: asked of the task alone, once a control would download a file.
-pub fn downloads_question(task: &str) -> NoulQuestion {
+/// Whether the task rules out downloading: asked of the task alone, once a control would download a file. Like every
+/// question asked of the task alone, it names the state's `task` rather than restating it: the request already sends
+/// the task as its state, and Jev bills every copy.
+pub fn downloads_question() -> NoulQuestion {
     NoulQuestion::new(
-        format!(
-            "The agent is doing this task: {task}\nDoes the task rule out downloading files, either by telling the \
-             agent not to download anything or by saying the work is read-only?"
-        ),
+        "Does `task` rule out downloading files, either by telling the agent not to download anything or by saying the \
+         work is read-only?",
         Some("The task says not to download files, or calls the work read-only."),
         Some("The task says nothing against downloading, even if it only asks for information."),
     )
@@ -369,12 +369,10 @@ pub const EDITS_NONE: &str = "none";
 /// else." as ruling out the reply itself (#879), so a task that asks for a change and forbids the others has an answer
 /// of its own. "No change" needs the task's own words: worded as asking for no change, it took "Confirm the reference
 /// in the form" as asking for none.
-pub fn edits_question(task: &str) -> ChoiceQuestion {
+pub fn edits_question() -> ChoiceQuestion {
     ChoiceQuestion::new(
-        format!(
-            "The agent is doing this task: {task}\nWhich changes to what the page's fields and settings hold does the \
-             task allow, such as typing into a field, ticking a box or choosing an option?"
-        ),
+        "Which changes to what the page's fields and settings hold does `task` allow, such as typing into a field, \
+         ticking a box or choosing an option?",
         IndexMap::from([
             (
                 EDITS_ALLOWED.to_string(),
@@ -420,12 +418,10 @@ pub fn changes_a_value(operation: Operation, control: &Control) -> bool {
 
 /// Whether the task has the agent answer a cookie or consent banner itself: asked of the task alone, before the
 /// browser opens, since the browser otherwise refuses such banners before the agent sees them.
-pub fn consent_question(task: &str) -> NoulQuestion {
+pub fn consent_question() -> NoulQuestion {
     NoulQuestion::new(
-        format!(
-            "The agent is doing this task: {task}\nDoes the task ask the agent itself to answer a cookie or consent \
-             banner, such as accepting or rejecting cookies or choosing consent settings?"
-        ),
+        "Does `task` ask the agent itself to answer a cookie or consent banner, such as accepting or rejecting cookies \
+         or choosing consent settings?",
         Some("The task asks the agent to accept, reject or set cookie or consent choices."),
         Some("The task says nothing about answering a cookie or consent banner."),
     )
@@ -1078,8 +1074,8 @@ mod tests {
 
     #[test]
     fn test_the_edits_question_is_about_the_task_and_tells_a_requested_change_from_none() {
-        let question = edits_question("Post the reply 'Thanks'. Change nothing else.");
-        assert!(question.instructions.contains("Post the reply 'Thanks'. Change nothing else."));
+        let question = edits_question();
+        assert!(question.instructions.contains("does `task` allow"), "the state carries the task once");
         assert_eq!(
             question.criteria.keys().map(String::as_str).collect::<Vec<_>>(),
             [EDITS_ALLOWED, EDITS_REQUESTED_ONLY, EDITS_NONE]

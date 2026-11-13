@@ -28,3 +28,5 @@ def test_profiles_count_unanswered_states_without_inventing_tokens(tmp_path: Pat
     assert measured["input_tokens"] == 110
     assert measured["state_chars"] == 3 * len('{"page":"A\\n雪","controls":[]}')
     assert measured["fields"] == {"page": 3 * characters("A\n雪"), "controls": 6}
+    assert measured["question_chars"] == 3 * characters(request["questions"])
+    assert measured["questions"] == {"carried": 3 * characters({"type": "noul"})}
