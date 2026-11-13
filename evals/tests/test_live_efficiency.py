@@ -4,7 +4,7 @@ Speed is model throughput over the LLM calls' own seconds, never the run's wall 
 calls recorded no seconds reports unknown rather than a fabricated number.
 """
 
-from fastbrowse.models import CostBasis, CostBreakdown, CostComponent, CostLine
+from fastbrowse.models import CostBasis, CostBreakdown, CostComponent, CostLine, JevPurpose
 
 from fastbrowse_evals.live import efficiency
 
@@ -97,3 +97,15 @@ def test_missing_physical_receipt_keeps_mixed_count_unknown() -> None:
 
 def test_no_llm_requests_has_known_zero_count() -> None:
     assert efficiency(CostBreakdown())["llm_calls"] == 0
+
+
+def test_jev_calls_count_each_request_by_its_purpose() -> None:
+    action = line(CostComponent.JEV, requests=2).model_copy(update={"decision_purpose": JevPurpose.ACTION})
+    verify = line(CostComponent.JEV).model_copy(update={"decision_purpose": JevPurpose.VERIFY})
+    # A historical receipt records no request count, and counts as the one request it was.
+    unnamed = line(CostComponent.JEV, requests=None)
+
+    measured = efficiency(CostBreakdown(lines=(action, verify, unnamed, line(CostComponent.LLM))))
+
+    assert measured["jev_calls_by_purpose"] == {"action": 2, "verify": 1, "unnamed": 1}
+    assert measured["jev_calls"] == 4

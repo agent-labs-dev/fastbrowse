@@ -608,6 +608,7 @@ class Efficiency(TypedDict):
     llm_calls: int | None
     llm_calls_basis: Literal["physical_requests"]
     jev_calls: int
+    jev_calls_by_purpose: dict[str, int]
     tokens_per_second: float | None
 
 
@@ -677,6 +678,9 @@ class ArmReport(BaseModel):
         default=None, exclude_if=lambda basis: basis is None
     )
     jev_calls: int | None = None
+    jev_calls_by_purpose: dict[str, int] = {}
+    """fastbrowse's `jev_calls` by decision purpose (action, read, verify, ...), so a cut is measured by where it
+    landed."""
     tokens_per_second: float | None = None
     # jev-ultrafast
     actions: int | None = None
@@ -2017,6 +2021,7 @@ def efficiency(cost: CostBreakdown) -> Efficiency:
     timed = [line for line in llm if line.seconds is not None]
     call_seconds = sum(line.seconds or 0.0 for line in timed)
     timed_tokens = sum(line.input_tokens + line.output_tokens for line in timed)
+    jev = cost.jev_calls_by_purpose()
     return {
         "input_tokens": tokens_in,
         "output_tokens": tokens_out,
@@ -2027,7 +2032,9 @@ def efficiency(cost: CostBreakdown) -> Efficiency:
             else None
         ),
         "llm_calls_basis": "physical_requests",
-        "jev_calls": sum(1 for line in cost.lines if line.component is CostComponent.JEV),
+        # Each physical request reserves a call, so a line holding a retry counts both.
+        "jev_calls": sum(jev.values()),
+        "jev_calls_by_purpose": jev,
         "tokens_per_second": round(timed_tokens / call_seconds, 1) if call_seconds > 0 else None,
     }
 
