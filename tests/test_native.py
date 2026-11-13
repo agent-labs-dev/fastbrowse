@@ -229,8 +229,8 @@ class Counted:
             self.purposes.append(purpose)
             return await generate(purpose, *args, **kwargs)
 
-        self.jev.evaluate = counted_evaluate  # ty: ignore[invalid-assignment]
-        self.llm.generate = counted_generate  # ty: ignore[invalid-assignment]
+        self.jev.evaluate = counted_evaluate
+        self.llm.generate = counted_generate
 
         def page(request: httpx.Request) -> httpx.Response:
             self.requests.append(str(request.url))
@@ -252,7 +252,7 @@ async def test_a_callback_failure_keeps_the_paid_runs_receipt() -> None:
             update={"cost": CostLine(component=CostComponent.JEV, basis=CostBasis.METERED, dollars=0.01)}
         )
 
-    counted.jev.evaluate = paid  # ty: ignore[invalid-assignment]
+    counted.jev.evaluate = paid
     failure = RuntimeError("the caller stopped reading steps")
 
     async def until(_: str) -> bool:
@@ -359,7 +359,7 @@ async def test_a_reservation_the_rust_ledger_refuses_ends_the_run_budget_exceede
             raise
         return await generate(purpose, *args, ledger=ledger, **kwargs)
 
-    counted.llm.generate = greedy  # ty: ignore[invalid-assignment]
+    counted.llm.generate = greedy
     async with counted.http:
         result = await run_task(
             "Read the release",
@@ -403,7 +403,7 @@ async def test_an_llm_client_that_raises_fails_as_that_client_and_the_run_report
     async def broken(*_: Any, **__: Any) -> Any:
         raise KeyError("not a model error")
 
-    counted.llm.generate = broken  # ty: ignore[invalid-assignment]
+    counted.llm.generate = broken
     async with counted.http:
         result = await run_task(
             "Read the release",
@@ -452,7 +452,7 @@ async def test_receipts_a_client_adds_to_ledger_lines_count_in_the_result() -> N
         ledger.lines.extend([UNKNOWN])
         return await generate(purpose, *args, ledger=ledger, **kwargs)
 
-    counted.llm.generate = unpriced  # ty: ignore[invalid-assignment]
+    counted.llm.generate = unpriced
     async with counted.http:
         result = await run_task(
             "Read the release",
@@ -622,7 +622,7 @@ async def test_a_response_cut_off_mid_json_fails_validation_as_pydantic_reports_
             errors.append(exc)
         return await generate(purpose, messages, schema, **kwargs)
 
-    counted.llm.generate = truncated  # ty: ignore[invalid-assignment]
+    counted.llm.generate = truncated
     async with counted.http:
         await run_task(
             "Read the release",
@@ -654,7 +654,7 @@ async def test_cancelling_a_run_stops_the_model_call_it_began_before_run_task_ra
             stopped.append(purpose.value)
             raise
 
-    counted.llm.generate = hanging  # ty: ignore[invalid-assignment]
+    counted.llm.generate = hanging
     async with counted.http:
         run = asyncio.create_task(
             run_task(

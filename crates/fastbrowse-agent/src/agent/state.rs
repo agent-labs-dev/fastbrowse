@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use fastbrowse_core::decision::{Answer, DecisionError};
-use fastbrowse_core::llm::LLMError;
+use fastbrowse_core::llm::{Generation, LLMError};
 use fastbrowse_core::models::{Attachment, Authorization, Evidence, Status, StepChoice, StepResult, WallKind};
 use fastbrowse_core::page::{BrowserError, Capture, Control, Observation};
 use fastbrowse_core::py::dump::Dump;
@@ -17,6 +17,7 @@ use crate::memory::{Fact, Notes, address, fact_id};
 use crate::policy::{Decision, HistoryEntry};
 use crate::retrieval::ComposedAnswer;
 use crate::retrieval::whole_page_facts;
+use crate::start::KnownPages;
 
 /// Reads a page gets between finished reads: one that did not finish is tried once more, then the page counts as read.
 const READ_TRIES: u8 = 2;
@@ -242,6 +243,27 @@ impl SiteFailure {
     }
 }
 
+/// The known pages request a run sent while its first page opened, answered with its cost unrecorded: the run that
+/// takes the answer records it, which after an escalation to a browser is the browser run's ledger. Dropped, the request
+/// is aborted, so a cancelled run's request stops with it and records what it was billed.
+pub(crate) struct KnownAsked(tokio::task::JoinHandle<crate::error::Result<Generation<KnownPages>>>);
+
+impl KnownAsked {
+    pub fn new(asked: tokio::task::JoinHandle<crate::error::Result<Generation<KnownPages>>>) -> KnownAsked {
+        KnownAsked(asked)
+    }
+
+    pub async fn answer(mut self) -> crate::error::Result<Generation<KnownPages>> {
+        (&mut self.0).await.unwrap_or_else(|error| Err(AgentError::Invalid(format!("not answered: {error}"))))
+    }
+}
+
+impl Drop for KnownAsked {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 pub(crate) struct RunState {
     pub task: String,
     /// The recipe this run replays, while it has steps left to offer.
@@ -267,6 +289,9 @@ pub(crate) struct RunState {
     /// Pages the site is known to serve for the items the task names, offered as places to navigate until each has
     /// been open (#983).
     pub known_pages: Vec<String>,
+    /// The request for `known_pages` while it is out. A run decides its first step while it is, and waits for it only
+    /// before acting on a decision or proposing another route, so the request is not on every run's first step.
+    pub known_asked: Option<KnownAsked>,
     /// The known pages the run has been on: each stays one the run may navigate to, and is not offered again.
     pub reached_known_pages: Vec<String>,
     pub steps: Vec<StepResult>,
@@ -297,6 +322,8 @@ pub(crate) struct RunState {
     /// The one renderer hang this run may recover without risking a replay of the action.
     pub hung_page_reopened: bool,
     pub last_page: Option<(String, String)>,
+    /// The document in which Jev was last asked whether the task needs an action inside a drawn surface.
+    pub surface_judged: Option<(String, String)>,
     /// The source of the latest navigation, scoped to the destination that followed it.
     pub navigation_from: Option<((String, String), Observation)>,
     /// Jev's sign-in readings stay with the document they described, not with every later route.
@@ -683,6 +710,17 @@ impl RunState {
         }
     }
 
+    /// Records what the known pages request cost, for a run that ends without taking its answer. An ending run does not
+    /// wait for it, so a time limit still ends the run on time: one still out is aborted.
+    pub async fn known_pages_unused(&mut self) {
+        if let Some(asked) = self.known_asked.take()
+            && asked.0.is_finished()
+            && let Ok(answer) = asked.answer().await
+        {
+            let _ = self.ledger.for_answer().record([answer.cost]);
+        }
+    }
+
     pub fn carried_on(self, ledger: Arc<Ledger>) -> RunState {
         RunState {
             ledger,
@@ -699,6 +737,7 @@ impl RunState {
             commits: 0,
             redecided: false,
             last_page: None,
+            surface_judged: None,
             navigation_from: None,
             ..self
         }
@@ -727,6 +766,7 @@ impl RunState {
             walled: Vec::new(),
             routes: HashSet::new(),
             known_pages: Vec::new(),
+            known_asked: None,
             reached_known_pages: Vec::new(),
             steps: Vec::new(),
             choices: Vec::new(),
@@ -744,6 +784,7 @@ impl RunState {
             blank_waited: HashSet::new(),
             hung_page_reopened: false,
             last_page: None,
+            surface_judged: None,
             navigation_from: None,
             login_readings: HashMap::new(),
             reached: HashMap::new(),

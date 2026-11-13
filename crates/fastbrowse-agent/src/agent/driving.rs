@@ -156,6 +156,7 @@ impl Agent {
                 Some(picked) => picked,
                 None => {
                     let mut context = self.context(state, &observation, secrets, check_login, fresh)?;
+                    context.check_surface = state.surface_judged.as_ref() != Some(&page) || state.page_failed;
                     context.list_read = if list_walk.is_some() {
                         ListRead::Continue
                     } else if output_schema.is_none()
@@ -235,6 +236,9 @@ impl Agent {
                             state.missing.contains(&(offered.url.clone(), target.label.clone(), target.context.clone()))
                         });
                         replay.confirm(&offered.url, &offered.controls, &mut decision, missing);
+                    }
+                    if decision.inside_drawn.is_some() {
+                        state.surface_judged = Some(page.clone());
                     }
                     state.last_page = Some(page);
                     decision
@@ -354,6 +358,13 @@ impl Agent {
             if decision.unobtainable.is_some_and(|probability| probability >= EVEN_ODDS) {
                 return Err(self.unobtainable(state, &observation).await?.into());
             }
+            // A streamed remote browser draws its page as a picture: a run asked to type into it pressed the picture,
+            // reloaded it and ended blaming the site (#1084). The snapshot marks the surface and Jev judges that the
+            // task needs an action inside it; the run cannot make one, so it ends saying so.
+            if decision.inside_drawn.is_some_and(|probability| probability >= EVEN_ODDS) {
+                let surfaces = crate::policy::drawn_surfaces(&observation.controls);
+                return Err(drawn_surface_stop(&observation.url, &surfaces).into());
+            }
             if decision.read_scope == ReadScope::Return {
                 list_walk = None;
                 continue;
@@ -364,6 +375,14 @@ impl Agent {
             {
                 list_walk = None;
                 decision.read_scope = ReadScope::Page;
+            }
+            // The known pages were asked beside the run's first decision. A decision made before their answer, which
+            // offers a page it was not offered, is made again with that page before the run reads
+            // for it or builds its action, since a build asks the step's gates and can stop for a confirmation.
+            if self.known_pages_arrived(state, &observation.url).await? {
+                state.built = None;
+                state.committing = false;
+                continue;
             }
             if let Some(shows) = Self::reads_before_leaving(state, &observation, &decision)
                 // The page the run began on is read for an answer only for a task that asks to be told something: a
@@ -480,6 +499,7 @@ impl Agent {
                 shows_answer: None,
                 site_failure: None,
                 unobtainable: None,
+                inside_drawn: None,
                 destination: None,
                 replayed: false,
                 by_code: false,
@@ -600,15 +620,39 @@ impl Agent {
     }
 
     /// The pages the site is known to serve for the items the task names, asked while the first page opens (#983).
+    /// Only a run with no runtime to send the request beside its first step waits for them here.
     pub(super) async fn known_pages(
         &self,
         task: &str,
         start: Option<&str>,
         ledger: &fastbrowse_core::telemetry::Ledger,
     ) -> Step<Vec<String>> {
+        self.known_pages_from(crate::start::known_pages(&*self.llm, task, start, Some(ledger)).await, ledger)
+    }
+
+    /// Takes the answer to the known pages request the run sent beside its first step, once it is out: whether it
+    /// offers a page the decision just made was not offered, which that decision is then made again with.
+    pub(super) async fn known_pages_arrived(&self, state: &mut RunState, here: &str) -> Step<bool> {
+        let Some(asked) = state.known_asked.take() else { return Ok(false) };
+        let mut offered = false;
+        for url in self.known_pages_from(asked.answer().await, &state.ledger)? {
+            if !state.known_pages.contains(&url) {
+                offered |=
+                    !state.reached_known_pages.contains(&url) && !fastbrowse_core::navigation::same_address(&url, here);
+                state.known_pages.push(url);
+            }
+        }
+        Ok(offered)
+    }
+
+    fn known_pages_from(
+        &self,
+        answer: crate::error::Result<fastbrowse_core::llm::Generation<crate::start::KnownPages>>,
+        ledger: &fastbrowse_core::telemetry::Ledger,
+    ) -> Step<Vec<String>> {
         // As with the task's dates, a run whose known pages could not be asked for runs on without them: a provider
         // error on this hint ended a run before its first page was read. Only the budget stops the run here.
-        let proposal = match crate::start::known_pages(&*self.llm, task, start, Some(ledger)).await {
+        let proposal = match answer {
             Ok(proposal) => proposal,
             Err(crate::error::AgentError::Budget(budget)) => return Err(budget.into()),
             Err(error) => {
@@ -616,7 +660,9 @@ impl Agent {
                 return Ok(Vec::new());
             }
         };
-        ledger.record([proposal.cost])?;
+        // Its cost was settled by a request sent before the first step, so it is checked against the spend and not the
+        // steps: taken after a step that reached the step limit, it is not another step.
+        ledger.for_answer().record([proposal.cost])?;
         let mut known: Vec<String> = Vec::new();
         for url in proposal.data.urls.iter().filter_map(|url| crate::start::accept_start(Some(url))) {
             if !known.contains(&url) {
@@ -1644,6 +1690,21 @@ pub(super) fn edit_progress(decision: &Decision, action: &Action, written: &Writ
 fn held_value(action: &Action) -> Option<String> {
     let text = action.text.as_ref()?;
     Some(if action.secret { "\u{2022}".repeat(text.chars().count()) } else { text.clone() })
+}
+
+/// The stop of a run whose task needs an action inside a drawn surface: the run's own limit, which no retry changes.
+/// One surface in view is named; of several, Jev's answer does not say which.
+pub(super) fn drawn_surface_stop(url: &str, surfaces: &[&Control]) -> Stop {
+    let inside = match surfaces {
+        [surface] => format!("{} at {url}, a drawn surface", text::repr(&surface.label)),
+        _ => format!("a drawn surface at {url}"),
+    };
+    Stop::new(
+        Status::Stuck,
+        format!(
+            "Could not complete the task: it needs an action inside {inside}: fastbrowse acts on page elements and cannot act inside a streamed or canvas view."
+        ),
+    )
 }
 
 pub(super) fn require(target: Option<&Control>) -> Step<&Control> {

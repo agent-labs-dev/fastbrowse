@@ -54,6 +54,9 @@ class Control(Frozen):
     """A link the page marks `rel="next"`: the next page of the list it belongs to."""
     download: bool | None = None
     """A link the page marks with a `download` attribute: activating it saves a file instead of opening a page."""
+    drawn: bool | None = Field(default=None, exclude_if=lambda drawn: drawn is None)
+    """An image, canvas or video the page takes input on: what it shows is pixels, with no page elements inside it
+    to read or act on, such as a streamed remote browser or a canvas app."""
 
     @field_serializer("operations", when_used="json")
     def _sorted_operations(self, operations: frozenset[Operation]) -> list[Operation]:

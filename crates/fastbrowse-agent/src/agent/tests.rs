@@ -231,6 +231,7 @@ pub(super) fn code_decision(operation: Operation, target: Option<Control>) -> De
         shows_answer: None,
         site_failure: None,
         unobtainable: None,
+        inside_drawn: None,
         destination: None,
         offered: Vec::new(),
         ahead: IndexMap::new(),
@@ -3879,6 +3880,42 @@ async fn test_a_run_that_gives_up_on_a_drawn_page_it_could_not_read_says_so() {
     let drawn = gives_up(true).await;
     assert!(drawn.starts_with("no_progress (3) ") && drawn.contains("shows a canvas, picture or video"), "{drawn}");
     assert_eq!(gives_up(false).await, "no_progress (3)");
+}
+
+/// A streamed remote browser draws its page as a picture that takes clicks (#1084). The stop of a run whose task
+/// needs an action inside it names the surface and the limit, as `stuck`, and does not blame the site.
+#[test]
+fn test_the_stop_on_a_drawn_surface_names_it_and_the_limitation() {
+    let view = Control { drawn: Some(true), ..button("Remote browser view") };
+    let stop = super::driving::drawn_surface_stop("https://live.test/view", &[&view]);
+    assert_eq!(stop.status, Status::Stuck);
+    assert_eq!(
+        stop.error.as_deref(),
+        Some(
+            "Could not complete the task: it needs an action inside 'Remote browser view' at https://live.test/view, a drawn surface: fastbrowse acts on page elements and cannot act inside a streamed or canvas view."
+        )
+    );
+}
+
+/// Of several surfaces in view Jev's answer does not say which, so the stop names none.
+#[test]
+fn test_the_stop_with_several_drawn_surfaces_in_view_names_none() {
+    let (map, chart) = (button("Map"), button("Chart"));
+    let error = super::driving::drawn_surface_stop("https://x.test/", &[&map, &chart]).error.unwrap_or_default();
+    assert!(error.contains("inside a drawn surface at https://x.test/: fastbrowse"), "{error}");
+}
+
+/// Jev is told what a drawn surface is, from the control snapshot.js marked, on the page that has one.
+#[test]
+fn test_a_drawn_surface_in_view_is_stated_as_a_fact() {
+    let state = run_state();
+    let view = Control { drawn: Some(true), ..button("Remote browser view") };
+    let facts = Agent::page_facts(&state, &observation(std::slice::from_ref(&view)));
+    assert!(facts.iter().any(|fact| fact.starts_with("An element marked `drawn` is a drawn surface")), "{facts:?}");
+    let hidden = Control { offscreen: true, ..view };
+    let facts = Agent::page_facts(&state, &observation(&[hidden, button("Next")]));
+    assert!(facts.iter().all(|fact| !fact.contains("drawn surface")), "{facts:?}");
+    assert_eq!(crate::policy::element(&button("Next")).get("drawn"), None);
 }
 
 #[tokio::test]
@@ -8278,6 +8315,36 @@ fn a_read_the_step_chose_keeps_the_steps_word_that_the_page_holds_evidence() {
     // A run composing from records read on earlier pages takes an unread page of them as holding more.
     state.compose = true;
     assert!(Agent::page_shows(&state, &page, &read));
+}
+
+#[tokio::test]
+async fn known_pages_answered_beside_the_first_step_redecide_only_when_they_offer_a_page() {
+    // The known-pages question runs beside the first decision instead of before it. Its answer is taken before the
+    // first act: a page the run is not on is offered, so the step is decided again, and the page it is on offers nothing.
+    let agent = agent();
+    let mut state = run_state();
+    let asked = |urls: Vec<&str>| {
+        let urls = urls.into_iter().map(String::from).collect();
+        super::state::KnownAsked::new(tokio::spawn(async move {
+            Ok(Generation {
+                data: crate::start::KnownPages { urls },
+                cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)),
+            })
+        }))
+    };
+    let here = "https://pypi.org/project/httpx/";
+    state.known_asked = Some(asked(vec![here]));
+    assert!(!agent.known_pages_arrived(&mut state, here).await.unwrap(), "the page the run is on offers nothing");
+    assert_eq!(state.known_pages, vec![here.to_string()]);
+    state.known_asked = Some(asked(vec!["https://pypi.org/project/requests/"]));
+    assert!(agent.known_pages_arrived(&mut state, here).await.unwrap(), "another page is offered");
+    assert_eq!(state.known_pages.len(), 2);
+    assert!(state.known_asked.is_none());
+    assert!(!agent.known_pages_arrived(&mut state, here).await.unwrap(), "an answer is taken once");
+    // A run that ends with the request still out does not wait for it, so a time limit still ends the run on time.
+    state.known_asked = Some(super::state::KnownAsked::new(tokio::spawn(std::future::pending())));
+    let ending = tokio::time::timeout(std::time::Duration::from_secs(5), state.known_pages_unused());
+    assert!(ending.await.is_ok(), "an ending run waited on its known pages request");
 }
 
 #[tokio::test]

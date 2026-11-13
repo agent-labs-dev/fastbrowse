@@ -238,6 +238,11 @@ pub fn evidence_id(evidence: &Evidence) -> String {
     identity
 }
 
+/// Whether `now` was captured after `before`; false when either capture time has no fixed offset.
+fn read_later(now: &Evidence, before: &Evidence) -> bool {
+    now.captured_at.timestamp().zip(before.captured_at.timestamp()).is_some_and(|(now, before)| now > before)
+}
+
 /// A read fact is keyed by its span; a derived one by what it concludes from which facts.
 pub fn fact_id(fact: &Fact) -> String {
     if let Some(evidence) = &fact.evidence {
@@ -458,7 +463,14 @@ impl Notes {
             if new_kept && Some(previous.text.as_str()) != quote && !text.contains(&previous.text) {
                 text = format!("{}\n{text}", previous.text);
             }
-            let merged = Fact { basis, text, ..kept.clone() };
+            // The same span of the same page text read again stands as of its latest read. Kept as of its first, a
+            // sorted list read again after the run had left it and come back held its top record only as the page
+            // stood before those steps, and the composer named the next record as the list's first (#1082).
+            let evidence = match (&previous.evidence, &fact.evidence) {
+                (Some(before), Some(now)) if read_later(now, before) => Some(now.clone()),
+                _ => kept.evidence.clone(),
+            };
+            let merged = Fact { basis, text, evidence, ..kept.clone() };
             self.facts.insert(key, merged);
             return false;
         }
@@ -962,6 +974,35 @@ mod tests {
             notes.add(old.clone());
             assert!(notes.current_evidence(None).contains_key(&fact_id(&old)));
         }
+    }
+
+    /// #1082: a price-sorted list was read, left for its next page and read again unchanged on coming back. Its top
+    /// record kept the first read's step, so the notes showed the list after the return without it.
+    #[test]
+    fn a_span_read_again_stands_as_of_its_latest_read() {
+        use crate::retrieval::testing::capture;
+
+        let first = capture(&[(BlockKind::ListItem, "Drum Roaster - GBP 210.00")]);
+        let again = Capture { captured_at: DateTime::new(2026, 1, 1, 0, 5, 0).utc(), ..first.clone() };
+        let read = |captured: &Capture| {
+            let quote = Evidence {
+                capture_sha256: captured.sha256.clone(),
+                captured_at: captured.captured_at,
+                ..span("", 0, 12)
+            };
+            Fact::read("Drum Roaster", quote, FactReader::JevChoice)
+        };
+        let mut notes = Notes::default();
+        notes.remember_capture(&first, 1);
+        assert!(notes.add(read(&first).answering()));
+        notes.remember_capture(&again, 3);
+        assert!(!notes.add(read(&again)));
+        let kept = notes.facts()[0];
+        assert_eq!(notes.steps_taken(kept.evidence.as_ref().unwrap()), Some(3));
+        assert!(notes.answered(), "the read again keeps the answer the first read gave");
+        // An earlier capture added after a later one does not move the span back.
+        assert!(!notes.add(read(&first)));
+        assert_eq!(notes.steps_taken(notes.facts()[0].evidence.as_ref().unwrap()), Some(3));
     }
 
     #[test]
