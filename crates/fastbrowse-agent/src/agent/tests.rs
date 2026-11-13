@@ -2715,51 +2715,27 @@ fn test_the_value_questions_say_what_a_field_holds_now_unless_it_is_sensitive() 
     assert!(shown("secret").iter().all(|q| !q.contains("@ann")), "{:?}", shown("secret"));
 }
 
-/// A form's fields were each asked where their value begins and where it ends among the task's words, every word
-/// described in each of those questions and the task restated in every question (#903). The step's state describes
-/// each word once and the questions offer them by id; a field whose limit cuts a word into pieces is offered its own.
+/// Every question a form's fields are asked ahead restated the task the step's state already holds (#903). The
+/// questions read it from the state, and each word a value may begin or end at stays described in its own option:
+/// offered by id with the descriptions in the state, Jev picked words the value does not hold.
 #[test]
-fn test_fields_asked_ahead_offer_the_task_words_the_state_describes_once() {
+fn test_fields_asked_ahead_read_the_task_from_the_state_and_describe_each_word() {
     let agent = Agent::new(Arc::new(NoPage), Arc::new(EndValues), Arc::new(ScriptedLLM));
     let mut state = run_state();
     state.task = "Sign up as Ada Lovelace with ada@example.com".into();
     let name = Control::new("name", "textbox", "Name", [Operation::Fill]);
     let email = Control::new("email", "textbox", "Email", [Operation::Fill]);
-    let mut code = Control::new("code", "textbox", "Code", [Operation::Fill]);
-    code.max_length = Some(4);
-    let page = observation(&[name, email, code]);
+    let page = observation(&[name, email]);
     let asked = agent.ahead(&state, &page);
-    let choices = |control: &str| {
-        asked
-            .iter()
-            .filter(move |ahead| ahead.control == control && ahead.name != "source")
-            .map(|ahead| match &ahead.question {
-                Question::Choice(choice) => (choice, &ahead.words),
-                _ => panic!("expected a choice"),
-            })
-            .collect::<Vec<_>>()
-    };
-    for ahead in &asked {
-        let Question::Choice(choice) = &ahead.question else { continue };
-        assert!(!choice.instructions.contains(&state.task), "{}", choice.instructions);
-    }
     for control in ["name", "email"] {
-        let asked = choices(control);
-        assert_eq!(asked.len(), 2, "where the value begins and where it ends");
-        for (choice, words) in asked {
-            assert!(choice.criteria.values().all(serde_json::Value::is_null), "{:?}", choice.criteria);
-            assert_eq!(words.keys().collect::<Vec<_>>(), choice.criteria.keys().collect::<Vec<_>>());
-            assert!(choice.instructions.contains("`task_words`"), "{}", choice.instructions);
+        let ends: Vec<_> = asked.iter().filter(|ahead| ahead.control == control && ahead.name != "source").collect();
+        assert_eq!(ends.len(), 2, "where the value begins and where it ends");
+        for ahead in ends {
+            let Question::Choice(choice) = &ahead.question else { panic!("expected a choice") };
+            assert!(!choice.instructions.contains(&state.task), "{}", choice.instructions);
+            assert!(choice.criteria.values().all(serde_json::Value::is_string), "{:?}", choice.criteria);
         }
     }
-    let cut = choices("code");
-    assert!(
-        !cut.is_empty()
-            && cut.iter().all(|(choice, words)| {
-                words.is_empty() && choice.criteria.values().all(serde_json::Value::is_string)
-            })
-    );
-
     let mut context = crate::policy::StepContext::new(&state.task);
     context.ahead = asked;
     let request = crate::policy::build_request(
@@ -2769,13 +2745,8 @@ fn test_fields_asked_ahead_offer_the_task_words_the_state_describes_once() {
         &fastbrowse_core::config::Config::default(),
         fastbrowse_core::decision::MAX_CHOICE_OPTIONS,
     );
-    let described = request.state[crate::policy::TASK_WORDS].as_object().expect("the task's words");
-    assert_eq!(described.len(), 7, "each word of the task once");
-    let shared: IndexMap<_, _> = request.questions.iter().filter(|(key, _)| !key.contains(":code:")).collect();
-    let questions = serde_json::to_string(&shared).unwrap();
-    for word in described.values() {
-        assert!(!questions.contains(word.as_str().unwrap()), "{word} is described in a question too");
-    }
+    assert_eq!(request.state["task"], state.task.as_str());
+    assert!(request.questions.keys().any(|key| key.ends_with(":first")), "{:?}", request.questions.keys());
 }
 
 /// Every reply box on a comment page has one label, and a task with a reply for each of three comments had all three
@@ -7816,14 +7787,13 @@ fn test_naming_a_chosen_option_of_a_multiple_select_again_is_not_a_repeat() {
 }
 
 /// Answers every value question truthfully for a value the task states between `VSTART` and `VEND`: a part is picked
-/// only when it holds what the question asks for, and a word or a copy only when it is that end of the value. A word
-/// offered by id alone is read where the state describes it.
+/// only when it holds what the question asks for, and a word or a copy only when it is that end of the value.
 struct LongValue;
 
 impl DecisionClient for LongValue {
     fn evaluate<'a>(
         &'a self,
-        state: &'a serde_json::Value,
+        _: &'a serde_json::Value,
         questions: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         let answers = questions
@@ -7832,16 +7802,8 @@ impl DecisionClient for LongValue {
                 let Question::Choice(question) = question else { panic!("expected a choice") };
                 let has =
                     |option: &serde_json::Value, word: &str| option.as_str().is_some_and(|text| text.contains(word));
-                let described = |key: &String, option: &'a serde_json::Value| match option {
-                    serde_json::Value::Null => &state[crate::policy::TASK_WORDS][key],
-                    _ => option,
-                };
                 let find = |test: &dyn Fn(&serde_json::Value) -> bool, or: &str| {
-                    question
-                        .criteria
-                        .iter()
-                        .find(|(key, option)| test(described(key, option)))
-                        .map_or(or.to_string(), |(k, _)| k.clone())
+                    question.criteria.iter().find(|(_, option)| test(option)).map_or(or.to_string(), |(k, _)| k.clone())
                 };
                 let asks = |words: &str| question.instructions.contains(words);
                 let choice = if key == "source" {

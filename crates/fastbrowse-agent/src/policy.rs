@@ -70,11 +70,6 @@ pub static NEXT_ACTION: LazyLock<String> = LazyLock::new(|| untrusted(NEXT_ACTIO
 pub static TARGET: LazyLock<String> = LazyLock::new(|| untrusted(TARGET_RULES));
 pub static DESTINATION: LazyLock<String> = LazyLock::new(|| untrusted(DESTINATION_RULES));
 pub static RELEVANCE: LazyLock<String> = LazyLock::new(|| untrusted(RELEVANCE_RULES));
-/// Where a request's state describes the task's words its questions offer by id. A field is asked where its value
-/// begins and where it ends among the same words, and every field of a form among the same task: described in each
-/// question, the task's words were the largest text one request repeated (#903).
-pub const TASK_WORDS: &str = "task_words";
-
 pub const GROUP: &str = "Too many elements to list at once. Choose the group that contains the best target if the next\noperation is the one this question names. A later question picks the element inside the group.";
 
 /// The Press operation where a control's ARIA role defines keys, such as a slider stepped by its arrows.
@@ -344,8 +339,6 @@ pub struct Ahead {
     /// What the follow-up calls this question.
     pub name: String,
     pub question: Question,
-    /// The task's words the question offers by id, which the state describes once for every question asked ahead.
-    pub words: IndexMap<String, Value>,
 }
 
 impl Ahead {
@@ -1167,25 +1160,18 @@ pub fn build_request(
         }
     }
     let described: HashSet<&str> = targets.values().flatten().map(|control| control.id.as_str()).collect();
-    let mut state = state(observation, controls, context, &described);
-    let mut words: Map<String, Value> = Map::new();
+    let state = state(observation, controls, context, &described);
     if context.screenshot.is_some() && context.plan_ahead {
         // An image puts the request in long-context mode already, so the questions asked ahead cost no mode switch and
         // save the round trip each would otherwise take after the decision.
         for ahead in &context.ahead {
             if offered.contains(&ahead.operation) && controls.iter().any(|control| control.id == ahead.control) {
                 questions.insert(ahead.key(), ahead.question.clone());
-                words.extend(ahead.words.clone());
             }
         }
     } else if context.screenshot.is_none() {
         let written: usize = questions.iter().map(|(key, question)| key.len() + question.dump_json().len()).sum();
         let mut room = LONG_CONTEXT_BYTES.saturating_sub(dumps(&state).len() + written);
-        // What the state's described words add to it: the field once, and each word once however many questions
-        // offer it. Written alone, the field's braces are as long as the separator that joins it to the state.
-        let held = |words: &Map<String, Value>| {
-            if words.is_empty() { 0 } else { dumps(&json!({TASK_WORDS: words})).len() }
-        };
         let mut ahead: Vec<(usize, &Ahead)> = context
             .ahead
             .iter()
@@ -1196,19 +1182,12 @@ pub fn build_request(
         // The smallest first, so a form's long value questions never push out what its buttons would commit.
         ahead.sort_by_key(|(size, _)| *size);
         for (size, ahead) in ahead {
-            let mut with = words.clone();
-            with.extend(ahead.words.clone());
-            let size = size + held(&with) - held(&words);
             if size > room {
                 break;
             }
             room -= size;
             questions.insert(ahead.key(), ahead.question.clone());
-            words = with;
         }
-    }
-    if !words.is_empty() {
-        state[TASK_WORDS] = Value::Object(words);
     }
     Request {
         state,
@@ -2289,7 +2268,6 @@ mod tests {
             control: control.id.clone(),
             name: "irreversible".into(),
             question: noul(content, "yes", "no"),
-            words: IndexMap::new(),
         };
         let page = observation(vec![control.clone()]);
         let controls = std::slice::from_ref(&control);
