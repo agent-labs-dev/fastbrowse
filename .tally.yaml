@@ -63,10 +63,12 @@ keys:
     service: github
     group: release
     owner: cjber
+    label: fastbrowse AUR sync
     locations:
       - github: AUR_SYNC_TOKEN
-    expires: unknown
-    limit: unknown
+    expires: 2026-12-11
+    expiresNote: fine-grained PAT on cjber, resource owner agent-labs-dev; expiry read from github.com/settings/personal-access-tokens
+    limit: none
   - id: browser-use-api-key
     service: browser-use
     group: benchmarks
