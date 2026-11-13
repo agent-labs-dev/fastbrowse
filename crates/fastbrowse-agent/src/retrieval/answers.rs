@@ -1251,7 +1251,7 @@ async fn review_composition(
     let (answered, failure) = if questions.is_empty() {
         (None, None)
     } else {
-        match evaluate_batches(JevPurpose::Verify, jev, &state, &questions, &tokens, ledger, None, false).await {
+        match evaluate_batches(JevPurpose::Verify, jev, &state, &questions, &tokens, ledger, false).await {
             Ok(answered) => (answered, None),
             Err(AgentError::Jev(error)) => (None, Some(format!("Jev could not judge composed claims: {error}"))),
             Err(error) => return Err(error),
@@ -1892,12 +1892,11 @@ pub(crate) async fn draft_reviewed(
         let answer = ComposedAnswer { problem: Some(problem.into()), ..assemble_answer(&claims, notes, &[]) };
         return Ok(Some(Draft::Reviewed(ReviewedComposition { answer, rejection: None })));
     }
-    let answered =
-        match evaluate_batches(JevPurpose::Verify, jev, &state, &questions, &tokens, ledger, None, false).await {
-            Ok(answered) => answered,
-            Err(AgentError::Jev(_)) => None,
-            Err(error) => return Err(error),
-        };
+    let answered = match evaluate_batches(JevPurpose::Verify, jev, &state, &questions, &tokens, ledger, false).await {
+        Ok(answered) => answered,
+        Err(AgentError::Jev(_)) => None,
+        Err(error) => return Err(error),
+    };
     let holds = |key: &str| answered.as_ref().and_then(|pass| judged(pass.answers.get(key)));
     let (problem, rejection) = match holds("coverage") {
         Some(true) => match holds("exact") {

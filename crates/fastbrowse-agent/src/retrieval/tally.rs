@@ -1421,7 +1421,7 @@ async fn ask(
     if questions.is_empty() {
         return Ok(None);
     }
-    match evaluate_batches(JevPurpose::Verify, jev, state, questions, tokens, ledger, None, false).await {
+    match evaluate_batches(JevPurpose::Verify, jev, state, questions, tokens, ledger, false).await {
         Ok(answered) => Ok(answered.map(|answered| answered.answers)),
         Err(AgentError::Jev(_)) => Ok(None),
         Err(error) => Err(error),

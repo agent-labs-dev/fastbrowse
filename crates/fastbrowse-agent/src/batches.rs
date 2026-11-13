@@ -30,9 +30,6 @@ pub struct Answered {
     pub known: usize,
 }
 
-/// Called with each answer as its batch comes back, for a caller that keeps answers a cancelled pass already paid for.
-pub type OnAnswer<'a> = &'a (dyn Fn(&str, &Answer) + Send + Sync);
-
 /// One batch's answers, or None when its request failed and failures are allowed.
 type BatchAnswers = Option<IndexMap<String, Answer>>;
 
@@ -106,7 +103,6 @@ pub async fn knowing<F: Future>(known: Arc<Known>, future: F) -> F::Output {
 }
 
 /// None when no batch was answered; a question too large to send with the state alone goes unscored.
-#[allow(clippy::too_many_arguments)]
 pub async fn evaluate_batches(
     purpose: JevPurpose,
     jev: &dyn DecisionClient,
@@ -114,7 +110,6 @@ pub async fn evaluate_batches(
     questions: &IndexMap<String, Question>,
     tokens: &TokenBudget,
     ledger: Option<&Ledger>,
-    on_answer: Option<OnAnswer<'_>>,
     allow_failed_batches: bool,
 ) -> Result<Option<Answered>> {
     let ratio = tokens.chars_per_token;
@@ -220,9 +215,6 @@ pub async fn evaluate_batches(
                 if let Some(known) = known {
                     answers(known).insert(question.dump_json(), answer.clone());
                 }
-                if let Some(on_answer) = on_answer {
-                    on_answer(key, answer);
-                }
             }
             Ok(Some(evaluation.answers))
         }));
@@ -320,16 +312,8 @@ mod tests {
         let many: IndexMap<String, Question> = (0..4000)
             .map(|i| (format!("r{i}"), NoulQuestion::new(format!("Is element {i} relevant?"), None, None).into()))
             .collect();
-        let answered = block_on(evaluate_batches(
-            JevPurpose::Verify,
-            &jev,
-            &state,
-            &many,
-            &TokenBudget::default(),
-            None,
-            None,
-            false,
-        ));
+        let answered =
+            block_on(evaluate_batches(JevPurpose::Verify, &jev, &state, &many, &TokenBudget::default(), None, false));
         assert_eq!(answered.unwrap().unwrap().answers.len(), 4000);
         let sent = jev.sent.lock().unwrap();
         assert!(sent.len() < 40, "{} requests for 4000 questions", sent.len());
@@ -342,16 +326,8 @@ mod tests {
         let questions = questions(&[("a", "first"), ("b", "second")]);
         let tokens = one_per_batch();
         let state = json!({});
-        let mut pass = Box::pin(evaluate_batches(
-            JevPurpose::Verify,
-            &jev,
-            &state,
-            &questions,
-            &tokens,
-            Some(&ledger),
-            None,
-            true,
-        ));
+        let mut pass =
+            Box::pin(evaluate_batches(JevPurpose::Verify, &jev, &state, &questions, &tokens, Some(&ledger), true));
         assert!(pass.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
         // Dropped where a deadline would cancel it.
         drop(pass);
@@ -367,16 +343,8 @@ mod tests {
         let questions = questions(&[("a", "first"), ("b", "second")]);
         let tokens = one_per_batch();
         let state = json!({});
-        let mut pass = Box::pin(evaluate_batches(
-            JevPurpose::Verify,
-            &jev,
-            &state,
-            &questions,
-            &tokens,
-            Some(&ledger),
-            None,
-            true,
-        ));
+        let mut pass =
+            Box::pin(evaluate_batches(JevPurpose::Verify, &jev, &state, &questions, &tokens, Some(&ledger), true));
         let Poll::Ready(Err(AgentError::Budget(stop))) = pass.as_mut().poll(&mut Context::from_waker(Waker::noop()))
         else {
             panic!("the pass should stop before sending")
@@ -392,10 +360,9 @@ mod tests {
         let many: IndexMap<String, Question> =
             (0..40).map(|i| (format!("q{i}"), NoulQuestion::new("x".repeat(300), None, None).into())).collect();
         let tokens = TokenBudget { batch_tokens: 1000, ..TokenBudget::default() };
-        let answered =
-            block_on(evaluate_batches(JevPurpose::Verify, &jev, &json!({}), &many, &tokens, None, None, true))
-                .unwrap()
-                .unwrap();
+        let answered = block_on(evaluate_batches(JevPurpose::Verify, &jev, &json!({}), &many, &tokens, None, true))
+            .unwrap()
+            .unwrap();
         assert_eq!(answered.answers.len(), 40);
         let sent = jev.sent.lock().unwrap();
         assert!(sent.len() > 1 && sent.iter().all(|batch| batch.len() < 40));
@@ -413,7 +380,6 @@ mod tests {
             &many,
             &TokenBudget::default(),
             None,
-            None,
             true,
         ))
         .unwrap();
@@ -430,7 +396,7 @@ mod tests {
         let asked = questions(&[("a", "first")]);
         let state = json!({"text": "x".repeat(100)});
         assert_eq!(
-            block_on(evaluate_batches(JevPurpose::Verify, &jev, &state, &asked, &tiny, None, None, true)).unwrap(),
+            block_on(evaluate_batches(JevPurpose::Verify, &jev, &state, &asked, &tiny, None, true)).unwrap(),
             None
         );
         assert!(jev.sent.lock().unwrap().is_empty());
@@ -444,13 +410,13 @@ mod tests {
         let asked = questions(&[("a", "first"), ("b", "second")]);
         let tokens = one_per_batch();
         let state = json!({"notes": ["Released: Dec 6, 2024"]});
-        let pass = || evaluate_batches(JevPurpose::Verify, &jev, &state, &asked, &tokens, Some(&ledger), None, false);
+        let pass = || evaluate_batches(JevPurpose::Verify, &jev, &state, &asked, &tokens, Some(&ledger), false);
         let (first, again, changed) = block_on(knowing(Default::default(), async {
             let first = pass().await.unwrap().unwrap();
             let again = pass().await.unwrap().unwrap();
             let other = json!({"notes": ["Released: May 14, 2026"]});
             let changed =
-                evaluate_batches(JevPurpose::Verify, &jev, &other, &asked, &tokens, Some(&ledger), None, false).await;
+                evaluate_batches(JevPurpose::Verify, &jev, &other, &asked, &tokens, Some(&ledger), false).await;
             (first, again, changed.unwrap().unwrap())
         }));
         assert_eq!((again.answers.len(), again.requests, again.cost.len()), (2, 0, 0));
@@ -468,15 +434,13 @@ mod tests {
         let known = Arc::new(Known::default());
         let mut pass = Box::pin(knowing(
             known.clone(),
-            evaluate_batches(JevPurpose::Verify, &jev, &state, &asked, &tokens, None, None, true),
+            evaluate_batches(JevPurpose::Verify, &jev, &state, &asked, &tokens, None, true),
         ));
         assert!(pass.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
         drop(pass);
         let only_a = questions(&[("a", "first")]);
-        let again = block_on(knowing(
-            known,
-            evaluate_batches(JevPurpose::Verify, &jev, &state, &only_a, &tokens, None, None, true),
-        ));
+        let again =
+            block_on(knowing(known, evaluate_batches(JevPurpose::Verify, &jev, &state, &only_a, &tokens, None, true)));
         assert_eq!(again.unwrap().unwrap().requests, 0);
         assert_eq!(jev.sent.lock().unwrap().len(), 2);
     }
@@ -502,13 +466,11 @@ mod tests {
         let asked = questions(&[("a", "first")]);
         let tokens = TokenBudget::default();
         assert_eq!(
-            block_on(evaluate_batches(JevPurpose::Verify, &Failing, &json!({}), &asked, &tokens, None, None, true))
-                .unwrap(),
+            block_on(evaluate_batches(JevPurpose::Verify, &Failing, &json!({}), &asked, &tokens, None, true)).unwrap(),
             None
         );
-        let error =
-            block_on(evaluate_batches(JevPurpose::Verify, &Failing, &json!({}), &asked, &tokens, None, None, false))
-                .unwrap_err();
+        let error = block_on(evaluate_batches(JevPurpose::Verify, &Failing, &json!({}), &asked, &tokens, None, false))
+            .unwrap_err();
         assert_eq!(error, AgentError::Jev(DecisionError::Failed("down".into())));
     }
 }

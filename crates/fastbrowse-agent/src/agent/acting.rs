@@ -1153,7 +1153,7 @@ impl Agent {
             state.text_source = Some(RecipeText::Live);
             task = read;
             (begins, ends) = self.located(state, observation, &task, &label, words(&task, target.max_length)).await?;
-            let (mut asked, _) = value_questions(
+            let (mut asked, described) = value_questions(
                 state,
                 target,
                 (&task, "what was read"),
@@ -1166,7 +1166,7 @@ impl Agent {
             if asked.is_empty() {
                 return Err(self.missing(state, observation, target));
             }
-            picks.extend(self.ask_choices(state, Some(observation), asked).await?);
+            picks.extend(self.ask_choices_in(state, Some(observation), asked, described).await?);
         }
         if let Some(input) = source.strip_prefix("input:") {
             state.text_source = Some(RecipeText::Input(input.to_string()));

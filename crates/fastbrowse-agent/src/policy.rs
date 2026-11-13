@@ -832,8 +832,7 @@ async fn shortlist(
             pending.insert(key.clone(), question.clone());
         }
     }
-    let answered =
-        evaluate_batches(JevPurpose::Relevance, jev, &state, &pending, &config.tokens, ledger, None, true).await?;
+    let answered = evaluate_batches(JevPurpose::Relevance, jev, &state, &pending, &config.tokens, ledger, true).await?;
     let mut answers: IndexMap<String, Answer> = answered.as_ref().map(|a| a.answers.clone()).unwrap_or_default();
     for (key, representative) in &aliases {
         if let Some(answer) = answers.get(representative).cloned() {
@@ -1183,9 +1182,9 @@ pub fn build_request(
         let written: usize = questions.iter().map(|(key, question)| key.len() + question.dump_json().len()).sum();
         let mut room = LONG_CONTEXT_BYTES.saturating_sub(dumps(&state).len() + written);
         // What the state's described words add to it: the field once, and each word once however many questions
-        // offer it.
+        // offer it. Written alone, the field's braces are as long as the separator that joins it to the state.
         let held = |words: &Map<String, Value>| {
-            if words.is_empty() { 0 } else { TASK_WORDS.len() + 4 + dumps(&Value::Object(words.clone())).len() }
+            if words.is_empty() { 0 } else { dumps(&json!({TASK_WORDS: words})).len() }
         };
         let mut ahead: Vec<(usize, &Ahead)> = context
             .ahead
