@@ -324,9 +324,8 @@ pub(crate) struct RunState {
     pub acted_from: Option<Observation>,
     /// Jev's word that the task rules out downloading, asked once a control the page says downloads is in play.
     pub downloads_forbidden: Option<bool>,
-    /// Jev's word that the task rules out changing what the page's fields and settings hold, asked once an edit is in
-    /// play.
-    pub edits_forbidden: Option<bool>,
+    /// Jev's word on which changes to the page's fields and settings the task allows, asked once an edit is in play.
+    pub edits: Option<Edits>,
     /// Pages read, by `read_key`, each with whether an action changed it since it was last read.
     pub read_documents: HashMap<(String, String), bool>,
     /// Reads begun on each page, by `read_key`, since its last finished read, so a read that did not finish is retried
@@ -757,7 +756,7 @@ impl RunState {
             idle: Vec::new(),
             acted_from: None,
             downloads_forbidden: None,
-            edits_forbidden: None,
+            edits: None,
             read_documents: HashMap::new(),
             read_tries: HashMap::new(),
             unanswered_images: HashSet::new(),
@@ -865,12 +864,23 @@ mod tests {
     }
 }
 
+/// Which changes to what the page's fields and settings hold a task allows, as Jev reads the task alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edits {
+    Allowed,
+    /// The task asks for some changes and rules out the rest, so each edit goes ahead only if the task asks for it.
+    RequestedOnly,
+    /// The task rules out every change, authorized or not (#838).
+    Forbidden,
+}
+
 /// Jev's reading of the task at a sign-in wall, each a question of its own, so code decides what the wall means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SignInNeeds {
     /// The task needs a signed-in account: its own orders, messages, settings or other private pages.
     pub account: bool,
-    /// The task itself gives the credentials to sign in with.
+    /// The task gives the credentials to sign in with, or says to sign in with saved or configured ones: asked only
+    /// whether it gives them, a task to sign in with the saved password and report a 2FA prompt read the wall instead.
     pub credentials: bool,
     /// The task asks about the access restriction itself, which the wall shows.
     pub inspects: bool,

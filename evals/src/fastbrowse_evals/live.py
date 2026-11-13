@@ -987,7 +987,7 @@ def _browser_dollars(cost: Sequence[CostLine]) -> tuple[float, bool]:
 def _known_components(lines: Sequence[CostLine]) -> dict[str, float]:
     """Dollars by component; a component with an unpriced line has no figure, which a zero would misstate."""
     known = {line.component for line in lines} - {line.component for line in lines if line.dollars is None}
-    return {c.value: round(sum(line.dollars or 0 for line in lines if line.component == c), 5) for c in known}
+    return {c.value: sum(line.dollars or 0 for line in lines if line.component == c) for c in known}
 
 
 async def ultrafast_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | None) -> tuple[Outcome, ArmReport]:
@@ -1032,13 +1032,13 @@ async def ultrafast_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path
         seconds=round(ran.seconds, 2),
         session_open_seconds=round((cloud.open_seconds or 0.0) + ran.setup_seconds, 2),
         session_close_seconds=cloud.close_seconds,
-        dollars=None if unknown else round(dollars, 5),
+        dollars=None if unknown else dollars,
         unknown_cost=unknown,
         error=ran.error,
         steps=ran.steps,
         trace=ran.trace,
         cost_by_component=({} if ran.unmetered_requests else {"jev": ran.jev_dollars, "llm": ran.text_dollars})
-        | ({} if unpriced else {"browser": round(browser, 5)}),
+        | ({} if unpriced else {"browser": browser}),
         actions=ran.actions,
         **ran.model_dump(
             include={
@@ -2344,8 +2344,8 @@ async def oss_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | Non
         provenance={"llm_cost_basis": OSS_LLM_COST}
         | ({} if ran.step_ceiling is None else {"upstream_max_steps": ran.step_ceiling})
         | ({} if ran.timeout_ceiling is None else {"upstream_timeout_seconds": ran.timeout_ceiling}),
-        cost_by_component=({} if unpriced else {"browser": round(browser, 5)})
-        | ({} if ran.dollars is None else {"llm": round(ran.dollars, 5)}),
+        cost_by_component=({} if unpriced else {"browser": browser})
+        | ({} if ran.dollars is None else {"llm": ran.dollars}),
     )
 
 
@@ -2427,8 +2427,8 @@ async def harness_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path |
         final_page_capture_viewport=final.frame_viewport,
         final_page_capture_withheld=final.frame_withheld,
         artifact=str(artifact),
-        cost_by_component=({} if unpriced else {"browser": round(browser, 5)})
-        | ({} if ran.dollars is None else {"llm": round(ran.dollars, 5)}),
+        cost_by_component=({} if unpriced else {"browser": browser})
+        | ({} if ran.dollars is None else {"llm": ran.dollars}),
     )
 
 
