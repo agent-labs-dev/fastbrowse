@@ -7,6 +7,9 @@ The release workflow runs this before it publishes anything. A release passes wh
   campaign `release-<version>` together measured every task at least three times, and against the campaign named
   in `docs/results/release-baseline.json` no task's pass rate fell, and the median run time and the mean cost per
   run are both lower.
+- for a release whose tag message has the line `Benchmarks: official`, both official suites ran three times on its
+  build, every cost known. Their judge reads every run with Opus, which costs far more than the internal campaign, so
+  a release claims official scores only when it says so.
 
 Fixtures are cheap, so they must pass on the exact tree. Live tasks are not, so a fix late in a release reruns only
 the tasks it affects (the campaign's `only` input): each task is scored on the newest campaign run that measured it
@@ -15,6 +18,7 @@ Langfuse, so what each task was measured on stays visible.
 
     uv run python scripts/release_gate.py v0.10.0            # what the release workflow runs
     uv run python scripts/release_gate.py --ref <sha>        # before tagging: would this commit pass?
+    uv run python scripts/release_gate.py --ref <sha> --official   # and with official scores claimed
 """
 
 from __future__ import annotations
@@ -286,15 +290,18 @@ def campaign_rows(repo: str, campaign: str) -> tuple[list[dict[str, Any]], list[
     return [row for rows in chosen.values() for row in rows], used
 
 
-def measures_itself(repo: str, tag: str, version: str) -> bool:
-    """A minor release does; a patch does when its annotated tag message has the line `Benchmarks: run`."""
-    if version.split(".")[-1] == "0":
-        return True
+def tag_lines(repo: str, tag: str) -> list[str]:
+    """The lines of `tag`'s annotated message; a lightweight tag has none."""
     ref = json.loads(_gh("api", f"repos/{repo}/git/ref/tags/{tag}"))["object"]
     if ref["type"] != "tag":
-        return False
-    message = json.loads(_gh("api", f"repos/{repo}/git/tags/{ref['sha']}"))["message"]
-    return "Benchmarks: run" in message.splitlines()
+        return []
+    return json.loads(_gh("api", f"repos/{repo}/git/tags/{ref['sha']}"))["message"].splitlines()
+
+
+def measures_itself(version: str, lines: list[str]) -> bool:
+    """A minor release does; a patch does when its annotated tag message has the line `Benchmarks: run`, or claims
+    official scores, which are compared beside the campaign."""
+    return version.split(".")[-1] == "0" or "Benchmarks: run" in lines or "Benchmarks: official" in lines
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -302,6 +309,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("tag", nargs="?", help="the release tag, v<x.y.z>")
     parser.add_argument("--ref", help="check a commit before it is tagged, as a minor release")
     parser.add_argument("--version", help="the version the campaign is named for (default: the tag's)")
+    parser.add_argument("--official", action="store_true", help="with --ref, also require official coverage")
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", "agent-labs-dev/fastbrowse"))
     args = parser.parse_args(argv)
     if bool(args.tag) == bool(args.ref):
@@ -314,11 +322,15 @@ def main(argv: list[str] | None = None) -> int:
     try:
         fixture_id = fixture_run(args.repo, tree)
         print(f"fixtures: Evals run {fixture_id} passed on tree {tree}")
-        if args.tag and not measures_itself(args.repo, args.tag, version):
+        lines = tag_lines(args.repo, args.tag) if args.tag else []
+        if args.tag and not measures_itself(version, lines):
             print(f"{args.tag} is a patch release without 'Benchmarks: run' in its tag message: no campaign needed")
             return 0
         baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
-        _, official_notes = campaign_candidate(args.repo, f"release-{version}", tree, fixture_id)
+        if args.official or "Benchmarks: official" in lines:
+            _, official_notes = campaign_candidate(args.repo, f"release-{version}", tree, fixture_id)
+        else:
+            official_notes = ["official benchmarks: not claimed (no 'Benchmarks: official' line)"]
         candidate, used = campaign_rows(args.repo, f"release-{version}")
         failures, notes = compare(candidate, ledger_rows(args.repo, int(baseline["campaign_run"])))
     except (GateError, ValueError, subprocess.CalledProcessError) as error:

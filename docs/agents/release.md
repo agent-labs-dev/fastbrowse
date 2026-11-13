@@ -17,7 +17,10 @@ Versions are patch-by-patch unless the maintainer says otherwise, and every one 
    the campaign in `docs/results/release-baseline.json`, and the median run time and mean cost below it.
    The comparison requires valid timing and known cost receipts for every fastbrowse attempt on both sides;
    missing or provisional totals cannot prove an improvement.
-   The campaign also needs the `benchmark-candidate` artifact with both official suites: all 200 BU Bench and
+   A release that claims official scores says so with the line `Benchmarks: official` in its tag message (`--official`
+   with `--ref`). Their judge reads every run with Opus, so the official suites cost far more than the internal
+   campaign, and a release without the line is gated on the internal campaign alone.
+   Such a campaign also needs the `benchmark-candidate` artifact with both official suites: all 200 BU Bench and
    300 Online-Mind2Web tasks, each repeated three times. Their groups must match public rows exported by successful
    Official benchmarks runs on the candidate's agent and harness commits. The candidate stage must have succeeded,
    including private tracking readback, and its original fixture receipt must pass on the measured build, with successful fixtures on the release
