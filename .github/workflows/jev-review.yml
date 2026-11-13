@@ -8,6 +8,9 @@ jobs:
   # pull_request_target runs this job as the base branch defines it, from the base branch's code: the pull
   # request's head is fetched only as a ref to diff, so nothing it changed runs where the key is.
   jev-review:
+    # A pull request from a fork would spend our OpenRouter budget on a stranger's diff, sized by them, and could
+    # exhaust the key's daily cap that the rest of CI shares.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     permissions: {contents: read}
     runs-on: blacksmith-2vcpu-ubuntu-2404
     continue-on-error: true
