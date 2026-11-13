@@ -74,21 +74,24 @@ fn lock(spent: &Mutex<Spent>) -> MutexGuard<'_, Spent> {
 /// again after its claim was sent back re-asked fifty requests of identical questions on PyPI. The state is the whole
 /// input beside the question, so a page that changed, even outside the viewport, is a different state and asked anew.
 #[derive(Debug, Default)]
-pub struct Known(Mutex<HashMap<String, HashMap<String, Answer>>>);
+pub struct Known(Mutex<HashMap<String, Arc<KnownFor>>>);
+
+/// The answers had beside one state, which a pass looks up once so no question hashes the whole state again.
+type KnownFor = Mutex<HashMap<String, Answer>>;
 
 impl Known {
-    fn lock(&self) -> MutexGuard<'_, HashMap<String, HashMap<String, Answer>>> {
+    fn beside(&self, state: &str) -> Arc<KnownFor> {
         // A panic while the lock was held leaves answers that are still what Jev said.
-        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        let mut states = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(known) = states.get(state) {
+            return known.clone();
+        }
+        states.entry(state.to_string()).or_default().clone()
     }
+}
 
-    fn get(&self, state: &str, question: &str) -> Option<Answer> {
-        self.lock().get(state)?.get(question).cloned()
-    }
-
-    fn insert(&self, state: &str, question: String, answer: Answer) {
-        self.lock().entry(state.to_string()).or_default().insert(question, answer);
-    }
+fn answers(known: &KnownFor) -> MutexGuard<'_, HashMap<String, Answer>> {
+    known.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 tokio::task_local! {
@@ -116,7 +119,7 @@ pub async fn evaluate_batches(
     let written_state = dumps(state);
     let state_chars = text::len(&written_state) as i64;
     let state_size = state_chars as f64 / ratio;
-    let known = KNOWN.try_with(Arc::clone).ok();
+    let known = KNOWN.try_with(|known| known.beside(&written_state)).ok();
     // Answers already had for this state.
     let mut answered: IndexMap<String, Answer> = IndexMap::new();
     let mut batches: Vec<IndexMap<String, Question>> = Vec::new();
@@ -131,7 +134,7 @@ pub async fn evaluate_batches(
     let most = profile.max_questions.unwrap_or(usize::MAX);
     for (key, question) in questions {
         let json = question.dump_json();
-        if let Some(answer) = known.as_ref().and_then(|known| known.get(&written_state, &json)) {
+        if let Some(answer) = known.as_ref().and_then(|known| answers(known).get(&json).cloned()) {
             answered.insert(key.clone(), answer);
             continue;
         }
@@ -179,7 +182,7 @@ pub async fn evaluate_batches(
     for questions in &batches {
         let receipt = Paid::default();
         lock(&spent).receipts.push(receipt.clone());
-        let (spent, known, written_state) = (&spent, &known, &written_state);
+        let (spent, known) = (&spent, &known);
         tasks.push(Box::pin(async move {
             let evaluation = match jev_purpose(
                 purpose,
@@ -212,7 +215,7 @@ pub async fn evaluate_batches(
             for (key, answer) in &evaluation.answers {
                 let Some(question) = questions.get(key) else { continue };
                 if let Some(known) = known {
-                    known.insert(written_state, question.dump_json(), answer.clone());
+                    answers(known).insert(question.dump_json(), answer.clone());
                 }
                 if let Some(on_answer) = on_answer {
                     on_answer(key, answer);

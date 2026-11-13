@@ -24,7 +24,8 @@ class Request:
     purpose: str
     step: int
     """The step this request decided or read for: the count of pages the run had recorded before it."""
-    dollars: float
+    dollars: float | None
+    """What the provider reported charging, or None for a route whose response reports no cost."""
     state: str
     """A digest of the state sent, so requests resending one state can be told apart from those that changed it."""
     request: str
@@ -55,12 +56,15 @@ def requests(events: Iterable[object]) -> list[Request]:
             continue
         span = next((s for s in spans if s["began"] <= event["began"] and event["ended"] <= s["ended"]), None)
         purpose = "unnamed" if span is None else str(span.get("decision_purpose") or "unnamed")
-        usage = (event.get("response") or {}).get("usage") or {}
+        # A response that was not JSON, such as a plain-text 503, is traced as its text and reports no cost.
+        response = event.get("response")
+        usage = response.get("usage") if isinstance(response, Mapping) else None
+        cost = usage.get("cost") if isinstance(usage, Mapping) else None
         found.append(
             Request(
                 purpose=purpose,
                 step=pages,
-                dollars=float(usage.get("cost") or 0.0),
+                dollars=None if cost is None else float(cost),
                 state=_digest(sent.get("state")),
                 request=_digest(sent),
             )
@@ -110,10 +114,15 @@ def report(measured: list[Run], *, top: int = 10) -> str:
     ]
     for purpose, calls in purposes.most_common():
         mine = [sum(1 for r in run.requests if r.purpose == purpose) for run in measured]
-        dollars = sum(r.dollars for run in measured for r in run.requests if r.purpose == purpose)
+        priced = [r.dollars for run in measured for r in run.requests if r.purpose == purpose]
+        unpriced = sum(1 for dollars in priced if dollars is None)
+        # An unpriced request makes the purpose's dollars a floor, never a total that counts it free.
+        dollars = f"${sum(d for d in priced if d is not None) / count:.5f}" + (
+            f" (+{unpriced} unpriced)" if unpriced else ""
+        )
         lines.append(
             f"| {purpose} | {calls / count:.2f} | {statistics.median(mine):g} | {calls / total:.0%} "
-            f"| ${dollars / count:.5f} | {exact[purpose] / count:.2f} | {resent[purpose] / count:.2f} |"
+            f"| {dollars} | {exact[purpose] / count:.2f} | {resent[purpose] / count:.2f} |"
         )
     steps = Counter((run.task, r.purpose, r.step) for run in measured for r in run.requests)
     lines += [
