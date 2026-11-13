@@ -79,6 +79,12 @@ pub(crate) const HISTORY_REREADS: u32 = 2;
 pub(crate) const NAVIGATE_ATTEMPTS: u32 = 4;
 /// Doubled after each failed try.
 pub(crate) const NAVIGATE_RETRY_SECONDS: f64 = 1.0;
+/// The readiness wait of a navigation's first try.
+pub(crate) const LOAD_TIMEOUT_SECONDS: f64 = 15.0;
+/// How long a load is waited on before it is no longer on its way: every try `navigate` gives one, added up. A
+/// server that never answers leaves Chrome loading with no further event, so nothing else ends it; a page that keeps
+/// navigating, such as a challenge, starts a new load each time and with it a new wait.
+pub(crate) const LOAD_AWAITED_SECONDS: f64 = LOAD_TIMEOUT_SECONDS * ((1u32 << NAVIGATE_ATTEMPTS) - 1) as f64;
 /// Whether Chrome's error names the site or the connection to it giving nothing, rather than the address being wrong.
 ///
 /// A certificate or TLS failure belongs here because the agent cannot repair the site's connection. A mistyped
@@ -1411,7 +1417,7 @@ impl CdpPage {
     /// `back_to` is the page BACK opens when this tab has no earlier entry on its site: a run that went straight to a
     /// deep address keeps the start page it skipped one BACK away without spending a load on it.
     pub async fn navigate(&self, url: &str, back_to: Option<&str>) -> Result<(), BrowserError> {
-        self.navigate_within(url, 15.0, back_to).await
+        self.navigate_within(url, LOAD_TIMEOUT_SECONDS, back_to).await
     }
 
     pub async fn navigate_within(
@@ -1883,8 +1889,8 @@ impl Page for CdpPage {
         self.session.captcha_solve()
     }
 
-    fn loading(&self) -> bool {
-        self.session.navigating() || self.session.frames_loading()
+    fn loading(&self) -> Option<f64> {
+        self.session.loading_left()
     }
 }
 

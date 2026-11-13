@@ -13,6 +13,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.11.0] - 2026-11-12
 
+- A count, total, minimum or maximum is checked against what the task asks for, so an answer no longer counts the orders where the task asks for their total.
+
+- A run with no time limit no longer waits forever on a page whose server never answers. Chrome reports such a load as in flight and sends no further event, so a run waiting out a bot check or a blank page waited until the browser was closed, four hours on a Browser Use Cloud browser. A load is now waited on for as long as a navigation is given, 225 s from that load's start, and a page that keeps navigating, such as a challenge, starts a new load and a new wait each time.
+
 - A model priced higher for long prompts no longer bounds an unanswered call at billions of dollars: the prompt length that starts the dearer price is read as a condition, not a price, so the budget guard holds the real ceiling.
 
 - Browserless runs read a JSON response by its structure, so a single value such as a package's name can be selected and cited alone, under its key path. Field choices and read passages also show the headings a value sits under, and a page with more candidates than one Jev request can describe is chosen over a series of requests that each fit, instead of failing as too large ([#1069](https://github.com/agent-labs-dev/fastbrowse/issues/1069)).

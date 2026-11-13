@@ -234,7 +234,7 @@ impl Page for SearchPage {
     fn captcha_solve(&self) -> Option<CaptchaSolve> {
         self.view().captcha_solve()
     }
-    fn loading(&self) -> bool {
+    fn loading(&self) -> Option<f64> {
         self.view().loading()
     }
 }

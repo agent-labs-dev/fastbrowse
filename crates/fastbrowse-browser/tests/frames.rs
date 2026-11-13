@@ -718,3 +718,27 @@ for line in sys.stdin:
         session.close().await.unwrap();
     }
 }
+
+/// A server that never answers leaves Chrome loading with no further event, so a load is waited on for as long as a
+/// navigation is given one, from its own start, and no longer.
+#[tokio::test]
+async fn a_load_that_never_ends_stops_being_waited_on_once_it_has_had_a_navigations_time() {
+    let fake = FakeChrome::start().await;
+    let session = fake.session_with(fake.connection(), SessionOptions::default()).await;
+    settle(&session).await;
+    assert_eq!(session.loading_left(), None);
+    tokio::time::pause();
+    testing::dispatch(&session, "Page.frameStartedLoading", json!({"frameId": "top"}), Some("session"));
+    assert_eq!(session.loading_left(), Some(225.0));
+    tokio::time::advance(Duration::from_secs(200)).await;
+    // The same load reported again is no new time to wait.
+    testing::dispatch(&session, "Page.frameStartedLoading", json!({"frameId": "top"}), Some("session"));
+    assert_eq!(session.loading_left(), Some(25.0));
+    tokio::time::advance(Duration::from_secs(25)).await;
+    assert_eq!(session.loading_left(), None);
+    assert!(session.navigating(), "the load is still in flight; only the wait on it ends");
+    // A load that lands ends; the next one, as a challenge page that keeps navigating starts, has its own time.
+    testing::dispatch(&session, "Page.frameStoppedLoading", json!({"frameId": "top"}), Some("session"));
+    testing::dispatch(&session, "Page.frameStartedLoading", json!({"frameId": "top"}), Some("session"));
+    assert_eq!(session.loading_left(), Some(225.0));
+}
