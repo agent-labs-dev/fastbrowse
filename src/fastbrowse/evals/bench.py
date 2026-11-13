@@ -660,6 +660,9 @@ async def run_suite(args: argparse.Namespace) -> int:
             entry["unpriced_exchanges"] = unpriced
         run["tasks"].append(entry)
         _write(args.out, run)
+        # The requests the last pass sent, for scripts/jev_state_size.py to measure.
+        with (logs / f"{task.id}.requests.jsonl").open("w", encoding="utf-8") as out:
+            out.writelines(json.dumps(line, ensure_ascii=False) + "\n" for line in proxy.sent)
         if entry["misses"]:
             with (logs / f"{task.id}.misses.txt").open("w", encoding="utf-8") as out:
                 for miss in entry["misses"]:

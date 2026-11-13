@@ -155,9 +155,12 @@ is shorter than the list of objects. Each control keeps its label,
 context, role, value, checked state and selection when present; a null cell means that property is absent.
 Text extraction and other lists keep their object representation. Page text, notes and action history keep their existing representation.
 
-`python scripts/jev_state_size.py TRACE.jsonl` measures state characters by question set and top-level field;
-it also accepts bench cassettes (`.jsonl.gz`). It counts recorded HTTP exchanges, including retries. Its `input_tokens` are provider-reported totals for the state and
-questions together. Providers do not expose state-only token counts, so the report does not estimate them.
+`python scripts/jev_state_size.py TRACE.jsonl` measures, by question set, the characters of the state by top-level
+field and of the questions by key. It counts recorded HTTP exchanges, including retries. Its `input_tokens` are
+provider-reported totals for the state and questions together. Providers do not expose per-part token counts, so the
+report does not estimate them. To measure what the current build sends on the fixture tasks, run `just bench replay`
+and profile the `logs/*.requests.jsonl` files beside its results. A cassette (`.jsonl.gz`) is accepted too, but it
+keeps every exchange ever recorded for its task, including requests the agent has since stopped sending.
 
 ## Confidence is not correctness
 

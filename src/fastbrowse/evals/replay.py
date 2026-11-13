@@ -477,6 +477,9 @@ class Proxy:
             for exchange in cassette.exchanges:
                 self._by_key.setdefault(exchange.key, []).append(exchange)
         self.misses: list[Miss] = []
+        # Every request this run sent, beside the response it got, as trace lines: a cassette also keeps exchanges
+        # the agent no longer sends, so measuring what a run sends reads these, not the cassette.
+        self.sent: list[dict[str, Any]] = []
         self.requests = 0
         self.forwarded = 0
         self._server: ThreadingHTTPServer | None = None
@@ -502,6 +505,22 @@ class Proxy:
 
     def answer(self, path: str, raw: bytes) -> tuple[int, str, str, float]:
         """The response to one request, and how long to hold it before sending."""
+        status, content_type, text, hold = self._answer(path, raw)
+        try:
+            request: Any = json.loads(raw)
+        except ValueError:
+            request = raw.decode("utf-8", "replace")
+        try:
+            response: Any = json.loads(text)
+        except ValueError:
+            response = text
+        with self._lock:
+            self.sent.append(
+                {"event": "http", "path": path, "status": status, "request": request, "response": response}
+            )
+        return status, content_type, text, hold
+
+    def _answer(self, path: str, raw: bytes) -> tuple[int, str, str, float]:
         try:
             body: Any = json.loads(raw)
         except ValueError:
