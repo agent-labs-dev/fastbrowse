@@ -7,7 +7,7 @@ from pathlib import Path
 from fastbrowse.evals.benchmarks import ExclusionReason
 from pydantic import TypeAdapter, ValidationError
 
-from fastbrowse_evals.live import ARMS, HEAD_TO_HEAD_ARMS, SUITES, ULTRAFAST_TEXT_MODEL, eligible, excluded_because
+from fastbrowse_evals.live import ARMS, HEAD_TO_HEAD_ARMS, SUITES, eligible, excluded_because
 from fastbrowse_evals.versions import fingerprint, load_lock
 
 DERIVED_ARMS = (
@@ -81,7 +81,6 @@ def render() -> str:
             for name, tasks in SUITES.items()
         },
         "arms": {name: {"pin": a.pin, "tier": a.tier, "default": a.default} for name, a in ARMS.items()},
-        "ultrafast_text_model": ULTRAFAST_TEXT_MODEL,
         "retired": list(RETIRED),
     }
     return json.dumps(catalog, indent=2) + "\n"

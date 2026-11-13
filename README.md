@@ -136,35 +136,32 @@ permissions and stopping a run.
 
 ## How it compares
 
-| | Browser Use agent (hosted) | [Browser Use Ultrafast](https://github.com/browser-use/jev-ultrafast) (`jev-ultrafast`) | fastbrowse |
-|:--|:--|:--|:--|
-| Choosing an action | hosted model and tools | Jev picks from indexed controls | Jev picks from indexed controls |
-| Returns | an answer | `DONE` or `BLOCKED` | an answer with quotes, or why it stopped |
-| Cited answers | not graded for citations here | no cited-answer result API | answers backed by captured quotes |
-| Signing in | yes | password fields excluded | `--secret` or a Bitwarden vault item; models see names only |
-| Irreversible actions | explicit task instructions in our fixture tests | no authorization parameter in Agent | classifier plus a code-enforced authorization gate |
-| Browser | cloud | Chrome through Browser Harness; cloud in these evals | your own Chrome through the extension (CLI default) or cloud with `--cloud`; the SDKs add local Chrome |
+| | Browser Use agent (hosted) and BU Ultrafast | fastbrowse |
+|:--|:--|:--|
+| Choosing an action | hosted model and tools | Jev picks from indexed controls |
+| Returns | an answer | an answer with quotes, or why it stopped |
+| Cited answers | not graded for citations here | answers backed by captured quotes |
+| Signing in | yes | `--secret` or a Bitwarden vault item; models see names only |
+| Irreversible actions | explicit task instructions in our fixture tests | classifier plus a code-enforced authorization gate |
+| Browser | cloud | your own Chrome through the extension (CLI default) or cloud with `--cloud`; the SDKs add local Chrome |
 
-The Ultrafast column describes
-[commit 1231850a](https://github.com/browser-use/jev-ultrafast/tree/1231850a0bf1a0c0341fe408ef1668dbbfdfac46),
-the version the eval runner pins.
+BU Ultrafast (`browser-use-ultrafast`) is the same hosted agent on Browser Use Cloud API V4 with the `bu-ultrafast`
+model; `browser-use` runs it on the API's default model.
 
 Benchmarking makes three comparisons:
 
-- **C1, agent against agent:** fastbrowse against the hosted Browser Use agent, Browser Harness and Jev
-  Ultrafast, the figures above, on the same tasks on Browser Use cloud browsers under identical limits with each
-  agent at its own defaults. On the same 53-task catalog, fastbrowse alone passed 90.5% of its 159 attempts at
-  $0.0149 a run. Jev Ultrafast, the fourth arm of that live suite, passed 4.6% of 129 attempts at $0.0017 a run
-  and was fastest on 2 of the 50 tasks two or more agents passed. It cannot return an answer, so every task that
-  asks a question fails, and 6 of the 53 tasks are counted as failures: five need login credentials it has no way
-  to be given, and saucedemo-pause needs a pause before an irreversible step, which it cannot make.
+- **C1, agent against agent:** fastbrowse against the hosted Browser Use agent on its default model and on
+  `bu-ultrafast`, and Browser Harness, on the same tasks under identical limits with each agent at its own
+  defaults. On the same 53-task catalog, fastbrowse alone passed 90.5% of its 159 attempts at $0.0149 a run. The
+  published release-0.10.0 campaign also ran Jev Ultrafast, an open source agent the suite no longer measures: it
+  passed 4.6% of 129 attempts at $0.0017 a run, since it returns no answer and cannot be given login credentials.
 - **C2, browser against browser:** the same fastbrowse build on its own browser pool and on a Browser Use Cloud
   browser. In an earlier record (release-0.5.25), not on the published page, the pool passed fewer tasks.
-- **C3, fastbrowse on its own browser pool against `jev-ultrafast`:** not yet measured. The pairing over the 6
-  navigation tasks both run has not been run; the Ultrafast figures above are C1's, on a Browser Use cloud browser
-  like every arm of that campaign. Browser Use's vendor-reported 22 seconds and $0.0064 a task for Ultrafast cover
-  the model and the search only, with the browser and proxy billed separately, so they are not comparable with our
-  figures.
+- **C3, fastbrowse on its own browser pool against BU Ultrafast (`browser-use-ultrafast`):** not yet measured. It
+  pairs `fastbrowse-pool` with the hosted agent on `bu-ultrafast`, each product on its own backend, over the 52
+  tasks both run, three repeats each. Browser Use's vendor-reported 22 seconds and $0.0064 a task for Ultrafast
+  cover the model and the search only, with the browser and proxy billed separately, so they are not comparable
+  with our figures.
 
 The [benchmark page](https://fastbrowse.ai/benchmarks) publishes campaign release-0.10.0 (fastbrowse-evals at
 commit `2e94d24`, run 2026-11-09, judged by anthropic/claude-opus-5.5 through OpenRouter). 0.10.0, tagged

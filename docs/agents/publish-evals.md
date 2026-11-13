@@ -36,8 +36,12 @@ as references with their task and build differences stated. Every group inside o
 from the same measured agent and runner build. Adding a suite must retain the published groups and their
 regression checks; results from different builds cannot be combined under one build receipt.
 Schema 4 adds `internal-backend`: fastbrowse on a Browser Use Cloud browser against fastbrowse on its own
-browser pool. From schema 5, `internal-ultrafast` pairs fastbrowse on its own pool with `jev-ultrafast`; figures
-approved under an older schema keep fastbrowse on a Browser Use Cloud browser there.
+browser pool. From schema 7, `internal-ultrafast` pairs fastbrowse on its own pool with `browser-use-ultrafast`, the
+hosted Browser Use agent on `bu-ultrafast`, over the 52 tasks both run, and no group may measure `jev-ultrafast`.
+Figures approved under an older schema keep the pairing they were measured under: schema 5 and 6 paired the pool with
+`jev-ultrafast` over 6 navigation tasks, and earlier schemas paired fastbrowse on a Browser Use Cloud browser with it,
+and their `internal-hosted` groups may carry `jev-ultrafast` rows. `benchmarks.group_arms` holds the pairing per
+schema, and a change of pairing is a protocol change the owner approves.
 Schema 2 and later record each group's agent and runner commits and require them to match the candidate's build,
 unless the group lists its `sources`: the campaign runs its rows came from, newest first, one entry per run and arm,
 each with its commits, date and the tasks it supplied for that arm, and for an arm other than fastbrowse the pin it
@@ -55,11 +59,9 @@ Groups retain outcomes and every elapsed time across explicit bases, but consume
 speed comparisons across bases. Legacy rows without a basis cannot be mixed with explicit clocks.
 
 `internal-hosted` is the head-to-head over the 53 tasks fastbrowse runs; figures approved at 46, 47 or 52 tasks still
-read. A campaign runs `fastbrowse` and `jev-ultrafast` live in one harness invocation, on Browser Use Cloud browsers
-with the same settings. A competitor refresh adds `browser-use`, `browser-use-ultrafast` and `browser-harness`. Both hosted Browser Use models return answers. Each arm runs every repeat of every task it can attempt: `browser-use` and `browser-use-ultrafast` skip the task that
+read. A campaign runs `fastbrowse` live on a Browser Use Cloud browser. A competitor refresh adds `browser-use`, `browser-use-ultrafast` and `browser-harness`. Both hosted Browser Use models return answers. Each arm runs every repeat of every task it can attempt: `browser-use` and `browser-use-ultrafast` skip the task that
 passes only by stopping before an unauthorized step, and `browser-harness` also skips the login tasks, so it runs 47.
-`jev-ultrafast` returns no answer, only DONE or BLOCKED, so it runs only the six navigation tasks, which are graded on the
-page a run ends on. The catalog states each reason and the site shows those tasks as not run. An arm that did not run has no rows and the site shows it as not measured. An arm
+The catalog states each reason and the site shows those tasks as not run. An arm that did not run has no rows and the site shows it as not measured. An arm
 whose complete cost is unavailable carries `"dollars": null` on every public row. Its grounded outcomes and seconds
 remain publishable, with no cost total, average, ratio or cost winner. An unresolved charge in any contributing
 slot's physical retries withholds that arm's costs across all contributing invocations. Other arms keep their

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 from importlib.metadata import version as installed_version
@@ -29,7 +28,6 @@ ARM_PINS = {
     "browser-use": (SDK,),
     "browser-use-ultrafast": (SDK,),
     "browser-use-oss": ("browser-use",),
-    "jev-ultrafast": ("browser-use/jev-ultrafast",),
     "browser-harness": ("browser-harness", "@openai/codex"),
     "cua-codex": ("cua-driver", "@openai/codex"),
 }
@@ -45,13 +43,11 @@ def pinned(name: str) -> str:
 
 
 def latest(http: httpx.Client, name: str, registry: str) -> str:
-    """The newest release a user would install: PyPI's and npm's `latest`, a GitHub repository's default branch."""
+    """The newest release a user would install: PyPI's and npm's `latest`."""
     if registry == "pypi":
         return http.get(f"https://pypi.org/pypi/{name}/json").raise_for_status().json()["info"]["version"]
     if registry == "npm":
         return http.get(f"https://registry.npmjs.org/{name}/latest").raise_for_status().json()["version"]
-    if registry == "github":
-        return http.get(f"https://api.github.com/repos/{name}/commits/HEAD").raise_for_status().json()["sha"]
     raise ValueError(f"{name}: unknown registry {registry!r}")
 
 
@@ -75,10 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("action", choices=("check", "update"))
     parser.add_argument("--arms", nargs="+", help="check only the pins these arms install")
     args = parser.parse_args(argv)
-    # GitHub allows 60 unauthenticated requests an hour per address, which shared CI runners exhaust.
-    token = os.environ.get("GITHUB_TOKEN")
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
-    with httpx.Client(timeout=30, follow_redirects=True, headers=headers) as http:
+    with httpx.Client(timeout=30, follow_redirects=True) as http:
         behind = stale(http, args.arms)
     for entry in behind:
         print(f"{entry['name']} ({entry['registry']}): pinned {entry['version']}, latest {entry['latest']}")

@@ -126,9 +126,8 @@ class LiveTask:
     expect: Status = Status.COMPLETE
     """The fastbrowse arm's required status: a safety task passes only by stopping."""
     arms: tuple[str, ...] = ("fastbrowse", "browser-use")
-    """The arms the task can grade on equal terms. An answer task leaves out jev-ultrafast, which returns no answer; a
-    navigation task, graded on the page the run ended on, leaves out the Browser Use agent, whose SDK does not say
-    where its browser ended; a safety task needs the pause before irreversible actions only fastbrowse has."""
+    """The arms the task can grade on equal terms. A safety task needs the pause before irreversible actions only
+    fastbrowse has."""
     rolling: Mapping[str, str] = field(default_factory=dict[str, str])
     """Text that changes from run to run by design, such as a date four weeks out, and the name its version
     fingerprint uses in its place, so the task keeps its version from one day to the next."""
@@ -142,7 +141,6 @@ def prompt(task: LiveTask) -> str:
 ARM_BROWSERS = {
     "fastbrowse": ("browser-use-cloud", "local-chrome"),
     "fastbrowse-pool": ("fastbrowse-pool",),
-    "jev-ultrafast": ("browser-use-cloud",),
     "browser-harness": ("browser-use-cloud",),
     "browser-use-oss": ("browser-use-cloud",),
     "browser-use": ("browser-use-hosted",),

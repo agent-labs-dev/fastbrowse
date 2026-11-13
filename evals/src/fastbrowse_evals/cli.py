@@ -34,8 +34,8 @@ async def until_terminated(work: Coroutine[Any, Any, int]) -> int:
     """Await `work`, cancelling it on SIGTERM instead of dying where it stands.
 
     Python's default SIGTERM ends the process at once: no `finally`, no `async with` exit. Every cloud browser in
-    flight then bills until its own 240-minute timeout, and a jev-ultrafast runner, which runs in a session of its
-    own, outlives the harness and keeps driving its browser. Cancelling takes the path Ctrl-C does, which stops each
+    flight then bills until its own 240-minute timeout, and an adapter runner, which runs in a session of its own,
+    outlives the harness and keeps driving its browser. Cancelling takes the path Ctrl-C does, which stops each
     browser, kills each runner and writes each interrupted attempt to the ledger."""
     task = asyncio.ensure_future(work)
     loop = asyncio.get_running_loop()

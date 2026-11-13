@@ -1389,9 +1389,9 @@ def test_an_unknown_charge_commits_at_least_what_it_states() -> None:
     assert official.interruption_usd({"interruptions": [row]}, 1.0) == 2.5
 
 
-def test_ultrafast_is_not_an_official_arm(tmp_path, stubbed):
+def test_an_arm_without_an_official_run_is_refused(tmp_path, stubbed):
     with pytest.raises(SystemExit):
-        asyncio.run(official.main(main_args(tmp_path, "--arm", "jev-ultrafast")))
+        asyncio.run(official.main(main_args(tmp_path, "--arm", "browser-use-ultrafast")))
 
 
 def test_the_hosted_agent_is_kept_alive_for_its_final_page_then_stopped(tmp_path, monkeypatch):

@@ -239,15 +239,15 @@ class Coverage(NamedTuple):
 # so it runs the six navigation tasks too.
 #
 # The head-to-head (internal-hosted) is one Parallax invocation over fastbrowse's tasks, with rows from whichever of its
-# arms ran, each on the tasks the catalog lists it for. Jev Ultrafast and Browser Harness take no credentials or
-# authorization setting, and the hosted Browser Use agents (its default model and bu-ultrafast) no authorization
-# setting; the catalog states why each skips a task. The official suites publish the fastbrowse arm; a vendor arm's
-# rows reach a candidate only when Parallax marks them publishable.
+# arms ran, each on the tasks the catalog lists it for. Browser Harness takes no credentials or authorization setting,
+# and the hosted Browser Use agents (its default model and bu-ultrafast) no authorization setting; the catalog states
+# why each skips a task. The Ultrafast comparison (internal-ultrafast) is fastbrowse on its own browser pool against
+# the hosted agent on bu-ultrafast, each product on its own backend, over the tasks both run. The official suites
+# publish the fastbrowse arm; a vendor arm's rows reach a candidate only when Parallax marks them publishable.
 HEAD_TO_HEAD: tuple[Arm, ...] = (
     "fastbrowse",
     "browser-use",
     "browser-use-ultrafast",
-    "jev-ultrafast",
     "browser-harness",
     "browser-use-oss",
 )
@@ -260,9 +260,12 @@ COVERAGE: dict[GroupId, Coverage] = {
         "task-success",
         HEAD_TO_HEAD,
         (),
+        # jev-ultrafast stays partial for the figures approved before BU_ULTRAFAST_SCHEMA (`group_arms`).
         ("browser-use", "browser-use-ultrafast", "jev-ultrafast", "browser-harness", "browser-use-oss"),
     ),
-    "internal-ultrafast": Coverage(frozenset({6, 47}), 3, "task-success", ("fastbrowse-pool", "jev-ultrafast")),
+    "internal-ultrafast": Coverage(
+        frozenset({6, 47, 52}), 3, "task-success", ("fastbrowse-pool", "browser-use-ultrafast")
+    ),
     "internal-backend": Coverage(frozenset({53, 54}), 3, "task-success", ("fastbrowse", "fastbrowse-pool")),
     "bu-bench": Coverage(frozenset({200}), None, "weighted-rubric", OFFICIAL, ("fastbrowse",)),
     "online-mind2web": Coverage(frozenset({300}), None, "full-task-success", OFFICIAL, ("fastbrowse",)),
@@ -271,12 +274,20 @@ POOL_ULTRAFAST_SCHEMA = 5
 """From this schema the Ultrafast comparison is fastbrowse with its own browser pool against `jev-ultrafast`: the
 two whole products, each on its own backend. Before it, fastbrowse ran there on a Browser Use Cloud browser, so
 figures approved under an older schema keep that pairing."""
+BU_ULTRAFAST_SCHEMA = 7
+"""From this schema the Ultrafast comparison is fastbrowse on its own browser pool against the hosted Browser Use
+agent on bu-ultrafast (`browser-use-ultrafast`), and no group measures `jev-ultrafast`, which the harness no longer
+runs. Figures approved under an older schema keep the pairing they were measured under."""
 
 
 def group_arms(group: GroupId, schema_version: int) -> tuple[Arm, ...]:
     """The arms a group may measure under the candidate's schema."""
     if group == "internal-ultrafast" and schema_version < POOL_ULTRAFAST_SCHEMA:
         return ("fastbrowse", "jev-ultrafast")
+    if group == "internal-ultrafast" and schema_version < BU_ULTRAFAST_SCHEMA:
+        return ("fastbrowse-pool", "jev-ultrafast")
+    if group == "internal-hosted" and schema_version < BU_ULTRAFAST_SCHEMA:
+        return (*HEAD_TO_HEAD, "jev-ultrafast")
     return COVERAGE[group].arms
 
 
@@ -434,12 +445,12 @@ class ExportReceipt(PublicModel):
     trace_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9_.:-]{1,64}$")]
 
 
-SCHEMA = 6
+SCHEMA = 7
+"""The schema a new or changed record is written under. Older schemas still read: Parallax writes schema 2 for a
+candidate of official suites alone, and the approved published figures and the staged candidate were written under
+earlier ones, where an approval binds the bytes it approved."""
 TIMED_SCHEMA = 6
 """From this schema every row records its timing basis."""
-"""The schema a new or changed record is written under. Older schemas still read: Parallax writes schema 2 for a
-candidate of official suites alone, and the approved published figures and the staged candidate were written under 3
-and 4, where an approval binds the bytes it approved."""
 
 
 class CompetitorReference(PublicModel):
@@ -465,7 +476,7 @@ REFERENCE_PATH = "docs/results/competitor-reference.json"
 
 
 class Candidate(PublicModel):
-    schema_version: Literal[2, 3, 4, 5, 6]
+    schema_version: Literal[2, 3, 4, 5, 6, 7]
     campaign_id: Identifier
     agent_sha: Sha
     runner_sha: Sha
@@ -568,11 +579,13 @@ def check_catalog(candidate: Candidate, path: Path) -> None:
         if group.id in {"bu-bench", "online-mind2web"}:
             continue
         # Approved figures keep the pairing they were measured under, but a new measurement is held to the current
-        # one: fastbrowse with its own browser pool against jev-ultrafast.
-        if group.id == "internal-ultrafast" and candidate.schema_version < POOL_ULTRAFAST_SCHEMA:
-            raise ValueError(f"new internal-ultrafast rows pair fastbrowse-pool, from schema {POOL_ULTRAFAST_SCHEMA}")
+        # one: fastbrowse with its own browser pool against browser-use-ultrafast.
+        if group.id == "internal-ultrafast" and candidate.schema_version < BU_ULTRAFAST_SCHEMA:
+            raise ValueError(
+                f"new internal-ultrafast rows pair browser-use-ultrafast, from schema {BU_ULTRAFAST_SCHEMA}"
+            )
         # A comparison covers the tasks every one of its arms is eligible for: the pool runs every fastbrowse task,
-        # so the Ultrafast comparison covers the tasks fastbrowse and jev-ultrafast share whichever backend it ran.
+        # so the Ultrafast comparison covers the tasks fastbrowse and browser-use-ultrafast share.
         # A partial arm is left out of the task set, which is the same whichever arms ran, and runs its own part.
         arms = group_arms(group.id, candidate.schema_version)
         partial = COVERAGE[group.id].partial

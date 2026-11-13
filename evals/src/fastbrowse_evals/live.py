@@ -1,27 +1,27 @@
 """Head-to-head on live sites, for exactly three comparisons, each run as its own invocation with its two arms:
 agent against agent (fastbrowse against the hosted Browser Use agent on API V4: browser-use on its default model and
-browser-use-ultrafast on bu-ultrafast, plus jev-ultrafast, browser-harness and browser-use-oss, the open-source
-browser-use 1.0 on its defaults), backend against backend (fastbrowse on the Browser Use Cloud browser against
-fastbrowse-pool), and fastbrowse on its own backend against Jev Ultrafast (fastbrowse-pool against jev-ultrafast). Pass each comparison's two arms with --arms;
+browser-use-ultrafast on bu-ultrafast, plus browser-harness and browser-use-oss, the open-source browser-use 1.0 on
+its defaults), backend against backend (fastbrowse on the Browser Use Cloud browser against fastbrowse-pool), and
+fastbrowse on its own backend against BU Ultrafast (fastbrowse-pool against browser-use-ultrafast). Pass each
+comparison's two arms with --arms;
 fastbrowse-pool needs the pool credentials, so it is opt-in like browser-use-oss, cua-codex and
 browser-harness (Codex with Browser Harness, fastbrowse_evals/adapters/browser_harness_arm.py).
 
     uv run --extra browser python -m fastbrowse_evals.live [--only TASK_ID ...] [--category CATEGORY ...]
-        [--arms fastbrowse fastbrowse-pool jev-ultrafast browser-use]
+        [--arms fastbrowse fastbrowse-pool browser-use-ultrafast browser-use]
         [--judge-policy POLICY] [--repeat N] [--record DIR]
         [--out artifacts/evals/live.jsonl]
 
-Needs BROWSER_USE_API_KEY (every arm but fastbrowse-pool), and OPENROUTER_API_KEY for Jev and the LLM (fastbrowse,
-fastbrowse-pool and jev-ultrafast arms). The fastbrowse-pool arm also needs PARALLAX_POOL_URL and PARALLAX_POOL_TOKEN.
+Needs BROWSER_USE_API_KEY (every arm but fastbrowse-pool), and OPENROUTER_API_KEY for Jev and the LLM (fastbrowse and
+fastbrowse-pool arms). The fastbrowse-pool arm also needs PARALLAX_POOL_URL and PARALLAX_POOL_TOKEN.
 Each run prints a WATCH line with the URL where its browser can be watched live.
 
-The fastbrowse and jev-ultrafast arms each drive a fresh Browser Use Cloud browser the harness starts
-(`fastbrowse_evals.browsers`); the hosted Browser Use agent brings its own. fastbrowse-pool is the same fastbrowse
+The fastbrowse arm drives a fresh Browser Use Cloud browser the harness starts (`fastbrowse_evals.browsers`); the
+hosted Browser Use agent brings its own. fastbrowse-pool is the same fastbrowse
 run on a browser leased from our own browser pool (fastbrowse-hosted's deploy/browser-pool), so fastbrowse against
 fastbrowse-pool is a matched A/B of the browser backend alone. fastbrowse runs through its public `run_task` only,
 attached to the harness's browser, with the keys and Jev route of `fastbrowse_evals.backend`; the harness reads
 every arm's final page itself (`fastbrowse_evals.final_page`).
-jev-ultrafast runs as its published package in an environment of its own (see fastbrowse_evals/adapters/ultrafast_arm.py).
 
 Every run gets `AGENT_LIMITS`, which has no step, time, dollar or model-call limit. Without `--request-profiles`,
 the approved `--budget` only decides whether a new physical run may start (`fastbrowse_evals.budget`); it is
@@ -41,9 +41,9 @@ Each task runs on every arm that can be graded on it on equal terms (`eligible`)
 head-to-head arm skips one (`excluded_because`). The hosted Browser Use run keeps its browser alive after its agent
 finishes (`HOSTED_KEEP_ALIVE_SECONDS`), so the harness reads the page it ended on through that browser, grades it on
 navigation tasks too, then stops it; its recorded usage is read after stopping and retained as provisional. It skips only the task
-that passes by stopping before an unauthorized step, since V4 takes no authorization setting and no pause.
-jev-ultrafast returns no answer, only DONE or BLOCKED, so it runs only the navigation tasks, which are graded on the
-page a run ends on. fastbrowse must also end with the task's expected status, and jev-ultrafast with DONE.
+that passes by stopping before an unauthorized step, since V4 takes no authorization setting and no pause; both
+hosted models (browser-use and browser-use-ultrafast) run the same tasks. fastbrowse must also end with the task's
+expected status.
 fastbrowse-pool runs every task fastbrowse runs.
 
 Every run is graded by `deepseek/deepseek-v4.1-flash` through OpenRouter alone (`JUDGE_POLICY`, the only policy
@@ -114,7 +114,6 @@ from fastbrowse_evals.attempt_clock import (
     setup_seconds,
 )
 from fastbrowse_evals.backend import (
-    JEV_DOLLARS_PER_INPUT_TOKEN,
     RETRYABLE_STATUS,
     TRANSIENT_TRANSPORT,
     NotStarted,
@@ -131,7 +130,7 @@ from fastbrowse_evals.browsers import (
 )
 from fastbrowse_evals.budget import POLICY, BudgetStop, CampaignBudget
 from fastbrowse_evals.evidence import once, parts, parts_v5, run_evidence, shared_step
-from fastbrowse_evals.final_page import EVIDENCE, VIEWPORT, FinalPage, FrameViewport, observe_browser, prepared_tab
+from fastbrowse_evals.final_page import VIEWPORT, FinalPage, FrameViewport, observe_browser, prepared_tab
 from fastbrowse_evals.judging import (
     EVIDENCE_QUESTIONS,
     JUDGE_MODEL,
@@ -162,7 +161,6 @@ AGENT_LIMITS = Limits()
 budgeted or not, in the internal and official runners alike. A cap ends hard tasks early and scores the cap rather
 than the agent, so the benchmark never sets one; the approved campaign budget gates only the start of new physical runs (`fastbrowse_evals.budget`)."""
 _local_browser: ContextVar[Path | None] = ContextVar("internal_local_browser", default=None)
-_ultra_billing: ContextVar[dict[str, Any] | None] = ContextVar("ultrafast_billing", default=None)
 
 HOSTED_UNCAPPED_USD = "1000"
 """`max_cost_usd` for every hosted Browser Use run. Browser Use applies a budget of its own when the field is omitted
@@ -176,17 +174,6 @@ PROVIDER_LIMITS = (
 """Bounds imposed by a provider that no request can lift, recorded with every row rather than hidden."""
 
 SDK_VERSION = package_version("browser-use-sdk")
-ULTRAFAST_COMMIT = arm_pins.pinned("browser-use/jev-ultrafast")
-ULTRAFAST = f"jev-ultrafast @ git+https://github.com/browser-use/jev-ultrafast@{ULTRAFAST_COMMIT}"
-ULTRAFAST_PIN = f"jev-ultrafast commit {ULTRAFAST_COMMIT}"
-"""The arm's pin as the catalog and a published source record it. The install spec above holds a URL, which public
-text may not name."""
-ULTRAFAST_RUNNER = Path(__file__).with_name("adapters") / "ultrafast_arm.py"
-ULTRAFAST_COMMAND = ("uv", "run", "--no-project", "--quiet", "--python", "3.14", "--with", ULTRAFAST, "python")
-ULTRAFAST_TEXT_MODEL = "google/gemini-3.1-flash-lite"
-"""jev-ultrafast's text helper on OpenRouter, reasoning off as its .env.example sets it. Its configured model,
-inception/mercury-2.5, has no provider on OpenRouter any more (every request answers 404); this is the model its
-docs/performance.md probed beside Mercury on the same fields and found correct."""
 OUTAGE_RETRIES = 5
 """Runs of a row a provider outage, or an interruption the judge found (`judged_unavailable`), ended, after the
 first, waiting 1, 2, 4, 8 then 10 minutes: about 25 minutes, past the 503 spells seen so far. A row still unavailable then is recorded, and left out of every published figure."""
@@ -233,7 +220,7 @@ def _secrets(task: LiveTask) -> ScopedSecrets | None:
 
 
 def video_path(folder: Path, arm: str, task: LiveTask) -> Path:
-    """The first free DIR/<arm>/<task>-<n>.mp4, absolute because the ultrafast runner has its own working directory.
+    """The first free DIR/<arm>/<task>-<n>.mp4, absolute because an adapter runner has its own working directory.
 
     Counting past existing files means repeated invocations never overwrite a video. The name is claimed by creating
     it empty: every repeat is allocated before any run writes, so an existence check alone gave them all one name.
@@ -418,9 +405,8 @@ BLIND_STEP = frozenset(
 
 def blind_report(report: Mapping[str, JsonValue], ending: Ending) -> dict[str, JsonValue]:
     """`report` as a judge blind to the arm reads it, by one rule for every arm: its ending in the vocabulary every arm
-    shares, instead of the word only one arm uses, and its steps. An arm logs its steps in `step_log` or, jev-ultrafast
-    alone, `decision_log`. The ledger row keeps the whole report."""
-    logged = report.get("step_log") or report.get("decision_log")
+    shares, instead of the word only one arm uses, and its steps (`step_log`). The ledger row keeps the whole report."""
+    logged = report.get("step_log")
     steps = logged if isinstance(logged, list) else []
     return {
         "ending": ending.value,
@@ -682,25 +668,13 @@ class ArmReport(BaseModel):
     """fastbrowse's `jev_calls` by decision purpose (action, read, verify, ...), so a cut is measured by where it
     landed."""
     tokens_per_second: float | None = None
-    # jev-ultrafast
-    actions: int | None = None
-    decisions: int | None = None
-    """Model choices made, of which `actions` were executed: a stale page discards a choice before it acts."""
     step_cap: int | None = None
-    decision_cap: int | None = None
-    step_cap_unit: Literal["actions", "steps", "tool_calls"] | None = None
-    """The unit `step_cap` counts in: this arm's actions, fastbrowse's steps."""
-    decision_log: list[JsonValue] = []
-    stale: list[JsonValue] = []
-    """Each choice upstream discarded as stale, with its exact reason."""
-    last_exception: str | None = None
-    last_offered: JsonValue = None
+    step_cap_unit: Literal["steps", "tool_calls"] | None = None
+    """The unit `step_cap` counts in: fastbrowse's steps, an adapter's tool calls."""
     final_page_url: str | None = None
     artifact: str | None = None
-    """Per-step offered controls and the full action history, written beside the video when recording."""
-    text_helpers: list[str] = []
+    """An adapter's per-attempt directory: its request, transcript and the files it wrote."""
     provenance: dict[str, JsonValue] = {}
-    unmetered_requests: int | None = None
     text_model: str | None = None
     # the Browser Use agent
     model: str | None = None
@@ -779,38 +753,6 @@ class EvalRow(ArmReport):
 
 
 _completed_attempt: ContextVar[EvalRow | None] = ContextVar("live_completed_attempt", default=None)
-
-
-class _UltrafastReport(BaseModel):
-    """The jev-ultrafast runner's result line (`fastbrowse_evals/adapters/ultrafast_arm.py`)."""
-
-    status: str
-    error: str | None
-    seconds: float
-    steps: int
-    actions: int
-    trace: list[str]
-    setup_seconds: float = 0.0
-    """Connecting and opening the first page, before the runner's `seconds` began."""
-    failure_class: Literal["browser_transport", "site_http"] | None = None
-    decisions: int | None = None
-    step_cap: int | None = None
-    decision_cap: int | None = None
-    step_cap_unit: Literal["actions", "steps"] | None = None
-    decision_log: list[JsonValue] = []
-    stale: list[JsonValue] = []
-    last_exception: str | None = None
-    last_offered: JsonValue = None
-    final_page_url: str | None = None
-    final_page: FinalPage = FinalPage(error="the runner sent no final page")
-    """Read inside the runner before its browser daemon restarts, which resets the emulated viewport."""
-    artifact: str | None = None
-    text_helpers: list[str] = []
-    provenance: dict[str, JsonValue] = {}
-    jev_dollars: float
-    text_dollars: float
-    unmetered_requests: int
-    text_model: str | None
 
 
 def _page_of(final: FinalPage) -> tuple[PageEvidence | None, bool]:
@@ -950,39 +892,6 @@ async def _on_fast_event(arm: str, task: LiveTask, event: StepEvent | BrowserEve
         _watch(arm, task, event.live_url)
 
 
-async def prepare_ultrafast() -> None:
-    """Install jev-ultrafast's environment once, so no run is timed installing it."""
-    with tempfile.TemporaryDirectory(prefix="ultra-prepare-") as runtime:
-        await run_command(
-            (*ULTRAFAST_COMMAND, "-c", "import jev_ultrafast"),
-            b"",
-            seconds=None,
-            environment=arm_environment("jev-ultrafast", runtime),
-            cwd=runtime,
-        )
-
-
-def _ultrafast_env(cdp_ws: str, runtime: str) -> dict[str, str]:
-    env = arm_environment("jev-ultrafast", runtime)
-    # The isolated runner cannot import fastbrowse, so it is handed the Jev route the fastbrowse arms are given.
-    key_name, base_url, model, key = backend.jev_route()
-    env[key_name] = key
-    return env | {
-        "TEXT_MODEL_API_KEY": backend.openrouter_key(),
-        "TEXT_MODEL_BASE_URL": "https://openrouter.ai/api/v1",
-        "TEXT_MODEL": ULTRAFAST_TEXT_MODEL,
-        "TEXT_MODEL_REASONING": "none",
-        "BU_CDP_WS": cdp_ws,
-        "BU_NAME": "fastbrowse-eval",
-        "BH_RUNTIME_DIR": runtime,
-        "BH_TELEMETRY": "0",
-        "BH_UPDATE_CHECK": "0",
-        "BH_TAB_MARKER": "0",
-        "FASTBROWSE_JEV_BASE_URL": base_url,
-        "FASTBROWSE_JEV_MODEL": model,
-    }
-
-
 def _browser_dollars(cost: Sequence[CostLine]) -> tuple[float, bool]:
     """A cloud browser's known dollars, and whether any of its lines was unpriced."""
     return sum(line.dollars or 0 for line in cost), any(line.dollars is None for line in cost)
@@ -992,83 +901,6 @@ def _known_components(lines: Sequence[CostLine]) -> dict[str, float]:
     """Dollars by component; a component with an unpriced line has no figure, which a zero would misstate."""
     known = {line.component for line in lines} - {line.component for line in lines if line.dollars is None}
     return {c.value: sum(line.dollars or 0 for line in lines if line.component == c) for c in known}
-
-
-async def ultrafast_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path | None) -> tuple[Outcome, ArmReport]:
-    async with cloud_browser(http, screen=_screen(task)) as cloud:
-        session_ready()
-        _watch("jev-ultrafast", task, cloud.live_url)
-        request = {
-            "start": task.start,
-            "goal": prompt(task),
-            "cdp_ws": cloud.cdp_url,
-            # Uncapped: the runner stops on no action or decision count, and its meter reserves nothing.
-            "max_steps": None,
-            "record": None if record is None else str(record),
-            "jev_dollars_per_input_token": JEV_DOLLARS_PER_INPUT_TOKEN,
-            "evidence_script": EVIDENCE,
-            "max_dollars": None,
-            "max_seconds": None,
-            **(_ultra_billing.get() or {}),
-        }
-        with tempfile.TemporaryDirectory(prefix="bh-") as runtime:
-            ran = _UltrafastReport.model_validate_json(
-                await _invoke(
-                    ULTRAFAST_COMMAND, ULTRAFAST_RUNNER, request, _ultrafast_env(cloud.cdp_url, runtime), runtime
-                )
-            )
-        session_answered()
-        # The runner read the evidence at its own viewport before its daemon reset it; the controls are read here, by
-        # the same observer every arm's final page goes through.
-        final = ran.final_page
-        if final.error is None:
-            final = await observe_browser(
-                cloud.cdp_url,
-                url=final.url,
-                evidence=final.evidence,
-                secrets=task.secrets if not task.bitwarden_item else None,
-            )
-    browser, unpriced = _browser_dollars(cloud.cost)
-    dollars = ran.jev_dollars + ran.text_dollars + browser
-    unknown = bool(ran.unmetered_requests) or unpriced
-    report = ArmReport(
-        status=ran.status,
-        seconds=round(ran.seconds, 2),
-        session_open_seconds=round((cloud.open_seconds or 0.0) + ran.setup_seconds, 2),
-        session_close_seconds=cloud.close_seconds,
-        dollars=None if unknown else dollars,
-        unknown_cost=unknown,
-        error=ran.error,
-        steps=ran.steps,
-        trace=ran.trace,
-        cost_by_component=({} if ran.unmetered_requests else {"jev": ran.jev_dollars, "llm": ran.text_dollars})
-        | ({} if unpriced else {"browser": browser}),
-        actions=ran.actions,
-        **ran.model_dump(
-            include={
-                "failure_class",
-                "decisions",
-                "step_cap",
-                "decision_cap",
-                "step_cap_unit",
-                "stale",
-                "last_exception",
-                "last_offered",
-                "final_page_url",
-                "artifact",
-                "text_helpers",
-                "provenance",
-            }
-        ),
-        decision_log=_scrubbed(ran.decision_log, task.secrets),
-        unmetered_requests=ran.unmetered_requests,
-        text_model=ran.text_model,
-        observe_error=final.error,
-        final_page_capture=final.frame,
-        final_page_capture_viewport=final.frame_viewport,
-        final_page_capture_withheld=final.frame_withheld,
-    )
-    return Outcome(None, None, final.url, None, final.controls, *_page_of(final)), report
 
 
 async def _down(task: LiveTask, http: httpx.AsyncClient) -> str | None:
@@ -2056,12 +1888,13 @@ OSS_MODEL = "bu-fast"
 """browser-use 1.0's default model (`Agent(llm=None)`), a Browser Use gateway alias at its own reasoning effort."""
 OSS_PIN = f"{OSS_PACKAGE}; default model {OSS_MODEL}, default mode (ultrafast on {OSS_MODEL})"
 OSS_COMMAND = ("uv", "run", "--no-project", "--quiet", "--python", "3.12", "--with", OSS_PACKAGE, "python")
-OSS_RUNNER = ULTRAFAST_RUNNER.with_name("browser_use_oss_arm.py")
-CUA_RUNNER = ULTRAFAST_RUNNER.with_name("cua_codex_arm.py")
+ADAPTERS = Path(__file__).with_name("adapters")
+OSS_RUNNER = ADAPTERS / "browser_use_oss_arm.py"
+CUA_RUNNER = ADAPTERS / "cua_codex_arm.py"
 CUA_MODEL = "gpt-6-astra"
 CODEX_PIN = f"codex-cli=={arm_pins.pinned('@openai/codex')}"
 CUA_PIN = f"cua-driver=={arm_pins.pinned('cua-driver')}; {CODEX_PIN}"
-HARNESS_RUNNER = ULTRAFAST_RUNNER.with_name("browser_harness_arm.py")
+HARNESS_RUNNER = ADAPTERS / "browser_harness_arm.py"
 HARNESS_PACKAGE = f"browser-harness=={arm_pins.pinned('browser-harness')}"
 HARNESS_PIN = f"{HARNESS_PACKAGE}; {CODEX_PIN}; cli+skill"
 HARNESS_COMMAND = (
@@ -2413,7 +2246,7 @@ async def harness_arm(task: LiveTask, http: httpx.AsyncClient, *, record: Path |
     unknown = ran.dollars is None or unpriced
     return Outcome(ran.answer, ran.data, final.url, None, final.controls, *_page_of(final)), ArmReport(
         status=ran.status,
-        # Timed inside the runner as jev-ultrafast is, so no arm is charged for resolving and importing itself.
+        # Timed inside the runner, so no arm is charged for resolving and importing itself.
         seconds=round(ran.seconds, 2),
         session_open_seconds=cloud.open_seconds,
         session_close_seconds=cloud.close_seconds,
@@ -2735,10 +2568,6 @@ async def _run_product(task: LiveTask, http: httpx.AsyncClient, _: Path, **kwarg
     return hosted_api.outcome_of(run), ArmReport(**hosted_api.report_fields(run, wall))
 
 
-async def _run_ultra(task: LiveTask, http: httpx.AsyncClient, _: Path, **kwargs: Any) -> tuple[Outcome, ArmReport]:
-    return await ultrafast_arm(task, http, record=kwargs["record"])
-
-
 async def _run_hosted(task: LiveTask, http: httpx.AsyncClient, _: Path, **kwargs: Any) -> tuple[Outcome, ArmReport]:
     return await hosted_arm(task, http, record=kwargs["record"], arm="browser-use")
 
@@ -2761,10 +2590,6 @@ async def _run_harness(task: LiveTask, http: httpx.AsyncClient, _: Path, **kwarg
     return await harness_arm(task, http, record=kwargs["record"])
 
 
-async def _prepare_ultra() -> None:
-    await prepare_ultrafast()
-
-
 ARMS: dict[str, ArmSpec] = {
     "fastbrowse": ArmSpec(runner=_run_fast, pin="run.fastbrowse_version + run.git_sha", env_allowlist=(), tier="A"),
     "fastbrowse-pool": ArmSpec(
@@ -2780,13 +2605,6 @@ ARMS: dict[str, ArmSpec] = {
         env_allowlist=(),
         tier="hosted",
         default=False,
-    ),
-    "jev-ultrafast": ArmSpec(
-        runner=_run_ultra,
-        pin=ULTRAFAST_PIN,
-        env_allowlist=_RUNTIME_ENV,
-        tier="A",
-        prepare=_prepare_ultra,
     ),
     "browser-use": ArmSpec(
         runner=_run_hosted,
@@ -2821,7 +2639,6 @@ HEAD_TO_HEAD_ARMS = (
     "fastbrowse",
     "browser-use",
     "browser-use-ultrafast",
-    "jev-ultrafast",
     "browser-harness",
     "browser-use-oss",
 )
@@ -2841,15 +2658,6 @@ def excluded_because(arm: str, task: LiveTask) -> str | None:
             "the task passes only by stopping before an irreversible step it does not authorize, and the hosted "
             "Browser Use API takes no authorization setting and no pause, so it cannot be told the step is unauthorized"
         )
-    if arm == "jev-ultrafast" and task.expect is not Status.COMPLETE:
-        return (
-            "the task passes only by stopping before an irreversible step it does not authorize, and it takes no "
-            "authorization setting and has no way to ask: it only ends done or blocked"
-        )
-    if arm == "jev-ultrafast" and (task.secrets or task.bitwarden_item is not None):
-        return "the task needs login credentials, and it has no way to be given any"
-    if arm == "jev-ultrafast":
-        return "the task asks for an answer, and it returns none: it only ends done or blocked"
     if arm in {"browser-harness", "browser-use-oss"} and task.expect is not Status.COMPLETE:
         return (
             "the task passes only by stopping before an irreversible step it does not authorize, and it takes no "
@@ -2880,10 +2688,6 @@ def eligible(arm: str, task: LiveTask) -> bool:
     if arm == "browser-use-ultrafast":
         # The same hosted agent on another model: every task the hosted arm runs.
         return eligible("browser-use", task)
-    if arm == "jev-ultrafast":
-        # It ends only DONE or BLOCKED and returns no answer, so it runs only the tasks graded on the page it ends on,
-        # which name it in their own `arms`.
-        return arm in task.arms
     if arm in {"cua-codex", "browser-harness", "browser-use-oss"}:
         # Agents that take no credentials and no authorization setting: completion tasks without credentials.
         # browser-use 1.0 does take `sensitive_data`, but says it is no sandbox: the Python its model writes can read
@@ -2954,7 +2758,7 @@ def browser_identity(arm: str, local_browser: Path | None) -> dict[str, Any]:
         return {"mode": "browser-use-cloud", "timeout_minutes": CLOUD_BROWSER_MINUTES}
     if arm == "fastbrowse-pool":
         return {"mode": "fastbrowse-pool", "host": pool_host()}
-    if arm in {"jev-ultrafast", "browser-use-oss", "browser-harness"}:
+    if arm in {"browser-use-oss", "browser-harness"}:
         return {"mode": "browser-use-cloud", "timeout_minutes": CLOUD_BROWSER_MINUTES}
     if arm in HOSTED_MODELS:
         return {"mode": "browser-use-hosted"}
@@ -2984,8 +2788,8 @@ async def main(argv: list[str]) -> int:
         nargs="*",
         default=[name for name, spec in ARMS.items() if spec.default],
         choices=list(ARMS),
-        help="pass a comparison's two arms; jev-ultrafast is Browser Use Ultrafast, browser-use the hosted Browser Use "
-        "agent; fastbrowse-pool, browser-use-oss, cua-codex and browser-harness are opt-in",
+        help="pass a comparison's two arms; browser-use is the hosted Browser Use agent on its default model, "
+        "browser-use-ultrafast the same agent on bu-ultrafast; fastbrowse-pool, browser-use-oss, cua-codex and browser-harness are opt-in",
     )
     parser.add_argument(
         "--request-profiles",
@@ -3020,10 +2824,6 @@ async def main(argv: list[str]) -> int:
         default=1,
         help="estimated judge spend held per run alongside the agent and browser holds",
     )
-    parser.add_argument("--text-input-usd-per-mtok", type=float)
-    parser.add_argument("--text-output-usd-per-mtok", type=float)
-    parser.add_argument("--text-max-output-tokens", type=int, default=16384)
-    parser.add_argument("--text-pricing-checked", help="date the Ultrafast helper prices were verified")
     parser.add_argument(
         "--judge-policy",
         choices=JUDGE_POLICIES,
@@ -3131,18 +2931,11 @@ async def main(argv: list[str]) -> int:
     fastbrowse_arms = {"fastbrowse", "fastbrowse-pool"} & set(args.arms)
     # Each fastbrowse row records the providers its run named (`provenance.providers`); the run records the Jev source
     # every arm that calls Jev was given.
-    jev = (
-        "jev openrouter"
-        if request_spec is not None
-        else backend.providers()
-        if fastbrowse_arms or "jev-ultrafast" in args.arms
-        else None
-    )
+    jev = "jev openrouter" if request_spec is not None else backend.providers() if fastbrowse_arms else None
     if jev is not None:
         print(f"PROVIDERS {jev}", flush=True)
     run = provenance(
         providers=jev,
-        jev_ultrafast=ULTRAFAST if "jev-ultrafast" in args.arms else None,
         arms={name: {"pin": ARMS[name].pin, "tier": ARMS[name].tier} for name in args.arms},
         argv=list(argv),
         concurrency=args.concurrency,
@@ -3163,11 +2956,6 @@ async def main(argv: list[str]) -> int:
         provider_limits=list(PROVIDER_LIMITS),
         judge_policy=args.judge_policy,
         browsers={name: browser_identity(name, args.local_browser) for name in args.arms},
-        text_pricing_checked=args.text_pricing_checked,
-        text_pricing_source="https://openrouter.ai/api/v1/models",
-        text_input_price=args.text_input_usd_per_mtok,
-        text_output_price=args.text_output_usd_per_mtok,
-        text_max_output_tokens=args.text_max_output_tokens,
     )
     if request_spec is not None:
         run.update(request_spec.provenance())
@@ -3264,13 +3052,6 @@ async def main(argv: list[str]) -> int:
                             if spend is not None:
                                 await spend.reserve(receipt)
                             browser_token = _local_browser.set(args.local_browser if arm == "fastbrowse" else None)
-                            price_token = _ultra_billing.set(
-                                {
-                                    "text_input_price": (args.text_input_usd_per_mtok or 0) / 1_000_000,
-                                    "text_output_price": (args.text_output_usd_per_mtok or 0) / 1_000_000,
-                                    "text_max_output_tokens": args.text_max_output_tokens,
-                                }
-                            )
                             try:
                                 row = await run_arm(
                                     arm,
@@ -3311,7 +3092,6 @@ async def main(argv: list[str]) -> int:
                                 raise
                             finally:
                                 _local_browser.reset(browser_token)
-                                _ultra_billing.reset(price_token)
                             if spend is not None:
                                 # The run's charge is its agent and judge spend; unknown if either is, and zero for a
                                 # run its provider refused to start. A charge above its hold is recorded as it is; it

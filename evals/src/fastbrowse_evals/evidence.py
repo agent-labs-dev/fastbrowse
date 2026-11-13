@@ -84,7 +84,7 @@ def run_evidence(report: Mapping[str, Any], quotes: JsonValue) -> dict[str, Json
         elif event.get("event") in ("page", "read") and event.get("text") is not None:
             seen = {k: event[k] for k in ("url", "title", "status", "text", "controls") if event.get(k) is not None}
             saw.setdefault(at, []).append(pages.add(seen))
-    logged = report.get("step_log") or report.get("decision_log")
+    logged = report.get("step_log")
     timeline: list[JsonValue] = []
     by_step: dict[int, list[str]] = {}
     for position, step in enumerate(logged if isinstance(logged, list) else ()):

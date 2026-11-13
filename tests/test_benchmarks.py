@@ -44,8 +44,8 @@ def candidate() -> dict:
         (
             "internal-ultrafast",
             "task-success",
-            ["fastbrowse-pool", "jev-ultrafast"],
-            sorted(t["id"] for t in tasks if "jev-ultrafast" in t["arms"]),
+            ["fastbrowse-pool", "browser-use-ultrafast"],
+            sorted(t["id"] for t in tasks if "browser-use-ultrafast" in t["arms"]),
             3,
         ),
         ("bu-bench", "weighted-rubric", ["fastbrowse"], [f"bu-{i}" for i in range(200)], 1),
@@ -1212,8 +1212,14 @@ def test_bare_status_reads_the_staged_candidate(tmp_path, monkeypatch):
     assert seen == [Path("docs/results/benchmark-candidate.json")]
 
 
-def _ultrafast(candidate: dict, schema: int, arms: tuple[str, ...]) -> dict:
+NAVIGATION = ["arxiv-open", "flights-search", "github-open", "hn-comments", "pypi-open", "wiki-open"]
+"""The six tasks the Ultrafast comparison ran before schema 7, when it measured jev-ultrafast."""
+
+
+def _ultrafast(candidate: dict, schema: int, arms: tuple[str, ...], task_ids: list[str] | None = None) -> dict:
     group = copy.deepcopy(candidate["groups"][1])
+    if task_ids is not None:
+        group["task_ids"] = task_ids
     template = group["rows"][0]
     group["rows"] = [
         {**template, "task": t, "repeat": r, "arm": a} for t in group["task_ids"] for r in range(3) for a in arms
@@ -1222,35 +1228,39 @@ def _ultrafast(candidate: dict, schema: int, arms: tuple[str, ...]) -> dict:
 
 
 @pytest.mark.parametrize(
-    ("schema", "arms", "valid"),
+    ("schema", "arms", "task_ids", "valid"),
     [
-        # Schema 5 compares the two products each on its own backend: fastbrowse's pool against jev-ultrafast.
-        (5, ("fastbrowse-pool", "jev-ultrafast"), True),
-        (5, ("fastbrowse", "jev-ultrafast"), False),
-        # Figures approved before keep the pairing they were measured under.
-        (4, ("fastbrowse", "jev-ultrafast"), True),
-        (4, ("fastbrowse-pool", "jev-ultrafast"), False),
+        # Schema 7 compares fastbrowse on its own pool with the hosted agent on bu-ultrafast, on every task both run.
+        (7, ("fastbrowse-pool", "browser-use-ultrafast"), None, True),
+        (7, ("fastbrowse-pool", "jev-ultrafast"), None, False),
+        # Figures approved before keep the pairing they were measured under: from 5 the pool against jev-ultrafast,
+        # before it fastbrowse on a cloud browser.
+        (5, ("fastbrowse-pool", "jev-ultrafast"), NAVIGATION, True),
+        (5, ("fastbrowse", "jev-ultrafast"), NAVIGATION, False),
+        (5, ("fastbrowse-pool", "browser-use-ultrafast"), NAVIGATION, False),
+        (4, ("fastbrowse", "jev-ultrafast"), NAVIGATION, True),
+        (4, ("fastbrowse-pool", "jev-ultrafast"), NAVIGATION, False),
     ],
 )
-def test_the_ultrafast_pairing_follows_the_schema(candidate, schema, arms, valid):
-    data = _ultrafast(candidate, schema, arms)
+def test_the_ultrafast_pairing_follows_the_schema(candidate, schema, arms, task_ids, valid):
+    data = _ultrafast(candidate, schema, arms, task_ids)
     if not valid:
         with pytest.raises(ValidationError, match="internal-ultrafast measures only"):
             Candidate.model_validate(data)
         return
     parsed = Candidate.model_validate(data)
-    assert len(parsed.groups[0].task_ids) == 6
-    if schema < 5:
-        # The old pairing still reads, but a new measurement on the current catalog must use the pool.
-        with pytest.raises(ValueError, match="pair fastbrowse-pool"):
+    if schema < 7:
+        # The old pairing still reads, but a new measurement on the current catalog must use the current one.
+        with pytest.raises(ValueError, match="pair browser-use-ultrafast"):
             check_catalog(parsed, CATALOG)
     else:
+        assert len(parsed.groups[0].task_ids) == 52
         check_catalog(parsed, CATALOG)
 
 
 def test_the_pool_arm_is_the_one_guarded_in_the_ultrafast_comparison(candidate):
-    before = Candidate.model_validate(_ultrafast(candidate, 5, ("fastbrowse-pool", "jev-ultrafast")))
-    data = _ultrafast(candidate, 5, ("fastbrowse-pool", "jev-ultrafast"))
+    before = Candidate.model_validate(_ultrafast(candidate, SCHEMA, ("fastbrowse-pool", "browser-use-ultrafast")))
+    data = _ultrafast(candidate, SCHEMA, ("fastbrowse-pool", "browser-use-ultrafast"))
     task = data["groups"][0]["task_ids"][0]
     for row in data["groups"][0]["rows"]:
         if row["task"] == task and row["arm"] == "fastbrowse-pool":
@@ -1259,11 +1269,18 @@ def test_the_pool_arm_is_the_one_guarded_in_the_ultrafast_comparison(candidate):
         regressions(Candidate.model_validate(data), before)
 
 
-def test_repointing_the_ultrafast_comparison_is_a_protocol_change(candidate):
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ((4, ("fastbrowse", "jev-ultrafast")), (5, ("fastbrowse-pool", "jev-ultrafast"))),
+        ((5, ("fastbrowse-pool", "jev-ultrafast")), (7, ("fastbrowse-pool", "browser-use-ultrafast"))),
+    ],
+)
+def test_repointing_the_ultrafast_comparison_is_a_protocol_change(candidate, old, new):
     from fastbrowse.evals.benchmarks import unapproved_changes
 
-    before = Candidate.model_validate(_ultrafast(candidate, 4, ("fastbrowse", "jev-ultrafast")))
-    after = Candidate.model_validate(_ultrafast(candidate, 5, ("fastbrowse-pool", "jev-ultrafast")))
+    before = Candidate.model_validate(_ultrafast(candidate, *old, NAVIGATION))
+    after = Candidate.model_validate(_ultrafast(candidate, *new, NAVIGATION))
     assert unapproved_changes(after, before, CATALOG.read_bytes()) == {"internal-ultrafast"}
     with pytest.raises(ValueError, match="protocol changed: internal-ultrafast"):
         regressions(after, before, CATALOG.read_bytes())
@@ -1292,33 +1309,28 @@ def test_any_collaborator_who_dispatches_publish_evals_publishes_the_approved_fi
 
 
 def _head_to_head(candidate: dict, arms: tuple[str, ...]) -> dict:
-    """The fixture with the head-to-head measured by `arms`: Ultrafast on the tasks of the set the catalog
-    lists it for."""
+    """The fixture with the head-to-head measured by `arms`, each on the tasks of the set the catalog lists it for."""
     out = copy.deepcopy(candidate)
     group = out["groups"][0]
     template = group["rows"][0]
-    own = {
-        "jev-ultrafast": set(out["groups"][1]["task_ids"]),
-        "browser-use": {r["task"] for r in group["rows"] if r["arm"] == "browser-use"},
-    }
+    tasks = [t for suite in json.loads(CATALOG.read_bytes())["suites"].values() for t in suite]
     group["rows"] = [
-        {**template, "task": task, "repeat": repeat, "arm": arm, "dollars": 0.01}
+        {**template, "task": t["id"], "repeat": repeat, "arm": arm, "dollars": 0.01}
         for arm in arms
-        for task in group["task_ids"]
-        if task in own.get(arm, group["task_ids"])
+        for t in tasks
+        if t["id"] in group["task_ids"] and arm in t["arms"]
         for repeat in range(3)
     ]
-    tasks = [t for suite in json.loads(CATALOG.read_bytes())["suites"].values() for t in suite]
-    group["excluded"] = excluded(tasks, group["task_ids"], [a for a in arms if a in own])
+    group["excluded"] = excluded(tasks, group["task_ids"], [a for a in arms if a != "fastbrowse"])
     return out
 
 
 @pytest.mark.parametrize(
     "arms",
     [
-        ("fastbrowse", "browser-use", "jev-ultrafast"),
+        ("fastbrowse", "browser-use", "browser-use-ultrafast", "browser-harness"),
         ("fastbrowse", "browser-use"),
-        ("browser-use", "jev-ultrafast"),
+        ("browser-use", "browser-harness"),
     ],
 )
 def test_the_head_to_head_publishes_whichever_of_its_arms_ran(candidate, arms):
@@ -1346,19 +1358,19 @@ def test_fastbrowse_always_reports_its_cost(candidate):
         Candidate.model_validate(data)
 
 
-def test_ultrafast_runs_exactly_its_part_of_the_head_to_head(candidate):
-    data = _head_to_head(candidate, ("fastbrowse", "jev-ultrafast"))
+def test_a_partial_arm_runs_exactly_its_part_of_the_head_to_head(candidate):
+    data = _head_to_head(candidate, ("fastbrowse", "browser-harness"))
     group = data["groups"][0]
-    dropped = next(r["task"] for r in group["rows"] if r["arm"] == "jev-ultrafast")
-    group["rows"] = [r for r in group["rows"] if not (r["arm"] == "jev-ultrafast" and r["task"] == dropped)]
+    dropped = next(r["task"] for r in group["rows"] if r["arm"] == "browser-harness")
+    group["rows"] = [r for r in group["rows"] if not (r["arm"] == "browser-harness" and r["task"] == dropped)]
     with pytest.raises(ValidationError, match="every scheduled slot"):
         Candidate.model_validate(data)
-    # Listing the dropped task as excluded fills the grid, but the catalog says jev-ultrafast can run it.
+    # Listing the dropped task as excluded fills the grid, but the catalog says browser-harness can run it.
     group["excluded"] = sorted(
-        [*group["excluded"], {"arm": "jev-ultrafast", "task": dropped, "reason": "no reason"}],
+        [*group["excluded"], {"arm": "browser-harness", "task": dropped, "reason": "no reason"}],
         key=lambda e: (e["arm"], e["task"]),
     )
-    with pytest.raises(ValueError, match="jev-ultrafast must run exactly the tasks of its set"):
+    with pytest.raises(ValueError, match="browser-harness must run exactly the tasks of its set"):
         check_catalog(Candidate.model_validate(data), CATALOG)
 
 
@@ -1373,7 +1385,7 @@ def test_a_full_arm_cannot_skip_a_task_of_the_set(candidate):
 
 def test_a_head_to_head_without_fastbrowse_is_not_compared_with_one_that_had_it(candidate):
     published = Candidate.model_validate(_head_to_head(candidate, ("fastbrowse", "browser-use")))
-    vendors = Candidate.model_validate(_head_to_head(candidate, ("browser-use", "jev-ultrafast")))
+    vendors = Candidate.model_validate(_head_to_head(candidate, ("browser-use", "browser-harness")))
     with pytest.raises(ValueError, match="no longer measures fastbrowse"):
         regressions(vendors, published)
 
@@ -1430,7 +1442,9 @@ def test_a_new_schema_row_must_record_its_timing_basis(candidate):
             del row["timing_basis"]
     with pytest.raises(ValidationError, match="must record its timing basis"):
         Candidate.model_validate(data)
-    Candidate.model_validate({**data, "schema_version": 5})
+    # The Ultrafast group's current pairing is schema 7's, so the older schema reads the other groups.
+    older = [g for g in data["groups"] if g["id"] != "internal-ultrafast"]
+    Candidate.model_validate({**data, "schema_version": 5, "groups": older})
 
 
 def test_only_the_session_ready_clock_can_be_published(candidate):

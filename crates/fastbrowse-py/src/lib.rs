@@ -477,17 +477,6 @@ fn totp_period(key: &str) -> PyResult<u64> {
     fastbrowse_cli::totp::period_of(key).map_err(|error| PyValueError::new_err(error.0))
 }
 
-/// The Jev model each decision source sends unless a run names another, by source name, so a harness running Jev
-/// outside fastbrowse runs the release this build runs.
-#[pyfunction]
-fn jev_models() -> std::collections::BTreeMap<&'static str, &'static str> {
-    std::collections::BTreeMap::from([
-        ("openrouter", fastbrowse_clients::system_one::OPENROUTER_MODEL),
-        ("typesafe", fastbrowse_core::decision::JEV_MODEL),
-        ("gateway", fastbrowse_clients::vercel::MODEL),
-    ])
-}
-
 /// The command that reads PDFs: this interpreter running `fastbrowse/_helper.py`, or None where this process is no
 /// interpreter that can be run again.
 ///
@@ -543,7 +532,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(secret_allowed, m)?)?;
     m.add_function(wrap_pyfunction!(totp_at, m)?)?;
     m.add_function(wrap_pyfunction!(totp_period, m)?)?;
-    m.add_function(wrap_pyfunction!(jev_models, m)?)?;
     m.add_class::<connect::Page>()?;
     m.add("PageFailed", m.py().get_type::<connect::PageFailed>())?;
     m.add("CloudFailed", m.py().get_type::<cloud::CloudFailed>())?;

@@ -23,13 +23,10 @@ from fastbrowse.models import CostBreakdown, Unavailable
 
 from fastbrowse_evals import backend, final_page, judging, live, live_tasks, more_tasks
 from fastbrowse_evals.attempt_clock import TIMING_BASIS, AttemptClock
-from fastbrowse_evals.backend import RETRYABLE_STATUS, TRANSIENT_TRANSPORT
 from fastbrowse_evals.browsers import Browser
 from fastbrowse_evals.final_page import FinalPage
 from fastbrowse_evals.live_tasks import TASKS, LiveTask, Outcome, PageEvidence, page_defect
 from fastbrowse_evals.process import CommandError
-
-RUNNER: dict[str, Any] = runpy.run_path(str(live.ULTRAFAST_RUNNER))
 
 
 async def test_cancelled_competitor_stops_child_after_launcher_exits(tmp_path: Path) -> None:
@@ -73,7 +70,7 @@ def test_videos_count_up_past_names_already_claimed(tmp_path: Path) -> None:
     first = live.video_path(tmp_path, "fastbrowse", task("hn-top"))
     assert first == tmp_path.resolve() / "fastbrowse" / "hn-top-1.mp4"
     assert live.video_path(tmp_path, "fastbrowse", task("hn-top")).name == "hn-top-2.mp4"
-    assert live.video_path(tmp_path, "jev-ultrafast", task("hn-top")).name == "hn-top-1.mp4"
+    assert live.video_path(tmp_path, "browser-use-ultrafast", task("hn-top")).name == "hn-top-1.mp4"
 
 
 @pytest.mark.parametrize(
@@ -135,17 +132,15 @@ async def test_an_answer_key_that_will_not_come_back_fails_only_its_task(
             )
         return None
 
-    async def ultrafast_arm(
-        _: LiveTask, __: httpx.AsyncClient, *, record: Path | None
-    ) -> tuple[Outcome, live.ArmReport]:
+    async def runner(*_: Any, **__: Any) -> tuple[Outcome, live.ArmReport]:
         outcome = Outcome("Done.", None, "https://pypi.org/project/httpx/", evidence=_evidence())
         return outcome, live.ArmReport(status="done", dollars=0.001, seconds=3.0)
 
     monkeypatch.setattr(live, "_truth", truth)
-    monkeypatch.setattr(live, "ultrafast_arm", ultrafast_arm)
-    monkeypatch.setattr(live, "prepare_ultrafast", AsyncMock())
+    spec = live.ARMS["browser-use-ultrafast"].model_copy(update={"runner": runner})
+    monkeypatch.setitem(live.ARMS, "browser-use-ultrafast", spec)
     out = tmp_path / "live.jsonl"
-    argv = ["--only", "wiki-open", "pypi-open", "--arms", "jev-ultrafast", "--out", str(out)]
+    argv = ["--only", "wiki-open", "pypi-open", "--arms", "browser-use-ultrafast", "--out", str(out)]
     assert await live.main(argv) == 0
     rows = {row.task: row for row in map(live.EvalRow.model_validate_json, out.read_text().splitlines())}
     assert rows["pypi-open"].passed is None
@@ -154,37 +149,9 @@ async def test_an_answer_key_that_will_not_come_back_fails_only_its_task(
     assert rows["wiki-open"].failure.startswith("truth raised HTTPStatusError")
 
 
-def test_the_runner_answers_a_choice_of_one_option_without_asking_jev(monkeypatch: pytest.MonkeyPatch) -> None:
-    sent: list[dict[str, Any]] = []
-
-    def post(_model: Any, _url: str, _headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
-        sent.append(body)
-        return {"answers": {"operation": {"choice": "TYPE_TEXT"}}, "usage": {"cost": 0.0001}}
-
-    monkeypatch.setenv("TYPESAFE_API_KEY", "key")
-    monkeypatch.setitem(RUNNER["patch_transport"].__globals__, "_post", post)
-    model = SimpleNamespace()
-    RUNNER["patch_transport"](model, RUNNER["Meter"]())
-    questions = {
-        "operation": {"type": "choice", "criteria": {"TYPE_TEXT": "", "DONE": "", "BLOCKED": ""}},
-        "type_text_target": {"type": "choice", "criteria": {"search": "the search box"}},
-    }
-    result = model.post_json("https://api.typesafe.ai/v1/evaluate", "key", {"state": {}, "questions": questions})
-    assert list(sent[0]["questions"]) == ["operation"]
-    assert result["answers"]["type_text_target"]["choice"] == "search"
-    assert result["answers"]["operation"]["choice"] == "TYPE_TEXT"
-
-
 @pytest.mark.parametrize("env", [{}, {"AI_GATEWAY_API_KEY": "obsolete"}])
 def test_jev_defaults_to_openrouter_without_a_supported_key(env: dict[str, str]) -> None:
     assert backend.jev_source(env) == "openrouter"
-
-
-@pytest.mark.parametrize("source,key_name", [("openrouter", "OPENROUTER_API_KEY"), ("typesafe", "TYPESAFE_API_KEY")])
-def test_selected_jev_route_requires_its_key(monkeypatch: pytest.MonkeyPatch, source: str, key_name: str) -> None:
-    monkeypatch.setattr(backend, "environment", lambda: {"FASTBROWSE_DECISION_SOURCE": source})
-    with pytest.raises(backend.MissingKey, match=key_name):
-        backend.jev_route()
 
 
 def test_settings_remove_gateway_backup_and_honor_legacy_source(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -199,84 +166,6 @@ def test_settings_remove_gateway_backup_and_honor_legacy_source(monkeypatch: pyt
 def test_gateway_is_not_a_jev_source() -> None:
     with pytest.raises(backend.MissingKey, match="use openrouter or typesafe"):
         backend.jev_source({"FASTBROWSE_DECISION_SOURCE": "gateway", "AI_GATEWAY_API_KEY": "obsolete"})
-
-
-def test_ultrafast_text_helper_keeps_the_openrouter_wire(monkeypatch: pytest.MonkeyPatch) -> None:
-    body = {"model": live.ULTRAFAST_TEXT_MODEL, "messages": [{"role": "user", "content": "Read the label"}]}
-    response = {"choices": [{"message": {"content": '{"text":"label"}'}}], "usage": {"cost": 0.001}}
-
-    def post(_model: Any, url: str, headers: dict[str, str], sent: dict[str, Any]) -> dict[str, Any]:
-        assert url == "https://openrouter.ai/api/v1/chat/completions"
-        assert headers == {"Authorization": "Bearer or"}
-        assert sent == body
-        return response
-
-    monkeypatch.setitem(RUNNER["patch_transport"].__globals__, "_post", post)
-    model, meter = SimpleNamespace(), RUNNER["Meter"]()
-    RUNNER["patch_transport"](model, meter)
-    assert model.post_json("https://openrouter.ai/api/v1/chat/completions", "or", body) == response
-    assert meter.text == 0.001 and meter.jev == 0 and meter.unmetered == 0
-
-
-@pytest.mark.parametrize(
-    ("source", "url", "key"),
-    [
-        (None, "https://openrouter.ai/api/v1/systemone", "or"),
-        ("openrouter", "https://openrouter.ai/api/v1/systemone", "or"),
-        ("typesafe", "https://api.typesafe.ai/v1/systemone", "ts"),
-    ],
-)
-@pytest.mark.parametrize("pinned", [False, True])
-def test_ultrafast_uses_the_selected_jev_route_and_meters_its_cost(
-    monkeypatch: pytest.MonkeyPatch, source: str | None, url: str, key: str, pinned: bool
-) -> None:
-    configured = {"OPENROUTER_API_KEY": "or", "TYPESAFE_API_KEY": "ts", "AI_GATEWAY_API_KEY": "gw"}
-    if source is not None:
-        configured["FASTBROWSE_DECISION_SOURCE"] = source
-    if pinned:
-        configured |= {"FASTBROWSE_DECISION_BASE_URL": "https://proxy.test/", "FASTBROWSE_DECISION_MODEL": "pinned-jev"}
-    monkeypatch.setattr(backend, "environment", lambda: configured)
-    env = live._ultrafast_env("wss://browser.test", "/tmp/ultrafast-test")
-    assert "AI_GATEWAY_API_KEY" not in env
-    for name in ("TYPESAFE_API_KEY", "AI_GATEWAY_API_KEY", "FASTBROWSE_JEV_BASE_URL", "FASTBROWSE_JEV_MODEL"):
-        monkeypatch.delenv(name, raising=False)
-        if name in env:
-            monkeypatch.setenv(name, env[name])
-
-    def post(_model: Any, endpoint: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
-        path = "/v1/systemone"
-        assert endpoint == (f"https://proxy.test{path}" if pinned else url)
-        assert headers == {"Authorization": f"Bearer {key}"}
-        # The Jev release this fastbrowse build's Rust core sends for the source, never a copy of it.
-        assert body == {
-            "state": {},
-            "questions": {},
-            "model": "pinned-jev" if pinned else backend.jev_models()[source or "openrouter"],
-        }
-        return {"answers": {}, "usage": {"input_tokens": 100, "cost": 0.001}}
-
-    monkeypatch.setitem(RUNNER["patch_transport"].__globals__, "_post", post)
-    model, meter = SimpleNamespace(), RUNNER["Meter"]()
-    RUNNER["patch_transport"](model, meter)
-    model.post_json(
-        "https://api.typesafe.ai/v1/systemone", os.environ["TYPESAFE_API_KEY"], {"state": {}, "questions": {}}
-    )
-    assert meter.jev == 0.001 and meter.text == 0 and meter.unmetered == 0
-
-
-@pytest.mark.parametrize("content", ['{"text": "httpx"}\n```', '```json\n{"text": "httpx"}\n```', '{"text": "httpx"}'])
-def test_the_runner_reads_the_text_helpers_json_past_a_stray_fence(content: str) -> None:
-    assert json.loads(RUNNER["unfenced"](content)) == {"text": "httpx"}
-
-
-def test_each_task_runs_only_where_it_grades_on_equal_terms() -> None:
-    for live_task in TASKS:
-        if "jev-ultrafast" in live_task.arms:
-            # jev-ultrafast has no answer, so its tasks must be graded on the page alone.
-            assert live_task.output_schema is None
-            # The hosted agent is graded on its final page, read through its kept-alive browser, so it runs these too.
-            assert "browser-use" in live_task.arms
-    assert {t.id for t in TASKS if "jev-ultrafast" in t.arms} >= {"wiki-open", "flights-search"}
 
 
 @pytest.mark.parametrize(
@@ -771,24 +660,6 @@ def test_the_first_friday_grader_takes_the_date_as_the_page_shows_it() -> None:
     assert more_tasks._first_friday_check(Outcome("It shows 10/02/2026.", None, None), truth)
 
 
-def test_the_runner_prices_jev_at_list_when_the_provider_reports_zero() -> None:
-    """A zero-dollar provider receipt still needs its token-based list cost."""
-    meter = RUNNER["Meter"](0.042 / 1_000_000)
-    RUNNER["_meter"](meter, "jev", 0.0, 1_000_000)
-    RUNNER["_meter"](meter, "jev", "0.0005", 1_000_000)
-    RUNNER["_meter"](meter, "text", 0.0, 1_000_000)
-    assert meter.jev == pytest.approx(0.042 + 0.0005) and meter.text == 0.0
-
-
-def test_an_error_sent_with_http_200_is_not_an_answer() -> None:
-    """OpenRouter held a wiki-open request open, then sent its error in a 200; upstream failed the run on it."""
-    for code, raised in ((503, RUNNER["Unavailable"]), (400, RuntimeError)):
-        response = SimpleNamespace(status_code=200, is_error=False, json=lambda code=code: {"error": {"code": code}})
-        model = SimpleNamespace(CLIENT=SimpleNamespace(post=lambda *_, response=response, **__: response))
-        with pytest.raises(raised, match=f"error {code} in HTTP 200"):
-            RUNNER["_post"](model, "https://openrouter.ai/api/v1/chat/completions", {}, {})
-
-
 async def test_an_attempt_its_site_stalled_during_is_an_outage_for_any_arm(monkeypatch: pytest.MonkeyPatch) -> None:
     """One day's the-internet.herokuapp.com held requests 30s at a time: nested-frames took 36s, and 7s between."""
     served = iter([httpx.Response(200), httpx.Response(503)])
@@ -915,7 +786,6 @@ async def test_outage_retries_retain_attempts_and_distinct_recordings(
 
     monkeypatch.setattr(live, "OUTAGE_RETRIES", 1)
     monkeypatch.setattr(live, "run_arm", run)
-    monkeypatch.setattr(live, "prepare_ultrafast", AsyncMock())
     monkeypatch.setattr(live, "_truth", AsyncMock(return_value=None))
     monkeypatch.setattr(live, "_site_checked", AsyncMock(side_effect=lambda row, *_: row))
     monkeypatch.setattr(live.SiteWatch, "run", AsyncMock())
@@ -929,7 +799,7 @@ async def test_outage_retries_retain_attempts_and_distinct_recordings(
                 "--only",
                 "wiki-open",
                 "--arms",
-                "jev-ultrafast",
+                "browser-use-ultrafast",
                 "--out",
                 str(out),
                 "--record",
@@ -957,7 +827,6 @@ async def test_outage_retries_retain_attempts_and_distinct_recordings(
 def _live_fakes(monkeypatch: pytest.MonkeyPatch, run: Any, *, truth: Any = None) -> None:
     """The seams `main` calls around a run: no provider, no browser, no answer key, no site probe."""
     monkeypatch.setattr(live, "run_arm", run)
-    monkeypatch.setattr(live, "prepare_ultrafast", AsyncMock())
     monkeypatch.setattr(live, "_truth", truth if truth is not None else AsyncMock(return_value=None))
     monkeypatch.setattr(live, "_site_checked", AsyncMock(side_effect=lambda row, *_: row))
     monkeypatch.setattr(live.SiteWatch, "run", AsyncMock())
@@ -1003,7 +872,9 @@ async def test_a_cancelled_in_flight_attempt_is_persisted_with_its_cost_unknown(
 
     _live_fakes(monkeypatch, run)
     out = tmp_path / "run.jsonl"
-    runner = asyncio.create_task(live.main(["--only", "wiki-open", "--arms", "jev-ultrafast", "--out", str(out)]))
+    runner = asyncio.create_task(
+        live.main(["--only", "wiki-open", "--arms", "browser-use-ultrafast", "--out", str(out)])
+    )
     await _await_started(started, runner)
     runner.cancel()
     await asyncio.gather(runner, return_exceptions=True)
@@ -1023,7 +894,7 @@ async def test_cancelling_the_site_probe_keeps_the_finished_report_price(
 ) -> None:
     probing = asyncio.Event()
     report = live.EvalRow(
-        arm="jev-ultrafast",
+        arm="browser-use-ultrafast",
         task="wiki-open",
         category="navigate",
         at=time.time(),
@@ -1043,7 +914,9 @@ async def test_cancelling_the_site_probe_keeps_the_finished_report_price(
     _live_fakes(monkeypatch, AsyncMock(return_value=report))
     monkeypatch.setattr(live, "_site_checked", probe)
     out = tmp_path / "run.jsonl"
-    runner = asyncio.create_task(live.main(["--only", "wiki-open", "--arms", "jev-ultrafast", "--out", str(out)]))
+    runner = asyncio.create_task(
+        live.main(["--only", "wiki-open", "--arms", "browser-use-ultrafast", "--out", str(out)])
+    )
     await probing.wait()
     runner.cancel()
     await asyncio.gather(runner, return_exceptions=True)
@@ -1068,7 +941,17 @@ async def test_a_cancelled_queued_attempt_writes_no_ledger_row(monkeypatch: pyte
     first = next(t.id for t in TASKS if t.id in {"wiki-open", "pypi-open"})
     runner = asyncio.create_task(
         live.main(
-            ["--only", "wiki-open", "pypi-open", "--arms", "jev-ultrafast", "--concurrency", "1", "--out", str(out)]
+            [
+                "--only",
+                "wiki-open",
+                "pypi-open",
+                "--arms",
+                "browser-use-ultrafast",
+                "--concurrency",
+                "1",
+                "--out",
+                str(out),
+            ]
         )
     )
     await _await_started(started, runner)
@@ -1091,7 +974,9 @@ async def test_a_cancelled_truth_fetch_writes_no_ledger_row(monkeypatch: pytest.
 
     _live_fakes(monkeypatch, run, truth=truth)
     out = tmp_path / "run.jsonl"
-    runner = asyncio.create_task(live.main(["--only", "wiki-open", "--arms", "jev-ultrafast", "--out", str(out)]))
+    runner = asyncio.create_task(
+        live.main(["--only", "wiki-open", "--arms", "browser-use-ultrafast", "--out", str(out)])
+    )
     await _await_started(started, runner)
     runner.cancel()
     await asyncio.gather(runner, return_exceptions=True)
@@ -1129,7 +1014,9 @@ async def test_cancelling_during_a_retry_wait_keeps_one_attempt_row(
     monkeypatch.setattr(live, "OUTAGE_RETRIES", 1)
     monkeypatch.setattr(live.asyncio, "sleep", hang)
     out = tmp_path / "run.jsonl"
-    runner = asyncio.create_task(live.main(["--only", "wiki-open", "--arms", "jev-ultrafast", "--out", str(out)]))
+    runner = asyncio.create_task(
+        live.main(["--only", "wiki-open", "--arms", "browser-use-ultrafast", "--out", str(out)])
+    )
     await waiting.wait()
     runner.cancel()
     await asyncio.gather(runner, return_exceptions=True)
@@ -1163,7 +1050,17 @@ async def test_a_sibling_exception_cancels_and_awaits_the_in_flight_attempt(
     out = tmp_path / "run.jsonl"
     runner = asyncio.create_task(
         live.main(
-            ["--only", "wiki-open", "pypi-open", "--arms", "jev-ultrafast", "--concurrency", "2", "--out", str(out)]
+            [
+                "--only",
+                "wiki-open",
+                "pypi-open",
+                "--arms",
+                "browser-use-ultrafast",
+                "--concurrency",
+                "2",
+                "--out",
+                str(out),
+            ]
         )
     )
     try:
@@ -1181,40 +1078,6 @@ async def test_a_sibling_exception_cancels_and_awaits_the_in_flight_attempt(
         for sibling in in_flight:
             sibling.cancel()
         await asyncio.gather(*in_flight, return_exceptions=True)
-
-
-@pytest.mark.parametrize("code", sorted(RETRYABLE_STATUS))
-@pytest.mark.parametrize("in_body", [False, True])
-def test_ultrafast_classifies_the_same_provider_outages(
-    code: int, in_body: bool, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(RUNNER["_post"].__globals__["time"], "sleep", lambda _: None)
-    response = httpx.Response(200 if in_body else code, json={"error": {"code": code}})
-    model = SimpleNamespace(CLIENT=SimpleNamespace(post=lambda *_, **__: response))
-    with pytest.raises(RUNNER["Unavailable"]):
-        RUNNER["_post"](model, "https://openrouter.ai/api/v1/chat/completions", {}, {})
-
-
-@pytest.mark.parametrize("nested", [False, True])
-@pytest.mark.parametrize("flag", [True, False, "true", None])
-def test_ultrafast_respects_explicit_provider_transience(nested: bool, flag: object) -> None:
-    marker = {"isRetryable": flag}
-    error = {"param": marker} if nested else marker
-    response = httpx.Response(400, json={"error": error})
-    model = SimpleNamespace(CLIENT=SimpleNamespace(post=lambda *_, **__: response))
-    with pytest.raises(RuntimeError) as caught:
-        RUNNER["_post"](model, "https://provider.test", {}, {})
-    assert isinstance(caught.value, RUNNER["Unavailable"]) is (flag is True)
-
-
-@pytest.mark.parametrize("error", TRANSIENT_TRANSPORT)
-def test_ultrafast_classifies_the_same_transport_outages(error: type[httpx.TransportError]) -> None:
-    def post(*_: Any, **__: Any) -> None:
-        raise error("upstream failure")
-
-    model = SimpleNamespace(CLIENT=SimpleNamespace(post=post))
-    with pytest.raises(RUNNER["Unavailable"]):
-        RUNNER["_post"](model, "https://provider.test", {}, {})
 
 
 def _evidence(status: int | None = 200, title: str | None = "Item", length: int | None = 40) -> PageEvidence:
@@ -1235,15 +1098,6 @@ def test_page_defect_needs_a_successful_non_empty_document(evidence: PageEvidenc
     assert page_defect(evidence) == defect
 
 
-def test_only_a_browser_transport_timeout_is_classified_as_one() -> None:
-    class _IPCResponseTimeout(TimeoutError):
-        pass
-
-    assert RUNNER["failure_class"](_IPCResponseTimeout("Runtime.evaluate timed out")) == "browser_transport"
-    assert RUNNER["failure_class"](TimeoutError("task budget")) is None
-    assert RUNNER["failure_class"](RuntimeError("anything else")) is None
-
-
 @pytest.mark.parametrize(
     ("error", "transport"),
     [
@@ -1257,34 +1111,7 @@ def test_fastbrowse_transport_errors_are_recognized_by_type_alone(error: str, tr
     assert bool(live.TRANSPORT_ERROR.search(error)) is transport
 
 
-def test_trace_records_stale_choices_and_offered_controls_without_changing_the_run() -> None:
-    class StalePage(ValueError):
-        pass
-
-    page = {"url": "https://arxiv.org/", "actions": [{"id": "a1", "kind": "click", "label": "Search"}]}
-
-    class Agent:
-        def __init__(self) -> None:
-            self.state: dict[str, Any] = {"page": page, "decisions": [], "history": []}
-
-        def command(self, name: str, body: dict[str, Any] | None = None) -> str:
-            if name == "predict":
-                self.state["decisions"].append({"choice": "a1", "operation": "click", "probabilities": {"a1": 0.9}})
-                return "predicted"
-            raise StalePage("Target is covered")
-
-    agent = Agent()
-    trace = RUNNER["Trace"](agent)
-    assert agent.command("predict") == "predicted"
-    with pytest.raises(StalePage):
-        agent.command("act")
-    assert trace.stale == [{"decision": 1, "phase": "act", "reason": "Target is covered"}]
-    assert trace.last_exception == "StalePage: Target is covered"
-    [decision] = trace.decisions()
-    assert (decision["choice"], decision["probability"], decision["offered"]) == ("a1", 0.9, 1)
-
-
-@pytest.mark.parametrize("arm", ["fastbrowse", "jev-ultrafast"])
+@pytest.mark.parametrize("arm", ["fastbrowse", "browser-harness"])
 async def test_final_http_outage_preserves_document_evidence_and_retries_either_arm(
     arm: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1306,7 +1133,7 @@ async def test_final_http_outage_preserves_document_evidence_and_retries_either_
 
 async def test_independent_site_probe_cannot_excuse_an_agent_failure() -> None:
     row = live._crashed(
-        "jev-ultrafast", task("pypi-open"), "wrong choice", at=0, seconds=1, status="error", record=None
+        "browser-harness", task("pypi-open"), "wrong choice", at=0, seconds=1, status="error", record=None
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(503))) as http:
         checked = await live._site_checked(row, task("pypi-open"), http)
@@ -1668,28 +1495,6 @@ def test_oss_runner_treats_no_limit_as_no_limit():
     assert oss["STEP_CEILING"] >= 1_000_000 and oss["TIMEOUT_CEILING"] >= 86_400
 
 
-def test_the_ultrafast_runner_lifts_the_packages_demo_budget(monkeypatch: pytest.MonkeyPatch) -> None:
-    """jev-ultrafast stops at a 60-action demo budget; the runner must lift it before the agent runs."""
-    seen: dict[str, int] = {}
-    agent_module = types.ModuleType("jev_ultrafast.agent")
-    agent_module.MAX_STEPS = 60  # ty: ignore[unresolved-attribute]
-
-    class Agent:
-        def __init__(self, *_: Any) -> None:
-            seen["max_steps"] = agent_module.MAX_STEPS  # ty: ignore[unresolved-attribute]
-            raise RuntimeError("stop here")
-
-    Agent.__module__ = "jev_ultrafast.agent"  # as in the package, where Agent is defined in agent.py
-    package = types.ModuleType("jev_ultrafast")
-    package.Agent, package.model = Agent, types.ModuleType("model")  # ty: ignore[unresolved-attribute]
-    monkeypatch.setitem(sys.modules, "jev_ultrafast", package)
-    monkeypatch.setitem(sys.modules, "jev_ultrafast.agent", agent_module)
-    runner = runpy.run_path(str(live.ULTRAFAST_RUNNER))
-    monkeypatch.setitem(runner["run"].__globals__, "patch_transport", lambda *_: None)
-    runner["run"]({"start": "https://example.test", "goal": "g", "max_steps": None})
-    assert seen["max_steps"] == runner["STEP_CEILING"] >= 1_000_000
-
-
 @pytest.mark.parametrize("stopped", [True, False])
 async def test_every_cloud_browser_asks_for_the_provider_maximum_lifetime(
     stopped: bool, monkeypatch: pytest.MonkeyPatch
@@ -1743,7 +1548,7 @@ async def test_every_cloud_browser_asks_for_the_provider_maximum_lifetime(
     else:
         assert {line.basis for line in browser.cost} == {CostBasis.UNKNOWN}
     assert live.CLOUD_BROWSER_MINUTES == 240
-    assert live.browser_identity("jev-ultrafast", None) == {"mode": "browser-use-cloud", "timeout_minutes": 240}
+    assert live.browser_identity("browser-harness", None) == {"mode": "browser-use-cloud", "timeout_minutes": 240}
     assert any("4 hour" in limit for limit in live.PROVIDER_LIMITS)
 
 
@@ -1886,7 +1691,7 @@ def test_a_repeated_observation_is_stored_once_and_referenced() -> None:
     [
         ("blocked", "bot check at https://pypi.org; it is not a sign-in and no credential passes it.", None, False),
         ("blocked", "Could not complete the task after HTTP 403 at https://x in this browser session", None, True),
-        ("blocked", "", None, True),  # jev-ultrafast's own BLOCKED choice is the agent's, not an observed bot check
+        ("blocked", "", None, True),  # a BLOCKED ending with no stated cause is the agent's, not an observed bot check
         ("blocked", "bot check at https://pypi.org; it is not a sign-in", "0.28.1", True),  # it still answered
     ],
 )
@@ -2058,7 +1863,7 @@ async def test_an_unbudgeted_campaign_without_its_judges_refuses_to_start(monkey
 
 
 class _StoppedCloud:
-    """A cloud browser that counts its stops: every jev-ultrafast run must end with exactly one."""
+    """A cloud browser that counts its stops: every run on a harness-started browser must end with exactly one."""
 
     def __init__(self) -> None:
         self.stops = 0
@@ -2078,17 +1883,26 @@ def _runner_line(status: str, error: str | None = None) -> bytes:
             "error": error,
             "seconds": 1.0,
             "steps": 1,
-            "actions": 1,
-            "trace": [],
-            "jev_dollars": 0.0,
-            "text_dollars": 0.0,
-            "unmetered_requests": 0,
-            "text_model": None,
+            "dollars": 0.0,
+            "input_tokens": 0,
+            "cached_input_tokens": 0,
+            "output_tokens": 0,
+            "commands": [],
+            "provenance": {},
         }
     ).encode()
 
 
-def _ultrafast_fixture(monkeypatch: pytest.MonkeyPatch, invoke: Any) -> _StoppedCloud:
+def _tools_checked(run: Any) -> Any:
+    """`run` as the browser-harness runner's second invocation: the first only checks its pinned tools."""
+
+    async def invoke(_command: object, _script: object, request: dict, *_: object, **__: object) -> bytes:
+        return b"" if "check" in request else await run()
+
+    return invoke
+
+
+def _cloud_fixture(monkeypatch: pytest.MonkeyPatch, invoke: Any) -> _StoppedCloud:
     cloud = _StoppedCloud()
     monkeypatch.setattr(live, "cloud_browser", cloud)
     monkeypatch.setattr(backend, "environment", lambda: {"BROWSER_USE_API_KEY": "cloud", "OPENROUTER_API_KEY": "text"})
@@ -2104,15 +1918,15 @@ async def _never(*_: object) -> bytes:
 
 @pytest.mark.parametrize(
     "ending",
-    ["done", "blocked", "error", "browser killed", "runner crashed", "unreadable result", "cancelled"],
+    ["done", "stopped", "error", "browser killed", "runner crashed", "unreadable result", "cancelled"],
 )
-async def test_every_ultrafast_exit_stops_its_cloud_browser(ending: str, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_every_runner_exit_stops_its_cloud_browser(ending: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """A cloud browser bills until it is stopped or reaches its 240-minute timeout. The run's browser is released only
     when its runner process ends (2026-10-16: arxiv-open browsers ran 14-16 minutes because their agents were still
     looping, not because a finished run kept them), and then on every ending: pass, fail, error, a browser stopped
     from outside (the runaway watchdog), a crashed runner, an unreadable result and cancellation."""
 
-    async def invoke(*_: object) -> bytes:
+    async def run() -> bytes:
         match ending:
             case "runner crashed":
                 raise CommandError("command exited 1: boom")
@@ -2125,15 +1939,16 @@ async def test_every_ultrafast_exit_stops_its_cloud_browser(ending: str, monkeyp
             case _:
                 return _runner_line(ending)
 
-    cloud = _ultrafast_fixture(monkeypatch, invoke)
+    cloud = _cloud_fixture(monkeypatch, _tools_checked(run))
     task = next(t for t in TASKS if t.id == "flights-search")
     async with httpx.AsyncClient() as http:
-        run = asyncio.create_task(live.ultrafast_arm(task, http, record=None))
+        attempt = asyncio.create_task(live.harness_arm(task, http, record=None))
         if ending == "cancelled":
-            await asyncio.sleep(0)
-            run.cancel()
+            for _ in range(5):
+                await asyncio.sleep(0)
+            attempt.cancel()
         try:
-            _, report = await run
+            _, report = await attempt
         except (asyncio.CancelledError, CommandError, ValueError):
             assert ending in {"cancelled", "runner crashed", "unreadable result"}
         else:
@@ -2150,13 +1965,13 @@ async def test_cloud_browser_costs_keep_provider_precision(monkeypatch: pytest.M
     async def cloud(*_: object, **__: object):
         yield Browser("ws://fixture", cost=lines)
 
-    async def invoke(*_: object) -> bytes:
+    async def run() -> bytes:
         return _runner_line("done")
 
-    _ultrafast_fixture(monkeypatch, invoke)
+    _cloud_fixture(monkeypatch, _tools_checked(run))
     monkeypatch.setattr(live, "cloud_browser", cloud)
     async with httpx.AsyncClient() as http:
-        _, report = await live.ultrafast_arm(task("flights-search"), http, record=None)
+        _, report = await live.harness_arm(task("flights-search"), http, record=None)
     browser = sum(line.dollars for line in lines)
     assert report.cost_by_component["browser"] == browser and report.dollars == browser
 
@@ -2169,7 +1984,7 @@ async def test_a_wrong_browser_harness_tool_opens_no_browser(monkeypatch: pytest
     async def invoke(*_: object) -> bytes:
         raise CommandError("command exited 1: RuntimeError: codex must be 0.163.0, got 0.166.0")
 
-    cloud = _ultrafast_fixture(monkeypatch, invoke)
+    cloud = _cloud_fixture(monkeypatch, invoke)
     task = next(t for t in TASKS if t.id == "flights-search")
     async with httpx.AsyncClient() as http:
         with pytest.raises(backend.NotStarted, match="codex must be"):
@@ -2177,22 +1992,22 @@ async def test_a_wrong_browser_harness_tool_opens_no_browser(monkeypatch: pytest
     assert cloud.stops == 0
 
 
-def test_sigterm_stops_an_ultrafast_runs_cloud_browser(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sigterm_stops_a_runs_cloud_browser(monkeypatch: pytest.MonkeyPatch) -> None:
     """SIGTERM (a container stop, `kill`, `timeout`) used to end the harness where it stood: no `async with` exit, so
     every browser in flight billed until its 240-minute timeout, while its runner, in a session of its own, went on
     driving it. It is now a cancellation, the path that stops each browser."""
     from fastbrowse_evals import cli
 
-    async def invoke(*_: object) -> bytes:
+    async def run() -> bytes:
         os.kill(os.getpid(), signal.SIGTERM)
         return await _never()
 
-    cloud = _ultrafast_fixture(monkeypatch, invoke)
+    cloud = _cloud_fixture(monkeypatch, _tools_checked(run))
     task = next(t for t in TASKS if t.id == "flights-search")
 
     async def main(_: list[str]) -> int:
         async with httpx.AsyncClient() as http:
-            await live.ultrafast_arm(task, http, record=None)
+            await live.harness_arm(task, http, record=None)
         return 0
 
     def unhandled(*_: object) -> None:
@@ -2353,7 +2168,6 @@ async def test_a_genuine_agent_failure_on_a_working_site_stays_a_judged_failure(
     [
         ("fastbrowse-pool", "Page.navigate failed (net::ERR_NAME_NOT_RESOLVED)"),
         ("browser-use", "RuntimeError: the session could not open the start page"),
-        ("jev-ultrafast", "ModelError: the planner returned no action"),
     ],
 )
 async def test_a_failure_before_any_step_is_an_outage_only_at_a_site_that_is_down(
@@ -2550,10 +2364,8 @@ def test_every_head_to_head_arm_runs_the_same_tasks_unless_a_stated_reason_stops
     assert skipped["fastbrowse"] == set()
     assert skipped["browser-use"] == {"saucedemo-pause"}
     assert len(every) - len(skipped["browser-harness"]) == 47
-    # jev-ultrafast returns no answer, so it runs only the tasks graded on the page a run ends on.
-    assert {t.id for t in every if t.id not in skipped["jev-ultrafast"]} == {
-        t.id for t in every if t.category is live_tasks.Category.NAVIGATE
-    }
+    # The same hosted agent on another model runs exactly the tasks the hosted arm runs.
+    assert skipped["browser-use-ultrafast"] == skipped["browser-use"]
 
 
 async def test_local_browser_is_the_fastbrowse_arms_alone_in_a_head_to_head(monkeypatch, tmp_path):
@@ -2569,11 +2381,11 @@ async def test_local_browser_is_the_fastbrowse_arms_alone_in_a_head_to_head(monk
     monkeypatch.setattr(live, "local_browser_identity", lambda binary: {"mode": "local-chrome", "binary": str(binary)})
     chrome = tmp_path / "chrome"
     out = tmp_path / "rows.jsonl"
-    arms = ["fastbrowse", "browser-use", "jev-ultrafast"]
+    arms = ["fastbrowse", "browser-use", "browser-use-ultrafast"]
     target = next(t for suite in live.SUITES.values() for t in suite if all(live.eligible(a, t) for a in arms))
     argv = ["--only", target.id, "--arms", *arms, "--local-browser", str(chrome)]
     assert await live.main([*argv, "--budget", "20", "--out", str(out)]) == 0
-    assert seen == {"fastbrowse": chrome, "browser-use": None, "jev-ultrafast": None}
+    assert seen == {"fastbrowse": chrome, "browser-use": None, "browser-use-ultrafast": None}
     browsers = _ledger(out)[0]["run"]["browsers"]
     assert browsers["fastbrowse"] == {"mode": "local-chrome", "binary": str(chrome)}
     assert browsers["browser-use"] == {"mode": "browser-use-hosted"}
@@ -2583,7 +2395,7 @@ async def test_local_browser_is_the_fastbrowse_arms_alone_in_a_head_to_head(monk
     ("arms", "extra", "message"),
     [
         (["browser-use"], [], "needs the fastbrowse arm"),
-        (["fastbrowse", "jev-ultrafast"], ["--browser-reserve-dollars", "0"], "zero browser reserve"),
+        (["fastbrowse", "browser-harness"], ["--browser-reserve-dollars", "0"], "zero browser reserve"),
     ],
 )
 async def test_local_browser_refusals(arms, extra, message, tmp_path, capsys):
@@ -2605,10 +2417,10 @@ async def test_a_refused_start_releases_its_budget_hold(monkeypatch, tmp_path):
 
     real_run_arm = live.run_arm
     _live_fakes(monkeypatch, run)
-    spec = live.ARMS["jev-ultrafast"].model_copy(update={"runner": runner})
-    monkeypatch.setattr(live, "ARMS", {**live.ARMS, "jev-ultrafast": spec})
+    spec = live.ARMS["browser-use-ultrafast"].model_copy(update={"runner": runner})
+    monkeypatch.setattr(live, "ARMS", {**live.ARMS, "browser-use-ultrafast": spec})
     out = tmp_path / "rows.jsonl"
-    argv = ["--only", "wiki-open", "--arms", "jev-ultrafast", "--repeat", "2"]
+    argv = ["--only", "wiki-open", "--arms", "browser-use-ultrafast", "--repeat", "2"]
     assert await live.main([*argv, "--concurrency", "1", "--budget", "3", "--out", str(out)]) == 0
     rows = _ledger(out)
     assert [(r["started"], r["dollars"], r["failure"]) for r in rows] == [
@@ -2670,14 +2482,14 @@ BLIND_ARMS = {
         session_id="hosted-1",
         step_log=[{"index": 0, "operation": "extract", "outcome": "executed", "duration_ms": 77}],
     ),
-    "jev-ultrafast": live.ArmReport(
+    "browser-harness": live.ArmReport(
         status="done",
         seconds=5.0,
         dollars=None,
         steps=1,
-        decision_log=[{"index": 0, "operation": "extract", "outcome": "executed", "confidence": 0.9}],
-        provenance={"package": "jev-ultrafast"},
-        artifact="artifacts/jev-ultrafast/1.evidence.json",
+        step_cap_unit="tool_calls",
+        step_log=[{"index": 0, "operation": "extract", "outcome": "executed"}],
+        provenance={"package": "browser-harness"},
     ),
     "browser-use-oss": live.ArmReport(
         status="done",
@@ -2787,7 +2599,7 @@ def test_a_coding_agent_arms_commands_reach_the_judge_whole() -> None:
 
 
 async def test_a_long_final_page_reaches_the_judge_whole(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert "slice" not in live.EVIDENCE
+    assert "slice" not in final_page.EVIDENCE
     page = "the answer is at the very end " * 20_000 + "42"
     evidence = PageEvidence(url="https://a.test", status=200, text=page, text_length=len(page))
     state = await _judged_state(monkeypatch, "browser-use", Outcome("42", None, "https://a.test", evidence=evidence))
@@ -2846,7 +2658,7 @@ def test_a_component_with_an_unpriced_line_has_no_figure() -> None:
     assert live._known_components(lines) == {"browser": 0.2}
 
 
-@pytest.mark.parametrize("arm", ["fastbrowse", "browser-use", "jev-ultrafast"])
+@pytest.mark.parametrize("arm", ["fastbrowse", "browser-use", "browser-harness"])
 def test_a_crash_leaves_its_cost_unknown_for_every_arm(arm: str) -> None:
     row = live._crashed(arm, task("pypi-open"), "boom", at=0.0, seconds=1.0, status="error", record=None)
     assert row.dollars is None and row.unknown_cost is True
@@ -2954,37 +2766,6 @@ def test_a_completed_oss_run_reports_its_answer_and_cost(monkeypatch) -> None:
 def test_an_oss_run_the_provider_refused_is_its_own_error(monkeypatch) -> None:
     result = _oss_run(monkeypatch, "error", "ModelHTTPError: status_code: 400, model_name: bu-fast, body: {}")
     assert result["status"] == "error" and result["error"].startswith("ModelHTTPError")
-
-
-@pytest.mark.parametrize(("cost", "tokens", "price"), [(0.0, None, 1e-7), (0.0, 0, 1e-7), (0.0, 100, 0.0)])
-def test_a_jev_request_metered_free_with_nothing_to_price_it_is_unknown(cost, tokens, price) -> None:
-    meter = RUNNER["Meter"](price)
-    RUNNER["_meter"](meter, "jev", cost, tokens)
-    assert meter.unmetered == 1 and meter.jev == 0.0
-
-
-def test_a_dropped_model_connection_counts_as_unmetered_and_a_refused_request_does_not(monkeypatch) -> None:
-    meter = RUNNER["Meter"]()
-    model = SimpleNamespace()
-    RUNNER["patch_transport"].__globals__["os"].environ.setdefault("TYPESAFE_API_KEY", "k")
-
-    def client(error: Exception | None) -> SimpleNamespace:
-        def post(*_: Any, **__: Any) -> httpx.Response:
-            if error is not None:
-                raise error
-            return httpx.Response(400, json={})
-
-        return SimpleNamespace(post=post)
-
-    RUNNER["patch_transport"](model, meter)
-    model.CLIENT = client(None)
-    with pytest.raises(RuntimeError):
-        model.post_json("https://openrouter.ai/x", "k", {})
-    assert meter.unmetered == 0
-    model.CLIENT = client(httpx.ReadError("reset"))
-    with pytest.raises(RUNNER["Unavailable"]):
-        model.post_json("https://openrouter.ai/x", "k", {})
-    assert meter.unmetered == 1
 
 
 async def test_a_cloud_navigation_starts_on_a_real_screen_and_any_other_browser_is_pinned(

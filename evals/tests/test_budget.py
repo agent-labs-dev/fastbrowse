@@ -2,12 +2,9 @@
 
 import asyncio
 from pathlib import Path
-from types import SimpleNamespace
 
-import httpx
 import pytest
 
-from fastbrowse_evals.adapters.ultrafast_arm import Meter, RunBudgetExceeded, _meter, _post
 from fastbrowse_evals.budget import BudgetStop, CampaignBudget
 
 
@@ -36,41 +33,6 @@ async def test_unknown_charge_keeps_its_reservation_and_never_starts_a_duplicate
         await budget.reserve("second")
     with pytest.raises(ValueError, match="reserve twice"):
         await budget.reserve("first")
-
-
-def bounded_meter(limit=1):
-    return Meter(
-        0.000001, max_dollars=limit, text_input_price=0.000001, text_output_price=0.000001, text_max_output_tokens=1000
-    )
-
-
-def test_ultrafast_reserves_before_http_and_refuses_an_unaffordable_request():
-    calls = []
-    model = SimpleNamespace(CLIENT=SimpleNamespace(post=lambda *args, **kwargs: calls.append(kwargs)))
-    with pytest.raises(RunBudgetExceeded):
-        _post(model, "https://example.test", {}, {"state": "x" * 1000}, budget=bounded_meter(0.0001), kind="jev")
-    assert calls == []
-
-
-def test_each_ultrafast_retry_retains_unknown_spend(monkeypatch):
-    meter = bounded_meter()
-    model = SimpleNamespace(CLIENT=SimpleNamespace(post=lambda *args, **kwargs: httpx.Response(503)))
-    monkeypatch.setattr("fastbrowse_evals.adapters.ultrafast_arm.time.sleep", lambda _: None)
-    with pytest.raises(RuntimeError):
-        _post(model, "https://example.test", {}, {"state": "x"}, budget=meter, kind="jev")
-    assert meter.unmetered == 3
-    assert meter.reserved > 0
-
-
-def test_known_ultrafast_charge_releases_only_its_own_reservation():
-    meter = bounded_meter()
-    meter.reserve({"state": "x"}, "jev")
-    first = meter.reserved
-    meter.reserve({"state": "y"}, "jev")
-    _meter(meter, "jev", 0.000001)
-    assert meter.unmetered == 1
-    assert meter.reserved == pytest.approx(first)
-    assert meter.dollars == pytest.approx(0.000001)
 
 
 def test_campaign_lock_refuses_another_owner(tmp_path: Path):
