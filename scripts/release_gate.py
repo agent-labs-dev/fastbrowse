@@ -299,8 +299,9 @@ def tag_lines(repo: str, tag: str) -> list[str]:
 
 
 def measures_itself(version: str, lines: list[str]) -> bool:
-    """A minor release does; a patch does when its annotated tag message has the line `Benchmarks: run`."""
-    return version.split(".")[-1] == "0" or "Benchmarks: run" in lines
+    """A minor release does; a patch does when its annotated tag message has the line `Benchmarks: run`, or claims
+    official scores, which are compared beside the campaign."""
+    return version.split(".")[-1] == "0" or "Benchmarks: run" in lines or "Benchmarks: official" in lines
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -346,8 +346,9 @@ def test_candidate_keeps_valid_original_fixture_after_new_same_tree_dispatch(mon
     assert "verified original rows" in notes
 
 
+@pytest.mark.parametrize("tag", ["v9.9.0", "v9.9.1"])
 @pytest.mark.parametrize(("lines", "official"), [([], False), (["Benchmarks: official"], True)])
-def test_official_coverage_is_required_only_when_the_tag_claims_it(monkeypatch, lines, official):
+def test_official_coverage_is_required_only_when_the_tag_claims_it(monkeypatch, tag, lines, official):
     asked = []
     monkeypatch.setattr(gate, "_tree", lambda *_: "tree")
     monkeypatch.setattr(gate, "fixture_run", lambda *_: 7)
@@ -356,5 +357,6 @@ def test_official_coverage_is_required_only_when_the_tag_claims_it(monkeypatch, 
     candidate = [row(task, True, 5.0, 0.01) for task in ("a", "b")]
     monkeypatch.setattr(gate, "campaign_rows", lambda *_: (candidate, ["run 1"]))
     monkeypatch.setattr(gate, "ledger_rows", lambda *_: BASELINE)
-    assert gate.main(["v9.9.0"]) == 0
+    assert gate.main([tag]) == 0
+    # A patch that claims official scores is measured too, so its claim is checked.
     assert asked == ([True] if official else [])
