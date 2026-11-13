@@ -349,24 +349,8 @@ jobs:
             echo "::error::missing repository configuration:$missing"
             exit 1
           fi
-          groups=1
-          if test "$GROUPS_CHOSEN" = all && test "$SMOKE" != true; then groups=2; fi
-          # The hosted diagnostic group spends too, on the same OpenRouter key for its steps and its judge.
-          case " $EXTRA_ARMS " in *" fastbrowse-hosted "*) groups=$((groups + 1)) ;; esac
-          # Both keys must cover every group before browsers begin billing.
-          for key in "$OPENROUTER_API_KEY" "$PARALLAX_JUDGE_API_KEY"; do
-            KEY="$key" NEED="$(python3 -c "print($BUDGET * $groups)")" python3 - <<'PYTHON'
-          import json, os, sys, urllib.request
-
-          request = urllib.request.Request("https://openrouter.ai/api/v1/key",
-                                           headers={"Authorization": f"Bearer {os.environ['KEY']}"})
-          with urllib.request.urlopen(request, timeout=30) as reply:
-              left = json.load(reply)["data"].get("limit_remaining")
-          need = float(os.environ["NEED"])
-          if left is not None and left < need:
-              sys.exit(f"::error::the OpenRouter key has {left:.2f} dollars left, the approved budget needs {need:.2f}")
-          PYTHON
-          done
+          # No credit preflight: the key's own daily cap is the spend control, so a dispatch starts whatever
+          # the key has left. `budget` still bounds the run itself, through the runner's start gate.
       - name: Build the group matrix
         id: matrix
         env:
