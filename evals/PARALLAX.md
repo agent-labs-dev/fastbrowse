@@ -1,15 +1,24 @@
-# Parallax dev16 migration
+# Parallax pin
 
-The harness pins the published `parallax-evals==2.0.0.dev16` release in
+The harness pins the published `parallax-evals==2.0.0.dev17` release in
 `evals/pyproject.toml` and `evals/uv.lock`. The wheel and source archive are
 served by PyPI and their downloaded bytes match the lock's SHA-256 hashes:
 
-- Wheel: `e08a4c64a54d247c86567dc4b9b308d992942a8af43bff2afc4c3d5aa9a33921`.
-- Source archive: `156df0f6cd0e1b83e02102ac7c391d01b8056ac9d04d1faedc3b1259bfad956f`.
+- Wheel: `1e8d14a3b1bff11e2f46793e0c1d9e1d262e620c03f5170febcfbf1950f224fd`.
+- Source archive: `f6e5a81c4b3a75f5b494a5e021df00d1693abb02471d29a53184e5ba93c8c52a`.
 
-The release tag is `v2.0.0.dev16`, on Parallax commit
-`290f19ee1868de6e15a82bc629b157387abc5431`. The private repository is not a
+The release tag is `v2.0.0.dev17`, on Parallax commit
+`a778f9c258819215c63ccc92eda98c7b9f40feb9`. The private repository is not a
 consumer dependency source. `uv lock --check` passes with the published lock.
+
+dev17 verifies `deepseek/deepseek-v4.1-flash` as a fallback judge and asks for
+each answer's reason before its verdict. That changes the identity of any
+fallback policy graded from now on, so `browser-internal-deepseek-v6` and
+`browser-official-deepseek-v3` are new policies. Recorded receipts keep the
+`policy_sha256` they were graded under: publication compares those recorded
+hashes within a group and never recomputes them, so Opus v5 and official v2
+ledgers publish unchanged. A v5 campaign resumed under dev17 is refused as two
+policies.
 
 ## Compatibility
 
