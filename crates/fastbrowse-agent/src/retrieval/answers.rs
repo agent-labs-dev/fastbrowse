@@ -3023,7 +3023,7 @@ mod tests {
             let memberships: Vec<_> =
                 states.iter().filter(|(keys, _)| keys.iter().any(|key| key.starts_with("t0/n"))).collect();
             let sizes: Vec<usize> =
-                memberships.iter().map(|(_, state)| state["notes"].as_array().unwrap().len()).collect();
+                memberships.iter().map(|(_, state)| state["labels_on_the_page"].as_array().unwrap().len()).collect();
             assert_eq!(sizes, [3, 1]);
             assert!(memberships.iter().all(|(_, state)| state["task"] == "Find the cheapest book"));
         }
