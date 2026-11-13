@@ -214,10 +214,9 @@ fn typed_into(state: &RunState, target: &Control) -> Vec<String> {
         .collect()
 }
 
-/// A choice about the page, asked beside a state that holds the task: restated in each question, a form's fields
-/// carried the task once a question (#903).
-pub(super) fn page_question(question: &str, criteria: IndexMap<String, JsonValue>) -> Question {
-    Question::Choice(ChoiceQuestion::new(format!("{UNTRUSTED}\n\n{question}"), criteria))
+fn page_question(task: &str, question: &str, criteria: IndexMap<String, JsonValue>) -> Question {
+    let content = format!("{UNTRUSTED}\n\n# Task\n{task}\n\n{question}");
+    Question::Choice(ChoiceQuestion::new(content, criteria))
 }
 
 /// Jev's picks from the decision's own request, when it answered all of `asked` there.
@@ -318,7 +317,7 @@ impl Agent {
                         source_question,
                         sources,
                     ) {
-                        add(Operation::Fill, name, page_question(&question, criteria));
+                        add(Operation::Fill, name, page_question(&state.task, &question, criteria));
                     }
                 }
             }
@@ -1359,8 +1358,7 @@ impl Agent {
 
     /// `options`, copies of a value keyed by what each keeps, as a choice offers them: whole when the question then
     /// fits one decision request, and otherwise each by its ends, said in the question.
-    /// The request's state holds `task`, so the copies are offered whole only when the task fits beside them.
-    pub(super) fn offered_copies(
+    fn offered_copies(
         &self,
         task: &str,
         question: String,
@@ -1368,8 +1366,7 @@ impl Agent {
     ) -> (String, IndexMap<String, JsonValue>) {
         let whole: IndexMap<String, JsonValue> =
             options.iter().map(|(key, value)| (key.clone(), JsonValue::from(value.as_str()))).collect();
-        let held = text::len(&json!({"task": task}).dump_json()) as i64;
-        if self.config.tokens.input_chars(&[page_question(&question, whole.clone()).dump_json()]) > held {
+        if self.config.tokens.input_chars(&[page_question(task, &question, whole.clone()).dump_json()]) > 0 {
             return (question, whole);
         }
         let ends = options.iter().map(|(key, value)| (key.clone(), JsonValue::from(value_ends(value))));
@@ -1976,19 +1973,31 @@ impl Agent {
         observation: Option<&Observation>,
         asked: Vec<Asked<'_>>,
     ) -> Step<IndexMap<String, String>> {
+        self.ask_choices_in(state, observation, asked, None).await
+    }
+
+    /// `ask_choices`, asked with `context` in place of the notes when it is given: what was read is left out of a
+    /// question about what was done.
+    async fn ask_choices_in(
+        &self,
+        state: &mut RunState,
+        observation: Option<&Observation>,
+        asked: Vec<Asked<'_>>,
+        context: Option<&Map<String, JsonValue>>,
+    ) -> Step<IndexMap<String, String>> {
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
         let questions: IndexMap<String, Question> = asked
             .into_iter()
-            .map(|(key, question, criteria)| (key.to_string(), page_question(&question, criteria)))
+            .map(|(key, question, criteria)| (key.to_string(), page_question(&state.task, &question, criteria)))
             .collect();
         let dumped: Vec<String> = questions.values().map(Dump::dump_json).collect();
-        let held = Map::from_iter([("task".to_string(), JsonValue::from(state.task.as_str()))]);
         let page = match observation {
             Some(observation) => {
-                page_state(observation, &state.notes, &self.config.tokens, &dumped, Some(&held), &state.dates)?
+                let notes = if context.is_some() { &Notes::default() } else { &state.notes };
+                page_state(observation, notes, &self.config.tokens, &dumped, context, &state.dates)?
             }
             // Output format is a requirement of the task, independent of what the page or notes say.
-            None => JsonValue::Object(held),
+            None => JsonValue::Object(Map::new()),
         };
         let evaluation = jev_purpose(JevPurpose::Action, self.jev.evaluate(&page, &questions)).await?;
         state.ledger.record([evaluation.cost.clone()])?;

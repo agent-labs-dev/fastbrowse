@@ -188,9 +188,23 @@ and where fastbrowse follows it:
 - **Question ids are invisible to the model.** Everything the model needs is in the instruction text.
 - **Batch independent questions that share one state; answers cannot see each other.** The policy batches
   operation and target choices and applicable sign-in and bot checks. Grouped targets need a second choice.
-- **Content goes in the state once ([State](https://docs.typesafe.ai/concepts/state)).** A question about the page
-  reads the task from the state's `task` rather than restating it. An option keeps its own description: offered the
-  task's words by id, with the descriptions held once in the state, Jev chose words the value does not hold.
+- **A question about the page states the task itself, and an option describes its own word.** TypeSafe's
+  [State](https://docs.typesafe.ai/concepts/state) guidance puts content in the state once, and two cuts to
+  repeated question text followed it (#903). Two probes each sent 120 recorded requests in the old and the new
+  wording, 10 samples of each: the first with both cuts, the second with the task cut alone. Each cut changed
+  Jev's choices for the worse, so neither is in the code:
+  - *The task's words offered by id, described once in the state* (5.6% of request characters). In
+    mock-book-table, where the Date value ends, Jev chose the word `2027-03-04` in 10 of 10 samples with each
+    option describing its word, and the word `confirmed` in 8 of 10 with ids. In mock-iframe-note, where the
+    note begins moved from `coffee-restock` in 10 of 10 to `Save` in 6 of 10.
+  - *Page questions reading `task` from the state in place of an inline `# Task`* (1.59% of request
+    characters). Where the contact-form Message begins moved from word 6 `that` in 7 of 10 samples to word 0
+    `Tell` in 10 of 10, which is wrong, and contact-needs-confirmation moved the same way, from 8 of 10 to
+    none. The Message source in contact-form moved from `task` in 10 of 10 to `write` in 7 of 10, and a
+    mock-shadow-dom field's source from `read` in 7 of 10 to `none` in 10 of 10.
+
+  Jev ties a judgment to the text beside it: a word or a task it has to look up elsewhere in the request is
+  linked less reliably. A further cut to this text needs the same probe before it ships.
 - **Filter before choosing on a dense page.** The Jev 1.13 jaggedness notes say accuracy falls with a large
   state full of irrelevant detail, and suggest a Noul to filter for relevance. When a page has more controls than
   one group step can offer (`group_size` times the model's options per Choice) or its request does not fit Jev's

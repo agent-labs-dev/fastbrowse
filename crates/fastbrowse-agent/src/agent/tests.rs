@@ -2715,40 +2715,6 @@ fn test_the_value_questions_say_what_a_field_holds_now_unless_it_is_sensitive() 
     assert!(shown("secret").iter().all(|q| !q.contains("@ann")), "{:?}", shown("secret"));
 }
 
-/// Every question a form's fields are asked ahead restated the task the step's state already holds (#903). The
-/// questions read it from the state, and each word a value may begin or end at stays described in its own option:
-/// offered by id with the descriptions in the state, Jev picked words the value does not hold.
-#[test]
-fn test_fields_asked_ahead_read_the_task_from_the_state_and_describe_each_word() {
-    let agent = Agent::new(Arc::new(NoPage), Arc::new(EndValues), Arc::new(ScriptedLLM));
-    let mut state = run_state();
-    state.task = "Sign up as Ada Lovelace with ada@example.com".into();
-    let name = Control::new("name", "textbox", "Name", [Operation::Fill]);
-    let email = Control::new("email", "textbox", "Email", [Operation::Fill]);
-    let page = observation(&[name, email]);
-    let asked = agent.ahead(&state, &page);
-    for control in ["name", "email"] {
-        let ends: Vec<_> = asked.iter().filter(|ahead| ahead.control == control && ahead.name != "source").collect();
-        assert_eq!(ends.len(), 2, "where the value begins and where it ends");
-        for ahead in ends {
-            let Question::Choice(choice) = &ahead.question else { panic!("expected a choice") };
-            assert!(!choice.instructions.contains(&state.task), "{}", choice.instructions);
-            assert!(choice.criteria.values().all(serde_json::Value::is_string), "{:?}", choice.criteria);
-        }
-    }
-    let mut context = crate::policy::StepContext::new(&state.task);
-    context.ahead = asked;
-    let request = crate::policy::build_request(
-        &page,
-        &page.controls,
-        &context,
-        &fastbrowse_core::config::Config::default(),
-        fastbrowse_core::decision::MAX_CHOICE_OPTIONS,
-    );
-    assert_eq!(request.state["task"], state.task.as_str());
-    assert!(request.questions.keys().any(|key| key.ends_with(":first")), "{:?}", request.questions.keys());
-}
-
 /// Every reply box on a comment page has one label, and a task with a reply for each of three comments had all three
 /// typed into the first box (#879): the value questions say which comment a box sits in, and that its value is the one
 /// the task gives for that comment.
@@ -7838,24 +7804,6 @@ impl DecisionClient for LongValue {
     fn profile(&self) -> DecisionProfile {
         DecisionProfile::jev()
     }
-}
-
-/// The copy question no longer carries the task, which the request's state holds, so whether copies are offered whole
-/// counts the task beside them: counted alone, a task that fit by itself but not beside whole copies sent a request no
-/// state could fit.
-#[test]
-fn test_copies_are_offered_whole_only_when_the_task_fits_beside_them() {
-    let mut agent = agent();
-    let value = (0..40).map(|n| format!("word{n}")).collect::<Vec<_>>().join(" ");
-    let options = [("0".to_string(), value.clone())];
-    let question = "Which exact text belongs in 'Description'?".to_string();
-    let whole = IndexMap::from([("0".to_string(), serde_json::Value::from(value.as_str()))]);
-    let asked = super::acting::page_question(&question, whole).dump_json().chars().count() as i64;
-    agent.config.tokens.decision_chars = Some((asked + 500, asked + 500));
-    let (_, offered) = agent.offered_copies(&"a".repeat(100), question.clone(), &options);
-    assert_eq!(offered["0"], value, "a short task fits beside the whole copy");
-    let (said, offered) = agent.offered_copies(&"a".repeat(1000), question, &options);
-    assert_ne!(offered["0"], value, "{said}");
 }
 
 /// A push gave about 10 KB of markdown to put in a description, longer than any one part a long task is cut into. No
