@@ -1,5 +1,5 @@
 {
-  "version": "0.9.1",
-  "campaign_run": 42473984954,
-  "note": "The campaign a release is compared with: the last release's, measured on the harness it ran. scripts/release_gate.py reads it."
+  "version": "0.10.0",
+  "campaign": "release-0.10.0",
+  "note": "The campaign a release is compared with: the last release's, each task from its newest run that measured it three times, as the candidate is read. scripts/release_gate.py reads it."
 }

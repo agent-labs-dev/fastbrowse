@@ -332,11 +332,12 @@ def main(argv: list[str] | None = None) -> int:
         else:
             official_notes = ["official benchmarks: not claimed (no 'Benchmarks: official' line)"]
         candidate, used = campaign_rows(args.repo, f"release-{version}")
-        failures, notes = compare(candidate, ledger_rows(args.repo, int(baseline["campaign_run"])))
+        before, _ = campaign_rows(args.repo, baseline["campaign"])
+        failures, notes = compare(candidate, before)
     except (GateError, ValueError, subprocess.CalledProcessError) as error:
         print(f"::error::{error}", file=sys.stderr)
         return 1
-    print(f"campaign release-{version} against {baseline['version']} (run {baseline['campaign_run']}):")
+    print(f"campaign release-{version} against {baseline['version']} (campaign {baseline['campaign']}):")
     for line in used:
         print(f"  {line}")
     for line in official_notes:
