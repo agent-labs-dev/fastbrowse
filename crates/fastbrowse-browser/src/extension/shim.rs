@@ -16,7 +16,7 @@ use serde_json::{Map, Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
 
-use super::protocol::{EXTENSION_IDS, HostRecord, PROTOCOL, allowed_methods};
+use super::protocol::{EXTENSION_IDS, HostRecord, MIN_EXTENSION_VERSION, PROTOCOL, required_methods};
 use crate::error::BrowserError;
 
 /// Domains the session enables with `<Domain>.enable`, which the extension must relay.
@@ -594,29 +594,39 @@ fn validate_hello(hello: &Value) -> Result<(), BrowserError> {
         )));
     }
     let version = hello["extensionVersion"].as_str().unwrap_or("(version not reported)");
-    if !hello["methods"].is_array() {
-        return Err(unavailable(&format!(
-            "the fastbrowse extension {version} does not report its supported commands: this fastbrowse needs \
-             extension 0.1.1 or newer with the required commands. Update it from the Chrome Web Store; if that \
-             update is not available yet, run `fastbrowse extension path` and load that unpacked copy from \
-             chrome://extensions"
-        )));
-    }
     let missing = missing_methods(hello);
     if !missing.is_empty() {
+        // A copy that predates the inventory cannot name a single method, so every one reads as missing: name the
+        // version it needs instead of a list that says nothing about why.
+        let why = if hello["methods"].is_array() {
+            format!(
+                "the fastbrowse extension {version} does not relay {} of the {} CDP methods this fastbrowse needs \
+                 (extension {MIN_EXTENSION_VERSION} or newer relays all of them): {}",
+                required_methods().len() - missing.len(),
+                required_methods().len(),
+                missing.join(", ")
+            )
+        } else {
+            format!(
+                "the fastbrowse extension {version} predates extension {MIN_EXTENSION_VERSION} and cannot say \
+                 which CDP methods it relays, so it cannot be used for a run"
+            )
+        };
         return Err(unavailable(&format!(
-            "the fastbrowse extension {version} does not relay {} that this fastbrowse sends: update the fastbrowse extension \
-             (from the Chrome Web Store, or run `fastbrowse extension path` and click Reload on chrome://extensions)",
-            missing.join(", ")
+            "{why}. Install extension {MIN_EXTENSION_VERSION} or newer from the Chrome Web Store once it lists one, \
+             or load the copy this fastbrowse ships: run `fastbrowse extension path` and click Reload on \
+             chrome://extensions"
         )));
     }
     Ok(())
 }
 
-/// The CDP methods this build sends that the extension's hello does not explicitly list.
+/// The CDP methods this build cannot run without that the extension's hello does not list. A copy older than the
+/// inventory sends none, so every method is missing; a newer copy relaying more passes; a copy missing only a
+/// best-effort method passes, since the run works without it.
 fn missing_methods(hello: &Value) -> Vec<String> {
     let theirs: HashSet<&str> = hello["methods"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
-    allowed_methods().into_iter().filter(|method| !theirs.contains(method.as_str())).collect()
+    required_methods().into_iter().filter(|method| !theirs.contains(method.as_str())).collect()
 }
 
 #[cfg(unix)]
@@ -636,14 +646,15 @@ async fn dial(socket: &Path) -> Result<tokio::net::windows::named_pipe::NamedPip
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extension::protocol::allowed_methods;
 
     #[test]
     fn an_extension_that_cannot_relay_a_method_this_build_sends_is_named_before_the_run() {
-        let ours = allowed_methods();
+        let ours = required_methods();
         assert_eq!(missing_methods(&json!({"protocol": PROTOCOL})), ours, "a copy older than the list relays none");
-        let short: Vec<&String> = ours.iter().filter(|m| *m != "Page.setInterceptFileChooserDialog").collect();
-        assert_eq!(missing_methods(&json!({"methods": short})), ["Page.setInterceptFileChooserDialog"]);
-        let mut more: Vec<String> = ours.clone();
+        let short: Vec<&String> = ours.iter().filter(|m| *m != "Runtime.callFunctionOn").collect();
+        assert_eq!(missing_methods(&json!({"methods": short})), ["Runtime.callFunctionOn"]);
+        let mut more = allowed_methods();
         more.push("Some.newerMethod".to_owned());
         assert!(missing_methods(&json!({"methods": more})).is_empty(), "a newer copy relaying more passes");
     }
@@ -672,6 +683,16 @@ mod tests {
         hello["methods"] = json!(allowed_methods());
         hello["protocol"] = json!(PROTOCOL + 1);
         assert!(validate_hello(&hello).unwrap_err().to_string().contains("relay protocol"));
+    }
+
+    /// The Store's 0.1.0 package lacks only this one of the methods a run sends, and the session already runs on when
+    /// it is refused, so a copy without it must still drive a task.
+    #[test]
+    fn a_copy_that_lacks_only_a_best_effort_method_still_runs() {
+        let mut relayed = allowed_methods();
+        relayed.retain(|method| method != "Page.setInterceptFileChooserDialog");
+        assert!(missing_methods(&json!({"methods": relayed})).is_empty());
+        assert!(validate_hello(&json!({"protocol": PROTOCOL, "methods": relayed})).is_ok());
     }
 
     fn relay() -> Relay {
