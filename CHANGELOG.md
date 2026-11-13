@@ -11,7 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- **Benchmarks are judged by DeepSeek V4.1 Flash.** Internal grading uses policy `browser-internal-deepseek-v6`, and the official suites default to the same judge. Each page goes to the judge once, so a 2 MB Hacker News thread costs about $0.05 to judge instead of $23, and screenshots go to the judge as images. On 48 recorded rows, DeepSeek agreed with Opus on 47 and left one ungraded, which it graded the same as Opus on a rerun ([#1075](https://github.com/agent-labs-dev/fastbrowse/issues/1075)).
+- **Benchmarks are judged by DeepSeek V4.1 Flash 1017.** Internal grading uses policy `browser-internal-deepseek-v7`, and the official suites default to the same judge, `deepseek/deepseek-v4.1-flash-1017`. Each page goes to the judge once, so a 2 MB Hacker News thread costs about $0.05 to judge instead of $23, and screenshots go to the judge as images. The judge grades the run's `answer` as given, whatever the run's ending, and not a draft its error quotes. On 21 recorded rows, it agreed with Opus on all 21 in each of two judgings ([#1075](https://github.com/agent-labs-dev/fastbrowse/issues/1075)).
 
 - **The Ultrafast comparison runs BU Ultrafast.** C3 (`internal-ultrafast`) pairs fastbrowse on its own browser pool with the hosted Browser Use agent on `bu-ultrafast` (`browser-use-ultrafast`, Browser Use Cloud API V4) over the 52 tasks both run, and the `jev-ultrafast` arm is gone from the harness, the catalog and the campaign workflow. New publication candidates are schema 7, which refuses `jev-ultrafast` rows; published figures keep their own schema and still read. The six navigation tasks moved to task version 12, since their arm list changed.
 

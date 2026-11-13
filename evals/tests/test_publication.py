@@ -408,7 +408,7 @@ def test_export_counts_every_physical_run_and_keeps_source_grades_separate(tmp_p
     assert bu.rows[0].llm_calls_basis == "physical_requests"
     assert groups["internal-hosted"].source_sha256 == DIGEST
     assert 1 <= len(bu.limits) <= 12
-    assert any("Judge deepseek deepseek-v4.1-flash via OpenRouter, reasoning medium" in n for n in bu.limits)
+    assert any("Judge deepseek deepseek-v4.1-flash-1017 via OpenRouter, reasoning medium" in n for n in bu.limits)
     assert any("model-x" in n for n in groups["internal-hosted"].limits)
     # the closed public shape survives a round trip through its own strict contract
     Candidate.model_validate_json(json.dumps(candidate.model_dump(mode="json")))
@@ -1164,7 +1164,7 @@ def test_an_internal_ledger_graded_under_another_policy_cannot_publish(tmp_path:
             a["semantic_judge"]["judgment"]["policy"] = policy
 
     h = Harness(tmp_path, hosted=other)
-    with pytest.raises(PublicationError, match="browser-internal-deepseek-v6"):
+    with pytest.raises(PublicationError, match="browser-internal-deepseek-v7"):
         h.export(ultrafast=None, bu_bench=None, mind2web=None)
 
 

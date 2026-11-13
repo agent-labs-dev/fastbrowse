@@ -46,7 +46,7 @@ hosted models (browser-use and browser-use-ultrafast) run the same tasks. fastbr
 expected status.
 fastbrowse-pool runs every task fastbrowse runs.
 
-Every run is graded by `deepseek/deepseek-v4.1-flash` through OpenRouter alone (`JUDGE_POLICY`, the only policy
+Every run is graded by `deepseek/deepseek-v4.1-flash-1017` through OpenRouter alone (`JUDGE_POLICY`, the only policy
 publication accepts); `--judge-policy browser-internal-jev-v4` grades Jev first with a verified fallback. The earlier
 `browser-internal-opus-v*` policies name Opus, which is no longer an eval judge; they remain only so their recorded
 receipts stay readable.
@@ -134,6 +134,7 @@ from fastbrowse_evals.final_page import VIEWPORT, FinalPage, FrameViewport, obse
 from fastbrowse_evals.judging import (
     EVIDENCE_QUESTIONS,
     JUDGE_MODEL,
+    JUDGE_QUESTIONS,
     OPUS_JUDGE,
     QUESTIONS,
     SITE_FAILURE_QUESTIONS,
@@ -287,7 +288,7 @@ OPUS_V5_POLICY = "browser-internal-opus-v5"
 (`NO_EVIDENCE`). The source text of a task's check is gone from the state. A state too long for one request is divided
 by `evidence.parts_v5`, which sends a long page's whole controls with every slice of its text: one Hacker News thread
 took 16 requests and $23 to judge (#1075). Selected only with --judge-policy; no published figure accepts it."""
-JUDGE_POLICY = "browser-internal-deepseek-v6"
+JUDGE_POLICY = "browser-internal-deepseek-v7"
 """The default, and the only policy a published figure accepts, graded by `judging.JUDGE_MODEL` alone: v5's evidence
 with each page listed once
 (`evidence.once`), its controls beside its text, and a state too long for one request divided by `evidence.parts`, which
@@ -301,7 +302,7 @@ POLICY_QUESTIONS = {
     OPUS_V3_POLICY: SITE_FAILURE_QUESTIONS,
     OPUS_V4_POLICY: SITE_FAILURE_QUESTIONS,
     OPUS_V5_POLICY: EVIDENCE_QUESTIONS,
-    JUDGE_POLICY: EVIDENCE_QUESTIONS,
+    JUDGE_POLICY: JUDGE_QUESTIONS,
     JEV_JUDGE_POLICY: QUESTIONS,
 }
 JUDGE_POLICIES = tuple(POLICY_QUESTIONS)

@@ -45,7 +45,7 @@ Credentials per arm (environment variable names; values never enter Git, rows or
 | `browser-use-ultrafast` | `BROWSER_USE_API_KEY` |
 | `browser-harness` | `BROWSER_USE_API_KEY` (cloud browser), `OPENROUTER_API_KEY` (Codex's model provider); the pinned Codex CLI on PATH |
 | `fastbrowse-hosted` | `FASTBROWSE_HOSTED_API_KEY`; `FASTBROWSE_HOSTED_URL` overrides the public API |
-| every run (the judge) | `PARALLAX_JUDGE_MODELS=deepseek/deepseek-v4.1-flash`, `PARALLAX_JUDGE_BASE_URL=https://openrouter.ai/api/v1`, `PARALLAX_JUDGE_API_KEY`; `OPENROUTER_API_KEY` also with `--judge-policy browser-internal-jev-v4` |
+| every run (the judge) | `PARALLAX_JUDGE_MODELS=deepseek/deepseek-v4.1-flash-1017`, `PARALLAX_JUDGE_BASE_URL=https://openrouter.ai/api/v1`, `PARALLAX_JUDGE_API_KEY`; `OPENROUTER_API_KEY` also with `--judge-policy browser-internal-jev-v4` |
 
 Publish each comparison's ledger with `fastbrowse-evals browser publish-candidate`: `--hosted` (C1), `--backend` (C2) and
 `--ultrafast` (C3); see [Publication candidate](#publication-candidate).
@@ -76,7 +76,7 @@ Each catalog task lists the head-to-head arms it leaves out under `excluded`, ea
 A comparison scores both arms on the tasks both ran.
 
 Source grades are imported evidence. They are not Parallax's semantic quality verdicts. Internal browser grading
-uses policy `browser-internal-deepseek-v6` by default: every verdict comes from `deepseek/deepseek-v4.1-flash` through
+uses policy `browser-internal-deepseek-v7` by default: every verdict comes from `deepseek/deepseek-v4.1-flash-1017` through
 OpenRouter, with no Jev, and the run refuses to start unless `PARALLAX_JUDGE_MODELS` is exactly that model and
 `PARALLAX_JUDGE_BASE_URL` is OpenRouter. Publication accepts only this policy. The judge reads, in one form for every
 arm, each page the run saw, each action with its typed values, and the citations with their quotes, in the ending
@@ -392,7 +392,7 @@ concurrency of every contributing invocation: mixed settings publish as "Concurr
   checks; any other ungraded slot blocks export. Each repeat is its own row, and a task's figure is the mean of its
   repeat scores.
   The upstream score of each repeat is kept as upstream defines it. Only `fastbrowse` official runs are
-  published, graded by `deepseek/deepseek-v4.1-flash` through OpenRouter.
+  published, graded by `deepseek/deepseek-v4.1-flash-1017` through OpenRouter.
 - Every campaign must already be uploaded with `fastbrowse-evals browser track-ledger --push` or `track-official --push`. The exporter reads each
   experiment back from `fastbrowse-evals` and requires stored items equal to the projection of the exact source rows.
 - Limits record the protocol, models, judge, upstream versions, timing and cost inclusion as short phrases.
@@ -429,7 +429,7 @@ screenshots and the final page captured through its browser's DevTools address. 
 files it wrote, which the BU Bench judge is told. Only Fastbrowse's official runs
 are published; the others are measured only.
 
-The upstream judge is `deepseek/deepseek-v4.1-flash` (`--judge-model`) through `--judge-base-url`
+The upstream judge is `deepseek/deepseek-v4.1-flash-1017` (`--judge-model`) through `--judge-base-url`
 (`https://openrouter.ai/api/v1` unless set), with that endpoint's key as `OPENAI_API_KEY`. Publication accepts only
 that model and route.
 BU Bench keeps the upstream weighted rubric score; Online-Mind2Web keeps the upstream full-task grade.

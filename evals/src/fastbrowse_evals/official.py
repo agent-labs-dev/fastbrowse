@@ -2,7 +2,7 @@
 
 `--arm` picks the agent: fastbrowse (the default and the only one published) or the hosted Browser Use agent
 (`OFFICIAL_ARMS`). Every arm gets the same tasks and the same upstream judge request. The judge
-model is `deepseek/deepseek-v4.1-flash` through `--judge-base-url` (OpenRouter unless set), keyed by OPENAI_API_KEY. A run may repeat each
+model is `deepseek/deepseek-v4.1-flash-1017` through `--judge-base-url` (OpenRouter unless set), keyed by OPENAI_API_KEY. A run may repeat each
 task (`--repeat`); every repeat is graded, and a task's figure is the mean of its repeats. Before the upstream judge,
 Parallax's own judge checks each run for a site-side interruption (`INTERRUPTION_POLICY`) and runs such an attempt
 again rather than score it."""
@@ -139,7 +139,7 @@ agent, so by one rule for every arm and suite the attempt runs again as an inter
 graded on what was recorded, and the group states how many runs had no capture."""
 
 
-INTERRUPTION_POLICY = "browser-official-deepseek-v3"
+INTERRUPTION_POLICY = "browser-official-deepseek-v4"
 """Parallax's own check of every official run before the upstream judge sees it: the internal policy's evidence
 question (`judging.SITE_FAILURE_QUESTIONS`) alone, asked of `judging.JUDGE_MODEL`. Upstream scoring has no ungraded
 outcome, so a run the check finds interrupted by the site (an error page, a rate limit, an outage, a network failure
