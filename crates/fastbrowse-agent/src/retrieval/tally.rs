@@ -184,7 +184,65 @@ fn repeat_questions(index: usize, records: &[usize], found: &[Candidate], most: 
             })
             .map(|(_, &record)| record)
             .collect();
-        for (chunk, offer) in offered.chunks(most - 1).enumerate() {
+        let question = format!(
+            "{UNTRUSTED}\nThis note was not cut from its page's text: it was read from a screenshot of the page or from an element's markup, so a note cut from the page's text may hold the same record in other words. Which of these notes holds the record this one gives? Note: {}",
+            dumps(&reading.note)
+        );
+        questions.extend(same_record(&format!("t{index}/s{note}"), &question, &offered, found, most));
+    }
+    questions
+}
+
+/// For each record Jev judged whole but without the field, the questions asking which record of its page that states
+/// the field it is. A page can show one record in several blocks, each a note: on a PyPI project page the release date
+/// is one block and the maintainers card another, Jev judged the card one whole package with no release date, and a
+/// correct comparison of two packages was rejected for a record whose date another note gives (#977). Offered are the
+/// records of its page whose field Jev chose: one it repeats has that value, and one it repeats none of still has no
+/// value, so the claim is still rejected for it.
+fn unvalued_questions(
+    index: usize,
+    tally: &Tally,
+    records: &[usize],
+    found: &[Candidate],
+    fields: &HashMap<(usize, usize), FieldAnswer>,
+    most: usize,
+) -> IndexMap<String, Question> {
+    let (of, field) = (text::repr(&tally.of), text::repr(tally.field.as_deref().unwrap_or("value")));
+    let mut questions = IndexMap::new();
+    for &note in records {
+        if !matches!(fields.get(&(index, note)), Some(FieldAnswer::NoValue)) {
+            continue;
+        }
+        let offered: Vec<usize> = records
+            .iter()
+            .copied()
+            .filter(|&record| {
+                found[record].page == found[note].page
+                    && matches!(fields.get(&(index, record)), Some(FieldAnswer::Value(_)))
+            })
+            .collect();
+        let question = format!(
+            "{UNTRUSTED}\nThis note was judged one whole {of} that does not state its {field}. A page can show one record across several of its blocks, so another note from its page may give this same {of} with its {field}. Which of these notes holds the record this one gives? Note: {}",
+            dumps(&found[note].note)
+        );
+        questions.extend(same_record(&format!("t{index}/v{note}"), &question, &offered, found, most));
+    }
+    questions
+}
+
+/// The choices asking which of `offered` holds the record `question` shows, keyed `{key}c{chunk}`: the offers are
+/// split to fit one choice, with an option kept for none.
+fn same_record(
+    key: &str,
+    question: &str,
+    offered: &[usize],
+    found: &[Candidate],
+    most: usize,
+) -> IndexMap<String, Question> {
+    offered
+        .chunks(most - 1)
+        .enumerate()
+        .map(|(chunk, offer)| {
             let mut criteria: IndexMap<String, serde_json::Value> = offer
                 .iter()
                 .map(|record| {
@@ -193,15 +251,9 @@ fn repeat_questions(index: usize, records: &[usize], found: &[Candidate], most: 
                 })
                 .collect();
             criteria.insert(NO_VALUE.into(), json!("It is a record none of these notes holds."));
-            let question = format!(
-                "{UNTRUSTED}\nThis note was not cut from its page's text: it was read from a screenshot of the page or from an element's markup, so a note cut from the page's text may hold the same record in other words. Which of these notes holds the record this one gives? Note: {}",
-                dumps(&reading.note)
-            );
-            questions
-                .insert(format!("t{index}/s{note}c{chunk}"), Question::Choice(ChoiceQuestion::new(question, criteria)));
-        }
-    }
-    questions
+            (format!("{key}c{chunk}"), Question::Choice(ChoiceQuestion::new(question.to_string(), criteria)))
+        })
+        .collect()
 }
 
 /// `records` less each one Jev said repeats another, or None when Jev left one of those questions unanswered.
@@ -214,9 +266,9 @@ fn distinct(
 ) -> Option<Vec<usize>> {
     let mut kept = Vec::new();
     for note in records {
-        let prefix = format!("t{index}/s{note}c");
+        let prefixes = [format!("t{index}/s{note}c"), format!("t{index}/v{note}c")];
         let mut repeats = false;
-        for key in questions.keys().filter(|key| key.starts_with(&prefix)) {
+        for key in questions.keys().filter(|key| prefixes.iter().any(|prefix| key.starts_with(prefix))) {
             let Some(Answer::Choice(answer)) = answered.and_then(|answered| answered.get(key)) else {
                 return None;
             };
@@ -1142,7 +1194,7 @@ pub(super) async fn work_selected(
     // Each claim's records Jev judged, whole, before any repeat among them is dropped.
     let mut judged: HashMap<usize, Option<Vec<usize>>> = HashMap::new();
     let mut repeats = IndexMap::new();
-    for (index, _, _, _) in claims {
+    for (index, tally, _, _) in claims {
         if worked.contains_key(index) {
             continue;
         }
@@ -1152,7 +1204,11 @@ pub(super) async fn work_selected(
             .map(|notes| whole(notes.into_iter().flatten().collect(), &found));
         if let Some(records) = &records {
             let asking = led.get(index).copied().unwrap_or(*index);
-            repeats.extend(repeat_questions(asking, records, &found, jev.profile().max_choice_options));
+            let most = jev.profile().max_choice_options;
+            repeats.extend(repeat_questions(asking, records, &found, most));
+            if tally.op != Op::Count {
+                repeats.extend(unvalued_questions(asking, tally, records, &found, &fields, most));
+            }
         }
         judged.insert(*index, records);
     }
@@ -1727,8 +1783,10 @@ mod tests {
                 .iter()
                 .map(|(key, question)| {
                     let Question::Choice(choice) = question else { panic!("only field choices expected") };
-                    assert!(choice.criteria.contains_key("n0"));
-                    let selected = if choice
+                    // Each release is its own record, so no note without a price repeats one with it.
+                    let selected = if choice.instructions.contains("Which of these notes holds the record") {
+                        NO_VALUE
+                    } else if choice
                         .criteria
                         .values()
                         .any(|value| value.as_str().is_some_and(|value| value.contains("is its 'price':")))
@@ -1740,6 +1798,7 @@ mod tests {
                             .map(|(key, _)| key.as_str())
                             .unwrap_or(NO_VALUE)
                     } else {
+                        assert!(choice.criteria.contains_key("n0"));
                         "n0"
                     };
                     (
@@ -1766,6 +1825,126 @@ mod tests {
         fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
             fastbrowse_core::decision::DecisionProfile::jev()
         }
+    }
+
+    /// Answers as Jev did on pypi-newer (#977): a release line's first date is its latest release, the maintainers card
+    /// is one whole package with no date, and that card is or is not the package its page's release line gives.
+    struct PypiPages {
+        same: bool,
+    }
+
+    impl DecisionClient for PypiPages {
+        fn evaluate<'a>(
+            &'a self,
+            _: &'a serde_json::Value,
+            questions: &'a IndexMap<String, Question>,
+        ) -> fastbrowse_core::BoxFuture<
+            'a,
+            std::result::Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>,
+        > {
+            use fastbrowse_core::decision::{ChoiceAnswer, ChoiceTag, Evaluation};
+            let answers = questions
+                .iter()
+                .map(|(key, question)| {
+                    let Question::Choice(choice) = question else { panic!("a comparison asks choices") };
+                    let selected = if choice.instructions.contains("Which of these notes holds the record") {
+                        let first = choice.criteria.keys().find(|key| key.starts_with('m')).cloned();
+                        if self.same { first.expect("the release line is offered") } else { NO_VALUE.into() }
+                    } else if choice.instructions.contains("maintainers") {
+                        NO_VALUE.into()
+                    } else {
+                        "n0".into()
+                    };
+                    let answer = ChoiceAnswer {
+                        kind: ChoiceTag,
+                        probabilities: IndexMap::from([(selected.clone(), 1.0)]),
+                        choice: selected,
+                        confidence: 1.0,
+                    };
+                    (key.clone(), Answer::Choice(answer))
+                })
+                .collect();
+            Box::pin(async move {
+                Ok(Evaluation {
+                    model: "fixture".into(),
+                    answers,
+                    input_tokens: 1,
+                    cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                    requests: 1,
+                })
+            })
+        }
+        fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+            fastbrowse_core::decision::DecisionProfile::jev()
+        }
+    }
+
+    /// Recorded on pypi-newer (#977): each project page gave its release line and its maintainers card as notes, Jev
+    /// judged the card one whole package with no release date, and the correct answer, requests on May 14, 2026, was
+    /// rejected as "one package but states no latest release date". The card is the package its release line gives, so
+    /// the comparison stands; a card that is no record of its page with a date still has none, and is still rejected.
+    #[tokio::test]
+    async fn a_record_spread_over_its_page_takes_its_field_from_another_note() {
+        use crate::memory::Fact;
+        use crate::retrieval::chunks::evidence;
+        use crate::retrieval::testing::capture;
+        use crate::retrieval::text::Page;
+        use fastbrowse_core::models::FactReader;
+
+        let mut notes = Notes::default();
+        let mut ids = Vec::new();
+        for (name, heading, released, maintainers) in [
+            (
+                "httpx",
+                "httpx 0.28.1",
+                "Released:\nDec 6, 2024\n(2024-12-06T15:37:21+0000)",
+                "2 maintainers\nPyPI data\nData sourced directly from PyPI's database.\ncagil lovelydinosaur",
+            ),
+            (
+                "requests",
+                "Requests",
+                "Released:\nMay 14, 2026\n(2026-05-14T19:25:26+0000)",
+                "3 maintainers\nPyPI data\nData sourced directly from PyPI's database.\ngraffatcolmingov Lukasa nateprewitt",
+            ),
+        ] {
+            let mut captured = capture(&[(BlockKind::ListItem, released), (BlockKind::Record, maintainers)]);
+            captured.url = format!("https://pypi.org/project/{name}/");
+            captured.sha256.push_str(name);
+            captured.blocks[0].heading_path = vec![heading.into(), "Key dates".into()];
+            captured.blocks[1].heading_path = vec![heading.into()];
+            captured.blocks[1].whole_record = true;
+            let page = Page::new(&captured);
+            for block in &captured.blocks {
+                let fact = Fact::read(name, evidence(&page, block, block.start, block.end), FactReader::JevChoice);
+                ids.push(fact_id(&fact));
+                notes.add(fact);
+            }
+            notes.remember_capture(&captured, 0);
+        }
+        let tally = Tally {
+            op: Op::Max,
+            of: "PyPI package (httpx or requests)".into(),
+            field: Some("latest release date".into()),
+            rank: None,
+            by: None,
+            group: None,
+            written: "May 14, 2026".into(),
+        };
+        let task = "Which of httpx and requests has the more recent latest release on PyPI?";
+        let claims = [(0, &tally, "requests has the more recent latest release: May 14, 2026.", &[][..])];
+        let tokens = FirstField.profile().fit(None).tokens;
+        let worked =
+            work(&PypiPages { same: true }, &ReadsGroups(&[]), task, &claims, &notes, &tokens, None).await.unwrap();
+        let done = worked[&0].as_ref().unwrap();
+        assert_eq!(done.value, "May 14, 2026");
+        assert_eq!(done.evidence_ids, vec![ids[2].clone()]);
+        let worked =
+            work(&PypiPages { same: false }, &ReadsGroups(&[]), task, &claims, &notes, &tokens, None).await.unwrap();
+        assert!(
+            matches!(&worked[&0], Err(Unworked::Notes { notes, .. }) if notes == &vec![ids[1].clone()]),
+            "{:?}",
+            worked[&0]
+        );
     }
 
     #[tokio::test]
