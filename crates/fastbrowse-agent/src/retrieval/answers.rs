@@ -1135,8 +1135,13 @@ async fn review_composition(
     let mut tallies = HashMap::new();
     let copied: Vec<Value> = claims
         .iter()
-        .flat_map(BoundClaim::copied)
-        .map(|item| copied_element(&item.text, &item.sources, notes))
+        .flat_map(|claim| {
+            claim.copied().into_iter().map(move |item| {
+                let mut element = copied_element(&item.text, &item.sources, notes);
+                element["claim"] = json!(claim.text);
+                element
+            })
+        })
         .collect();
     let claims: Vec<Claim> = claims
         .into_iter()
@@ -1933,7 +1938,7 @@ fn exact_question(task: &str, claims: &[Claim], notes: &Notes) -> Question {
 fn copied_question(task: &str, copied: &[Value]) -> Question {
     Question::Noul(NoulQuestion::new(
         format!(
-            "{UNTRUSTED} A written answer copies these texts from the page. Is every copied text free of page information the task neither asks for nor names, such as another field's value, an identifier, another record, or a whole date where the task asks for one part of it? Text that repeats the task's own words, such as the name of what it asks about, and a sentence stating only an asked value, carry nothing beyond it.{} The rest of the answer is checked separately. Task: {} Copied: {}",
+            "{UNTRUSTED} A written answer copies these texts from the page. Is every copied text free of page information the task neither asks for nor names, such as another field's value, an identifier, another record, or a whole date where the task asks for one part of it? Text that repeats the task's own words, such as the name of what it asks about, and a sentence stating only an asked value, carry nothing beyond it.{} The rest of the answer is checked separately. Each copied text includes the claim it contributes to, as context for the role of that text in the answer. Judge only the copied text, not the rest of the claim. Task: {} Copied: {}",
             element_rule(copied),
             dumps(&json!(task)),
             dumps(&json!(copied))
@@ -3898,6 +3903,14 @@ mod tests {
             let checked =
                 review_composition(&jev, &READS, task, None, vec![bound], &notes, None, true, true, &[]).await.unwrap();
             assert_eq!(jev.asked.lock().unwrap().iter().any(|questions| questions.contains_key("exact")), asked);
+            if asked {
+                let batches = jev.asked.lock().unwrap();
+                let exact = batches.iter().find_map(|questions| questions.get("exact")).unwrap();
+                let payload: Value = serde_json::from_str(&exact.dump_json()).unwrap();
+                let instructions = payload["instructions"].as_str().unwrap();
+                let copied: Value = serde_json::from_str(instructions.rsplit_once(" Copied: ").unwrap().1).unwrap();
+                assert_eq!(copied[0]["claim"], "The site received Received stocktake.txt (34 bytes).");
+            }
             let found = checked.problem.as_deref();
             assert_eq!(
                 found.map(|found| found.contains(problem.unwrap_or_default())),
