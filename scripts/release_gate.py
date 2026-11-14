@@ -6,7 +6,9 @@ The release workflow runs this before it publishes anything. A release passes wh
 - for a minor release, or a patch whose tag message has the line `Benchmarks: run`, the runs of the benchmark
   campaign `release-<version>` together measured every task at least three times, and against the campaign named
   in `docs/results/release-baseline.json` no task's pass rate fell, and the median run time and the mean cost per
-  run are both lower.
+  run are both lower. A tag message with the line `Benchmarks: correctness` keeps every pass rate gated and reports
+  the median time and mean cost beside the baseline's without requiring them lower: for a release whose difference
+  there is the measuring environment's rather than its own, and the tag records that it was not held to them.
 - for a release whose tag message has the line `Benchmarks: official`, both official suites ran three times on its
   build, every cost known. Their judge reads every screenshot of every run, which costs far more than the internal
   campaign, so a release claims official scores only when it says so.
@@ -66,7 +68,9 @@ def _rate(rows: list[dict[str, Any]]) -> float:
     return sum(bool(row.get("passed")) for row in rows) / len(rows)
 
 
-def compare(candidate: list[dict[str, Any]], baseline: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
+def compare(
+    candidate: list[dict[str, Any]], baseline: list[dict[str, Any]], *, correctness_only: bool = False
+) -> tuple[list[str], list[str]]:
     """The reasons the candidate fails against the baseline, and notes on what could not be compared.
 
     A task whose version changed since the baseline measures something else, so it is noted rather than compared.
@@ -90,6 +94,8 @@ def compare(candidate: list[dict[str, Any]], baseline: list[dict[str, Any]]) -> 
                 f"{task.suite}/{task.task}: passed {sum(bool(r.get('passed')) for r in now)}/{len(now)}, "
                 f"the baseline {sum(bool(r.get('passed')) for r in before)}/{len(before)}"
             )
+    # Time and cost findings fail the release, or are only reported when it is gated on correctness alone.
+    measured = notes if correctness_only else failures
     mine = [row for rows in ours.values() for row in rows]
     base = [row for rows in theirs.values() for row in rows]
     for label, field, measure in (
@@ -97,7 +103,7 @@ def compare(candidate: list[dict[str, Any]], baseline: list[dict[str, Any]]) -> 
         ("mean $", "dollars", statistics.fmean),
     ):
         if field == "seconds" and len({row.get("timing_basis") for row in [*mine, *base]}) > 1:
-            failures.append("median seconds cannot compare different timing bases")
+            measured.append("median seconds cannot compare different timing bases")
             continue
         incomplete = False
         for side, rows in (("candidate", mine), ("baseline", base)):
@@ -110,14 +116,14 @@ def compare(candidate: list[dict[str, Any]], baseline: list[dict[str, Any]]) -> 
                 or (field == "dollars" and row.get("unknown_cost") is True)
                 for row in rows
             ):
-                failures.append(f"{side} {field}: missing, unknown or invalid measurements")
+                measured.append(f"{side} {field}: missing, unknown or invalid measurements")
                 incomplete = True
         if incomplete:
             continue
         now = measure([float(row[field]) for row in mine])
         before = measure([float(row[field]) for row in base])
         if not now < before:
-            failures.append(f"{label} {now:.4g} is not below the baseline's {before:.4g}")
+            measured.append(f"{label} {now:.4g} is not below the baseline's {before:.4g}")
         else:
             notes.append(f"{label} {now:.4g}, the baseline {before:.4g}")
     return failures, notes
@@ -145,7 +151,9 @@ def fixture_run(repo: str, tree: str) -> int:
 
 
 def run_rows(repo: str, run_id: int) -> list[dict[str, Any]]:
-    """Internal fastbrowse rows projected from the campaign's Parallax run directories."""
+    """Internal fastbrowse rows of a campaign run: projected from its Parallax run directories, or, for a run made
+    before campaigns ran through Parallax, its `ledger-*` rows as recorded. The baseline campaign and a release's
+    earlier runs are of that kind, and a task is scored on the newest run that measured it, so both stay readable."""
     from fastbrowse_evals.publication import public_arm, trial_result_to_row
     from parallax.models import Verdict
     from parallax.track.rows import load_run
@@ -155,9 +163,16 @@ def run_rows(repo: str, run_id: int) -> list[dict[str, Any]]:
     task_suites = {task.id: suite for suite, tasks in CATALOG.suites.items() for task in tasks}
     with tempfile.TemporaryDirectory() as scratch:
         try:
-            _gh("run", "download", str(run_id), "-R", repo, "-D", scratch, "-p", "run-*")
+            _gh("run", "download", str(run_id), "-R", repo, "-D", scratch, "-p", "run-*", "-p", "ledger-*")
         except subprocess.CalledProcessError:
             return []
+        rows: list[dict[str, Any]] = [
+            json.loads(line)
+            for path in sorted(Path(scratch).glob("ledger-*/*.jsonl"))
+            if not path.name.endswith((".attempts.jsonl", ".budget.jsonl"))
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
         run_dirs: list[Path] = []
         for marker in Path(scratch).rglob("parallax-verify.json"):
             directory = marker.parent
@@ -166,7 +181,6 @@ def run_rows(repo: str, run_id: int) -> list[dict[str, Any]]:
             if not manifest.is_file() or not results.is_file():
                 raise GateError(f"{directory}: a verified run directory is missing its manifest or results")
             run_dirs.append(directory)
-        rows: list[dict[str, Any]] = []
         for directory in run_dirs:
             loaded = load_run(directory)
             provenance = json.loads((directory / "provenance.json").read_text(encoding="utf-8"))
@@ -382,9 +396,11 @@ def tag_lines(repo: str, tag: str) -> list[str]:
 
 
 def measures_itself(version: str, lines: list[str]) -> bool:
-    """A minor release does; a patch does when its annotated tag message has the line `Benchmarks: run`, or claims
-    official scores, which are compared beside the campaign."""
-    return version.split(".")[-1] == "0" or "Benchmarks: run" in lines or "Benchmarks: official" in lines
+    """A minor release does; a patch does when its annotated tag message has the line `Benchmarks: run`, claims
+    official scores, which are compared beside the campaign, or asks to be gated on correctness."""
+    return version.split(".")[-1] == "0" or any(
+        line in lines for line in ("Benchmarks: run", "Benchmarks: official", "Benchmarks: correctness")
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -393,6 +409,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ref", help="check a commit before it is tagged, as a minor release")
     parser.add_argument("--version", help="the version the campaign is named for (default: the tag's)")
     parser.add_argument("--official", action="store_true", help="with --ref, also require official coverage")
+    parser.add_argument(
+        "--correctness", action="store_true", help="with --ref, as a tag with 'Benchmarks: correctness' would be gated"
+    )
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", "agent-labs-dev/fastbrowse"))
     args = parser.parse_args(argv)
     if bool(args.tag) == bool(args.ref):
@@ -416,7 +435,8 @@ def main(argv: list[str] | None = None) -> int:
             official_notes = ["official benchmarks: not claimed (no 'Benchmarks: official' line)"]
         candidate, used = campaign_rows(args.repo, f"release-{version}")
         before = baseline_rows(args.repo, baseline)
-        failures, notes = compare(candidate, before)
+        correctness_only = args.correctness or "Benchmarks: correctness" in lines
+        failures, notes = compare(candidate, before, correctness_only=correctness_only)
     except (GateError, ValueError, subprocess.CalledProcessError) as error:
         print(f"::error::{error}", file=sys.stderr)
         return 1
