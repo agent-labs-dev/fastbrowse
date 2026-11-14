@@ -1,7 +1,12 @@
 # Benchmark sources
 
-fastbrowse retains source identities in `fastbrowse.evals.sources`. The `evals/` project
-(`fastbrowse_evals`, a Parallax plugin) owns dataset loading, official grader adapters and benchmark execution.
+fastbrowse retains source identities in `fastbrowse.evals.sources` for its
+catalog and historical checks. The `evals/` project (`fastbrowse_evals`, a
+Parallax plugin) owns the fastbrowse task source and benchmark execution.
+
+Parallax dev20 owns the official `bu-bench` and `online-mind2web` task sources,
+dataset checks, and upstream judge bridges. Their pinned revisions and access
+requirements are documented by Parallax's `docs/official-suites.md`.
 
 BU Bench uses the pinned Browser Use benchmark dataset and its weighted findings grader. The encrypted
 tasks stay private. The current full task set and a historical subset are separate measurements.

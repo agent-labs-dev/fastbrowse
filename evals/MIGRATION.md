@@ -1,15 +1,26 @@
-# The first publication on `evals/`
+# Migration notes
 
-The workflows run the campaign and official benchmarks from `evals/` in this repository. What the first
-candidate they publish needs:
+Fastbrowse evals now consume Parallax dev20 directly from PyPI. The old live
+runner, duplicate evidence and judging code, request wallets, spend proxy,
+tracking ledger, and competitor adapter modules are deleted.
 
-- The committed catalog's `task_sources["more_tasks.py"]` moved because the file imports from
-  `fastbrowse_evals` now. A catalog that moves only its source hashes is a protocol change to the publication
-  gate (`benchmarks._retirement_only`), so the first candidate after the move needs the owner's
-  `protocol_change` approval. Task versions and fingerprints are unchanged.
-- A run records the catalog hash the harness renders (`fastbrowse_evals.versions.provenance`) and measures any
-  build. Publication refuses a candidate whose measured build ships a different catalog
-  (`fastbrowse_evals.publication.export`). 0.10.0 ships the old hash, so the first build this harness can
-  publish is the first one that contains the regenerated catalog.
-- The candidate's `runner_sha` is now a fastbrowse commit. The publication check that it is in the
-  checkout's history (`runner_pinned`) runs inside this repository, so it holds by construction.
+The task functions were converted into one immutable task specification table.
+`live_tasks.py` exposes its `TaskRecord` list to Parallax, while
+`more_tasks.py` and `sweep_tasks.py` remain small suite views for catalog and
+documentation code. Task versions continue to come from `versions.json`.
+
+Publication reads Parallax result directories through
+`fastbrowse_evals.publication`. It maps every selected result and its physical
+retries to the existing `fastbrowse.evals.benchmarks.Row`, then runs the
+existing schema 7 publication gate. Historical candidate and evidence files
+are not regenerated.
+
+The official suite runner, dataset loader, upstream bridge, and official rows
+adapter were deleted. Parallax now supplies `bu-bench` and
+`online-mind2web`, and the official workflow installs each pinned upstream
+judge in its own environment. Official run directories use the same
+TrialResult-to-Row mapping as internal campaigns, keyed by the task source in
+the run selection.
+
+Offline verification uses synthetic `TrialResult` values and a synthetic
+Parallax run directory. It makes no browser, provider, judge, or Langfuse call.

@@ -307,7 +307,10 @@ def test_settings_match_campaign_backend_and_reject_credential_inputs(monkeypatc
         "BROWSER_USE_API_KEY": "excluded-browser-key",
     }
     monkeypatch.setattr(harness, "environment", lambda: supplied)
-    backend = runpy.run_path(str(Path(__file__).parents[1] / "evals/src/fastbrowse_evals/backend.py"))
+    evals_src = Path(__file__).parents[1] / "evals/src"
+    # The campaign package is its own project, not installed in the root environment; its backend imports it.
+    monkeypatch.syspath_prepend(str(evals_src))
+    backend = runpy.run_path(str(evals_src / "fastbrowse_evals/backend.py"))
     probe = helper.Probe(task="read", allowed_origins=["https://example.invalid"])
     assert helper.run_settings(probe) == backend["run_settings"]()
     assert "AI_GATEWAY_API_KEY" not in helper.run_settings(probe)
