@@ -17,6 +17,11 @@ Versions are patch-by-patch unless the maintainer says otherwise, and every one 
    the campaign in `docs/results/release-baseline.json`, and the median run time and mean cost below it.
    The comparison requires valid timing and known cost receipts for every fastbrowse attempt on both sides;
    missing or provisional totals cannot prove an improvement.
+   A release whose time or cost difference comes from the measuring environment rather than its own build says so
+   with the line `Benchmarks: correctness` in its tag message (`--correctness` with `--ref`): every pass rate stays
+   gated, and the median time and mean cost are reported beside the baseline's without being required lower.
+   Campaign runs from before the Parallax plugin are read from their `ledger-*` artifacts, so the baseline and a
+   release's earlier runs still count.
    A release that claims official scores says so with the line `Benchmarks: official` in its tag message (`--official`
    with `--ref`). Their judge reads every screenshot of every run, so the official suites cost far more than the internal
    campaign, and a release without the line is gated on the internal campaign alone.
