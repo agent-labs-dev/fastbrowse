@@ -96,7 +96,7 @@ the old figures as recorded history.
 
 ## Official suites
 
-The official workflow runs Parallax 2.0.0.dev23's `bu-bench` and
+The official workflow runs Parallax 2.0.0.dev24's `bu-bench` and
 `online-mind2web` sources with policies `bu-bench-upstream-v1` and
 `online-mind2web-upstream-v1`. It clones each pinned upstream judge at the
 revision named by Parallax, installs its own dependencies in its own virtual
