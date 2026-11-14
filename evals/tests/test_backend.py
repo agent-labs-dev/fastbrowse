@@ -4,11 +4,44 @@ from pathlib import Path
 
 import pytest
 from fastbrowse.evals import harness
-from fastbrowse.models import Citation, Status
+from fastbrowse.models import Citation, CostBreakdown, Decider, Operation, RunResult, Status, StepOutcome, StepResult
 from parallax.browser_evidence import BrowserEvidence
 from parallax.harnesses.base import credential_env_problems
+from parallax.harnesses.browser.cloud import Browser
 
 from fastbrowse_evals import backend, hosted_api
+
+
+def test_browser_evidence_distinguishes_a_blocked_attempt_from_an_executed_action() -> None:
+    step = StepResult(
+        index=0,
+        operation=Operation.CLICK,
+        decided_by=Decider.CODE,
+        outcome=StepOutcome.FAILED,
+        url="https://shop.example/review",
+        target="Place order",
+        note="This action needs confirmation",
+        duration_ms=0,
+    )
+    output = RunResult(
+        status=Status.NEEDS_CONFIRMATION,
+        answer=None,
+        data=None,
+        evidence=(),
+        steps=(step,),
+        cost=CostBreakdown(),
+        artifacts=(),
+    )
+    result = backend._run_result(output, None, Browser(cdp_url="ws://browser"), [], latency_ms=0)
+    evidence = BrowserEvidence.model_validate({"answer": None, "steps": result["step_log"]})
+    assert evidence.steps[0].action == "click (failed): This action needs confirmation"
+
+    executed = output.model_copy(
+        update={"steps": (step.model_copy(update={"outcome": StepOutcome.EXECUTED, "note": None}),)}
+    )
+    result = backend._run_result(executed, None, Browser(cdp_url="ws://browser"), [], latency_ms=0)
+    evidence = BrowserEvidence.model_validate({"answer": None, "steps": result["step_log"]})
+    assert evidence.steps[0].action == "click (executed)"
 
 
 def test_configured_search_key_reaches_the_product_but_not_an_isolated_adapter(monkeypatch: pytest.MonkeyPatch) -> None:

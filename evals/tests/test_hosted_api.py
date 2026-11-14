@@ -43,6 +43,29 @@ def test_a_recorded_live_run_reports_the_charge_the_worker_time_and_the_citation
     }
 
 
+async def test_the_hosted_arm_preserves_action_outcomes_for_the_judge(monkeypatch: pytest.MonkeyPatch) -> None:
+    run = json.loads(RUN.read_text())
+    run["status"] = "needs_confirmation"
+    run["steps"] = [
+        {
+            "operation": "click",
+            "outcome": "failed",
+            "note": "This action needs confirmation",
+            "url": "https://shop.example/review",
+            "target": "Place order",
+        }
+    ]
+
+    async def finished(*args: object) -> tuple[dict[str, object], float]:
+        return run, 1.0
+
+    monkeypatch.setattr(hosted_api, "submit_and_wait", finished)
+    harness = hosted_api.FastbrowseHostedHarness(observer="plain-cdp")
+    harness.bind_task(TASK)
+    result = await harness.execute(TASK.turns[0])
+    assert result["step_log"][0]["action"] == "click (failed): This action needs confirmation"
+
+
 @pytest.mark.hosted_simulator
 async def test_the_hosted_api_simulator_answers_in_the_shapes_the_arm_reads() -> None:
     """Against the live API with a `fbh_test_` key: no browser and no charge, but the real submit, poll and run
