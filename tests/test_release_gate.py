@@ -70,13 +70,67 @@ def test_each_task_is_scored_on_the_newest_campaign_run_that_measured_it_three_t
     titles = {4: "release-9.9.9", 3: "release-1.0.0", 2: "release-1.0.0", 1: "release-1.0.0", 0: "release-1.0.0"}
     runs = [{"databaseId": i, "displayTitle": f"Benchmark campaign {name}"} for i, name in titles.items()]
     monkeypatch.setattr(gate, "_runs", lambda *_: runs)
-    monkeypatch.setattr(gate, "ledger_rows", lambda _, run_id: ledgers[run_id])
+    monkeypatch.setattr(gate, "run_rows", lambda _, run_id: ledgers[run_id])
     rows, used = gate.campaign_rows("o/r", "release-1.0.0")
     assert {(r["task"], r["run"]["git_sha"], r["passed"]) for r in rows} == {
         ("a", "bbbbbbbb", True),
         ("b", "aaaaaaaa", True),
     }
     assert used == ["run 2 on bbbbbbbb: 1 tasks", "run 1 on aaaaaaaa: 1 tasks"]
+
+
+def test_run_rows_keeps_two_groups_whose_runs_share_a_run_id(monkeypatch, tmp_path) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).parent.parent / "evals" / "src"))
+    import fastbrowse_evals.publication as publication
+    from parallax.models import Verdict
+
+    class TemporaryDirectory:
+        def __enter__(self):
+            return str(tmp_path)
+
+        def __exit__(self, *_):
+            return None
+
+    class Result:
+        key = "pypi-version-0"
+        task_id = "pypi-version"
+        task_version = 1
+        repeat = 0
+        verdict = Verdict.PASS
+
+    class Loaded:
+        def __init__(self, path):
+            self.path = path
+            self.results = (Result(),)
+
+        def physical_runs(self, _key):
+            return self.results
+
+    class Projected:
+        def __init__(self, path):
+            self.path = path
+            self.dollars = 0.0
+
+        def model_dump(self, mode):
+            return {"arm": "fastbrowse", "task": "pypi-version", "repeat": 0, "dollars": 0.0}
+
+    run_dirs = (tmp_path / "group-one", tmp_path / "group-two")
+    for directory, sha in zip(run_dirs, ("a" * 40, "b" * 40), strict=False):
+        directory.mkdir()
+        (directory / "manifest.json").write_text(json.dumps({"run_id": "fastbrowse"}))
+        (directory / "results.jsonl").write_text("{}\n")
+        (directory / "parallax-verify.json").write_text("{}\n")
+        (directory / "provenance.json").write_text(json.dumps({"extra": {"fastbrowse.agent_sha": sha}}))
+
+    monkeypatch.setattr(gate.tempfile, "TemporaryDirectory", lambda: TemporaryDirectory())
+    monkeypatch.setattr(gate, "_gh", lambda *args: "")
+    monkeypatch.setattr("parallax.track.rows.load_run", lambda path: Loaded(path))
+    monkeypatch.setattr(publication, "public_arm", lambda result: "fastbrowse")
+    monkeypatch.setattr(publication, "trial_result_to_row", lambda result, attempts: Projected(attempts[0]))
+
+    rows = gate.run_rows("owner/repo", 1)
+
+    assert {row["run"]["git_sha"] for row in rows} == {"a" * 40, "b" * 40}
 
 
 def test_other_arms_are_not_the_release() -> None:
@@ -167,6 +221,10 @@ def official_raw():
     import json
 
     raw = json.loads((Path(__file__).parent.parent / "docs/results/benchmark-candidate.json").read_text())
+    raw["schema_version"] = 7
+    for group in raw["groups"]:
+        for row in group["rows"]:
+            row["timing_basis"] = "session-ready-to-answer"
     template = raw["groups"][0]["rows"][0]
     for name, count, metric in (("bu-bench", 200, "weighted-rubric"), ("online-mind2web", 300, "full-task-success")):
         tasks = [f"task{i}" for i in range(count)]
@@ -180,6 +238,18 @@ def official_raw():
                 "task_ids": tasks,
                 "repeats": 3,
                 "limits": ["Test protocol"],
+                "sources": [
+                    {
+                        "run_id": f"synthetic-{name}",
+                        "arm": "fastbrowse",
+                        "agent_sha": raw["agent_sha"],
+                        "runner_sha": raw["runner_sha"],
+                        "measured_on": "2026-11-13",
+                        "tasks": tasks.copy(),
+                        "version": "upstream",
+                        "models": ["test:model"],
+                    }
+                ],
                 "rows": [{**template, "task": task, "repeat": repeat} for task in tasks for repeat in range(3)],
             }
         )
@@ -222,7 +292,9 @@ def test_official_release_refuses_inexact_slots(mutation):
     elif mutation == "extra":
         rows.append({**rows[0], "repeat": 3})
     else:
-        rows[-1]["task"] = "unrelated"
+        for row in rows[-3:]:
+            row["task"] = "unrelated"
+        raw["groups"][-1]["sources"][0]["tasks"][-1] = "unrelated"
     with pytest.raises(ValidationError, match="scheduled slot"):
         check_official(raw)
 
@@ -293,6 +365,7 @@ def test_complete_candidate_intake_requires_original_official_receipts(monkeypat
     campaign = raw["campaign_id"]
     monkeypatch.setattr(gate, "_runs", lambda *_: [{"displayTitle": f"Benchmark campaign {campaign}", "databaseId": 1}])
     monkeypatch.setattr(gate, "_tree", lambda *_: "tree")
+    monkeypatch.setattr(gate, "_fixture_receipt", lambda *_: raw["fixture"])
 
     def gh(*args):
         if args[0] == "run":
@@ -312,7 +385,7 @@ def test_complete_candidate_intake_requires_original_official_receipts(monkeypat
         gate.campaign_candidate("o/r", campaign, "tree", raw["fixture"]["run_id"])
 
 
-def test_candidate_keeps_valid_original_fixture_after_new_same_tree_dispatch(monkeypatch):
+def test_candidate_uses_the_checked_fixture_after_new_same_tree_dispatch(monkeypatch):
     import json
 
     raw = official_raw()
@@ -320,6 +393,8 @@ def test_candidate_keeps_valid_original_fixture_after_new_same_tree_dispatch(mon
     original = raw["fixture"]["run_id"]
     monkeypatch.setattr(gate, "_runs", lambda *_: [{"displayTitle": f"Benchmark campaign {campaign}", "databaseId": 1}])
     monkeypatch.setattr(gate, "_tree", lambda *_: "tree")
+    checked = {**raw["fixture"], "run_id": original + 1}
+    monkeypatch.setattr(gate, "_fixture_receipt", lambda *_: checked)
 
     def gh(*args):
         if args[0] == "run":
@@ -328,22 +403,12 @@ def test_candidate_keeps_valid_original_fixture_after_new_same_tree_dispatch(mon
             return ""
         if args[-1].endswith("/jobs?per_page=100"):
             return json.dumps({"jobs": [{"name": "Build the candidate", "conclusion": "success"}]})
-        if args[-1].endswith(f"/runs/{original}"):
-            return json.dumps(
-                {
-                    "head_sha": raw["agent_sha"],
-                    "path": ".github/workflows/evals.yml",
-                    "event": "workflow_dispatch",
-                    "status": "completed",
-                    "conclusion": "success",
-                }
-            )
         return json.dumps({"path": ".github/workflows/benchmark-campaign.yml", "head_sha": "different-workflow-head"})
 
     monkeypatch.setattr(gate, "_gh", gh)
     monkeypatch.setattr(gate, "official_receipts", lambda *_: ["verified original rows"])
     candidate, notes = gate.campaign_candidate("o/r", campaign, "tree", original + 1)
-    assert candidate.fixture.run_id == original
+    assert candidate.fixture.run_id == original + 1
     assert "verified original rows" in notes
 
 

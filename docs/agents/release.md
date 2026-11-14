@@ -6,10 +6,10 @@ Versions are patch-by-patch unless the maintainer says otherwise, and every one 
 2. `uv version <x.y.z>`, then `uv run python scripts/npm_versions.py --write`, which gives the SDK's manifest
    and the Rust workspace the same number. Open a `chore: <x.y.z>` PR. CI fails if the version has no entry or
    npm or Cargo disagrees with it.
-3. Before tagging, measure the release commit: `gh workflow run evals.yml --ref <branch-or-tag>`, and for a minor release
-   (or a patch tagged with the line `Benchmarks: run`) the campaign `release-<x.y.z>`: every group and suite,
-   three repeats, `refresh_competitors` off unless the site needs new competitor rows. Workflow dispatch requires a
-   branch or tag, so confirm the resulting run's `head_sha` is the intended release commit before using its results.
+3. Before tagging, measure the release commit with `benchmark-campaign.yml`: for a minor release (or a patch tagged
+   with the line `Benchmarks: run`), run every internal group and suite with three repeats and `refresh_competitors`
+   off unless the site needs new competitor rows. Workflow dispatch requires a branch or tag, so confirm the measured
+   fastbrowse SHA and harness SHA before using the Parallax run artifacts.
    After a later fix, rerun
    only the tasks it affects (`only`, with the same groups and repeats); be generous when the fix changes a
    prompt every task sees. `uv run --project evals python scripts/release_gate.py --ref <sha> --version <x.y.z>` scores each task on
@@ -23,27 +23,23 @@ Versions are patch-by-patch unless the maintainer says otherwise, and every one 
    Such a campaign also needs the `benchmark-candidate` artifact with both official suites: all 200 BU Bench and
    300 Online-Mind2Web tasks, each repeated three times. Their groups must match public rows exported by successful
    Official benchmarks runs on the candidate's agent and harness commits. The candidate stage must have succeeded,
-   including private tracking readback, and its original fixture receipt must pass on the measured build, with successful fixtures on the release
-   tree. Missing artifacts, incomplete repeats or unrelated builds block release. The workflow head may differ from its explicit agent and harness pins. Official upstream scores and evidenced
-   unjudged slots retain their meaning. A verified export does not replace the release
-   candidate's live fixture receipt. These suites establish coverage; the internal baseline comparison does not
-   claim an official score, speed or cost improvement. A later agent fix requires fresh official rows on its build.
-   The fixture Evals run must be on the release commit's tree; a squash merge keeps the pull request's tree.
-   A rerun's campaign builds the site candidate the same way, each task from its newest run. To build it from the
-   finished runs without running anything, dispatch the campaign with `candidate_only` and `fastbrowse_ref` set to
-   the newest run's build. The candidate's fixture Evals run must be on that build and the build must be in `main`'s
-   history, so build it after the release pull request merges, or dispatch Evals again on the merged commit and rerun
-   one task there so the newest run is on it.
+   including the required run artifact checks, on the measured build. Missing artifacts, incomplete repeats or
+   unrelated builds block release. The workflow head may differ from its explicit agent and harness pins. Official
+   upstream scores and evidenced unjudged slots retain their meaning. These suites establish coverage; the internal
+   baseline comparison does not
+   claim an official score, speed or cost improvement. A later agent fix requires fresh official Parallax runs on its build.
+   The campaign's Parallax run artifacts must be from the intended measured build. A rerun's campaign builds the site
+   candidate the same way, each task from its newest run. To build it from finished runs without running anything,
+   dispatch the campaign with `candidate_only` and `fastbrowse_ref` set to the newest run's build. The measured build
+   must be in `main`'s history before publication.
 4. Before tagging a CLI that requires an extension update, use the [Store workflow](extension-store.md)
    to submit the reviewed package, wait for approval, publish it and verify the Store-installed extension through
    the current CLI. The required manifest version must be published to all users before the CLI publishes.
    Then, once the maintainer says to release, `git tag v<x.y.z> <sha> && git push origin v<x.y.z>`. The tag's workflow
    publishes once the sdist, the wheels and the five binaries build and pass their smoke tests and its `gate`
    job finds those evals passing on the tagged tree. Then point `docs/results/release-baseline.json` at the new
-   release's campaign, so the next release is compared with this one. Publish the release commit's fixture rows
-   too: download that Evals run's `eval-rows` artifact and run `just evals-publish <dir>/nightly.jsonl`, which
-   reads the attempt ledger beside it. Each later fixture run is compared with those rows at the same task
-   version.
+   release's campaign, so the next release is compared with this one. Keep the release campaign's Parallax run
+   artifacts with the candidate receipt. Each later campaign is compared with those rows at the same task version.
 5. The tag's `aur` job publishes the Arch package and its `aur-sync` job opens the PR that moves
    `packaging/aur` to the release. [aur.md](aur.md) has how the package is built and checked, and what to do
    by hand when either job's secret is missing.
