@@ -4467,6 +4467,53 @@ async fn test_a_stuck_run_whose_answer_passes_every_check_answers_the_task() {
     assert_eq!(stopped(text, None, Some(true)).await.status, Status::Complete);
 }
 
+/// A composer that writes one claim citing the first note, and says its answer leaves `.1` unestablished.
+struct WritesPartial(&'static str, &'static str);
+
+impl LLMClient for WritesPartial {
+    fn generate_value<'a>(
+        &'a self,
+        _: LLMPurpose,
+        _: &'a [Message],
+        schema: &'a dyn ResponseSchema,
+        _: Option<&'a Ledger>,
+    ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
+        Box::pin(async move {
+            let draft = json!({"claims": [{"text": [{"prose": self.0}], "evidence_ids": ["e0"]}], "partial": self.1});
+            let data = schema.validate_json(&draft.to_string()).map_err(LLMError::Failed)?;
+            Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+        })
+    }
+}
+
+/// Asked how many quotes an author has across a site, a run stuck after two pages of ten composed "The total across
+/// the whole site is unsupported. The available pages show 2 J.K. Rowling quotes, but the site listing continues to
+/// page 3." Each claim held and coverage passed at 0.57, so the run ended complete. The composer's own account that its
+/// answer is partial keeps a stuck run stuck, and ends a finished one unverified, naming what is left out.
+#[tokio::test]
+async fn test_an_answer_its_composer_calls_partial_never_ends_complete() {
+    let composer = || Arc::new(WritesPartial("2 quotes by Ada were found.", "the quotes past page 2"));
+    let run = || {
+        let mut state = run_state();
+        state.output_intent = super::state::OutputIntent::Text;
+        state.compose = true;
+        let page = capture(&[(BlockKind::Paragraph, "Quote by Ada")]);
+        state.notes.add(Fact::read("Quote by Ada", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
+        state
+    };
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(JudgesCarried(true)), composer());
+    let mut state = run();
+    let ledger = state.ledger.clone();
+    let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "no_progress (3)"));
+    let stuck = agent.stopped(stop, Some(&mut state), &ledger).await;
+    assert_eq!(stuck.status, Status::Stuck);
+    assert!(stuck.answer.unwrap_or_default().contains("2 quotes by Ada were found."));
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(JudgesCarried(true)), composer());
+    let done = agent.conclude(&mut run(), &observation(&[]), None).await.unwrap();
+    assert_eq!(done.status, Status::Unverified);
+    assert_eq!(done.error.as_deref(), Some("The answer is partial; it does not establish the quotes past page 2"));
+}
+
 #[test]
 fn test_a_control_still_offered_after_a_page_change_is_reported() {
     let click = |added| {

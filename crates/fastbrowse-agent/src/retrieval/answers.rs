@@ -66,6 +66,10 @@ pub struct ComposedAnswer {
     /// A composed claim lacked support, or its support could not be judged.
     #[serde(skip)]
     pub problem: Option<String>,
+    /// What the composer said its answer leaves unestablished of what the task asks, such as a total over a list it
+    /// saw continue unread. A run whose answer is partial is never complete.
+    #[serde(skip)]
+    pub partial: Option<String>,
 }
 
 impl Schema for Claim {
@@ -143,6 +147,7 @@ pub fn assemble_answer(claims: &[Claim], notes: &Notes, steps: &[Value]) -> Comp
         linked_answer: linked.join("\n\n"),
         claims: claims.to_vec(),
         problem: None,
+        partial: None,
         citations: known.into_values().collect(),
     }
 }
@@ -156,6 +161,9 @@ struct AnswerDraft {
     /// The task asks for a numbered list, which code numbers in the order the claims are written.
     #[serde(default)]
     numbered: bool,
+    /// What the answer leaves unestablished of what the task asks, when it is partial.
+    #[serde(default)]
+    partial: Option<String>,
 }
 
 impl Schema for AnswerDraft {
@@ -166,15 +174,16 @@ impl Schema for AnswerDraft {
                 Field::required("claims", Ty::list(DraftClaim::ty())),
                 Field::default("columns", Ty::optional(Ty::list(Ty::Str)), serde_json::Value::Null),
                 Field::default("numbered", Ty::Bool, false),
+                Field::default("partial", Ty::optional(Ty::Str), serde_json::Value::Null),
             ],
         )
         .ty()
     }
 }
 
-/// What the composer wrote: the columns when the task asks for a table, whether it asks for a numbered list, and the
-/// claims.
-type Drafted = (Option<Vec<String>>, bool, Vec<BoundClaim>);
+/// What the composer wrote: the columns when the task asks for a table, whether it asks for a numbered list, the claims,
+/// and what the answer leaves unestablished when it is partial.
+type Drafted = (Option<Vec<String>>, bool, Vec<BoundClaim>, Option<String>);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -635,7 +644,7 @@ impl ComposeItem {
 
 // Told only "self-contained", the composer split a price off its record as "It costs £56.88.", which its support
 // check, judging that claim alone, rightly failed (6 of 10 first drafts; 0 of 15 once told how claims are checked).
-const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Each claim is checked alone, against only the notes it cites and without the other claims, so it names the record its values belong to instead of referring back to a record another claim named. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself, and every number in digits. For a count, total, minimum or maximum across records, whether found by comparing values or by the order a list is sorted in, set tally to its op (count, sum, min or max), of (the kind of record it ranges over, with the scope the task gives it, such as \"quote by Albert Einstein\" or \"book in the Mystery category\"), field (the value added or compared, such as \"price\"; null for a count), rank (for a place after the extreme, such as 2 for the second cheapest, with op min; null otherwise) and written (the initial value and format of its computed part, such as \"$14.99\" for a price; for a claim that answers which record is at a minimum or maximum without its field value, the record's name). A task that asks for several places, such as the two cheapest, gets one claim per place, each with its own tally. A claim stating how many records one group has, or a group's place by how many it has, such as the author with the most quotes, is a count per group: set op count, of the kind of record without the group (\"quote\"), by the field that groups them (\"author\"), group (the one this claim counts, as the notes write it) and rank (its place by count, 1 for the most, or null when the claim states none), one claim per group; code reads every record's group from its note. Otherwise set by and group null. Code works the value out from every note read, fills the computed part and cites the records. Source parts never supply that computed part: every tally also includes its own computed part, even when the source writes the same value. A claim that repeats a single note's own value without asserting an aggregate, such as a page's own total of results, has tally null; so does every claim that works nothing out. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. Say an answer is partial only when a note itself shows part of what the task covers was not reached, never because the notes might lack something. When the task asks for a table, set columns to its column names and make each claim one row: set cells to its values in column order, which code writes as the claim's text. Otherwise set columns and cells to null. When the task asks for a numbered list, set numbered and write no number in any claim: a claim's place among the others is not in the notes it cites, so code numbers the claims in the order written. Otherwise set numbered to false.\n\n";
+const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Each claim is checked alone, against only the notes it cites and without the other claims, so it names the record its values belong to instead of referring back to a record another claim named. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself, and every number in digits. For a count, total, minimum or maximum across records, whether found by comparing values or by the order a list is sorted in, set tally to its op (count, sum, min or max), of (the kind of record it ranges over, with the scope the task gives it, such as \"quote by Albert Einstein\" or \"book in the Mystery category\"), field (the value added or compared, such as \"price\"; null for a count), rank (for a place after the extreme, such as 2 for the second cheapest, with op min; null otherwise) and written (the initial value and format of its computed part, such as \"$14.99\" for a price; for a claim that answers which record is at a minimum or maximum without its field value, the record's name). A task that asks for several places, such as the two cheapest, gets one claim per place, each with its own tally. A claim stating how many records one group has, or a group's place by how many it has, such as the author with the most quotes, is a count per group: set op count, of the kind of record without the group (\"quote\"), by the field that groups them (\"author\"), group (the one this claim counts, as the notes write it) and rank (its place by count, 1 for the most, or null when the claim states none), one claim per group; code reads every record's group from its note. Otherwise set by and group null. Code works the value out from every note read, fills the computed part and cites the records. Source parts never supply that computed part: every tally also includes its own computed part, even when the source writes the same value. A claim that repeats a single note's own value without asserting an aggregate, such as a page's own total of results, has tally null; so does every claim that works nothing out. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. Say an answer is partial only when a requested value is not established or a note itself shows part of what the task covers was not reached, never because the notes might lack something, and then set partial to what it leaves unestablished, in a few words; otherwise set partial to null. When the task asks for a table, set columns to its column names and make each claim one row: set cells to its values in column order, which code writes as the claim's text. Otherwise set columns and cells to null. When the task asks for a numbered list, set numbered and write no number in any claim: a claim's place among the others is not in the notes it cites, so code numbers the claims in the order written. Otherwise set numbered to false.\n\n";
 
 const DESCRIPTIVE_VALUES: &str = "Interpret the requested field by its meaning, not by literal labels in the source. A value stated in descriptive prose counts even when no heading names that field. A statement that a value is not shown contradicts such a value. Use only a value stated by the description, including equivalent wording; do not infer a value from a merely related detail.";
 
@@ -756,7 +765,8 @@ async fn compose_part(
         .map(|claim| claim.bind(items))
         .collect::<std::result::Result<_, _>>()
         .map_err(LLMError::Failed)?;
-    Ok((columns, draft.numbered, claims))
+    let partial = draft.partial.map(|partial| text::strip(&partial).to_string()).filter(|partial| !partial.is_empty());
+    Ok((columns, draft.numbered, claims, partial))
 }
 
 /// How much composing a packing still needs: its requests, then the bytes of the notes they carry. A round may shorten
@@ -833,24 +843,29 @@ async fn compose_packed(
         let mut claims = Vec::new();
         let mut columns = None;
         let mut numbered = false;
+        let mut partial = None;
         for part in &parts {
-            let (part_columns, part_numbered, part_claims) = compose_part(llm, task, part, ledger).await?;
+            let (part_columns, part_numbered, part_claims, part_partial) =
+                compose_part(llm, task, part, ledger).await?;
             columns = columns.or(part_columns);
             numbered |= part_numbered;
             claims.extend(part_claims);
+            partial = part_partial;
         }
+        // A part sees only its own notes, so only a request that saw them all says whether the answer is partial; an
+        // answer that never reduced to one is unverified for that already.
         if parts.len() == 1 {
-            return Ok(((columns, numbered, claims), true));
+            return Ok(((columns, numbered, claims, partial), true));
         }
         // Rewording a lone claim cannot recover the notes other requests omitted.
         if claims.len() <= 1 {
-            return Ok(((columns, numbered, claims), false));
+            return Ok(((columns, numbered, claims, None), false));
         }
         let Some(next) = pack_compositions(task, &claims, limit) else {
-            return Ok(((columns, numbered, claims), false));
+            return Ok(((columns, numbered, claims, None), false));
         };
         if packed_size(&next) >= packed_size(&parts) {
-            return Ok(((columns, numbered, claims), false));
+            return Ok(((columns, numbered, claims, None), false));
         }
         parts = next;
     }
@@ -910,7 +925,7 @@ pub(crate) async fn compose_reviewed(
     let writing_task = writing_task.as_str();
     let written: Vec<String> = items.iter().map(ComposeItem::written).collect();
     let messages = compose_messages(writing_task, &written);
-    let ((columns, numbers, claims), reduced) = match llm.context_tokens(LLMPurpose::Compose).await {
+    let ((columns, numbers, claims, partial), reduced) = match llm.context_tokens(LLMPurpose::Compose).await {
         Some(context) if estimated_context_bytes(&messages) > context_limit(context)? => {
             compose_packed(llm, writing_task, items, context_limit(context)?, ledger).await?
         }
@@ -938,7 +953,7 @@ pub(crate) async fn compose_reviewed(
     // Each claim was still judged against its quotes, but a count or comparison across requests is not established.
     let problem = problem.or_else(|| (!reduced).then(|| UNREDUCED.to_string()));
     Ok(ReviewedComposition {
-        answer: tabled(columns, ComposedAnswer { problem, ..assemble_answer(&claims, notes, steps) }),
+        answer: tabled(columns, ComposedAnswer { problem, partial, ..assemble_answer(&claims, notes, steps) }),
         rejection: reduced.then_some(rejection).flatten(),
     })
 }
@@ -1985,6 +2000,7 @@ mod tests {
             claims,
             citations: Vec::new(),
             problem: None,
+            partial: None,
         }
     }
 
@@ -3901,7 +3917,7 @@ mod tests {
         let notes = Notes::new([fact(0, "Record B: 34".into())]);
         let mut llm = RecordingLlm::new(None);
         llm.columns = Some(vec![]);
-        let (columns, _, _) = compose_part(&llm, "Report B", &initial_items(&notes, false), None).await.unwrap();
+        let (columns, _, _, _) = compose_part(&llm, "Report B", &initial_items(&notes, false), None).await.unwrap();
         assert_eq!(columns, None);
     }
 
