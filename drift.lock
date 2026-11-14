@@ -1,6 +1,11 @@
 version = 1
 
 [[bindings]]
+doc = "blog/agent-actions-need-confirmation.md"
+target = "crates/fastbrowse-cli/src/cli.rs"
+sig = "7f0be7087b920344"
+
+[[bindings]]
 doc = "blog/agent-credentials-scoped.md"
 target = "crates/fastbrowse-cli/src/bitwarden.rs"
 sig = "e9f9130a415ed07d"
