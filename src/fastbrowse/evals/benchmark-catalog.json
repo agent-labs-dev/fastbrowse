@@ -985,7 +985,7 @@
       "default": true
     },
     "browser-use-oss": {
-      "pin": "browser-use==1.0.3; default model bu-fast, default mode (ultrafast on bu-fast)",
+      "pin": "browser-use==1.0.4; default model bu-fast, default mode (ultrafast on bu-fast)",
       "tier": "A",
       "default": false
     },
