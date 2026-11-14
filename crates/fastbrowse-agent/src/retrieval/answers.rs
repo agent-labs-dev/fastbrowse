@@ -290,6 +290,19 @@ impl Composition {
     }
 }
 
+/// Why a claim that copies the record's name it also sets as tally.written goes back to the composer.
+fn named_twice_reason(index: usize, tally: &Tally) -> String {
+    let field = text::repr(tally.field.as_deref().unwrap_or("value"));
+    let extreme = if tally.op == Op::Min { "lowest" } else { "highest" };
+    format!(
+        "Claim {index} copies {} from its note and also sets it as tally.written. A record's name as tally.written \
+         means claim {index} names the record at the {extreme} {field} without stating it, and code writes the name in \
+         the computed part. Claim {index} names the record already: set tally.written to the {field} as its computed \
+         part writes it, or drop the copied name.",
+        text::repr(&tally.written)
+    )
+}
+
 /// Source text survives until the tally has been computed; a rendered string cannot distinguish its value slot
 /// from the same digits in a quoted record.
 #[derive(Debug, Clone)]
@@ -1053,21 +1066,27 @@ async fn review_composition(
         });
     }
     let tokens = jev.profile().fit(None).tokens;
+    // A record's name as tally.written puts that name in the computed part, so a claim that also copies it as a
+    // source part names the record twice and states no value: asked for phones and their prices, one read "Galaxy
+    // S20 Ultra" at Galaxy S20 Ultra. It goes back to the composer instead of being worked out.
+    let named_twice: HashMap<usize, String> = claims
+        .iter()
+        .enumerate()
+        .filter_map(|(index, claim)| {
+            let tally = claim.tally.as_ref().filter(|tally| tally.names_record())?;
+            claim.copied().contains(&tally.written).then(|| (index, named_twice_reason(index, tally)))
+        })
+        .collect();
     // Each tally is worked out first, so its claim is judged on everything but the value code wrote, and shown with it.
     let tallied: Vec<(usize, &Tally, &str, &[String])> = claims
         .iter()
         .enumerate()
+        .filter(|(index, _)| !named_twice.contains_key(index))
         .filter_map(|(index, claim)| {
             claim.tally.as_ref().map(|tally| {
                 // The typed composition has exactly one computed slot. Source digits are immutable text, not
-                // another occurrence of the slot the tally replaces. A record's name in that slot is checked against
-                // the whole claim: a claim copying the name and computing it again read "Galaxy S20 Ultra" at Galaxy
-                // S20 Ultra, where the task asked for the price.
-                let text = if claim.composition.is_some() && !tally.names_record() {
-                    tally.written.as_str()
-                } else {
-                    claim.text.as_str()
-                };
+                // another occurrence of the slot the tally replaces.
+                let text = if claim.composition.is_some() { tally.written.as_str() } else { claim.text.as_str() };
                 (index, tally, text, claim.evidence_ids.as_slice())
             })
         })
@@ -1077,7 +1096,8 @@ async fn review_composition(
         .enumerate()
         .filter_map(|(index, claim)| claim.within.clone().map(|within| (index, within)))
         .collect();
-    let worked = tally::work_selected(jev, llm, task, &tallied, &selections, notes, &tokens, ledger).await?;
+    let mut worked = tally::work_selected(jev, llm, task, &tallied, &selections, notes, &tokens, ledger).await?;
+    worked.extend(named_twice.into_iter().map(|(index, reason)| (index, Err(Unworked::Draft(reason)))));
     // A rewrite keeps a claim that passed as it was drafted: kept once worked, a tally lost its tally, and "The most
     // expensive book is A Year in Provence ..." citing that one book was judged as a plain claim, which it fails.
     let drafted: Vec<Claim> = claims.iter().map(|claim| claim.claim.clone()).collect();
@@ -2499,6 +2519,15 @@ mod tests {
             ),
             "{rejection}"
         );
+        assert!(!jev.asked.lock().unwrap().iter().any(|questions| questions.keys().any(|key| key.starts_with("t0/"))));
+        // Named only in the computed part, the record is worked out, whatever letters its name shares with the prose.
+        let tally = tallied("", "a", Op::Max, "Samsung phone", Some("price"), vec![]).tally;
+        let bound = bind_claim(&items, json!([{"computed":true}, {"prose": " has the highest price."}]), tally);
+        let jev = Tallying::new("Galaxy", "1399.00|1299.00");
+        let checked =
+            review_composition(&jev, &READS, task, None, vec![bound], &notes, None, false, &[]).await.unwrap();
+        let rejection = format!("{:?} {:?}", checked.problem, checked.rejection);
+        assert!(!rejection.contains("names the record already"), "{rejection}");
     }
 
     #[test]
