@@ -425,14 +425,20 @@ async fn by_page(
 }
 
 /// The first note a claim cites, as a membership question shows it: the composer's own example of the record it
-/// counts.
+/// counts, marked `whole_record` when its capture shows it is all the text of one item the page repeats.
 fn example(notes: &Notes, cited: &[String]) -> Option<serde_json::Value> {
     let facts = notes.facts_by_id();
     notes
         .expand_evidence_ids(cited.iter().map(String::as_str))
         .iter()
         .find_map(|id| facts.get(id).and_then(|fact| fact.evidence.as_ref()))
-        .map(|evidence| shown(notes, evidence))
+        .map(|evidence| {
+            let mut note = shown(notes, evidence);
+            if notes.whole_record(evidence) {
+                note["whole_record"] = true.into();
+            }
+            note
+        })
 }
 
 /// Whether a count includes this whole record, rather than a mention or part of it.
@@ -441,6 +447,16 @@ fn member_question(tally: &Tally, note: &serde_json::Value, example: Option<&ser
     // Asked about a biography that quotes its author, with only `of` ("quote by J.K. Rowling across the whole site")
     // to go on, Jev said it was one such quote in 3 replays of 10, and the count was one too many. Shown a record the
     // claim cites, it said no 10 times of 10, and still said yes to every quote record.
+    // Whether a note is all the text of one item its page repeats is known from the capture, not from the note's words:
+    // without it, the footer "Made with love by Zyte" was one quote like a cited J.K. Rowling quote at 0.6, and the
+    // count it joined could not be worked out. Shown that the cited quote is a whole record and the footer is not, Jev
+    // said 0.2.
+    let marked = |note: &serde_json::Value| note.get("whole_record").is_some();
+    let proof = if marked(note) || example.is_some_and(marked) {
+        " whole_record true proves that a note holds all the text its page renders for one item it repeats. Without that proof a note may still be one whole record."
+    } else {
+        ""
+    };
     let example = example.map_or(String::new(), |example| {
         format!(
             " The claim counts entries such as this one: {}. A note is one only when it is an entry of that same kind, not a passage that mentions one.",
@@ -448,7 +464,7 @@ fn member_question(tally: &Tally, note: &serde_json::Value, example: Option<&ser
         )
     });
     let question = format!(
-        "Is this note exactly one whole {of}? A note holding several is not one, and nor is its tags, label or heading alone, or a value a page states across several, such as a total.{example}"
+        "Is this note exactly one whole {of}? A note holding several is not one, and nor is its tags, label or heading alone, or a value a page states across several, such as a total.{example}{proof}"
     );
     let yes = format!("The note is exactly one whole {of}.");
     let no = format!("The note is no {of}, several, or only part of one.");
@@ -1167,7 +1183,11 @@ pub(super) async fn work_selected(
                 continue;
             }
             if tally.op == Op::Count {
-                let question = member_question(tally, &candidate.note, example.as_ref());
+                let mut shown_note = candidate.note.clone();
+                if candidate.whole_record {
+                    shown_note["whole_record"] = true.into();
+                }
+                let question = member_question(tally, &shown_note, example.as_ref());
                 members.insert(format!("t{index}/n{note}"), (candidate.page.clone(), question));
             } else {
                 let mut shown_note = candidate.note.clone();
@@ -1722,6 +1742,95 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(worked[&0].as_ref().unwrap().value, "800");
+    }
+
+    /// A count of quotes asked whether the footer "Made with love by Zyte" was one, beside a cited quote, and Jev said
+    /// yes at 0.6: nothing it was shown said the cited quote was one of the items the page repeats and the footer was
+    /// not, though the capture knew. The footer had no author, so the count by author was left unworked.
+    #[tokio::test]
+    async fn a_count_shows_which_notes_are_whole_records() {
+        use std::sync::Mutex;
+
+        use crate::memory::Fact;
+        use crate::retrieval::chunks::evidence;
+        use crate::retrieval::testing::capture;
+        use crate::retrieval::text::Page;
+        use fastbrowse_core::decision::{Evaluation, NoulAnswer};
+        use fastbrowse_core::models::FactReader;
+
+        #[derive(Default)]
+        struct Asked(Mutex<Vec<String>>);
+        impl DecisionClient for Asked {
+            fn evaluate<'a>(
+                &'a self,
+                _state: &'a serde_json::Value,
+                questions: &'a IndexMap<String, Question>,
+            ) -> fastbrowse_core::BoxFuture<'a, std::result::Result<Evaluation, fastbrowse_core::decision::DecisionError>>
+            {
+                let answers = questions
+                    .iter()
+                    .map(|(key, question)| {
+                        let Question::Noul(noul) = question else { panic!("a count asks membership") };
+                        self.0.lock().unwrap().push(noul.instructions.clone());
+                        (key.clone(), Answer::Noul(NoulAnswer { kind: Default::default(), probability: 1.0 }))
+                    })
+                    .collect();
+                Box::pin(async move {
+                    Ok(Evaluation {
+                        model: "test".into(),
+                        answers,
+                        input_tokens: 1,
+                        cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                        requests: 1,
+                    })
+                })
+            }
+            fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+                fastbrowse_core::decision::DecisionProfile::jev()
+            }
+        }
+
+        let mut captured =
+            capture(&[(BlockKind::Record, "\"Choices\" by Ada (about)"), (BlockKind::Paragraph, "Made by Zyte")]);
+        captured.blocks[0].whole_record = true;
+        let page = Page::new(&captured);
+        let facts = captured.blocks.iter().map(|block| {
+            let quote = evidence(&page, block, block.start, block.end);
+            Fact::read(&quote.quote.clone(), quote, FactReader::JevChoice)
+        });
+        let mut notes = Notes::new(facts.collect::<Vec<_>>());
+        notes.remember_capture(&captured, 0);
+        let cited = vec![candidates(&notes)[0].id.clone()];
+        let tally = Tally {
+            op: Op::Count,
+            of: "quote".into(),
+            field: None,
+            rank: None,
+            by: None,
+            group: None,
+            written: "1".into(),
+        };
+        let jev = Asked::default();
+        let tokens = jev.profile().fit(None).tokens;
+        let claims = [(0, &tally, "1", cited.as_slice())];
+        work(&jev, &ReadsGroups(&[]), "How many quotes?", &claims, &notes, &tokens, None).await.unwrap();
+        let asked = jev.0.into_inner().unwrap();
+        let note = |question: &str| -> serde_json::Value {
+            serde_json::from_str(question.rsplit_once(" Note: ").unwrap().1).unwrap()
+        };
+        let question = |quote: &str| {
+            let found = asked.iter().find(|question| note(question)["quote"] == quote);
+            found.unwrap_or_else(|| panic!("no question about {quote}: {asked:?}"))
+        };
+        let footer = question("Made by Zyte");
+        assert_eq!(note(footer).get("whole_record"), None);
+        assert!(
+            footer.contains("\"whole_record\": true}. A note is one only"),
+            "the cited example is marked: {footer}"
+        );
+        assert!(footer.contains("whole_record true proves"), "{footer}");
+        let record = question("\"Choices\" by Ada (about)");
+        assert_eq!(note(record)["whole_record"], true);
     }
 
     #[test]
