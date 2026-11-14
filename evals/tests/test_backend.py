@@ -72,3 +72,27 @@ def test_both_arms_cite_in_the_shape_browser_evidence_accepts() -> None:
     run = json.loads((Path(__file__).parent / "fixtures" / "fastbrowse_hosted_run.json").read_text())
     for citations in (backend.evidence_citations([cited]), hosted_api.evidence_citations(run)):
         BrowserEvidence.model_validate({"final_page": None, "answer": None, "citations": citations})
+
+
+def test_a_page_read_over_http_is_the_evidence_its_read_step_points_at() -> None:
+    """The browser never left its blank tab: the frames page the run read over HTTP is the only record of it."""
+    url = "https://practice.expandtesting.com/frames"
+    text = "Frames\nSend updates to my inbox"
+    pages, seen_at = backend.read_pages(
+        [
+            {"event": "route", "providers": {}},
+            {"event": "read", "step": 0, "url": url, "title": "Frames", "sha256": "a", "text": text, "chars": 30},
+            {"event": "page", "step": 1, "url": url, "title": "Frames", "status": 200, "text": text},
+        ]
+    )
+    evidence = BrowserEvidence.model_validate(
+        {
+            "final_page": None,
+            "answer": "Send updates to my inbox",
+            "steps": [{"action": "read", "url": url, "page": seen_at[0]}],
+            "pages": pages,
+            "citations": [{"url": url, "quote": "Send updates to my inbox"}],
+        }
+    )
+    assert [(page.url, page.text) for page in evidence.pages] == [(url, text)]
+    assert evidence.steps[0].page == 0 and seen_at[1] == 0

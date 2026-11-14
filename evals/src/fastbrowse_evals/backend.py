@@ -16,6 +16,7 @@ from fastbrowse.evals import harness
 from fastbrowse.models import Authorization, Citation, Limits, RunResult, Status
 from fastbrowse.run import run_task
 from fastbrowse.safety import ScopedSecrets, origin_of
+from fastbrowse.telemetry import traced
 from parallax.harnesses.browser import BrowserHarness
 from parallax.harnesses.browser.cloud import Browser, cloud_browser
 from parallax.models import Capability, CostSource, HarnessInfo, HarnessKind, Isolation, Task, TurnInput
@@ -123,21 +124,24 @@ class FastbrowseHarness(BrowserHarness):
             self._details["browser"] = "cloud" if browser.browser_id else "pool"
             self._agent_started(browser.open_seconds)
             began = time.perf_counter()
-            output = await run_task(
-                turn.text,
-                start=start_url,
-                open_browser=lambda: _ready_browser(browser),
-                output_schema=answer_model(task.id),
-                limits=Limits(),
-                authorization=authorization,
-                secrets=secrets,
-                http=http,
-                settings=run_settings(),
-            )
+            with traced() as events:
+                output = await run_task(
+                    turn.text,
+                    start=start_url,
+                    open_browser=lambda: _ready_browser(browser),
+                    output_schema=answer_model(task.id),
+                    limits=Limits(),
+                    authorization=authorization,
+                    secrets=secrets,
+                    http=http,
+                    settings=run_settings(),
+                )
             self._product_status = output.status
             latency_ms = round((time.perf_counter() - began) * 1000)
-            page = await self.observe(browser.cdp_url, url=output.final_url)
-        return _run_result(output, page, browser, latency_ms=latency_ms)
+            # A run that read every page over HTTP never drove the browser, which still shows the blank tab it
+            # opened on; what it saw is in `pages`.
+            page = None if output.browser is None else await self.observe(browser.cdp_url, url=output.final_url)
+        return _run_result(output, page, browser, events, latency_ms=latency_ms)
 
     def trial_details(self) -> dict[str, object]:
         details = super().trial_details()
@@ -178,7 +182,30 @@ def evidence_citations(citations: Iterable[Citation]) -> list[dict[str, str]]:
     return [{"url": citation.url, "quote": citation.quote} for citation in citations]
 
 
-def _run_result(output: RunResult, page: dict[str, object], browser: Browser, *, latency_ms: int) -> dict[str, object]:
+def read_pages(events: Iterable[object]) -> tuple[list[dict[str, object]], dict[int, int]]:
+    """The pages a run saw, each once and in the order it first saw them, from the `page` and `read` events of its
+    trace, and for each step the index of the last page it saw. Over HTTP the browser never shows these pages, so
+    the trace is the only record of what the run read."""
+    pages: list[dict[str, object]] = []
+    index: dict[tuple[object, object, object], int] = {}
+    seen_at: dict[int, int] = {}
+    for event in events:
+        if not isinstance(event, Mapping) or event.get("event") not in ("page", "read"):
+            continue
+        if not isinstance(event.get("text"), str) or not isinstance(event.get("step"), int):
+            continue
+        record = {key: event[key] for key in ("url", "title", "text", "controls") if event.get(key) is not None}
+        key = (record.get("url"), record.get("title"), record["text"])
+        if key not in index:
+            index[key] = len(pages)
+            pages.append(record)
+        seen_at[event["step"]] = index[key]
+    return pages, seen_at
+
+
+def _run_result(
+    output: RunResult, page: dict[str, object] | None, browser: Browser, events: Iterable[object], *, latency_ms: int
+) -> dict[str, object]:
     lines = [line.model_dump(mode="json") for line in output.cost.lines]
     lines.extend(browser.cost)
     usage = []
@@ -199,13 +226,16 @@ def _run_result(output: RunResult, page: dict[str, object], browser: Browser, *,
                 "source": "harness",
             }
         )
+    pages, seen_at = read_pages(events)
     steps = []
     for step in output.steps:
-        item = {"action": step.operation.value, "url": step.url}
+        item: dict[str, object] = {"action": step.operation.value, "url": step.url}
         if step.target:
             item["value"] = step.target
         if step.facts:
             item["quote"] = step.facts[0].quote or step.facts[0].text
+        if step.index in seen_at:
+            item["page"] = seen_at[step.index]
         steps.append(item)
     return {
         "status": _turn_status(output.status),
@@ -214,6 +244,7 @@ def _run_result(output: RunResult, page: dict[str, object], browser: Browser, *,
         "final_page": page,
         "final_url": output.final_url,
         "step_log": steps,
+        "pages": pages,
         "citations": evidence_citations(output.citations),
         "cost_lines": lines,
         "usage": usage,
