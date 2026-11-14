@@ -1696,16 +1696,8 @@ async fn read_inner(
                 });
             }
         }
-        // Claims rejected for lost records, by their `claim:N` reference: a conclusion drawing on one lost an operand.
-        let mut dropped: HashSet<String> = HashSet::new();
         for (index, original) in result.data.claims.iter().enumerate() {
             let mut claim = original.clone();
-            if claim.draws_on.iter().any(|reference| dropped.contains(reference)) {
-                // Rejecting the dependent is enough; the operand's own arm already settled what is lost.
-                dropped.insert(format!("claim:{index}"));
-                rejected_here += 1;
-                continue;
-            }
             if options.require_all_evidence
                 && let Some(requirement_id) = &claim.requirement_id
                 && requirement_ids.contains(requirement_id)
@@ -1726,24 +1718,14 @@ async fn read_inner(
             }
             if missing > 0 {
                 // A comparison missing an operand cannot close here or on a later page using these notes.
-                //
-                // A claim with no requirement id is one of the context claims a read is asked to give a null id -
-                // "keep quotes containing values needed for the task's remaining actions". It is no requirement's
-                // operand, so records it cited that do not resolve close nothing: it used to mark every open
-                // requirement of the page lost, and `lost` outlives the page, so one malformed context claim from a
-                // reader that attaches records to its context claims left the run unable to evidence anything it read
-                // later, on any page. A claim that does name a requirement keeps the recorded behaviour: its own
-                // requirement is marked lost, and a name outside this read's set still marks the page's lost.
                 match &claim.requirement_id {
                     Some(requirement_id) if requirement_ids.contains(requirement_id) => {
                         lost.insert(requirement_id.clone());
                     }
-                    Some(_) => lost.extend(requirement_ids.iter().cloned()),
-                    None => {}
+                    _ => lost.extend(requirement_ids.iter().cloned()),
                 }
                 uncovered += missing;
                 rejected_here += 1;
-                dropped.insert(format!("claim:{index}"));
                 continue;
             }
             if options.preserve_collections {
@@ -2132,89 +2114,4 @@ fn unique_ints(values: impl Iterator<Item = i64>) -> Vec<i64> {
         seen.insert(value);
     }
     seen.into_iter().collect()
-}
-
-#[cfg(test)]
-mod tests {
-    //! A context claim's unresolved records close no requirement (#551).
-
-    use fastbrowse_core::BoxFuture;
-    use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
-    use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, LLMPurpose};
-    use fastbrowse_core::page::BlockKind;
-    use serde_json::{Value, json};
-
-    use super::*;
-    use crate::planner::RequirementKind;
-    use crate::retrieval::testing::capture;
-    use crate::support::testing::block_on;
-
-    /// Answers every read with one fixed response body.
-    struct FixedLLM(Value);
-
-    impl LLMClient for FixedLLM {
-        fn generate_value<'a>(
-            &'a self,
-            _: LLMPurpose,
-            _: &'a [Message],
-            _: &'a dyn ResponseSchema,
-            _: i64,
-            _: Option<&Ledger>,
-        ) -> BoxFuture<'a, std::result::Result<Generation<Value>, LLMError>> {
-            let reply = self.0.clone();
-            Box::pin(async move {
-                Ok(Generation { data: reply, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
-            })
-        }
-    }
-
-    /// The requirements a read reports as lost, given one context claim whose cited record does not resolve.
-    fn lost_after_a_context_claim(claim_requirement_id: Value) -> Vec<String> {
-        let capture = capture(&[
-            (BlockKind::Paragraph, "Order total: $42.00"),
-            (BlockKind::Paragraph, "Confirmation: thanks, Ada"),
-            (BlockKind::Paragraph, "Some unrelated footer text"),
-        ]);
-        let reply = json!({
-            "tallies": [],
-            "claims": [{
-                "cite": {"first": "s2", "last": "s2"},
-                "excerpt": null,
-                "draws_on": [],
-                // No source id resolves, so the claim's records are missing.
-                "records": [{"first": "s9", "last": "s9"}],
-                "orders_list": null,
-                "text": "Footer text kept for context.",
-                "requirement_id": claim_requirement_id,
-            }],
-            "answered": false,
-            "continues": [],
-            "collections": [],
-        });
-        let llm = FixedLLM(reply);
-        let ids = vec!["R7".to_string(), "R8".to_string()];
-        let requirements = vec![
-            Requirement::new("R7", "the order total", RequirementKind::Information),
-            Requirement::new("R8", "the confirmation message", RequirementKind::Information),
-        ];
-        let mut notes = Notes::default();
-        let options = ReadOptions { requirements, ..ReadOptions::default() };
-        let outcome =
-            block_on(read(&llm, &capture, "Report the order total and confirmation.", &ids, &mut notes, &options))
-                .expect("read");
-        outcome.incomplete
-    }
-
-    #[test]
-    fn a_context_claim_that_loses_a_record_closes_no_requirement() {
-        // A null-id claim is one the read is asked to give no requirement: it is no requirement's operand, so the
-        // record it could not resolve must not mark the page's requirements lost. Before the fix this returned both.
-        assert_eq!(lost_after_a_context_claim(Value::Null), Vec::<String>::new());
-    }
-
-    #[test]
-    fn a_claim_naming_a_requirement_still_closes_only_that_one() {
-        // The recorded behaviour is unchanged for a claim that names a requirement of this read.
-        assert_eq!(lost_after_a_context_claim(json!("R7")), vec!["R7".to_string()]);
-    }
 }

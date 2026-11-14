@@ -20,7 +20,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::{BrowserConnection, CostBasis, CostComponent, CostLine};
-use fastbrowse_core::py::datetime::DateTime;
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
@@ -156,8 +155,6 @@ struct View {
     live_url: Option<String>,
     browser_cost: f64,
     proxy_cost: f64,
-    /// `finishedAt` less `startedAt`: the time the browser cost is metered on, known once the browser has stopped.
-    lifetime: Option<f64>,
 }
 
 pub struct BrowserUseCloudBrowser {
@@ -480,11 +477,7 @@ fn lock(state: &Shared) -> std::sync::MutexGuard<'_, State> {
 
 fn record_cost(state: &Shared, browser: &View) {
     lock(state).cost = vec![
-        CostLine {
-            seconds: browser.lifetime,
-            ..CostLine::new(CostComponent::Browser, CostBasis::Metered, Some(browser.browser_cost))
-        },
-        // Proxy cost is metered on the data sent through it (`proxyUsedMb`), not on time, so it has no seconds.
+        CostLine::new(CostComponent::Browser, CostBasis::Metered, Some(browser.browser_cost)),
         CostLine::new(CostComponent::Proxy, CostBasis::Metered, Some(browser.proxy_cost)),
     ];
 }
@@ -528,20 +521,12 @@ fn view(raw: &Value) -> Option<View> {
         None => Some(0.0),
         Some(value) => decimal(value),
     };
-    // The lifetime only reports the cost line's duration, so a missing or unreadable time leaves it unknown
-    // rather than losing the browser id and dollars the stop needs. A cost line's seconds cannot be negative, and
-    // one that was would fail the whole result as it crosses into Python.
-    let instant = |alias: &str, name: &str| field(alias, name).and_then(|v| DateTime::parse(v).ok()?.timestamp());
-    let lifetime = instant("startedAt", "started_at")
-        .zip(instant("finishedAt", "finished_at"))
-        .map(|(started, finished)| (finished - started).max(0.0));
     Some(View {
         id: object.get("id")?.as_str()?.to_owned(),
         cdp_url: text("cdpUrl", "cdp_url")?,
         live_url: text("liveUrl", "live_url")?,
         browser_cost: dollars("browserCost", "browser_cost")?,
         proxy_cost: dollars("proxyCost", "proxy_cost")?,
-        lifetime,
     })
 }
 
@@ -882,29 +867,6 @@ mod tests {
         assert!(keyed(&requests[0]) && !keyed(&requests[1]) && keyed(&requests[2]));
         assert_eq!(requests[2].body, br#"{"action":"stop"}"#);
         assert_eq!(dollars(&cloud), [Some(0.50), Some(0.10)]);
-    }
-
-    #[tokio::test]
-    async fn the_browser_line_carries_the_stopped_sessions_lifetime() {
-        let server = FakeServer::start(|r, base| {
-            let mut browser = serde_json::json!({
-                "id": "created", "cdpUrl": base, "webSocketDebuggerUrl": "ws://cdp.test", "browserCost": "0.000334",
-                "proxyCost": "0.10", "startedAt": "2026-11-04T10:00:00.400000Z",
-            });
-            if r.method == "PATCH" {
-                browser["finishedAt"] = serde_json::json!("2026-11-04T11:00:19.500+01:00");
-            }
-            reply(200, browser)
-        })
-        .await;
-        let mut cloud = cloud(&server, BrowserUseCloudOptions::default(), &Waits::default());
-        cloud.start().await.unwrap();
-        let seconds = |cloud: &BrowserUseCloudBrowser| cloud.cost().iter().map(|line| line.seconds).collect::<Vec<_>>();
-        assert_eq!(seconds(&cloud), [None, None], "a running browser has no lifetime yet");
-        cloud.stop().await.unwrap();
-        let [browser, proxy] = &seconds(&cloud)[..] else { panic!() };
-        assert!((browser.unwrap() - 19.1).abs() < 1e-6, "{browser:?}");
-        assert_eq!(*proxy, None, "proxy cost is metered on data, not time");
     }
 
     #[tokio::test(flavor = "multi_thread")]

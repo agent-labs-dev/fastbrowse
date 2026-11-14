@@ -7,7 +7,6 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
-use fastbrowse_core::citations::{TableBlock, table_blocks};
 use fastbrowse_core::models::{Evidence, FactReader};
 use fastbrowse_core::page::Capture;
 use fastbrowse_core::py::datetime::DateTime;
@@ -366,9 +365,6 @@ pub struct Notes {
     continuation_records: IndexMap<String, HashSet<String>>,
     collection_pages: IndexMap<String, IndexSet<CollectionRead>>,
     pages: IndexMap<(String, String, DateTime), CapturedPage>,
-    /// Each remembered capture's table blocks by its hash, so a citation can show a quote as the page shows it. Not
-    /// part of `NotesState`: notes rebuilt from one cite their quotes as cut.
-    tables: HashMap<String, Arc<[TableBlock]>>,
 }
 
 /// Everything a `Notes` holds, as `tests/golden/capture.py` writes it, so a recorded call can start from the notes a
@@ -429,7 +425,6 @@ impl Notes {
                 .collect(),
             collection_pages: state.collection_pages.into_iter().map(|(k, v)| (k, v.into_iter().collect())).collect(),
             pages: state.pages.into_iter().collect(),
-            tables: HashMap::new(),
         }
     }
 
@@ -496,12 +491,6 @@ impl Notes {
         self.pages
             .entry((capture.sha256.clone(), capture.url.clone(), capture.captured_at))
             .or_insert_with(|| CapturedPage { url: capture.url.clone(), title: capture.title.clone() });
-        self.tables.entry(capture.sha256.clone()).or_insert_with(|| table_blocks(capture).into());
-    }
-
-    /// The table blocks of the capture `evidence` was cut from; none when that capture was never remembered.
-    pub fn table_blocks(&self, evidence: &Evidence) -> &[TableBlock] {
-        self.tables.get(&evidence.capture_sha256).map_or(&[], |tables| tables)
     }
 
     pub fn captured_page(&self, evidence: &Evidence) -> Option<&CapturedPage> {
@@ -965,7 +954,6 @@ impl Notes {
                 .map(|(identity, occurrences)| (identity.clone(), occurrences.clone()))
                 .collect(),
             pages: self.pages.clone(),
-            tables: self.tables.clone(),
         }
     }
 

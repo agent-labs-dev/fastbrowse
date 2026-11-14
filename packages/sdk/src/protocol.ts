@@ -114,7 +114,7 @@ export interface CostLine {
   input_tokens: number;
   output_tokens: number;
   /**
-   * Wall time of the call, retries included, or the time a metered browser was held. None when unknown.
+   * Wall time of the call, retries included. None for a line that is not one call, such as browser time.
    */
   seconds: number | null;
 }

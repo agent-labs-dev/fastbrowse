@@ -145,8 +145,7 @@ limit.
   sign-in and no credential passes it. Retry using an attached local browser or choose another source for
   this research.`
 - The site answered HTTP 403 and recovery found no way on. The error is
-  `Could not complete the task after HTTP 403 at <url>: the site refused this browser session, which is an access or bot check; no credential passes it.`
-  and the result's `wall` field names `bot_check`, because the page offers no field to sign in with.
+  `Could not complete the task after HTTP 403 at <url> in this browser session; the cause is unknown.`
 
 A bot check can block a cloud browser before any task step runs. Credentials do not pass a CAPTCHA, so
 `--secret` and `--bitwarden` do not help here.

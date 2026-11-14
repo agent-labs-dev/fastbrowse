@@ -203,7 +203,7 @@ class CostLine(Frozen):
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     seconds: float | None = Field(default=None, ge=0)
-    """Wall time of the call, retries included, or the time a metered browser was held. None when unknown."""
+    """Wall time of the call, retries included. None for a line that is not one call, such as browser time."""
 
     @property
     def label(self) -> str:

@@ -698,13 +698,23 @@ impl<'a> Reader<'a> {
         let path = self.path();
         for (index, cells) in std::mem::take(&mut self.rows).into_iter().enumerate() {
             let line = cells.iter().map(|cell| cell.replace('|', "\\|")).collect::<Vec<_>>().join(" | ");
-            let mut text = format!("| {line} |");
+            self.blocks.push(Found {
+                kind: BlockKind::Table,
+                text: format!("| {line} |"),
+                heading_path: path.clone(),
+                href: None,
+            });
             if index == 0 && self.header_row == Some(0) {
-                // Without the divider the row above reads as prose, and a reader cannot tell a column name from a
-                // value. It shares the header's block, as a browser capture writes it, so a block of dashes is a row.
-                text.push_str(&format!("\n| {} |", vec!["---"; cells.len()].join(" | ")));
+                // Without the separator the row above reads as prose, and a reader cannot tell a column name from a
+                // value.
+                let separator = vec!["---"; cells.len()].join(" | ");
+                self.blocks.push(Found {
+                    kind: BlockKind::Table,
+                    text: format!("| {separator} |"),
+                    heading_path: path.clone(),
+                    href: None,
+                });
             }
-            self.blocks.push(Found { kind: BlockKind::Table, text, heading_path: path.clone(), href: None });
         }
         self.row = None;
         self.header_row = None;

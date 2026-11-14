@@ -5,7 +5,7 @@ package dev.agentlabs.fastbrowse.protocol;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
- * @param seconds Wall time of the call, retries included, or the time a metered browser was held. None when unknown.
+ * @param seconds Wall time of the call, retries included. None for a line that is not one call, such as browser time.
  */
 public record CostLine(
     @JsonProperty("component") CostComponent component,

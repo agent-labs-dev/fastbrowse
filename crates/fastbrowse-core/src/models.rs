@@ -427,7 +427,7 @@ pub struct CostLine {
     pub input_tokens: i64,
     #[serde(default, deserialize_with = "lax::int_ge0")]
     pub output_tokens: i64,
-    /// Wall time of the call, retries included, or the time a metered browser was held. None when unknown.
+    /// Wall time of the call, retries included. None for a line that is not one call, such as browser time.
     #[serde(default, deserialize_with = "lax::opt_float_ge0")]
     pub seconds: Option<f64>,
 }
@@ -457,7 +457,7 @@ impl Schema for CostLine {
                 Field::default("input_tokens", Ty::Int.ge(0), 0),
                 Field::default("output_tokens", Ty::Int.ge(0), 0),
                 Field::default("seconds", Ty::optional(Ty::Float.ge(0)), Value::Null).doc(
-                    "Wall time of the call, retries included, or the time a metered browser was held. None when unknown.",
+                    "Wall time of the call, retries included. None for a line that is not one call, such as browser time.",
                 ),
             ],
         )

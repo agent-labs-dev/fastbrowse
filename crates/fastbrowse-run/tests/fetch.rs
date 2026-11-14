@@ -67,7 +67,8 @@ fn test_blocks_keep_the_shapes_a_quote_needs() {
     // Scripts state nothing a reader can quote, and a CSS rule is not page text.
     assert!(!texts.iter().any(|(_, text)| text.contains("window.x") || text.contains("color: red")));
     // Each row holds its cells in one line, under the header that names them.
-    assert!(texts.contains(&(BlockKind::Table, "| Item | Amount |\n| --- | --- |")));
+    assert!(texts.contains(&(BlockKind::Table, "| Item | Amount |")));
+    assert!(texts.contains(&(BlockKind::Table, "| --- | --- |")));
     assert!(texts.contains(&(BlockKind::Table, "| Kettle | 34.50 |")));
     assert!(texts.contains(&(BlockKind::ListItem, "One")));
     // A link's destination is kept where the link is the whole block.

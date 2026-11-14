@@ -2,11 +2,11 @@
 
 use std::collections::HashSet;
 
-use fastbrowse_core::citations::{page_text, text_fragment};
+use fastbrowse_core::citations::text_fragment;
 use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::decision::NoulQuestion;
 use fastbrowse_core::llm::{Generation, LLMClient, Message};
-use fastbrowse_core::models::{Citation, Evidence, LLMPurpose, UNTRUSTED, background_section};
+use fastbrowse_core::models::{Citation, LLMPurpose, UNTRUSTED, background_section};
 use fastbrowse_core::page::cut_text;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{Style, dumped_len, dumps, write};
@@ -157,21 +157,6 @@ pub fn retain_fields(answer: ComposedAnswer, previous: &ComposedAnswer, notes: &
     assemble_answer(&claims, notes, &answer.requirements, answer.dropped_claims).with_outputs(outputs)
 }
 
-/// The quote and link a reader is shown for `evidence`, each passed through `redact`: the page's own text, a table's
-/// rows without the markdown the capture wrote them in, and a link that highlights it there. A typed observation is
-/// code's description rather than page text, so it links to the address alone. The link is built from the redacted
-/// text, since percent-encoding hides a secret from redaction.
-pub(crate) fn cited_quote(evidence: &Evidence, notes: &Notes, redact: impl Fn(&str) -> String) -> (String, String) {
-    let url = redact(&evidence.url);
-    if !evidence.rendered_text {
-        return (redact(&evidence.quote), url);
-    }
-    let quote = redact(&page_text(&evidence.quote, evidence.start, notes.table_blocks(evidence)));
-    // Python raises on a quote of only whitespace; a capture never cuts one, so the address stands in.
-    let deep_link = text_fragment(&url, &quote).unwrap_or(url);
-    (quote, deep_link)
-}
-
 /// `assemble_answer`: the claims with their numbered links and the citations they use.
 pub fn assemble_answer(
     claims: &[Claim],
@@ -190,13 +175,18 @@ pub fn assemble_answer(
         .filter_map(|fact| fact.evidence.as_ref().map(|evidence| (fact, evidence)))
         .enumerate()
         .map(|(index, (fact, evidence))| {
-            let (quote, deep_link) = cited_quote(evidence, notes, str::to_owned);
+            // Python raises on a quote of only whitespace; a capture never cuts one, so the address stands in.
+            let deep_link = if evidence.rendered_text {
+                text_fragment(&evidence.url, &evidence.quote).unwrap_or_else(|_| evidence.url.clone())
+            } else {
+                evidence.url.clone()
+            };
             let citation = Citation {
                 id: index as i64 + 1,
                 text: fact.text.clone(),
                 requirement_id: fact.requirement_id.clone(),
                 url: evidence.url.clone(),
-                quote,
+                quote: evidence.quote.clone(),
                 deep_link,
             };
             (fact_id(fact), citation)
@@ -836,46 +826,5 @@ mod tests {
         assert_eq!(without_citation_markup("Value [sha:1:2], [derived:abc], [tally:abc]"), "Value , ,");
         assert_eq!(without_citation_markup("Use [optional] fields"), "Use [optional] fields");
         assert_eq!(without_citation_markup("See [docs](https://x.test) and [3]"), "See docs and");
-    }
-
-    #[test]
-    fn a_table_row_is_cited_as_the_page_shows_it() {
-        use fastbrowse_core::page::BlockKind;
-
-        use crate::retrieval::chunks::evidence;
-        use crate::retrieval::testing::capture;
-        use crate::retrieval::text::Page;
-
-        let captured = capture(&[
-            (BlockKind::Paragraph, "a | b \\| c"),
-            (BlockKind::Table, "| Story | Site |\n| --- | --- |\n| Hacker News \\| past | ieee.org |"),
-        ]);
-        let page = Page::new(&captured);
-        let span = evidence(&page, &captured.blocks[0], 0, captured.blocks[1].end);
-        let mut notes = Notes::default();
-        let (quote, _) = cited_quote(&span, &notes, str::to_owned);
-        assert_eq!(quote, span.quote, "a capture the notes never saw is cited as cut");
-        notes.remember_capture(&captured);
-        let (quote, link) = cited_quote(&span, &notes, str::to_owned);
-        assert_eq!(quote, "a | b \\| c\n\nStory Site\nHacker News | past ieee.org");
-        assert_eq!(
-            link,
-            "https://example.test#:~:text=a%20%7C%20b%20%5C%7C%20c%20Story%20Site%20Hacker%20News%20%7C%20past%20ieee.org"
-        );
-        let typed = Evidence { rendered_text: false, ..span };
-        assert_eq!(cited_quote(&typed, &notes, str::to_owned), (typed.quote.clone(), typed.url.clone()));
-
-        // A later row's header is above the first row on the page, so its quote starts at its own row.
-        let scores = capture(&[
-            (BlockKind::Table, "| Name | Score |\n| --- | --- |\n| Ada | 10 |"),
-            (BlockKind::Table, "| Name | Score |\n| --- | --- |\n| Grace | 9 |"),
-        ]);
-        let block = &scores.blocks[1];
-        let row = evidence(&Page::new(&scores), block, block.start, block.end);
-        notes.remember_capture(&scores);
-        assert_eq!(
-            cited_quote(&row, &notes, str::to_owned),
-            ("Grace 9".into(), "https://example.test#:~:text=Grace%209".into())
-        );
     }
 }

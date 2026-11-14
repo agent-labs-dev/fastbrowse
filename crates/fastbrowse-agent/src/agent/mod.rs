@@ -51,7 +51,7 @@ use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
 use crate::planner::{Plan, RequirementKind, RunReport, make_plan};
 use crate::policy::StepContext;
-use crate::retrieval::{ComposeOptions, ComposedAnswer, assemble_answer, cited_quote, compose, partial_answer};
+use crate::retrieval::{ComposeOptions, ComposedAnswer, assemble_answer, compose, partial_answer};
 use crate::shortcut::{Shortcut, propose_shortcut};
 use crate::verification::RecordSchema;
 
@@ -778,29 +778,26 @@ impl Agent {
                 }
             }
         }
-        // A page that offers neither a credential field nor a sign-in is not a sign-in wall. A refusal that leaves no
-        // way in is a bot or access check, and naming it `sign_in` sends a caller to a password that cannot pass it.
-        let offers_sign_in = !credentials.is_empty() || raw.as_ref().is_some_and(sign_in::shows_sign_in);
-        let kind = match kind {
-            Some(kind) => Some(kind),
-            None if offers_sign_in => Some(wall_kind(&credentials)),
-            None => Some(WallKind::BotCheck),
-        };
         Some(Wall { kind: kind.unwrap_or_else(|| wall_kind(&credentials)), origin, fields, seen_at_ms: now_ms() })
     }
 
-    fn public_fact(&self, fact: &Fact, notes: &Notes) -> StepFact {
+    fn public_fact(&self, fact: &Fact) -> StepFact {
         let text = self.redact(&fact.text);
         let requirement_id = fact.requirement_id.as_deref().map(|id| self.redact(id));
         let Some(evidence) = &fact.evidence else {
             return StepFact { text, requirement_id, quote: None, url: None, reader: fact.reader, deep_link: None };
         };
-        let (quote, deep_link) = cited_quote(evidence, notes, |value| self.redact(value));
+        let (url, quote) = (self.redact(&evidence.url), self.redact(&evidence.quote));
+        let deep_link = if evidence.rendered_text {
+            text_fragment(&url, &quote).unwrap_or_else(|_| url.clone())
+        } else {
+            url.clone()
+        };
         StepFact {
             text,
             requirement_id,
             quote: Some(quote),
-            url: Some(self.redact(&evidence.url)),
+            url: Some(url),
             reader: fact.reader,
             deep_link: Some(deep_link),
         }

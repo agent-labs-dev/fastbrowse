@@ -16,9 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use fastbrowse_clients::environment::{ConfigurationError, Settings};
-use fastbrowse_core::models::{
-    Authorization, Event, Limits, LocalChrome, RunResult, SecretRef, SecretValue, Status, WallKind,
-};
+use fastbrowse_core::models::{Authorization, Event, Limits, LocalChrome, RunResult, SecretRef, SecretValue, Status};
 use fastbrowse_core::output_schema::{ObjectType, OutputField, OutputModel, OutputType};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{self, Floats, Style};
@@ -98,14 +96,6 @@ impl Default for ServerConfig {
             mcp_token: None,
             grace_seconds: OVERRUN_GRACE_SECONDS,
         }
-    }
-}
-
-/// The status whose advice fits `result`: a `needs_login` stop at a bot or access check takes the bot-check advice.
-fn advice_status(result: &RunResult) -> Status {
-    match &result.wall {
-        Some(wall) if result.status == Status::NeedsLogin && wall.kind == WallKind::BotCheck => Status::Blocked,
-        _ => result.status,
     }
 }
 
@@ -336,7 +326,7 @@ pub fn browse_result(result: &RunResult, live_url: Option<&str>, config: &Server
         "answer": result.answer,
         "data": result.data,
         "citations": citations,
-        "next_step": next_step(advice_status(result), config.allow_authorize),
+        "next_step": next_step(result.status, config.allow_authorize),
         "error": result.error,
         "final_url": result.final_url,
         "live_url": live_url,

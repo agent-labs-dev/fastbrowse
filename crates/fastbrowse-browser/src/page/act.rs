@@ -635,7 +635,7 @@ impl CdpPage {
             _ => return Err(bad("Literal['Enter', ' '] | None")),
         };
         let Some(key) = key else { return Ok((StepOutcome::Covered, Some(self.covered_detail(target).await))) };
-        if !self.focus(session_id, local_id, false, false, false, true).await? {
+        if !self.focus(session_id, local_id, false, false, false).await? {
             return Ok((StepOutcome::Covered, Some(self.covered_detail(target).await)));
         }
         if let Some(refusal) = self.keys_reach(target, true, None).await? {
@@ -801,9 +801,7 @@ impl CdpPage {
         for attempt in 0..2 {
             if attempt > 0 || focused.is_none() {
                 let activate = focused.is_none();
-                // The pointer route's own focus wait already answered null, so this activated wait is its one retry.
-                let retry = keyboard || attempt > 0;
-                focused = Some(self.focus(session_id, local_id, true, secret, activate, retry).await?);
+                focused = Some(self.focus(session_id, local_id, true, secret, activate).await?);
                 covered = None;
             }
             if focused != Some(true) {
@@ -995,7 +993,7 @@ impl CdpPage {
                 }
                 Point::At(..) => {}
             }
-            if !self.focus(&session_id, local_id, false, false, false, true).await? {
+            if !self.focus(&session_id, local_id, false, false, false).await? {
                 return Ok((StepOutcome::Failed, Some("target did not receive keyboard focus".into())));
             }
             if let Some(refusal) = self.keys_reach(target, point == Point::Covered, None).await? {
@@ -1306,18 +1304,15 @@ impl CdpPage {
         prepare_fill: bool,
         secret: bool,
         activate: bool,
-        retry: bool,
     ) -> Result<bool, BrowserError> {
-        // A pointer click normally focused the document already; background tabs still need activation. The script
-        // answers null for a document without focus, before focusing it or after the wait, and the tab is brought
-        // forward once more: focus the window lost after an activation is taken back rather than failing the fill.
+        // A pointer click normally focused the document already; background tabs still need activation.
         let script = focus_script(prepare_fill, secret);
         if activate {
             self.session.bring_to_front().await?;
         }
         let mut result =
             self.evaluate(session_id, &format!("{script}({local_id}, {})", py_json(&json!(activate)))).await?;
-        if result.is_null() && retry {
+        if result.is_null() {
             self.session.bring_to_front().await?;
             result = self.evaluate(session_id, &format!("{script}({local_id}, true)")).await?;
         }
@@ -1443,8 +1438,6 @@ fn focus_script(prepare_fill: bool, secret: bool) -> String {
     // a tick or two, so judging it here in the same task rejects a field that is in fact focused. Poll instead of
     // guessing. Every condition is rechecked on the tick that succeeds: waiting for the focus signal means focus can
     // move meanwhile, and reporting success on a stale activeElement would authorize keystrokes to whatever holds focus.
-    // A field that holds focus in a document the browser never focused within the wait answers null, as a document
-    // without focus does up front: the window, not the field, is what lacks focus, and activating it is the remedy.
     format!(
         "((id, activated) => {{ const e = window.__fastbrowse?.nodes.get(id); if (!e?.isConnected) return false; \
          if (!activated && !e.ownerDocument.hasFocus()) return null; \
@@ -1455,7 +1448,7 @@ fn focus_script(prepare_fill: bool, secret: bool) -> String {
          const check = () => {{ if (!e.isConnected || e.getRootNode().activeElement !== e) \
          {{ resolve(false); return; }} \
          if (e.ownerDocument.hasFocus()) {{ {prepare}resolve(true); return; }} \
-         if (Date.now() > deadline) {{ resolve(null); return; }} \
+         if (Date.now() > deadline) {{ resolve(false); return; }} \
          setTimeout(check, 10); }}; check(); }}); }})",
         deadline = py_float(FOCUS_SETTLE_SECONDS * 1000.0),
     )

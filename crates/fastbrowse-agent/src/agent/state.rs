@@ -129,24 +129,6 @@ impl HttpFailure {
         format!("HTTP {} at {} in this browser session; the cause is unknown.", self.status, self.url)
     }
 
-    /// What the stop report says about the refusal, and which wall it names.
-    ///
-    /// A 403 is the shape an access or bot check takes: the page has no credential field and no form, so a caller
-    /// told only that "the cause is unknown" is sent looking for a sign-in that cannot pass it. Every other status
-    /// keeps the recorded wording (`message`) so replaying recorded Python traffic still matches byte for byte.
-    fn refusal(&self) -> (String, Option<WallKind>) {
-        match self.status {
-            403 => (
-                format!(
-                    "HTTP 403 at {}: the site refused this browser session, which is an access or bot check; no credential passes it",
-                    self.url
-                ),
-                Some(WallKind::BotCheck),
-            ),
-            _ => (self.message(), None),
-        }
-    }
-
     pub fn stop(&self) -> Stop {
         let mut status = match self.status {
             401 => Status::NeedsLogin,
@@ -156,13 +138,7 @@ impl HttpFailure {
         if matches!(self.status, 408 | 419 | 429) || self.status >= 500 {
             status = Status::Unavailable;
         }
-        let (refusal, wall) = self.refusal();
-        Stop {
-            status,
-            error: Some(format!("Could not complete the task after {}.", refusal.trim_end_matches('.'))),
-            evidence: Vec::new(),
-            wall,
-        }
+        Stop::new(status, format!("Could not complete the task after {}", self.message()))
     }
 }
 

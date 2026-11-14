@@ -103,15 +103,6 @@ impl DateTime {
         }
     }
 
-    /// Unix seconds, as `datetime.timestamp()`; `None` for a naive time, whose instant depends on a zone it lacks.
-    pub fn timestamp(&self) -> Option<f64> {
-        let offset = self.offset?;
-        let days = days_from_civil(self.year, self.month, self.day);
-        let seconds =
-            days * 86_400 + i64::from(self.hour) * 3600 + i64::from(self.minute) * 60 + i64::from(self.second);
-        Some((seconds - i64::from(offset)) as f64 + f64::from(self.microsecond) / 1e6)
-    }
-
     /// Monday is 0, as `date.weekday()`.
     pub fn weekday(&self) -> usize {
         (days_from_civil(self.year, self.month, self.day) + 3).rem_euclid(7) as usize

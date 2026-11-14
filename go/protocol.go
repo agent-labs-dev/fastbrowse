@@ -91,7 +91,7 @@ type CostLine struct {
 	Purpose      *LLMPurpose   `json:"purpose"`
 	InputTokens  int64         `json:"input_tokens"`
 	OutputTokens int64         `json:"output_tokens"`
-	// Wall time of the call, retries included, or the time a metered browser was held. None when unknown.
+	// Wall time of the call, retries included. None for a line that is not one call, such as browser time.
 	Seconds *float64 `json:"seconds"`
 }
 

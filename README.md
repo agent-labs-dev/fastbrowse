@@ -229,9 +229,8 @@ async def main() -> None:
 
 **Citations.** `result.citations` holds a `Citation` per numbered link in `result.answer`: `id`, `text`,
 `requirement_id`, `url`, `quote` and `deep_link`. Counts, totals and superlatives cite every record they were
-derived from. A `quote` is the page's text, a table row as its cells separated by spaces. A `deep_link` is a
-[text fragment](https://wicg.github.io/scroll-to-text-fragment/#syntax) URL that scrolls to the quote; it may not
-resolve on a page that changes or needs a session.
+derived from. A `deep_link` is a [text fragment](https://wicg.github.io/scroll-to-text-fragment/#syntax) URL that
+scrolls to the quote; it may not resolve on a page that changes or needs a session.
 
 **Watching a run.**
 

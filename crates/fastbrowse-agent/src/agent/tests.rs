@@ -1390,9 +1390,6 @@ fn test_a_stop_at_a_wall_names_what_the_wall_asks_for() {
         (vec![code.clone()], Status::NeedsLogin, None, Some(WallKind::OneTimeCode)),
         (vec![code.clone(), password.clone()], Status::NeedsLogin, None, Some(WallKind::Password)),
         (vec![button("Sign in")], Status::NeedsLogin, None, Some(WallKind::SignIn)),
-        // A needs_login stop on a page offering no field and no sign-in is not a sign-in wall: an access-denied notice
-        // leaves nothing to sign in with, so naming it `sign_in` sends a caller to a password that cannot pass it.
-        (vec![], Status::NeedsLogin, None, Some(WallKind::BotCheck)),
         (vec![code.clone()], Status::Blocked, Some(WallKind::BotCheck), Some(WallKind::BotCheck)),
         // A refusal that is not a bot check, and a run that stopped for any other reason, name no wall.
         (vec![code.clone()], Status::Blocked, None, None),
@@ -1521,32 +1518,4 @@ async fn test_a_secret_in_a_step_or_trace_event_is_redacted_on_the_way_out() {
             json!({"event": "record_filter", "requirement": "[secret:password]"}),
         ]
     );
-}
-
-/// A server refusal is not an unknown cause: a 403 is the shape an access or bot check takes, and a run told only
-/// "the cause is unknown" with no wall sends its caller looking for a sign-in that cannot pass it.
-#[test]
-fn test_a_403_stop_names_a_bot_or_access_wall_instead_of_an_unknown_cause() {
-    use super::state::HttpFailure;
-    use fastbrowse_core::models::WallKind;
-    let forbidden =
-        HttpFailure { url: "https://www.curseforge.com/wow/addons/tweaks-forever/files".into(), status: 403 };
-    let stop = forbidden.stop();
-    assert_eq!(stop.status, Status::Blocked);
-    assert_eq!(stop.wall, Some(WallKind::BotCheck));
-    let error = stop.error.expect("an error names the refusal");
-    assert!(error.contains("HTTP 403"), "{error}");
-    assert!(error.contains("access or bot check"), "{error}");
-    assert!(!error.contains("cause is unknown"), "{error}");
-    // Every other status keeps the recorded Python wording, so replayed golden traffic stays byte for byte. A 401 is
-    // still a needs-login stop with no wall of its own, and a 5xx is the site being unavailable, not the run failing.
-    let recorded = "in this browser session; the cause is unknown.";
-    let unauthorized = HttpFailure { url: "https://shop.test/cart".into(), status: 401 }.stop();
-    assert_eq!(unauthorized.status, Status::NeedsLogin);
-    assert_eq!(unauthorized.wall, None);
-    assert!(unauthorized.error.unwrap().contains(recorded));
-    let unavailable = HttpFailure { url: "https://shop.test/cart".into(), status: 503 }.stop();
-    assert_eq!(unavailable.status, Status::Unavailable);
-    assert_eq!(unavailable.wall, None);
-    assert!(unavailable.error.unwrap().contains(recorded));
 }
