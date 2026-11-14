@@ -36,7 +36,7 @@ The plugin registers `fastbrowse`, `fastbrowse-pool`, and
 `browser-use-oss`, `browser-harness`, and `cua-codex`.
 
 Each task is world-less, has `Area.BROWSER`, and uses
-`browser-evidence-v1`. A browser harness stores the final page under trial
+`browser-evidence-v2`. A browser harness stores the final page under trial
 metadata key `browser`, using the `plain-cdp` observer. Timing, cost
 components, and secret-free harness details use Parallax trial hooks.
 
@@ -66,7 +66,7 @@ catalog. Use `fastbrowse-evals browser publish-candidate RUN_DIR ...` to build a
 candidate from Parallax run directories. The command runs the existing
 publication gate before writing the candidate.
 
-The official benchmark workflow runs Parallax dev20's `bu-bench` and
+The official benchmark workflow runs Parallax 2.0.0.dev23's `bu-bench` and
 `online-mind2web` task sources. It checks out each pinned upstream judge in its
 own environment, maps the upstream judge key through Parallax's official
 bridge, and passes sanitized Parallax run directories with provenance to the

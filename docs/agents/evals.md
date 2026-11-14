@@ -56,7 +56,7 @@ the same budget and reserve. Environment interruptions are retried with
 environment interruption.
 
 New task records belong in the combined task source. A record must use
-`Area.BROWSER`, require `Capability.BROWSER`, and name `browser-evidence-v1`.
+`Area.BROWSER`, require `Capability.BROWSER`, and name `browser-evidence-v2`.
 Task identity comes from `versions.json`. Do not put a password or token in a
 record or prompt. The fastbrowse harness resolves task secrets by origin.
 
@@ -79,7 +79,7 @@ The mapping preserves these public arm names:
 `fastbrowse-hosted` and `cua-codex` remain diagnostic. Candidate schema 7,
 `GROUPS`, site groups, and all files under `docs/results` stay as recorded.
 
-The official benchmark workflow uses Parallax dev20's `bu-bench` and
+The official benchmark workflow uses Parallax 2.0.0.dev23's `bu-bench` and
 `online-mind2web` sources. It clones the pinned upstream judge for each source,
 installs its dependencies in that checkout's own virtual environment, and
 passes the official source's sanitized run directory to the normal publication
