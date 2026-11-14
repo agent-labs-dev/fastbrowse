@@ -50,6 +50,23 @@ def test_a_run_no_faster_or_cheaper_fails_the_release() -> None:
     assert [failure.split()[0] for failure in failures] == ["median", "mean"]
 
 
+def test_a_correctness_release_reports_speed_and_cost_but_still_gates_pass_rates() -> None:
+    failures, notes = gate.compare(BASELINE, BASELINE, correctness_only=True)
+    assert failures == []
+    assert [note.split()[0] for note in notes] == ["median", "mean"]
+    worse = [{**row, "passed": False} if index == 0 else row for index, row in enumerate(BASELINE)]
+    failures, _ = gate.compare(worse, BASELINE, correctness_only=True)
+    assert len(failures) == 1 and "passed" in failures[0]
+
+
+def test_a_correctness_release_reports_mixed_clocks_and_still_measures_a_patch() -> None:
+    mixed = [{**row, "timing_basis": "physical-attempt-wall-time"} for row in BASELINE]
+    failures, notes = gate.compare(mixed, BASELINE, correctness_only=True)
+    assert failures == []
+    assert any("timing bases" in note for note in notes)
+    assert gate.measures_itself("0.11.1", ["Benchmarks: correctness"])
+
+
 def test_a_task_left_out_fails_but_a_new_version_is_only_noted() -> None:
     candidate = [row("a", True, 8, 0.01), row("b", True, 8, 0.01, version=2), row("b", True, 8, 0.01, version=2)]
     failures, notes = gate.compare(candidate, [*BASELINE, row("c", True)])
@@ -131,6 +148,25 @@ def test_run_rows_keeps_two_groups_whose_runs_share_a_run_id(monkeypatch, tmp_pa
     rows = gate.run_rows("owner/repo", 1)
 
     assert {row["run"]["git_sha"] for row in rows} == {"a" * 40, "b" * 40}
+
+
+def test_run_rows_reads_a_ledger_from_before_parallax(monkeypatch, tmp_path) -> None:
+    class TemporaryDirectory:
+        def __enter__(self):
+            return str(tmp_path)
+
+        def __exit__(self, *_):
+            return None
+
+    ledger = tmp_path / "ledger-fastbrowse"
+    ledger.mkdir()
+    row = {"arm": "fastbrowse", "suite": "dev", "task": "pypi-version", "task_version": 1, "passed": True}
+    (ledger / "fastbrowse.jsonl").write_text(json.dumps(row) + "\n")
+    (ledger / "fastbrowse.attempts.jsonl").write_text(json.dumps({"attempt": 1}) + "\n")
+    monkeypatch.setattr(gate.tempfile, "TemporaryDirectory", lambda: TemporaryDirectory())
+    monkeypatch.setattr(gate, "_gh", lambda *args: "")
+
+    assert gate.run_rows("owner/repo", 1) == [row]
 
 
 def test_other_arms_are_not_the_release() -> None:
