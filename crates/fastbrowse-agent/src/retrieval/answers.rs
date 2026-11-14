@@ -2502,7 +2502,7 @@ mod tests {
         let jev = Tallying::new("Galaxy", "1399.00|1299.00");
         let task = "Tell me the most expensive Samsung phone and its price";
         let checked =
-            review_composition(&jev, &READS, task, None, vec![bound], &notes, None, false, &[]).await.unwrap();
+            review_composition(&jev, &READS, task, None, vec![bound], &notes, None, false, false, &[]).await.unwrap();
         assert!(checked.claims.is_empty(), "{:?}", checked.claims);
         let rejection = format!("{:?} {:?}", checked.problem, checked.rejection);
         assert!(
@@ -2517,7 +2517,7 @@ mod tests {
         let bound = bind_claim(&items, json!([{"computed":true}, {"prose": " has the highest price."}]), tally);
         let jev = Tallying::new("Galaxy", "1399.00|1299.00");
         let checked =
-            review_composition(&jev, &READS, task, None, vec![bound], &notes, None, false, &[]).await.unwrap();
+            review_composition(&jev, &READS, task, None, vec![bound], &notes, None, false, false, &[]).await.unwrap();
         let rejection = format!("{:?} {:?}", checked.problem, checked.rejection);
         assert!(!rejection.contains("names the record already"), "{rejection}");
     }
