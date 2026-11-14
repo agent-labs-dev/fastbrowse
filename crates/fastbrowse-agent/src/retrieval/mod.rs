@@ -62,6 +62,7 @@ pub(crate) mod testing {
             text: joined,
             blocks,
             inaccessible_frames: 0,
+            masked: Vec::new(),
         }
     }
 }

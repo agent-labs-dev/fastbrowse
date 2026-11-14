@@ -6,9 +6,11 @@ use fastbrowse_core::citations::{page_text, text_fragment};
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionClient, NoulQuestion, Question};
 use fastbrowse_core::llm::{LLMClient, LLMError, Message, ResponseSchema, Typed};
 use fastbrowse_core::models::{Citation, Evidence, JevPurpose, LLMPurpose, Link, UNTRUSTED};
+use fastbrowse_core::page::BlockKind;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::text;
+use fastbrowse_core::safety::MASK;
 use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
 use fastbrowse_core::telemetry::Ledger;
 use indexmap::IndexMap;
@@ -328,14 +330,14 @@ impl From<Claim> for BoundClaim {
 
 impl BoundClaim {
     /// The page text the claim copies through its source parts; a claim with no composition is all its own wording.
-    fn copied(&self) -> Vec<String> {
+    fn copied(&self) -> Vec<&ComposeItem> {
         let Some(composition) = &self.composition else { return Vec::new() };
         composition
             .text
             .iter()
             .chain(composition.cells.iter().flatten().flatten())
             .filter_map(|part| match part {
-                BoundPart::Source { item, .. } => Some(item.text.clone()),
+                BoundPart::Source { item, .. } => Some(item),
                 _ => None,
             })
             .collect()
@@ -1076,7 +1078,11 @@ async fn review_composition(
         .enumerate()
         .filter_map(|(index, claim)| {
             let tally = claim.tally.as_ref().filter(|tally| tally.names_record())?;
-            claim.copied().contains(&tally.written).then(|| (index, named_twice_reason(index, tally)))
+            claim
+                .copied()
+                .iter()
+                .any(|item| item.text == tally.written)
+                .then(|| (index, named_twice_reason(index, tally)))
         })
         .collect();
     // Each tally is worked out first, so its claim is judged on everything but the value code wrote, and shown with it.
@@ -1112,7 +1118,11 @@ async fn review_composition(
     let mut shown = drafted.clone();
     // The tally each worked claim stated, which its support is judged against.
     let mut tallies = HashMap::new();
-    let copied: Vec<Vec<String>> = claims.iter().map(BoundClaim::copied).collect();
+    let copied: Vec<Value> = claims
+        .iter()
+        .flat_map(BoundClaim::copied)
+        .map(|item| copied_element(&item.text, &item.sources, notes))
+        .collect();
     let claims: Vec<Claim> = claims
         .into_iter()
         .enumerate()
@@ -1271,7 +1281,6 @@ async fn review_composition(
     if require_coverage && fits_one {
         questions.insert("coverage".into(), coverage_question(task, columns, &claims, notes, steps));
     }
-    let copied: Vec<&String> = copied.iter().flatten().collect();
     if exact && fits_one && !copied.is_empty() {
         questions.insert("exact".into(), copied_question(task, &copied));
     }
@@ -1667,7 +1676,14 @@ fn quote_states<'a>(ids: impl Iterator<Item = &'a String>, notes: &Notes, steps:
             fact.evidence.as_ref().map(|quote| {
                 let after_step = notes.steps_taken(quote).filter(|_| steps);
                 let whole_record = notes.whole_record(quote);
-                json!(QuoteState { quote, superseded: notes.superseded(&fact_id(fact)), after_step, whole_record })
+                json!(QuoteState {
+                    quote,
+                    superseded: notes.superseded(&fact_id(fact)),
+                    after_step,
+                    whole_record,
+                    source_kind: notes.source_kind(quote),
+                    whole_element: notes.whole_element(quote),
+                })
             })
         })
         .collect()
@@ -1682,6 +1698,12 @@ struct QuoteState<'a> {
     after_step: Option<usize>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     whole_record: bool,
+    /// The type of page element the quote is: a bare quote cited as the heading a task asks for was judged
+    /// unsupported, since nothing in the quote said it was a heading.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_kind: Option<BlockKind>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    whole_element: bool,
 }
 
 fn note_text(
@@ -1867,12 +1889,15 @@ fn draft_claims(notes: &Notes) -> Vec<Claim> {
 /// a table cell, a sentence or a row. The span can hold the value beside other page text, such as a footnote marker
 /// and a rank in an infobox cell, or be the whole date where the task asks for its year, and only a writer can narrow
 /// it (#862).
-fn exact_question(task: &str, claims: &[Claim]) -> Question {
+fn exact_question(task: &str, claims: &[Claim], notes: &Notes) -> Question {
+    let claims: Vec<Value> =
+        claims.iter().map(|claim| copied_element(&claim.text, &claim.evidence_ids, notes)).collect();
     Question::Noul(NoulQuestion::new(
         format!(
-            "{UNTRUSTED} Is each claim of the written answer only what the task asks to be told, in the form the task asks for it? A claim that also holds other text copied from the page beside the requested value, or gives a whole passage, row or date where the task asks for one part of it, is not. Whether the claims are true and whether they cover the task are checked separately. Task: {} Answer: {}",
+            "{UNTRUSTED} Is each claim of the written answer only what the task asks to be told, in the form the task asks for it? A claim that also holds other text copied from the page beside the requested value, or gives a whole passage, row or date where the task asks for one part of it, is not.{} Whether the claims are true and whether they cover the task are checked separately. Task: {} Answer: {}",
+            element_rule(&claims),
             dumps(&json!(task)),
-            dumps(&json!({"columns": null, "claims": claims.iter().map(|claim| &claim.text).collect::<Vec<_>>()}))
+            dumps(&json!({"columns": null, "claims": claims}))
         ),
         Some("Each claim states only what the task asks to be told, in the form it asks for."),
         Some("A claim holds page text beside the requested value, or more than the part the task asks for."),
@@ -1882,10 +1907,11 @@ fn exact_question(task: &str, claims: &[Claim]) -> Question {
 /// Whether each text a composed answer copies from the page is only what the task asks to be told. Only its source
 /// parts copy page text, so only they are judged: asked about whole claims, the exact question rejected the writer's
 /// own wording, "The most expensive product is \"Drum Roaster\" at GBP 210.00." at 0.44, as text beside the value.
-fn copied_question(task: &str, copied: &[&String]) -> Question {
+fn copied_question(task: &str, copied: &[Value]) -> Question {
     Question::Noul(NoulQuestion::new(
         format!(
-            "{UNTRUSTED} A written answer copies these texts from the page. Is every copied text free of page information the task neither asks for nor names, such as another field's value, an identifier, another record, or a whole date where the task asks for one part of it? Text that repeats the task's own words, such as the name of what it asks about, and a sentence stating only an asked value, carry nothing beyond it. The rest of the answer is checked separately. Task: {} Copied: {}",
+            "{UNTRUSTED} A written answer copies these texts from the page. Is every copied text free of page information the task neither asks for nor names, such as another field's value, an identifier, another record, or a whole date where the task asks for one part of it? Text that repeats the task's own words, such as the name of what it asks about, and a sentence stating only an asked value, carry nothing beyond it.{} The rest of the answer is checked separately. Task: {} Copied: {}",
+            element_rule(copied),
             dumps(&json!(task)),
             dumps(&json!(copied))
         ),
@@ -1894,6 +1920,41 @@ fn copied_question(task: &str, copied: &[&String]) -> Question {
             "A copied text carries information the task neither asks for nor names, or more than the part it asks for.",
         ),
     ))
+}
+
+/// A text copied from the page, with the type of element its notes quote, whether it is all of that element's text,
+/// and whether code masked a secret in it. Shown the text alone, the exact check read the page's own heading "Send
+/// updates to my inbox ..." as cut from a longer one, and rejected it at 0.2.
+fn copied_element(text: &str, sources: &[String], notes: &Notes) -> Value {
+    let quotes: Vec<&Evidence> =
+        sources.iter().filter_map(|id| notes.facts_by_id().get(id)?.evidence.as_ref()).collect();
+    let mut element = json!({"text": text});
+    let kinds: Vec<Option<BlockKind>> = quotes.iter().map(|quote| notes.source_kind(quote)).collect();
+    if let Some(Some(kind)) = kinds.first()
+        && kinds.iter().all(|other| other == &Some(*kind))
+    {
+        element["source_kind"] = json!(kind);
+        if quotes.iter().all(|quote| quote.quote == text && notes.whole_element(quote)) {
+            element["whole_element"] = true.into();
+        }
+    }
+    if text.contains(MASK) && quotes.iter().any(|quote| notes.masks_secret(quote)) {
+        element["masked_secret"] = true.into();
+    }
+    element
+}
+
+/// What the fields beside each copied text mean. Read as page text, a sign-in name the page greets the user with,
+/// masked as "•••••••", was judged an identifier the task does not ask for.
+fn element_rule(copied: &[Value]) -> String {
+    let mut rule = String::new();
+    if copied.iter().any(|element| element.get("source_kind").is_some()) {
+        rule.push_str(" Each text gives the type of page element it was copied from as source_kind, and whole_element true when it is that element's entire text.");
+    }
+    if copied.iter().any(|element| element.get("masked_secret").is_some()) {
+        rule.push_str(&format!(" A text with masked_secret true holds a secret the user gave for this task, such as a sign-in name, which code writes as one {MASK} per character: a hidden secret is the user's own input, not page information."));
+    }
+    rule
 }
 
 /// What a review of the picked notes found.
@@ -1921,7 +1982,7 @@ pub(crate) async fn draft_reviewed(
     }
     let questions = IndexMap::from([
         ("coverage".to_string(), coverage_question(task, None, &claims, notes, &[])),
-        ("exact".to_string(), exact_question(task, &claims)),
+        ("exact".to_string(), exact_question(task, &claims, notes)),
     ]);
     let state = json!({"task": task, "pages_read": pages_read(notes)});
     let tokens = jev.profile().fit(None).tokens;
@@ -2253,7 +2314,7 @@ mod tests {
             "{error}"
         );
         assert!(error.contains("e0 does not write \"\"."), "{error}");
-        assert_eq!(bound.copied(), ["katherine@example.com"]);
+        assert_eq!(bound.copied().iter().map(|item| item.text.as_str()).collect::<Vec<_>>(), ["katherine@example.com"]);
     }
 
     fn bind_claim(items: &[ComposeItem], text: Value, tally: Option<Tally>) -> BoundClaim {
@@ -4418,6 +4479,82 @@ mod tests {
         };
         assert!(reviewed.answer.problem.unwrap().contains("unanswered"));
         assert!(reviewed.rejection.is_none());
+    }
+
+    /// The frame's heading reads "Send updates to my inbox ...": shown without its element, the exact check took the
+    /// page's own ellipsis for a cut. Each pick names the element it quotes and whether it is all of it.
+    #[tokio::test]
+    async fn a_pick_names_the_element_it_quotes() {
+        use crate::retrieval::chunks::evidence;
+        use crate::retrieval::testing::capture;
+        use crate::retrieval::text::Page;
+
+        let captured = capture(&[
+            (BlockKind::Heading, "Send updates to my inbox ..."),
+            (BlockKind::Paragraph, "Plan: Pro, 12 seats"),
+        ]);
+        let page = Page::new(&captured);
+        let (heading, paragraph) = (&captured.blocks[0], &captured.blocks[1]);
+        let mut notes = Notes::new([
+            Fact::read(
+                "Send updates to my inbox ...",
+                evidence(&page, heading, heading.start, heading.end),
+                FactReader::JevChoice,
+            )
+            .answering(),
+            Fact::read(
+                "Pro",
+                evidence(&page, paragraph, paragraph.start + 6, paragraph.start + 9),
+                FactReader::JevChoice,
+            )
+            .answering(),
+        ]);
+        notes.remember_capture(&captured, 0);
+        let jev = Support::new(true);
+        draft_reviewed(&jev, "What does the form's heading say, and which plan is it?", &notes, None).await.unwrap();
+        let asked = jev.asked.lock().unwrap();
+        let Question::Noul(exact) = &asked[0]["exact"] else { panic!("exactness is asked") };
+        let answer: Value = serde_json::from_str(exact.instructions.split_once(" Answer: ").unwrap().1).unwrap();
+        assert_eq!(
+            answer["claims"],
+            json!([
+                {"text": "Send updates to my inbox ...", "source_kind": "heading", "whole_element": true},
+                {"text": "Pro", "source_kind": "paragraph"},
+            ])
+        );
+        assert!(exact.instructions.contains("whole_element true when"));
+        assert!(!exact.instructions.contains("secret"));
+    }
+
+    /// The page greets the signed-in user by a name the run typed as a secret, so the copy holds the mask, which the
+    /// exact check read as an identifier the task does not ask for. A bullet the page itself shows is page text.
+    #[test]
+    fn only_a_mask_code_wrote_is_named_as_the_users_input() {
+        use crate::retrieval::chunks::evidence;
+        use crate::retrieval::testing::capture;
+        use crate::retrieval::text::Page;
+
+        let greeting = format!("Congratulations {}. You successfully logged in!", MASK.to_string().repeat(7));
+        let listed = format!("{MASK} Free shipping");
+        let mut captured = capture(&[(BlockKind::Paragraph, &greeting), (BlockKind::ListItem, &listed)]);
+        captured.masked = vec![(16, 23)];
+        let page = Page::new(&captured);
+        let quote = |block: &fastbrowse_core::page::Block| {
+            Fact::read(
+                captured.block_text(block),
+                evidence(&page, block, block.start, block.end),
+                FactReader::JevChoice,
+            )
+        };
+        let mut notes = Notes::new([quote(&captured.blocks[0]), quote(&captured.blocks[1])]);
+        notes.remember_capture(&captured, 1);
+        let ids: Vec<String> = notes.facts_by_id().keys().cloned().collect();
+        let masked = copied_element(&greeting, &ids[..1], &notes);
+        let bullet = copied_element(&listed, &ids[1..], &notes);
+        assert_eq!(masked["masked_secret"], true);
+        assert!(bullet.get("masked_secret").is_none());
+        assert!(element_rule(&[masked]).contains("secret the user gave"));
+        assert!(!element_rule(&[bullet]).contains("secret"));
     }
 
     #[tokio::test]
