@@ -31,6 +31,18 @@ pub const MAX_FROM_EXTENSION: usize = 64 * 1024 * 1024;
 /// user's profile only through the page: no cookies, storage or saved passwords.
 pub const ALLOWED_METHODS: &str = include_str!("../../extension/allowed-methods.json");
 
+/// The extension version that relays every method [`required_methods`] names. The extension reaches users from the
+/// Chrome Web Store, on the Store's review schedule, while a fastbrowse release reaches them from PyPI hours after a
+/// tag: the two drift unless a release is held, so a run names this version when the browser's copy is older.
+pub const MIN_EXTENSION_VERSION: &str = "0.1.1";
+
+/// Methods a run sends best-effort, which an older copy lacks and the run still works without. Each is logged as a
+/// warning when the extension does not relay it, never a reason to refuse the run before it starts.
+pub const BEST_EFFORT: [&str; 1] = [
+    // Only adds the chooser a page opens from a script: the session sends it and runs on when it is refused.
+    "Page.setInterceptFileChooserDialog",
+];
+
 /// What a connected browser's host writes next to its socket once it is listening, so a run can find it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -94,6 +106,13 @@ fn login_runtime_dir(run_user: &Path) -> Option<PathBuf> {
 /// The CDP methods in [`ALLOWED_METHODS`].
 pub fn allowed_methods() -> Vec<String> {
     serde_json::from_str(ALLOWED_METHODS).expect("the extension's allowed-methods.json is a JSON list of strings")
+}
+
+/// The CDP methods a run cannot start without: every allowed method except the [`BEST_EFFORT`] ones. An extension
+/// that relays these drives any task; a copy that lacks one would refuse a command mid-task, so the run is refused
+/// before it spends anything and names what is missing.
+pub fn required_methods() -> Vec<String> {
+    allowed_methods().into_iter().filter(|method| !BEST_EFFORT.contains(&method.as_str())).collect()
 }
 
 /// Split one message for the extension into frames Chrome accepts. A message that fits goes as it is; a larger one
