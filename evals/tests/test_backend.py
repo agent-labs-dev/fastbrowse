@@ -1,8 +1,11 @@
+import json
 from importlib.metadata import entry_points
+from pathlib import Path
 
 import pytest
 from fastbrowse.evals import harness
-from fastbrowse.models import Status
+from fastbrowse.models import Citation, Status
+from parallax.browser_evidence import BrowserEvidence
 from parallax.harnesses.base import credential_env_problems
 
 from fastbrowse_evals import backend, hosted_api
@@ -61,3 +64,11 @@ def test_the_arm_reads_its_openrouter_key_under_its_own_name(monkeypatch: pytest
         harness, "environment", lambda: {"FASTBROWSE_OPENROUTER_API_KEY": "arm", "OPENROUTER_API_KEY": "meter"}
     )
     assert backend.run_settings()["OPENROUTER_API_KEY"] == "arm"
+
+
+def test_both_arms_cite_in_the_shape_browser_evidence_accepts() -> None:
+    """A field Parallax's evidence does not hold fails the whole run, not one trial."""
+    cited = Citation(id=1, text="A Light in the Attic", url="https://books.example/1", quote="£51.77", deep_link="x")
+    run = json.loads((Path(__file__).parent / "fixtures" / "fastbrowse_hosted_run.json").read_text())
+    for citations in (backend.evidence_citations([cited]), hosted_api.evidence_citations(run)):
+        BrowserEvidence.model_validate({"final_page": None, "answer": None, "citations": citations})

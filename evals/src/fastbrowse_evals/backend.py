@@ -7,13 +7,13 @@ environment is read as fastbrowse reads it (`environment`).
 
 import os
 import time
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Iterable, Mapping
 from contextlib import asynccontextmanager
 from typing import assert_never
 
 import httpx
 from fastbrowse.evals import harness
-from fastbrowse.models import Authorization, Limits, RunResult, Status
+from fastbrowse.models import Authorization, Citation, Limits, RunResult, Status
 from fastbrowse.run import run_task
 from fastbrowse.safety import ScopedSecrets, origin_of
 from parallax.harnesses.browser import BrowserHarness
@@ -173,6 +173,11 @@ def _turn_status(status: Status) -> str:
             assert_never(other)
 
 
+def evidence_citations(citations: Iterable[Citation]) -> list[dict[str, str]]:
+    """Each citation as Parallax's browser evidence holds it: the page and the quote the answer rests on."""
+    return [{"url": citation.url, "quote": citation.quote} for citation in citations]
+
+
 def _run_result(output: RunResult, page: dict[str, object], browser: Browser, *, latency_ms: int) -> dict[str, object]:
     lines = [line.model_dump(mode="json") for line in output.cost.lines]
     lines.extend(browser.cost)
@@ -202,7 +207,6 @@ def _run_result(output: RunResult, page: dict[str, object], browser: Browser, *,
         if step.facts:
             item["quote"] = step.facts[0].quote or step.facts[0].text
         steps.append(item)
-    citations = [citation.model_dump(mode="json") for citation in output.citations]
     return {
         "status": _turn_status(output.status),
         "answer": output.answer,
@@ -210,7 +214,7 @@ def _run_result(output: RunResult, page: dict[str, object], browser: Browser, *,
         "final_page": page,
         "final_url": output.final_url,
         "step_log": steps,
-        "citations": citations,
+        "citations": evidence_citations(output.citations),
         "cost_lines": lines,
         "usage": usage,
         "latency_ms": latency_ms,
