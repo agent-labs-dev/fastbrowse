@@ -146,3 +146,12 @@ def test_a_page_read_over_http_is_the_evidence_its_read_step_points_at() -> None
     )
     assert [(page.url, page.text) for page in evidence.pages] == [(url, text)]
     assert evidence.steps[0].page == 0 and seen_at[1] == 0
+
+
+def test_campaign_metadata_preserves_model_requests_outside_judge_evidence() -> None:
+    harness = backend.FastbrowseHarness(observer="plain-cdp")
+    event = {"event": "llm_request", "messages": [{"role": "user", "content": "Captured notes"}]}
+    harness._events.append(event)
+    metadata = json.loads(json.dumps(harness.trial_metadata))
+    assert metadata["events"] == [event]
+    assert "events" not in metadata["browser"]
