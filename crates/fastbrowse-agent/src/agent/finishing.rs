@@ -572,6 +572,9 @@ fn rejection_reason(rejection: &str) -> String {
     // for four others; shown that draft, it chose the next method (#897).
     let feedback: Value = serde_json::from_str(rejection).unwrap_or_default();
     let coverage = feedback["rejected_checks"].as_array().is_some_and(|checks| checks.iter().any(|c| c == "coverage"));
+    if coverage && let Some(partial) = feedback["partial"].as_str() {
+        reason += &format!("\nThe composer says the answer leaves unestablished: {partial}");
+    }
     if coverage && let Some(claims) = drafted(rejection).filter(|claims| !claims.is_empty()) {
         reason += "\nThe rejected answer:";
         if let Some(columns) = feedback["columns"].as_array().filter(|columns| !columns.is_empty()) {
@@ -677,6 +680,18 @@ mod tests {
     use serde_json::json;
 
     use super::rejection_reason;
+
+    #[test]
+    fn partial_coverage_feedback_names_what_the_navigator_still_needs() {
+        let feedback = json!({
+            "draft_claims": [{"text": "Two matching records were found.", "evidence_ids": ["e0"]}],
+            "rejected_checks": ["coverage"],
+            "partial": "the records beyond this page",
+        });
+        let reason = rejection_reason(&feedback.to_string());
+        assert!(reason.contains("the records beyond this page"), "{reason}");
+        assert!(reason.contains("Two matching records were found."), "{reason}");
+    }
 
     #[test]
     fn a_rejected_draft_tells_the_navigator_which_claim_failed_which_check() {
