@@ -1,4 +1,13 @@
-"""Product action descriptions for Parallax's browser evidence."""
+"""Product results and action descriptions for Parallax's browser evidence."""
+
+import json
+
+from pydantic import JsonValue
+
+
+def result_answer(answer: str | None, data: JsonValue | None) -> str | None:
+    """The structured result is the submitted answer when the caller requested a schema."""
+    return answer if data is None else json.dumps(data, ensure_ascii=False)
 
 
 def step_action(operation: str, outcome: str | None, note: str | None) -> str:

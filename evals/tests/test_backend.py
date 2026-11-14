@@ -8,6 +8,7 @@ from fastbrowse.models import Citation, CostBreakdown, Decider, Operation, RunRe
 from parallax.browser_evidence import BrowserEvidence
 from parallax.harnesses.base import credential_env_problems
 from parallax.harnesses.browser.cloud import Browser
+from pydantic import JsonValue
 
 from fastbrowse_evals import backend, hosted_api
 
@@ -42,6 +43,22 @@ def test_browser_evidence_distinguishes_a_blocked_attempt_from_an_executed_actio
     result = backend._run_result(executed, None, Browser(cdp_url="ws://browser"), [], latency_ms=0)
     evidence = BrowserEvidence.model_validate({"answer": None, "steps": result["step_log"]})
     assert evidence.steps[0].action == "click (executed)"
+
+
+@pytest.mark.parametrize("data", [{"name": "widget", "revision": 3}, [], False, 0])
+def test_structured_result_reaches_the_judge_instead_of_its_prose(data: JsonValue) -> None:
+    output = RunResult(
+        status=Status.COMPLETE,
+        answer="A prose explanation of the structured result.",
+        data=data,
+        evidence=(),
+        steps=(),
+        cost=CostBreakdown(),
+        artifacts=(),
+    )
+    result = backend._run_result(output, None, Browser(cdp_url="ws://browser"), [], latency_ms=0)
+    assert isinstance(result["answer"], str)
+    assert json.loads(result["answer"]) == data
 
 
 def test_configured_search_key_reaches_the_product_but_not_an_isolated_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
