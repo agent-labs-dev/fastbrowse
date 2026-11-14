@@ -115,9 +115,10 @@ keys:
     owner: cjber
     locations:
       - gcp: fastbrowse-hosted/FBH_BROWSER_POOL_TOKEN
-    expires: unknown
-    limit: unknown
+    expires: none
+    limit: "none: checked by the pool itself, so there is no provider cap"
     note: "benchmark-campaign.yml reads it with gcloud for the fastbrowse-pool arm, so the workflow scan cannot see it"
+    expiresNote: "A shared secret fastbrowse-hosted generates and its browser pool checks as POOL_AUTH_TOKEN, with no expiry mechanism (checked 2026-11-13). Rotate it by hand"
   - id: hf-token
     service: huggingface
     group: benchmarks
