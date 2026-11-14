@@ -346,6 +346,16 @@ impl Notes {
         Some(if link { BlockKind::Link } else { block.kind })
     }
 
+    /// Whether `evidence` quotes the entire text of the element `source_kind` names: all of one link's text when it
+    /// lies within a link, otherwise all of its block's. A heading that ends in "..." is then the page's own heading,
+    /// not a cut from a longer one.
+    pub fn whole_element(&self, evidence: &Evidence) -> bool {
+        let Some(block) = self.source_block(evidence) else { return false };
+        let link = block.links.iter().find(|&&(start, end)| start <= evidence.start && evidence.end <= end);
+        let (start, end) = link.copied().unwrap_or((block.start, block.end));
+        (start, end) == (evidence.start, evidence.end)
+    }
+
     fn source_block(&self, evidence: &Evidence) -> Option<&SourceBlock> {
         let key = (evidence.capture_sha256.clone(), evidence.url.clone(), evidence.captured_at);
         let blocks = self.source_blocks.get(&key)?;

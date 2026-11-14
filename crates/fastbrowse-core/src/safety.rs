@@ -18,6 +18,9 @@ use crate::page::Control;
 use crate::py::json::write_string;
 use crate::py::text;
 
+/// The character `Redactor::mask` writes in place of each character of a secret value.
+pub const MASK: char = '\u{2022}';
+
 /// Whether Jev is asked before this dispatches: every click, drag, Enter and key chord.
 ///
 /// Whether a click commits is a judgment about the page, so Jev makes it rather than a word list. A list of committing
@@ -712,7 +715,7 @@ impl Redactor {
         let mut at = 0;
         for (start, end, _) in self.spans(text) {
             out.push_str(&text[at..start]);
-            out.extend(std::iter::repeat_n('\u{2022}', text[start..end].chars().count()));
+            out.extend(std::iter::repeat_n(MASK, text[start..end].chars().count()));
             at = end;
         }
         out.push_str(&text[at..]);
