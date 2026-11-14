@@ -79,7 +79,7 @@ The mapping preserves these public arm names:
 `fastbrowse-hosted` and `cua-codex` remain diagnostic. Candidate schema 7,
 `GROUPS`, site groups, and all files under `docs/results` stay as recorded.
 
-The official benchmark workflow uses Parallax 2.0.0.dev25's `bu-bench` and
+The official benchmark workflow uses Parallax 2.0.0.dev26's `bu-bench` and
 `online-mind2web` sources. It clones the pinned upstream judge for each source,
 installs its dependencies in that checkout's own virtual environment, and
 passes the official source's sanitized run directory to the normal publication
