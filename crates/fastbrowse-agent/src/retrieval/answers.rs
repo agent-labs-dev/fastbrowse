@@ -1839,24 +1839,32 @@ fn relabeled(feedback: &str, items: &[ComposeItem]) -> String {
 /// `steps` is whether the run took steps that could change the site: each read note then says how many it was read
 /// after.
 fn initial_items(notes: &Notes, steps: bool) -> Vec<ComposeItem> {
+    let mut next_label = 0;
     notes
         .facts()
         .iter()
-        .enumerate()
-        .map(|(index, fact)| {
+        .flat_map(|fact| {
             let source = fact_id(fact);
             let superseded = Some(notes.superseded(&source));
-            ComposeItem {
-                label: format!("e{index}"),
-                text: fact.text.clone(),
-                sources: vec![source],
+            let make = |label: String, text: String| ComposeItem {
+                label,
+                text,
+                sources: vec![source.clone()],
                 quotable: true,
                 superseded,
                 page: fact_page(fact),
                 headings: fact.evidence.as_ref().map(|evidence| evidence.heading_path.clone()).unwrap_or_default(),
                 links: fact.evidence.as_ref().map(|evidence| evidence.links.clone()).unwrap_or_default(),
                 after_step: fact.evidence.as_ref().filter(|_| steps).and_then(|evidence| notes.steps_taken(evidence)),
+            };
+            let mut items = Vec::new();
+            if let Some(evidence) = fact.evidence.as_ref().filter(|evidence| evidence.quote != fact.text) {
+                items.push(make(format!("e{next_label}"), evidence.quote.clone()));
+                next_label += 1;
             }
+            items.push(make(format!("e{next_label}"), fact.text.clone()));
+            next_label += 1;
+            items
         })
         .collect()
 }
@@ -2303,6 +2311,51 @@ mod tests {
         .unwrap();
         let quote = evidence.quote.clone();
         Fact::read(&quote, evidence, FactReader::JevChoice)
+    }
+
+    #[test]
+    fn composer_note_keeps_the_record_around_a_selected_field() {
+        let mut selected = fact(0, "Area (km2): 825418.0".into());
+        selected.evidence.as_mut().unwrap().quote =
+            "Namibia\nCapital: Windhoek\nPopulation: 2281318\nArea (km2): 825418.0".into();
+        let notes = Notes::new([selected.answering()]);
+        let written = initial_items(&notes, false)[0].written();
+        assert!(written.contains("Namibia"), "the composer note must retain the source record identity: {written}");
+    }
+
+    #[test]
+    fn a_long_source_record_uses_normal_packing() {
+        let mut selected = fact(0, "Area: 825418".into());
+        let record = format!("Namibia\n{}\nArea: 825418", "Population: 2281318\n".repeat(200));
+        selected.evidence.as_mut().unwrap().quote = record.clone();
+        let notes = Notes::new([selected.answering()]);
+        let items = initial_items(&notes, false);
+        let limit = estimated_context_bytes(&compose_messages("Report the area", &[])) + 300;
+        let parts = pack_items("Report the area", &items, limit).unwrap();
+        let source: String =
+            parts.iter().flatten().filter(|item| item.label == items[0].label).map(|item| item.text.as_str()).collect();
+        assert_eq!(source, record);
+        let room = limit - estimated_context_bytes(&compose_messages("Report the area", &[]));
+        assert!(parts.iter().flatten().all(|item| line_bytes(item, &item.text) <= room));
+    }
+
+    #[test]
+    fn expanded_source_items_keep_unique_labels_for_binding() {
+        let mut first = fact(0, "Area: 1".into());
+        first.evidence.as_mut().unwrap().quote = "Namibia\nArea: 1".into();
+        let second = fact(1, "Area: 2".into());
+        let items = initial_items(&Notes::new([first.answering(), second.answering()]), false);
+        let labels: HashSet<_> = items.iter().map(|item| item.label.as_str()).collect();
+        assert_eq!(labels.len(), items.len());
+        let second_label = items.last().unwrap().label.clone();
+        let draft = serde_json::from_value::<DraftClaim>(json!({
+            "evidence_ids": [second_label],
+            "text": [{"note": items.last().unwrap().label, "quoted": false, "part": "Area: 2"}]
+        }))
+        .unwrap();
+        let bound = draft.bind(&items).unwrap();
+        assert_eq!(bound.text, "Area: 2");
+        assert_eq!(bound.copied().iter().map(|item| item.text.as_str()).collect::<Vec<_>>(), ["Area: 2"]);
     }
 
     /// Able to insert only a whole note, the composer answered an account's email with "Signed in as

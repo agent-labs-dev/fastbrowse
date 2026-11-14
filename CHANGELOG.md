@@ -13,6 +13,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.11.1] - 2026-11-14
 
+- **Selected values retain their source record when the answer is composed.** Reading one field could discard the record name from the composer input even though its citation retained it, leaving a country area described as unestablished. The composer now receives the source record alongside the selected field, using the existing source binding and context packing ([#1142](https://github.com/agent-labs-dev/fastbrowse/issues/1142)).
+
 - **Structured benchmark answers reach the judge as JSON.** The local and hosted eval adapters now submit returned structured data instead of substituting its prose description ([#1139](https://github.com/agent-labs-dev/fastbrowse/issues/1139)).
 
 - **Structured answers follow the requested list across pages.** A task asking for JSON could stop on the first page even when it needed the whole list, leaving a cheapest-product answer unverified. Structured output now uses the same pagination as a plain-text answer ([#1136](https://github.com/agent-labs-dev/fastbrowse/issues/1136)).
