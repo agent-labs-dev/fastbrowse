@@ -476,8 +476,13 @@ fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], gr
             )
         })
         .collect();
+    // `of` carries the task's scope, such as "row in the second table" or "five-star-rated book in the Nonfiction
+    // category", and the note shows where its record sits. Without this sentence Jev read `of` as the record's kind
+    // alone: it scored a row of the first table and a two-star book 0.45 to 0.55 as members, so sums and ranked picks
+    // took them in (table-total-due 0 of 6, stretch-books-nonfiction-five-star 2 of 6). With it, replayed on the
+    // recorded questions, those score 0.07 and 0.21 on average and every member still 0.96 or more.
     criteria.insert(NO_RECORD.into(), json!(format!(
-        "The note is not one whole {of} and does not give the {field} of one. A name, label, heading, link or unrelated field alone is not a whole record. Several records, and a value stated across records such as a total or a starting price, are not one record. A note whose source_kind is heading or link and gives no quoted field value is a fragment naming the record, not a record with a missing field."
+        "The note is not one whole {of} and does not give the {field} of one. A name, label, heading, link or unrelated field alone is not a whole record. Several records, and a value stated across records such as a total or a starting price, are not one record. A note whose source_kind is heading or link and gives no quoted field value is a fragment naming the record, not a record with a missing field. A whole record that the note shows is outside {of}, in a group, place or state other than the one {of} names, is not one either."
     )));
     // A heading or link names its record and is never the whole of it, so it cannot be one shown missing the field:
     // offered that, Jev split 51 to 49 on whether the heading "Clerkenwell Coffee" was a shop with no price, and a
@@ -1494,6 +1499,28 @@ mod tests {
         assert!(question.instructions.contains("Absence from a fragment does not prove absence from its record"));
         assert!(question.criteria[NO_VALUE].as_str().unwrap().contains("does not state its"));
         assert!(question.criteria[NO_RECORD].as_str().unwrap().contains("source_kind is heading or link"));
+    }
+
+    /// A sum over "row in the second table" took in rows of the first table, which held the same rows: asked whether
+    /// a first-table row was one, Jev split about 50 to 50, and the total came to $352 instead of $251.
+    #[test]
+    fn a_record_outside_the_tallys_scope_is_no_record() {
+        let tally = Tally {
+            op: Op::Sum,
+            of: "row in the second table".into(),
+            field: Some("Due".into()),
+            rank: None,
+            by: None,
+            group: None,
+            written: "$251.00".into(),
+        };
+        let row = json!({"quote": "| Smith | John | $50.00 |", "table": "table 1 of the 2 on its page"});
+        let Question::Choice(question) = field_question(&tally, &row, &["$50.00".into()], false) else { panic!() };
+        let no_record = question.criteria[NO_RECORD].as_str().unwrap();
+        assert!(
+            no_record.contains("A whole record that the note shows is outside 'row in the second table', in a group, place or state other than the one 'row in the second table' names, is not one either."),
+            "{no_record}"
+        );
     }
 
     /// A shop's name heading beside its price line was judged a shop with no price 51 to 49, and the correct cheapest
