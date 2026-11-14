@@ -4489,6 +4489,29 @@ impl LLMClient for WritesPartial {
     }
 }
 
+#[tokio::test]
+async fn test_partial_composition_supplies_missing_coverage_to_recovery() {
+    let page = capture(&[(BlockKind::Paragraph, "Quote by Ada")]);
+    let mut notes = Notes::default();
+    notes.add(Fact::read("Quote by Ada", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
+    let reviewed = crate::retrieval::compose_reviewed(
+        &JudgesCarried(true),
+        &WritesPartial("2 quotes by Ada were found.", "the quotes past page 2"),
+        "How many quotes are there across the whole list?",
+        &notes,
+        None,
+        None,
+        true,
+        &[],
+    )
+    .await
+    .unwrap();
+    let feedback: serde_json::Value =
+        serde_json::from_str(&reviewed.rejection.expect("partial coverage needs recovery")).unwrap();
+    assert!(feedback["rejected_checks"].as_array().unwrap().contains(&json!("coverage")));
+    assert_eq!(feedback["partial"], "the quotes past page 2");
+}
+
 /// Asked how many quotes an author has across a site, a run stuck after two pages of ten composed "The total across
 /// the whole site is unsupported. The available pages show 2 J.K. Rowling quotes, but the site listing continues to
 /// page 3." Each claim held and coverage passed at 0.57, so the run ended complete. The composer's own account that its

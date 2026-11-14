@@ -942,8 +942,20 @@ pub(crate) async fn compose_reviewed(
     // A composed answer is held to what the task asks to be told as a pick is: a source part inserts its note's
     // entire text, and unchecked, a whole release record of 16 fields stood in for "httpx", and a rewrite repeated
     // "The site received the file Received stocktake.txt (34 bytes)." after that check rejected it.
-    let reviewed =
-        review_composition(jev, llm, task, columns.as_deref(), claims, notes, ledger, reports, true, steps).await?;
+    let reviewed = review_composition(
+        jev,
+        llm,
+        task,
+        columns.as_deref(),
+        claims,
+        notes,
+        ledger,
+        reports,
+        true,
+        partial.as_deref(),
+        steps,
+    )
+    .await?;
     let CheckedClaims { claims, problem, rejection, denies_steps } = reviewed;
     let claims = if numbers { numbered(claims) } else { claims };
     if !reports {
@@ -1058,6 +1070,7 @@ async fn review_claims(
         ledger,
         require_coverage,
         false,
+        None,
         steps,
     )
     .await
@@ -1074,6 +1087,7 @@ async fn review_composition(
     ledger: Option<&Ledger>,
     require_coverage: bool,
     exact: bool,
+    partial: Option<&str>,
     steps: &[Value],
 ) -> Result<CheckedClaims> {
     if claims.is_empty() {
@@ -1342,6 +1356,11 @@ async fn review_composition(
     let mut rejected_checks: Vec<_> = questions.keys().filter(|key| holds(key) == Some(false)).cloned().collect();
     rejected_checks.extend(uncited.iter().map(|claim| format!("claim{}/citations", claim["claim"])));
     rejected_checks.extend(untallied.iter().map(|claim| format!("claim{}/tally", claim["claim"])));
+    // The composer already marks missing coverage as incomplete. Give that same shortfall to recovery instead of
+    // ending immediately, even when the separate coverage check accepted the claims it did write.
+    if require_coverage && partial.is_some() && !rejected_checks.iter().any(|check| check == "coverage") {
+        rejected_checks.push("coverage".into());
+    }
     let coverage = !require_coverage || holds("coverage") == Some(true);
     let only_asked = !questions.contains_key("exact") || holds("exact") == Some(true);
     // A contradiction of the run's own steps cannot be pinned to one claim, so none is shown unless the answer agrees.
@@ -1359,6 +1378,9 @@ async fn review_composition(
         "drafted_within": drafted_within,
         "rejected_checks": rejected_checks,
     });
+    if let Some(partial) = partial {
+        feedback["partial"] = json!(partial);
+    }
     if !uncited.is_empty() {
         feedback["uncited_claims"] = json!(uncited);
     }
@@ -2601,6 +2623,7 @@ mod tests {
             None,
             false,
             false,
+            None,
             &[],
         )
         .await
@@ -2636,8 +2659,9 @@ mod tests {
         );
         let jev = Tallying::new("Galaxy", "1399.00|1299.00");
         let task = "Tell me the most expensive Samsung phone and its price";
-        let checked =
-            review_composition(&jev, &READS, task, None, vec![bound], &notes, None, false, false, &[]).await.unwrap();
+        let checked = review_composition(&jev, &READS, task, None, vec![bound], &notes, None, false, false, None, &[])
+            .await
+            .unwrap();
         assert!(checked.claims.is_empty(), "{:?}", checked.claims);
         let rejection = format!("{:?} {:?}", checked.problem, checked.rejection);
         assert!(
@@ -2651,8 +2675,9 @@ mod tests {
         let tally = tallied("", "a", Op::Max, "Samsung phone", Some("price"), vec![]).tally;
         let bound = bind_claim(&items, json!([{"computed":true}, {"prose": " has the highest price."}]), tally);
         let jev = Tallying::new("Galaxy", "1399.00|1299.00");
-        let checked =
-            review_composition(&jev, &READS, task, None, vec![bound], &notes, None, false, false, &[]).await.unwrap();
+        let checked = review_composition(&jev, &READS, task, None, vec![bound], &notes, None, false, false, None, &[])
+            .await
+            .unwrap();
         let rejection = format!("{:?} {:?}", checked.problem, checked.rejection);
         assert!(!rejection.contains("names the record already"), "{rejection}");
     }
@@ -2775,6 +2800,7 @@ mod tests {
             None,
             true,
             false,
+            None,
             &[],
         )
         .await
@@ -3901,7 +3927,9 @@ mod tests {
                 serde_json::from_value(json!({"evidence_ids": ["e0"], "text": text, "tally": null})).unwrap();
             let bound = draft.bind(&items).unwrap();
             let checked =
-                review_composition(&jev, &READS, task, None, vec![bound], &notes, None, true, true, &[]).await.unwrap();
+                review_composition(&jev, &READS, task, None, vec![bound], &notes, None, true, true, None, &[])
+                    .await
+                    .unwrap();
             assert_eq!(jev.asked.lock().unwrap().iter().any(|questions| questions.contains_key("exact")), asked);
             if asked {
                 let batches = jev.asked.lock().unwrap();
