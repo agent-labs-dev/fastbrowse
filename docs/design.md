@@ -351,10 +351,8 @@ where the task asks for its year. When it holds more, the composer writes the an
 told that they held more than the task asks, and its claims pass the same checks as any composed answer.
 A composed answer is judged for exactness on the text it copies through its source parts, since its own wording holds no
 page text: a source part can insert its note's whole text, so a composed answer can copy more than the task asks too.
-Each claim's copied texts are judged on their own, so a claim that copies too much fails alone, is left out, and is the
-only claim the rewrite replaces. The check rejects copied page information the task neither asks for nor names, such as
-another field's value, an identifier or another record, not the task's own words or a sentence that states only an
-asked value.
+The check rejects copied page information the task neither asks for nor names, such as another field's value, an
+identifier or another record, not the task's own words or a sentence that states only an asked value.
 
 ## Prompt limits and progress
 
