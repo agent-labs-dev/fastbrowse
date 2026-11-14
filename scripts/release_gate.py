@@ -94,6 +94,8 @@ def compare(
                 f"{task.suite}/{task.task}: passed {sum(bool(r.get('passed')) for r in now)}/{len(now)}, "
                 f"the baseline {sum(bool(r.get('passed')) for r in before)}/{len(before)}"
             )
+    # Time and cost findings fail the release, or are only reported when it is gated on correctness alone.
+    measured = notes if correctness_only else failures
     mine = [row for rows in ours.values() for row in rows]
     base = [row for rows in theirs.values() for row in rows]
     for label, field, measure in (
@@ -101,7 +103,7 @@ def compare(
         ("mean $", "dollars", statistics.fmean),
     ):
         if field == "seconds" and len({row.get("timing_basis") for row in [*mine, *base]}) > 1:
-            failures.append("median seconds cannot compare different timing bases")
+            measured.append("median seconds cannot compare different timing bases")
             continue
         incomplete = False
         for side, rows in (("candidate", mine), ("baseline", base)):
@@ -114,16 +116,14 @@ def compare(
                 or (field == "dollars" and row.get("unknown_cost") is True)
                 for row in rows
             ):
-                failures.append(f"{side} {field}: missing, unknown or invalid measurements")
+                measured.append(f"{side} {field}: missing, unknown or invalid measurements")
                 incomplete = True
         if incomplete:
             continue
         now = measure([float(row[field]) for row in mine])
         before = measure([float(row[field]) for row in base])
         if not now < before:
-            (notes if correctness_only else failures).append(
-                f"{label} {now:.4g} is not below the baseline's {before:.4g}"
-            )
+            measured.append(f"{label} {now:.4g} is not below the baseline's {before:.4g}")
         else:
             notes.append(f"{label} {now:.4g}, the baseline {before:.4g}")
     return failures, notes
@@ -396,9 +396,11 @@ def tag_lines(repo: str, tag: str) -> list[str]:
 
 
 def measures_itself(version: str, lines: list[str]) -> bool:
-    """A minor release does; a patch does when its annotated tag message has the line `Benchmarks: run`, or claims
-    official scores, which are compared beside the campaign."""
-    return version.split(".")[-1] == "0" or "Benchmarks: run" in lines or "Benchmarks: official" in lines
+    """A minor release does; a patch does when its annotated tag message has the line `Benchmarks: run`, claims
+    official scores, which are compared beside the campaign, or asks to be gated on correctness."""
+    return version.split(".")[-1] == "0" or any(
+        line in lines for line in ("Benchmarks: run", "Benchmarks: official", "Benchmarks: correctness")
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

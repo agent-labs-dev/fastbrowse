@@ -59,6 +59,14 @@ def test_a_correctness_release_reports_speed_and_cost_but_still_gates_pass_rates
     assert len(failures) == 1 and "passed" in failures[0]
 
 
+def test_a_correctness_release_reports_mixed_clocks_and_still_measures_a_patch() -> None:
+    mixed = [{**row, "timing_basis": "physical-attempt-wall-time"} for row in BASELINE]
+    failures, notes = gate.compare(mixed, BASELINE, correctness_only=True)
+    assert failures == []
+    assert any("timing bases" in note for note in notes)
+    assert gate.measures_itself("0.11.1", ["Benchmarks: correctness"])
+
+
 def test_a_task_left_out_fails_but_a_new_version_is_only_noted() -> None:
     candidate = [row("a", True, 8, 0.01), row("b", True, 8, 0.01, version=2), row("b", True, 8, 0.01, version=2)]
     failures, notes = gate.compare(candidate, [*BASELINE, row("c", True)])
