@@ -7158,6 +7158,25 @@ async fn test_done_on_page_one_of_a_whole_list_task_opens_the_next_page_instead(
 }
 
 #[tokio::test]
+async fn test_schema_output_on_a_whole_list_opens_the_next_page_instead() {
+    let browser = Arc::new(HungPage::new(0));
+    let agent = pager_agent(browser);
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    read_one(&mut state, &first, Extent::EveryPage);
+    state.note_pager_pages(&first);
+    let model = fastbrowse_core::output_schema::output_model(&json!({"type": "object", "properties": {}})).unwrap();
+    let schema = crate::verification::RecordSchema::from_output(model);
+
+    let finished = agent.finish(&mut state, &first, Some(&schema), None).await.expect("the run goes on");
+    assert!(finished.is_none(), "schema output must not bypass whole-list coverage");
+    let step = state.steps.last().expect("a step opened the next page");
+    assert_eq!((step.operation, step.outcome), (Operation::Navigate, StepOutcome::Executed));
+    assert_eq!(step.decided_by, Decider::Code);
+    assert!(state.pager_followed.contains("https://list.test/page/2/"));
+}
+
+#[tokio::test]
 async fn test_done_on_a_record_page_after_leaving_the_list_returns_to_its_unread_next_page() {
     let browser = Arc::new(HungPage::new(0));
     let agent = pager_agent(browser.clone());
