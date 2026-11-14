@@ -21,6 +21,7 @@ from parallax.harnesses.browser import BrowserHarness
 from parallax.harnesses.browser.cloud import Browser, cloud_browser
 from parallax.models import Capability, CostSource, HarnessInfo, HarnessKind, Isolation, Task, TurnInput
 
+from fastbrowse_evals.evidence import step_action
 from fastbrowse_evals.task_specs import answer_model
 
 PROVIDER_KEYS = ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "EXA_API_KEY")
@@ -229,7 +230,10 @@ def _run_result(
     pages, seen_at = read_pages(events)
     steps = []
     for step in output.steps:
-        item: dict[str, object] = {"action": step.operation.value, "url": step.url}
+        item: dict[str, object] = {
+            "action": step_action(step.operation.value, step.outcome.value, step.note),
+            "url": step.url,
+        }
         if step.target:
             item["value"] = step.target
         if step.facts:
