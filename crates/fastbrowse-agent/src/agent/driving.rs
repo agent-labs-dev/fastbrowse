@@ -1526,6 +1526,7 @@ impl Agent {
             })
             .collect();
         Ok(Capture {
+            masked: redactor.masked_spans(&capture.text),
             text,
             url: mask(&capture.url),
             title: mask(&capture.title),

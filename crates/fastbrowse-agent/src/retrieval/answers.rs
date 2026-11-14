@@ -1922,9 +1922,9 @@ fn copied_question(task: &str, copied: &[Value]) -> Question {
     ))
 }
 
-/// A text copied from the page, with the type of element its notes quote and whether it is all of that element's
-/// text. Shown the text alone, the exact check read the page's own heading "Send updates to my inbox ..." as cut
-/// from a longer one, and rejected it at 0.2.
+/// A text copied from the page, with the type of element its notes quote, whether it is all of that element's text,
+/// and whether code masked a secret in it. Shown the text alone, the exact check read the page's own heading "Send
+/// updates to my inbox ..." as cut from a longer one, and rejected it at 0.2.
 fn copied_element(text: &str, sources: &[String], notes: &Notes) -> Value {
     let quotes: Vec<&Evidence> =
         sources.iter().filter_map(|id| notes.facts_by_id().get(id)?.evidence.as_ref()).collect();
@@ -1938,18 +1938,21 @@ fn copied_element(text: &str, sources: &[String], notes: &Notes) -> Value {
             element["whole_element"] = true.into();
         }
     }
+    if text.contains(MASK) && quotes.iter().any(|quote| notes.masks_secret(quote)) {
+        element["masked_secret"] = true.into();
+    }
     element
 }
 
-/// What the fields beside each copied text mean, and what a masked secret in one is. Read as page text, a sign-in
-/// name the page greets the user with, masked as "•••••••", was judged an identifier the task does not ask for.
+/// What the fields beside each copied text mean. Read as page text, a sign-in name the page greets the user with,
+/// masked as "•••••••", was judged an identifier the task does not ask for.
 fn element_rule(copied: &[Value]) -> String {
     let mut rule = String::new();
     if copied.iter().any(|element| element.get("source_kind").is_some()) {
         rule.push_str(" Each text gives the type of page element it was copied from as source_kind, and whole_element true when it is that element's entire text.");
     }
-    if copied.iter().any(|element| element["text"].as_str().is_some_and(|text| text.contains(MASK))) {
-        rule.push_str(&format!(" Code writes a secret the user gave for this task, such as a sign-in name, as one {MASK} per character wherever it appears: a hidden secret is the user's own input, not page information."));
+    if copied.iter().any(|element| element.get("masked_secret").is_some()) {
+        rule.push_str(&format!(" A text with masked_secret true holds a secret the user gave for this task, such as a sign-in name, which code writes as one {MASK} per character: a hidden secret is the user's own input, not page information."));
     }
     rule
 }
@@ -4524,15 +4527,34 @@ mod tests {
     }
 
     /// The page greets the signed-in user by a name the run typed as a secret, so the copy holds the mask, which the
-    /// exact check read as an identifier the task does not ask for.
+    /// exact check read as an identifier the task does not ask for. A bullet the page itself shows is page text.
     #[test]
-    fn a_masked_secret_is_named_as_the_users_input() {
-        let rule = element_rule(&[
-            json!({"text": format!("Congratulations {}. You successfully logged in!", MASK.to_string().repeat(7))}),
-        ]);
-        assert!(rule.contains("secret the user gave"));
-        assert!(!rule.contains("source_kind"));
-        assert!(element_rule(&[json!({"text": "Logged In Successfully"})]).is_empty());
+    fn only_a_mask_code_wrote_is_named_as_the_users_input() {
+        use crate::retrieval::chunks::evidence;
+        use crate::retrieval::testing::capture;
+        use crate::retrieval::text::Page;
+
+        let greeting = format!("Congratulations {}. You successfully logged in!", MASK.to_string().repeat(7));
+        let listed = format!("{MASK} Free shipping");
+        let mut captured = capture(&[(BlockKind::Paragraph, &greeting), (BlockKind::ListItem, &listed)]);
+        captured.masked = vec![(16, 23)];
+        let page = Page::new(&captured);
+        let quote = |block: &fastbrowse_core::page::Block| {
+            Fact::read(
+                captured.block_text(block),
+                evidence(&page, block, block.start, block.end),
+                FactReader::JevChoice,
+            )
+        };
+        let mut notes = Notes::new([quote(&captured.blocks[0]), quote(&captured.blocks[1])]);
+        notes.remember_capture(&captured, 1);
+        let ids: Vec<String> = notes.facts_by_id().keys().cloned().collect();
+        let masked = copied_element(&greeting, &ids[..1], &notes);
+        let bullet = copied_element(&listed, &ids[1..], &notes);
+        assert_eq!(masked["masked_secret"], true);
+        assert!(bullet.get("masked_secret").is_none());
+        assert!(element_rule(&[masked]).contains("secret the user gave"));
+        assert!(!element_rule(&[bullet]).contains("secret"));
     }
 
     #[tokio::test]

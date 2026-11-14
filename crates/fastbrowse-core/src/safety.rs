@@ -722,6 +722,12 @@ impl Redactor {
         out
     }
 
+    /// Where `mask` blanks secret values in `text`, as code point ranges, which stay valid in the masked text.
+    pub fn masked_spans(&self, text: &str) -> Vec<(i64, i64)> {
+        let at = |byte: usize| text[..byte].chars().count() as i64;
+        self.spans(text).into_iter().map(|(start, end, _)| (at(start), at(end))).collect()
+    }
+
     pub fn reveals(&self, text: &str) -> bool {
         !self.spans(text).is_empty()
     }
@@ -899,6 +905,17 @@ mod tests {
         assert_eq!(once, "sent [secret:api_token], then [secret:api_token]");
         assert_eq!(redactor.redact(&once), once);
         assert!(!redactor.reveals(&once));
+    }
+
+    #[test]
+    fn test_masked_spans_are_code_points_into_the_masked_text() {
+        let mut redactor = Redactor::new();
+        redactor.register("username", "student", None);
+        let text = "Café, student!";
+        let spans = redactor.masked_spans(text);
+        assert_eq!(spans, [(6, 13)]);
+        let masked: Vec<char> = redactor.mask(text).chars().collect();
+        assert!(masked[6..13].iter().all(|c| *c == MASK));
     }
 
     #[test]

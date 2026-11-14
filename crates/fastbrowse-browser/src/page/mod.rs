@@ -1135,6 +1135,7 @@ impl CdpPage {
                 text: String::new(),
                 blocks: vec![],
                 inaccessible_frames: 0,
+                masked: Vec::new(),
             });
         };
         let frames = frames?;
@@ -1258,6 +1259,7 @@ impl CdpPage {
             text,
             blocks,
             inaccessible_frames: int(self.inaccessible_frames(&coverage)?),
+            masked: Vec::new(),
         })
     }
 
