@@ -956,6 +956,9 @@ fn test_a_stop_at_a_wall_names_what_the_wall_asks_for() {
         (vec![code.clone()], Status::NeedsLogin, None, Some(WallKind::OneTimeCode)),
         (vec![code.clone(), password.clone()], Status::NeedsLogin, None, Some(WallKind::Password)),
         (vec![button("Sign in")], Status::NeedsLogin, None, Some(WallKind::SignIn)),
+        // A needs_login stop on a page offering nothing to act on is not a sign-in wall: an access-denied notice leaves
+        // nothing to sign in with, so naming it `sign_in` sends a caller to a password that cannot pass it (#635).
+        (vec![], Status::NeedsLogin, None, Some(WallKind::BotCheck)),
         (vec![code.clone()], Status::Blocked, Some(WallKind::BotCheck), Some(WallKind::BotCheck)),
         // A refusal that is not a bot check, and a run that stopped for any other reason, name no wall.
         (vec![code.clone()], Status::Blocked, None, None),
