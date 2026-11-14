@@ -614,8 +614,9 @@ fn validate_hello(hello: &Value) -> Result<(), BrowserError> {
         };
         return Err(unavailable(&format!(
             "{why}. Install extension {MIN_EXTENSION_VERSION} or newer from the Chrome Web Store once it lists one, \
-             or load the copy this fastbrowse ships: run `fastbrowse extension path` and click Reload on \
-             chrome://extensions"
+             or load the copy this fastbrowse ships: run `fastbrowse extension path`, then enable Developer mode on \
+             chrome://extensions and choose Load unpacked for the folder it prints. Reloading the Store \
+             installation does not install that folder"
         )));
     }
     Ok(())
@@ -693,6 +694,17 @@ mod tests {
         relayed.retain(|method| method != "Page.setInterceptFileChooserDialog");
         assert!(missing_methods(&json!({"methods": relayed})).is_empty());
         assert!(validate_hello(&json!({"protocol": PROTOCOL, "methods": relayed})).is_ok());
+    }
+
+    /// A Store install cannot pick up the shipped folder by reloading it, so the recovery step has to name the
+    /// Developer-mode Load unpacked path that actually installs the directory `extension path` writes.
+    #[test]
+    fn the_recovery_step_names_loading_the_unpacked_copy_not_reloading_the_store_install() {
+        let error = validate_hello(&json!({"protocol": PROTOCOL})).unwrap_err().to_string();
+        assert!(error.contains("fastbrowse extension path"), "names the command that prints the folder: {error}");
+        assert!(error.contains("Developer mode"), "names where the Developer mode toggle lives: {error}");
+        assert!(error.contains("Load unpacked"), "names the action that installs the shipped folder: {error}");
+        assert!(!error.contains("click Reload"), "reloading a Store install installs nothing: {error}");
     }
 
     fn relay() -> Relay {
