@@ -20,7 +20,7 @@ TASK = task_from_record(
         area=Area.BROWSER,
         summary="Report the page title.",
         prompt="Report the page title.",
-        grading="browser-evidence-v1",
+        grading="browser-evidence-v2",
         requires=frozenset({Capability.BROWSER}),
         data={"start_url": "https://example.com/"},
     ),
