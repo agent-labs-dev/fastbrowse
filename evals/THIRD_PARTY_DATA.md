@@ -1,7 +1,7 @@
 # Third-party benchmark data
 
 `fastbrowse_evals` vendors no third-party dataset. The internal live tasks (`live_tasks.py`, `more_tasks.py`) are
-authored for fastbrowse and are covered by the repository's [LICENSE](../LICENSE). Parallax 2.0.0.dev24 fetches the official
+authored for fastbrowse and are covered by the repository's [LICENSE](../LICENSE). Parallax 2.0.0.dev25 fetches the official
 suite data at run time, verifies its pinned digest, and keeps the bytes in its cache. See Parallax's
 `docs/official-suites.md` for the source revisions, digests, access requirements, and upstream judge environments.
 
