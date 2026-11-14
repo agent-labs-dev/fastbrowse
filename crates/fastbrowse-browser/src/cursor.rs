@@ -1,13 +1,15 @@
-//! Optional on-screen cursor feedback for a visible browser, drawn by the Cua Driver (`browser/cursor.py`).
+//! Optional on-screen cursor feedback for a visible browser, drawn by the Cua Driver on X11 and by deskpilot on
+//! Hyprland.
 //!
 //! Cua Driver's `move_cursor` moves a synthetic overlay and leaves the user's pointer, focus and the browser alone
-//! (only `scope=desktop` would move the real pointer, which is never sent here). It is purely visual: the click
+//! (only `scope=desktop` would move the real pointer, which is never sent here). deskpilot's `move` draws its agent
+//! cursor the same way, and `take_pointer`, `show` and `focus` are never sent to it. It is purely visual: the click
 //! itself is still sent over CDP, so nothing this module does can change what an action did, and it is never
 //! retried.
 //!
 //! Every failure turns the feature off for the rest of the run, quietly: a missing binary, a headless machine, an
-//! old driver, a window that cannot be mapped. The driver is one `cua-driver mcp` child owned by the run and
-//! killed when it ends, so a crashed run cannot leave a daemon behind.
+//! old driver, a window that cannot be mapped. The driver is one `cua-driver mcp` or `deskpilot mcp` child owned
+//! by the run and killed when it ends, so a crashed run cannot leave a daemon behind.
 //!
 //! Failures are logged by kind only, to stderr and only when `FASTBROWSE_LOG` is set: there is no logging crate
 //! in this layer yet, and a run embedded in another process must not write to its stderr unasked.
@@ -17,10 +19,11 @@ use std::ffi::OsString;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard as StdMutexGuard};
 use std::time::{Duration, Instant};
 
+use crate::page::truthy;
 use fastbrowse_core::BoxFuture;
 use futures_util::future::{FutureExt, Shared};
 use serde::{Deserialize, Serialize};
@@ -30,6 +33,9 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{Mutex, MutexGuard};
 use tokio::task::{AbortHandle, JoinHandle};
 use tokio::time::{sleep, timeout};
+
+const THEME_ID: &str = "fastbrowse.focus.v1";
+const THEME: &[u8] = include_bytes!("../assets/cursor/fastbrowse.focus.cua-theme");
 
 const TOOLS: [&str; 5] = ["start_session", "end_session", "list_windows", "move_cursor", "set_agent_cursor_enabled"];
 const CALL_SECONDS: Duration = Duration::from_secs(2);
@@ -116,11 +122,17 @@ pub type GeometryFn = Arc<dyn Fn() -> BoxFuture<'static, Option<Geometry>> + Sen
 /// the width evenly. Both insets come from the page's own report (`outerHeight - innerHeight`), so nothing here is
 /// a guess about a particular browser's chrome; a result that looks wrong draws nothing.
 pub fn viewport_point(geometry: &Geometry, x: f64, y: f64) -> Option<(f64, f64)> {
+    let (dx, dy) = window_point(geometry, x, y)?;
+    Some((geometry.screen_x + dx, geometry.screen_y + dy))
+}
+
+/// A point in the page's viewport (CSS pixels) as a point in its window frame, or None as for `viewport_point`.
+fn window_point(geometry: &Geometry, x: f64, y: f64) -> Option<(f64, f64)> {
     let (side, top) = viewport_inset(geometry)?;
     if !((0.0..=geometry.inner_width).contains(&x) && (0.0..=geometry.inner_height).contains(&y)) {
         return None;
     }
-    Some((geometry.screen_x + side + x * geometry.zoom, geometry.screen_y + top + y * geometry.zoom))
+    Some((side + x * geometry.zoom, top + y * geometry.zoom))
 }
 
 /// Where the viewport starts inside the window frame, or None when this frame cannot place any point: a hidden tab,
@@ -162,6 +174,48 @@ pub fn browser_window(windows: &[Window], geometry: &Geometry) -> Option<Window>
     (!covered).then_some(found)
 }
 
+/// A window as deskpilot's `windows` lists it on Hyprland, in global logical pixels.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HyprWindow {
+    pub address: String,
+    pub pid: Option<i64>,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    /// Whether any of it is on a workspace a monitor is showing.
+    pub visible: bool,
+}
+
+impl HyprWindow {
+    fn overlaps(&self, other: &HyprWindow) -> bool {
+        self.x < other.x + other.width
+            && other.x < self.x + self.width
+            && self.y < other.y + other.height
+            && other.y < self.y + self.height
+    }
+}
+
+/// The browser's own window on Hyprland, when it can be shown to hold the page and to be uncovered, else None.
+///
+/// Chrome on native Wayland cannot know where its window is, so only the process and the page's reported frame size
+/// pick it, and two of one size cannot be told apart. The size match also proves Hyprland and the page share one
+/// scale. Hyprland gives no stacking order, so any other window on screen over it may be in front.
+pub fn hyprland_window<'a>(windows: &'a [HyprWindow], geometry: &Geometry) -> Option<&'a HyprWindow> {
+    let pid = geometry.browser_pid?;
+    let mut matches = windows.iter().filter(|window| {
+        window.pid == Some(pid)
+            && (window.width - geometry.outer_width).abs() <= BOUNDS_TOLERANCE
+            && (window.height - geometry.outer_height).abs() <= BOUNDS_TOLERANCE
+    });
+    let found = matches.next()?;
+    if matches.next().is_some() || !found.visible {
+        return None;
+    }
+    let covered = windows.iter().any(|other| other.address != found.address && other.visible && other.overlaps(found));
+    (!covered).then_some(found)
+}
+
 /// Why the feature turned itself off. Only the kind is ever logged: a message could carry what the driver saw.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Failure {
@@ -172,24 +226,10 @@ enum Failure {
     ToolFailed,
     MissingTools,
     NoWindowScope,
+    /// deskpilot drew somewhere other than the point asked for, as it does once it holds a shot of that window.
+    Misplaced,
     Io,
     Random,
-}
-
-impl Failure {
-    fn kind(self) -> &'static str {
-        match self {
-            Self::Timeout => "Timeout",
-            Self::DriverExited => "DriverExited",
-            Self::DriverRejected => "DriverRejected",
-            Self::BadReply => "BadReply",
-            Self::ToolFailed => "ToolFailed",
-            Self::MissingTools => "MissingTools",
-            Self::NoWindowScope => "NoWindowScope",
-            Self::Io => "Io",
-            Self::Random => "Random",
-        }
-    }
 }
 
 fn log_warning(message: &str) {
@@ -202,18 +242,6 @@ fn log_warning(message: &str) {
 /// a consistent value.
 fn lock<T>(mutex: &StdMutex<T>) -> StdMutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-/// Python truthiness for a JSON value, as `result.get("isError")` and `structuredContent or {}` test it.
-fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().is_some_and(|n| n != 0.0),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    }
 }
 
 struct Io {
@@ -254,16 +282,21 @@ impl Io {
     }
 }
 
-/// A minimal JSON-RPC line client for `cua-driver mcp`, avoiding an MCP dependency in the shipped binary.
+/// A minimal JSON-RPC line client for `cua-driver mcp` and `deskpilot mcp`, avoiding an MCP dependency in the shipped binary.
 struct Driver {
     io: Mutex<Io>,
     child: Mutex<Child>,
 }
 
 impl Driver {
-    fn spawn(binary: &Path) -> std::io::Result<Self> {
+    /// Start `binary mcp`, as the deskpilot agent named `agent` when there is one.
+    fn spawn(binary: &Path, agent: Option<&str>) -> std::io::Result<Self> {
         let start = || {
-            Command::new(binary)
+            let mut command = Command::new(binary);
+            if let Some(agent) = agent {
+                command.env("DESKPILOT_AGENT", agent);
+            }
+            command
                 .arg("mcp")
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
@@ -334,14 +367,20 @@ impl Driver {
     }
 
     async fn tool_within(&self, name: &str, arguments: Value, seconds: Duration) -> Result<Value, Failure> {
+        let mut result = self.call(name, arguments, seconds).await?;
+        Ok(result.remove("structuredContent").filter(truthy).unwrap_or_else(|| Value::Object(Map::new())))
+    }
+
+    /// A tool's whole result, for a tool that answers in its content blocks rather than structured content.
+    async fn call(&self, name: &str, arguments: Value, seconds: Duration) -> Result<Map<String, Value>, Failure> {
         let params = json!({"name": name, "arguments": arguments});
-        let Value::Object(mut result) = self.request("tools/call", Some(params), seconds).await? else {
+        let Value::Object(result) = self.request("tools/call", Some(params), seconds).await? else {
             return Err(Failure::BadReply);
         };
         if result.get("isError").is_some_and(truthy) {
             return Err(Failure::ToolFailed);
         }
-        Ok(result.remove("structuredContent").filter(truthy).unwrap_or_else(|| Value::Object(Map::new())))
+        Ok(result)
     }
 
     /// Close its input first so it can clean up, then end it; each step is bounded.
@@ -398,8 +437,27 @@ struct Tasks {
     watching: Option<JoinHandle<()>>,
 }
 
+/// The program to start for the cursor and the tools it is spoken to with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Backend {
+    /// `cua-driver`, on X11: a session, window lookup with stacking, and a hide.
+    Cua(PathBuf),
+    /// deskpilot, on Hyprland: `windows` and `move` only. There is no session or hide; its arrow fades after
+    /// eight idle seconds on its own.
+    Deskpilot(PathBuf),
+}
+
+impl Backend {
+    fn binary(&self) -> &Path {
+        match self {
+            Backend::Cua(binary) | Backend::Deskpilot(binary) => binary,
+        }
+    }
+}
+
 struct Inner {
     driver: Driver,
+    deskpilot: bool,
     session: String,
     disabled: AtomicBool,
     /// Whether the driver takes `set_agent_cursor_motion`, so the glide can be re-paced per move.
@@ -420,10 +478,11 @@ pub struct CursorFeedback {
 }
 
 impl CursorFeedback {
-    fn new(driver: Driver, session: String, motion: bool) -> Self {
+    fn new(driver: Driver, deskpilot: bool, session: String, motion: bool) -> Self {
         let tasks = Tasks { generation: 0, pending: None, watching: None };
         let inner = Inner {
             driver,
+            deskpilot,
             session,
             disabled: AtomicBool::new(false),
             motion,
@@ -482,9 +541,14 @@ impl CursorFeedback {
 
 impl Inner {
     async fn follow(self: Arc<Self>, geometry: GeometryFn, point: (f64, f64), generation: u64) {
-        let moved = timeout(MOVE_SECONDS + CALL_SECONDS * 3, Arc::clone(&self).glide(&geometry, point)).await;
+        // A stale session, window lookup, visibility restore and pacing update may all precede the move.
+        let moved = timeout(MOVE_SECONDS + CALL_SECONDS * 4, Arc::clone(&self).glide(&geometry, point)).await;
         if let Err(failure) = moved.unwrap_or(Err(Failure::Timeout)) {
             return self.fail(failure).await;
+        }
+        // deskpilot has no hide to send, so there is nothing to watch for.
+        if self.deskpilot {
+            return;
         }
         // Watched even when this move drew nothing: the previous drawing is still on screen and still needs hiding.
         let mut tasks = lock(&self.tasks);
@@ -494,6 +558,9 @@ impl Inner {
     }
 
     async fn glide(self: Arc<Self>, geometry: &GeometryFn, point: (f64, f64)) -> Result<(), Failure> {
+        if self.deskpilot {
+            return self.glide_deskpilot(geometry, point).await;
+        }
         let Some(reading) = geometry().await else {
             // A page that has not reported its frame yet is not a reason to take the cursor away: it stays where
             // the last step left it, the only place it could still be, and the watcher hides it if the page goes.
@@ -507,13 +574,12 @@ impl Inner {
             return Ok(());
         };
         if *lock(&self.last_call) + KEEPALIVE_SECONDS < Instant::now() {
-            self.driver.tool("start_session", json!({"session": self.session})).await?;
+            self.driver.tool("start_session", session_options(&self.session)).await?;
         }
         let window = self.browser_window(&reading).await?;
         self.show(window.is_some()).await?;
         if window.is_some() {
-            // Pace this move by how far the arrow has to travel, from where it was last drawn. A page change
-            // leaves the previous drawing behind the new page, so that move is paced as a fresh short one.
+            // The drawing stays at its screen position across page changes, so pace from where it was last drawn.
             let distance = lock(&self.drawn).map_or(0.0, |(x, y)| (target.0 - x).hypot(target.1 - y));
             self.pace(glide_ms(distance)).await?;
             let arguments = json!({"session": self.session, "x": target.0, "y": target.1, "scope": "window"});
@@ -522,6 +588,35 @@ impl Inner {
         }
         *lock(&self.last_call) = Instant::now();
         Ok(())
+    }
+
+    /// Draw through deskpilot at the point's window pixels, only where `hyprland_window` places the page. With no
+    /// shot of that window deskpilot takes the point in window pixels; with one it scales the point by that shot, so
+    /// the global point it reports drawing at is checked against the one meant, and a different one ends the feature.
+    async fn glide_deskpilot(&self, geometry: &GeometryFn, point: (f64, f64)) -> Result<(), Failure> {
+        let Some(reading) = geometry().await.filter(|reading| reading.same_page) else {
+            return Ok(());
+        };
+        let Some((dx, dy)) = window_point(&reading, point.0, point.1) else {
+            return Ok(());
+        };
+        let listed = self.driver.tool("windows", json!({})).await?;
+        let raw = listed.get("result").and_then(Value::as_array).ok_or(Failure::BadReply)?;
+        let windows: Vec<HyprWindow> = raw.iter().filter_map(hypr_window).collect();
+        // Whole pixels, as deskpilot rounds them, so the point it reports can be compared exactly.
+        let (x, y) = (dx.round(), dy.round());
+        let Some(window) = hyprland_window(&windows, &reading).filter(|w| x < w.width && y < w.height) else {
+            return Ok(());
+        };
+        let arguments = json!({"window": window.address, "x": x, "y": y});
+        let mut reply = self.driver.call("move", arguments, MOVE_SECONDS).await?;
+        let drawn = reply.remove("structuredContent").filter(truthy).or_else(|| text_json(&reply));
+        let at = |key: &str| drawn.as_ref().and_then(|drawn| drawn.get(key)).and_then(Value::as_f64);
+        match (at("x"), at("y")) {
+            (Some(gx), Some(gy)) if gx == window.x + x && gy == window.y + y => Ok(()),
+            (Some(_), Some(_)) => Err(Failure::Misplaced),
+            _ => Err(Failure::BadReply),
+        }
     }
 
     /// Ask for a glide of `glide_ms`, unless the driver already has it. A driver without the motion tool keeps the
@@ -606,7 +701,7 @@ impl Inner {
     }
 
     async fn fail(&self, failure: Failure) {
-        log_warning(&format!("cursor feedback turned off for this run ({})", failure.kind()));
+        log_warning(&format!("cursor feedback turned off for this run ({failure:?})"));
         self.disabled.store(true, Ordering::SeqCst);
         self.driver.close().await;
     }
@@ -625,9 +720,34 @@ impl Inner {
             watching.abort();
             let _ = watching.await;
         }
-        let _ = self.driver.tool("end_session", json!({"session": self.session})).await;
+        if !self.deskpilot {
+            let _ = self.driver.tool("end_session", json!({"session": self.session})).await;
+        }
         self.driver.close().await;
     }
+}
+
+/// The first text block of a tool result that is JSON: how MCP carries a result the tool gives no schema for.
+fn text_json(result: &Map<String, Value>) -> Option<Value> {
+    result
+        .get("content")?
+        .as_array()?
+        .iter()
+        .filter_map(|block| block.get("text").and_then(Value::as_str))
+        .find_map(|text| serde_json::from_str(text).ok())
+}
+
+fn hypr_window(raw: &Value) -> Option<HyprWindow> {
+    let float = |key: &str| raw.get(key).and_then(Value::as_f64);
+    Some(HyprWindow {
+        address: raw.get("address")?.as_str()?.to_owned(),
+        pid: raw.get("pid").and_then(Value::as_i64),
+        x: float("x")?,
+        y: float("y")?,
+        width: float("width")?,
+        height: float("height")?,
+        visible: raw.get("visible")?.as_bool()?,
+    })
 }
 
 fn window(raw: &Value) -> Option<Window> {
@@ -652,14 +772,29 @@ fn window(raw: &Value) -> Option<Window> {
     })
 }
 
-/// The `cua-driver` binary to start, or None where the cursor cannot be placed with certainty.
-fn driver_binary(linux: bool, var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+/// The program to start for the cursor, or None where the cursor cannot be placed with certainty.
+fn driver_binary(linux: bool, var: impl Fn(&str) -> Option<OsString>) -> Option<Backend> {
     let set = |name: &str| var(name).is_some_and(|value| !value.is_empty());
-    // X11 only: native Wayland and XWayland coordinate mapping are not verified.
-    if !linux || !set("DISPLAY") || set("WAYLAND_DISPLAY") {
+    let on_path = |name: &str| std::env::split_paths(&var("PATH")?).map(|dir| dir.join(name)).find(|p| executable(p));
+    if !linux {
         return None;
     }
-    std::env::split_paths(&var("PATH")?).map(|dir| dir.join("cua-driver")).find(|path| executable(path))
+    if set("WAYLAND_DISPLAY") {
+        // deskpilot reads its windows from Hyprland. cua-driver lists no windows there, and another compositor has
+        // neither, so the cursor is off.
+        if !set("HYPRLAND_INSTANCE_SIGNATURE") {
+            return None;
+        }
+        // The same override `--desktop` starts deskpilot with.
+        if let Some(program) = var("FASTBROWSE_DESKPILOT").filter(|value| !value.is_empty()) {
+            return Some(Backend::Deskpilot(PathBuf::from(program)));
+        }
+        return on_path("deskpilot").map(Backend::Deskpilot);
+    }
+    if !set("DISPLAY") {
+        return None;
+    }
+    on_path("cua-driver").map(Backend::Cua)
 }
 
 #[cfg(unix)]
@@ -673,15 +808,26 @@ fn executable(path: &Path) -> bool {
     path.is_file()
 }
 
+/// Deskpilot agents started by this process, numbered so no two share an agent.
+static DESKPILOT_AGENTS: AtomicU32 = AtomicU32::new(0);
+
+/// A deskpilot agent name of this process's own. deskpilot keeps one cursor and one hidden workspace per agent, so
+/// each run's deskpilot gets its own name and two runs in one process never share them. deskpilot takes an agent name
+/// of up to 32 letters, digits, `-`, `_` or `.`: "fastbrowse-", a u32 process id and a u32 count fit it.
+pub fn deskpilot_agent() -> String {
+    format!("fastbrowse-{}-{}", std::process::id(), DESKPILOT_AGENTS.fetch_add(1, Ordering::Relaxed))
+}
+
 fn session_name() -> Result<String, Failure> {
+    use data_encoding::HEXLOWER;
     use ring::rand::{SecureRandom, SystemRandom};
     let mut bytes = [0u8; 4];
     SystemRandom::new().fill(&mut bytes).map_err(|_| Failure::Random)?;
-    Ok(format!("fastbrowse-{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()))
+    Ok(format!("fastbrowse-{}", HEXLOWER.encode(&bytes)))
 }
 
-/// Set a session up and report whether the driver takes a per-move glide.
-async fn handshake(driver: &Driver, session: &str) -> Result<bool, Failure> {
+/// Start MCP with the driver and list its tools.
+async fn initialize(driver: &Driver) -> Result<Value, Failure> {
     let hello = json!({
         "protocolVersion": "2025-06-18",
         "capabilities": {},
@@ -689,7 +835,24 @@ async fn handshake(driver: &Driver, session: &str) -> Result<bool, Failure> {
     });
     driver.request("initialize", Some(hello), START_SECONDS).await?;
     driver.notify("notifications/initialized").await?;
-    let listed = driver.request("tools/list", None, START_SECONDS).await?;
+    driver.request("tools/list", None, START_SECONDS).await
+}
+
+/// Check deskpilot offers the two tools the cursor uses. It has no session to start.
+async fn deskpilot_handshake(driver: &Driver) -> Result<(), Failure> {
+    let listed = initialize(driver).await?;
+    let offered = |name: &str| {
+        listed.get("tools").and_then(Value::as_array).into_iter().flatten().any(|tool| tool["name"] == name)
+    };
+    if !(offered("windows") && offered("move")) {
+        return Err(Failure::MissingTools);
+    }
+    Ok(())
+}
+
+/// Set a session up and report whether the driver takes a per-move glide.
+async fn handshake(driver: &Driver, session: &str) -> Result<bool, Failure> {
+    let listed = initialize(driver).await?;
     let tools: HashMap<&str, &Value> = listed
         .get("tools")
         .and_then(Value::as_array)
@@ -704,7 +867,10 @@ async fn handshake(driver: &Driver, session: &str) -> Result<bool, Failure> {
     if !scope.is_some_and(|scopes| scopes.iter().any(|scope| scope == "window")) {
         return Err(Failure::NoWindowScope);
     }
-    driver.tool("start_session", json!({"session": session})).await?;
+    if tools["start_session"].pointer("/inputSchema/properties/cursor_theme").is_none() {
+        return Err(Failure::MissingTools);
+    }
+    driver.tool("start_session", session_options(session)).await?;
     // The overlay fades out on its own after a short idle by default, and a run spends most of its time between
     // steps: ask for a cursor that stays where it was left, and glides short enough to keep up with the clicks.
     // A driver without this tool keeps its own defaults.
@@ -717,15 +883,67 @@ async fn handshake(driver: &Driver, session: &str) -> Result<bool, Failure> {
         match driver.tool("set_agent_cursor_motion", arguments).await {
             Ok(_) => motion = true,
             Err(failure) => {
-                log_warning(&format!("the cursor may fade while the run is idle ({})", failure.kind()));
+                log_warning(&format!("the cursor may fade while the run is idle ({failure:?})"));
             }
         }
     }
     Ok(motion)
 }
 
-pub(crate) async fn open(binary: &Path) -> Option<CursorFeedback> {
-    let driver = match Driver::spawn(binary) {
+/// `CursorFeedback` on the `cua-driver` at `binary`, for the crate's test hooks.
+pub(crate) async fn open_cua(binary: &Path) -> Option<CursorFeedback> {
+    open(&Backend::Cua(binary.to_path_buf())).await
+}
+
+fn session_options(session: &str) -> Value {
+    json!({"session": session, "cursor_theme": {"theme_id": THEME_ID},
+        "cursor_motion": {"idle_hide_ms": 0, "timing": "fixed", "glide_duration_ms": GLIDE_MS}})
+}
+
+// The installed id is versioned so upgrading fastbrowse never overwrites a theme another live run is using.
+async fn install_theme(binary: &Path) -> Result<(), Failure> {
+    let listed = Command::new(binary)
+        .args(["cursor-theme", "list", "--json"])
+        .kill_on_drop(true)
+        .output()
+        .await
+        .map_err(|_| Failure::Io)?;
+    let ids: Vec<String> = serde_json::from_slice(&listed.stdout).map_err(|_| Failure::BadReply)?;
+    if listed.status.success() && ids.iter().any(|id| id == THEME_ID) {
+        return Ok(());
+    }
+    let cache = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
+        .ok_or(Failure::Io)?
+        .join("fastbrowse/cursor");
+    tokio::fs::create_dir_all(&cache).await.map_err(|_| Failure::Io)?;
+    struct Source(PathBuf);
+    impl Drop for Source {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    // Also remove the source if opening the cursor is cancelled while the installer is running.
+    let path = Source(cache.join(format!("{}-{}.cua-theme", THEME_ID, session_name()?)));
+    tokio::fs::write(&path.0, THEME).await.map_err(|_| Failure::Io)?;
+    let installed =
+        Command::new(binary).args(["cursor-theme", "install"]).arg(&path.0).kill_on_drop(true).output().await;
+    installed.map_err(|_| Failure::Io)?.status.success().then_some(()).ok_or(Failure::ToolFailed)
+}
+
+async fn open(backend: &Backend) -> Option<CursorFeedback> {
+    if matches!(backend, Backend::Cua(_)) {
+        match timeout(START_SECONDS, install_theme(backend.binary())).await {
+            Ok(Ok(())) => {}
+            _ => {
+                log_warning("the fastbrowse cursor theme could not be installed");
+                return None;
+            }
+        }
+    }
+    let agent = matches!(backend, Backend::Deskpilot(_)).then(deskpilot_agent);
+    let driver = match Driver::spawn(backend.binary(), agent.as_deref()) {
         Ok(driver) => driver,
         Err(error) => {
             log_warning(&format!("cursor feedback unavailable ({:?}); running without it", error.kind()));
@@ -733,18 +951,27 @@ pub(crate) async fn open(binary: &Path) -> Option<CursorFeedback> {
         }
     };
     let guard = CloseOnDrop(Some(driver));
-    let opened = match session_name() {
-        Ok(session) => match timeout(START_SECONDS, handshake(guard.driver(), &session)).await {
-            Ok(Ok(motion)) => Ok((session, motion)),
+    let deskpilot = matches!(backend, Backend::Deskpilot(_));
+    let opened = if deskpilot {
+        match timeout(START_SECONDS, deskpilot_handshake(guard.driver())).await {
+            Ok(Ok(())) => Ok((String::new(), false)),
             Ok(Err(failure)) => Err(failure),
             Err(_) => Err(Failure::Timeout),
-        },
-        Err(failure) => Err(failure),
+        }
+    } else {
+        match session_name() {
+            Ok(session) => match timeout(START_SECONDS, handshake(guard.driver(), &session)).await {
+                Ok(Ok(motion)) => Ok((session, motion)),
+                Ok(Err(failure)) => Err(failure),
+                Err(_) => Err(Failure::Timeout),
+            },
+            Err(failure) => Err(failure),
+        }
     };
     match opened {
-        Ok((session, motion)) => Some(CursorFeedback::new(guard.take(), session, motion)),
+        Ok((session, motion)) => Some(CursorFeedback::new(guard.take(), deskpilot, session, motion)),
         Err(failure) => {
-            log_warning(&format!("cursor feedback unavailable ({}); running without it", failure.kind()));
+            log_warning(&format!("cursor feedback unavailable ({failure:?}); running without it"));
             guard.take().close().await;
             None
         }
@@ -756,11 +983,11 @@ pub async fn cursor_feedback(enabled: bool) -> Option<CursorFeedback> {
     if !enabled {
         return None;
     }
-    let Some(binary) = driver_binary(cfg!(target_os = "linux"), |name: &str| std::env::var_os(name)) else {
-        log_warning("cursor feedback needs cua-driver and an X11 display; running without it");
+    let Some(backend) = driver_binary(cfg!(target_os = "linux"), |name: &str| std::env::var_os(name)) else {
+        log_warning("cursor feedback needs cua-driver on X11 or deskpilot on Hyprland; running without it");
         return None;
     };
-    open(&binary).await
+    open(&backend).await
 }
 
 #[cfg(test)]
@@ -771,9 +998,16 @@ mod tests {
 
     const FAKE_DRIVER: &str = r#"
 import json, os, sys, time
+if len(sys.argv) > 1 and sys.argv[1] == "cursor-theme":
+    print(json.dumps(["fastbrowse.focus.v1"]))
+    sys.exit(0)
 log = open(LOG, "a")
+open(LOG + ".agent", "w").write(json.dumps(os.environ.get("DESKPILOT_AGENT")))
 windows = json.loads(WINDOWS)
+paced_ready = False
 tools = ["start_session", "end_session", "list_windows", "move_cursor", "set_agent_cursor_enabled"]
+if mode == "paced_deadline":
+    tools.append("set_agent_cursor_motion")
 if mode == "old":
     tools.remove("move_cursor")
 for line in sys.stdin:
@@ -789,12 +1023,22 @@ for line in sys.stdin:
         result = {"capabilities": {}}
     elif method == "tools/list":
         scope = {"enum": ["window", "desktop"] if mode != "unsafe_scope" else ["desktop"]}
-        schema = {"properties": {"scope": scope}}
+        schema = {"properties": {"scope": scope, "cursor_theme": {"type": "object"}}}
+        if mode == "unthemed":
+            del schema["properties"]["cursor_theme"]
         result = {"tools": [{"name": name, "inputSchema": schema} for name in tools]}
     else:
         name, arguments = message["params"]["name"], message["params"]["arguments"]
         log.write(json.dumps([name, arguments]) + "\n")
         log.flush()
+        if mode == "paced_deadline":
+            if paced_ready:
+                if name in ["start_session", "list_windows", "set_agent_cursor_enabled", "set_agent_cursor_motion"]:
+                    time.sleep(1.8)
+                elif name == "move_cursor":
+                    time.sleep(5.5)
+            if name == "set_agent_cursor_motion":
+                paced_ready = True
         if mode == "die" and name == "move_cursor":
             sys.exit(3)
         if mode == "garbage" and name == "move_cursor":
@@ -814,6 +1058,68 @@ log.flush()
 if mode == "linger":
     time.sleep(30)
 "#;
+
+    /// A fake `deskpilot mcp`: `windows` replays the shape a live Hyprland desktop returned, and `move` answers with
+    /// the global point it drew at, as deskpilot does, in its first text block.
+    const FAKE_DESKPILOT: &str = r#"
+import json, os, sys
+log = open(LOG, "a")
+open(LOG + ".agent", "w").write(json.dumps(os.environ.get("DESKPILOT_AGENT")))
+windows = json.loads(WINDOWS)
+tools = ["windows", "move", "focus", "shot", "click"]
+if mode == "old":
+    tools.remove("move")
+for line in sys.stdin:
+    message = json.loads(line)
+    method = message.get("method")
+    if "id" not in message:
+        continue
+    if method == "initialize":
+        result = {"capabilities": {}}
+    elif method == "tools/list":
+        result = {"tools": [{"name": name, "inputSchema": {"properties": {}}} for name in tools]}
+    else:
+        name, arguments = message["params"]["name"], message["params"]["arguments"]
+        log.write(json.dumps([name, arguments]) + "\n")
+        log.flush()
+        if name == "windows":
+            result = {"content": [], "structuredContent": {"result": windows}, "isError": False}
+        elif name == "move":
+            window = next(w for w in windows if w["address"] == arguments["window"])
+            shift = 7 if mode == "misplaced" else 0
+            point = {"x": window["x"] + round(arguments["x"]) + shift, "y": window["y"] + round(arguments["y"])}
+            result = {"content": [{"type": "text", "text": json.dumps(point)}], "isError": False}
+        else:
+            result = {"content": [], "isError": False}
+    print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}), flush=True)
+log.write(json.dumps(["stdin_closed", {}]) + "\n")
+log.flush()
+"#;
+
+    /// Chrome on native Wayland cannot know where its window is, so it reports 0, 0.
+    const WAYLAND: Geometry = Geometry { screen_x: 0.0, screen_y: 0.0, ..GEOMETRY };
+
+    fn hypr(address: &str, pid: i64, x: f64, width: f64, visible: bool) -> HyprWindow {
+        HyprWindow { address: address.into(), pid: Some(pid), x, y: 628.0, width, height: 700.0, visible }
+    }
+
+    fn raw_hypr(window: &HyprWindow) -> Value {
+        json!({
+            "address": window.address,
+            "class": "google-chrome",
+            "title": "page - Google Chrome",
+            "x": window.x,
+            "y": window.y,
+            "width": window.width,
+            "height": window.height,
+            "monitor": 1,
+            "workspace": "1",
+            "xwayland": false,
+            "visible": window.visible,
+            "pid": window.pid,
+            "focused": true,
+        })
+    }
 
     const GEOMETRY: Geometry = Geometry {
         browser_pid: Some(5),
@@ -853,28 +1159,50 @@ if mode == "linger":
 
     impl Fake {
         fn new(mode: &str, windows: Option<Vec<Value>>) -> Self {
+            let windows = windows.unwrap_or_else(|| vec![raw_window(Some(0), 100.0)]);
+            Self::script("cua-driver", FAKE_DRIVER, mode, windows)
+        }
+
+        fn deskpilot(mode: &str, windows: Vec<Value>) -> Self {
+            Self::script("deskpilot", FAKE_DESKPILOT, mode, windows)
+        }
+
+        fn script(name: &str, body: &str, mode: &str, windows: Vec<Value>) -> Self {
             static COUNTER: AtomicUsize = AtomicUsize::new(0);
             let n = COUNTER.fetch_add(1, Ordering::SeqCst);
             let dir = std::env::temp_dir().join(format!("fastbrowse-cursor-{}-{n}", std::process::id()));
             std::fs::create_dir_all(&dir).unwrap();
-            let binary = dir.join("cua-driver");
+            let binary = dir.join(name);
             let log = dir.join("log");
             std::fs::write(&log, "").unwrap();
-            let windows = Value::Array(windows.unwrap_or_else(|| vec![raw_window(Some(0), 100.0)])).to_string();
             let header = format!(
                 "#!/usr/bin/env python3\nLOG = {}\nmode = {}\nWINDOWS = {}\n",
                 json!(log.to_str().unwrap()),
                 json!(mode),
-                json!(windows),
+                json!(Value::Array(windows).to_string()),
             );
-            std::fs::write(&binary, header + FAKE_DRIVER).unwrap();
+            std::fs::write(&binary, header + body).unwrap();
             set_mode(&binary, 0o755);
             Self { dir, binary, log }
+        }
+
+        fn backend(&self) -> Backend {
+            if self.binary.ends_with("deskpilot") {
+                Backend::Deskpilot(self.binary.clone())
+            } else {
+                Backend::Cua(self.binary.clone())
+            }
         }
 
         fn entries(&self) -> Vec<(String, Value)> {
             let text = std::fs::read_to_string(&self.log).unwrap();
             text.lines().map(|line| serde_json::from_str::<(String, Value)>(line).unwrap()).collect()
+        }
+
+        /// The `DESKPILOT_AGENT` the driver was started with.
+        fn agent(&self) -> Option<String> {
+            let path = self.log.with_extension("agent");
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
         }
 
         fn calls(&self) -> Vec<String> {
@@ -897,7 +1225,7 @@ if mode == "linger":
         }
 
         async fn open(&self) -> Option<CursorFeedback> {
-            open(&self.binary).await
+            open(&self.backend()).await
         }
     }
 
@@ -1049,8 +1377,142 @@ if mode == "linger":
     #[test]
     fn x11_with_the_binary_on_path_is_accepted() {
         let fake = Fake::new("ok", None);
-        assert_eq!(driver_binary(true, fake.env(&[("DISPLAY", ":99")])), Some(fake.binary.clone()));
+        assert_eq!(driver_binary(true, fake.env(&[("DISPLAY", ":99")])), Some(fake.backend()));
         assert_eq!(driver_binary(false, fake.env(&[("DISPLAY", ":99")])), None);
+    }
+
+    const HYPRLAND: [(&str, &str); 3] =
+        [("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-1"), ("HYPRLAND_INSTANCE_SIGNATURE", "abc")];
+
+    #[test]
+    fn hyprland_draws_through_deskpilot() {
+        let fake = Fake::deskpilot("ok", Vec::new());
+        assert_eq!(driver_binary(true, fake.env(&HYPRLAND)), Some(fake.backend()));
+        // A cua-driver beside it is not used: its window list is empty on Hyprland.
+        let cua = Fake::new("ok", None);
+        let path = std::env::join_paths([&cua.dir, &fake.dir]).unwrap();
+        let mut both = HYPRLAND.to_vec();
+        both.push(("PATH", path.to_str().unwrap()));
+        assert_eq!(driver_binary(true, fake.env(&both)), Some(fake.backend()));
+    }
+
+    #[test]
+    fn fastbrowse_deskpilot_wins_over_path() {
+        let fake = Fake::deskpilot("ok", Vec::new());
+        let mut vars = HYPRLAND.to_vec();
+        vars.push(("FASTBROWSE_DESKPILOT", "/opt/deskpilot/bin/deskpilot"));
+        let chosen = driver_binary(true, fake.env(&vars));
+        assert_eq!(chosen, Some(Backend::Deskpilot(PathBuf::from("/opt/deskpilot/bin/deskpilot"))));
+    }
+
+    #[test]
+    fn wayland_without_deskpilot_on_hyprland_draws_nothing() {
+        // cua-driver alone, under Hyprland or another Wayland compositor: neither can place the cursor.
+        let cua = Fake::new("ok", None);
+        assert_eq!(driver_binary(true, cua.env(&HYPRLAND)), None);
+        let deskpilot = Fake::deskpilot("ok", Vec::new());
+        let other = [("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-0")];
+        assert_eq!(driver_binary(true, deskpilot.env(&other)), None);
+        assert_eq!(driver_binary(false, deskpilot.env(&HYPRLAND)), None);
+        assert!(cua.calls().is_empty() && deskpilot.calls().is_empty());
+    }
+
+    #[test]
+    fn hyprland_window_is_the_one_browser_window_of_the_page_size() {
+        let page = hypr("0xa", 5, 1481.0, 900.0, true);
+        let other_size = hypr("0xb", 5, 12.0, 1416.0, true);
+        assert_eq!(hyprland_window(&[other_size.clone(), page.clone()], &WAYLAND), Some(&page));
+        // The page's own screenX/Y are not used: Chrome on native Wayland reports 0, 0.
+        assert_eq!(hyprland_window(std::slice::from_ref(&page), &GEOMETRY), Some(&page));
+        // Two of the page's size cannot be told apart.
+        let twin = hypr("0xc", 5, 12.0, 900.0, true);
+        assert_eq!(hyprland_window(&[page.clone(), twin], &WAYLAND), None);
+        // Another process's window of that size is not the browser.
+        assert_eq!(hyprland_window(&[hypr("0xd", 42, 1481.0, 900.0, true)], &WAYLAND), None);
+        assert_eq!(hyprland_window(std::slice::from_ref(&page), &Geometry { browser_pid: None, ..WAYLAND }), None);
+    }
+
+    #[test]
+    fn hyprland_window_must_be_on_screen_and_uncovered() {
+        let page = hypr("0xa", 5, 1481.0, 900.0, true);
+        // On a workspace that is not showing.
+        assert_eq!(hyprland_window(&[HyprWindow { visible: false, ..page.clone() }], &WAYLAND), None);
+        // Any visible window over it: Hyprland gives no stacking order, so it cannot be shown to be behind.
+        let floating = HyprWindow { width: 400.0, ..hypr("0xe", 9, 1700.0, 400.0, true) };
+        assert_eq!(hyprland_window(&[page.clone(), floating.clone()], &WAYLAND), None);
+        // The same window on a hidden workspace, or one that only touches the edge, covers nothing.
+        let hidden = HyprWindow { visible: false, ..floating };
+        let beside = hypr("0xf", 9, 1481.0 + 900.0, 300.0, true);
+        assert_eq!(hyprland_window(&[page.clone(), hidden, beside], &WAYLAND), Some(&page));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn deskpilot_draws_at_window_pixels_and_never_takes_the_pointer() {
+        let page = hypr("0xa", 5, 1481.0, 900.0, true);
+        let fake = Fake::deskpilot("ok", vec![raw_hypr(&hypr("0xb", 5, 12.0, 1416.0, true)), raw_hypr(&page)]);
+        let feedback = fake.open().await.unwrap();
+        feedback.follow(fixed(Some(WAYLAND)), (10.0, 20.0));
+        feedback.settled().await;
+        assert!(!feedback.inner.disabled.load(Ordering::SeqCst));
+        feedback.close().await;
+        let entries = fake.entries();
+        let moves: Vec<_> = entries.iter().filter(|(name, _)| name == "move").map(|(_, a)| a.clone()).collect();
+        assert_eq!(moves, [json!({"window": "0xa", "x": 10.0, "y": 107.0})]);
+        let names: Vec<_> = entries.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["windows", "move", "stdin_closed"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn deskpilot_drawing_somewhere_else_turns_the_feature_off() {
+        let fake = Fake::deskpilot("misplaced", vec![raw_hypr(&hypr("0xa", 5, 1481.0, 900.0, true))]);
+        let feedback = fake.open().await.unwrap();
+        feedback.follow(fixed(Some(WAYLAND)), (10.0, 20.0));
+        feedback.settled().await;
+        assert!(feedback.inner.disabled.load(Ordering::SeqCst));
+        feedback.follow(fixed(Some(WAYLAND)), (11.0, 21.0));
+        feedback.settled().await;
+        feedback.close().await;
+        assert_eq!(fake.calls().iter().filter(|name| *name == "move").count(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn deskpilot_with_an_uncertain_window_draws_nothing() {
+        let page = hypr("0xa", 5, 1481.0, 900.0, true);
+        let covered = vec![raw_hypr(&page), raw_hypr(&hypr("0xe", 9, 1700.0, 400.0, true))];
+        // A covered window, and a point on the viewport's right edge, which is outside the pixels deskpilot accepts.
+        for (windows, point) in [(covered, (10.0, 20.0)), (vec![raw_hypr(&page)], (900.0, 20.0))] {
+            let fake = Fake::deskpilot("ok", windows);
+            let feedback = fake.open().await.unwrap();
+            feedback.follow(fixed(Some(WAYLAND)), point);
+            feedback.settled().await;
+            assert!(!feedback.inner.disabled.load(Ordering::SeqCst));
+            feedback.close().await;
+            assert!(!fake.calls().contains(&"move".to_owned()), "{point:?}");
+        }
+    }
+
+    /// deskpilot keeps one cursor per agent, so two runs that drew as its one unnamed agent moved the same arrow.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn each_deskpilot_cursor_is_an_agent_of_its_own() {
+        let (one, two) = (Fake::deskpilot("ok", Vec::new()), Fake::deskpilot("ok", Vec::new()));
+        let (first, second) = (one.open().await.unwrap(), two.open().await.unwrap());
+        first.close().await;
+        second.close().await;
+        let (first, second) = (one.agent().unwrap(), two.agent().unwrap());
+        let prefix = format!("fastbrowse-{}-", std::process::id());
+        assert!(first.starts_with(&prefix) && second.starts_with(&prefix), "{first} {second}");
+        assert_ne!(first, second);
+        assert!(first.len() <= 32 && second.len() <= 32);
+        // cua-driver has no agents: it is started with the environment it would have had anyway.
+        let cua = Fake::new("ok", None);
+        cua.open().await.unwrap().close().await;
+        assert_eq!(cua.agent(), std::env::var("DESKPILOT_AGENT").ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_deskpilot_without_move_is_skipped() {
+        let fake = Fake::deskpilot("old", Vec::new());
+        assert!(fake.open().await.is_none());
     }
 
     #[test]
@@ -1064,17 +1526,13 @@ if mode == "linger":
         assert_eq!(driver_binary(true, fake.env(&[("DISPLAY", "")])), None);
     }
 
-    #[test]
-    fn wayland_is_skipped_even_with_an_xwayland_display() {
-        let fake = Fake::new("ok", None);
-        assert_eq!(driver_binary(true, fake.env(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-0")])), None);
-        assert!(fake.calls().is_empty());
-    }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_old_driver_without_the_tools_is_skipped() {
-        let fake = Fake::new("old", None);
-        assert!(fake.open().await.is_none());
+        for mode in ["old", "unthemed"] {
+            let fake = Fake::new(mode, None);
+            assert!(fake.open().await.is_none());
+            assert!(!fake.calls().contains(&"start_session".to_owned()));
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1169,6 +1627,24 @@ if mode == "linger":
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_paced_move_keeps_the_deadlines_of_all_four_setup_calls() {
+        let fake = Fake::new("paced_deadline", None);
+        let feedback = fake.open().await.unwrap();
+        *lock(&feedback.inner.last_call) = Instant::now() - KEEPALIVE_SECONDS - Duration::from_secs(1);
+        *lock(&feedback.inner.shown) = Some(false);
+        *lock(&feedback.inner.drawn) = Some((800.0, 600.0));
+        feedback.follow(reading(), (10.0, 20.0));
+        feedback.settled().await;
+        let running = feedback.running();
+        feedback.close().await;
+        assert!(running, "the outer deadline cut off individually valid driver calls");
+        let calls = fake.calls();
+        assert_eq!(calls.iter().filter(|name| *name == "start_session").count(), 2);
+        assert_eq!(calls.iter().filter(|name| *name == "set_agent_cursor_motion").count(), 2);
+        assert!(calls.contains(&"move_cursor".to_owned()));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_failing_driver_turns_the_feature_off_and_is_cleaned_up() {
         for mode in ["die", "garbage"] {
             let fake = Fake::new(mode, None);
@@ -1207,8 +1683,8 @@ if mode == "linger":
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cancellation_during_initialization_stops_the_child() {
         let fake = Fake::new("hang_initialize", None);
-        let binary = fake.binary.clone();
-        let opening = tokio::spawn(async move { open(&binary).await.is_some() });
+        let backend = fake.backend();
+        let opening = tokio::spawn(async move { open(&backend).await.is_some() });
         eventually("initialization to start", || !fake.calls().is_empty()).await;
         opening.abort();
         assert!(opening.await.unwrap_err().is_cancelled());
@@ -1270,6 +1746,10 @@ if mode == "linger":
         // out is not a driver failure: it turned the cursor off for the rest of a run after its first long move.
         let fake = Fake::new("long_glide", None);
         let feedback = fake.open().await.unwrap();
+        let options = fake.entries().into_iter().find(|(name, _)| name == "start_session").unwrap().1;
+        assert_eq!(options["cursor_theme"]["theme_id"], THEME_ID);
+        assert_eq!(options["cursor_motion"]["idle_hide_ms"], 0);
+
         feedback.follow(reading(), (10.0, 20.0));
         feedback.settled().await;
         assert!(!feedback.inner.disabled.load(Ordering::SeqCst));
@@ -1303,7 +1783,7 @@ if mode == "linger":
     async fn cancelling_driver_close_reaps_the_child() {
         // This child ignores its closed input, so the drop lands in close's first wait.
         let fake = Fake::new("linger", None);
-        let driver = Driver::spawn(&fake.binary).unwrap();
+        let driver = Driver::spawn(&fake.binary, None).unwrap();
         assert!(timeout(Duration::from_millis(300), driver.close()).await.is_err());
         eventually("the child to be killed", || !driver.running()).await;
     }

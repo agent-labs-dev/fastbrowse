@@ -1,7 +1,6 @@
 #nullable enable
 
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -31,7 +30,7 @@ public sealed class FastbrowseClientTests : IAsyncLifetime
             return named;
         }
         string built = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../../target/debug/fastbrowse"));
-        Assert.SkipUnless(File.Exists(built), "no fastbrowse binary: run `cargo build -p fastbrowse-cli`, or set FASTBROWSE_TEST_BINARY");
+        Assert.SkipUnless(File.Exists(built), "no fastbrowse binary: run `cargo build -p fastbrowse-cli --features scripted`, or set FASTBROWSE_TEST_BINARY");
         return built;
     }
 
@@ -109,6 +108,59 @@ public sealed class FastbrowseClientTests : IAsyncLifetime
         JsonElement parameters = result.Data!.Value.GetProperty("params");
         Assert.False(parameters.TryGetProperty("cdp_port", out _));
         Assert.True(parameters.GetProperty("local").GetBoolean());
+    }
+
+    /// <summary>The names the request's params were sent with, besides its run_id.</summary>
+    private static string[] Sent(JsonElement parameters) =>
+        parameters.EnumerateObject().Select(each => each.Name).Where(name => name != "run_id").Order(StringComparer.Ordinal).ToArray();
+
+    private static string[] Strings(JsonElement array) => array.EnumerateArray().Select(each => each.GetString()!).ToArray();
+
+    [Fact]
+    public async Task CloudBrowserAndRoutingOptionsReachTheServerUnderTheirWireNames()
+    {
+        const string extension = "0f4c7a52-3b1e-4d8a-9c6f-2e5b8d1a7c30";
+        var client = await Scripted("echo", new StartOptions
+        {
+            Browser = new BrowserOptions { CloudExtensions = [extension], CloudTimeoutMinutes = 90 },
+        });
+        RunResult result = await client.RunAsync("t", new RunOptions
+        {
+            BrowserFirst = true,
+            AllowedOrigins = ["https://shop.example"],
+        }, TestContext.Current.CancellationToken);
+        JsonElement parameters = result.Data!.Value.GetProperty("params");
+        Assert.Equal(new[] { "allowed_origins", "browser", "cloud_extensions", "cloud_timeout_minutes", "task" }, Sent(parameters));
+        Assert.Equal(new[] { extension }, Strings(parameters.GetProperty("cloud_extensions")));
+        Assert.Equal(90, parameters.GetProperty("cloud_timeout_minutes").GetInt32());
+        Assert.Equal(new[] { "https://shop.example" }, Strings(parameters.GetProperty("allowed_origins")));
+        Assert.True(parameters.GetProperty("browser").GetBoolean());
+
+        // A run's own browser replaces the client's, cloud options with it, which is what lets this run fetch.
+        RunResult fetched = await client.RunAsync("t", new RunOptions { Browser = new BrowserOptions(), Fetch = true }, TestContext.Current.CancellationToken);
+        JsonElement fetchedParameters = fetched.Data!.Value.GetProperty("params");
+        Assert.Equal(new[] { "fetch", "task" }, Sent(fetchedParameters));
+        Assert.True(fetchedParameters.GetProperty("fetch").GetBoolean());
+    }
+
+    [Fact]
+    public async Task FetchAndBrowserFirstTogetherAreRefusedByTheServer()
+    {
+        var client = await Scripted("echo");
+        var refused = await Assert.ThrowsAsync<RpcException>(() =>
+            client.RunAsync("t", new RunOptions { Fetch = true, BrowserFirst = true }, TestContext.Current.CancellationToken));
+        Assert.Equal(ProtocolConstants.ErrorInvalidParams, refused.Code);
+        Assert.Contains("fetch never starts a browser and browser always does", refused.Message);
+    }
+
+    [Fact]
+    public async Task AnEmptyAllowedOriginsReachesTheServerAndIsRefusedRatherThanUnscoped()
+    {
+        var client = await Scripted("echo");
+        var refused = await Assert.ThrowsAsync<RpcException>(() =>
+            client.RunAsync("t", new RunOptions { AllowedOrigins = [] }, TestContext.Current.CancellationToken));
+        Assert.Equal(ProtocolConstants.ErrorInvalidParams, refused.Code);
+        Assert.Contains("allowed_origins is empty", refused.Message);
     }
 
     [Fact]
@@ -209,15 +261,39 @@ public sealed class FastbrowseClientTests : IAsyncLifetime
         var client = await Scripted("until_cancelled");
         string closed = Path.Combine(Path.GetTempPath(), $"fastbrowse-{Guid.NewGuid():N}");
         using var cancellation = new CancellationTokenSource();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.RunAsync("t", new RunOptions
+        var stopped = await Assert.ThrowsAsync<RunCancelledException>(() => client.RunAsync("t", new RunOptions
         {
             Inputs = new Dictionary<string, string> { ["closed"] = closed },
             OnEvent = _ => cancellation.Cancel(),
         }, cancellation.Token));
         Assert.True(File.Exists(closed), "the run returned before its browser closed");
+        Assert.Equal(cancellation.Token, stopped.CancellationToken);
+        // What the run did and spent before it stopped, with the unpriced browser left unpriced.
+        CancellationReceipt receipt = stopped.Receipt!;
+        Assert.Single(receipt.Steps);
+        Assert.Equal([CostBasis.Metered, CostBasis.Unknown], receipt.Cost.Lines.Select(line => line.Basis));
+        Assert.Equal([0.004, null], receipt.Cost.Lines.Select(line => line.Dollars));
+        Assert.Empty(receipt.Recordings);
         // The process is still there for the next run.
         RunResult next = await client.RunAsync("t", cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(Status.Complete, next.Status);
+        File.Delete(closed);
+    }
+
+    [Fact]
+    public async Task ARunAThrowingCallbackStoppedKeepsWhatItDidAndSpent()
+    {
+        var client = await Scripted("until_cancelled");
+        string closed = Path.Combine(Path.GetTempPath(), $"fastbrowse-{Guid.NewGuid():N}");
+        RunResult result = await client.RunAsync("t", new RunOptions
+        {
+            Inputs = new Dictionary<string, string> { ["closed"] = closed },
+            OnEvent = _ => throw new InvalidOperationException("full disk"),
+        }, TestContext.Current.CancellationToken);
+        Assert.Equal(Status.Error, result.Status);
+        Assert.Equal("run/event: full disk", result.Error);
+        Assert.Single(result.Steps);
+        Assert.Equal([0.004, null], result.Cost.Lines.Select(line => line.Dollars));
         File.Delete(closed);
     }
 

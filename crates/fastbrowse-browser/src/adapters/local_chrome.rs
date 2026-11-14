@@ -1,4 +1,4 @@
-//! Chrome on this machine: headless with a throwaway profile by default (`adapters/local_chrome.py`).
+//! Chrome on this machine: headless with a throwaway profile by default.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -27,8 +27,8 @@ const CLOSE_GRACE: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 pub enum LocalChromeError {
-    /// Python's `RuntimeError`: no Chrome, or a Chrome that exited or never answered. The message carries the tail
-    /// of Chrome's own stderr, which is what says why.
+    /// Python's `RuntimeError`: no Chrome, or a Chrome that exited or never answered. The message carries
+    /// Chrome's complete stderr, which is what says why.
     Runtime(String),
     Browser(BrowserError),
     Io(std::io::Error),
@@ -331,15 +331,19 @@ impl LocalChromeProcess {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
             _ => {}
         }
-        quiet_password_manager(&profile)?;
-        let child = Command::new(binary)
+        set_preferences(&profile)?;
+        let mut command = Command::new(binary);
+        command
             .args(launch_args(options, &profile))
             // Chrome never reads stdin, and under `fastbrowse serve --stdio` stdin is the caller's protocol stream.
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(log.try_clone()?)
-            .kill_on_drop(true)
-            .spawn()?;
+            .kill_on_drop(true);
+        #[cfg(target_os = "linux")]
+        let child = spawn_bound_to_owner(command).await?;
+        #[cfg(not(target_os = "linux"))]
+        let child = command.spawn()?;
         let child = self.child.insert(child);
         wait_for_ws(&active, child, &mut log, DEVTOOLS_TIMEOUT).await
     }
@@ -385,6 +389,79 @@ impl Drop for LocalChromeProcess {
     }
 }
 
+/// Spawn Chrome tied to this process on Linux, where `kill_on_drop` alone leaves it running once its owner is killed
+/// outright and never runs Drop, and where every descriptor this process holds without close-on-exec (a caller's pipe,
+/// a socket a library opened) would otherwise stay open in Chrome for its whole life. macOS has no equivalent of the
+/// death signal and keeps Drop alone.
+///
+/// The death signal fires when the thread that forked ends, not the process, and a runtime worker can end while its
+/// runtime runs on (one handed to `block_in_place` does). So one thread that lasts as long as the process forks every
+/// Chrome, inside the caller's runtime so the child is reaped there.
+///
+/// That thread is kept with the id of the process that started it. A process forked from this one, such as an
+/// embedder's worker, inherits the channel but not the thread behind it, so it starts its own instead of waiting on
+/// one that is not there. The owner sits behind an atomic pointer rather than a mutex, because a process forked while
+/// another thread held a mutex inherits it locked with nothing left to unlock it. One owner is leaked per process.
+#[cfg(target_os = "linux")]
+async fn spawn_bound_to_owner(mut command: Command) -> std::io::Result<Child> {
+    use std::sync::atomic::{AtomicPtr, Ordering};
+    use std::sync::mpsc::{Sender, channel};
+    type Job = Box<dyn FnOnce() + Send>;
+    type Owner = (u32, Sender<Job>);
+    static OWNER: AtomicPtr<Owner> = AtomicPtr::new(std::ptr::null_mut());
+
+    let owner = std::process::id() as libc::pid_t;
+    // SAFETY: the closure runs between fork and exec, and makes only async-signal-safe calls: prctl, getppid, _exit,
+    // getrlimit, fcntl and a raw syscall. It never fails the spawn.
+    unsafe {
+        command.pre_exec(move || {
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+            // An owner that died before the signal was armed has already passed the child to another parent.
+            if libc::getppid() != owner {
+                libc::_exit(0);
+            }
+            let marked =
+                libc::syscall(libc::SYS_close_range, 3 as libc::c_uint, libc::c_uint::MAX, libc::CLOSE_RANGE_CLOEXEC);
+            // A kernel older than close_range (5.11): mark each descriptor the open-files limit allows instead.
+            let mut limit = std::mem::MaybeUninit::<libc::rlimit>::uninit();
+            if marked != 0 && libc::getrlimit(libc::RLIMIT_NOFILE, limit.as_mut_ptr()) == 0 {
+                let open_max = libc::c_int::try_from(limit.assume_init().rlim_cur).unwrap_or(libc::c_int::MAX);
+                for fd in 3..open_max {
+                    libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+                }
+            }
+            Ok(())
+        });
+    }
+    let runtime = tokio::runtime::Handle::current();
+    let (reply, spawned) = tokio::sync::oneshot::channel();
+    let job: Job = Box::new(move || {
+        let _entered = runtime.enter();
+        let _ = reply.send(command.spawn());
+    });
+    let pid = std::process::id();
+    let current = OWNER.load(Ordering::Acquire);
+    // SAFETY: a non-null pointer is a leaked `Owner` that is never freed, and a forked process keeps a copy of it.
+    let unsent = match unsafe { current.as_ref() } {
+        Some((started_by, jobs)) if *started_by == pid => jobs.send(job).err().map(|returned| returned.0),
+        _ => Some(job),
+    };
+    if let Some(job) = unsent {
+        let (jobs, queue) = channel::<Job>();
+        std::thread::Builder::new().name("fastbrowse-chrome".into()).spawn(move || {
+            for job in queue {
+                job();
+            }
+        })?;
+        jobs.send(job).map_err(|_| std::io::Error::other("the Chrome spawner stopped"))?;
+        // A launch that lost the race to publish its owner leaks it all the same: freeing it would end the thread,
+        // and with it the death signal would reach the Chrome that thread just forked.
+        let started = Box::into_raw(Box::new((pid, jobs)));
+        let _ = OWNER.compare_exchange(current, started, Ordering::AcqRel, Ordering::Acquire);
+    }
+    spawned.await.unwrap_or_else(|_| Err(std::io::Error::other("the Chrome spawner stopped")))
+}
+
 /// `Popen.terminate`: SIGTERM, so Chrome flushes a kept profile's cookies before it exits. std and tokio only send
 /// SIGKILL, so the system's `kill` sends it.
 async fn terminate(child: &mut Child) {
@@ -408,13 +485,15 @@ async fn terminate(child: &mut Child) {
     let _ = child.start_kill();
 }
 
-/// Keep Chrome's password manager out of the profile, whether it is fresh or kept between runs.
+/// Set the preferences a run depends on, whether the profile is fresh or kept between runs. A kept profile keeps
+/// every other preference its owner set; these are set on each launch.
 ///
-/// After a sign-in, its save and leaked-password bubbles take the browser's input: the page still renders and hit
-/// tests still pass, but no click reaches it, and the bubble is Chrome's own interface, outside the page the agent
-/// sees. saucedemo's shared password is a known leak, so every click after its sign-in did nothing. A kept profile
-/// keeps every other preference its owner set; these three are set on each launch.
-fn quiet_password_manager(profile: &Path) -> Result<(), LocalChromeError> {
+/// - The password manager is off. After a sign-in, its save and leaked-password bubbles take the browser's input:
+///   the page still renders and hit tests still pass, but no click reaches it, and the bubble is Chrome's own
+///   interface, outside the page the agent sees.
+/// - Network prediction is off (`2` is "never"). Chrome preconnects to an address it expects to load before the
+///   request reaches Fetch, so a host outside a run's scope saw TCP connections from a request the scope gate failed.
+fn set_preferences(profile: &Path) -> Result<(), LocalChromeError> {
     let preferences = profile.join("Default").join("Preferences");
     let held: Option<Value> = match std::fs::read(&preferences) {
         Ok(bytes) => String::from_utf8(bytes).ok().and_then(|text| serde_json::from_str(&text).ok()),
@@ -433,6 +512,12 @@ fn quiet_password_manager(profile: &Path) -> Result<(), LocalChromeError> {
     owned.insert("password_manager_enabled".into(), Value::Bool(false));
     owned.insert("password_manager_leak_detection".into(), Value::Bool(false));
     held.insert("profile".into(), Value::Object(owned));
+    let mut net = match held.remove("net") {
+        Some(Value::Object(net)) => net,
+        _ => Map::new(),
+    };
+    net.insert("network_prediction_options".into(), Value::from(2));
+    held.insert("net".into(), Value::Object(net));
     if let Some(parent) = preferences.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -451,7 +536,7 @@ async fn wait_for_ws(
     loop {
         if let Some(status) = child.try_wait()? {
             let message =
-                format!("Chrome exited with status {} before DevTools started{}", returncode(status), tail(log));
+                format!("Chrome exited with status {} before DevTools started{}", returncode(status), diagnostic(log));
             return Err(LocalChromeError::Runtime(message));
         }
         // Not written yet, written only partly, or written and not yet listening: each is read again shortly.
@@ -459,7 +544,8 @@ async fn wait_for_ws(
             return Ok(url);
         }
         if Instant::now() > deadline {
-            let message = format!("Chrome did not start DevTools within {:.0}s{}", timeout.as_secs_f64(), tail(log));
+            let message =
+                format!("Chrome did not start DevTools within {:.0}s{}", timeout.as_secs_f64(), diagnostic(log));
             return Err(LocalChromeError::Runtime(message));
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -497,14 +583,13 @@ fn returncode(status: ExitStatus) -> i32 {
     status.code().unwrap_or(-1)
 }
 
-/// The last 2000 bytes of Chrome's stderr, introduced for an error message, or nothing when it printed nothing.
-fn tail(log: &mut File) -> String {
+/// A crash stack follows the startup failure, so keep the diagnostic before the stack too.
+fn diagnostic(log: &mut File) -> String {
     let mut bytes = Vec::new();
     if log.seek(SeekFrom::Start(0)).is_err() || log.read_to_end(&mut bytes).is_err() {
         return String::new();
     }
-    let start = bytes.len().saturating_sub(2000);
-    let text = String::from_utf8_lossy(&bytes[start..]);
+    let text = String::from_utf8_lossy(&bytes);
     let text = text.trim_matches(|c: char| c.is_whitespace() || ('\x1c'..='\x1f').contains(&c));
     if text.is_empty() { String::new() } else { format!(":\n{text}") }
 }
@@ -512,6 +597,19 @@ fn tail(log: &mut File) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_diagnostic_keeps_the_cause_before_a_long_crash_stack() {
+        use std::io::Write;
+        let (mut log, path) = temp_log().unwrap();
+        let output = format!("FATAL: Socket path too long\n{}", "stack frame\n".repeat(500));
+        log.write_all(output.as_bytes()).unwrap();
+        assert_eq!(diagnostic(&mut log), format!(":\n{}", output.trim()));
+        drop(log);
+        if let Some(path) = path {
+            std::fs::remove_file(path).unwrap();
+        }
+    }
 
     /// The id of a process that has exited.
     #[cfg(unix)]
@@ -708,35 +806,37 @@ mod tests {
     }
 
     #[test]
-    fn the_password_manager_is_quieted_and_other_preferences_kept() {
+    fn the_password_manager_and_network_prediction_are_off_and_other_preferences_kept() {
         let profile = scratch();
-        quiet_password_manager(&profile).unwrap();
+        set_preferences(&profile).unwrap();
         let preferences = profile.join("Default").join("Preferences");
         let read = || serde_json::from_slice::<Value>(&std::fs::read(&preferences).unwrap()).unwrap();
         assert_eq!(
             read(),
             serde_json::json!({
                 "credentials_enable_service": false,
+                "net": {"network_prediction_options": 2},
                 "profile": {"password_manager_enabled": false, "password_manager_leak_detection": false},
             })
         );
         std::fs::write(
             &preferences,
-            r#"{"homepage": "x", "profile": {"name": "Me", "password_manager_enabled": true}}"#,
+            r#"{"homepage": "x", "net": {"x": 1, "network_prediction_options": 0}, "profile": {"name": "Me", "password_manager_enabled": true}}"#,
         )
         .unwrap();
-        quiet_password_manager(&profile).unwrap();
+        set_preferences(&profile).unwrap();
         assert_eq!(
             read(),
             serde_json::json!({
                 "homepage": "x",
                 "credentials_enable_service": false,
+                "net": {"x": 1, "network_prediction_options": 2},
                 "profile": {"name": "Me", "password_manager_enabled": false, "password_manager_leak_detection": false},
             })
         );
         for garbage in [&b"[1, 2]"[..], b"not json", b"\xff\xfe"] {
             std::fs::write(&preferences, garbage).unwrap();
-            let error = quiet_password_manager(&profile).unwrap_err();
+            let error = set_preferences(&profile).unwrap_err();
             assert_eq!(error.to_string(), format!("{} is not a Chrome preferences file", preferences.display()));
         }
         std::fs::remove_dir_all(profile).unwrap();
@@ -804,6 +904,193 @@ mod tests {
         let (mut chrome, _) = LocalChromeProcess::launch(&options).await.unwrap();
         chrome.close().await;
         assert!(kept.join("Default").join("Preferences").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A stand-in Chrome answering a fake `/json/version`, which first runs `before` in its own shell.
+    #[cfg(target_os = "linux")]
+    async fn stand_in(dir: &Path, before: &str) -> (http::fake::FakeServer, PathBuf) {
+        use crate::adapters::http::fake::{FakeServer, json};
+        let server = FakeServer::start(|_, _| {
+            json(200, serde_json::json!({"webSocketDebuggerUrl": "ws://127.0.0.1:1/devtools/browser/x"}))
+        })
+        .await;
+        let port = server.base.rsplit(':').next().unwrap().to_owned();
+        let body = format!(
+            "{before}\nfor arg; do case \"$arg\" in --user-data-dir=*) dir=\"${{arg#--user-data-dir=}}\";; esac; done\n\
+             printf '{port}\\n/devtools/browser/x\\n' > \"$dir/DevToolsActivePort\"\nexec sleep 30\n"
+        );
+        (server, script(dir, "chrome", &body))
+    }
+
+    /// A descriptor this process left open across exec, such as a caller's pipe, never reaches Chrome.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn chrome_inherits_no_descriptor_beyond_its_standard_streams() {
+        let dir = scratch();
+        let listing = dir.join("fds");
+        let (_server, binary) = stand_in(&dir, &format!("ls /proc/$$/fd > '{}'", listing.display())).await;
+        // F_DUPFD never sets close-on-exec, as a descriptor handed down by a parent process would arrive. It is placed
+        // above the low descriptors the stand-in's shell opens for itself (dash reads its script on 10), which would
+        // otherwise share its number.
+        let open = File::open(&binary).unwrap();
+        let leaked = unsafe { libc::fcntl(std::os::fd::AsRawFd::as_raw_fd(&open), libc::F_DUPFD, 100) };
+        assert!(leaked >= 100);
+        let options = LocalChrome { binary: Some(binary.to_string_lossy().into_owned()), ..Default::default() };
+        let launched = LocalChromeProcess::launch(&options).await;
+        unsafe { libc::close(leaked) };
+        let (mut chrome, _) = launched.unwrap();
+        chrome.close().await;
+        let fds = std::fs::read_to_string(&listing).unwrap();
+        assert!(!fds.lines().any(|fd| fd == leaked.to_string()), "fd {leaked} reached Chrome: {fds:?}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A process forked after a launch, as an embedder's worker is, launches its own Chrome rather than waiting on the
+    /// spawner thread it inherited the channel of but not the thread.
+    ///
+    /// The launch and the fork run in a copy of the test binary that runs only this test: a fork from the shared
+    /// harness inherits, locked for good, any lock another test's thread held at that moment.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_process_forked_after_a_launch_can_launch() {
+        const NAME: &str = "adapters::local_chrome::tests::a_process_forked_after_a_launch_can_launch";
+        const ALONE: &str = "FASTBROWSE_TEST_FORKED_LAUNCH";
+        if std::env::var_os(ALONE).is_none() {
+            let alone = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", NAME, "--test-threads=1", "--nocapture"])
+                .env(ALONE, "1")
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            let output = String::from_utf8_lossy(&alone.stdout) + String::from_utf8_lossy(&alone.stderr);
+            assert!(alone.status.success() && output.contains("1 passed"), "the test run alone failed: {output}");
+            return;
+        }
+        // Each step that fails exits with its own code, so the parent can name it.
+        const FAILURES: [&str; 4] =
+            ["", "the launch timed out", "the launch could not spawn", "the launched process did not succeed"];
+        let launch = || -> i32 {
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            runtime.block_on(async {
+                let spawned = tokio::time::timeout(Duration::from_secs(5), spawn_bound_to_owner(Command::new("true")));
+                match spawned.await {
+                    Err(_) => 1,
+                    Ok(Err(_)) => 2,
+                    Ok(Ok(mut child)) => {
+                        if child.wait().await.is_ok_and(|status| status.success()) {
+                            0
+                        } else {
+                            3
+                        }
+                    }
+                }
+            })
+        };
+        let first = launch();
+        assert_eq!(first, 0, "the first launch failed: {}", FAILURES[first as usize]);
+        // SAFETY: the child only builds a runtime, launches and exits; it never returns into the test harness.
+        let child = unsafe { libc::fork() };
+        if child == 0 {
+            unsafe { libc::_exit(launch()) };
+        }
+        let mut status = 0;
+        assert_eq!(unsafe { libc::waitpid(child, &mut status, 0) }, child);
+        assert!(libc::WIFEXITED(status), "the forked process ended without exiting: wait status {status}");
+        let code = libc::WEXITSTATUS(status) as usize;
+        assert_eq!(
+            code,
+            0,
+            "the forked process could not launch: {}",
+            FAILURES.get(code).unwrap_or(&"an unknown failure")
+        );
+    }
+
+    /// Chrome belongs to the process, not to the thread that launched it: a runtime worker that ends, as one handed to
+    /// `block_in_place` can, leaves the browser running.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn chrome_outlives_the_thread_that_launched_it() {
+        let dir = scratch();
+        let launcher_dir = dir.clone();
+        let pid = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            runtime.block_on(async {
+                let (server, binary) = stand_in(&launcher_dir, "").await;
+                std::mem::forget(server);
+                let options = LocalChrome { binary: Some(binary.to_string_lossy().into_owned()), ..Default::default() };
+                let (mut chrome, _) = LocalChromeProcess::launch(&options).await.unwrap();
+                let pid = chrome.pid().unwrap() as libc::pid_t;
+                // The handle outlives this thread and runtime, as a long-lived session's does.
+                std::mem::forget(chrome.child.take());
+                pid
+            })
+        })
+        .join()
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        let alive = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .is_ok_and(|stat| stat.rsplit(')').next().is_some_and(|rest| !rest.trim_start().starts_with('Z')));
+        // SAFETY: the stand-in is this process's child, and nothing else waits for it once its handle is forgotten.
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+            libc::waitpid(pid, std::ptr::null_mut(), 0);
+        }
+        assert!(alive, "Chrome {pid} ended with the thread that launched it");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// An owner killed outright, with no chance to run Drop, still takes its Chrome down with it.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn chrome_exits_when_its_owner_is_killed() {
+        const OWNER: &str = "FASTBROWSE_TEST_CHROME_OWNER";
+        if let Some(dir) = std::env::var_os(OWNER).map(PathBuf::from) {
+            // The owner: launch the stand-in, say its pid, and wait to be killed.
+            let (_server, binary) = stand_in(&dir, "").await;
+            let options = LocalChrome { binary: Some(binary.to_string_lossy().into_owned()), ..Default::default() };
+            let (chrome, _) = LocalChromeProcess::launch(&options).await.unwrap();
+            std::fs::write(dir.join("pid.tmp"), chrome.pid().unwrap().to_string()).unwrap();
+            std::fs::rename(dir.join("pid.tmp"), dir.join("pid")).unwrap();
+            std::thread::sleep(Duration::from_secs(60));
+            return;
+        }
+        let dir = scratch();
+        let mut owner = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "adapters::local_chrome::tests::chrome_exits_when_its_owner_is_killed", "--nocapture"])
+            .env(OWNER, &dir)
+            .stdin(Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let pid: libc::pid_t = loop {
+            if let Ok(text) = std::fs::read_to_string(dir.join("pid")) {
+                break text.trim().parse().unwrap();
+            }
+            if Instant::now() >= deadline {
+                // Killing the owner takes down any Chrome it did launch.
+                let _ = owner.kill();
+                let _ = owner.wait();
+                panic!("the owner never launched its Chrome");
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        owner.kill().unwrap();
+        owner.wait().unwrap();
+        // Gone, or a zombie its new parent has yet to reap.
+        let alive = || {
+            std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .is_ok_and(|stat| stat.rsplit(')').next().is_some_and(|rest| !rest.trim_start().starts_with('Z')))
+        };
+        let killed = Instant::now();
+        while alive() && killed.elapsed() < Duration::from_secs(2) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let survived = alive();
+        if survived {
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        assert!(!survived, "Chrome {pid} outlived its killed owner");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

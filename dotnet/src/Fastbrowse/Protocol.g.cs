@@ -37,6 +37,10 @@ public enum ArtifactKind
 {
     [JsonStringEnumMemberName("download")]
     Download,
+    [JsonStringEnumMemberName("screenshot")]
+    Screenshot,
+    [JsonStringEnumMemberName("capture")]
+    Capture,
 }
 
 public sealed record Authorization
@@ -70,6 +74,44 @@ public sealed record BrowserEvent
     public string? BrowserId { get; init; }
 }
 
+/// <summary>
+/// The browser a run drove.
+/// </summary>
+public sealed record BrowserUsed
+{
+    [JsonPropertyName("via")]
+    public required BrowserVia Via { get; init; }
+
+    /// <summary>
+    /// The profile it ran in, when one was named: a local profile directory, a cloud profile, or the label of a
+    /// browser connected through the extension.
+    /// </summary>
+    [JsonPropertyName("profile")]
+    public string? Profile { get; init; }
+
+    /// <summary>
+    /// The browser's product and version, when known, such as <c>Chrome 150.0.7400.2</c>.
+    /// </summary>
+    [JsonPropertyName("browser")]
+    public string? Browser { get; init; }
+}
+
+/// <summary>
+/// How a run reached the browser it drove.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter<BrowserVia>))]
+public enum BrowserVia
+{
+    [JsonStringEnumMemberName("cloud")]
+    Cloud,
+    [JsonStringEnumMemberName("launched")]
+    Launched,
+    [JsonStringEnumMemberName("attached")]
+    Attached,
+    [JsonStringEnumMemberName("extension")]
+    Extension,
+}
+
 public sealed record BudgetStop
 {
     [JsonPropertyName("resource")]
@@ -77,6 +119,29 @@ public sealed record BudgetStop
 
     [JsonPropertyName("limit")]
     public required double Limit { get; init; }
+}
+
+/// <summary>
+/// What a cancelled run did before it stopped: the <c>data</c> of its <c>cancelled</c> error.
+///
+/// A cancelled run proved nothing, so this has no status and no answer. It holds what the caller is owed
+/// whatever the run became: the steps it reported, every charge known when it stopped, an unpriced one as an
+/// <c>unknown</c> line, and the videos finished before its browser closed. A step cut off before its event was sent
+/// was never reported, so it is not among the steps.
+/// </summary>
+public sealed record CancellationReceipt
+{
+    [JsonPropertyName("steps")]
+    public required IReadOnlyList<StepResult> Steps { get; init; }
+
+    [JsonPropertyName("cost")]
+    public required CostBreakdown Cost { get; init; }
+
+    [JsonPropertyName("recordings")]
+    public required IReadOnlyList<string> Recordings { get; init; }
+
+    [JsonPropertyName("browser")]
+    public BrowserUsed? Browser { get; init; }
 }
 
 public sealed record Citation
@@ -89,9 +154,6 @@ public sealed record Citation
 
     [JsonPropertyName("text")]
     public required string Text { get; init; }
-
-    [JsonPropertyName("requirement_id")]
-    public string? RequirementId { get; init; }
 
     [JsonPropertyName("url")]
     public required string Url { get; init; }
@@ -112,6 +174,8 @@ public enum CostBasis
     Estimated,
     [JsonStringEnumMemberName("bounded")]
     Bounded,
+    [JsonStringEnumMemberName("unsettled")]
+    Unsettled,
     [JsonStringEnumMemberName("unknown")]
     Unknown,
 }
@@ -133,6 +197,8 @@ public enum CostComponent
     Browser,
     [JsonStringEnumMemberName("proxy")]
     Proxy,
+    [JsonStringEnumMemberName("search")]
+    Search,
 }
 
 public sealed record CostLine
@@ -149,6 +215,9 @@ public sealed record CostLine
     [JsonPropertyName("purpose")]
     public LLMPurpose? Purpose { get; init; }
 
+    [JsonPropertyName("decision_purpose")]
+    public JevPurpose? DecisionPurpose { get; init; }
+
     [JsonPropertyName("input_tokens")]
     public required long InputTokens { get; init; }
 
@@ -156,23 +225,30 @@ public sealed record CostLine
     public required long OutputTokens { get; init; }
 
     /// <summary>
-    /// Wall time of the call, retries included. None for a line that is not one call, such as browser time.
+    /// Wall time of the call, retries included, or the time a metered browser was held. None when unknown.
     /// </summary>
     [JsonPropertyName("seconds")]
     public double? Seconds { get; init; }
+
+    /// <summary>
+    /// Physical provider requests represented by this line; absent on historical receipts.
+    /// </summary>
+    [JsonPropertyName("physical_requests")]
+    public long? PhysicalRequests { get; init; }
 }
 
 /// <summary>
-/// The model whose choice a step carries out, even when code dispatches it: the next page of a list is the
-/// reader's, because the reader asked for the rest of the list.
+/// Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev.
 /// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter<Decider>))]
 public enum Decider
 {
     [JsonStringEnumMemberName("jev")]
     Jev,
-    [JsonStringEnumMemberName("llm")]
-    Llm,
+    [JsonStringEnumMemberName("code")]
+    Code,
+    [JsonStringEnumMemberName("recipe")]
+    Recipe,
 }
 
 public sealed record Evidence
@@ -221,6 +297,18 @@ public sealed record Evidence
     /// </summary>
     [JsonPropertyName("heading_path")]
     public required IReadOnlyList<string> HeadingPath { get; init; }
+
+    /// <summary>
+    /// The <c>uri</c> of the <c>capture</c> artifact holding the page text <c>start</c> and <c>end</c> index into, if one was kept.
+    /// </summary>
+    [JsonPropertyName("capture_artifact")]
+    public string? CaptureArtifact { get; init; }
+
+    /// <summary>
+    /// The links inside the quote and where each leads, which its text alone does not say.
+    /// </summary>
+    [JsonPropertyName("links")]
+    public IReadOnlyList<Link>? Links { get; init; }
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<FactReader>))]
@@ -228,8 +316,8 @@ public enum FactReader
 {
     [JsonStringEnumMemberName("jev_choice")]
     JevChoice,
-    [JsonStringEnumMemberName("llm")]
-    Llm,
+    [JsonStringEnumMemberName("llm_image")]
+    LlmImage,
 }
 
 /// <summary>
@@ -253,23 +341,48 @@ public sealed record InitializeResult
     public required string FastbrowseVersion { get; init; }
 }
 
+[JsonConverter(typeof(JsonStringEnumConverter<JevPurpose>))]
+public enum JevPurpose
+{
+    [JsonStringEnumMemberName("action")]
+    Action,
+    [JsonStringEnumMemberName("authorization")]
+    Authorization,
+    [JsonStringEnumMemberName("relevance")]
+    Relevance,
+    [JsonStringEnumMemberName("read")]
+    Read,
+    [JsonStringEnumMemberName("verify")]
+    Verify,
+    [JsonStringEnumMemberName("locate")]
+    Locate,
+}
+
 [JsonConverter(typeof(JsonStringEnumConverter<LLMPurpose>))]
 public enum LLMPurpose
 {
-    [JsonStringEnumMemberName("plan")]
-    Plan,
-    [JsonStringEnumMemberName("read")]
-    Read,
-    [JsonStringEnumMemberName("field_text")]
-    FieldText,
-    [JsonStringEnumMemberName("recover")]
-    Recover,
-    [JsonStringEnumMemberName("verify")]
-    Verify,
+    [JsonStringEnumMemberName("start")]
+    Start,
     [JsonStringEnumMemberName("compose")]
     Compose,
-    [JsonStringEnumMemberName("shortcut")]
-    Shortcut,
+    [JsonStringEnumMemberName("image_read")]
+    ImageRead,
+    [JsonStringEnumMemberName("fill")]
+    Fill,
+    [JsonStringEnumMemberName("pages")]
+    Pages,
+    [JsonStringEnumMemberName("dates")]
+    Dates,
+    [JsonStringEnumMemberName("known_pages")]
+    KnownPages,
+    [JsonStringEnumMemberName("recovery_pages")]
+    RecoveryPages,
+    [JsonStringEnumMemberName("search")]
+    Search,
+    [JsonStringEnumMemberName("unobtainable")]
+    Unobtainable,
+    [JsonStringEnumMemberName("groups")]
+    Groups,
 }
 
 public sealed record Limits
@@ -302,6 +415,21 @@ public sealed record Limits
     /// </summary>
     [JsonPropertyName("max_seconds")]
     public double? MaxSeconds { get; init; }
+}
+
+public sealed record Link
+{
+    [JsonPropertyName("text")]
+    public required string Text { get; init; }
+
+    [JsonPropertyName("start")]
+    public required long Start { get; init; }
+
+    [JsonPropertyName("end")]
+    public required long End { get; init; }
+
+    [JsonPropertyName("href")]
+    public required string Href { get; init; }
 }
 
 public sealed record LocalChrome
@@ -337,6 +465,10 @@ public enum Operation
     Drag,
     [JsonStringEnumMemberName("fill")]
     Fill,
+    [JsonStringEnumMemberName("press")]
+    Press,
+    [JsonStringEnumMemberName("blur")]
+    Blur,
     [JsonStringEnumMemberName("select")]
     Select,
     [JsonStringEnumMemberName("enter")]
@@ -355,14 +487,16 @@ public enum Operation
     Upload,
     [JsonStringEnumMemberName("dialog")]
     Dialog,
+    [JsonStringEnumMemberName("wait")]
+    Wait,
     [JsonStringEnumMemberName("read")]
     Read,
     [JsonStringEnumMemberName("done")]
     Done,
-    [JsonStringEnumMemberName("escalate")]
-    Escalate,
     [JsonStringEnumMemberName("navigate")]
     Navigate,
+    [JsonStringEnumMemberName("search")]
+    Search,
 }
 
 /// <summary>
@@ -417,7 +551,7 @@ public sealed record RunFrame
 }
 
 /// <summary>
-/// One run. Apart from <c>run_id</c>, each field is the <c>run_task</c> argument or the CLI flag of the same name.
+/// One run: the run's arguments, and what the server needs to talk to the client about it.
 ///
 /// The reply is the <c>RunResult</c>. No API key is among the fields: model and browser keys come from the
 /// environment the server inherited.
@@ -426,6 +560,15 @@ public sealed record RunParams
 {
     [JsonPropertyName("run_id")]
     public required string RunId { get; init; }
+
+    [JsonPropertyName("secrets")]
+    public IReadOnlyList<SecretRef>? Secrets { get; init; }
+
+    [JsonPropertyName("frames")]
+    public bool? Frames { get; init; }
+
+    [JsonPropertyName("until")]
+    public bool? Until { get; init; }
 
     [JsonPropertyName("task")]
     public required string Task { get; init; }
@@ -451,26 +594,26 @@ public sealed record RunParams
     [JsonPropertyName("output_schema")]
     public JsonElement? OutputSchema { get; init; }
 
-    [JsonPropertyName("secrets")]
-    public IReadOnlyList<SecretRef>? Secrets { get; init; }
-
-    [JsonPropertyName("frames")]
-    public bool? Frames { get; init; }
-
-    [JsonPropertyName("until")]
-    public bool? Until { get; init; }
-
     [JsonPropertyName("downloads")]
     public string? Downloads { get; init; }
 
     [JsonPropertyName("record")]
     public string? Record { get; init; }
 
+    [JsonPropertyName("recipe")]
+    public string? Recipe { get; init; }
+
+    [JsonPropertyName("save_recipe")]
+    public string? SaveRecipe { get; init; }
+
     [JsonPropertyName("cursor")]
     public bool? Cursor { get; init; }
 
     [JsonPropertyName("local")]
     public bool? Local { get; init; }
+
+    [JsonPropertyName("launch")]
+    public bool? Launch { get; init; }
 
     [JsonPropertyName("chrome")]
     public LocalChrome? Chrome { get; init; }
@@ -499,8 +642,29 @@ public sealed record RunParams
     [JsonPropertyName("viewport")]
     public IReadOnlyList<long>? Viewport { get; init; }
 
-    [JsonPropertyName("cloud_allow_resizing")]
-    public bool? CloudAllowResizing { get; init; }
+    [JsonPropertyName("cloud_extensions")]
+    public IReadOnlyList<string>? CloudExtensions { get; init; }
+
+    [JsonPropertyName("cloud_timeout_minutes")]
+    public long? CloudTimeoutMinutes { get; init; }
+
+    [JsonPropertyName("allowed_origins")]
+    public IReadOnlyList<string>? AllowedOrigins { get; init; }
+
+    [JsonPropertyName("fetch")]
+    public bool? Fetch { get; init; }
+
+    [JsonPropertyName("browser")]
+    public bool? Browser { get; init; }
+
+    [JsonPropertyName("extension")]
+    public bool? Extension { get; init; }
+
+    [JsonPropertyName("extension_browser")]
+    public string? ExtensionBrowser { get; init; }
+
+    [JsonPropertyName("desktop")]
+    public string? Desktop { get; init; }
 }
 
 public sealed record RunResult
@@ -552,6 +716,12 @@ public sealed record RunResult
     /// </summary>
     [JsonPropertyName("wall")]
     public Wall? Wall { get; init; }
+
+    /// <summary>
+    /// The browser the run drove, and how it reached it; none when it read every page over HTTP.
+    /// </summary>
+    [JsonPropertyName("browser")]
+    public BrowserUsed? Browser { get; init; }
 }
 
 /// <summary>
@@ -629,6 +799,8 @@ public enum Status
     ObservationLimit,
     [JsonStringEnumMemberName("unavailable")]
     Unavailable,
+    [JsonStringEnumMemberName("cancelled")]
+    Cancelled,
     [JsonStringEnumMemberName("error")]
     Error,
 }
@@ -683,9 +855,6 @@ public sealed record StepFact
 {
     [JsonPropertyName("text")]
     public required string Text { get; init; }
-
-    [JsonPropertyName("requirement_id")]
-    public string? RequirementId { get; init; }
 
     /// <summary>
     /// None for a count, total or winner derived from other facts rather than read from the page.
@@ -752,7 +921,7 @@ public sealed record StepResult
     public required IReadOnlyList<StepFact> Facts { get; init; }
 
     /// <summary>
-    /// Whether the page's fingerprint changed; None for steps that do not act (read, escalate).
+    /// Whether the page's fingerprint changed; None for steps that do not act (read).
     /// </summary>
     [JsonPropertyName("page_changed")]
     public bool? PageChanged { get; init; }
@@ -816,7 +985,7 @@ public enum WallKind
 public static class ProtocolConstants
 {
     /// <summary>The version of the wire format this client speaks.</summary>
-    public const int Version = 1;
+    public const int Version = 3;
 
     public const string MethodInitialize = "initialize";
     public const string MethodRun = "run";

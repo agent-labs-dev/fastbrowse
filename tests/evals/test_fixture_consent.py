@@ -1,6 +1,7 @@
 """Fixture consent remains visible to the agent the runner starts."""
 
 import asyncio
+import dataclasses
 from pathlib import Path
 from typing import Any
 
@@ -53,8 +54,13 @@ async def test_the_fixture_config_leaves_the_scripted_banner_for_the_agent() -> 
     assert "Dismiss" in labels
 
 
-@needs_chrome
-async def test_the_default_browser_config_would_remove_the_banner() -> None:
-    """The mechanism the fixture config opts out of, pinned so the reason for the opt-out cannot be lost."""
-    labels = await _labels_after_modal(Config())
-    assert "Accept all" not in labels
+async def test_a_mock_task_that_ends_on_another_status_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    async def stuck(task: str, **kwargs: Any) -> RunResult:
+        return RunResult(
+            status=Status.STUCK, answer=None, data=None, evidence=(), steps=(), cost=CostBreakdown(), artifacts=()
+        )
+
+    monkeypatch.setattr(runner, "run_fastbrowse", stuck)
+    task = dataclasses.replace(next(t for t in TASKS if t.expect is Status.UNAVAILABLE), check=lambda _r, _s: None)
+    row = await runner.run_mock_task(task, "ws://unused", tmp_path)
+    assert row["failure"] == f"status stuck, expected {Status.UNAVAILABLE.value}"

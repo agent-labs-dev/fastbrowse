@@ -23,6 +23,8 @@ import httpx
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from pydantic_core import InitErrorDetails, PydanticCustomError
 
+from fastbrowse import build
+from fastbrowse.config import Config
 from fastbrowse.jev import (
     JevClient,
     JevError,
@@ -50,6 +52,7 @@ from fastbrowse.models import (
     Limits,
     LLMPurpose,
     RecordingError,
+    RunCancelled,
     RunResult,
     SecretResolver,
     StepEvent,
@@ -71,6 +74,7 @@ from fastbrowse.page import (
     SiteUnreachable,
     _ScriptError,
 )
+from fastbrowse.protocol import CancellationReceipt
 from fastbrowse.telemetry import BudgetExceeded, collecting
 
 _EVENT: TypeAdapter[StepEvent | BrowserEvent] = TypeAdapter(StepEvent | BrowserEvent)
@@ -80,7 +84,6 @@ _JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 _PLAIN = (
     "start",
     "context",
-    "browser_api_key",
     "cloud_profile",
     "cdp_url",
     "cdp_port",
@@ -88,27 +91,28 @@ _PLAIN = (
     "target_match",
     "foreground",
     "proxy_country",
-    "cloud_allow_resizing",
     "cloud_timeout_minutes",
     "cursor",
     "fetch",
-    "fetch_first",
+    "browser",
+    "extension",
+    "extension_browser",
+    "desktop",
 )
-"""`run_task` arguments that are JSON already."""
+"""`run_task` arguments that are JSON already and belong to the run itself."""
 
 
 def _dumped(value: BaseModel | None) -> Any:
     return None if value is None else value.model_dump(mode="json")
 
 
-def options(arguments: dict[str, Any]) -> str:
-    """`run_task`'s data arguments, as the JSON `fastbrowse._native.run_task` reads."""
+def run_task_json(task: str, arguments: dict[str, Any]) -> str:
+    """The run as the `RunTask` JSON every entry point shares, which `fastbrowse._native.run_task` reads."""
     output_schema: type[BaseModel] | None = arguments["output_schema"]
-    secrets: SecretResolver | None = arguments["secrets"]
     origins, viewport, inputs = arguments["allowed_origins"], arguments["viewport"], arguments["inputs"]
-    settings: Mapping[str, str] | None = arguments["settings"]
     return json.dumps(
         {
+            "task": task,
             **{name: arguments[name] for name in _PLAIN},
             "allowed_origins": None if origins is None else list(origins),
             "viewport": None if viewport is None else list(viewport),
@@ -122,11 +126,10 @@ def options(arguments: dict[str, Any]) -> str:
             ],
             "limits": _dumped(arguments["limits"]),
             "authorization": _dumped(arguments["authorization"]),
-            "secrets": None if secrets is None else [ref.model_dump(mode="json") for ref in secrets.available()],
             "downloads": None if arguments["downloads"] is None else str(arguments["downloads"]),
             "record": None if arguments["record"] is None else str(arguments["record"]),
-            "config": _dumped(arguments["config"]),
-            "settings": None if settings is None else dict(settings),
+            "recipe": None if arguments["recipe"] is None else str(arguments["recipe"]),
+            "save_recipe": None if arguments["save_recipe"] is None else str(arguments["save_recipe"]),
         }
     )
 
@@ -300,15 +303,11 @@ def _messages(payload: str) -> list[Message]:
 
 
 def _llm(client: LLMClient) -> Callable[..., Awaitable[str]]:
-    async def generate(
-        purpose: str, messages: str, name: str, schema: str, max_output_tokens: int, context: Any
-    ) -> str:
+    async def generate(purpose: str, messages: str, name: str, schema: str, context: Any) -> str:
         ledger: Any = _Ledger(context) if context.ledger else None
         model = _response_model(name, json.loads(schema), context)
         try:
-            generation = await client.generate(
-                LLMPurpose(purpose), _messages(messages), model, max_output_tokens=max_output_tokens, ledger=ledger
-            )
+            generation = await client.generate(LLMPurpose(purpose), _messages(messages), model, ledger=ledger)
         except BudgetExceeded as exc:
             return _budget(exc)
         except LLMRetriesExhausted as exc:
@@ -336,10 +335,12 @@ type _Sent = tuple[str, int, list[tuple[str, str]], bytes] | tuple[str, str]
 
 
 def _http(client: httpx.AsyncClient) -> Callable[..., Awaitable[_Sent]]:
-    async def send(method: str, url: str, headers: list[tuple[str, str]], body: bytes, max_bytes: int | None) -> _Sent:
+    async def send(
+        method: str, url: str, headers: list[tuple[str, str]], body: bytes, max_bytes: int | None, silence: float
+    ) -> _Sent:
         try:
-            # The core times each request itself and cancels this call when it runs out.
-            request = client.build_request(method, url, headers=headers, content=body or None, timeout=None)
+            # The core's timeout bounds each silence, not the whole answer, as an httpx timeout does.
+            request = client.build_request(method, url, headers=headers, content=body or None, timeout=silence)
             # The core follows redirects itself, checking each against the run's allowed origins.
             response = await client.send(request, stream=True, follow_redirects=False)
             try:
@@ -394,6 +395,8 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
     until: UntilCheck | None = arguments["until"]
     secrets: SecretResolver | None = arguments["secrets"]
     check_access: Callable[[], Awaitable[None]] | None = arguments["check_access"]
+    open_browser: Callable[[], Awaitable[str]] | None = arguments["open_browser"]
+    page_ready: Callable[[], Awaitable[None]] | None = arguments["page_ready"]
     jev: JevClient | None = arguments["jev"]
     llm: LLMClient | None = arguments["llm"]
     http: httpx.AsyncClient | None = arguments["http"]
@@ -404,16 +407,24 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
 
     # A `traced()` block collecting this run's events gets the core's too.
     events = collecting()
+    config: Config | None = arguments["config"]
+    settings: Mapping[str, str] | None = arguments["settings"]
+    refs = None if secrets is None else json.dumps([ref.model_dump(mode="json") for ref in secrets.available()])
     try:
         # Settings passed in are read as the run is made, so a refusal can come before the run starts.
         native = core.run_task(
-            task,
-            options(arguments),
+            run_task_json(task, arguments),
+            browser_api_key=arguments["browser_api_key"],
+            secrets=refs,
+            config=None if config is None else config.model_dump_json(),
+            settings=None if settings is None else json.dumps(dict(settings)),
             on_event=None if on_event is None else raised.wrap(event),
             on_frame=None if on_frame is None else raised.wrap(on_frame),
             until=None if until is None else raised.wrap(until),
             resolve_secret=None if secrets is None else raised.wrap(secrets.resolve),
             check_access=None if check_access is None else _check(check_access),
+            open_browser=None if open_browser is None else raised.wrap(open_browser),
+            page_ready=None if page_ready is None else raised.wrap(page_ready),
             jev=None if jev is None else _jev(jev),
             llm=None if llm is None else _llm(llm),
             http=None if http is None else _http(http),
@@ -424,11 +435,29 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
     try:
         payload, frame = await native
     except core.RunRefused as exc:
-        raise _refusal(exc, raised) from None
-    except asyncio.CancelledError:
-        # The browser is closed before the cancellation reaches the caller.
-        await asyncio.shield(native.finished)
-        raise
+        refusal = _refusal(exc, raised)
+        if isinstance(refusal, asyncio.CancelledError):
+            # Settled in the same moment as the refusal, so this does not wait.
+            refusal = _cancelled(refusal, await native.finished)
+        # A callback can fail as the run completes, so the finished receipt covers either outcome.
+        elif exc.args[0] == "callback" and (receipt := await native.finished):
+            refusal.__dict__["receipt"] = CancellationReceipt.model_validate_json(receipt)
+        raise refusal from None
+    except asyncio.CancelledError as exc:
+        # The browser is closed before the cancellation reaches the caller, and what the run spent comes with it.
+        finished = asyncio.ensure_future(native.finished)
+        while True:
+            try:
+                receipt = await asyncio.shield(finished)
+                break
+            except asyncio.CancelledError:
+                # A second cancellation must not interrupt the core's cleanup: its receipt is the only record of spend.
+                if finished.cancelled():
+                    raise
+                continue
+        if receipt is None:
+            raise
+        raise _cancelled(exc, receipt) from None
     finally:
         if events is not None:
             events.extend(_on_this_clock(json.loads(native.trace_events()), time.monotonic() - core.monotonic()))
@@ -439,15 +468,23 @@ async def run(task: str, arguments: dict[str, Any]) -> RunResult:
 def _refusal(exc: Exception, raised: _Raised) -> BaseException:
     """What `run_task` raises for a run the core refused, by the kind the core names."""
     kind, message = exc.args
-    if kind == "configuration":
-        return ConfigurationError(message)
-    if kind == "recording":
-        return RecordingError(message)
+    if kind in {"configuration", "recording"}:
+        error = ConfigurationError(message) if kind == "configuration" else RecordingError(message)
+        if receipt := getattr(exc, "receipt", None):
+            error.receipt = CancellationReceipt.model_validate_json(receipt)
+        return error
     if kind == "cancelled":
         return asyncio.CancelledError(message)
     if kind == "callback" and raised.first is not None:
         return raised.first
     return ValueError(message)
+
+
+def _cancelled(exc: asyncio.CancelledError, receipt: str | None) -> asyncio.CancelledError:
+    """`exc` as a `RunCancelled` carrying the core's receipt, or as it is when the core sent none."""
+    if receipt is None:
+        return exc
+    return RunCancelled(*exc.args, receipt=CancellationReceipt.model_validate_json(receipt))
 
 
 def _on_this_clock(events: list[dict[str, Any]], offset: float) -> list[dict[str, Any]]:
@@ -582,7 +619,6 @@ async def open_cloud_browser(arguments: dict[str, Any], *, origin: str | None = 
         **{name: arguments[name] for name in ("browser_api_key", "profile", "timeout_minutes", "proxy_country")},
         "extensions": list(arguments["extensions"]),
         "viewport": None if viewport is None else list(viewport),
-        "allow_resizing": arguments["allow_resizing"],
         "origin": origin,
     }
     try:
@@ -598,7 +634,7 @@ async def open_cloud_browser(arguments: dict[str, Any], *, origin: str | None = 
         if opening.done() and not opening.cancelled() and opening.exception() is None:
             started = CloudBrowser.model_validate_json(opening.result())
             with contextlib.suppress(core.CloudFailed):
-                await core.stop_cloud_browser(arguments["browser_api_key"], started.id, started.api, origin=origin)
+                await core.stop_cloud_browser(arguments["browser_api_key"], started.id, origin=origin)
         raise
 
 
@@ -606,7 +642,7 @@ async def stop_cloud_browser(browser: CloudBrowser, browser_api_key: str, *, ori
     """`stop_cloud_browser` on the Rust core; `origin` stands in for Browser Use Cloud's."""
     core: Any = importlib.import_module("fastbrowse._native")
     try:
-        await core.stop_cloud_browser(browser_api_key, browser.id, browser.api, origin=origin)
+        await core.stop_cloud_browser(browser_api_key, browser.id, origin=origin)
     except core.CloudFailed as exc:
         raise _cloud_error(exc) from None
 
@@ -617,4 +653,5 @@ def command(program: str) -> NoReturn:
     # Ctrl-C ends the command as it ends the binary; Python's own handler would wait for the core to return first.
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     sys.stdout.flush()
-    sys.exit(core.cli_main(program, sys.argv[1:]))
+    commit = build.identity()
+    sys.exit(core.cli_main(program, sys.argv[1:], commit["git_sha"], commit["git_dirty"], **build.install_facts()))

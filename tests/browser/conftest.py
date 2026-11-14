@@ -18,6 +18,7 @@ from fastbrowse.evals.harness import chrome, find_chrome
 from fastbrowse.models import Artifact, ArtifactKind
 
 SITES = Path(__file__).parent / "sites"
+PDF = Path(__file__).parents[2] / "crates/fastbrowse-browser/tests/fixtures/wind.pdf"
 
 
 class RecordingArtifactSink:
@@ -84,6 +85,14 @@ def _handler_for(
                 body = b"PK fixture release archive"
                 self.send_response(200)
                 self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if self.path == "/map.pdf":
+                body = PDF.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/pdf")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)

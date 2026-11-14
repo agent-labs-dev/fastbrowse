@@ -28,7 +28,12 @@ class ScoreQuestion(Frozen):
     criteria: tuple[str, ...] = Field(min_length=2, max_length=10)
 
 
-type Question = Annotated[ChoiceQuestion | NoulQuestion | ScoreQuestion, Field(discriminator="type")]
+class BoxQuestion(Frozen):
+    type: Literal["box"] = "box"
+    instructions: str
+
+
+type Question = Annotated[ChoiceQuestion | NoulQuestion | ScoreQuestion | BoxQuestion, Field(discriminator="type")]
 
 
 class ChoiceAnswer(Frozen):
@@ -51,7 +56,20 @@ class ScoreAnswer(Frozen):
     confidence: float = Field(ge=0, le=1)
 
 
-type Answer = Annotated[ChoiceAnswer | NoulAnswer | ScoreAnswer, Field(discriminator="type")]
+class Edges(Frozen):
+    top: float
+    bottom: float
+    left: float
+    right: float
+
+
+class BoxAnswer(Frozen):
+    type: Literal["box"] = "box"
+    box: Edges
+    confidence: float | None = Field(default=None, ge=0, le=1)
+
+
+type Answer = Annotated[ChoiceAnswer | NoulAnswer | ScoreAnswer | BoxAnswer, Field(discriminator="type")]
 
 
 class Evaluation(Frozen):

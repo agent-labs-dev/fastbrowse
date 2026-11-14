@@ -1,6 +1,6 @@
 """Browser outcome contracts shared by fixture and publication checks.
 
-Maintainer benchmark tasks and orchestration live in Parallax.
+Maintainer benchmark tasks and orchestration live in the `evals/` project, `fastbrowse_evals`.
 """
 
 from collections.abc import Awaitable, Callable, Mapping
@@ -88,23 +88,6 @@ def browser_refusal(browser: object) -> str | None:
     )
 
 
-class PublicSiteRefused(RuntimeError):
-    """A public-site run the campaign must not start: its rows could never be admitted, so its spend is waste."""
-
-
-def admit_public_run(browser: object) -> None:
-    """Refuse to start a public-site run in a browser that the publication rule would refuse later.
-
-    `browser_refusal` is the rule; this is the same rule at the only point where refusing it saves anything,
-    before the first step. A campaign calls this once per run, with the same browser record it will publish,
-    so a headless throwaway-profile run against a public site fails immediately instead of minting rows that
-    can never be admitted (issue #389: `pypi-newer` was `blocked` on three repeats of three, each row costing
-    its whole budget to produce).
-    """
-    if (refusal := browser_refusal(browser)) is not None:
-        raise PublicSiteRefused(refusal)
-
-
 @dataclass(frozen=True, slots=True)
 class Outcome:
     answer: str | None
@@ -143,9 +126,8 @@ class LiveTask:
     expect: Status = Status.COMPLETE
     """The fastbrowse arm's required status: a safety task passes only by stopping."""
     arms: tuple[str, ...] = ("fastbrowse", "browser-use")
-    """The arms the task can grade on equal terms. An answer task leaves out jev-ultrafast, which returns no answer; a
-    navigation task, graded on the page the run ended on, leaves out the Browser Use agent, whose SDK does not say
-    where its browser ended; a safety task needs the pause before irreversible actions only fastbrowse has."""
+    """The arms the task can grade on equal terms. A safety task needs the pause before irreversible actions only
+    fastbrowse has."""
     rolling: Mapping[str, str] = field(default_factory=dict[str, str])
     """Text that changes from run to run by design, such as a date four weeks out, and the name its version
     fingerprint uses in its place, so the task keeps its version from one day to the next."""
@@ -159,9 +141,10 @@ def prompt(task: LiveTask) -> str:
 ARM_BROWSERS = {
     "fastbrowse": ("browser-use-cloud", "local-chrome"),
     "fastbrowse-pool": ("fastbrowse-pool",),
-    "jev-ultrafast": ("browser-use-cloud",),
     "browser-harness": ("browser-use-cloud",),
+    "browser-use-oss": ("browser-use-cloud",),
     "browser-use": ("browser-use-hosted",),
+    "browser-use-ultrafast": ("browser-use-hosted",),
 }
 """The browsers each arm is measured in. The pool and Browser Use's hosted browser are each the one their arm sells,
 so a pool row's block rate is part of what the backend comparison measures; binding the mode to the arm keeps a

@@ -17,6 +17,7 @@ from typing import Annotated, Any, Literal
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter, model_validator
 
+from fastbrowse.evals import baseline
 from fastbrowse.evals.evidence import Campaign, Digest, Evidence, Identifier
 
 PROJECT = "cmuwjxra401iyad0cymgswes5"
@@ -191,7 +192,7 @@ def store_archive(sdk: Any, root: Path, previous: Mapping[str, dict[str, Any]]) 
             if not path.is_file() or path.name in {
                 "evidence.manifest.json",
                 "evidence.manifest.archive.json",
-                "publication-baselines.json",
+                baseline.NAME,
             }:
                 continue
             content = path.read_bytes()

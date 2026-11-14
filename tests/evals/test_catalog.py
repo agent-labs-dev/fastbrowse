@@ -16,3 +16,11 @@ def test_catalog_rejects_unknown_arms() -> None:
     data["suites"]["core"][0]["arms"] = ["invented-agent"]
     with pytest.raises(ValidationError, match="arm"):
         Catalog.model_validate(data)
+
+
+def test_all_task_versions_include_shared_grading_changes() -> None:
+    from fastbrowse.evals import versions
+
+    suites, fixtures = versions.all_tasks()
+    tasks = [*(task for suite in suites.values() for task in suite), *fixtures]
+    assert versions.mismatches(tasks) == []

@@ -1,0 +1,147 @@
+warnDays: 30
+staleDays: 365
+idleDays: 90
+secretPatterns: []
+ignore:
+  - LANGFUSE_PUBLIC_KEY
+credentialNames: []
+ignorePaths:
+  - .env.example
+sources: []
+keys:
+  - id: ai-gateway-fastbrowse-ci
+    service: vercel-ai-gateway
+    group: ci
+    owner: cjber
+    label: fastbrowse-ci
+    locations:
+      - github: AI_GATEWAY_API_KEY
+      - pass: ai/ai-gateway/fastbrowse-ci
+    expires: 2027-11-13
+    expiresNote: "expiresAt from vercel ai-gateway api-keys list, read 2026-11-13"
+    limit: $50/day
+  - id: openrouter-fastbrowse-ci
+    service: openrouter
+    group: ci
+    owner: cjber
+    locations:
+      - github: OPENROUTER_API_KEY
+      - pass: openrouter/fastbrowse-ci
+    expires: 2027-02-11
+    expiresNote: "expires_at from the OpenRouter key endpoint, read 2026-11-13"
+    limit: $50/day
+  - id: openrouter-fastbrowse-benchmarks
+    service: openrouter
+    group: benchmarks
+    owner: cjber
+    locations:
+      - github: OPENROUTER_BENCHMARKS_API_KEY
+      - pass: openrouter/fastbrowse-benchmarks
+    expires: 2027-02-11
+    expiresNote: "expires_at from the OpenRouter key endpoint, read 2026-11-13"
+    limit: $100/day
+  - id: openrouter-fastbrowse-judge
+    service: openrouter
+    group: benchmarks
+    owner: cjber
+    locations:
+      - github: OPENROUTER_JUDGE_API_KEY
+      - pass: openrouter/fastbrowse-judge
+    expires: 2027-02-11
+    expiresNote: "expires_at from the OpenRouter key endpoint, read 2026-11-13"
+    limit: $50/day
+  - id: aur-ssh-private-key
+    service: aur
+    group: release
+    owner: cjber
+    locations:
+      - github: AUR_SSH_PRIVATE_KEY
+    expires: none
+    expiresNote: an SSH key pair carries no expiry
+    limit: none
+  - id: aur-sync-token
+    service: github
+    group: release
+    owner: cjber
+    label: fastbrowse AUR sync
+    locations:
+      - github: AUR_SYNC_TOKEN
+    expires: 2027-11-12
+    limit: none
+    rotated: 2026-11-13
+    note: fine-grained PAT with contents and pull request write on agent-labs-dev/fastbrowse only
+  - id: browser-use-api-key
+    service: browser-use
+    group: benchmarks
+    owner: cjber
+    locations:
+      - github: BROWSER_USE_API_KEY
+    label: fastbrowse-ci
+    expires: 2027-11-13
+    limit: "none: Browser Use offers no per-key spend cap"
+    rotated: 2026-11-13
+  - id: fastbrowse-hosted-api-key
+    service: fastbrowse-hosted
+    group: benchmarks
+    owner: cjber
+    locations:
+      - github: FASTBROWSE_HOSTED_API_KEY
+    expires: none
+    limit: "none: spends the organization's prepaid balance; the key has no cap of its own"
+    expiresNote: "The console API reports expires_at null for the nebula org live key \"parallax-evals\" (checked 2026-11-13); the same value is pass dev/FASTBROWSE_HOSTED_API_KEY"
+  - id: fastbrowse-hosted-test-key
+    service: fastbrowse-hosted
+    group: ci
+    owner: cjber
+    locations:
+      - github: FASTBROWSE_HOSTED_TEST_KEY
+    expires: none
+    limit: "none: a test key runs against the mock browser and is never charged"
+    expiresNote: "The console API reports expires_at null for the nebula org test key \"parallax-evals\" (checked 2026-11-13)"
+  - id: fastbrowse-site-token
+    service: github
+    group: release
+    owner: cjber
+    label: fastbrowse-evals
+    locations:
+      - github: FASTBROWSE_SITE_TOKEN
+    expires: 2027-11-12
+    limit: none
+    rotated: 2026-11-13
+    note: fine-grained PAT with repository access to agent-labs-dev/fastbrowse-site only
+  - id: fbh-browser-pool-token
+    service: fastbrowse-hosted
+    group: benchmarks
+    owner: cjber
+    locations:
+      - gcp: fastbrowse-hosted/FBH_BROWSER_POOL_TOKEN
+    expires: unknown
+    limit: unknown
+    note: "benchmark-campaign.yml reads it with gcloud for the fastbrowse-pool arm, so the workflow scan cannot see it"
+  - id: hf-token
+    service: huggingface
+    group: benchmarks
+    owner: cjber
+    locations:
+      - github: HF_TOKEN
+    expires: none
+    limit: "none: prepaid credits only, a hard stop unless auto-recharge is on"
+    expiresNote: "no expiry option in the Hugging Face user token docs (vendor docs, checked 2026-11-13)"
+  - id: langfuse-secret-key
+    service: langfuse
+    group: ci
+    owner: cjber
+    locations:
+      - github: LANGFUSE_SECRET_KEY
+    expires: unknown
+    limit: "none: Langfuse Cloud offers soft spend alerts only"
+    expiresNote: "set 2026-10-29. Langfuse added optional key expiry on 2026-10-07, and keys made before then have none (langfuse.com changelog, checked 2026-11-13), so read this key's expiry under Project Settings, API Keys"
+  - id: site-deploy-hook
+    service: vercel
+    group: release
+    owner: cjber
+    locations:
+      - github: SITE_DEPLOY_HOOK
+    expires: none
+    limit: "none: rate limited to 60 triggers an hour per project"
+    expiresNote: "Vercel deploy hooks are valid until revoked (vendor docs, checked 2026-11-13)"

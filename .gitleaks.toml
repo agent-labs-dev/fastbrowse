@@ -1,7 +1,8 @@
 # gitleaks' own rules, and one allowance. The core and agent goldens record what Python's helpers return, and some of
 # that is a sha256 digest under a name ending in `_key`, which the generic-api-key rule reads as a credential. Only
-# those names, holding only lowercase hex, in only the golden files, are let through. A golden is regenerated whenever
-# Python changes, so a fingerprint in .gitleaksignore, which names a line, would stop matching.
+# those names, holding only lowercase hex, in only the golden files, are let through. A golden is re-recorded with
+# FASTBROWSE_UPDATE_GOLDEN when what it pins changes, so a fingerprint in .gitleaksignore, which names a line, would
+# stop matching.
 
 [extend]
 useDefault = true
@@ -12,3 +13,11 @@ condition = "AND"
 paths = ['''^crates/fastbrowse-(core|agent)/tests/golden/[a-z_]+\.json$''']
 regexTarget = "match"
 regexes = ['''(state|step|read|page|document)_key": "[0-9a-f]{16,64}"''']
+
+[[allowlists]]
+description = "the extension's public key, which pins its ID; Chrome's manifest format requires it and it grants nothing"
+condition = "AND"
+# The shipped manifest, and the copy of the Store-approved package kept as evidence in extension-store/published.
+paths = ['''^crates/fastbrowse-browser/(extension|extension-store/published/[0-9.]+)/manifest\.json$''']
+regexTarget = "line"
+regexes = ['''^\s*"key": "MII[A-Za-z0-9+/]+=*",?$''']

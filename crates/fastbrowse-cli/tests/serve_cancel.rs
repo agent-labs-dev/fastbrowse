@@ -1,4 +1,4 @@
-//! tests/test_serve_cancel.py: cancelling a run over the serve protocol, as a client sees it.
+//! Cancelling a run over the serve protocol, as a client sees it.
 //!
 //! `run_task` is replaced by a stand-in that holds a browser open until it is stopped. What is asserted is the order of
 //! the messages the server wrote and whether that browser was closed by then.
@@ -6,13 +6,15 @@
 mod common;
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use common::{CHROME, Recorder, binary, browser_event, result, run_params, runner, serving, settings};
-use fastbrowse_cli::runner::{RunArgs, RunError, Runner};
-use fastbrowse_core::models::{RunResult, Status};
+use common::{CHROME, Call, Recorder, browser_event, isolated_binary, result, run_params, runner, serving, settings};
+use fastbrowse_cli::runner::{RunError, Runner};
+use fastbrowse_core::models::{CostBasis, CostBreakdown, CostComponent, CostLine, RunResult, Status};
+use fastbrowse_core::protocol::CancellationReceipt;
+use fastbrowse_core::protocol::PROTOCOL_VERSION;
 use serde_json::{Value, json};
 use tokio::sync::{Notify, watch};
 
@@ -43,23 +45,24 @@ impl Browsing {
 
     fn runner(&self) -> Arc<dyn Runner> {
         let browsing = self.clone();
-        runner(move |args: RunArgs| {
+        runner(move |args: Call| {
             let browsing = browsing.clone();
             async move {
-                browsing.started.lock().unwrap().push(args.task.clone());
+                browsing.started.lock().unwrap().push(args.task.task.clone());
                 let mut finish = browsing.finish.subscribe();
                 let outcome = args
+                    .host
                     .cancel
                     .guard(async {
-                        (args.on_event.as_ref().unwrap())(browser_event(None, None)).await;
+                        (args.host.on_event.as_ref().unwrap())(browser_event(None, None)).await;
                         let _ = finish.wait_for(|done| *done).await;
                     })
                     .await;
                 browsing.closing.notify_one();
                 let _ = browsing.let_close.subscribe().wait_for(|go| *go).await;
-                browsing.closed.lock().unwrap().push(args.task.clone());
+                browsing.closed.lock().unwrap().push(args.task.task.clone());
                 outcome?;
-                Ok(RunResult { answer: Some(args.task.clone()), ..result(Status::Complete) })
+                Ok(RunResult { answer: Some(args.task.task.clone()), ..result(Status::Complete) })
             }
         })
     }
@@ -86,6 +89,66 @@ async fn closing(browsing: &Browsing) {
 
 const KETTLE: &str = "Add the kettle to the cart";
 
+/// What the stand-in below did before it was stopped: a step, a priced call, a browser nobody priced and a video.
+fn receipt() -> CancellationReceipt {
+    CancellationReceipt {
+        steps: vec![common::step(1)],
+        cost: CostBreakdown {
+            lines: vec![
+                CostLine::new(CostComponent::Jev, CostBasis::Metered, Some(0.004)),
+                CostLine::new(CostComponent::Browser, CostBasis::Unknown, None),
+            ],
+        },
+        recordings: vec!["run.mp4".into()],
+        ..Default::default()
+    }
+}
+
+/// A run that opens its browser, asks `run/until` when the params set it, and reports [`receipt`] once stopped.
+fn stopping() -> Arc<dyn Runner> {
+    runner(|args: Call| async move {
+        (args.host.on_event.as_ref().unwrap())(browser_event(None, None)).await;
+        if let Some(until) = &args.host.until {
+            let _ = args.host.cancel.guard(until("https://shop.example/orders".into())).await;
+        }
+        args.host.cancel.tripped().await;
+        Err(RunError::Cancelled(receipt()))
+    })
+}
+
+#[tokio::test]
+async fn test_a_cancelled_reply_carries_what_the_run_did_and_spent() {
+    let mut client = serving(stopping(), settings());
+    let run = under_way(&mut client, "run-1", json!({})).await;
+    client.result("run/cancel", Some(json!({"run_id": "run-1"}))).await;
+    let reply = client.reply(run).await;
+    assert_eq!(reply["error"]["code"], CANCELLED);
+    assert_eq!(reply["error"]["data"], serde_json::to_value(receipt()).unwrap());
+    // The browser's charge stays unknown rather than becoming a free one.
+    assert_eq!(reply["error"]["data"]["cost"]["lines"][1]["basis"], "unknown");
+    assert_eq!(reply["error"]["data"]["cost"]["lines"][1]["dollars"], Value::Null);
+    assert!(reply["error"].get("status").is_none() && reply.get("result").is_none());
+    // Every other error has no data member at all.
+    let unknown = client.request("nonsense", None).await;
+    assert!(unknown["error"].get("data").is_none(), "{unknown}");
+}
+
+#[tokio::test]
+async fn test_a_run_a_failed_callback_stopped_reports_what_it_did_and_spent() {
+    let mut client = serving(stopping(), settings());
+    let run = under_way(&mut client, "run-1", json!({"until": true})).await;
+    let question = client.receive().await;
+    assert_eq!(question["method"], "run/until");
+    client.refuse(&question, -32603, "the check threw");
+    let reply = client.reply(run).await;
+    let result = &reply["result"];
+    assert_eq!(result["status"], "error", "{reply}");
+    assert!(result["error"].as_str().unwrap().contains("the check threw"), "{reply}");
+    assert_eq!(result["steps"], serde_json::to_value(receipt().steps).unwrap());
+    assert_eq!(result["cost"], serde_json::to_value(receipt().cost).unwrap());
+    assert_eq!(result["recordings"], json!(["run.mp4"]));
+}
+
 #[tokio::test]
 async fn test_cancelling_the_active_run_ends_it_with_the_cancelled_error() {
     let browsing = Browsing::new(false);
@@ -108,7 +171,7 @@ async fn test_the_browser_is_closed_before_the_cancelled_reply_is_written() {
     client.result("run/cancel", Some(json!({"run_id": "run-1"}))).await;
     closing(&browsing).await;
     // Still closing, and a handshake goes through, so the server is not merely slow to write.
-    client.result("initialize", Some(json!({"protocol_version": 1}))).await;
+    client.result("initialize", Some(json!({"protocol_version": PROTOCOL_VERSION}))).await;
     assert!(client.inbox.is_empty() && client.silent().await);
     browsing.let_close.send_replace(true);
     let reply = client.reply(run).await;
@@ -241,7 +304,7 @@ async fn test_shutdown_straight_after_the_run_still_cancels_it() {
 fn served(
     marker: &std::path::Path,
 ) -> (std::process::Child, std::process::ChildStdin, BufReader<std::process::ChildStdout>) {
-    let mut process = Command::new(binary())
+    let mut process = isolated_binary()
         .args(["serve", "--stdio", "--run-task", "tests.serve_scripts:browse_until_cancelled"])
         .env("OPENROUTER_API_KEY", "unused")
         .env("AI_GATEWAY_API_KEY", "unused")
@@ -305,14 +368,18 @@ fn test_the_command_exits_zero_with_its_browser_closed_on_shutdown_during_a_run(
 async fn test_cancelling_a_run_that_is_waiting_on_a_secret_ends_it_and_the_late_value_goes_nowhere() {
     let resolved: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
     let seen = resolved.clone();
-    let typist = runner(move |args: RunArgs| {
+    let typist = runner(move |args: Call| {
         let resolved = seen.clone();
         async move {
-            (args.on_event.as_ref().unwrap())(browser_event(None, None)).await;
-            let secrets = args.secrets.clone().unwrap();
-            let value = args.cancel.guard(secrets.resolve("SHOP_PASSWORD", "https://shop.example.com")).await?;
+            (args.host.on_event.as_ref().unwrap())(browser_event(None, None)).await;
+            let secrets = args.host.secrets.clone().unwrap();
+            let value = args
+                .host
+                .cancel
+                .guard(fastbrowse_core::safety::resolve_secret(&*secrets, "SHOP_PASSWORD", "https://shop.example.com"))
+                .await?;
             resolved.lock().unwrap().push(value);
-            Err::<RunResult, _>(RunError::Cancelled)
+            Err::<RunResult, _>(RunError::Cancelled(Default::default()))
         }
     });
     let mut client = serving(typist, settings());
@@ -323,9 +390,9 @@ async fn test_cancelling_a_run_that_is_waiting_on_a_secret_ends_it_and_the_late_
     client.result("run/cancel", Some(json!({"run_id": "run-1"}))).await;
     let reply = client.reply(run).await;
     client.send(json!({"jsonrpc": "2.0", "id": question["id"], "result": "hunter2-correct-horse"}));
-    let handshake = client.result("initialize", Some(json!({"protocol_version": 1}))).await;
+    let handshake = client.result("initialize", Some(json!({"protocol_version": PROTOCOL_VERSION}))).await;
     assert_eq!(reply["error"]["code"], CANCELLED);
     assert!(resolved.lock().unwrap().is_empty());
-    assert_eq!(handshake["protocol_version"], 1);
+    assert_eq!(handshake["protocol_version"], PROTOCOL_VERSION);
     assert!(client.inbox.is_empty());
 }

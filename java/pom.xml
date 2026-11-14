@@ -6,7 +6,7 @@
 
   <groupId>dev.agentlabs</groupId>
   <artifactId>fastbrowse</artifactId>
-  <version>0.9.1</version>
+  <version>0.11.0</version>
   <packaging>jar</packaging>
 
   <name>fastbrowse</name>
@@ -38,9 +38,9 @@
 
   <dependencies>
     <dependency>
-      <groupId>com.fasterxml.jackson.core</groupId>
+      <groupId>tools.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
-      <version>2.22.4</version>
+      <version>3.2.4</version>
     </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
@@ -83,7 +83,7 @@
   <profiles>
     <!--
       The release: sources, javadoc, one `natives-<target>` jar per platform from the binaries staged under ${natives},
-      all signed and sent to Maven Central. `mvn -P release deploy` from the release workflow.
+      all signed for Maven Central. No workflow runs it: the release does not publish the Java client.
     -->
     <profile>
       <id>release</id>

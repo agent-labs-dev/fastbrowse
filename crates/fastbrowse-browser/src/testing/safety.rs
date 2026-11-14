@@ -12,25 +12,20 @@ use tokio::time::Instant;
 use crate::cdp::secs;
 use crate::error::BrowserError;
 use crate::page::act::Point;
-use crate::page::{CdpPage, FRAME_READ_SECONDS, FRAME_RECHECK_SECONDS, SETTLE_QUIET_SECONDS, SETTLE_SECONDS};
+use crate::page::{CdpPage, FRAME_READ_SECONDS, FRAME_RECHECK_SECONDS, SETTLE_SECONDS};
 use crate::session::{BrowserSession, Shared, SnapshotScript, State, py_json};
 
-/// `page_module._SETTLE_SECONDS`: the longest an action waits for the page to settle.
+/// The longest an action waits for the page to settle.
 pub fn settle_seconds() -> f64 {
     SETTLE_SECONDS
 }
 
-/// `page_module._SETTLE_QUIET_SECONDS`: how long the DOM must be still to count as settled.
-pub fn settle_quiet_seconds() -> f64 {
-    SETTLE_QUIET_SECONDS
-}
-
-/// `page_module._FRAME_READ_SECONDS`: a child frame's full read budget.
+/// A child frame's full read budget.
 pub fn frame_read_seconds() -> f64 {
     FRAME_READ_SECONDS
 }
 
-/// As if `page_module._FRAME_RECHECK_SECONDS` had passed since each frame missed its deadline, so the next read
+/// As if `FRAME_RECHECK_SECONDS` had passed since each frame missed its deadline, so the next read
 /// gives every such frame its full budget again.
 pub fn expire_frame_rechecks(page: &CdpPage) {
     let past = Instant::now().checked_sub(secs(FRAME_RECHECK_SECONDS)).expect("monotonic clock far enough along");
@@ -39,9 +34,16 @@ pub fn expire_frame_rechecks(page: &CdpPage) {
     }
 }
 
-/// `await page._upload(page._last.controls[control_id], files, (1.0, 1.0))`.
+/// Snapshot slots currently retained by the page, for frame lifetime assertions.
+pub fn kept_keys(page: &CdpPage) -> Vec<String> {
+    let mut keys: Vec<_> = page.state.lock().unwrap().kept.keys().cloned().collect();
+    keys.sort();
+    keys
+}
+
+/// Upload `files` to the last observation's `control_id`.
 ///
-/// With `grant`, the upload runs as if `session._grant = OriginGrant(grant)` had been set first: through a page on
+/// With `grant`, the upload runs as if the session held that origin grant: through a page on
 /// a session that shares this one's socket, tabs and active tab, and differs only in its grant.
 pub async fn upload(
     page: &CdpPage,
@@ -70,10 +72,15 @@ pub async fn upload(
         artifact_sink: shared.artifact_sink.clone(),
         max_download_bytes: shared.max_download_bytes,
         new_document_scripts: vec![],
+        require_chooser_interception: false,
         on_frame: None,
+        on_stop: None,
+        trace: fastbrowse_core::telemetry::Trace::disabled(),
+        viewport: None,
         client: Mutex::new(shared.client.lock().unwrap().clone()),
         state: Mutex::new(state),
         dialog_opened: watch::channel(0).0,
+        chooser_pins: watch::channel(0).0,
         lifecycle: watch::channel(0).0,
         snapshot,
         popup_signal: watch::channel(0).0,

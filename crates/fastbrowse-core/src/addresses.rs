@@ -1,9 +1,8 @@
-//! Port of `src/fastbrowse/addresses.py`: an address read for the search state a page keeps in it, its query and its
+//! An address read for the search state a page keeps in it, its query and its
 //! fragment alike.
 //!
-//! Everything that asks whether two addresses name the same search reads them through here. Lineage once dropped the
-//! fragment while the search check kept it, so on a site routing its searches by fragment a corrected `/search#new`
-//! matched a guessed `/search#old` and stayed guessed.
+//! Everything that asks whether two addresses name the same search reads them through here, so every comparison keeps
+//! the fragment as well as the query: a site may route its searches by fragment.
 
 use url::Url;
 
@@ -18,32 +17,9 @@ pub fn search_address(url: &str) -> String {
     search_parts(url).map_or_else(|| url.to_string(), String::from)
 }
 
-/// Whether the address carries search state, in its query or its fragment.
-pub fn searched(url: &str) -> bool {
-    match search_parts(url) {
-        Some(parsed) => {
-            parsed.query().is_some_and(|q| !q.is_empty()) || parsed.fragment().is_some_and(|f| !f.is_empty())
-        }
-        // A relative or broken address still says what it carries after `?` or `#`.
-        None => {
-            let (rest, fragment) = url.split_once('#').unwrap_or((url, ""));
-            !fragment.is_empty() || rest.split_once('?').is_some_and(|(_, query)| !query.is_empty())
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn search_state_is_the_query_or_the_fragment() {
-        assert!(searched("https://example.test/search?q=kettle"));
-        assert!(searched("https://example.test/search#q=kettle"));
-        assert!(!searched("https://example.test/search"));
-        assert!(!searched("https://example.test/search?#"));
-        assert!(searched("/search?q=1"));
-    }
 
     /// WHATWG normalizes what `urlsplit` kept as written, and keeps an empty `?` that `geturl` dropped.
     #[test]

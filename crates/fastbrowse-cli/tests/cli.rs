@@ -1,16 +1,14 @@
-//! tests/test_cli.py: the CLI's flags, its preflight errors on both streams, and its exit codes, with `run_task`
+//! The CLI's flags, its preflight errors on both streams, and its exit codes, with `run_task`
 //! replaced by a recorder.
 
 mod common;
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 
-use common::{binary, result, runner};
-use fastbrowse_cli::cli::{self, Context, Streams};
-use fastbrowse_cli::runner::{RunArgs, Runner};
+use common::{Call, Recorder, isolated_binary, model_settings, result};
+use fastbrowse_cli::cli::{self, Build, Context, Streams};
 use fastbrowse_clients::environment::{Secret, Settings};
 use fastbrowse_core::models::{CostBasis, CostBreakdown, CostComponent, CostLine, RunResult, Status};
 use serde_json::Value;
@@ -40,7 +38,7 @@ struct Ran {
     out: String,
     err: String,
     code: i32,
-    call: Option<RunArgs>,
+    call: Option<Call>,
 }
 
 impl Ran {
@@ -51,28 +49,52 @@ impl Ran {
 
 /// Pinned to config-file-free settings, so a checkout's `.env` cannot add a profile the guards would read.
 async fn cli_with(argv: &[&str], settings: Settings, environ: &[(&str, &str)], answer: RunResult) -> Ran {
-    let calls: Arc<Mutex<Vec<RunArgs>>> = Arc::default();
-    let seen = calls.clone();
-    let fake: Arc<dyn Runner> = runner(move |args: RunArgs| {
-        seen.lock().unwrap().push(args);
-        let answer = answer.clone();
-        async move { Ok(answer) }
-    });
+    cli_built(argv, settings, environ, answer, Build::default()).await
+}
+
+async fn cli_built(
+    argv: &[&str],
+    settings: Settings,
+    environ: &[(&str, &str)],
+    answer: RunResult,
+    build: Build,
+) -> Ran {
+    let recorder = Recorder { result: Some(answer), ..Recorder::default() };
     let (out, err) = (Buffer::default(), Buffer::default());
     let context = Context {
-        runner: fake,
+        runner: recorder.runner(),
         settings: Arc::new(move || Ok(settings.clone())),
         environ: environ.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<HashMap<_, _>>(),
         streams: Streams { out: Arc::new(Mutex::new(out.clone())), err: Arc::new(Mutex::new(err.clone())) },
+        build,
     };
     let argv: Vec<String> = argv.iter().map(|arg| arg.to_string()).collect();
     let code = cli::main(&argv, &context).await;
-    let call = calls.lock().unwrap().pop();
+    let call = recorder.calls().pop();
     Ran { out: out.text(), err: err.text(), code, call }
 }
 
 async fn cli(argv: &[&str]) -> Ran {
-    cli_with(argv, Settings::default(), &[], RunResult { answer: Some("ok".into()), ..result(Status::Complete) }).await
+    cli_with(argv, model_settings(), &[], RunResult { answer: Some("ok".into()), ..result(Status::Complete) }).await
+}
+
+#[tokio::test]
+async fn test_the_version_and_the_json_result_name_the_commit_that_ran() {
+    let sha = "e1d478b".to_string() + &"0".repeat(33);
+    let built = Build { git_sha: Some(sha.clone()), git_dirty: Some(true), ..Default::default() };
+    let answer = || RunResult { answer: Some("ok".into()), ..result(Status::Complete) };
+    let version = cli_built(&["--version"], model_settings(), &[], answer(), built.clone()).await;
+    assert_eq!(version.out, format!("fastbrowse {} (e1d478b, dirty)\n", env!("CARGO_PKG_VERSION")));
+    let ran = cli_built(&["t", "--json"], model_settings(), &[], answer(), built).await;
+    assert_eq!(
+        ran.json()["build"],
+        serde_json::json!({"fastbrowse_version": env!("CARGO_PKG_VERSION"), "git_sha": sha, "git_dirty": true})
+    );
+    // A release knows only its version, and says so rather than naming a commit.
+    let release = cli(&["--version"]).await;
+    assert_eq!(release.code, 0);
+    assert_eq!(release.out, format!("fastbrowse {}\n", env!("CARGO_PKG_VERSION")));
+    assert_eq!(cli(&["t", "--json"]).await.json()["build"]["git_sha"], Value::Null);
 }
 
 #[tokio::test]
@@ -107,7 +129,7 @@ async fn test_a_limit_argparse_accepts_but_the_run_cannot_use_is_refused_as_a_co
 async fn test_a_credential_without_a_start_page_is_refused_rather_than_dropped() {
     for flag in [["--secret", "p=SET"], ["--bitwarden", "vault-item"]] {
         let argv = ["t", "--json", flag[0], flag[1]];
-        let ran = cli_with(&argv, Settings::default(), &[("SET", "value")], result(Status::Complete)).await;
+        let ran = cli_with(&argv, model_settings(), &[("SET", "value")], result(Status::Complete)).await;
         let result = ran.json();
         assert_eq!(result["status"], "error");
         assert!(result["error"].as_str().unwrap().contains("--start") && ran.err.contains("--start"));
@@ -115,12 +137,17 @@ async fn test_a_credential_without_a_start_page_is_refused_rather_than_dropped()
 }
 
 #[tokio::test]
-async fn test_cdp_url_hands_run_task_the_url_and_no_cloud_key() {
-    let ran = cli(&["t", "--start", "https://example.com", "--cdp-url", "ws://browser.test/devtools"]).await;
-    assert_eq!(ran.code, 0);
-    let call = ran.call.unwrap();
-    assert_eq!(call.cdp_url.as_deref(), Some("ws://browser.test/devtools"));
-    assert!(call.browser_api_key.is_none());
+async fn extension_is_the_default_and_local_alias_without_a_chrome_binary_or_cloud_key() {
+    for flags in [&[][..], &["--local"], &["--extension"], &["--local", "--extension"]] {
+        let mut argv = vec!["task"];
+        argv.extend_from_slice(flags);
+        let settings = Settings { chrome: Some("/no/such/chrome".into()), ..model_settings() };
+        let ran = cli_with(&argv, settings, &[], result(Status::Complete)).await;
+        assert_eq!(ran.code, 0, "{}", ran.err);
+        let call = ran.call.unwrap();
+        assert!(call.task.extension && !call.task.local && call.task.chrome.is_none());
+        assert!(call.host.browser_api_key.is_none());
+    }
 }
 
 #[tokio::test]
@@ -128,91 +155,73 @@ async fn test_fetch_starts_no_browser_and_asks_for_no_cloud_key() {
     let ran = cli(&["t", "--start", "https://example.com", "--fetch"]).await;
     assert_eq!(ran.code, 0, "{}", ran.err);
     let call = ran.call.unwrap();
-    assert!(call.fetch);
-    assert!(call.chrome.is_none() && call.browser_api_key.is_none());
+    assert!(call.task.fetch);
+    assert!(call.task.chrome.is_none() && call.host.browser_api_key.is_none());
+}
+
+#[tokio::test]
+async fn desktop_does_not_select_the_default_extension() {
+    let ran = cli(&["task", "--desktop", "app"]).await;
+    assert_eq!(ran.code, 0, "{}", ran.err);
+    let call = ran.call.unwrap();
+    assert_eq!(call.task.desktop.as_deref(), Some("app"));
+    assert!(!call.task.extension && call.task.chrome.is_none());
 }
 
 #[tokio::test]
 async fn test_fetch_refuses_flags_that_shape_a_browser() {
-    for flag in [&["--local"][..], &["--headed"], &["--cdp-port", "9222"], &["--cursor"], &["--downloads", "/tmp/d"]] {
+    for (flag, field) in [
+        (&["--local"][..], "local"),
+        (&["--headed"], "chrome"),
+        (&["--cdp-port", "9222"], "cdp_port"),
+        (&["--cursor"], "cursor"),
+        (&["--downloads", "/tmp/d"], "downloads"),
+    ] {
         let mut argv = vec!["t", "--start", "https://example.com", "--fetch"];
         argv.extend_from_slice(flag);
         let ran = cli(&argv).await;
         assert!(ran.call.is_none());
-        assert_eq!(
-            ran.err,
-            format!("fastbrowse: --fetch starts no browser, so it cannot be combined with {}\n", flag[0])
-        );
+        assert_eq!(ran.err, format!("fastbrowse: fetch starts no browser, so it cannot be combined with {field}\n"));
     }
 }
 
 #[tokio::test]
-async fn test_fetch_first_keeps_the_browser_and_refuses_what_needs_one_from_the_start() {
-    let ran = cli(&["t", "--start", "https://example.com", "--fetch-first", "--local"]).await;
+async fn test_browser_skips_the_read_first_and_refuses_fetch() {
+    let ran = cli(&["t", "--start", "https://example.com", "--browser", "--local"]).await;
     assert_eq!(ran.code, 0, "{}", ran.err);
     let call = ran.call.unwrap();
-    assert!(call.fetch_first && !call.fetch && call.chrome.is_some());
-    for (flag, refusal) in [
-        (&["--fetch"][..], "--fetch never starts a browser and --fetch-first may start one, so pass one of them"),
-        (&["--record", "r.mp4"], "--fetch-first may finish with no browser, so it cannot be combined with --record"),
-        (&["--attach"], "--fetch-first may finish with no browser, so it cannot be combined with --attach"),
+    assert!(call.task.browser && !call.task.fetch && call.task.extension && call.task.chrome.is_none());
+    let ran = cli(&["t", "--start", "https://example.com", "--browser", "--fetch"]).await;
+    assert!(ran.call.is_none());
+    assert!(ran.err.contains("fetch"), "{}", ran.err);
+}
+
+#[tokio::test]
+async fn local_browser_launch_and_cdp_options_cannot_bypass_the_extension() {
+    for (flags, field) in [
+        (&["--headed"][..], "chrome.headed"),
+        (&["--profile", "/tmp/kept"], "chrome.profile"),
+        (&["--cdp-url", "ws://browser.test/devtools"], "cdp_url"),
+        (&["--cdp-port", "9222"], "cdp_port"),
+        (&["--cloud-profile", "prof_1"], "cloud_profile"),
+        (&["--proxy-country", "uk"], "proxy_country"),
+        (&["--viewport", "800x600"], "viewport"),
     ] {
-        let mut argv = vec!["t", "--start", "https://example.com", "--fetch-first"];
-        argv.extend_from_slice(flag);
+        let mut argv = vec!["task", "--json"];
+        argv.extend_from_slice(flags);
         let ran = cli(&argv).await;
         assert!(ran.call.is_none());
-        assert_eq!(ran.err, format!("fastbrowse: {refusal}\n"));
-    }
-}
-
-#[tokio::test]
-async fn test_cdp_url_refuses_flags_that_shape_a_started_browser() {
-    for flag in [
-        &["--local"][..],
-        &["--headed"],
-        &["--profile", "/tmp/kept"],
-        &["--cloud-profile", "prof_1"],
-        &["--proxy-country", "uk"],
-    ] {
-        let mut argv = vec!["t", "--start", "https://example.com", "--json", "--cdp-url", "ws://browser.test/devtools"];
-        argv.extend_from_slice(flag);
-        let ran = cli(&argv).await;
         let error = ran.json()["error"].as_str().unwrap().to_string();
-        assert!(error.contains("--cdp-url") && error.contains(flag[0]), "{error}");
-        assert!(ran.err.contains(flag[0]));
+        assert!(error.contains("extension") && error.contains(field), "{error}");
     }
 }
 
 #[tokio::test]
-async fn test_proxy_country_refuses_local_chrome() {
-    // Local Chrome browses from this machine's IP, so a requested country would be silently ignored.
-    let ran = cli(&["t", "--start", "https://example.com", "--json", "--local", "--proxy-country", "uk"]).await;
-    let result = ran.json();
-    assert_eq!(result["status"], "error");
-    assert!(result["error"].as_str().unwrap().contains("--proxy-country"));
-}
-
-#[tokio::test]
-async fn test_cdp_url_counts_a_profile_from_the_environment() {
-    // FASTBROWSE_PROFILE implies --profile; a handed-over browser refuses it just the same.
-    let settings = Settings { profile: Some("/tmp/kept".into()), ..Settings::default() };
-    let argv = ["t", "--start", "https://example.com", "--json", "--cdp-url", "ws://browser.test/devtools"];
-    let ran = cli_with(&argv, settings, &[], result(Status::Complete)).await;
-    assert!(ran.json()["error"].as_str().unwrap().contains("--profile"));
-}
-
-#[tokio::test]
-async fn test_cdp_url_requires_a_websocket_url() {
-    let ran =
-        cli(&["t", "--start", "https://example.com", "--json", "--cdp-url", "https://browser.test/devtools"]).await;
-    assert!(ran.json()["error"].as_str().unwrap().contains("ws://"));
-}
-
-#[tokio::test]
-async fn test_version_prints_the_installed_version_without_a_task() {
-    let ran = cli(&["--version"]).await;
-    assert_eq!(ran.code, 0);
-    assert!(ran.out.starts_with("fastbrowse 0."));
+async fn extension_ignores_environment_launch_defaults() {
+    let settings = Settings { profile: Some("/tmp/kept".into()), headed: true, ..model_settings() };
+    let ran = cli_with(&["task"], settings, &[], result(Status::Complete)).await;
+    assert_eq!(ran.code, 0, "{}", ran.err);
+    assert!(ran.call.unwrap().task.extension);
 }
 
 #[test]
@@ -228,12 +237,18 @@ async fn test_explicit_cloud_overrides_environment_profile() {
     let settings = Settings {
         profile: Some("/tmp/profile".into()),
         browser_use_api_key: Some(Secret::new("browser-key")),
-        ..Settings::default()
+        ..model_settings()
     };
-    let ran = cli_with(&["task", "--cloud"], settings, &[], fastbrowse_cli::options::error_result("test")).await;
+    let ran = cli_with(
+        &["task", "--cloud", "--cloud-profile", "signed-in", "--viewport", "800x600", "--proxy-country", "uk"],
+        settings,
+        &[],
+        fastbrowse_cli::options::error_result("test"),
+    )
+    .await;
     let call = ran.call.unwrap();
-    assert_eq!(call.browser_api_key.as_deref(), Some("browser-key"));
-    assert!(call.chrome.unwrap().profile.is_none());
+    assert_eq!(call.host.browser_api_key.as_deref(), Some("browser-key"));
+    assert!(call.task.chrome.is_none() && !call.task.extension);
 }
 
 #[tokio::test]
@@ -241,7 +256,7 @@ async fn test_cli_login_and_blocked_have_distinct_exit_codes() {
     let mut codes = Vec::new();
     for status in [Status::NeedsLogin, Status::Blocked] {
         let answer = RunResult { status, ..fastbrowse_cli::options::error_result("test") };
-        codes.push(cli_with(&["task", "--local"], Settings::default(), &[], answer).await.code);
+        codes.push(cli_with(&["task", "--local"], model_settings(), &[], answer).await.code);
     }
     assert_eq!(codes, [4, 6]);
 }
@@ -249,75 +264,86 @@ async fn test_cli_login_and_blocked_have_distinct_exit_codes() {
 #[tokio::test]
 async fn test_login_advice_is_added_only_to_cli_output() {
     let answer = RunResult { status: Status::NeedsLogin, ..fastbrowse_cli::options::error_result("Sign-in required") };
-    let ran = cli_with(&["task", "--local", "--json"], Settings::default(), &[], answer).await;
+    let ran = cli_with(&["task", "--local", "--json"], model_settings(), &[], answer).await;
     assert_eq!(ran.code, 4);
     assert!(ran.json()["error"].as_str().unwrap().contains("--secret NAME=ENV_VAR@https://host"));
 }
 
 #[tokio::test]
-async fn test_cdp_port_hands_run_task_the_port_and_no_cloud_key() {
-    let argv = [
-        "t",
-        "--start",
-        "https://example.com",
-        "--cdp-port",
-        "9222",
-        "--attach",
-        "--target-match",
-        "app",
-        "--foreground",
-    ];
+async fn extension_can_attach_to_a_named_window() {
+    let argv = ["t", "--start", "https://example.com", "--attach", "--target-match", "app", "--foreground"];
     let ran = cli(&argv).await;
     assert_eq!(ran.code, 0);
     let call = ran.call.unwrap();
-    assert_eq!(call.cdp_port, Some(9222));
-    assert!(call.attach && call.foreground);
-    assert_eq!(call.target_match.as_deref(), Some("app"));
-    assert!(call.browser_api_key.is_none());
+    assert!(call.task.extension && call.task.cdp_port.is_none());
+    assert!(call.task.attach && call.task.foreground);
+    assert_eq!(call.task.target_match.as_deref(), Some("app"));
+    assert!(call.host.browser_api_key.is_none());
+}
+
+#[tokio::test]
+async fn named_inputs_reach_the_run_with_any_equals_sign_in_their_value() {
+    let ran = cli(&["t", "--local", "--input", "person=Ada Lovelace", "--input", "query=a=b"]).await;
+    assert_eq!(ran.code, 0);
+    let inputs = ran.call.unwrap().task.inputs.unwrap();
+    assert_eq!(inputs.get("person").map(String::as_str), Some("Ada Lovelace"));
+    assert_eq!(inputs.get("query").map(String::as_str), Some("a=b"));
+}
+
+#[tokio::test]
+async fn files_reach_the_run_as_attachments_under_their_file_names() {
+    let dir = std::env::temp_dir().join(format!("fastbrowse-cli-file-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("shrike_lid.png");
+    std::fs::write(&path, b"lid bytes").unwrap();
+    let ran = cli(&["upload shrike_lid.png", "--local", "--file", path.to_str().unwrap()]).await;
+    let missing = cli(&["t", "--local", "--file", dir.join("absent.stl").to_str().unwrap()]).await;
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(ran.code, 0, "{}", ran.err);
+    let attachments = ran.call.unwrap().task.attachments;
+    assert_eq!(attachments.len(), 1);
+    assert_eq!((attachments[0].name.as_str(), attachments[0].mime_type.as_str()), ("shrike_lid.png", "image/png"));
+    assert_eq!(attachments[0].content.0, b"lid bytes");
+    assert_eq!(missing.code, 1);
+    assert!(missing.err.contains("--file cannot read"), "{}", missing.err);
+    assert!(missing.call.is_none());
 }
 
 #[tokio::test]
 async fn test_cannot_combine_cdp_url_and_cdp_port() {
     let argv = [
+        "--cdp-port",
+        "9222",
         "t",
         "--start",
         "https://example.com",
         "--json",
         "--cdp-url",
         "ws://browser.test/devtools",
-        "--cdp-port",
-        "9222",
     ];
     let ran = cli(&argv).await;
-    assert!(ran.json()["error"].as_str().unwrap().contains("--cdp-url and --cdp-port both name"));
+    assert!(ran.json()["error"].as_str().unwrap().contains("cdp_url and cdp_port both name"));
 }
 
 #[tokio::test]
-async fn test_attach_requires_cdp() {
+async fn test_attach_uses_the_default_extension() {
     let ran = cli(&["t", "--start", "https://example.com", "--json", "--attach"]).await;
-    assert!(ran.json()["error"].as_str().unwrap().contains("--attach and --target-match need"));
-}
-
-#[tokio::test]
-async fn test_cdp_port_must_be_a_port() {
-    for bad_port in ["0", "-5", "65536"] {
-        let ran = cli(&["t", "--start", "https://example.com", "--json", "--cdp-port", bad_port]).await;
-        let error = ran.json()["error"].as_str().unwrap().to_string();
-        assert!(error.contains("--cdp-port expects a port from 1 to 65535"), "{error}");
-    }
+    assert_eq!(ran.code, 0, "{}", ran.err);
+    let call = ran.call.unwrap();
+    assert!(call.task.extension && call.task.attach);
 }
 
 #[test]
 fn test_only_serve_as_the_first_argument_is_the_subcommand() {
     // `serve` is taken as a subcommand in one position only, so every other command line is still a task. The
-    // binary has no agent to run it yet, so a task ends as a configuration error, exit 1, where `serve` would have
-    // been a usage error, exit 2.
+    // preflight refuses a run with no model key, so a task ends as a configuration error, exit 1, where `serve` would
+    // have been a usage error, exit 2.
     for argv in [
         &["serve the invoices page", "--cdp-url", "ws://b.test/x"][..],
         &["server", "--cdp-url", "ws://b.test/x"],
         &["--cdp-port", "9222", "serve"],
     ] {
-        let output = Command::new(binary()).args(argv).env_remove("FASTBROWSE_PROFILE").output().unwrap();
+        let output = isolated_binary().args(argv).output().unwrap();
         assert_eq!(output.status.code(), Some(1), "{argv:?}: {}", String::from_utf8_lossy(&output.stderr));
         assert!(String::from_utf8_lossy(&output.stderr).starts_with("fastbrowse: "));
     }
@@ -331,7 +357,7 @@ async fn test_the_summary_line_says_when_some_calls_reported_no_cost() {
             CostLine::new(CostComponent::Llm, basis, if basis == CostBasis::Unknown { None } else { Some(0.0) }),
         ];
         let answer = RunResult { cost: CostBreakdown { lines }, ..fastbrowse_cli::options::error_result("test") };
-        let ran = cli_with(&["task", "--local"], Settings::default(), &[], answer).await;
+        let ran = cli_with(&["task", "--local"], model_settings(), &[], answer).await;
         assert!(ran.out.contains(expected), "{}", ran.out);
     }
 }
@@ -348,6 +374,7 @@ async fn test_usage_errors_match_argparse() {
             "argument --proxy-country: Browser Use's code for the United Kingdom is uk, not gb",
         ),
         (&["t", "--secret", "abc"], "argument --secret: expected NAME=ENV_VAR, got 'abc'"),
+        (&["t", "--input", "abc"], "argument --input: expected NAME=VALUE, got 'abc'"),
         (&["t", "--bogus"], "unrecognized arguments: --bogus"),
         (&["t", "--max"], "ambiguous option: --max could match --max-steps, --max-dollars"),
         (&["t", "--start"], "argument --start: expected one argument"),
@@ -364,4 +391,32 @@ async fn test_help_matches_argparse() {
     let ran = cli(&["--help"]).await;
     assert_eq!(ran.code, 0);
     assert_eq!(ran.out, include_str!("../generated/cli.txt"));
+}
+
+#[test]
+fn test_the_trace_names_the_build_before_the_run() {
+    let dir = std::env::temp_dir().join(format!("fastbrowse-trace-build-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let trace = dir.join("trace.jsonl");
+    // The run stops at configuration for want of a model key, before any connection is tried.
+    let output = isolated_binary().args(["t", "--cdp-url", "ws://b.test/x", "--trace"]).arg(&trace).output().unwrap();
+    assert_eq!(output.status.code(), Some(1), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(&trace).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let first: Value = serde_json::from_str(text.lines().next().expect("a trace line")).unwrap();
+    assert_eq!(first["event"], "build");
+    assert_eq!(first["fastbrowse_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(first["git_sha"], Value::Null);
+}
+
+#[test]
+fn test_self_update_names_a_release_binary_and_its_upgrade_without_starting_a_run() {
+    let output = isolated_binary().arg("self-update").output().unwrap();
+    let out = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(out.starts_with(&format!("fastbrowse {} is a release binary at ", env!("CARGO_PKG_VERSION"))), "{out}");
+    assert!(out.contains("https://github.com/agent-labs-dev/fastbrowse/releases/latest"), "{out}");
+    let extra = isolated_binary().args(["self-update", "now"]).output().unwrap();
+    assert_eq!(extra.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&extra.stderr).starts_with("usage: fastbrowse self-update"));
 }

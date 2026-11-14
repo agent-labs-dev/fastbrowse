@@ -3,15 +3,16 @@
 # Update hook revisions and pyproject.toml tool pins together, then run `uv lock`; autoupdate only edits this file.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.17.0
+    rev: v0.17.4
     hooks:
       - id: ruff-check
-        exclude: ^\.sloppatrol/(gate|agents)\.py$
         args: [--fix]
       - id: ruff-format
-        exclude: ^\.sloppatrol/(gate|agents)\.py$
   - repo: https://github.com/astral-sh/ty-pre-commit
-    rev: v0.0.86
+    rev: v0.0.99
     hooks:
       # Checks the whole project, not the staged files: a change in one file moves diagnostics in another.
+      # `--no-sync`: pre-commit runs hooks over the stashed tree, so a sync would rebuild the native library from it
+      # and leave `src/fastbrowse/_native.abi3.so` stale for every later run on this checkout (#766).
       - id: ty
+        args: [--no-sync]

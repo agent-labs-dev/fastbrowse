@@ -112,8 +112,9 @@ async fn a_refusal_or_a_missing_answer_is_an_invalid_response() {
     }
 }
 
+/// Luna's API takes images, but this client sends none, so the agent takes no screenshot for it.
 #[test]
-fn luna_takes_four_hundred_questions_and_images_and_has_no_tuned_thresholds() {
+fn luna_takes_four_hundred_questions_is_sent_no_images_and_has_no_tuned_thresholds() {
     let profile = OpenAIDecisionsClient::new("sk", Script::new([]).http(), OPENAI_URL, "gpt-6-luna").profile();
-    assert_eq!((profile.max_questions, profile.images, profile.validated()), (Some(400), true, false));
+    assert_eq!((profile.max_questions, profile.images, profile.validated()), (Some(400), false, false));
 }

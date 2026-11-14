@@ -1,0 +1,84 @@
+[project]
+name = "fastbrowse-evals"
+version = "0.1.0"
+description = "Fastbrowse's browser benchmarks on Parallax: the internal campaign, its catalog and publication candidate, and the official suites."
+requires-python = ">=3.13"
+dependencies = [
+    # One Parallax release for every campaign; bump it deliberately, it moves the evaluator.
+    "parallax-evals[browser]==2.0.0.dev22",
+    # The measured agent and the eval contracts it shares with this harness. A campaign installs the build it
+    # measures over this one (see .github/workflows/benchmark-campaign.yml).
+    "fastbrowse[eval-data]",
+    # The hosted Browser Use agent and the Browser Use Cloud browsers the harness starts for its arms.
+    "browser-use-sdk==3.12.1",
+    "httpx",
+    "pydantic>=2.12",
+    # Uploading a tracked run to Langfuse.
+    "langfuse>=5.0.4,<6",
+]
+
+[project.scripts]
+fastbrowse-evals = "fastbrowse_evals.cli:main"
+
+[project.entry-points."parallax.harnesses"]
+fastbrowse = "fastbrowse_evals.backend:FastbrowseHarness"
+fastbrowse-pool = "fastbrowse_evals.live:FastbrowsePoolHarness"
+fastbrowse-hosted = "fastbrowse_evals.hosted_api:FastbrowseHostedHarness"
+
+[project.entry-points."parallax.provenance"]
+fastbrowse = "fastbrowse_evals.provenance:fields"
+
+[project.entry-points."parallax.task_sources"]
+fastbrowse = "fastbrowse_evals.live_tasks:task_records"
+
+[tool.uv.sources]
+fastbrowse = { path = "..", editable = false }
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+    "ty==0.0.80",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fastbrowse_evals"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "--import-mode=importlib -m 'not hosted_simulator'"
+pythonpath = ["tests"]
+norecursedirs = [".*", "__pycache__", "fixtures"]
+markers = [
+    "real_judge_check: runs the browser campaign start check against the real judge settings",
+    "real_interruption_check: runs official runs against the real interruption check function",
+    "hosted_simulator: calls the live fastbrowse-hosted API with a test key (the hosted-simulator CI job)",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.ty.src]
+include = ["src"]
+
+[tool.ty.rules]
+blanket-ignore-comment = "error"
+missing-type-argument = "error"
+possibly-missing-attribute = "error"
+possibly-missing-import = "error"
+possibly-unresolved-reference = "warn"
+redundant-cast = "error"
+unsupported-dynamic-base = "error"

@@ -1,225 +1,98 @@
-//! Port of `src/fastbrowse/agent.py`, the run loop: Jev chooses each action, the LLM plans, reads, writes and
-//! recovers, and code owns every gate.
+//! The run loop: Jev picks every operation and target, reads, and says DONE, and an unsure Jev still acts on its best
+//! pick. Code owns the safety gates (irreversible actions, sign-in walls, bot checks, authorization, secrets) and the
+//! stall rule. The answer is what Jev read, each fact with its citations.
 //!
-//! Only `Status::Complete` is success. Anything the loop cannot prove (an answer whose claims fail their checks, a
-//! DONE the verifier rejects at the end of the budget) is reported as what it is rather than rounded up.
-//!
-//! The module docstring of `agent.py` holds the invariants for guessed addresses, readings and holds; `Lineage`,
-//! `note_lineage` and `Notes::discredit` hold the detail. Every prompt and Jev request built here is byte for byte the
-//! one Python builds for the same inputs, since a run is proven by replaying recorded model traffic keyed on a hash of
-//! the request body. Python runs some calls side by side; here they run side by side too, and only their send order
-//! can differ.
+//! Every Jev request built here is a pure function of its inputs, since a run is replayed from recorded model traffic
+//! keyed on a hash of the request body.
 
 mod acting;
+mod batching;
 mod driving;
 mod finishing;
 pub mod helpers;
 mod reading;
 mod recovery;
-mod sign_in;
+mod replay;
+mod search;
+mod seeing;
 pub(crate) mod state;
 
 #[cfg(test)]
 mod tests;
 
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use fastbrowse_clients::validation::{Lines, jev_spend};
+use fastbrowse_core::BoxFuture;
 use fastbrowse_core::citations::text_fragment;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::DecisionClient;
-use fastbrowse_core::llm::{Generation, LLMClient};
+use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{
-    Attachment, Authorization, BudgetResource, BudgetStop, Citation, CostBreakdown, CostLine, EventHandler, Evidence,
-    Limits, MaybeUnavailable, Operation, RunResult, SecretResolver, Status, StepFact, StepOutcome, UntilCheck, Wall,
-    WallKind,
+    Artifact, Attachment, Authorization, BudgetResource, BudgetStop, Citation, CostBreakdown, CostLine, EventHandler,
+    Evidence, Limits, MaybeUnavailable, RunResult, SecretResolver, Status, StepFact, UntilCheck, Wall, WallKind,
 };
 use fastbrowse_core::page::{BrowserError, Observation, Page};
-use fastbrowse_core::py::json::dumps;
-use fastbrowse_core::py::text;
-use fastbrowse_core::safety::{CredentialField, Redactor, credential_field, origin_of, secret_allowed, wall_kind};
+use fastbrowse_core::safety::{
+    CredentialField, Redactor, asks_for_credentials, credential_field, origin_of, secret_allowed, wall_kind,
+};
 use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
-use helpers::{history, partition_proof, recovery_memory};
-pub use helpers::{next_page_control, next_page_notice, read_question};
-use state::{Flow, RunState, Spawned};
+use acting::Carried;
+use finishing::outcome_notes;
+use state::{Flow, RunState, Stop};
 
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes};
-use crate::planner::{Plan, RequirementKind, RunReport, make_plan};
-use crate::policy::StepContext;
-use crate::retrieval::{ComposeOptions, ComposedAnswer, assemble_answer, compose, partial_answer};
-use crate::shortcut::{Shortcut, propose_shortcut};
+use crate::policy::{HistoryEntry, StepContext};
+use crate::retrieval::{ComposedAnswer, cited_quote, compose, draft_answer, marked_partial, noticed, partial_answer};
 use crate::verification::RecordSchema;
 
-/// Long enough for a browser-verification page to run its check and hand over, short enough that a page which never
-/// moves still ends as needs_login well inside a run's time budget.
-const INTERSTITIAL_SECONDS: f64 = 12.0;
 /// A fresh observation can wait three seconds for loading, and a background capture needs time to activate.
 const ENDING_FRAME_SECONDS: f64 = 6.0;
-/// How long the first load waits for a shortcut. Flash-lite answers in 0.5 to 1s, and a start page loads in one to
-/// four, so a proposal later than this is an outlier and the start page is opened instead.
-const SHORTCUT_WAIT_SECONDS: f64 = 2.0;
 /// Longer than deciding takes: a watch ends with the work it watches, and this only bounds a stuck one.
 const REDRAW_WATCH_SECONDS: f64 = 10.0;
-/// Times one action may be taken from one page and still count as progress. Scrolling is exempt: a long page takes
-/// many scrolls, each of which shows something new.
-const REPEATS_BEFORE_CYCLE: i64 = 2;
-/// How much of a wall's text a blocked result quotes: enough for its message, not a whole page.
-const WALL_QUOTE_CHARS: i64 = 600;
-/// The choice a field's text is written for when no input or secret is the answer.
-const GENERATE: &str = "generate";
 
-/// What one run is asked to do, beyond its task: Python's keyword arguments to `Agent.run`.
+/// What one run is asked to do, beyond its task.
 #[derive(Default)]
 pub struct RunOptions {
     pub start: Option<String>,
     pub choose_start: bool,
-    /// What the caller knows about the task, shown to the planner, recovery, the composer and Jev as background
-    /// and never as requirements.
+    /// What the caller knows about the task, shown to Jev as background and never as part of the task.
     pub context: Option<String>,
     pub inputs: IndexMap<String, String>,
     pub attachments: Vec<Attachment>,
     pub output_schema: Option<Arc<RecordSchema>>,
     pub limits: Option<Limits>,
+    /// A ledger the caller reads after the run. It carries its own limits, so `limits` is not read beside it.
+    pub ledger: Option<Arc<Ledger>>,
     pub authorization: Option<Authorization>,
     pub until: Option<UntilCheck>,
-    pub head_start: Option<HeadStart>,
+    /// The run a page without a browser ended, which this one carries on from where it stopped.
+    pub resume: Option<Resume>,
+    pub recipe: Option<fastbrowse_core::recipe::Recipe>,
+    pub recipe_sink: Option<RecipeSink>,
 }
 
-/// The calls a run can make from the task alone, begun before there is a browser to drive.
-///
-/// Starting a cloud browser and opening its tab takes 2 to 3 seconds, and the plan and the shortcut need only the task
-/// and the start page, so `run_task` begins them first: the shortcut is waiting when the tab opens instead of being
-/// asked for then. The calls reserve against `ledger`, which the run takes over, so they count against its limits and
-/// are billed in its result.
-pub struct HeadStart {
-    pub ledger: Arc<Ledger>,
-    task: String,
-    start: Option<String>,
-    context: Option<String>,
-    planning: Arc<Spawned<Generation<Plan>>>,
-    proposing: Option<Arc<Spawned<Shortcut>>>,
-    plan_billed: bool,
+/// The executed steps and replay accounting, returned after a run ends.
+#[derive(Clone)]
+pub struct RecipeOutcome {
+    pub recipe: fastbrowse_core::recipe::Recipe,
+    pub replayed: usize,
+    pub fell_back: usize,
 }
 
-impl HeadStart {
-    /// Begin the plan and, with a site's entry point to start on, the shortcut. Needs a tokio runtime.
-    pub fn begin(
-        llm: Arc<dyn LLMClient>,
-        task: &str,
-        start: Option<&str>,
-        context: Option<&str>,
-        limits: Option<Limits>,
-    ) -> HeadStart {
-        let ledger = Arc::new(Ledger::new(limits.unwrap_or_default()));
-        // The run's clock starts when the run takes the ledger over. Until then, a call finishing past `max_seconds` of
-        // browser startup would end the run over time the limit does not count.
-        ledger.set_started(None);
-        // The plan is needed to read, to judge DONE and to answer, and the start page, the first fills and clicks all
-        // come before those, so it is written from the task while they run. Its answer checks are written by the same
-        // call, so a run can browse as soon as the plan arrives.
-        let planning = Arc::new(Spawned::spawn({
-            let (llm, ledger, task) = (llm.clone(), ledger.clone(), task.to_string());
-            let (start, context) = (start.map(String::from), context.map(String::from));
-            async move {
-                let planned = make_plan(&*llm, &task, start.as_deref(), context.as_deref(), Some(&ledger)).await?;
-                // The plan's receipt is billed the moment it exists: recorded only when the run took the plan, a cap
-                // the plan alone had spent used to let a later paid request through.
-                ledger.state().lines.push(planned.cost.clone());
-                Ok(planned)
-            }
-        }));
-        let proposing = start
-            .filter(|start| shortcut_worth_proposing(start))
-            .map(|start| Arc::new(propose(llm, task, start, ledger.clone())));
-        HeadStart {
-            ledger,
-            task: task.to_string(),
-            start: start.map(String::from),
-            context: context.map(String::from),
-            planning,
-            proposing,
-            plan_billed: true,
-        }
-    }
+pub type RecipeSink = Arc<Mutex<Option<RecipeOutcome>>>;
 
-    /// What stops the startup calls, kept by `run_task` once the agent holds the head start: a run cancelled mid-way
-    /// drops the agent, and dropping a spawned call does not stop it.
-    pub fn stopper(&self) -> HeadStop {
-        HeadStop { planning: self.planning.clone(), proposing: self.proposing.clone() }
-    }
-
-    /// Wait for every startup call to finish.
-    async fn gather(&self) {
-        self.stopper().gather().await;
-    }
-
-    /// Cancel what is still being written, so nothing bills a run that has already ended.
-    pub async fn discard(&self) {
-        self.stopper().discard().await;
-    }
-
-    /// What a run that never began spent: a shortcut bills itself, and a plan that finished is billed here.
-    pub async fn abandon(&self) -> Vec<CostLine> {
-        self.discard().await;
-        if !self.plan_billed
-            && let Some(planned) = self.planning.succeeded()
-        {
-            self.ledger.state().lines.push(planned.cost);
-        }
-        self.ledger.state().lines.clone()
-    }
-}
-
-/// A head start's startup calls, to cancel from outside the run that holds it.
-pub struct HeadStop {
-    planning: Arc<Spawned<Generation<Plan>>>,
-    proposing: Option<Arc<Spawned<Shortcut>>>,
-}
-
-impl HeadStop {
-    /// Cancel every startup call, then wait for each to finish its cleanup.
-    pub async fn discard(&self) {
-        // One transport can take time to close, so cancel every paid call before joining any cleanup.
-        self.planning.cancel();
-        if let Some(proposing) = &self.proposing {
-            proposing.cancel();
-        }
-        self.gather().await;
-    }
-
-    async fn gather(&self) {
-        self.planning.wait().await;
-        if let Some(proposing) = &self.proposing {
-            proposing.wait().await;
-        }
-    }
-}
-
-/// Whether to ask for a direct address from `start`.
-///
-/// The shortcut synthesizes a deeper page on the start site from the task's own words, worth asking for at a site's
-/// entry point, where the task names the page but not its address. When the caller already handed the run a page
-/// inside the site (a path, not just the origin) the run is at a destination the caller chose, and a proposal to go
-/// elsewhere on that origin second-guesses it.
-pub(crate) fn shortcut_worth_proposing(start: &str) -> bool {
-    // WHATWG gives a special scheme's empty path as "/", which is the same entry point `urlsplit` reads as "".
-    url::Url::parse(start).is_ok_and(|url| matches!(url.path(), "" | "/"))
-}
-
-/// The shortcut for `task` on `start`'s site, its receipt recorded where it was made: a proposal that finished is
-/// billed even when the run ends first.
-fn propose(llm: Arc<dyn LLMClient>, task: &str, start: &str, ledger: Arc<Ledger>) -> Spawned<Shortcut> {
-    let (task, start) = (task.to_string(), start.to_string());
-    Spawned::spawn(async move {
-        let generation = propose_shortcut(&*llm, &task, &start, Some(&ledger)).await?;
-        ledger.record([generation.cost])?;
-        Ok(generation.data)
-    })
+/// A run that ended on a page without a browser: what it knew, and where it stood.
+pub struct Resume {
+    // A browser handoff moves this state across nested futures; keep its fields off their poll stacks.
+    state: Box<RunState>,
+    url: Option<String>,
 }
 
 /// What the agent learns about the page as it goes, kept apart from the run so the page and the models can be asked
@@ -231,7 +104,14 @@ struct Seen {
     /// The last observation `observe` returned, which the finish judges again only if the page changed since.
     observed: Option<Observation>,
     artifact_start: usize,
+    /// The masked text of each capture a read took facts from, by digest, for the captures a result cites.
+    read_captures: HashMap<String, String>,
+    /// The ended run, kept for a browser to carry on from.
+    resume: Option<Resume>,
 }
+
+/// Told once the run's first page is open: see [`Agent::with_page_ready`].
+pub type PageReady = Arc<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync>;
 
 pub struct Agent {
     page: Arc<dyn Page>,
@@ -240,6 +120,7 @@ pub struct Agent {
     config: Config,
     secrets: Option<Arc<dyn SecretResolver>>,
     on_event: Option<EventHandler>,
+    page_ready: Option<PageReady>,
     trace: Trace,
     /// The run's secrets, shared with its trace.
     redactor: Arc<Mutex<Redactor>>,
@@ -257,6 +138,7 @@ impl Agent {
             config,
             secrets: None,
             on_event: None,
+            page_ready: None,
             trace: Trace::disabled().redacting(Arc::clone(&redactor)),
             redactor,
             seen: Mutex::new(Seen::default()),
@@ -279,6 +161,12 @@ impl Agent {
         self
     }
 
+    /// `page_ready` is called once the opening page is open, before the first decision.
+    pub fn with_page_ready(mut self, page_ready: Option<PageReady>) -> Agent {
+        self.page_ready = page_ready;
+        self
+    }
+
     /// Keep the run's secrets in `redactor`, so a trace the run's clients write through is redacted too.
     pub fn with_redactor(mut self, redactor: Arc<Mutex<Redactor>>) -> Agent {
         self.trace = self.trace.redacting(Arc::clone(&redactor));
@@ -291,6 +179,11 @@ impl Agent {
         self
     }
 
+    /// The run just ended, for one with a browser to carry on from. Only a run that reached a page has one.
+    pub fn resume(&self) -> Option<Resume> {
+        self.seen().resume.take()
+    }
+
     fn seen(&self) -> MutexGuard<'_, Seen> {
         self.seen.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -301,6 +194,28 @@ impl Agent {
 
     fn redact(&self, value: &str) -> String {
         self.redactor().redact(value)
+    }
+
+    fn store_recipe(&self, state: &RunState, sink: &RecipeSink) {
+        let mut sink = sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let task = self.redact(&state.given_task);
+        let start = state.started_url.as_deref().map(|url| self.redact(url));
+        if task != state.given_task || start.as_deref() != state.started_url.as_deref() {
+            *sink = None;
+            // Redaction changes exact replay identity; retaining the original would persist a resolved secret.
+            eprintln!(
+                "warning: the run used a resolved secret in its task or start URL, so no replay recipe was saved"
+            );
+            return;
+        }
+        let recipe = fastbrowse_core::recipe::Recipe {
+            version: fastbrowse_core::recipe::RECIPE_VERSION,
+            task,
+            start,
+            steps: replay::safe_steps(state.recipe_log.clone(), |text| self.reveals_text(text)),
+        };
+        let (replayed, fell_back) = state.replay.as_ref().map_or((0, 0), |replay| (replay.replayed, replay.fell_back));
+        *sink = Some(RecipeOutcome { recipe, replayed, fell_back });
     }
 
     fn mask(&self, value: &str) -> String {
@@ -323,34 +238,12 @@ impl Agent {
         self.trace.event(event, fields);
     }
 
-    /// Pursue `task`. A head start is the plan and shortcut already asked for with this task and start; it carries the
-    /// limits it was begun with, so `limits` is not read alongside it.
+    /// Pursue `task`.
     pub async fn run(&self, task: &str, mut options: RunOptions) -> Result<RunResult, AgentError> {
-        let head = options.head_start.take();
-        if let Some(head) = &head
-            && (options.limits.is_some()
-                || head.task != task
-                || head.start != options.start
-                || head.context != options.context)
-        {
-            // A plan written for another task, start or background would be followed without complaint.
-            return Err(AgentError::Invalid(
-                "a head start carries its own limits and must be begun with this task, start and context".into(),
-            ));
-        }
-        let mut head = match head {
-            Some(head) => head,
-            None => HeadStart::begin(
-                self.llm.clone(),
-                task,
-                options.start.as_deref(),
-                options.context.as_deref(),
-                options.limits.take(),
-            ),
+        let ledger = match options.ledger.take() {
+            Some(ledger) => ledger,
+            None => Arc::new(Ledger::new(options.limits.take().unwrap_or_default())),
         };
-        let ledger = head.ledger.clone();
-        // The run's clock starts here, as it did before there was a head start: a browser slow to start is not time
-        // spent on the task, and `max_seconds` bounds the deadline below from this moment too.
         let began = Instant::now();
         ledger.set_started(Some(began));
         self.seen().artifact_start = self.page.artifacts().len();
@@ -358,84 +251,138 @@ impl Agent {
         // provider call that never returns.
         let deadline = ledger.limits.max_seconds.map(|seconds| began + Duration::from_secs_f64(seconds));
         let mut slot: Option<RunState> = None;
-        let scoped = jev_spend(Lines::Ledger(ledger.clone()), Some(ledger.clone()), async {
-            let body = Box::pin(self.body(task, &options, &mut head, &mut slot));
+        let mut requested_frame = false;
+        let mut changed: Option<String> = None;
+        let resume = options.resume.take();
+        let spending = jev_spend(Lines::Ledger(ledger.clone()), Some(ledger.clone()), async {
+            let running = Box::pin(async {
+                let body = Box::pin(self.body(task, &options, resume, &ledger, &mut slot));
+                match body.await {
+                    Ok(result) => (result, true, false),
+                    Err(Flow::Browser(BrowserError::NeedsBrowser(message))) => {
+                        (blocked_without_browser(message), false, true)
+                    }
+                    Err(flow) => (self.stopped(flow, slot.as_mut(), &ledger).await, false, false),
+                }
+            });
+            // Reporting can await providers too, so the same deadline must cover the stop path.
             let outcome = match deadline {
-                Some(deadline) => tokio::time::timeout_at(deadline.into(), body).await.ok(),
-                None => Some(body.await),
+                Some(deadline) => tokio::time::timeout_at(deadline.into(), running).await.ok(),
+                None => Some(running.await),
             };
-            let mut loop_returned = false;
-            let mut needs_browser = false;
-            let mut result = match outcome {
-                Some(Ok(result)) => {
-                    loop_returned = true;
-                    result
-                }
-                Some(Err(Flow::Browser(BrowserError::NeedsBrowser(message)))) => {
-                    needs_browser = true;
-                    blocked_without_browser(message)
-                }
-                Some(Err(flow)) => self.stopped(flow, slot.as_mut(), &ledger).await,
+            let ended = match outcome {
+                Some(ended) => ended,
                 None => {
-                    let limit = ledger.limits.max_seconds.unwrap_or_default();
+                    let limit = ledger.stated().max_seconds.unwrap_or_default();
                     let notes = slot.as_ref().map(|state| state.notes.clone()).unwrap_or_default();
-                    self.partial_result(
+                    let result = self.partial_result(
                         &notes,
                         slot.as_ref(),
                         &ledger,
                         Status::BudgetExceeded,
                         Some(time_limit(limit)),
                         Some(BudgetStop { resource: BudgetResource::Seconds, limit }),
-                    )
+                    );
+                    (result, false, false)
                 }
             };
-            // Cancelling a paid startup call loses its receipt, so a finished run joins it before reporting cost.
-            if loop_returned {
-                let joined = match deadline {
-                    Some(deadline) => tokio::time::timeout_at(deadline.into(), head.gather()).await.is_ok(),
-                    None => {
-                        head.gather().await;
-                        true
-                    }
-                };
-                if !joined {
-                    head.discard().await;
-                    let limit = ledger.limits.max_seconds.unwrap_or_default();
-                    result.status = Status::BudgetExceeded;
-                    result.error = Some(time_limit(limit));
-                    result.budget = Some(BudgetStop { resource: BudgetResource::Seconds, limit });
-                    loop_returned = false;
-                }
-            } else {
-                head.discard().await;
-            }
-            if slot.as_ref().is_none_or(|state| state.ready_plan.is_none())
-                && !head.plan_billed
-                && let Some(planned) = head.planning.succeeded()
+            // A run that ends before it acts still records what its known pages request cost. One handed on to a
+            // browser takes the request with it, and the browser run records it.
+            if !ended.2
+                && let Some(state) = slot.as_mut()
             {
-                // First observation can fail before the completed plan is consumed, but its receipt still bills.
-                ledger.state().lines.push(planned.cost);
+                state.known_pages_unused().await;
             }
-            (result, loop_returned, needs_browser)
+            requested_frame = slot.as_ref().is_some_and(|state| {
+                matches!(state.output_intent, state::OutputIntent::Image | state::OutputIntent::TextAndImage)
+            });
+            if let (Some(sink), Some(state)) = (&options.recipe_sink, &slot) {
+                self.store_recipe(state, sink);
+            }
+            changed = slot.as_ref().and_then(|state| finishing::changed_fields(&state.history));
+            if let Some(state) = slot.take() {
+                let url = self.page.browser_address().or_else(|| self.raw().map(|page| page.url));
+                self.seen().resume = Some(Resume { state: Box::new(state), url });
+            }
+            ended
         });
-        let (mut result, mut loop_returned, needs_browser) = scoped.await;
-        if needs_browser {
-            // Python's `NeedsBrowser` leaves `Agent.run` as an exception once the head start is settled, and `run_task`
-            // reports it with what the ledger spent and nothing else: no budget check and no ending frame.
+        // A question the run already asked beside the same state is answered from what Jev said then.
+        let scoped = crate::batches::knowing(Default::default(), spending);
+        let (mut result, mut loop_returned, needs_browser) = self.trace.phase("run", scoped).await;
+        let result = if needs_browser {
+            // A run that needs a browser reports what the ledger spent and nothing else: no budget check and no ending
+            // frame.
             result.cost = ledger.breakdown();
-            return Ok(result);
-        }
-        // Startup calls can settle during teardown, after the loop has made its last budget check.
-        if let Err(error) = ledger.check_spend(0.0) {
-            if result.budget.as_ref().is_none_or(|budget| budget.resource != BudgetResource::Seconds) {
-                result.status = Status::BudgetExceeded;
-                result.error = Some(error.to_string());
-                result.budget = Some(error.budget);
+            result
+        } else {
+            self.keep_captures(&mut result).await;
+            // A run that already failed keeps its error: a refused Jev key's unpriced line reported the run as over a
+            // spend limit instead of naming the key.
+            if let Err(error) = ledger.check_spend(0.0) {
+                if result.status != Status::Error
+                    && result.budget.as_ref().is_none_or(|budget| budget.resource != BudgetResource::Seconds)
+                {
+                    result.status = Status::BudgetExceeded;
+                    result.error = Some(error.to_string());
+                    result.budget = Some(error.budget);
+                }
+                loop_returned = false;
             }
-            loop_returned = false;
+            if result.status.waits_on_person() {
+                self.page.hand_over_tab();
+            }
+            result.cost = ledger.breakdown();
+            if loop_returned { result } else { self.ending_frame(result, requested_frame).await }
+        };
+        Ok(self.with_changes(result, changed))
+    }
+
+    /// `result` with the fields its run changed named first in its answer when the run ended without finishing (#939).
+    /// Every result leaves the run here, once its status is final, so no path that builds one can drop them.
+    fn with_changes(&self, mut result: RunResult, changed: Option<String>) -> RunResult {
+        if result.status != Status::Complete
+            && let Some(changed) = changed
+        {
+            let changed = self.redact(&changed);
+            result.answer = Some(match result.answer.take() {
+                Some(answer) => format!("{changed}\n\n{answer}"),
+                None => changed,
+            });
         }
-        result.cost = ledger.breakdown();
-        Ok(if loop_returned { result } else { self.ending_frame(result, false).await })
+        result
+    }
+
+    /// Keeps each page capture the result's evidence quotes as a `capture` artifact, so a citation can be checked
+    /// against the text it was read from, and names that artifact on the evidence.
+    async fn keep_captures(&self, result: &mut RunResult) {
+        let mut kept: HashMap<String, Option<String>> = HashMap::new();
+        for index in 0..result.evidence.len() {
+            let digest = result.evidence[index].capture_sha256.clone();
+            if !kept.contains_key(&digest) {
+                let artifact = self.keep_capture(&digest).await;
+                kept.insert(digest.clone(), artifact.as_ref().map(|artifact| artifact.uri.clone()));
+                result.artifacts.extend(artifact);
+            }
+            result.evidence[index].capture_artifact = kept[&digest].clone();
+        }
+    }
+
+    /// The artifact a read capture is kept as, if the run read it and the page has somewhere to keep it.
+    async fn keep_capture(&self, digest: &str) -> Option<Artifact> {
+        let text = self.seen().read_captures.get(digest).cloned()?;
+        match self.page.keep_capture(&format!("capture-{digest}.txt"), &text).await {
+            Ok(artifact) => artifact,
+            Err(error) => {
+                self.event("capture_not_kept", || Map::from_iter([("error".into(), error.to_string().into())]));
+                None
+            }
+        }
+    }
+
+    async fn tell_page_ready(&self) {
+        if let Some(page_ready) = &self.page_ready {
+            page_ready().await;
+        }
     }
 
     /// The run up to its loop's result: the opening page, the run state, then the loop.
@@ -443,80 +390,221 @@ impl Agent {
         &self,
         task: &str,
         options: &RunOptions,
-        head: &mut HeadStart,
+        resume: Option<Resume>,
+        ledger: &Arc<Ledger>,
         slot: &mut Option<RunState>,
     ) -> Result<RunResult, Flow> {
-        let ledger = head.ledger.clone();
+        let prepared = match resume {
+            Some(Resume { state, url: Some(url) }) => {
+                self.trace.phase("open", self.page.navigate(&url, None)).await?;
+                self.tell_page_ready().await;
+                let state = slot.insert((*state).carried_on(ledger.clone()));
+                return Box::pin(self.run_loop(state, options.output_schema.as_deref(), options.until.as_ref())).await;
+            }
+            Some(Resume { state, url: None }) => Some(Box::new((*state).carried_on(ledger.clone()))),
+            None => None,
+        };
         let start = options.start.as_deref();
+        let mut opening = prepared.as_ref().and_then(|state| state.started_url.clone());
         // `start=None` leaves the browser where it is, which is what a caller stepping a run on from a page it opened
         // itself wants. `choose_start` is the other case: a caller with a goal and no page at all, who wants the first
         // address worked out from the task.
-        let opening = match start {
-            Some(start) => Some(start.to_string()),
-            None if options.choose_start => Some(self.first_page(task, &ledger).await?),
-            None => None,
+        let open = async {
+            if opening.is_none() {
+                opening = match start {
+                    Some(start) => Some(start.to_string()),
+                    None if options.choose_start => self.first_page(task, ledger).await?,
+                    None => None,
+                };
+            }
+            if let Some(opening) = &opening {
+                self.trace.phase("open", self.page.navigate(opening, None)).await?;
+            }
+            if let (None, Some(opening)) = (start, &opening) {
+                // The caller gave a goal and no page, so this address was worked out from the task.
+                self.front_page_if_blank(opening, browsing_deadline(ledger, false)).await?;
+            }
+            Ok::<_, Flow>(())
         };
-        if let Some(opening) = &opening
-            && head.proposing.is_none()
-            && shortcut_worth_proposing(opening)
-        {
-            // A chosen first address arrives after startup; its shortcut still needs owned, bounded waiting.
-            head.proposing = Some(Arc::new(propose(self.llm.clone(), task, opening, ledger.clone())));
+        // The composer's context window is looked up from the provider's listing and kept by the client. Asked only
+        // when the answer is written, the lookup held every run's last step for 0.5 to 2.7 s; asked now, it is known
+        // by then, and the run never waits on it here.
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let llm = self.llm.clone();
+            runtime.spawn(async move { llm.context_tokens(fastbrowse_core::models::LLMPurpose::Compose).await });
         }
-        let (opened, mut invented) = match &opening {
-            None => (Vec::new(), Default::default()),
-            Some(opening) => self.open(task, opening, &ledger, head.proposing.clone()).await?,
+        let prepare = async {
+            if let Some(state) = prepared {
+                return Ok::<_, Flow>(state);
+            }
+            let given = state::with_inputs(task, &options.inputs);
+            // The known pages are asked beside the first page's open, observation and decision, and taken before the
+            // run first reads for, builds or acts on a decision, or proposes a route (`known_pages_arrived`). Awaited
+            // here, the text LLM's answer held every run's first step, for about a second and up to 3.4 s. A capped run
+            // still waits: a call checks the cap against the receipts already recorded, and this one's comes later.
+            let asked =
+                (!ledger.capped()).then(|| tokio::runtime::Handle::try_current().ok()).flatten().map(|runtime| {
+                    let (llm, given, start, ledger) =
+                        (self.llm.clone(), given.clone(), start.map(String::from), ledger.clone());
+                    state::KnownAsked::new(runtime.spawn(async move {
+                        crate::start::known_pages(&*llm, &given, start.as_deref(), Some(&ledger)).await
+                    }))
+                });
+            let (judgments, known) = if asked.is_some() {
+                // Polled once, the request reserves its call and leaves now, as it did when it was awaited here: a
+                // current-thread runtime would otherwise first poll it when the run waits on I/O.
+                tokio::task::yield_now().await;
+                (self.task_judgments(&given, ledger).await, Ok(Vec::new()))
+            } else {
+                tokio::join!(self.task_judgments(&given, ledger), self.known_pages(&given, start, ledger))
+            };
+            // Dropped on an error, the request is aborted and records what it was billed so far.
+            let (judgments, known) = (judgments?, known?);
+            let mut state = RunState::new(
+                task.to_string(),
+                options.inputs.clone(),
+                options.attachments.clone(),
+                options.authorization.clone().unwrap_or_default(),
+                ledger.clone(),
+            );
+            state.dates = judgments.dates;
+            state.output_answers = judgments.output;
+            state.known_pages = known;
+            state.known_asked = asked;
+            state.replay = options.recipe.clone().map(replay::Replay::new);
+            state.context = options.context.clone();
+            state.caller_start = start.map(String::from);
+            Ok(Box::new(state))
         };
-        let mut fell_back = false;
-        if let (None, Some(opening)) = (start, &opening) {
-            // The caller gave a goal and no page, so this address was worked out from the task too.
-            invented.insert(opening.clone());
-            fell_back = self.front_page_if_blank(opening).await?;
+        let (opened, prepared) = tokio::join!(open, prepare);
+        let prepared = prepared.map(|mut state| {
+            state.started_url = opening;
+            state
+        });
+        // HTTP can need a browser before any capture exists. Keep task judgments for that handoff, without
+        // treating other opening failures as a run that reached its first page.
+        if let Err(flow) = opened {
+            match prepared {
+                Ok(state) if matches!(&flow, Flow::Browser(BrowserError::NeedsBrowser(_))) => {
+                    self.seen().resume = Some(Resume { state, url: None });
+                }
+                Ok(mut state) => state.known_pages_unused().await,
+                Err(_) => {}
+            }
+            return Err(flow);
         }
-        let mut state = RunState::new(
-            task.to_string(),
-            options.inputs.clone(),
-            options.attachments.clone(),
-            options.authorization.clone().unwrap_or_default(),
-            ledger.clone(),
-            head.planning.clone(),
-            head.plan_billed,
-        );
-        state.context = options.context.clone();
-        state.started_url = opening.clone();
-        state.caller_start = start.map(String::from);
-        if start.is_some() && opened.is_empty() {
+        let state = slot.insert(*prepared?);
+        self.tell_page_ready().await;
+        if start.is_some() {
             state.start_landing_url = Some(self.page.address().await?);
         }
-        state.history.extend(opened);
-        // The run begins on the guess only if the guess is still the page open: a guessed path that opened nothing was
-        // left for the site's front page, and a form there led back to the same path with every read of it held
-        // guessed.
-        state.guessing = !invented.is_empty() && !fell_back;
-        state.invented = invented;
-        if let Some(opening) = &opening {
-            // A shortcut leaves the start page before the loop observes anything.
-            state.visited.insert(opening.clone(), ());
-        }
-        let state = slot.insert(state);
         Box::pin(self.run_loop(state, options.output_schema.as_deref(), options.until.as_ref())).await
     }
 
     /// The result of a run a step stopped: the error the loop raised, as the status it means.
-    async fn stopped(&self, flow: Flow, state: Option<&mut RunState>, ledger: &Ledger) -> RunResult {
+    async fn stopped(&self, flow: Flow, mut state: Option<&mut RunState>, ledger: &Ledger) -> RunResult {
+        let schema = state.as_deref_mut().and_then(|state| state.schema_partial.take());
+        let mut result = self.stopped_result(flow, state, ledger).await;
+        // The schema was filled before the draft was sent back; a rewrite that fails too does not unfill it.
+        if let Some(extraction) = schema
+            && result.data.is_null()
+        {
+            result.data = extraction.data.unwrap_or(Value::Null);
+            result.evidence.extend(extraction.evidence);
+        }
+        result
+    }
+
+    async fn stopped_result(&self, flow: Flow, state: Option<&mut RunState>, ledger: &Ledger) -> RunResult {
+        let (flow, exhausted) = match flow {
+            Flow::Agent(AgentError::Budget(error)) => {
+                (Flow::Stop(state::Stop::new(Status::BudgetExceeded, error.to_string())), Some(error.budget))
+            }
+            flow => (flow, None),
+        };
         if let Flow::Stop(stop) = &flow
             && let Some(state) = state
         {
             // A stop's message can quote the page, such as a field's label, and a page can echo a typed secret there;
             // redacting at each raise missed one, so every stop is redacted here before the caller sees it.
             let error = stop.error.as_deref().map(|error| self.redact(error));
-            if matches!(stop.status, Status::Stuck | Status::Unverified) && !state.notes.evidence().is_empty() {
+            // Loop clock stops have no typed budget error; other limits retain their original resource.
+            let budget = exhausted.or_else(|| {
+                (stop.status == Status::BudgetExceeded).then(|| BudgetStop {
+                    resource: BudgetResource::Seconds,
+                    limit: ledger.stated().max_seconds.unwrap_or_default(),
+                })
+            });
+            if state.composition_partial.is_some() {
+                let notes = state.notes_to_compose();
+                if let Some(partial) = state.checked_composition(&notes) {
+                    let mut result = self.answered(partial, &notes, Some(state), ledger, stop.status, error, budget);
+                    result.wall = self.wall(stop);
+                    result.evidence.extend(stop.evidence.clone());
+                    return result;
+                }
+            }
+            if matches!(stop.status, Status::Stuck | Status::Unverified | Status::BudgetExceeded)
+                && !state.notes.evidence().is_empty()
+            {
                 // What was read is still cited evidence; a caller told only "stuck" has to browse again for it.
-                let notes = state.notes.clone();
-                return self.stopping_result(&notes, state, ledger, stop.status, error).await;
+                let notes = if state.compose { state.notes_to_compose() } else { state.notes.clone() };
+                // Records listed one after another answer no count: a list read to its end came back as a dump of it.
+                let reporting = ledger.for_answer();
+                let steps = state.executed_steps();
+                if state.compose
+                    && let Ok(composed) =
+                        compose(&*self.jev, &*self.llm, &state.task, &notes, Some(&reporting), &steps).await
+                    && !composed.claims.is_empty()
+                {
+                    // Only a rejected composition stops a run unverified, so one that passes every claim and coverage
+                    // check answers what that stop was about, as it would have at done. A run stuck going back and
+                    // forth over pages it had read held such an answer too, and came back stuck under "Partial
+                    // evidence only": when the task asks only to be told, the stop was over navigation, not the
+                    // answer. A task asking for something done is not done because what was read holds.
+                    // A step the site refused is still not carried out, however well the answer holds (#779).
+                    let told = matches!(
+                        state.output_intent,
+                        state::OutputIntent::Text | state::OutputIntent::Image | state::OutputIntent::TextAndImage
+                    );
+                    let mut answers = match stop.status {
+                        Status::Unverified => true,
+                        Status::Stuck => told,
+                        _ => false,
+                    } && composed.problem.is_none()
+                        && !state.refused
+                        && state.undone.is_none();
+                    // A task asking to be told can also ask for steps, such as setting a field and then reporting it,
+                    // and a run stuck before any finish check judged its steps may have left one undone: that check's
+                    // own question decides, asked of the last page.
+                    if answers && stop.status == Status::Stuck && state.history.iter().any(HistoryEntry::acts) {
+                        answers = match self.observed() {
+                            Some(page) => matches!(self.actions_done(state, &page).await, Ok(Carried::Done)),
+                            None => false,
+                        };
+                    }
+                    if answers {
+                        let result =
+                            self.answered(&composed, &notes, Some(state), ledger, Status::Complete, None, None);
+                        let requested = state.output_intent == state::OutputIntent::TextAndImage;
+                        return self.ending_frame(result, requested).await;
+                    }
+                    let partial = marked_partial(composed);
+                    let error = error.or_else(|| state.refused.then(|| self.redact(finishing::REFUSED)));
+                    return self.answered(&partial, &notes, Some(state), ledger, stop.status, error, budget);
+                }
+                // A task that only carries something out reports what it read after its last step, as at done, and
+                // whether it is one is asked only when that would leave out an answer read before such a step. Asking
+                // can fail on a spent budget, and the notes then answer as they stand.
+                if state.output_intent == state::OutputIntent::Unknown
+                    && outcome_notes(state).supporting().len() < state.notes.supporting().len()
+                {
+                    let _ = self.output_intent(state).await;
+                }
+                return self.partial_result(&notes, Some(state), ledger, stop.status, error, budget);
             }
             let wall = self.wall(stop);
-            let outcome = Outcome { error, evidence: stop.evidence.clone(), wall, ..Outcome::default() };
+            let outcome = Outcome { error, evidence: stop.evidence.clone(), wall, budget, ..Outcome::default() };
             return self.result(Some(state), ledger, stop.status, outcome);
         }
         let state = state.map(|state| &*state);
@@ -529,17 +617,9 @@ impl Agent {
                     state,
                     ledger,
                     stop.status,
-                    Outcome { error, evidence: stop.evidence, wall, ..Outcome::default() },
+                    Outcome { error, evidence: stop.evidence, wall, budget: exhausted, ..Outcome::default() },
                 )
             }
-            Flow::Agent(AgentError::Budget(error)) => self.partial_result(
-                &notes(),
-                state,
-                ledger,
-                Status::BudgetExceeded,
-                Some(error.to_string()),
-                Some(error.budget),
-            ),
             Flow::Agent(AgentError::NotesTooLarge(message)) => {
                 let message = self.redact(&message);
                 self.partial_result(&notes(), state, ledger, Status::ObservationLimit, Some(message), None)
@@ -549,22 +629,48 @@ impl Agent {
             }
             Flow::Browser(error) => {
                 let unavailable = error.is_unavailable()
+                    || matches!(error, BrowserError::PageUnresponsive(_))
                     || (state.is_none()
                         && matches!(error, BrowserError::NavigationTimeout(_) | BrowserError::SiteUnreachable(_)));
-                self.failed(error.to_string(), unavailable, state, ledger)
+                let kind = browser_failure_kind(&error);
+                self.failed(kind, error.to_string(), unavailable, state, ledger)
             }
             Flow::Agent(error) => {
                 let unavailable = error.is_unavailable();
-                self.failed(error.to_string(), unavailable, state, ledger)
+                self.failed(failure_kind(&error), error.to_string(), unavailable, state, ledger)
             }
-            // An unsure step that reached the run carries no recovery left to ask; it is an error, not a stop.
-            Flow::Unsure(unsure) => self.failed(unsure.reason, false, state, ledger),
+            Flow::Unsure(unsure) => self.failed("Unsure".into(), unsure.reason, false, state, ledger),
         }
     }
 
-    fn failed(&self, message: String, unavailable: bool, state: Option<&RunState>, ledger: &Ledger) -> RunResult {
-        let message = text::prefix(&self.redact(&message), 500).to_string();
-        let status = if unavailable { Status::Unavailable } else { Status::Error };
+    fn failed(
+        &self,
+        kind: String,
+        message: String,
+        unavailable: bool,
+        state: Option<&RunState>,
+        ledger: &Ledger,
+    ) -> RunResult {
+        self.event("run_failed", || Map::from_iter([("kind".into(), kind.into())]));
+        let mut message = self.redact(&message);
+        // `unavailable` tells a caller the same run may pass later, which is safe only while the run has changed
+        // nothing: running it again after a post that went through posts twice.
+        let changed: Vec<String> = state
+            .into_iter()
+            .flat_map(|state| &state.history)
+            .filter(|entry| entry.changed_site())
+            .map(|entry| {
+                let operation = entry.operation.map_or("", |operation| operation.as_str());
+                entry.target.as_deref().map_or_else(|| operation.to_string(), |target| format!("{operation} {target}"))
+            })
+            .collect();
+        let status = if unavailable && changed.is_empty() { Status::Unavailable } else { Status::Error };
+        if unavailable && !changed.is_empty() {
+            let steps = changed.join("; ");
+            message = format!(
+                "{message}. This came after steps that may have changed the site ({steps}), so check the site before running the task again."
+            );
+        }
         let notes = state.map(|state| state.notes.clone()).unwrap_or_default();
         self.partial_result(&notes, state, ledger, status, Some(message), None)
     }
@@ -579,6 +685,10 @@ impl Agent {
                 Ok(Ok(frame)) => frame,
                 _ => None,
             };
+        if requested && result.final_frame.is_none() && result.status == Status::Complete {
+            result.status = Status::Unverified;
+            result.error = Some("The requested final screenshot could not be captured.".into());
+        }
         result
     }
 
@@ -592,124 +702,48 @@ impl Agent {
         error: Option<String>,
         budget: Option<BudgetStop>,
     ) -> RunResult {
-        self.answered_partial(notes, state, ledger, status, Outcome { error, budget, ..Outcome::default() }, None)
-    }
-
-    /// `partial_result` for a run stopping stuck or unverified, which first asks for the answer its notes support.
-    pub(super) async fn stopping_result(
-        &self,
-        notes: &Notes,
-        state: &mut RunState,
-        ledger: &Ledger,
-        status: Status,
-        error: Option<String>,
-    ) -> RunResult {
-        let committed = if !notes.facts().is_empty() && matches!(status, Status::Stuck | Status::Unverified) {
-            self.commit(state).await
-        } else {
-            None
-        };
-        self.answered_partial(notes, Some(state), ledger, status, Outcome { error, ..Outcome::default() }, committed)
-    }
-
-    /// Write the answer a stopping run can still support, instead of handing back its notes.
-    ///
-    /// A task that stopped without verifying its finish used to arrive as every quote it read, in page order, with
-    /// the value the task asked for somewhere among them: a table lookup ended with its rows dumped and no sentence
-    /// naming the country. The evidence was there; nobody had been asked to answer from it. One composer call over
-    /// the collected notes asks that, and it is spent only on a run that is already stopping.
-    async fn commit(&self, state: &mut RunState) -> Option<ComposedAnswer> {
-        if !state.plan().page_answer_expected() || state.notes.evidence().is_empty() {
-            return None;
+        if let Some(state) = state.filter(|state| state.composition_partial.is_some()) {
+            let notes = state.notes_to_compose();
+            if let Some(partial) = state.checked_composition(&notes) {
+                return self.answered(partial, &notes, Some(state), ledger, status, error, budget);
+            }
         }
-        // A stop is the worst moment to trade the evidence already read for an error, so every failure of this
-        // best-effort call returns the notes rather than ending the run on a composer fault.
-        let transactions = self.transaction_evidence_ids(state).await.ok()?;
-        let ledger = state.ledger.clone();
-        let plan = state.plan().clone();
-        let options = ComposeOptions {
-            tokens: self.config.tokens.clone(),
-            ledger: Some(&ledger),
-            transaction_evidence_ids: transactions,
-            preserve_collections: !state.finish_partitions.is_empty() || !state.answer_corrections.is_empty(),
-            background: state.context.clone(),
-            ..ComposeOptions::new()
-        };
-        let generated = compose(&*self.llm, &state.task, &plan, &state.notes, &options).await.ok()?;
-        (!generated.data.claims.is_empty()).then_some(generated.data)
+        // A run stuck on a desktop form after choosing Germany cited "United Kingdom", the combo box's value as its
+        // first read saw it, before the choice: a task that only carries something out answers, stopped or not, with
+        // what it read after its last step that changes the site (#989).
+        let outcome = state.filter(|state| state.output_intent == state::OutputIntent::CarriedOut).map(outcome_notes);
+        let notes = outcome.as_ref().unwrap_or(notes);
+        // A composing run that lost its browser came back with its answering facts unmarked, read as the whole answer to
+        // a task it never finished; every stopped run's draft says it is partial (#962).
+        match partial_answer(notes) {
+            Some(answer) => self.answered(&answer, notes, state, ledger, status, error, budget),
+            None => self.result(state, ledger, status, Outcome { error, budget, ..Outcome::default() }),
+        }
     }
 
-    fn answered_partial(
+    /// `partial` as the result of a run that ended as `status`, with the evidence it cites.
+    #[allow(clippy::too_many_arguments)]
+    fn answered(
         &self,
+        partial: &ComposedAnswer,
         notes: &Notes,
         state: Option<&RunState>,
         ledger: &Ledger,
         status: Status,
-        outcome: Outcome,
-        committed: Option<ComposedAnswer>,
+        error: Option<String>,
+        budget: Option<BudgetStop>,
     ) -> RunResult {
-        let Outcome { error, budget, .. } = outcome;
-        if notes.facts().is_empty() {
-            return self.result(state, ledger, status, Outcome { error, budget, ..Outcome::default() });
-        }
-        let mut partial = match committed {
-            None => partial_answer(notes, self.config.observation.working_notes_chars),
-            Some(mut committed) => {
-                let notice = "Answer (unverified). The run stopped before its completion check confirmed this; these \
-                              are the values its evidence supports, written as an answer rather than a dump of what \
-                              was read.";
-                committed.linked_answer = format!("{notice}\n\n{}", committed.linked_answer);
-                committed
-            }
-        };
-        if let Some(state) = state
-            && (!state.partition_answers.is_empty() || !state.partial_answers.is_empty())
-            && !state.authorization.irreversible_actions
-        {
-            let mut verified: Vec<ComposedAnswer> = Vec::new();
-            let mut pending: Vec<String> = Vec::new();
-            for plan in &state.finish_partitions {
-                let ids: Vec<&str> = plan.requirements.iter().map(|r| r.id.as_str()).collect();
-                let proof = partition_proof(plan, &notes.for_requirements(ids, None), &state.invented);
-                if let Some(answer) = state.partition_answers.get(&proof) {
-                    verified.push(answer.clone());
-                } else if plan.page_answer_expected() {
-                    let partial_fields = state.partial_answers.get(&proof);
-                    if let Some(fields) = partial_fields {
-                        verified.push(fields.clone());
-                    }
-                    let checks: Vec<String> = if plan.answer_checks.is_empty() {
-                        plan.requirements.iter().map(|r| r.text.clone()).collect()
-                    } else {
-                        plan.answer_checks.clone()
-                    };
-                    pending.extend(checks.into_iter().filter(|check| {
-                        partial_fields.is_none_or(|fields| {
-                            !fields.output_claims.as_ref().is_some_and(|outputs| outputs.contains_key(check))
-                        })
-                    }));
-                }
-            }
-            if !verified.is_empty() {
-                let mut claims = Vec::new();
-                for claim in verified.iter().flat_map(|answer| answer.claims.iter()) {
-                    if !claims.contains(claim) {
-                        claims.push(claim.clone());
-                    }
-                }
-                partial = assemble_answer(&claims, notes, &[], 0);
-                let mut notice = String::from("Partial answer.");
-                let missing =
-                    if state.open_answer_outputs.is_empty() { pending } else { state.open_answer_outputs.clone() };
-                if !missing.is_empty() {
-                    notice += &format!(" Unverified outputs: {}", missing.join("; "));
-                }
-                partial.linked_answer = format!("{notice}\n\n{}", partial.linked_answer);
-            }
-        }
+        let undone = (status != Status::Complete)
+            .then(|| {
+                state
+                    .and_then(|state| state.undone.as_deref())
+                    .map(|step| noticed(&finishing::undone_notice(step), partial.clone()))
+            })
+            .flatten();
+        let partial = undone.as_ref().unwrap_or(partial);
         let cited =
             notes.expand_evidence_ids(partial.claims.iter().flat_map(|c| c.evidence_ids.iter().map(String::as_str)));
-        let (answer, citations) = self.public_answer(&partial);
+        let (answer, citations) = self.public_answer(partial);
         let evidence = notes.evidence().into_iter().filter(|(key, _)| cited.contains(key)).map(|(_, e)| e).collect();
         self.result(
             state,
@@ -727,6 +761,7 @@ impl Agent {
         let start = self.seen().artifact_start;
         let artifacts = self.page.artifacts();
         RunResult {
+            browser: None,
             status,
             budget: outcome.budget,
             answer: outcome.answer,
@@ -781,23 +816,16 @@ impl Agent {
         Some(Wall { kind: kind.unwrap_or_else(|| wall_kind(&credentials)), origin, fields, seen_at_ms: now_ms() })
     }
 
-    fn public_fact(&self, fact: &Fact) -> StepFact {
+    fn public_fact(&self, fact: &Fact, notes: &Notes) -> StepFact {
         let text = self.redact(&fact.text);
-        let requirement_id = fact.requirement_id.as_deref().map(|id| self.redact(id));
         let Some(evidence) = &fact.evidence else {
-            return StepFact { text, requirement_id, quote: None, url: None, reader: fact.reader, deep_link: None };
+            return StepFact { text, quote: None, url: None, reader: fact.reader, deep_link: None };
         };
-        let (url, quote) = (self.redact(&evidence.url), self.redact(&evidence.quote));
-        let deep_link = if evidence.rendered_text {
-            text_fragment(&url, &quote).unwrap_or_else(|_| url.clone())
-        } else {
-            url.clone()
-        };
+        let (quote, deep_link) = cited_quote(evidence, notes, |value| self.redact(value));
         StepFact {
             text,
-            requirement_id,
             quote: Some(quote),
-            url: Some(url),
+            url: Some(self.redact(&evidence.url)),
             reader: fact.reader,
             deep_link: Some(deep_link),
         }
@@ -837,106 +865,227 @@ impl Agent {
         (answer, citations)
     }
 
-    /// The final answer with the run reports the plan asked for, copied from browser state.
-    fn run_report(&self, state: &RunState, final_url: Option<&str>, captured: bool) -> String {
-        // A raw image has no page quotes for its address or the clicks that reached it. These reports copy runtime
-        // values; the composer cannot add claims to them.
-        let reports = &state.plan().run_reports;
-        let mut parts: Vec<String> = Vec::new();
-        if reports.contains(&RunReport::NavigationSteps) {
-            let mut steps: Vec<String> = Vec::new();
-            if let Some(start) = state.started_url.as_ref().or(state.first_url.as_ref()).filter(|s| !s.is_empty()) {
-                steps.push(format!("Started at: {}", self.redact(start)));
-            }
-            for entry in &state.history {
-                if entry.outcome != StepOutcome::Executed || !entry.page_changed {
-                    continue;
-                }
-                match entry.operation {
-                    None => {
-                        if let Some(note) = entry.note.as_deref().filter(|note| !note.is_empty()) {
-                            steps.push(self.redact(note));
-                        }
-                    }
-                    Some(
-                        operation @ (Operation::Click | Operation::Enter | Operation::Back | Operation::SwitchTab),
-                    ) => {
-                        let target = fastbrowse_core::py::json::write(
-                            &Value::from(self.redact(entry.target.as_deref().unwrap_or_default())),
-                            fastbrowse_core::py::json::Style::DUMPS.unicode(),
-                        );
-                        steps.push(format!("{operation}: {target}"));
-                    }
-                    Some(_) => {}
-                }
-            }
-            let listed: Vec<String> = steps.iter().map(|step| format!("- {step}")).collect();
-            parts.push(format!("Recorded navigation steps:\n{}", listed.join("\n")));
-        }
-        if reports.contains(&RunReport::FinalUrl)
-            && let Some(url) = final_url
-        {
-            parts.push(format!("Final URL: {url}"));
-        }
-        // The title is not viewport text, so no reader could ever quote it.
-        if reports.contains(&RunReport::PageTitle)
-            && let Some(observed) = self.raw().or_else(|| self.observed())
-        {
-            parts.push(format!("Page title: {}", self.redact(&observed.title)));
-        }
-        if reports.contains(&RunReport::Screenshot) {
-            parts.push(
-                if captured {
-                    "A screenshot of the final page was captured."
-                } else {
-                    "A screenshot of the final page could not be captured."
-                }
-                .to_string(),
-            );
-        }
-        parts.join("\n\n")
+    fn decision_notes(&self, state: &RunState) -> String {
+        // Retained evidence can contain a requested value that the selected answer leaves out.
+        let selected = (!state.compose && !state.extraction_pending)
+            .then(|| draft_answer(&state.notes))
+            .flatten()
+            .map(|answer| self.public_answer(&answer).0);
+        fastbrowse_core::py::json::dumps(&json!({
+            "selected_answer": selected,
+            "composition_pending": state.compose,
+            "structured_output_pending": state.extraction_pending,
+            "retained_notes": state.notes.render_for_navigation(),
+        }))
     }
 
     fn context(
         &self,
         state: &RunState,
+        observation: &Observation,
         secrets: Vec<String>,
         check_login: bool,
         check_bot: bool,
     ) -> Result<StepContext, Flow> {
-        let mut unread = None;
-        if let Some(plan) = &state.ready_plan {
-            let mut wanted: Vec<String> = state
-                .notes
-                .unresolved(plan)
-                .into_iter()
-                .filter(|r| r.kind == RequirementKind::Information)
-                .map(|r| r.text)
-                .collect();
-            if wanted.is_empty() && helpers::unread(plan, &state.notes) {
-                wanted = vec![state.task.clone()];
+        let mut page_facts = Self::page_facts(state, observation);
+        let page_origin = origin_of(&observation.url);
+        let credential_origins: BTreeSet<_> = observation
+            .controls
+            .iter()
+            .filter(|control| asks_for_credentials(control))
+            .map(|control| self.target_origin(control))
+            .collect();
+        for origin in credential_origins {
+            let available =
+                if origin == page_origin { !secrets.is_empty() } else { !self.secret_names(&origin).is_empty() };
+            if !available {
+                page_facts.push(if origin == page_origin {
+                    "No stored secrets are available for this page's origin.".into()
+                } else {
+                    format!("No stored secrets are available for credential fields at {}.", self.mask(&origin))
+                });
             }
-            unread = Some(wanted);
+        }
+        // Historical text is fitted from the end, before the current credential availability fact.
+        if let Some(source) = self.navigation_fact(state, observation, check_login) {
+            page_facts.push(source);
         }
         Ok(StepContext {
             task: state.task.clone(),
+            web_search: self.page.search_price().is_some(),
             subgoal: state.hint.clone(),
-            requirements: state
-                .ready_plan
-                .as_ref()
-                .map_or_else(Vec::new, |plan| plan.requirements.iter().map(|r| r.text.clone()).collect()),
-            notes: state.notes.render_for_navigation(self.config.observation.working_notes_chars, false)?,
-            history: history(&state.history, &self.config.observation),
+            dates: state.dates.clone(),
+            notes: self.decision_notes(state),
+            answered_in_notes: state.notes.answered(),
+            history: state.history.clone(),
             check_login,
+            check_answer: check_bot && !state.read_pages.contains(&observation.page_key),
             check_bot,
+            // Set by the step loop, which knows the document it last asked in.
+            check_surface: false,
             has_attachments: !state.attachments.is_empty(),
             secrets,
-            unread_requirements: unread,
             start_url: state.caller_start.clone(),
             start_landing_url: state.start_landing_url.clone(),
-            recovery_memory: recovery_memory(state, self.config.stall.max_recoveries, |value| self.redact(value)),
+            known_pages: state
+                .known_pages
+                .iter()
+                .filter(|url| !state.reached_known_pages.contains(url))
+                .cloned()
+                .collect(),
             background: state.context.clone(),
+            omitted_actions: 0,
+            problem: None,
+            withheld_targets: Vec::new(),
+            // A page read and unchanged since has nothing more to give a read.
+            withheld: if Self::page_read(state, observation) {
+                vec![fastbrowse_core::models::Operation::Read]
+            } else {
+                Vec::new()
+            },
+            no_value_fields: state
+                .missing
+                .iter()
+                .map(|(_, label, _)| label.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            page_facts,
+            reload: state.reload_target(&observation.url),
+            screenshot: None,
+            ahead: self.ahead(state, observation),
+            plan_ahead: self.config.plan_ahead,
+            list_read: crate::policy::ListRead::None,
         })
+    }
+
+    /// A wall on the route just opened does not describe the alternatives observed before it.
+    ///
+    /// The source page's text and controls are given only while a wall is suspected on the destination: the sign-in
+    /// question is asked on this step, the destination's sign-in reading is above even odds, or it answered with a
+    /// 4xx. The sign-in judgment is what uses them. Otherwise the fact names where the run came from.
+    fn navigation_fact(&self, state: &RunState, observation: &Observation, check_login: bool) -> Option<String> {
+        let (destination, source) = state.navigation_from.as_ref()?;
+        if *destination != state::read_key(observation) {
+            return None;
+        }
+        let wall = check_login
+            || state.login_readings.get(destination).is_some_and(|p| *p > fastbrowse_core::decision::EVEN_ODDS)
+            || observation.response_status.is_some_and(|status| (400..500).contains(&status));
+        if !wall {
+            let previous = json!({"page": {"url": self.mask(&source.url), "title": self.mask(&source.title)}});
+            return Some(format!(
+                "The latest navigation began on this observed page. This source is historical context, not content of the current page: {previous}"
+            ));
+        }
+        let controls: Vec<Value> = source
+            .controls
+            .iter()
+            .map(|control| {
+                json!({
+                    "label": self.mask(&control.label),
+                    "role": self.mask(&control.role),
+                    "context": control.context.as_deref().map(|value| self.mask(value)),
+                    "href": control.href.as_deref().map(|value| self.mask(value)),
+                    "operations": control.operations,
+                })
+            })
+            .collect();
+        let previous = json!({
+            "page": {
+                "url": self.mask(&source.url),
+                "title": self.mask(&source.title),
+                "text": self.mask(&source.viewport_text),
+                "offscreen_text": self.mask(&source.offscreen_text),
+                "response_status": source.response_status,
+            },
+            "login_required_probability": state.login_readings.get(&state::read_key(source)),
+            "controls": controls,
+        });
+        Some(format!(
+            "The latest navigation began on this observed page. These controls were available there before navigation; their current state is unknown. This source is historical context, not content of the current page: {previous}"
+        ))
+    }
+
+    /// This page was read and no action has changed it since.
+    pub(super) fn page_read(state: &RunState, observation: &Observation) -> bool {
+        !observation.document_key.is_empty() && state.read_documents.get(&state::read_key(observation)) == Some(&false)
+    }
+
+    /// Whether this step already judged that the page holds evidence for the task: Jev said it shows a fact the task
+    /// needs, or the run is composing from records and this page is unread. A read of such a page is not asked again
+    /// whether it holds any: the run that read ten pages of quotes for a count was told page 10 held none by its read,
+    /// at 0.58 against the step's 0.89, and its answer said page 10 was never read.
+    pub(super) fn page_shows(state: &RunState, observation: &Observation, decision: &crate::policy::Decision) -> bool {
+        decision.shows_answer.is_some_and(|probability| probability > fastbrowse_core::decision::EVEN_ODDS)
+            || (state.compose && !Self::page_read(state, observation))
+    }
+
+    /// Whether the page is read before the action Jev chose takes the run off it, and if so whether the read may take
+    /// it that the page holds evidence for the task.
+    ///
+    /// Jev's operation can leave a page, or end the run, before anything it shows has been read: an order total is
+    /// gone once the order is placed. Jev has said the page shows what the task needs, so the read is not asked again
+    /// whether it does: the page of a list judged absent was a third of the list lost. Once a read has said the answer
+    /// is written from several records, every new page is one more of them, however it came: a shop's fifth page
+    /// scored under even odds, and a list's More changes no address. The page the run began on is read whatever Jev
+    /// scored it: asked to count a site's Einstein quotes, Jev scored the quote list under even odds, left it for an
+    /// author page, and never came back to the list. Only that read may find nothing: on a bookshop's home page, a
+    /// read that could not say so picked the category link "Travel" as which Travel book costs most.
+    pub(super) fn reads_before_leaving(
+        state: &RunState,
+        observation: &Observation,
+        decision: &crate::policy::Decision,
+    ) -> Option<bool> {
+        let unread = !Self::page_read(state, observation);
+        let first = state.first_url.as_deref() == Some(observation.url.as_str());
+        let shows = Self::page_shows(state, observation, decision);
+        (decision.operation != fastbrowse_core::models::Operation::Read && (shows || (first && unread)))
+            .then_some(shows)
+    }
+
+    /// What code knows about this page that bears on reading it or leaving it. Jev decides what to do with each.
+    fn page_facts(state: &RunState, observation: &Observation) -> Vec<String> {
+        let mut facts = Vec::new();
+        if let Some(status) = observation.response_status.filter(|status| *status >= 400) {
+            facts.push(format!("This page answered HTTP {status}."));
+        }
+        if Self::page_read(state, observation) {
+            facts
+                .push("This page was read and has not changed since: the notes hold what a read takes from it.".into());
+        }
+        if observation.controls.is_empty() {
+            facts.push("This page offers no links or controls: nothing on it leads anywhere else.".into());
+        }
+        if !crate::policy::drawn_surfaces(&observation.controls).is_empty() {
+            facts.push("An element marked `drawn` is a drawn surface, such as a streamed remote browser or a canvas: what it shows is pixels, with no elements inside it for this run to fill or press. A click on it lands on the surface as one element, not on a field or button drawn inside it.".into());
+        }
+        let document = &observation.document_key;
+        let read = state.read_documents.get(&state::read_key(observation)).copied();
+        if !document.is_empty() && read == Some(true) {
+            facts.push(
+                "This page changed after it was last read, so the notes taken from it predate the change.".into(),
+            );
+        }
+        facts.extend(helpers::unsent_fact(&state.history, observation));
+        if state.to_carry_out {
+            facts.extend(helpers::empty_fields_fact(&state.missing, observation));
+        }
+        if state.compose {
+            facts.extend(helpers::page_change_fact(&state.history, observation));
+        }
+        if let Some(failure) = state.site_failure.as_ref().filter(|failure| failure.transient()) {
+            let stood = state.steps.len().saturating_sub(failure.since);
+            let mut fact = format!(
+                "The site failed: {} It has stood for {stood} steps. A failure is not the task's answer, and neither is an empty result shown beside it.",
+                failure.message()
+            );
+            if failure.url == observation.url {
+                fact += " This page's own address is offered to navigate to, which reloads it; a retry control the page offers, or another route, may also get past the failure.";
+            }
+            facts.push(fact);
+        }
+        facts
     }
 
     /// Stored secrets this origin may receive. With any, a sign-in wall is a step to take, not a stop.
@@ -948,29 +1097,6 @@ impl Agent {
             .filter(|secret| secret_allowed(secret, origin))
             .map(|secret| secret.name)
             .collect()
-    }
-
-    /// Stuck becomes needs_login when a sign-in is what the run stopped at: a caller told "stuck" narrows the task
-    /// rather than signing in.
-    fn walled(&self, state: &RunState, observation: &Observation, status: Status, said: bool) -> Status {
-        if status != Status::Stuck {
-            return status;
-        }
-        // A model's word alone is not the page's: absent controls do not establish missing authentication, so a run
-        // that stopped saying it was signed out ends needs_login only when the page itself shows a sign-in to act on,
-        // or the run is standing on a wall it actually observed. A page offering neither is stuck, not signed out.
-        let walled = (said && sign_in::shows_sign_in(observation))
-            || state
-                .passed_wall
-                .as_deref()
-                .is_some_and(|wall| fastbrowse_core::navigation::same_address(wall, &observation.url));
-        // A held secret makes the sign-in work the run can do, so a run holding one did not stop for want of it.
-        let origin = origin_of(&observation.url);
-        if walled && !(!origin.is_empty() && !self.secret_names(&origin).is_empty()) {
-            Status::NeedsLogin
-        } else {
-            status
-        }
     }
 }
 
@@ -986,6 +1112,30 @@ struct Outcome {
     wall: Option<Wall>,
 }
 
+/// The time a run that composes its answer keeps back from its limit to write it: composing waits on one LLM call.
+fn compose_reserve(limit: f64) -> f64 {
+    (limit * 0.1).min(60.0)
+}
+
+/// When the run must stop browsing: its time limit, less the time a run that composes its answer keeps back to write
+/// it. None for a run with no time limit.
+pub(super) fn browsing_deadline(ledger: &Ledger, compose: bool) -> Option<tokio::time::Instant> {
+    let limit = ledger.limits.max_seconds?;
+    let browsing = if compose { limit - compose_reserve(limit) } else { limit };
+    let left = (browsing - ledger.started()?.elapsed().as_secs_f64()).max(0.0);
+    Some(tokio::time::Instant::now() + Duration::from_secs_f64(left))
+}
+
+/// A run that composes its answer has browsed for as long as it can and still write it within its time limit.
+pub(super) fn out_of_browsing_time(state: &RunState) -> Option<Stop> {
+    if !state.compose {
+        return None;
+    }
+    let deadline = browsing_deadline(&state.ledger, true)?;
+    let stated = state.ledger.stated().max_seconds.or(state.ledger.limits.max_seconds)?;
+    (deadline <= tokio::time::Instant::now()).then(|| Stop::new(Status::BudgetExceeded, time_limit(stated)))
+}
+
 fn time_limit(limit: f64) -> String {
     format!("time limit {}s reached", fastbrowse_core::py::json::float_str(limit))
 }
@@ -995,15 +1145,40 @@ pub fn breakdown(lines: Vec<CostLine>) -> CostBreakdown {
     CostBreakdown { lines }
 }
 
-/// Python's `json.dumps` of a list of strings, as the recovery prompt lists addresses.
-fn dumps_strings(values: &[String]) -> String {
-    dumps(&Value::from(values.to_vec()))
-}
-
 /// A run whose page has no browser behind it reached a step only a browser can take. The document was never the
 /// problem and a second attempt cannot help, so it ends `blocked` with the reason, carrying nothing it read.
+/// The variant names of an error and no text it carries, so a public log can say what failed without quoting a page.
+fn failure_kind(error: &impl std::fmt::Debug) -> String {
+    let debug = format!("{error:?}");
+    let names: String = debug.chars().take_while(|c| c.is_alphanumeric() || *c == '(').collect();
+    names.trim_end_matches('(').replace('(', ".")
+}
+
+/// `failure_kind`, then the CDP call a browser message opens with and the code in `failed (code)`. The rest of such a
+/// message can be an address, so nothing else of it is kept.
+fn browser_failure_kind(error: &BrowserError) -> String {
+    let kind = failure_kind(error);
+    let message = error.to_string();
+    let method = message.split_whitespace().next().unwrap_or_default();
+    let is_call = method.split_once('.').is_some_and(|(domain, name)| {
+        domain.chars().next().is_some_and(char::is_uppercase)
+            && !name.is_empty()
+            && name.chars().all(char::is_alphanumeric)
+    });
+    if !is_call {
+        return kind;
+    }
+    let (_, rest) = message.split_once(method).unwrap_or_default();
+    let code: String = match rest.split_once(" failed (") {
+        Some((_, code)) => code.chars().take_while(|c| c.is_alphanumeric() || matches!(c, ':' | '_' | '-')).collect(),
+        None => rest.split_whitespace().next().unwrap_or_default().into(),
+    };
+    format!("{kind}/{method}/{code}")
+}
+
 fn blocked_without_browser(message: String) -> RunResult {
     RunResult {
+        browser: None,
         status: Status::Blocked,
         budget: None,
         answer: None,

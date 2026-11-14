@@ -1,12 +1,12 @@
-//! tests/test_serve.py: `fastbrowse serve --stdio` as a client sees it, the messages on the wire and the process
+//! `fastbrowse serve --stdio` as a client sees it, the messages on the wire and the process
 //! exiting. Most cases drive the server over in-memory streams; the ones about the real pipe start the binary.
 
 mod common;
 
 use std::io::{Read, Write};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
-use common::{Recorder, binary, serving, settings};
+use common::{Recorder, isolated_binary, serving, settings};
 use fastbrowse_core::protocol::{ErrorCode, PROTOCOL_VERSION};
 use serde_json::{Value, json};
 
@@ -19,25 +19,25 @@ fn server() -> common::FakeClient {
 #[tokio::test]
 async fn test_initialize_answers_with_the_protocol_version_and_the_package_version() {
     let mut client = server();
-    let response = client.request("initialize", Some(json!({"protocol_version": 1}))).await;
+    let response = client.request("initialize", Some(json!({"protocol_version": PROTOCOL_VERSION}))).await;
     assert_eq!(
         response,
-        json!({"jsonrpc": "2.0", "id": 1, "result": {"protocol_version": 1, "fastbrowse_version": VERSION}})
+        json!({"jsonrpc": "2.0", "id": 1, "result": {"protocol_version": PROTOCOL_VERSION, "fastbrowse_version": VERSION}})
     );
-    assert_eq!(PROTOCOL_VERSION, 1);
+    assert_eq!(PROTOCOL_VERSION, 3);
 }
 
 #[tokio::test]
 async fn test_a_client_on_another_protocol_version_still_learns_the_servers() {
     let mut client = server();
-    let result = client.result("initialize", Some(json!({"protocol_version": 2, "added_in_two": true}))).await;
-    assert_eq!(result["protocol_version"], 1);
+    let result = client.result("initialize", Some(json!({"protocol_version": 2, "from_older_client": true}))).await;
+    assert_eq!(result["protocol_version"], PROTOCOL_VERSION);
 }
 
 #[tokio::test]
 async fn test_shutdown_is_answered_and_then_the_server_exits_zero() {
     let mut client = server();
-    client.result("initialize", Some(json!({"protocol_version": 1}))).await;
+    client.result("initialize", Some(json!({"protocol_version": PROTOCOL_VERSION}))).await;
     let response = client.request("shutdown", None).await;
     assert_eq!(response, json!({"jsonrpc": "2.0", "id": 2, "result": null}));
     assert_eq!(client.exit_code().await, 0);
@@ -46,7 +46,7 @@ async fn test_shutdown_is_answered_and_then_the_server_exits_zero() {
 #[tokio::test]
 async fn test_end_of_input_is_a_shutdown() {
     let mut client = server();
-    client.result("initialize", Some(json!({"protocol_version": 1}))).await;
+    client.result("initialize", Some(json!({"protocol_version": PROTOCOL_VERSION}))).await;
     client.close_input();
     assert_eq!(client.exit_code().await, 0);
     assert!(client.silent().await);
@@ -84,7 +84,7 @@ async fn test_a_param_the_method_does_not_take_is_refused_and_not_dropped() {
     assert_eq!(response["error"]["code"], -32602);
     assert!(response["error"]["message"].as_str().unwrap().contains("force"));
     // A refused shutdown did not shut anything down.
-    assert_eq!(client.request("initialize", Some(json!({"protocol_version": 1}))).await["id"], 2);
+    assert_eq!(client.request("initialize", Some(json!({"protocol_version": PROTOCOL_VERSION}))).await["id"], 2);
 }
 
 #[tokio::test]
@@ -94,12 +94,11 @@ async fn test_a_line_that_is_not_json_gets_a_parse_error_and_the_server_keeps_se
     let refused = client.receive().await;
     client.send_line(b"\xff\xfe\n");
     let undecodable = client.receive().await;
-    let result = client.result("initialize", Some(json!({"protocol_version": 1}))).await;
-    // The in-memory line keeps its newline, which CPython counts into the position as well.
-    let message = "Expecting ':' delimiter: line 2 column 1 (char 37)";
+    let result = client.result("initialize", Some(json!({"protocol_version": PROTOCOL_VERSION}))).await;
+    let message = "EOF while parsing an object at line 2 column 0";
     assert_eq!(refused, json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": message}}));
     assert_eq!(undecodable["error"]["code"], -32700);
-    assert_eq!(result["protocol_version"], 1);
+    assert_eq!(result["protocol_version"], PROTOCOL_VERSION);
 }
 
 #[tokio::test]
@@ -122,7 +121,7 @@ async fn test_json_that_is_not_a_request_is_refused_as_invalid_request() {
 async fn test_a_notification_is_never_answered_even_when_its_method_is_unknown() {
     let mut client = server();
     client.send(json!({"jsonrpc": "2.0", "method": "run/teleport"}));
-    let response = client.request("initialize", Some(json!({"protocol_version": 1}))).await;
+    let response = client.request("initialize", Some(json!({"protocol_version": PROTOCOL_VERSION}))).await;
     // Had the notification been answered, that answer would have come first and be waiting here.
     assert_eq!(response["id"], 1);
     assert!(client.inbox.is_empty());
@@ -136,10 +135,10 @@ fn test_the_error_codes_are_a_closed_set() {
 }
 
 const INITIALIZE: &[u8] =
-    b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocol_version\":1}}\n";
+    b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocol_version\":2}}\n";
 
 fn start(arguments: &[&str]) -> std::process::Child {
-    Command::new(binary())
+    isolated_binary()
         .args(arguments)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -169,7 +168,7 @@ fn test_the_command_answers_shutdown_and_exits_zero_while_its_input_is_still_ope
     let mut stdout = Vec::new();
     process.stdout.take().unwrap().read_to_end(&mut stdout).unwrap();
     let replies = lines(&stdout);
-    assert_eq!(replies[0]["result"], json!({"protocol_version": 1, "fastbrowse_version": VERSION}));
+    assert_eq!(replies[0]["result"], json!({"protocol_version": PROTOCOL_VERSION, "fastbrowse_version": VERSION}));
     assert_eq!(replies[1], json!({"jsonrpc": "2.0", "id": 2, "result": null}));
     drop(stdin);
 }
@@ -187,14 +186,14 @@ fn test_the_command_exits_zero_when_its_input_ends() {
 fn test_a_request_line_over_64_kib_is_read_whole() {
     // The id comes back in the reply, so a line cut short or split in two could not produce this one.
     let long_id = "x".repeat(200_000);
-    let request = json!({"jsonrpc": "2.0", "id": long_id, "method": "initialize", "params": {"protocol_version": 1}});
+    let request = json!({"jsonrpc": "2.0", "id": long_id, "method": "initialize", "params": {"protocol_version": PROTOCOL_VERSION}});
     let mut process = start(&["serve", "--stdio"]);
     process.stdin.take().unwrap().write_all(format!("{request}\n").as_bytes()).unwrap();
     let output = process.wait_with_output().unwrap();
     let replies = lines(&output.stdout);
     assert_eq!(replies.len(), 1);
     assert_eq!(replies[0]["id"], json!(long_id));
-    assert_eq!(replies[0]["result"]["protocol_version"], 1);
+    assert_eq!(replies[0]["result"]["protocol_version"], PROTOCOL_VERSION);
 }
 
 #[tokio::test]

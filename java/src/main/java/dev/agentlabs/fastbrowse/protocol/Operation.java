@@ -13,6 +13,10 @@ public enum Operation {
     DRAG,
     @JsonProperty("fill")
     FILL,
+    @JsonProperty("press")
+    PRESS,
+    @JsonProperty("blur")
+    BLUR,
     @JsonProperty("select")
     SELECT,
     @JsonProperty("enter")
@@ -31,12 +35,14 @@ public enum Operation {
     UPLOAD,
     @JsonProperty("dialog")
     DIALOG,
+    @JsonProperty("wait")
+    WAIT,
     @JsonProperty("read")
     READ,
     @JsonProperty("done")
     DONE,
-    @JsonProperty("escalate")
-    ESCALATE,
     @JsonProperty("navigate")
-    NAVIGATE
+    NAVIGATE,
+    @JsonProperty("search")
+    SEARCH
 }

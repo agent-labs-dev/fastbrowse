@@ -9,20 +9,20 @@ import pytest
 from pydantic import ValidationError
 
 from fastbrowse.evals import benchmarks
-from fastbrowse.evals.benchmarks import Candidate, check_catalog, regressions
+from fastbrowse.evals.benchmarks import SCHEMA, Candidate, Row, check_catalog, regressions
+from fastbrowse.evals.status import TIMING_BASIS
 
 CATALOG = Path(__file__).parents[1] / "src/fastbrowse/evals/benchmark-catalog.json"
 
 
-run = {
-    "head_sha": "a" * 40,
-    "conclusion": "success",
-    "status": "completed",
-    "path": ".github/workflows/evals.yml",
-    "repository": {"full_name": "agent-labs-dev/fastbrowse"},
-    "head_branch": "main",
-    "event": "workflow_dispatch",
-}
+def excluded(tasks: list[dict], ids: list[str], arms: list[str]) -> list[dict]:
+    """The catalog's exclusions of `arms` among `ids`, as a candidate group lists them."""
+    return [
+        {"arm": arm, "task": t["id"], "reason": t["excluded"][arm]}
+        for arm in sorted(arms)
+        for t in sorted(tasks, key=lambda t: t["id"])
+        if t["id"] in ids and arm not in t["arms"]
+    ]
 
 
 @pytest.fixture
@@ -31,20 +31,21 @@ def candidate() -> dict:
     digest = hashlib.sha256(raw).hexdigest()
     catalog = json.loads(raw)
     tasks = [task for suite in catalog["suites"].values() for task in suite]
+    hosted = {t["id"] for t in tasks if "browser-use" in t["arms"]}
     groups = []
     for name, metric, arms, ids, repeats in (
         (
             "internal-hosted",
             "task-success",
             ["fastbrowse", "browser-use"],
-            sorted(t["id"] for t in tasks if "browser-use" in t["arms"]),
+            sorted(t["id"] for t in tasks if "fastbrowse" in t["arms"]),
             3,
         ),
         (
             "internal-ultrafast",
             "task-success",
-            ["fastbrowse", "jev-ultrafast"],
-            sorted(t["id"] for t in tasks if "jev-ultrafast" in t["arms"]),
+            ["fastbrowse-pool", "browser-use-ultrafast"],
+            sorted(t["id"] for t in tasks if "browser-use-ultrafast" in t["arms"]),
             3,
         ),
         ("bu-bench", "weighted-rubric", ["fastbrowse"], [f"bu-{i}" for i in range(200)], 1),
@@ -71,15 +72,19 @@ def candidate() -> dict:
                         "seconds": 10.0,
                         "dollars": 0.01,
                         "physical_runs": 1,
+                        "llm_calls": 10,
+                        "timing_basis": TIMING_BASIS,
                     }
                     for task in ids
                     for repeat in range(repeats)
                     for arm in arms
+                    if arm != "browser-use" or task in hosted
                 ],
+                **({"excluded": excluded(tasks, ids, ["browser-use"])} if name == "internal-hosted" else {}),
             }
         )
     return {
-        "schema_version": 1,
+        "schema_version": SCHEMA,
         "campaign_id": "test-campaign",
         "agent_sha": "a" * 40,
         "runner_sha": "b" * 40,
@@ -90,22 +95,12 @@ def candidate() -> dict:
     }
 
 
-def _current(candidate: dict) -> dict:
-    """The fixture as a new measurement makes it: schema 5, the Ultrafast comparison run on fastbrowse's own pool."""
-    out = copy.deepcopy(candidate)
-    out["schema_version"] = 5
-    for row in out["groups"][1]["rows"]:
-        if row["arm"] == "fastbrowse":
-            row["arm"] = "fastbrowse-pool"
-    return out
-
-
 def test_complete_candidate_matches_the_catalog(candidate):
-    check_catalog(Candidate.model_validate(_current(candidate)), CATALOG)
+    check_catalog(Candidate.model_validate(candidate), CATALOG)
 
 
 def test_official_suite_can_publish_without_new_comparator_runs(candidate):
-    candidate.update(schema_version=2, groups=[candidate["groups"][2]])
+    candidate.update(groups=[candidate["groups"][2]])
     check_catalog(Candidate.model_validate(candidate), CATALOG)
 
 
@@ -141,9 +136,6 @@ def test_internal_fastbrowse_group_covers_the_full_catalog_without_comparators(c
     }
     candidate.update(schema_version=3, groups=[group])
     check_catalog(Candidate.model_validate(candidate), CATALOG)
-    candidate["schema_version"] = 2
-    with pytest.raises(ValidationError, match="four original"):
-        Candidate.model_validate(candidate)
 
 
 def test_internal_fastbrowse_group_rejects_a_missing_catalog_slot(candidate):
@@ -187,58 +179,43 @@ def test_a_new_candidate_cannot_keep_a_retired_task(candidate):
         check_catalog(Candidate.model_validate(candidate), CATALOG)
 
 
-def test_legacy_schema_still_requires_all_four_groups(candidate):
-    candidate["groups"] = [candidate["groups"][2]]
-    with pytest.raises(ValidationError, match="all four"):
-        Candidate.model_validate(candidate)
-
-
-def test_legacy_complete_candidate_without_group_provenance_remains_valid(candidate):
-    for group in candidate["groups"]:
-        del group["agent_sha"], group["runner_sha"]
-    Candidate.model_validate(candidate)
-
-
 def test_copied_groups_cannot_be_attributed_to_a_new_build(candidate):
-    candidate.update(schema_version=2, agent_sha="c" * 40)
+    candidate.update(agent_sha="c" * 40)
     candidate["fixture"]["head_sha"] = "c" * 40
     with pytest.raises(ValidationError, match="measured agent and runner"):
         Candidate.model_validate(candidate)
 
 
 def test_independent_groups_require_explicit_provenance(candidate):
-    candidate["schema_version"] = 2
     del candidate["groups"][0]["agent_sha"]
-    with pytest.raises(ValidationError, match="measured agent and runner"):
+    with pytest.raises(ValidationError, match="agent_sha"):
         Candidate.model_validate(candidate)
 
 
 @pytest.mark.parametrize("groups", [[], [2, 2]])
 def test_independent_publication_requires_unique_complete_groups(candidate, groups):
-    candidate.update(schema_version=2, groups=[candidate["groups"][i] for i in groups])
+    candidate.update(groups=[candidate["groups"][i] for i in groups])
     with pytest.raises(ValidationError):
         Candidate.model_validate(candidate)
 
 
 def test_published_groups_cannot_be_removed(candidate):
     before = Candidate.model_validate(candidate)
-    candidate.update(schema_version=2, groups=[candidate["groups"][2]])
+    candidate.update(groups=[candidate["groups"][2]])
     with pytest.raises(ValueError, match="cannot disappear"):
         regressions(Candidate.model_validate(candidate), before)
 
 
 def test_new_complete_suite_can_be_added_to_an_approved_campaign(candidate):
-    candidate["schema_version"] = 2
     before = Candidate.model_validate({**candidate, "groups": [candidate["groups"][2]]})
     regressions(Candidate.model_validate(candidate), before)
 
 
-def test_legacy_schema_cannot_bypass_an_approved_group_provenance_check(candidate):
-    before = Candidate.model_validate({**candidate, "schema_version": 2})
-    for group in candidate["groups"]:
-        del group["agent_sha"], group["runner_sha"]
+def test_a_candidate_cannot_downgrade_the_schema(candidate):
+    before = Candidate.model_validate(candidate)
+    older = {**candidate, "schema_version": 4, "groups": [candidate["groups"][2]]}
     with pytest.raises(ValueError, match="cannot downgrade"):
-        regressions(Candidate.model_validate(candidate), before)
+        regressions(Candidate.model_validate(older), before)
 
 
 @pytest.mark.parametrize(
@@ -284,6 +261,24 @@ def test_matched_regressions_block_publication(candidate, field, value):
         regressions(Candidate.model_validate(candidate), before)
 
 
+def test_more_jev_calls_are_not_a_regression(candidate):
+    before = Candidate.model_validate(copy.deepcopy(candidate))
+    for row in candidate["groups"][0]["rows"]:
+        row["jev_calls"] = 400
+    regressions(Candidate.model_validate(candidate), before)
+
+
+@pytest.mark.parametrize(("count", "basis"), [(None, None), (None, "physical_requests"), (40, "physical_requests")])
+def test_missing_or_different_call_counts_are_advisory(candidate, count, basis):
+    before = Candidate.model_validate(copy.deepcopy(candidate))
+    for group in candidate["groups"]:
+        for row in group["rows"]:
+            row["llm_calls"] = count
+            if basis is not None:
+                row["llm_calls_basis"] = basis
+    regressions(Candidate.model_validate(candidate), before)
+
+
 def _official(candidate: dict, repeats: int, failed: int = 0) -> Candidate:
     """The BU Bench group alone at this many repeats, with the last `failed` repeats of its first task unfinished."""
     group = copy.deepcopy(candidate["groups"][2])
@@ -310,6 +305,80 @@ def test_changed_protocol_cannot_silently_skip_regressions(candidate):
     candidate["groups"][0]["limits"] = ["Different limits"]
     with pytest.raises(ValueError, match="protocol changed"):
         regressions(Candidate.model_validate(candidate), before)
+
+
+def _block(candidate: dict, index: int) -> dict:
+    """Move one official row out of the score: the slot the site blocked on every retry."""
+    group = candidate["groups"][2]
+    row = group["rows"].pop(index)
+    slot = {k: row[k] for k in ("task", "repeat", "arm", "seconds", "dollars")} | {"physical_runs": 6}
+    group.setdefault("blocked", []).append(slot)
+    return slot
+
+
+def test_a_blocked_slot_fills_its_place_in_the_grid_and_counts_as_a_failure(candidate):
+    baseline = Candidate.model_validate(copy.deepcopy(candidate))
+    slot = _block(candidate, 0)
+    published = Candidate.model_validate(candidate)
+    assert [b.task for b in published.groups[2].blocked] == [slot["task"]]
+    assert len(published.groups[2].rows) == 199
+    # The site reads a legacy blocked slot as a failed attempt, so it cannot stand in for the pass it replaced.
+    with pytest.raises(ValueError, match="source-score regression"):
+        regressions(published, baseline)
+
+
+def test_a_failed_row_matches_the_legacy_blocked_slot_it_replaces(candidate):
+    """A baseline's blocked slot was a failed attempt, so the row a new candidate records for the same refusal, with
+    its `failure`, is no regression on the repeats that graded."""
+    group = candidate["groups"][0]
+    index = next(i for i, r in enumerate(group["rows"]) if r["arm"] == "fastbrowse")
+    row = group["rows"][index]
+    failed = {
+        **row,
+        "status": "blocked",
+        "completed": False,
+        "score": 0.0,
+        "failure": "blocked by the site's bot check",
+    }
+    legacy = copy.deepcopy(candidate)
+    legacy["groups"][0]["rows"].pop(index)
+    keys = ("task", "repeat", "arm", "seconds", "dollars")
+    legacy["groups"][0]["blocked"] = [{k: row[k] for k in keys} | {"physical_runs": 1}]
+    group["rows"][index] = failed
+    regressions(Candidate.model_validate(candidate), Candidate.model_validate(legacy))
+
+
+def test_a_slot_cannot_be_both_graded_and_blocked(candidate):
+    group = candidate["groups"][2]
+    _block(candidate, 0)
+    group["rows"].append({**group["rows"][0], "task": group["blocked"][0]["task"]})
+    group["rows"].pop(0)
+    group["blocked"].append(dict(group["blocked"][0]))
+    with pytest.raises(ValidationError, match="exactly one measured row"):
+        Candidate.model_validate(candidate)
+
+
+def test_a_group_with_nothing_graded_cannot_publish(candidate):
+    for _ in range(len(candidate["groups"][2]["rows"])):
+        _block(candidate, 0)
+    with pytest.raises(ValidationError, match="measures only"):
+        Candidate.model_validate(candidate)
+
+
+def test_a_group_with_nothing_blocked_keeps_its_bytes(candidate):
+    dumped = Candidate.model_validate(candidate).model_dump(mode="json")
+    assert not any("blocked" in group for group in dumped["groups"])
+    _block(candidate, 0)
+    assert "blocked" in Candidate.model_validate(candidate).model_dump(mode="json")["groups"][2]
+
+
+def test_a_blocked_repeat_cannot_hide_a_regression_on_the_repeats_that_graded(candidate):
+    baseline = Candidate.model_validate(copy.deepcopy(candidate))
+    for row in candidate["groups"][2]["rows"][:2]:
+        row["score"] = 0.0
+    _block(candidate, 1)
+    with pytest.raises(ValueError, match="source-score regression"):
+        regressions(Candidate.model_validate(candidate), baseline)
 
 
 def test_fastbrowse_completion_cannot_disagree_with_status(candidate):
@@ -353,6 +422,7 @@ def test_fixture_claims_are_checked_against_the_actual_artifact(candidate, monke
         target.write_text("\n".join(json.dumps(r) for r in rows))
 
     monkeypatch.setattr(benchmarks.subprocess, "run", download)
+    candidate["fixture"].update(passed=len(rows), total=len(rows))
     parsed = Candidate.model_validate(candidate)
     benchmarks.check_fixture(parsed)
     rows[0]["passed"] = False
@@ -392,6 +462,7 @@ def test_a_fixture_receipt_from_another_branch_counts_only_at_a_main_commit_it_m
         target.write_text("\n".join(json.dumps(r) for r in rows))
 
     monkeypatch.setattr(benchmarks.subprocess, "run", download)
+    candidate["fixture"].update(passed=len(rows), total=len(rows))
     parsed = Candidate.model_validate(candidate)
     benchmarks.check_fixture(parsed)
     run["head_sha"] = "b" * 40
@@ -466,7 +537,7 @@ def test_a_protocol_change_skips_only_the_changed_groups(candidate):
     # internal-ultrafast kept its protocol, so it is still compared with its published figures.
     task = changed["groups"][1]["task_ids"][0]
     for row in changed["groups"][1]["rows"]:
-        if row["task"] == task and row["arm"] == "fastbrowse":
+        if row["task"] == task and row["arm"] == "fastbrowse-pool":
             row["score"] = 0.0
     with pytest.raises(ValueError, match="source-score regression: internal-ultrafast"):
         regressions(Candidate.model_validate(changed), base, changed={"internal-hosted"})
@@ -475,7 +546,7 @@ def test_a_protocol_change_skips_only_the_changed_groups(candidate):
 def test_a_protocol_change_cannot_drop_a_published_group(candidate):
     base = Candidate.model_validate(candidate)
     changed = _changed(candidate)
-    changed.update(schema_version=2, groups=changed["groups"][:3])
+    changed.update(groups=changed["groups"][:3])
     with pytest.raises(ValueError, match="cannot disappear"):
         regressions(Candidate.model_validate(changed), base, changed={"internal-hosted", "online-mind2web"})
 
@@ -940,6 +1011,16 @@ def test_a_protocol_change_keeps_comparing_a_retirement_only_group(candidate, tm
         benchmarks.main()
 
 
+def test_check_diff_holds_a_changed_record_to_the_current_schema(candidate, tmp_path, monkeypatch):
+    from fastbrowse.evals.benchmarks import check_diff
+
+    _repository(tmp_path, monkeypatch, {})
+    older = {**candidate, "schema_version": 4, "groups": [candidate["groups"][2]]}
+    (tmp_path / "docs/results/benchmark-candidate.json").write_bytes(_bytes(older))
+    with pytest.raises(ValueError, match=f"must use schema {SCHEMA}"):
+        check_diff("base", Path("catalog.json"))
+
+
 def test_check_diff_admits_only_the_archive_pair_an_approved_change_names(candidate, tmp_path, monkeypatch):
     from fastbrowse.evals.benchmarks import check_diff, protocol_change
 
@@ -1076,7 +1157,7 @@ def test_an_export_row_count_matching_the_groups_is_accepted(candidate):
 
 def test_status_names_the_receipt_and_the_single_next_action(candidate, tmp_path):
     path = tmp_path / "benchmark-candidate.json"
-    path.write_text(json.dumps(_export_candidate(_current(candidate))))
+    path.write_text(json.dumps(_export_candidate(candidate)))
     report = benchmarks.status(path, CATALOG, tmp_path / "absent.json")
     assert "PASS export" in report
     assert "no published baseline" in report
@@ -1131,8 +1212,14 @@ def test_bare_status_reads_the_staged_candidate(tmp_path, monkeypatch):
     assert seen == [Path("docs/results/benchmark-candidate.json")]
 
 
-def _ultrafast(candidate: dict, schema: int, arms: tuple[str, ...]) -> dict:
+NAVIGATION = ["arxiv-open", "flights-search", "github-open", "hn-comments", "pypi-open", "wiki-open"]
+"""The six tasks the Ultrafast comparison ran before schema 7, when it measured jev-ultrafast."""
+
+
+def _ultrafast(candidate: dict, schema: int, arms: tuple[str, ...], task_ids: list[str] | None = None) -> dict:
     group = copy.deepcopy(candidate["groups"][1])
+    if task_ids is not None:
+        group["task_ids"] = task_ids
     template = group["rows"][0]
     group["rows"] = [
         {**template, "task": t, "repeat": r, "arm": a} for t in group["task_ids"] for r in range(3) for a in arms
@@ -1141,49 +1228,59 @@ def _ultrafast(candidate: dict, schema: int, arms: tuple[str, ...]) -> dict:
 
 
 @pytest.mark.parametrize(
-    ("schema", "arms", "valid"),
+    ("schema", "arms", "task_ids", "valid"),
     [
-        # Schema 5 compares the two products each on its own backend: fastbrowse's pool against jev-ultrafast.
-        (5, ("fastbrowse-pool", "jev-ultrafast"), True),
-        (5, ("fastbrowse", "jev-ultrafast"), False),
-        # Figures approved before keep the pairing they were measured under.
-        (4, ("fastbrowse", "jev-ultrafast"), True),
-        (4, ("fastbrowse-pool", "jev-ultrafast"), False),
-        (2, ("fastbrowse", "jev-ultrafast"), True),
+        # Schema 7 compares fastbrowse on its own pool with the hosted agent on bu-ultrafast, on every task both run.
+        (7, ("fastbrowse-pool", "browser-use-ultrafast"), None, True),
+        (7, ("fastbrowse-pool", "jev-ultrafast"), None, False),
+        # Figures approved before keep the pairing they were measured under: from 5 the pool against jev-ultrafast,
+        # before it fastbrowse on a cloud browser.
+        (5, ("fastbrowse-pool", "jev-ultrafast"), NAVIGATION, True),
+        (5, ("fastbrowse", "jev-ultrafast"), NAVIGATION, False),
+        (5, ("fastbrowse-pool", "browser-use-ultrafast"), NAVIGATION, False),
+        (4, ("fastbrowse", "jev-ultrafast"), NAVIGATION, True),
+        (4, ("fastbrowse-pool", "jev-ultrafast"), NAVIGATION, False),
     ],
 )
-def test_the_ultrafast_pairing_follows_the_schema(candidate, schema, arms, valid):
-    data = _ultrafast(candidate, schema, arms)
+def test_the_ultrafast_pairing_follows_the_schema(candidate, schema, arms, task_ids, valid):
+    data = _ultrafast(candidate, schema, arms, task_ids)
     if not valid:
         with pytest.raises(ValidationError, match="internal-ultrafast measures only"):
             Candidate.model_validate(data)
         return
     parsed = Candidate.model_validate(data)
-    assert len(parsed.groups[0].task_ids) == 6
-    if schema < 5:
-        # The old pairing still reads, but a new measurement on the current catalog must use the pool.
-        with pytest.raises(ValueError, match="pair fastbrowse-pool"):
+    if schema < 7:
+        # The old pairing still reads, but a new measurement on the current catalog must use the current one.
+        with pytest.raises(ValueError, match="pair browser-use-ultrafast"):
             check_catalog(parsed, CATALOG)
     else:
+        assert len(parsed.groups[0].task_ids) == 52
         check_catalog(parsed, CATALOG)
 
 
 def test_the_pool_arm_is_the_one_guarded_in_the_ultrafast_comparison(candidate):
-    before = Candidate.model_validate(_ultrafast(candidate, 5, ("fastbrowse-pool", "jev-ultrafast")))
-    data = _ultrafast(candidate, 5, ("fastbrowse-pool", "jev-ultrafast"))
+    before = Candidate.model_validate(_ultrafast(candidate, SCHEMA, ("fastbrowse-pool", "browser-use-ultrafast")))
+    data = _ultrafast(candidate, SCHEMA, ("fastbrowse-pool", "browser-use-ultrafast"))
     task = data["groups"][0]["task_ids"][0]
     for row in data["groups"][0]["rows"]:
         if row["task"] == task and row["arm"] == "fastbrowse-pool":
             row["llm_calls"] = 40
-    with pytest.raises(ValueError, match="llm_calls regression: internal-ultrafast"):
+    with pytest.raises(ValueError, match="efficiency regression: internal-ultrafast"):
         regressions(Candidate.model_validate(data), before)
 
 
-def test_repointing_the_ultrafast_comparison_is_a_protocol_change(candidate):
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ((4, ("fastbrowse", "jev-ultrafast")), (5, ("fastbrowse-pool", "jev-ultrafast"))),
+        ((5, ("fastbrowse-pool", "jev-ultrafast")), (7, ("fastbrowse-pool", "browser-use-ultrafast"))),
+    ],
+)
+def test_repointing_the_ultrafast_comparison_is_a_protocol_change(candidate, old, new):
     from fastbrowse.evals.benchmarks import unapproved_changes
 
-    before = Candidate.model_validate(_ultrafast(candidate, 4, ("fastbrowse", "jev-ultrafast")))
-    after = Candidate.model_validate(_ultrafast(candidate, 5, ("fastbrowse-pool", "jev-ultrafast")))
+    before = Candidate.model_validate(_ultrafast(candidate, *old, NAVIGATION))
+    after = Candidate.model_validate(_ultrafast(candidate, *new, NAVIGATION))
     assert unapproved_changes(after, before, CATALOG.read_bytes()) == {"internal-ultrafast"}
     with pytest.raises(ValueError, match="protocol changed: internal-ultrafast"):
         regressions(after, before, CATALOG.read_bytes())
@@ -1212,28 +1309,28 @@ def test_any_collaborator_who_dispatches_publish_evals_publishes_the_approved_fi
 
 
 def _head_to_head(candidate: dict, arms: tuple[str, ...]) -> dict:
-    """The current fixture with the head-to-head measured by `arms`: Ultrafast on the tasks of the set the catalog
-    lists it for."""
-    out = _current(candidate)
+    """The fixture with the head-to-head measured by `arms`, each on the tasks of the set the catalog lists it for."""
+    out = copy.deepcopy(candidate)
     group = out["groups"][0]
     template = group["rows"][0]
-    ultrafast = set(out["groups"][1]["task_ids"])
+    tasks = [t for suite in json.loads(CATALOG.read_bytes())["suites"].values() for t in suite]
     group["rows"] = [
-        {**template, "task": task, "repeat": repeat, "arm": arm, "dollars": 0.01}
+        {**template, "task": t["id"], "repeat": repeat, "arm": arm, "dollars": 0.01}
         for arm in arms
-        for task in group["task_ids"]
-        if arm != "jev-ultrafast" or task in ultrafast
+        for t in tasks
+        if t["id"] in group["task_ids"] and arm in t["arms"]
         for repeat in range(3)
     ]
+    group["excluded"] = excluded(tasks, group["task_ids"], [a for a in arms if a != "fastbrowse"])
     return out
 
 
 @pytest.mark.parametrize(
     "arms",
     [
-        ("fastbrowse", "browser-use", "jev-ultrafast"),
+        ("fastbrowse", "browser-use", "browser-use-ultrafast", "browser-harness"),
         ("fastbrowse", "browser-use"),
-        ("browser-use", "jev-ultrafast"),
+        ("browser-use", "browser-harness"),
     ],
 )
 def test_the_head_to_head_publishes_whichever_of_its_arms_ran(candidate, arms):
@@ -1241,7 +1338,7 @@ def test_the_head_to_head_publishes_whichever_of_its_arms_ran(candidate, arms):
     check_catalog(parsed, CATALOG)
     group = parsed.groups[0]
     assert group.measured_arms(benchmarks.HEAD_TO_HEAD) == arms
-    assert len(group.task_ids) == 52
+    assert len(group.task_ids) == 53
 
 
 def test_an_arm_without_a_cost_has_none_on_every_row(candidate):
@@ -1261,12 +1358,19 @@ def test_fastbrowse_always_reports_its_cost(candidate):
         Candidate.model_validate(data)
 
 
-def test_ultrafast_runs_exactly_its_part_of_the_head_to_head(candidate):
-    data = _head_to_head(candidate, ("fastbrowse", "jev-ultrafast"))
+def test_a_partial_arm_runs_exactly_its_part_of_the_head_to_head(candidate):
+    data = _head_to_head(candidate, ("fastbrowse", "browser-harness"))
     group = data["groups"][0]
-    dropped = next(r["task"] for r in group["rows"] if r["arm"] == "jev-ultrafast")
-    group["rows"] = [r for r in group["rows"] if not (r["arm"] == "jev-ultrafast" and r["task"] == dropped)]
-    with pytest.raises(ValueError, match="jev-ultrafast must run exactly the tasks of its set"):
+    dropped = next(r["task"] for r in group["rows"] if r["arm"] == "browser-harness")
+    group["rows"] = [r for r in group["rows"] if not (r["arm"] == "browser-harness" and r["task"] == dropped)]
+    with pytest.raises(ValidationError, match="every scheduled slot"):
+        Candidate.model_validate(data)
+    # Listing the dropped task as excluded fills the grid, but the catalog says browser-harness can run it.
+    group["excluded"] = sorted(
+        [*group["excluded"], {"arm": "browser-harness", "task": dropped, "reason": "no reason"}],
+        key=lambda e: (e["arm"], e["task"]),
+    )
+    with pytest.raises(ValueError, match="browser-harness must run exactly the tasks of its set"):
         check_catalog(Candidate.model_validate(data), CATALOG)
 
 
@@ -1274,14 +1378,14 @@ def test_a_full_arm_cannot_skip_a_task_of_the_set(candidate):
     data = _head_to_head(candidate, ("fastbrowse", "browser-use"))
     group = data["groups"][0]
     task = group["task_ids"][0]
-    group["rows"] = [r for r in group["rows"] if not (r["arm"] == "browser-use" and r["task"] == task)]
+    group["rows"] = [r for r in group["rows"] if not (r["arm"] == "fastbrowse" and r["task"] == task)]
     with pytest.raises(ValidationError, match="every scheduled slot"):
         Candidate.model_validate(data)
 
 
 def test_a_head_to_head_without_fastbrowse_is_not_compared_with_one_that_had_it(candidate):
     published = Candidate.model_validate(_head_to_head(candidate, ("fastbrowse", "browser-use")))
-    vendors = Candidate.model_validate(_head_to_head(candidate, ("browser-use", "jev-ultrafast")))
+    vendors = Candidate.model_validate(_head_to_head(candidate, ("browser-use", "browser-harness")))
     with pytest.raises(ValueError, match="no longer measures fastbrowse"):
         regressions(vendors, published)
 
@@ -1297,3 +1401,210 @@ def test_an_official_suite_records_its_repeats_and_requires_fastbrowse(candidate
         row["arm"] = "browser-use"
     with pytest.raises(ValidationError, match="bu-bench must measure fastbrowse"):
         Candidate.model_validate(candidate)
+
+
+def test_a_competitor_reference_holds_every_row_it_names(candidate):
+    rows = [r for r in candidate["groups"][0]["rows"] if r["arm"] == "browser-use"]
+    arm = {
+        "arm": "browser-use",
+        "vendor": "Browser Use",
+        "measured_on": "2026-11-01",
+        "version": "browser-use-sdk==3.12.1",
+        "browser": "browser-use-hosted",
+        "campaign_id": "refresh-1",
+    }
+    versions = {r["task"]: 1 for r in rows}
+    body = {
+        "catalog_sha256": candidate["catalog_sha256"],
+        "judge_policy": "browser-internal-opus-v4",
+        "task_versions": versions,
+        "arms": [arm],
+        "rows": rows,
+    }
+    benchmarks.CompetitorReference.model_validate(body)
+    with pytest.raises(ValidationError):
+        benchmarks.CompetitorReference.model_validate({**body, "arms": []})
+
+
+def test_a_group_never_mixes_timing_bases(candidate):
+    """One rule for every arm: rows on two clocks are refused, whichever arm or reference they came from."""
+    data = copy.deepcopy(candidate)
+    del data["groups"][0]["rows"][-1]["timing_basis"]
+    data["schema_version"] = 5
+    with pytest.raises(ValidationError, match="different bases"):
+        Candidate.model_validate(data)
+
+
+def test_a_new_schema_row_must_record_its_timing_basis(candidate):
+    data = copy.deepcopy(candidate)
+    for group in data["groups"]:
+        for row in group["rows"]:
+            del row["timing_basis"]
+    with pytest.raises(ValidationError, match="must record its timing basis"):
+        Candidate.model_validate(data)
+    # The Ultrafast group's current pairing is schema 7's, so the older schema reads the other groups.
+    older = [g for g in data["groups"] if g["id"] != "internal-ultrafast"]
+    Candidate.model_validate({**data, "schema_version": 5, "groups": older})
+
+
+def test_only_the_session_ready_clock_can_be_published(candidate):
+    data = copy.deepcopy(candidate)
+    data["groups"][0]["rows"][0]["timing_basis"] = "session-included"
+    with pytest.raises(ValidationError):
+        Candidate.model_validate(data)
+
+
+def test_rows_without_a_timing_basis_keep_their_approved_bytes(candidate):
+    data = copy.deepcopy(candidate)
+    row = data["groups"][0]["rows"][0]
+    del row["timing_basis"]
+    dumped = Row.model_validate(row).model_dump()
+    assert not {"timing_basis", "session_open_seconds", "session_close_seconds"} & dumped.keys()
+    timed = Row.model_validate({**row, "timing_basis": TIMING_BASIS, "session_open_seconds": 1.5}).model_dump()
+    assert timed["session_open_seconds"] == 1.5 and "session_close_seconds" not in timed
+
+
+@pytest.mark.parametrize("count", [None, 0, 3])
+def test_physical_call_count_basis_survives_candidate_reader(candidate: dict, count: int | None) -> None:
+    row = candidate["groups"][0]["rows"][0]
+    row.update(llm_calls=count, llm_calls_basis="physical_requests")
+    parsed = Candidate.model_validate(candidate).groups[0].rows[0]
+    assert parsed.llm_calls == count
+    assert parsed.model_dump()["llm_calls_basis"] == "physical_requests"
+
+
+def test_historical_call_basis_is_not_added_to_saved_rows(candidate: dict) -> None:
+    parsed = Candidate.model_validate(candidate).groups[0].rows[0]
+    assert parsed.llm_calls_basis is None
+    assert "llm_calls_basis" not in parsed.model_dump()
+
+
+@pytest.mark.parametrize("basis", ["physical_requests", "cost_lines"])
+def test_explicit_call_basis_without_count_remains_unknown(candidate: dict, basis: str) -> None:
+    row = candidate["groups"][0]["rows"][0]
+    row.pop("llm_calls", None)
+    row["llm_calls_basis"] = basis
+    assert Candidate.model_validate(candidate).groups[0].rows[0].llm_calls is None
+
+
+def _unjudge(candidate: dict, index: int, reason: str = "evidence-unavailable") -> dict:
+    """Move one head-to-head row out of the score: a slot the judge could not judge."""
+    group = candidate["groups"][0]
+    row = group["rows"].pop(index)
+    slot = {k: row[k] for k in ("task", "repeat", "arm")} | {"reason": reason}
+    group.setdefault("unjudged", []).append(slot)
+    return slot
+
+
+def test_an_unjudged_slot_fills_its_place_in_the_grid_and_stays_out_of_the_rows(candidate):
+    baseline = Candidate.model_validate(copy.deepcopy(candidate))
+    slot = _unjudge(candidate, 0)
+    published = Candidate.model_validate(candidate)
+    assert [s.model_dump() for s in published.groups[0].unjudged] == [slot]
+    regressions(published, baseline)
+    group = candidate["groups"][0]
+    group["unjudged"].append(dict(group["unjudged"][0]))
+    with pytest.raises(ValidationError, match="exactly one measured row"):
+        Candidate.model_validate(candidate)
+
+
+def test_a_group_names_the_runs_its_tasks_came_from(candidate):
+    group = candidate["groups"][0]
+    tasks = group["task_ids"]
+    hosted = sorted({r["task"] for r in group["rows"] if r["arm"] == "browser-use"})
+    older = {"run_id": "r1", "agent_sha": "c" * 40, "runner_sha": "c" * 40, "measured_on": "2026-11-08"}
+    newest = {"run_id": "r2", "agent_sha": "a" * 40, "runner_sha": "b" * 40, "measured_on": "2026-11-09"}
+    # fastbrowse takes one task from the newer run; Browser Use keeps the older run it was measured in.
+    rival = older | {"arm": "browser-use", "tasks": hosted}
+    group["sources"] = [
+        newest | {"arm": "fastbrowse", "tasks": tasks[:1]},
+        older | {"arm": "fastbrowse", "tasks": tasks[1:]},
+        rival,
+    ]
+    published = Candidate.model_validate(candidate)
+    assert [(s.run_id, s.arm) for s in published.groups[0].sources] == [
+        ("r2", "fastbrowse"),
+        ("r1", "fastbrowse"),
+        ("r1", "browser-use"),
+    ]
+    # A group whose newest run is older than the candidate's build names that run's build.
+    group["sources"] = [older | {"arm": "fastbrowse", "tasks": tasks}, rival]
+    group["agent_sha"] = group["runner_sha"] = "c" * 40
+    Candidate.model_validate(candidate)
+    group["sources"] = [older | {"arm": "fastbrowse", "tasks": tasks[1:]}, rival]
+    with pytest.raises(ValidationError, match="every task of fastbrowse exactly once"):
+        Candidate.model_validate(candidate)
+    group["sources"] = [older | {"arm": "fastbrowse", "tasks": tasks}, rival]
+    group["agent_sha"] = "a" * 40
+    with pytest.raises(ValidationError, match="newest source"):
+        Candidate.model_validate(candidate)
+
+
+def test_a_task_an_arm_cannot_run_is_listed_as_excluded_never_with_rows(candidate):
+    """Each excluded entry stands for `repeats` failed attempts, so the grid holds rows, ungraded slots or an excluded
+    entry for every arm and task, never two of them, and the entries are the catalog's with its reasons."""
+    group = candidate["groups"][0]
+    entry = group["excluded"][0]
+    parsed = Candidate.model_validate(candidate)
+    assert parsed.groups[0].model_dump(mode="json")["excluded"] == group["excluded"]
+    check_catalog(parsed, CATALOG)
+    assert "excluded" not in parsed.groups[1].model_dump(mode="json")
+    for broken in (
+        dict(group, excluded=[]),
+        dict(group, rows=[*group["rows"], {**group["rows"][0], "arm": entry["arm"], "task": entry["task"]}]),
+        dict(group, excluded=[{**entry, "arm": "fastbrowse"}]),
+    ):
+        with pytest.raises(ValidationError):
+            Candidate.model_validate(candidate | {"groups": [broken, *candidate["groups"][1:]]})
+    group["excluded"] = [{**entry, "reason": "another reason"}]
+    with pytest.raises(ValueError, match="excluded tasks must be the catalog's"):
+        check_catalog(Candidate.model_validate(candidate), CATALOG)
+
+
+@pytest.mark.parametrize(
+    "reason", ["needs a login/2FA", 'asks for an "answer"', "needs a login, none given \u00b2", "see example.com", ""]
+)
+def test_an_exclusion_reason_is_refused_where_the_site_would_refuse_it(reason):
+    """The site parses a reason as plain words and punctuation with no slash or link, so the candidate fails here."""
+    with pytest.raises(ValidationError):
+        benchmarks.ExcludedTask(arm="browser-use", task="pypi-version", reason=reason)
+    benchmarks.ExcludedTask(arm="browser-use", task="pypi-version", reason="needs login credentials: none (100%)")
+
+
+def test_explicit_interruption_clock_retains_outcome_group(candidate):
+    data = copy.deepcopy(candidate)
+    row = data["groups"][0]["rows"][0]
+    row.update(
+        timing_basis="physical-attempt-wall-time",
+        timing_note="Includes dispatch and admission interruptions",
+        physical_runs=2,
+        seconds=340.3,
+    )
+    parsed = Candidate.model_validate(data)
+    assert parsed.groups[0].rows[0].seconds == 340.3
+    assert {r.timing_basis for r in parsed.groups[0].rows} == {TIMING_BASIS, "physical-attempt-wall-time"}
+
+
+@pytest.mark.parametrize("missing", ["timing_note", "physical_runs"])
+def test_interruption_clock_requires_note_and_retry_count(candidate, missing):
+    row = copy.deepcopy(candidate["groups"][0]["rows"][0])
+    row.update(
+        timing_basis="physical-attempt-wall-time",
+        timing_note="Includes dispatch and admission interruptions",
+        physical_runs=2,
+    )
+    if missing == "timing_note":
+        row[missing] = None
+    else:
+        row[missing] = 1
+    with pytest.raises(ValidationError, match="interruption note and retry count"):
+        Row.model_validate(row)
+
+
+@pytest.mark.parametrize("field", ["session_open_seconds", "session_close_seconds"])
+def test_physical_clock_rejects_partial_phase_totals(candidate, field):
+    row = copy.deepcopy(candidate["groups"][0]["rows"][0])
+    row.update(timing_basis="physical-attempt-wall-time", timing_note="Dispatch interruption", physical_runs=2)
+    row[field] = 0.1
+    with pytest.raises(ValidationError, match="without phase totals"):
+        Row.model_validate(row)

@@ -8,8 +8,7 @@
 //! click Add one; fill Token = secret:token
 //! ```
 //!
-//! Once the steps are spent the run is called done. Python's `run_task` entry, which hands these clients to the run,
-//! waits for the run loop's port.
+//! Once the steps are spent the run is called done.
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -28,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::error::{AgentError, Result};
+use crate::policy::keys;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -61,12 +61,16 @@ pub fn steps(task: &str) -> Result<Vec<Step>> {
     Ok(found)
 }
 
-/// Answers each choice as the script's current step says, and every yes/no so that the run goes on.
+/// Answers each choice as the script's current step says, and every yes/no with no but whether the answer covers the
+/// task.
 ///
-/// A run's options do not cross the protocol, so the thresholds are the shipped ones. A flat probability cannot serve
-/// them all: the walls and the irreversible check stop a run above theirs, and the done check stops it below its own.
+/// A no keeps a wall, a sign-in or the irreversible check from stopping the scripted run, and the run ends when the
+/// script runs out and the operation choice falls back to DONE, with the answer it read judged to cover the task.
 pub struct ScriptedJev {
     state: Mutex<Script>,
+    /// Whether the script takes a step besides opening and reading pages, which is how it answers what the task asks
+    /// to be done on a page.
+    acts: bool,
 }
 
 struct Script {
@@ -76,21 +80,32 @@ struct Script {
 
 impl ScriptedJev {
     pub fn new(script: Vec<Step>) -> ScriptedJev {
-        ScriptedJev { state: Mutex::new(Script { ahead: script.into(), step: None }) }
+        let acts = script.iter().any(|step| {
+            !matches!(
+                step.operation,
+                Operation::Read
+                    | Operation::Search
+                    | Operation::Done
+                    | Operation::Navigate
+                    | Operation::Scroll
+                    | Operation::ScrollUp
+                    | Operation::Back
+                    | Operation::SwitchTab
+                    | Operation::Wait
+            )
+        });
+        ScriptedJev { state: Mutex::new(Script { ahead: script.into(), step: None }), acts }
     }
 
     fn choice(step: Option<&Step>, key: &str, question: &ChoiceQuestion) -> Option<String> {
-        if key == "operation" {
+        if key == keys::OPERATION {
             return Some(step.map_or(Operation::Done, |step| step.operation).as_str().to_string());
-        }
-        if key == "read_assessment" {
-            return Some("absent".into());
         }
         let step = step?;
         if key == "pick" {
             return step.pick.clone();
         }
-        if key == format!("{}_target", step.operation) {
+        if key == keys::target(step.operation) {
             // A control's id is only known once the page is indexed, so the script names it by its label.
             return question
                 .criteria
@@ -103,13 +118,17 @@ impl ScriptedJev {
 }
 
 impl DecisionClient for ScriptedJev {
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        fastbrowse_core::decision::DecisionProfile::jev()
+    }
+
     fn evaluate<'a>(
         &'a self,
         _: &'a Value,
         questions: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
         let mut script = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if questions.contains_key("operation") {
+        if questions.contains_key(keys::OPERATION) {
             // The page is asked about once per step, so this question is what moves the script on.
             script.step = script.ahead.pop_front();
         }
@@ -119,7 +138,12 @@ impl DecisionClient for ScriptedJev {
             match question {
                 Question::Choice(question) => {
                     let options: Vec<&String> = question.criteria.keys().collect();
-                    let choice = ScriptedJev::choice(script.step.as_ref(), key, question)
+                    let scripted = if key == "steps" {
+                        Some(if self.acts { "acts" } else { "reads" }.to_string())
+                    } else {
+                        ScriptedJev::choice(script.step.as_ref(), key, question)
+                    };
+                    let choice = scripted
                         .filter(|choice| options.contains(&choice))
                         .or_else(|| options.first().map(|option| option.to_string()))
                         .unwrap_or_default();
@@ -133,10 +157,18 @@ impl DecisionClient for ScriptedJev {
                     );
                 }
                 Question::Noul(_) => {
-                    let probability = f64::from(u8::from(key == "complete"));
+                    // The done check holds unless the step scripts what it finds instead.
+                    let pick = script.step.as_ref().and_then(|step| step.pick.as_deref());
+                    let holds = match key.as_str() {
+                        "coverage" | "exact" => true,
+                        "carried" => !matches!(pick, Some("undone" | "refused")),
+                        "refused" => pick == Some("refused"),
+                        _ => false,
+                    };
+                    let probability = f64::from(u8::from(holds));
                     answers.insert(key.clone(), Answer::Noul(NoulAnswer { kind: NoulTag, probability }));
                 }
-                Question::Score(_) => {
+                Question::Score(_) | Question::Box(_) => {
                     failure =
                         Some(DecisionError::Failed(format!("the scripted Jev has no answer for {}", text::repr(key))));
                     break;
@@ -159,18 +191,22 @@ impl DecisionClient for ScriptedJev {
     }
 }
 
-/// A plan that requires nothing, no shortcut, and a verifier that agrees: the answer by what is asked.
-///
-/// Planning and the shortcut are asked for at the same moment, so the order of the calls says nothing.
+/// No start page: the answer by what is asked.
 pub struct ScriptedLLM;
 
 impl ScriptedLLM {
     fn reply(purpose: LLMPurpose) -> Option<Value> {
         match purpose {
-            LLMPurpose::Plan => Some(json!({"requirements": [], "answer_expected": false})),
-            LLMPurpose::Shortcut => Some(json!({"url": null})),
-            LLMPurpose::Verify => Some(json!({"complete": true, "missing": []})),
-            _ => None,
+            LLMPurpose::Start => Some(json!({"url": null})),
+            LLMPurpose::Compose => Some(json!({"claims": []})),
+            LLMPurpose::ImageRead => Some(json!({"text": null})),
+            LLMPurpose::Fill => Some(json!({"value": null})),
+            LLMPurpose::Pages => Some(json!({"first": null, "last": null})),
+            LLMPurpose::Dates => Some(json!({"dates": []})),
+            LLMPurpose::KnownPages | LLMPurpose::RecoveryPages => Some(json!({"urls": []})),
+            LLMPurpose::Unobtainable => Some(json!({"item": "", "reason": "", "quote": ""})),
+            LLMPurpose::Groups => Some(json!({"records": []})),
+            LLMPurpose::Search => Some(json!({"queries": []})),
         }
     }
 }
@@ -181,7 +217,6 @@ impl LLMClient for ScriptedLLM {
         purpose: LLMPurpose,
         _: &'a [Message],
         schema: &'a dyn ResponseSchema,
-        _: i64,
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, std::result::Result<Generation<Value>, LLMError>> {
         Box::pin(async move {
@@ -206,8 +241,7 @@ mod tests {
     use fastbrowse_core::decision::NoulQuestion;
 
     use super::*;
-    use crate::planner::Plan;
-    use crate::shortcut::Shortcut;
+    use crate::start::StartPage;
     use crate::support::generate;
     use crate::support::testing::block_on;
 
@@ -269,29 +303,21 @@ mod tests {
     }
 
     #[test]
-    fn test_no_page_is_a_wall_or_irreversible_and_a_finished_script_is_complete() {
+    fn test_no_page_is_a_wall_or_irreversible() {
         let question: Question = NoulQuestion::new("?", None, None).into();
         let jev = ScriptedJev::new(vec![]);
         let walls = ask(
             &jev,
-            &[
-                ("login_required", question.clone()),
-                ("bot_check", question.clone()),
-                ("irreversible", question.clone()),
-            ],
+            &[("login_required", question.clone()), ("bot_check", question.clone()), ("irreversible", question)],
         );
-        let done = ask(&jev, &[("complete", question)]);
         // The shipped thresholds stop a run above 0.70 for either wall and above 0.50 for an irreversible action.
         let probabilities: Vec<Option<f64>> = walls.answers.values().map(Answer::probability).collect();
         assert_eq!(probabilities, [Some(0.0), Some(0.0), Some(0.0)]);
-        assert_eq!(done.answers["complete"].probability(), Some(1.0));
     }
 
     #[test]
-    fn test_the_plan_and_the_shortcut_are_told_apart_by_purpose_not_by_order() {
-        let shortcut = block_on(generate::<Shortcut>(&ScriptedLLM, LLMPurpose::Shortcut, &[], 2000, None)).unwrap();
-        let plan = block_on(generate::<Plan>(&ScriptedLLM, LLMPurpose::Plan, &[], 2000, None)).unwrap();
-        assert_eq!(shortcut.data.url, None);
-        assert!(plan.data.requirements.is_empty() && !plan.data.answer_expected);
+    fn test_the_start_page_is_answered_by_purpose() {
+        let start = block_on(generate::<StartPage>(&ScriptedLLM, LLMPurpose::Start, &[], None)).unwrap();
+        assert_eq!(start.data.url, None);
     }
 }

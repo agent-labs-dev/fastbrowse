@@ -2,12 +2,7 @@
 
 import pytest
 
-from fastbrowse.evals.live_tasks import (
-    PublicSiteRefused,
-    admit_public_run,
-    arm_browser_refusal,
-    browser_refusal,
-)
+from fastbrowse.evals.live_tasks import arm_browser_refusal, browser_refusal
 
 
 @pytest.mark.parametrize(
@@ -60,8 +55,8 @@ HOSTED = {"mode": "browser-use-hosted"}
         ("fastbrowse", CLOUD),
         ("fastbrowse", {"mode": "local-chrome", "headed": True}),
         ("fastbrowse-pool", POOL),
-        ("jev-ultrafast", CLOUD),
         ("browser-use", HOSTED),
+        ("browser-use-oss", CLOUD),
     ],
 )
 def test_each_arm_may_publish_from_the_browser_it_is_measured_in(arm: str, browser: dict[str, object]) -> None:
@@ -74,9 +69,9 @@ def test_each_arm_may_publish_from_the_browser_it_is_measured_in(arm: str, brows
         ("fastbrowse-pool", CLOUD),  # a swapped record would publish the cloud browser as the pool
         ("fastbrowse", POOL),
         ("browser-use", CLOUD),
-        ("jev-ultrafast", HOSTED),
         ("fastbrowse", {"mode": "local-chrome"}),  # still headless with a throwaway profile
-        ("browser-use-oss", CLOUD),  # an arm this build does not know
+        ("cua-codex", CLOUD),  # an arm this build does not know
+        ("browser-use-oss", HOSTED),
         ("fastbrowse", None),
     ],
 )
@@ -91,9 +86,3 @@ def test_an_arm_is_never_judged_by_another_arms_browser() -> None:
 def test_an_older_campaigns_single_browser_is_judged_as_before() -> None:
     assert arm_browser_refusal({"browser": CLOUD}, "browser-use") is None
     assert arm_browser_refusal({"browser": POOL}, "fastbrowse-pool") is not None
-
-
-def test_a_public_run_is_refused_at_start_not_after_it_spent_its_budget() -> None:
-    with pytest.raises(PublicSiteRefused):
-        admit_public_run({"mode": "local-chrome"})
-    admit_public_run({"mode": "local-chrome", "headed": True})

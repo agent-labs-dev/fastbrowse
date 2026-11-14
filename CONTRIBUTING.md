@@ -39,7 +39,7 @@ another: on four cores over the same 985 tests, `cargo test --workspace` took 38
 `cargo nextest run --workspace` 161 s. Install it once with `cargo install cargo-nextest --locked` (or see
 [nextest's install page](https://get.nexte.st)), then `cargo nextest run --workspace`. `cargo test` still
 works and is still the way to run one binary or one test by name. nextest does not run doctests, so the gate
-runs `cargo test --workspace --doc` beside it; no crate has a doctest today.
+runs `cargo test --workspace --doc` beside it.
 
 Run the gate before you push. CI runs the same checks, and `main` requires them:
 
@@ -58,15 +58,21 @@ uv run python -m fastbrowse.evals.publication --check-diff origin/main
 npm ci --ignore-scripts && npm run check:browser
 npm run generate:sdk && git diff --exit-code -- packages/sdk/src/protocol.ts
 npm run check:sdk
+go -C go generate ./... && git diff --exit-code -- go
+test -z "$(gofmt -l go)" && go -C go vet ./...
+FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" go -C go test -race ./...
+python3 scripts/java_types.py && git diff --exit-code -- java
+FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" mvn -B -f java/pom.xml verify
+python3 scripts/dotnet_types.py && git diff --exit-code -- dotnet
+(cd dotnet && FASTBROWSE_TEST_BINARY="$PWD/../target/debug/fastbrowse" dotnet test --solution Fastbrowse.slnx)
 uv run actionlint
-uv run python .sloppatrol/agents.py check
-uv run python .sloppatrol/gate.py --base origin/main
 just rust
 ```
 
 The JavaScript checks need Node.js 22 or newer. `npm run check:sdk` lints, type-checks and tests the SDK in
-`packages/sdk`, and its tests start `fastbrowse serve` from the uv environment. Audit evidence commands and tool limits are in the
-[Sloppatrol project skill](.agents/skills/sloppatrol-project/SKILL.md).
+`packages/sdk`, and its tests start `fastbrowse serve` from the uv environment. The Go, Java and .NET tests run
+against the binary from `cargo build -p fastbrowse-cli --features scripted`, and need Go, Java 17 or newer with
+Maven, and .NET 10.
 
 The protocol's messages are the types in `crates/fastbrowse-core/src/protocol.rs` and the models those use, and
 `protocol/schema.json` is their JSON Schema. After changing one, run
@@ -78,8 +84,8 @@ under `java/src/main/java/dev/agentlabs/fastbrowse/protocol`, and `python3 scrip
 a committed file differs from what the types produce, and `tests/test_protocol_schema.py` fails when the Python
 models in `src/fastbrowse/protocol.py` no longer describe the same schema.
 
-The npm packages and the crates on crates.io are published at the Python package's version, and the Rust binary
-reports it too, as do the Java client on Maven Central and the .NET client on NuGet. `scripts/npm_versions.py` fails
+The npm packages are published at the Python package's version, and the Rust crates and binary carry it too, as do
+the Java client's jar and the .NET client. `scripts/npm_versions.py` fails
 when `packages/sdk/package.json`, the `[workspace.package]` version in `Cargo.toml`, a crate's pin in
 `[workspace.dependencies]`, the version in `java/pom.xml` or the one in `dotnet/src/Fastbrowse/Fastbrowse.csproj` holds
 another number, and with `--write` sets them all from
@@ -104,11 +110,11 @@ verification needs eval results in the PR, in this order:
 The held-out suite this used to name is gone: Parallax moved its tasks into `dev`, so a dev task may be one the
 fix was designed against. Say so in the PR when that is true.
 
-Run these commands in the maintainer's Parallax checkout:
+Run these commands from `evals/`:
 
 ```sh
-uv run --extra browser parallax browser internal --arms fastbrowse --suite core --repeat 3
-uv run --extra browser parallax browser internal --arms fastbrowse --suite dev --repeat 3
+uv run fastbrowse-evals browser internal --arms fastbrowse --suite core --repeat 3
+uv run fastbrowse-evals browser internal --arms fastbrowse --suite dev --repeat 3
 ```
 
 Paste the pass counts, time and cost from the final `dev` run and both `core` runs. A handful of runs on one site shows the change can
@@ -124,6 +130,10 @@ behaviour or to the fixtures:
 ```sh
 just evals-local --suite local mock --repeat 3
 ```
+
+The `replay` check replays every cassette in `bench/cassettes` with no model key and fails on any request a
+cassette did not record. A PR that changes what the agent sends to Jev or the LLM refreshes the cassettes it reports
+with `uv run python -m fastbrowse.evals.bench fill --only TASK ...`, a paid run that a maintainer starts.
 
 A published comparison figure has its own rule: it may only come from committed rows (`--publish`) at the task
 versions they ran, with every physical attempt and its spend retained. See [docs/evals.md](docs/evals.md).

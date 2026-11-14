@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<title>fastbrowse</title>
+<style>
+  :root {
+    --paper: #f6f3ed; --raised: #fbf9f5; --sunk: #ede8df; --rule: #d9d2c5; --rule-strong: #bfb6a4;
+    --ink: #17150f; --ink-muted: #4a453a; --ink-faint: #696253;
+    --ember: #c4451b; --ember-deep: #93320f; --ember-tint: #f6e3d8; --moss: #4c6b2f;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #14120e; --raised: #1c1915; --sunk: #0e0c09; --rule: #2c2821; --rule-strong: #403a2f;
+      --ink: #f2eee4; --ink-muted: #b8b0a0; --ink-faint: #a69b89;
+      --ember: #e8683a; --ember-deep: #f58a5f; --ember-tint: #2a1a12; --moss: #8fb65c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; width: 320px; background: var(--paper); color: var(--ink); font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--rule); }
+  header img { width: 24px; height: 24px; border-radius: 5px; }
+  header h1 { margin: 0; font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
+  .status { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-faint); }
+  .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--rule-strong); }
+  .status.on::before { background: var(--moss); }
+  .status.off { color: var(--ember-deep); }
+  .status.off::before { background: var(--ember); }
+  section { padding: 12px 14px; }
+  h2 { margin: 0 0 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-faint); }
+  ul { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  li.run { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: var(--raised); border: 1px solid var(--rule); border-radius: 6px; }
+  .run .text { min-width: 0; flex: 1; }
+  .run .task { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-weight: 500; }
+  .run .meta { font-size: 12px; color: var(--ink-faint); }
+  .run .meta::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--ember); vertical-align: 1px; animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: 0.3; } }
+  @media (prefers-reduced-motion: reduce) { .run .meta::before { animation: none; } }
+  button { flex: none; font: inherit; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 3px; cursor: pointer; color: var(--ember-deep); background: transparent; border: 1px solid var(--ember); }
+  button:hover { background: var(--ember-tint); }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--ember); outline-offset: 1px; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .empty { padding: 14px 10px; text-align: center; color: var(--ink-faint); background: var(--sunk); border-radius: 6px; }
+  code { font-family: var(--mono); font-size: 11.5px; padding: 1px 4px; border-radius: 3px; background: var(--sunk); color: var(--ink-muted); }
+  .empty code { display: block; margin-top: 8px; overflow-wrap: anywhere; background: var(--paper); }
+  footer { padding: 12px 14px 14px; border-top: 1px solid var(--rule); }
+  label { display: block; font-size: 12px; color: var(--ink-muted); }
+  .field { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  input { flex: 1; min-width: 0; font: inherit; padding: 5px 8px; color: var(--ink); background: var(--raised); border: 1px solid var(--rule-strong); border-radius: 3px; }
+  input::placeholder { color: var(--ink-faint); }
+  .saved { font-size: 12px; color: var(--moss); opacity: 0; transition: opacity 0.2s; }
+  .saved.show { opacity: 1; }
+  .run { cursor: pointer; }
+  .run:hover { border-color: var(--rule-strong); }
+  .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .head h2 { margin: 0; }
+  .recent li { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--ink-muted); }
+  .recent .task { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .recent .ending { flex: none; color: var(--ink-faint); white-space: nowrap; }
+  .recent .ending.bad { color: var(--ember-deep); }
+  .hint { margin: 8px 0 0; font-size: 12px; color: var(--ink-muted); }
+  a { color: var(--ember-deep); }
+  .links { display: flex; gap: 12px; margin-top: 10px; font-size: 12px; }
+  .links .id { margin-left: auto; color: var(--ink-faint); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <img src="icon-48.png" alt="">
+  <h1>fastbrowse</h1>
+  <span id="status" class="status" role="status">Checking connection</span>
+</header>
+<section>
+  <div class="head">
+    <h2>Runs in this browser</h2>
+    <button id="stop-all" title="Stop every fastbrowse run in this browser" hidden>Stop all</button>
+  </div>
+  <ul id="runs"></ul>
+  <p id="offline" class="hint" hidden>Run <code>fastbrowse extension install</code> in your terminal. Then restart Chrome or turn this extension off and on.
+    <a href="https://www.fastbrowse.ai/docs/troubleshooting/#the-extension-is-not-connected" target="_blank" rel="noreferrer">Setup help</a></p>
+</section>
+<section id="recent-section" class="recent" hidden>
+  <h2>Recent runs</h2>
+  <ul id="recent"></ul>
+  <p id="conflict" class="hint" hidden>A run lost its tab to another extension's frame. Set that extension's
+    <b>Site access</b> to <b>On click</b> at <a id="taker" href="#"><code>chrome://extensions</code></a>.
+    <a href="https://www.fastbrowse.ai/docs/troubleshooting/#another-extensions-frame-takes-the-tab-away" target="_blank" rel="noreferrer">Fix extension conflicts</a></p>
+</section>
+<footer>
+  <label for="label">Browser name</label>
+  <div class="field">
+    <input id="label" autocomplete="off" spellcheck="false" placeholder="e.g. work" aria-describedby="label-help">
+    <span id="saved" class="saved" role="status">Saved</span>
+  </div>
+  <p id="label-help" class="hint">With more than one browser connected, choose this one with <code>--extension-browser NAME</code>.</p>
+  <div class="links">
+    <a href="https://www.fastbrowse.ai/docs/signed-in-sites/#your-own-chrome" target="_blank" rel="noreferrer">Usage guide</a>
+    <span id="browser-id" class="id"></span>
+  </div>
+</footer>
+<script src="popup.js" type="module"></script>
+</body>
+</html>

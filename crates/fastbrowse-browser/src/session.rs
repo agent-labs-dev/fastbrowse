@@ -1,5 +1,5 @@
 //! One owned tab on a `BrowserConnection`: attach, OOPIF sessions, popup ownership, dialogs, downloads, live
-//! frames and origin scoping. `browser/session.py`'s `BrowserSession`.
+//! frames and origin scoping.
 //!
 //! State is kept by a handler on the connection's reader, so it is current whenever a call returns. The handler
 //! never blocks: work an event starts (preparing a frame's session, adopting a popup, releasing a paused request)
@@ -7,33 +7,41 @@
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use data_encoding::BASE64;
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::models::{Artifact, ArtifactKind, ArtifactSink, BrowserConnection, FrameHandler};
 use fastbrowse_core::origins::OriginGrant;
-use fastbrowse_core::page::{Dialog, Tab};
+use fastbrowse_core::page::{CaptchaSolve, Dialog, Tab};
+use fastbrowse_core::telemetry::Trace;
 use futures_util::future::{BoxFuture as FBoxFuture, try_join_all};
 use serde_json::{Value, json};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, timeout};
 
-use crate::cdp::{Cdp, Event, secs};
+use crate::cdp::{CDP_PAGE_SECONDS, Cdp, Event, secs};
 use crate::error::BrowserError;
+use crate::page::LOAD_AWAITED_SECONDS;
+use crate::urlsplit::urlsplit;
 use crate::warn;
 
 const SCREENCAST_COMMAND_SECONDS: f64 = 0.5;
 /// How long closing waits for a cancelled frame callback. The callback is the caller's code, and one that swallows
 /// its cancellation held the run open with no result while its cloud browser went on billing.
 const FRAME_RELEASE_SECONDS: f64 = 2.0;
+/// Pages a browser lists that the run may not drive on its own: an extension's options or background page, a
+/// settings or new tab page, and a DevTools window. A caller that names one with `target_match` still gets it.
+const BROWSER_INTERNAL_SCHEMES: [&str; 5] = ["chrome-extension", "chrome", "chrome-untrusted", "devtools", "edge"];
 
 pub const SNAPSHOT_JS: &str = include_str!("../js/snapshot.js");
 pub const CAPTURE_JS: &str = include_str!("../js/capture.js");
 /// What a call to the installed snapshot function throws in a document that never installed it.
 pub const SNAPSHOT_UNINSTALLED: &str = "fastbrowse: snapshot.js is not installed in this document";
+/// Thrown by snapshot.js's `snapshot` and `glance` before its `listeners` mode has run in the document.
+pub const LISTENERS_UNREAD: &str = "fastbrowse: listeners are not read in this document";
 
 /// snapshot.js, compiled once in each document and called by name after that.
 ///
@@ -54,10 +62,11 @@ impl SnapshotScript {
     pub fn new(origins: &str) -> Self {
         let digest = crate::page::sha256_hex(&format!("{origins}\n{SNAPSHOT_JS}"));
         let key = py_json(&json!(&digest[..16]));
+        let unread = py_json(&json!(LISTENERS_UNREAD));
         Self {
             install: format!(
                 "((globalThis.__fastbrowseScripts ||= {{}})[{key}] ||= \
-                 (snapshot => (mode, limits) => snapshot(mode, {origins}, limits))({SNAPSHOT_JS}))"
+                 (snapshot => {{ const own = {{ unread: {unread} }}; return (mode, base) => snapshot(mode, {origins}, own, base); }})({SNAPSHOT_JS}))"
             ),
             function: format!(
                 "(globalThis.__fastbrowseScripts?.[{key}] ?? (() => {{ throw new Error({}); }})())",
@@ -66,9 +75,34 @@ impl SnapshotScript {
         }
     }
 }
-/// DuckDuckGo's autoconsent (MPL-2.0, unmodified): refuses consent banners on known platforms and hides them
-/// before they paint, so neither the agent's steps nor a recording are spent on one.
-const REFUSE_COOKIES_JS: &str = include_str!("../js/autoconsent/autoconsent.standalone.js");
+/// DuckDuckGo's autoconsent (MPL-2.0, vendored unmodified): refuses consent banners on known platforms and hides
+/// them before they paint, so neither the agent's steps nor a recording are spent on one. Its bundle detects other
+/// banners at "tier2", which clicks a banner's only button when that button accepts; refusing never consents, so
+/// the detection here acts only on a banner it can refuse (#769).
+static REFUSE_COOKIES_JS: LazyLock<String> = LazyLock::new(|| {
+    const BUNDLE: &str = include_str!("../js/autoconsent/autoconsent.standalone.js");
+    const TIER2: &str = "heuristicMode: \"tier2\"";
+    assert_eq!(BUNDLE.matches(TIER2).count(), 1, "the autoconsent bundle sets its heuristic mode once");
+    // Its mutation observers schedule background waits during a click's task. They are the browser helper's work,
+    // not the page's response to input, so they must not hold the page's settle open. It runs in the page's world,
+    // where its rules read the page's globals, so the bundle's own timer calls are bound to the native timers in its
+    // scope: bare names resolve to the bindings below, and the calls it makes through `window` are rewritten to them.
+    // The counts are asserted so that a vendored update that adds another way to reach a timer is read before it ships.
+    const WINDOW_TIMERS: [(&str, &str); 2] =
+        [("window.setTimeout(", "setTimeout("), ("window.clearTimeout(", "clearTimeout(")];
+    let mut bundle = BUNDLE.replacen(TIER2, "heuristicMode: \"reject\"", 1);
+    for (through_window, bare) in WINDOW_TIMERS {
+        assert_eq!(bundle.matches(through_window).count(), 1, "the autoconsent bundle calls {through_window} once");
+        bundle = bundle.replace(through_window, bare);
+    }
+    for reach in [".setTimeout", ".clearTimeout", "setInterval", "clearInterval", "requestAnimationFrame"] {
+        assert!(!bundle.contains(reach), "the autoconsent bundle reaches a timer through {reach}");
+    }
+    format!(
+        "(() => {{ const setTimeout = window.__fastbrowse.nativeSetTimeout; \
+         const clearTimeout = window.__fastbrowse.nativeClearTimeout; {bundle} }})()"
+    )
+});
 
 /// The isolated world the input watch runs in: the page's own scripts cannot see a global, a listener or a binding
 /// there, and a binding or listener in the page's world is a fingerprint any site can read.
@@ -107,8 +141,6 @@ pub const STATUS_WORLD: &str = "fastbrowse-status";
 // `Network` reports the requests a page makes itself, which is how a settle tells a page still answering an action
 // from one the action left as it was.
 const ENABLE_DOMAINS: [&str; 4] = ["Page", "Runtime", "DOM", "Network"];
-const DOWNLOAD_TEXT_BYTES: usize = 16_384;
-const DOWNLOAD_TEXT_TOTAL: usize = 65_536;
 /// Largest download a session keeps by default. Bodies arrive whole over the DevTools socket, so this bounds a
 /// run's memory as much as a file's size; `Config.max_download_bytes` is how a caller that knows the size of the
 /// file it asked for raises it.
@@ -160,16 +192,34 @@ pub async fn check_browser_access(check: Option<&CheckAccess>) -> Result<(), Bro
     })
 }
 
+/// Told why the user stopped the run in their browser.
+pub type OnStop = Arc<dyn Fn(&str) + Send + Sync>;
+
 pub struct SessionOptions {
     pub max_download_bytes: usize,
     pub refuse_cookie_banners: bool,
+    pub has_attachments: bool,
     pub on_frame: Option<FrameHandler>,
     pub check_access: Option<CheckAccess>,
+    pub viewport: Option<(u32, u32)>,
+    /// Called when the user stops the run in their browser, over the extension backend, with what stopped it.
+    pub on_stop: Option<OnStop>,
+    /// The run's trace. Over the extension backend it records every message to and from the extension.
+    pub trace: Trace,
 }
 
 impl Default for SessionOptions {
     fn default() -> Self {
-        Self { max_download_bytes: MAX_DOWNLOAD_BYTES, refuse_cookie_banners: true, on_frame: None, check_access: None }
+        Self {
+            max_download_bytes: MAX_DOWNLOAD_BYTES,
+            refuse_cookie_banners: true,
+            has_attachments: false,
+            on_frame: None,
+            check_access: None,
+            viewport: None,
+            on_stop: None,
+            trace: Trace::disabled(),
+        }
     }
 }
 
@@ -182,6 +232,15 @@ pub(crate) struct TabState {
     pub(crate) opener_id: Option<String>,
 }
 
+/// A PDF the run kept and could not read. Said rather than left out: a PDF that shows no text looks like one that
+/// holds none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadUnread {
+    pub name: String,
+    pub url: String,
+    pub reason: crate::PdfUnread,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DownloadText {
     pub mime: String,
@@ -191,16 +250,23 @@ pub struct DownloadText {
     pub complete: bool,
 }
 
-/// A file the site offered and the run did not keep, because its body is over the ceiling. Recorded rather than
-/// dropped: a download that silently never arrives looks exactly like a click that never started one, so a
-/// migration would report success while holding no archive.
+/// A file the site offered and the run did not keep. Recorded rather than dropped: a download that silently never
+/// arrives looks exactly like a click that never started one, so a migration would report success while holding no
+/// archive.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DownloadRefused {
     pub name: String,
     pub url: String,
-    /// What the response stated its size to be, or what arrived when it stated nothing usable.
-    pub size_bytes: u64,
-    pub limit_bytes: u64,
+    pub reason: Refusal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// The body is over the ceiling. `size_bytes` is what the response stated, or what arrived when it stated
+    /// nothing usable.
+    TooLarge { size_bytes: u64, limit_bytes: u64 },
+    /// The browser did not hand the body over, or it could not be stored.
+    Failed,
 }
 
 #[derive(Clone)]
@@ -218,7 +284,7 @@ pub(crate) struct Popup {
 
 #[derive(Default)]
 pub(crate) struct State {
-    /// Insertion ordered, as Python's dict: `tabs()` lists them in this order, and a closed active tab with neither
+    /// Insertion ordered: `tabs()` lists them in this order, and a closed active tab with neither
     /// an opener nor an earlier active tab still open hands over to the first.
     pub(crate) tabs: Vec<TabState>,
     /// Tab target ids, least recently active first: where a closed active tab with no opener hands over to.
@@ -228,6 +294,8 @@ pub(crate) struct State {
     pub(crate) keepers: HashMap<String, String>,
     /// Targets already open when an attached session began, which never join the run.
     pub(crate) open_before: HashSet<String>,
+    /// Owned tabs an irreversible action was sent on: the user's from then on, so `close` leaves them open.
+    pub(crate) handed_over: HashSet<String>,
     /// Popup target id -> (opener target id, whether it was adopted), in the order they opened.
     pub(crate) popups: Vec<Popup>,
     /// `Page.windowOpen` events from the run's pages: each one is a window on its way, announced or not.
@@ -236,6 +304,8 @@ pub(crate) struct State {
     pub(crate) requests_started: u64,
     /// (session, request id) -> its place in that count, for each such request not yet finished or failed.
     pub(crate) requests_open: HashMap<(String, String), u64>,
+    /// (session, request id) -> bytes of a declared body still to arrive, for each open request whose response has come.
+    pub(crate) request_bytes_due: HashMap<(String, String), i64>,
     /// (session, context id) -> unique id, for each world named `STATUS_WORLD` Chrome reported creating.
     pub(crate) status_contexts: HashMap<(String, i64), String>,
     pub(crate) active_target_id: String,
@@ -259,15 +329,37 @@ pub(crate) struct State {
     /// A refused one has no identity: nothing was saved. A link that only downloads never changes the page, so the
     /// same click taken again looks productive every time; identity is what tells the second save from the first.
     pub(crate) download_keys: Vec<Option<(String, String)>>,
-    /// Downloads turned away by the ceiling, oldest first: evidence the file was offered, not kept.
+    /// Downloads not kept, oldest first: evidence the file was offered.
     pub(crate) download_refusals: Vec<DownloadRefused>,
-    /// How many of them an observation has already reported, so each refusal is reported once.
+    /// How many refusals an observation has already reported, so each is reported once.
     pub(crate) download_refusals_shown: usize,
+    /// Kept downloads whose PDF text could not be read.
+    pub(crate) download_unread: Vec<DownloadUnread>,
+    /// How many of `download_unread` an observation has already shown.
+    pub(crate) download_unread_shown: usize,
     /// Pending JS dialog per tab session id; cleared once handled.
     pub(crate) dialogs: HashMap<String, Dialog>,
     /// The address of the document each pending dialog came from, which `Dialog` does not carry.
     pub(crate) dialog_urls: HashMap<String, String>,
+    /// The control each session was last clicked on, by its snapshot id. A page opens a file chooser only on user
+    /// activation, and the run's own clicks are the only activation a page gets, so this is the chooser's opener.
+    pub(crate) clicked: HashMap<String, i64>,
     pub(crate) input_navigations: u32,
+    /// Top frames of each session with a navigation requested or a document loading that has not reached
+    /// DOMContentLoaded.
+    pub(crate) navigating: HashMap<(String, String), Instant>,
+    /// The same for frames with a parent. A frame in a process of its own counts from its attach, under its own
+    /// session.
+    pub(crate) frames_loading: HashMap<(String, String), Instant>,
+    /// Frames with a parent.
+    pub(crate) subframes: HashSet<String>,
+    /// The CAPTCHA each target's solver has taken on in its current document and not solved, by target id.
+    pub(crate) captcha_solves: HashMap<String, CaptchaSolve>,
+    /// Frames Chrome's own ad tagging marks as ads or inside one, which a look does not read: once cross-origin frames
+    /// were read, a page's ad slots reached every step as its content, and a run answered with an ad's text.
+    pub(crate) ad_frames: HashSet<String>,
+    /// session -> how many documents its top frame has committed, for `document_mark`.
+    pub(crate) documents: HashMap<String, u64>,
     /// Document requests the grant refused, so a navigation that was cut short is told from one that failed.
     pub(crate) denials: u32,
     /// Requests paused and not yet released, so closing can release what a stopped task left paused.
@@ -285,15 +377,22 @@ pub(crate) struct Shared {
     pub(crate) artifact_sink: Arc<dyn ArtifactSink>,
     pub(crate) max_download_bytes: usize,
     pub(crate) new_document_scripts: Vec<String>,
+    pub(crate) require_chooser_interception: bool,
     pub(crate) on_frame: Option<FrameHandler>,
+    pub(crate) on_stop: Option<OnStop>,
+    pub(crate) trace: Trace,
+    pub(crate) viewport: Option<(u32, u32)>,
     pub(crate) client: Mutex<Option<Cdp>>,
     pub(crate) state: Mutex<State>,
     pub(crate) dialog_opened: watch::Sender<u64>,
+    /// File choosers opened whose input is not yet held by the page's registry.
+    pub(crate) chooser_pins: watch::Sender<u32>,
     /// Bumped on every `Page.lifecycleEvent`: the page's own signal that it is still loading or has settled, so a
     /// settle waits on the page rather than a fixed interval.
     pub(crate) lifecycle: watch::Sender<u64>,
     pub(crate) snapshot: SnapshotScript,
-    /// Bumped each time a popup is begun, so a wait for one wakes as it is announced.
+    /// Bumped each time a popup is begun or a target is destroyed, so a wait for one to be announced, or to be gone,
+    /// wakes as Chrome reports it.
     pub(crate) popup_signal: watch::Sender<u64>,
     pub(crate) screencast_lock: tokio::sync::Mutex<()>,
 }
@@ -329,12 +428,14 @@ impl BrowserSession {
         });
         let mut new_document_scripts = vec![format!("{}('fingerprint')", snapshot.install)];
         if options.refuse_cookie_banners {
-            new_document_scripts.push(REFUSE_COOKIES_JS.to_owned());
+            new_document_scripts.push(REFUSE_COOKIES_JS.clone());
         }
         // A scoped run casts nothing: a frame is pixels of whatever the tab shows, and the browser's reports of where
         // it is can trail the screen, so no ordering of events makes a delivered frame provably in the grant.
         let on_frame = if grant.is_some() { None } else { options.on_frame };
         Self(Arc::new(Shared {
+            require_chooser_interception: options.has_attachments
+                && connection.cdp_url.starts_with(crate::extension::SCHEME),
             connection,
             check_access: options.check_access,
             grant,
@@ -343,9 +444,13 @@ impl BrowserSession {
             max_download_bytes: options.max_download_bytes,
             new_document_scripts,
             on_frame,
+            on_stop: options.on_stop,
+            trace: options.trace,
+            viewport: options.viewport,
             client: Mutex::new(None),
             state: Mutex::default(),
             dialog_opened: watch::channel(0).0,
+            chooser_pins: watch::channel(0).0,
             lifecycle: watch::channel(0).0,
             snapshot,
             popup_signal: watch::channel(0).0,
@@ -365,8 +470,8 @@ impl BrowserSession {
 
     /// Wait for a lifecycle event newer than `mark`, returning whether one arrived before `seconds`.
     ///
-    /// A timeout is not a failure: the caller re-reads the page and decides. This replaces the fixed-interval poll a
-    /// settle used to run, so the wait costs nothing while the page reports nothing new. The generation counts every
+    /// A timeout is not a failure: the caller re-reads the page and decides. The wait costs nothing while the page
+    /// reports nothing new. The generation counts every
     /// tab's events: a wake for another tab only makes a waiter re-check the page, which is what it would do anyway.
     pub async fn wait_for_lifecycle(&self, mark: u64, seconds: f64) -> bool {
         let mut generation = self.0.lifecycle.subscribe();
@@ -376,23 +481,33 @@ impl BrowserSession {
         if seconds <= 0.0 {
             return false;
         }
+        if seconds.is_infinite() {
+            return generation.changed().await.is_ok();
+        }
         matches!(timeout(secs(seconds), generation.changed()).await, Ok(Ok(())))
     }
 
-    /// `__aenter__`: connect, then open the run's tab or attach to the window asked for.
+    /// Connect, then open the run's tab or attach to the window asked for.
     pub async fn open(&self) -> Result<(), BrowserError> {
         self.check_access().await?;
         self.0.state.lock().unwrap().closing = false;
-        let client = Cdp::connect(&self.0.connection.cdp_url).await?;
+        let client = Cdp::connect(&self.0.connection.cdp_url, &self.0.trace).await?;
         let weak = Arc::downgrade(&self.0);
+        let on_stop = self.0.on_stop.clone();
         client.on_event(Box::new(move |event| {
+            if event.method == crate::extension::STOPPED_EVENT {
+                if let Some(on_stop) = &on_stop {
+                    on_stop(crate::extension::stop_reason(&event.params["by"]));
+                }
+                return;
+            }
             if let Some(shared) = weak.upgrade() {
                 Shared::on_event(&shared, event);
             }
         }));
         *self.0.client.lock().unwrap() = Some(client);
         // A caller that gives up while the tab is being set up (a run's time budget) drops this future; the tab it may
-        // already own and the socket are then closed in the background, as Python's `except BaseException` closes them.
+        // already own and the socket are then closed in the background.
         let mut guard = OpenGuard(Some(self.clone()));
         let opened = async {
             self.check_access().await?;
@@ -411,17 +526,15 @@ impl BrowserSession {
                 ])
                 .await?;
             }
-            if self.0.grant.is_some() {
-                // A popup's first request can leave before a session attached after targetCreated has Fetch on, so a
-                // scoped run has every new page attach paused and resumes it only once its Fetch is enabled.
-                self.send(
-                    "Target.setAutoAttach",
-                    json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true,
-                        "filter": [{"type": "page", "exclude": false}, {"exclude": true}]}),
-                    None,
-                )
-                .await?;
-            }
+            // A popup's first response can arrive before targetCreated adoption enables Fetch, losing inline PDFs
+            // and downloads. New pages pause until their session can capture; unrelated pages resume and detach.
+            self.send(
+                "Target.setAutoAttach",
+                json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true,
+                    "filter": [{"type": "page", "exclude": false}, {"exclude": true}]}),
+                None,
+            )
+            .await?;
             Ok::<(), BrowserError>(())
         }
         .await;
@@ -433,7 +546,7 @@ impl BrowserSession {
         Ok(())
     }
 
-    /// `_close`: stop background work, release paused requests, stop casts, close owned tabs, close the socket.
+    /// Stop background work, release paused requests, stop casts, close owned tabs, close the socket.
     pub async fn close(&self) -> Result<(), BrowserError> {
         let (background, delivery, paused) = {
             let mut state = self.0.state.lock().unwrap();
@@ -475,19 +588,31 @@ impl BrowserSession {
                 state
                     .tabs
                     .iter()
-                    .filter(|t| !state.owned.contains(&t.target_id))
+                    .filter(|t| !state.owned.contains(&t.target_id) || state.handed_over.contains(&t.target_id))
                     .map(|t| t.session_id.clone())
                     .collect()
             };
-            // A window the user keeps gets its service workers back.
+            // A window the user keeps, or a tab handed over to them, gets its service workers back.
             for session_id in kept {
                 let _ = self.bypass_service_workers(&session_id, false).await;
             }
         }
-        let owned: Vec<String> = self.0.state.lock().unwrap().owned.iter().cloned().collect();
+        let (owned, handed_over): (Vec<String>, Vec<String>) = {
+            let state = self.0.state.lock().unwrap();
+            (
+                state.owned.difference(&state.handed_over).cloned().collect(),
+                state.owned.intersection(&state.handed_over).cloned().collect(),
+            )
+        };
         for target_id in owned {
             // Best-effort teardown; the browser may already be gone.
             let _ = self.send("Target.closeTarget", json!({"targetId": target_id}), None).await;
+        }
+        if self.over_extension() {
+            // The extension closes a run's tabs itself when the run lets go of it, so a tab handed over is named to it.
+            for target_id in handed_over {
+                let _ = self.send("Fastbrowse.keepTarget", json!({"targetId": target_id}), None).await;
+            }
         }
         let client = self.0.client.lock().unwrap().take();
         if let Some(client) = client {
@@ -549,6 +674,12 @@ impl BrowserSession {
         Ok(())
     }
 
+    /// The active tab's URL from browser-level target metadata, which answers while its renderer is hung.
+    pub async fn active_url(&self) -> Result<String, BrowserError> {
+        let info = self.send("Target.getTargetInfo", json!({"targetId": self.active_target_id()}), None).await?;
+        Ok(info["targetInfo"]["url"].as_str().unwrap_or_default().to_owned())
+    }
+
     fn client_opt(&self) -> Option<Cdp> {
         self.0.client.lock().unwrap().clone()
     }
@@ -562,8 +693,21 @@ impl BrowserSession {
         self.client()?.send(method, params, session).await
     }
 
+    /// Leave the active tab open when the run ends. A payment or other commit sent from it can still be redirecting
+    /// or waiting on a 3-D Secure check when the run stops, and closing the tab would abort it.
+    pub fn hand_over_active_tab(&self) {
+        let mut state = self.0.state.lock().unwrap();
+        let active = state.active_target_id.clone();
+        state.handed_over.insert(active);
+    }
+
     pub fn active_target_id(&self) -> String {
         self.0.state.lock().unwrap().active_target_id.clone()
+    }
+
+    /// Whether the run opened this target, so closing it takes nothing from the user.
+    pub(crate) fn owns(&self, target_id: &str) -> bool {
+        self.0.state.lock().unwrap().owned.contains(target_id)
     }
 
     pub fn active_session_id(&self) -> Result<String, BrowserError> {
@@ -571,8 +715,22 @@ impl BrowserSession {
     }
 
     /// Only frame sessions descended from the active tab may contribute observations.
+    /// Whether Chrome's ad tagging marks the frame `frame_id` as an ad or inside one.
+    pub fn ad_frame(&self, frame_id: &str) -> bool {
+        self.0.state.lock().unwrap().ad_frames.contains(frame_id)
+    }
+
     pub fn frame_sessions(&self) -> Vec<(String, String)> {
         self.0.state.lock().unwrap().frame_sessions_of_active()
+    }
+
+    /// Retained reads belong to attached frames across tabs; missed-read deadlines belong to the active tab.
+    pub(crate) fn frame_read_liveness(&self) -> (HashSet<String>, HashSet<String>) {
+        let state = self.0.state.lock().unwrap();
+        (
+            state.frame_sessions.iter().map(|(frame, _)| frame.clone()).collect(),
+            state.frame_sessions_of_active().into_iter().map(|(_, session)| session).collect(),
+        )
     }
 
     /// `frame_id` and every frame drawn inside it, whose sessions descend from that frame's session.
@@ -602,10 +760,6 @@ impl BrowserSession {
         self.0.state.lock().unwrap().artifacts.clone()
     }
 
-    pub fn downloads_captured(&self) -> u32 {
-        self.0.state.lock().unwrap().downloads_captured
-    }
-
     /// Downloads resolved since the session opened, kept or refused.
     ///
     /// A navigation that resolves straight to a file aborts with `net::ERR_ABORTED`, and the abort is that
@@ -618,8 +772,7 @@ impl BrowserSession {
 
     /// Whether every download settled since `since` saves a file an earlier action already saved.
     ///
-    /// `since` is a `downloads_settled` count. A page that offers the same export twice has not moved the run forward
-    /// the second time, so the click that saved it again must not be recorded as one that changed something.
+    /// `since` is a `downloads_settled` count.
     pub fn repeated_download(&self, since: u32) -> bool {
         let state = self.0.state.lock().unwrap();
         repeated(&state.download_keys, since as usize)
@@ -638,7 +791,52 @@ impl BrowserSession {
         self.0.state.lock().unwrap().requests_started
     }
 
-    /// Whether a fetch or XHR request started after `mark` is still waiting for its response.
+    /// Whether the active tab's page has a navigation on its way.
+    pub fn navigating(&self) -> bool {
+        let Ok(active) = self.active_session_id() else { return false };
+        self.0.state.lock().unwrap().navigating.keys().any(|(session, _)| *session == active)
+    }
+
+    /// Whether a frame in the active tab's page is still loading its document.
+    ///
+    /// A frame's document is part of the page as much as the page's own is: one still loading when the page is ready
+    /// would show its controls during the next step, which would claim them as its effect. So a settle waits for it,
+    /// as Playwright's subtree lifecycle does, but its loading is not itself a change of the page.
+    pub fn frames_loading(&self) -> bool {
+        let Ok(active) = self.active_session_id() else { return false };
+        let state = self.0.state.lock().unwrap();
+        let frames = state.frame_sessions_of_active();
+        state
+            .frames_loading
+            .keys()
+            .any(|(session, _)| *session == active || frames.iter().any(|(_, frame_session)| frame_session == session))
+    }
+
+    /// The seconds the active tab's page is still waited on to load: the most any of its navigations or frame loads
+    /// has left of [`LOAD_AWAITED_SECONDS`] from its start. `None` when nothing is loading or every load has had it.
+    pub fn loading_left(&self) -> Option<f64> {
+        let Ok(active) = self.active_session_id() else { return None };
+        let state = self.0.state.lock().unwrap();
+        let frames = state.frame_sessions_of_active();
+        let ours =
+            |session: &String| *session == active || frames.iter().any(|(_, frame_session)| frame_session == session);
+        state
+            .navigating
+            .iter()
+            .chain(&state.frames_loading)
+            .filter(|((session, _), _)| ours(session))
+            .map(|(_, started)| LOAD_AWAITED_SECONDS - started.elapsed().as_secs_f64())
+            .reduce(f64::max)
+            .filter(|left| *left > 0.0)
+    }
+
+    /// The CAPTCHA the browser's solver has taken on in the active tab's document and not solved.
+    pub fn captcha_solve(&self) -> Option<CaptchaSolve> {
+        let state = self.0.state.lock().unwrap();
+        state.captcha_solves.get(&state.active_target_id).cloned()
+    }
+
+    /// Whether a fetch, XHR or script request started after `mark` is still waiting for its response.
     ///
     /// A page that answers a click with a request (a cart that adds over fetch, then redraws) leaves its document as
     /// it was until the response arrives, so an unchanged page with one open is not yet an action that did nothing.
@@ -649,15 +847,15 @@ impl BrowserSession {
     /// Whether a download landed since `since`, waiting briefly for the intercept's own task.
     ///
     /// The capture runs off the request-paused event in its own task, so it can complete a moment after the
-    /// navigation it belongs to aborts. A short bounded wait tells a download abort from a plain failure without
-    /// racing that task; a download that never came is not this kind of abort.
+    /// navigation it belongs to aborts. With no response paused, no capture is coming: that is not this kind of abort.
     pub async fn download_settled(&self, since: u32, timeout_seconds: f64) -> bool {
         let deadline = Instant::now() + secs(timeout_seconds);
         while self.downloads_settled() <= since {
-            if Instant::now() >= deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() || self.0.state.lock().unwrap().paused.is_empty() {
                 return false;
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            self.wait_for_lifecycle(self.lifecycle_mark(), remaining.as_secs_f64()).await;
         }
         true
     }
@@ -676,17 +874,21 @@ impl BrowserSession {
         pending
     }
 
-    /// Every download the ceiling turned away, oldest first: kept as evidence, not consumed.
-    pub fn downloads_refused(&self) -> Vec<DownloadRefused> {
-        self.0.state.lock().unwrap().download_refusals.clone()
-    }
-
     /// Refusals the run has not been told about yet, and now marked as told.
     pub fn pending_download_refusals(&self) -> Vec<DownloadRefused> {
         let mut state = self.0.state.lock().unwrap();
         let shown = state.download_refusals_shown.min(state.download_refusals.len());
         let pending = state.download_refusals[shown..].to_vec();
         state.download_refusals_shown = state.download_refusals.len();
+        pending
+    }
+
+    /// PDFs kept and not read that the run has not been shown yet, and now marked as shown.
+    pub fn pending_download_unread(&self) -> Vec<DownloadUnread> {
+        let mut state = self.0.state.lock().unwrap();
+        let shown = state.download_unread_shown.min(state.download_unread.len());
+        let pending = state.download_unread[shown..].to_vec();
+        state.download_unread_shown = state.download_unread.len();
         pending
     }
 
@@ -712,6 +914,24 @@ impl BrowserSession {
 
     pub fn set_tab_info(&self, target_id: &str, url: &str, title: &str) {
         self.0.state.lock().unwrap().set_tab_info(target_id, url, title);
+    }
+
+    /// Note the control a click is about to press in `session_id`, by its snapshot id.
+    pub fn note_click(&self, session_id: &str, local_id: i64) {
+        self.0.state.lock().unwrap().clicked.insert(session_id.to_owned(), local_id);
+    }
+
+    /// Wait until each file chooser opened so far has its input held by the page, or a dialog blocks the page from
+    /// answering until it is handled.
+    pub async fn choosers_pinned(&self) {
+        let mut pins = self.0.chooser_pins.subscribe();
+        let mut dialogs = self.0.dialog_opened.subscribe();
+        while *pins.borrow_and_update() != 0 && self.pending_dialog().is_none() {
+            tokio::select! {
+                _ = pins.changed() => {}
+                _ = dialogs.changed() => {}
+            }
+        }
     }
 
     pub fn pending_dialog(&self) -> Option<Dialog> {
@@ -743,6 +963,15 @@ impl BrowserSession {
     /// How many navigations to another document the run's own input has begun, on any page, so far.
     pub fn input_navigations(&self) -> u32 {
         self.0.state.lock().unwrap().input_navigations
+    }
+
+    /// Which document `session_id`'s top frame holds, as a count of the documents it has committed.
+    ///
+    /// The mark moves when, and only when, a navigation commits a new document there (a back-forward cache restore
+    /// included), so a read kept with it holds for as long as its document does. The lifecycle generation is no
+    /// such mark: every request that finishes and every frame's lifecycle event moves it, on an unchanged document.
+    pub fn document_mark(&self, session_id: &str) -> u64 {
+        self.0.state.lock().unwrap().documents.get(session_id).copied().unwrap_or_default()
     }
 
     /// The unique id of the status world `context_id` names on `session_id`, once, if Chrome reported it.
@@ -778,6 +1007,11 @@ impl BrowserSession {
         Ok(self.0.connection.foreground)
     }
 
+    /// Whether the browser is reached through the fastbrowse extension rather than a DevTools endpoint.
+    pub(crate) fn over_extension(&self) -> bool {
+        self.0.connection.cdp_url.starts_with(crate::extension::SCHEME)
+    }
+
     /// Have a tab that joins the run render: in front of its window, or behind it and kept painting.
     pub(crate) async fn show(&self, target_id: &str) -> Result<(), BrowserError> {
         if self.activate(target_id).await? {
@@ -788,6 +1022,21 @@ impl BrowserSession {
         // a cast too small and too sparse to cost anything runs on a session of its own, where the casts that deliver
         // live frames and recordings cannot replace it. A start can go unanswered while a tab swaps renderer, and a
         // tab without the cast is only slower to capture, so it is bounded and never fails the run.
+        if self.over_extension() {
+            // `chrome.debugger` gives a tab one session, so the cast runs on the tab's own. A live-frame cast or a
+            // recording there keeps the tab painting already, and a second cast would replace theirs.
+            let session = {
+                let state = self.0.state.lock().unwrap();
+                let casting = self.0.on_frame.is_some() || state.frame_tap.is_some();
+                let session = state.tabs.iter().find(|t| t.target_id == target_id).map(|t| t.session_id.clone());
+                session.filter(|_| !casting)
+            };
+            if let Some(session) = session {
+                self.0.state.lock().unwrap().keepers.insert(target_id.to_owned(), session.clone());
+                self.screencast_command("Page.startScreencast", keep_painting(), Some(&session)).await;
+            }
+            return Ok(());
+        }
         let attach = self.send("Target.attachToTarget", json!({"targetId": target_id, "flatten": true}), None);
         let keeper = match timeout(secs(SCREENCAST_COMMAND_SECONDS), attach).await {
             Ok(Ok(keeper)) => str_of(&keeper["sessionId"]),
@@ -813,7 +1062,12 @@ impl BrowserSession {
         if self.activate(&active).await? {
             return Ok(true);
         }
-        let keeper = self.0.state.lock().unwrap().keepers.get(&active).cloned();
+        let keeper = {
+            let state = self.0.state.lock().unwrap();
+            // Over the extension the keeper is the tab's own session, where a recording may have started since.
+            let replaced = self.over_extension() && state.frame_tap.is_some();
+            state.keepers.get(&active).cloned().filter(|_| !replaced)
+        };
         if let Some(keeper) = keeper {
             self.screencast_command("Page.startScreencast", keep_painting(), Some(&keeper)).await;
         }
@@ -830,19 +1084,24 @@ impl BrowserSession {
             // A window outside the grant is never matched, named or touched: it is not the run's to see.
             listed.retain(|t| grant.allows(t["url"].as_str().unwrap_or_default()));
         }
-        let mut pages: Vec<&Value> = listed
-            .iter()
-            .copied()
-            .filter(|t| !t["url"].as_str().unwrap_or_default().starts_with("devtools://"))
-            .collect();
-        if let Some(needle) = target_match {
-            pages.retain(|t| {
+        let scheme = |t: &Value| urlsplit(t["url"].as_str().unwrap_or_default()).0;
+        let mut pages: Vec<&Value> = listed.to_vec();
+        match target_match {
+            // Browser-internal pages, devtools included, are not a window the run may drive unless a caller names one.
+            // A web page is what the run is for, so it outranks an Electron or app window; the sort is stable, so the
+            // browser's order holds within each kind.
+            None => {
+                pages.retain(|t| !BROWSER_INTERNAL_SCHEMES.contains(&scheme(t).as_str()));
+                pages.sort_by_key(|t| !matches!(scheme(t).as_str(), "http" | "https"));
+            }
+            Some(needle) => pages.retain(|t| {
                 t["url"].as_str().unwrap_or_default().contains(needle)
                     || t["title"].as_str().unwrap_or_default().contains(needle)
-            });
+            }),
         }
-        if pages.is_empty() && self.0.grant.is_some() && target_match.is_none() {
-            // Every open window is outside the grant, as a fresh cloud browser showing only about:blank is. An empty
+        if pages.is_empty() && target_match.is_none() {
+            // Nothing listed is a page the run may take over: either every open window is outside the grant, as a
+            // fresh cloud browser showing only about:blank is, or only browser-internal pages are open. An empty
             // window shows nothing to keep from the run, so it is taken over rather than left beside a second one.
             for candidate in targets.iter().filter(|t| empty_window(t)) {
                 if self.still_blank(&str_of(&candidate["targetId"])).await? {
@@ -874,7 +1133,7 @@ impl BrowserSession {
         let target_id = str_of(&target["targetId"]);
         let attach = self.send("Target.attachToTarget", json!({"targetId": target_id, "flatten": true}), None).await?;
         let session_id = str_of(&attach["sessionId"]);
-        together(vec![Box::pin(self.show(&target_id)), Box::pin(self.prepare_session(&session_id))]).await?;
+        together(vec![Box::pin(self.show(&target_id)), Box::pin(self.prepare_session(&session_id, true))]).await?;
         self.run_document_scripts(&session_id).await;
         self.0.state.lock().unwrap().insert_tab(TabState {
             target_id: target_id.clone(),
@@ -887,8 +1146,6 @@ impl BrowserSession {
         Ok(target_id)
     }
 
-    /// A window that was already open loaded its document before the new-document scripts were registered, so
-    /// without this its freshness tracking and banner refusal would start only at its next navigation.
     /// Whether a window still holds the document Chrome gives a new about:blank. How a window was created does not
     /// say what is in it: a page can be written into after it opens, and such a window is not the run's.
     async fn still_blank(&self, target_id: &str) -> Result<bool, BrowserError> {
@@ -905,6 +1162,8 @@ impl BrowserSession {
         Ok(read?["result"]["value"] == json!(true))
     }
 
+    /// A window that was already open loaded its document before the new-document scripts were registered, so
+    /// without this its freshness tracking and banner refusal would start only at its next navigation.
     async fn run_document_scripts(&self, session_id: &str) {
         let scripts = self.0.new_document_scripts.iter().map(|source| async move {
             let _ = self.send("Runtime.evaluate", json!({"expression": source}), Some(session_id)).await;
@@ -977,7 +1236,7 @@ impl BrowserSession {
         let attach = self.send("Target.attachToTarget", json!({"targetId": target_id, "flatten": true}), None).await?;
         let session_id = str_of(&attach["sessionId"]);
         // Foregrounding the tab and enabling its session are independent, and both finish before the tab is used.
-        together(vec![Box::pin(self.show(&target_id)), Box::pin(self.prepare_session(&session_id))]).await?;
+        together(vec![Box::pin(self.show(&target_id)), Box::pin(self.prepare_session(&session_id, true))]).await?;
         self.0.state.lock().unwrap().insert_tab(TabState {
             target_id: target_id.clone(),
             session_id,
@@ -989,7 +1248,19 @@ impl BrowserSession {
         Ok(())
     }
 
-    pub(crate) async fn prepare_session(&self, session_id: &str) -> Result<(), BrowserError> {
+    pub(crate) async fn prepare_session(&self, session_id: &str, top_level: bool) -> Result<(), BrowserError> {
+        self.prepare_and_resume(session_id, top_level, &AtomicBool::new(false)).await
+    }
+
+    /// `prepare_session`, setting `resumed` once a page Chrome opened paused has been told to run. A resume whose reply
+    /// never came counts as unsent: the page's scope gate is on by then, so letting it go again is safe, and a resume
+    /// that never arrived counted as sent would leave it paused.
+    async fn prepare_and_resume(
+        &self,
+        session_id: &str,
+        top_level: bool,
+        resumed: &AtomicBool,
+    ) -> Result<(), BrowserError> {
         self.check_access().await?;
         let scoped = self.0.grant.is_some();
         let mut patterns = vec![download_pattern()];
@@ -997,6 +1268,15 @@ impl BrowserSession {
             patterns.push(scope_pattern());
         }
         let s = Some(session_id);
+        // A new popup has no renderer until it resumes, so renderer setup waits forever if it precedes this. Fetch
+        // and service-worker bypass are enabled first so the initial request meets the scope gate and its response
+        // can be captured.
+        self.send("Fetch.enable", json!({"patterns": patterns}), s).await?;
+        if scoped {
+            self.bypass_service_workers(session_id, true).await?;
+        }
+        self.send("Runtime.runIfWaitingForDebugger", json!({}), s).await?;
+        resumed.store(true, Ordering::SeqCst);
         let mut commands: Vec<FBoxFuture<'_, Result<(), BrowserError>>> = vec![];
         for domain in ENABLE_DOMAINS {
             commands
@@ -1009,20 +1289,39 @@ impl BrowserSession {
             ("Runtime.addBinding", json!({"name": INPUT_NAVIGATION_BINDING, "executionContextName": INPUT_WORLD})),
             ("Page.addScriptToEvaluateOnNewDocument", json!({"source": INPUT_HISTORY_JS, "worldName": INPUT_WORLD})),
             ("Target.setAutoAttach", json!({"autoAttach": true, "waitForDebuggerOnStart": scoped, "flatten": true})),
-            ("Fetch.enable", json!({"patterns": patterns})),
         ];
         for (method, params) in sends {
             commands.push(Box::pin(async move { self.send(method, params, s).await.map(drop) }));
         }
-        // A page behind another tab is hidden and unfocused, so it paints nothing and takes no typing. Focus emulation
-        // has it render and hold focus where it is, which is what lets a run leave the window alone.
-        if !self.0.connection.foreground {
+        // An old extension can refuse interception even when the CLI supports it. A run with files must stop
+        // before it can open a native picker in the person's browser.
+        commands.push(Box::pin(async move {
+            if let Err(error) = self.send("Page.setInterceptFileChooserDialog", json!({"enabled": true}), s).await
+                && self.0.require_chooser_interception
+            {
+                return Err(BrowserError::Unavailable(format!(
+                    "The fastbrowse extension could not intercept the file chooser: {error}. Update the extension, \
+                     or run `fastbrowse extension path` and reload the unpacked extension in your browser."
+                )));
+            }
+            Ok(())
+        }));
+        // A page behind another tab is hidden and unfocused, so it paints nothing, takes no typing and leaves input
+        // unanswered for seconds. Focus emulation has it render and hold focus where it is. A foreground run needs it
+        // too: anything can take the front from a tab the run is still driving.
+        commands.push(Box::pin(async move {
+            self.send("Emulation.setFocusEmulationEnabled", json!({"enabled": true}), s).await.map(drop)
+        }));
+        if top_level && let Some((width, height)) = self.0.viewport {
             commands.push(Box::pin(async move {
-                self.send("Emulation.setFocusEmulationEnabled", json!({"enabled": true}), s).await.map(drop)
+                self.send(
+                    "Emulation.setDeviceMetricsOverride",
+                    json!({"width": width, "height": height, "deviceScaleFactor": 0, "mobile": false}),
+                    s,
+                )
+                .await
+                .map(drop)
             }));
-        }
-        if scoped {
-            commands.push(Box::pin(self.bypass_service_workers(session_id, true)));
         }
         // Track parsing and hydration before the first post-navigation read, so an already quiet document does not
         // pay another full window just to install its observer.
@@ -1032,9 +1331,6 @@ impl BrowserSession {
             }));
         }
         together(commands).await?;
-        if scoped {
-            self.send("Runtime.runIfWaitingForDebugger", json!({}), s).await?;
-        }
         Ok(())
     }
 
@@ -1169,7 +1465,7 @@ impl State {
         self.tabs.iter().any(|t| t.target_id == target_id)
     }
 
-    /// `self._tabs[id] = state`: a known tab keeps its place.
+    /// Add `tab`: a known tab keeps its place.
     fn insert_tab(&mut self, tab: TabState) {
         match self.tabs.iter_mut().find(|t| t.target_id == tab.target_id) {
             Some(existing) => *existing = tab,
@@ -1212,6 +1508,18 @@ impl Shared {
         }
     }
 
+    /// A navigation of `params`' frame has arrived, or stopped without a document.
+    fn landed(&self, params: &Value, session: Option<&str>) {
+        let Some(session) = session else { return };
+        let key = (session.to_owned(), str_of(&params["frameId"]));
+        let mut state = self.state.lock().unwrap();
+        let top = state.navigating.remove(&key).is_some();
+        if state.frames_loading.remove(&key).is_some() || top {
+            drop(state);
+            self.lifecycle.send_modify(|generation| *generation += 1);
+        }
+    }
+
     pub(crate) fn on_event(self: &Arc<Self>, event: &Event) {
         let params = &event.params;
         let session = event.session.as_deref();
@@ -1227,10 +1535,59 @@ impl Shared {
                 }
             }
             "Page.windowOpen" => self.state.lock().unwrap().window_opens += 1,
+            "Page.frameAttached" => {
+                self.state.lock().unwrap().subframes.insert(str_of(&params["frameId"]));
+            }
+            "Page.frameNavigated" => {
+                // A tab's new document is not the one its solver worked on, so a solve given up on there never
+                // speaks for it.
+                if params["frame"]["parentId"].is_null()
+                    && let Some(session) = session
+                {
+                    let mut state = self.state.lock().unwrap();
+                    if let Some(target) =
+                        state.tabs.iter().find(|tab| tab.session_id == session).map(|tab| tab.target_id.clone())
+                    {
+                        state.captcha_solves.remove(&target);
+                    }
+                }
+                self.tag_ad_frame(&params["frame"]);
+                // Only a top frame's commit replaces the document a tab's observation reads; a frame inside it does not.
+                if let Some(session) = session
+                    && params["frame"]["parentId"].is_null()
+                {
+                    *self.state.lock().unwrap().documents.entry(session.to_owned()).or_default() += 1;
+                }
+            }
+            "Page.frameRequestedNavigation" | "Page.frameStartedLoading" => {
+                if let Some(session) = session {
+                    let frame = str_of(&params["frameId"]);
+                    let mut state = self.state.lock().unwrap();
+                    let key = (session.to_owned(), frame);
+                    // A load keeps the start it was first seen at until it lands: a navigation's request and its start,
+                    // or a later navigation that replaces it unfinished, are not new time to wait.
+                    let loads = if state.subframes.contains(&key.1) {
+                        &mut state.frames_loading
+                    } else {
+                        &mut state.navigating
+                    };
+                    loads.entry(key).or_insert_with(Instant::now);
+                }
+            }
+            // A frame removed before it loaded, or handed to a process of its own, whose session then reports it.
+            "Page.frameStoppedLoading" | "Page.navigatedWithinDocument" | "Page.frameDetached" => {
+                self.landed(params, session);
+            }
             // A frame reported a lifecycle transition (init, DOMContentLoaded, load, networkIdle...).
-            "Page.lifecycleEvent" => self.lifecycle.send_modify(|generation| *generation += 1),
-            // Only the page's own calls: a document, image or script request is the load lifecycle events report.
-            "Network.requestWillBeSent" if matches!(params["type"].as_str(), Some("Fetch" | "XHR")) => {
+            "Page.lifecycleEvent" => {
+                if params["name"] == "DOMContentLoaded" {
+                    self.landed(params, session);
+                }
+                self.lifecycle.send_modify(|generation| *generation += 1);
+            }
+            // The scripts a page loads as it goes: a menu's bundle arrives after its click. Fetch and XHR are counted in
+            // the page, which alone can tell the ones an input caused.
+            "Network.requestWillBeSent" if matches!(params["type"].as_str(), Some("Fetch" | "XHR" | "Script")) => {
                 if let Some(session) = session {
                     let mut state = self.state.lock().unwrap();
                     let key = (session.to_owned(), str_of(&params["requestId"]));
@@ -1242,14 +1599,60 @@ impl Shared {
                     }
                 }
             }
-            "Network.loadingFinished" | "Network.loadingFailed" => {
+            // Chrome reports a body nobody reads as finished only when the page drops it, which may be never: a page
+            // that posts and ignores the reply. The bytes arriving are the same news, so a declared length ends it too.
+            "Network.responseReceived"
+            | "Network.dataReceived"
+            | "Network.loadingFinished"
+            | "Network.loadingFailed" => {
                 if let Some(session) = session {
                     let key = (session.to_owned(), str_of(&params["requestId"]));
-                    if self.state.lock().unwrap().requests_open.remove(&key).is_some() {
-                        // Wakes a settle waiting on lifecycle events to look at the page again.
-                        self.lifecycle.send_modify(|generation| *generation += 1);
+                    let mut state = self.state.lock().unwrap();
+                    let finished = match event.method.as_str() {
+                        "Network.responseReceived" => match declared_length(&params["response"]["headers"]) {
+                            Some(length) if state.requests_open.contains_key(&key) => {
+                                state.request_bytes_due.insert(key.clone(), length);
+                                length <= 0
+                            }
+                            _ => false,
+                        },
+                        "Network.dataReceived" => state.request_bytes_due.get_mut(&key).is_some_and(|due| {
+                            *due -= params["encodedDataLength"].as_i64().unwrap_or(0);
+                            *due <= 0
+                        }),
+                        _ => true,
+                    };
+                    if finished {
+                        state.request_bytes_due.remove(&key);
+                        if state.requests_open.remove(&key).is_some() {
+                            drop(state);
+                            // Wakes a settle waiting on lifecycle events to look at the page again.
+                            self.lifecycle.send_modify(|generation| *generation += 1);
+                        }
                     }
                 }
+            }
+            // Browser Use Cloud's solver reports each CAPTCHA it takes on, on the browser's own connection: browser-use
+            // waits on the same two events (browser_use/repl/captcha.py). A solved one is dropped, and the page it
+            // cleared moves on.
+            "BrowserUse.captchaSolverStarted" | "BrowserUse.captchaSolverFinished" => {
+                let target = str_of(&params["targetId"]);
+                let started = event.method == "BrowserUse.captchaSolverStarted";
+                {
+                    let mut state = self.state.lock().unwrap();
+                    if started || params["success"] != true {
+                        let solve = CaptchaSolve {
+                            url: str_of(&params["url"]),
+                            vendor: str_of(&params["vendor"]),
+                            working: started,
+                        };
+                        state.captcha_solves.insert(target, solve);
+                    } else {
+                        state.captcha_solves.remove(&target);
+                    }
+                }
+                // Wakes a wait on the page to look at the solve again.
+                self.lifecycle.send_modify(|generation| *generation += 1);
             }
             "Target.attachedToTarget" => self.on_attached(params, session),
             "Target.detachedFromTarget" => {
@@ -1259,14 +1662,11 @@ impl Shared {
                 state.frame_sessions.retain(|(_, sid)| *sid != child);
                 // A target that went away answers nothing more.
                 state.requests_open.retain(|(sid, _), _| *sid != child);
-            }
-            // A scoped run adopts popups where they attach paused, not here, after their first request may have left.
-            "Target.targetCreated" if self.grant.is_none() => {
-                let info = &params["targetInfo"];
-                let mut state = self.state.lock().unwrap();
-                if let Some(opener) = self.popup_opener(&state, info) {
-                    self.begin_popup(&mut state, &str_of(&info["targetId"]), &opener, None);
-                }
+                state.request_bytes_due.retain(|(sid, _), _| *sid != child);
+                state.documents.remove(&child);
+                state.navigating.retain(|(sid, _), _| *sid != child);
+                state.frames_loading.retain(|(sid, _), _| *sid != child);
+                state.clicked.remove(&child);
             }
             "Target.targetInfoChanged" => {
                 let info = &params["targetInfo"];
@@ -1278,13 +1678,6 @@ impl Shared {
                         info["url"].as_str().unwrap_or_default(),
                         info["title"].as_str().unwrap_or_default(),
                     );
-                } else if self.grant.is_none()
-                    && info["openerId"].as_str().is_some_and(|o| !o.is_empty())
-                    && !state.popups.iter().any(|p| p.target_id == target_id)
-                    && let Some(opener) = self.popup_opener(&state, info)
-                {
-                    // An opener Chrome reports only after the target was created makes it the run's popup from then on.
-                    self.begin_popup(&mut state, &target_id, &opener, None);
                 }
             }
             "Target.targetDestroyed" => {
@@ -1295,9 +1688,11 @@ impl Shared {
                         state.tabs.iter().position(|t| t.target_id == target_id).map(|at| state.tabs.remove(at));
                     state.keepers.remove(&target_id);
                     state.owned.remove(&target_id);
+                    state.captcha_solves.remove(&target_id);
                     state.activated.retain(|t| *t != target_id);
                     (target_id == state.active_target_id).then(|| state.successor(closed.as_ref()))
                 };
+                self.popup_signal.send_modify(|n| *n += 1);
                 if let Some(next) = next {
                     self.set_active_target(&next);
                 }
@@ -1316,6 +1711,21 @@ impl Shared {
                 }
                 self.dialog_opened.send_modify(|n| *n += 1);
             }
+            // With the chooser intercepted, Chrome no longer holds its input: one a button made in script and never put
+            // on the page is held only by its own handlers and is collected at the page's next collection. The page's
+            // registry takes it now, tied to the control whose click opened it, so an observation can offer that control
+            // as the upload, as a label is offered for its input.
+            "Page.fileChooserOpened" => {
+                let (Some(session), Some(input)) = (session, params["backendNodeId"].as_i64()) else { return };
+                let mut state = self.state.lock().unwrap();
+                let Some(&opener) = state.clicked.get(session) else { return };
+                let (shared, session) = (self.clone(), session.to_owned());
+                let pin = ChooserPin::new(self);
+                self.spawn(&mut state, async move {
+                    let _pin = pin;
+                    pin_chooser(&shared, &session, input, opener).await;
+                });
+            }
             "Runtime.bindingCalled" if params["name"] == INPUT_NAVIGATION_BINDING => {
                 self.state.lock().unwrap().input_navigations += 1;
             }
@@ -1333,6 +1743,18 @@ impl Shared {
         }
     }
 
+    /// Record whether Chrome's ad tagging marks `frame` (a CDP `Page.Frame`) as an ad or as a frame inside one.
+    fn tag_ad_frame(&self, frame: &Value) {
+        let id = str_of(&frame["id"]);
+        let ad = matches!(frame["adFrameStatus"]["adFrameType"].as_str(), Some("root" | "child"));
+        let mut state = self.state.lock().unwrap();
+        if ad {
+            state.ad_frames.insert(id);
+        } else {
+            state.ad_frames.remove(&id);
+        }
+    }
+
     fn on_attached(self: &Arc<Self>, params: &Value, session: Option<&str>) {
         let info = &params["targetInfo"];
         let child = str_of(&params["sessionId"]);
@@ -1340,7 +1762,7 @@ impl Shared {
         let mut state = self.state.lock().unwrap();
         match session {
             None => {
-                if self.grant.is_some() && paused {
+                if paused {
                     self.on_new_page(&mut state, info, &child);
                 }
             }
@@ -1348,16 +1770,37 @@ impl Shared {
                 let target = str_of(&info["targetId"]);
                 match state.frame_sessions.iter_mut().find(|(t, _)| *t == target) {
                     Some(entry) => entry.1 = child.clone(),
-                    None => state.frame_sessions.push((target, child.clone())),
+                    None => state.frame_sessions.push((target.clone(), child.clone())),
                 }
                 state.frame_parents.insert(child.clone(), parent.to_owned());
+                // The frame's document may load before its session reports lifecycle events, so once it does, the
+                // document's own state says whether one is still to come.
+                state.frames_loading.entry((child.clone(), target.clone())).or_insert_with(Instant::now);
                 let session = self.session();
                 self.spawn(&mut state, async move {
-                    let _ = session.prepare_session(&child).await;
+                    let prepared = session.prepare_session(&child, false).await.is_ok();
+                    // The frame's own tree says whether Chrome tagged it an ad when it was created: its navigation
+                    // can come before this session reports events, so `Page.frameNavigated` alone can miss it.
+                    if prepared && let Ok(tree) = session.send("Page.getFrameTree", json!({}), Some(&child)).await {
+                        session.0.tag_ad_frame(&tree["frameTree"]["frame"]);
+                    }
+                    let loading = prepared
+                        && session
+                            .send(
+                                "Runtime.evaluate",
+                                json!({"expression": "document.readyState", "returnByValue": true}),
+                                Some(&child),
+                            )
+                            .await
+                            .is_ok_and(|out| out["result"]["value"] == "loading");
+                    if !loading {
+                        session.0.landed(&json!({"frameId": target}), Some(&child));
+                    }
                 });
             }
-            Some(_) if self.grant.is_some() && paused => {
-                // A worker has no document to scope.
+            Some(_) if info["type"] == "page" && paused => self.on_new_page(&mut state, info, &child),
+            Some(_) if paused => {
+                // A worker has no document to capture or scope.
                 let session = self.session();
                 self.spawn(&mut state, async move {
                     let _ = session.send("Runtime.runIfWaitingForDebugger", json!({}), Some(&child)).await;
@@ -1367,7 +1810,7 @@ impl Shared {
         }
     }
 
-    /// A page that opened since a scoped run asked for them paused. Sessions this run attached itself, and windows
+    /// A page that opened since the run asked for them paused. Sessions this run attached itself, and windows
     /// open before it asked, arrive with nothing to wait on and are left as they are.
     fn on_new_page(self: &Arc<Self>, state: &mut State, info: &Value, child: &str) {
         match self.popup_opener(state, info) {
@@ -1460,11 +1903,7 @@ impl Shared {
                 if !state.frame_scheduled {
                     state.frame_scheduled = true;
                     let shared = self.clone();
-                    if state.closing {
-                        state.frame_scheduled = false;
-                    } else {
-                        state.delivery = Some(tokio::spawn(async move { deliver_frames(&shared).await }));
-                    }
+                    state.delivery = Some(tokio::spawn(async move { deliver_frames(&shared).await }));
                 }
             }
         }
@@ -1518,47 +1957,166 @@ impl Shared {
     }
 }
 
-pub(crate) async fn adopt_popup(shared: &Arc<Shared>, target_id: &str, opener_id: &str, session: Option<String>) {
-    let session_handle = shared.session();
-    let adopt = async {
-        let session_id = match session {
-            Some(session_id) => session_id,
-            None => {
-                let attach = session_handle
-                    .send("Target.attachToTarget", json!({"targetId": target_id, "flatten": true}), None)
-                    .await?;
-                str_of(&attach["sessionId"])
-            }
-        };
-        together(vec![Box::pin(session_handle.show(target_id)), Box::pin(session_handle.prepare_session(&session_id))])
-            .await?;
-        if shared.connection.attach {
-            session_handle.run_document_scripts(&session_id).await;
-        }
-        shared.state.lock().unwrap().insert_tab(TabState {
-            target_id: target_id.to_owned(),
-            session_id,
-            url: "about:blank".into(),
-            title: String::new(),
-            opener_id: Some(opener_id.to_owned()),
-        });
-        // The popup may already have navigated to its final URL before this task got scheduled (targetCreated ->
-        // targetInfoChanged can both fire while attachToTarget above is awaited), so a targetInfoChanged event carrying
-        // it can arrive and be dropped because the tab was not in the tabs yet. Fetch current info now rather than
-        // relying on a future event.
-        let info = session_handle.send("Target.getTargetInfo", json!({"targetId": target_id}), None).await?;
-        let info = &info["targetInfo"];
-        session_handle.set_tab_info(
-            target_id,
-            info["url"].as_str().unwrap_or_default(),
-            info["title"].as_str().unwrap_or_default(),
-        );
-        Ok::<(), BrowserError>(())
+/// A chooser whose input the page's registry does not yet hold, counted while it lives.
+struct ChooserPin(Arc<Shared>);
+
+impl ChooserPin {
+    fn new(shared: &Arc<Shared>) -> Self {
+        shared.chooser_pins.send_modify(|n| *n += 1);
+        Self(shared.clone())
+    }
+}
+
+impl Drop for ChooserPin {
+    fn drop(&mut self) {
+        self.0.chooser_pins.send_modify(|n| *n -= 1);
+    }
+}
+
+/// Hold the chooser's file input in the page's registry as the upload target of `opener`, the control clicked. An
+/// input or page gone already is skipped: nothing to offer.
+async fn pin_chooser(shared: &Arc<Shared>, session: &str, input: i64, opener: i64) {
+    let session_id = Some(session);
+    let browser = shared.session();
+    let Ok(resolved) = browser.send("DOM.resolveNode", json!({"backendNodeId": input}), session_id).await else {
+        return;
     };
-    // Settled however this ends, as Python's `finally` does: a session closing mid-adoption drops this future, and a
+    let Some(object) = resolved["object"]["objectId"].as_str() else { return };
+    let _ = browser
+        .send(
+            "Runtime.callFunctionOn",
+            json!({
+                "objectId": object,
+                "functionDeclaration": "function (opener) { const registry = window.__fastbrowse; \
+                    const node = registry?.nodes.get(opener); \
+                    if (node) registry.chooser = {input: this, opener: node, connected: this.isConnected}; }",
+                "arguments": [{"value": opener}],
+            }),
+            session_id,
+        )
+        .await;
+    let _ = browser.send("Runtime.releaseObject", json!({"objectId": object}), session_id).await;
+}
+
+pub(crate) async fn adopt_popup(shared: &Arc<Shared>, target_id: &str, opener_id: &str, session: Option<String>) {
+    let mut session_id = session;
+    let resumed = AtomicBool::new(false);
+    // Settled however this ends: a session closing mid-adoption drops this future, and a
     // `follow_popup` waiting on the popup must still learn it never joined.
-    let _settle = AdoptionSettled { shared, target_id };
-    let _ = adopt.await;
+    let settle = AdoptionSettled { shared, target_id };
+    let adopted = adopt(shared, target_id, opener_id, &mut session_id, &resumed).await;
+    drop(settle);
+    if let Err(error) = adopted
+        && !resumed.load(Ordering::SeqCst)
+    {
+        release_popup(shared, target_id, opener_id, session_id.as_deref(), &error).await;
+    }
+}
+
+async fn adopt(
+    shared: &Arc<Shared>,
+    target_id: &str,
+    opener_id: &str,
+    session: &mut Option<String>,
+    resumed: &AtomicBool,
+) -> Result<(), BrowserError> {
+    let session_handle = shared.session();
+    let session_id = match session {
+        Some(session_id) => session_id.clone(),
+        None => {
+            let attach = session_handle
+                .send("Target.attachToTarget", json!({"targetId": target_id, "flatten": true}), None)
+                .await?;
+            session.insert(str_of(&attach["sessionId"])).clone()
+        }
+    };
+    // Both run to the end, even when one fails: a paint keeper attached while setup failed would otherwise be left
+    // attached without ever reaching `state.keepers`, where a failed adoption finds it.
+    let (shown, prepared) =
+        tokio::join!(session_handle.show(target_id), session_handle.prepare_and_resume(&session_id, true, resumed));
+    shown?;
+    prepared?;
+    if shared.connection.attach {
+        session_handle.run_document_scripts(&session_id).await;
+    }
+    shared.state.lock().unwrap().insert_tab(TabState {
+        target_id: target_id.to_owned(),
+        session_id,
+        url: "about:blank".into(),
+        title: String::new(),
+        opener_id: Some(opener_id.to_owned()),
+    });
+    // The popup may already have navigated to its final URL before this task got scheduled (targetCreated ->
+    // targetInfoChanged can both fire while attachToTarget above is awaited), so a targetInfoChanged event carrying
+    // it can arrive and be dropped because the tab was not in the tabs yet. Fetch current info now rather than
+    // relying on a future event.
+    let info = session_handle.send("Target.getTargetInfo", json!({"targetId": target_id}), None).await?;
+    let info = &info["targetInfo"];
+    session_handle.set_tab_info(
+        target_id,
+        info["url"].as_str().unwrap_or_default(),
+        info["title"].as_str().unwrap_or_default(),
+    );
+    Ok(())
+}
+
+/// Let go of a popup whose setup failed before it was resumed. Chrome holds a new window paused until the run resumes
+/// it, and the opener's script waits in `window.open` until then, so a popup left paused froze the page that opened
+/// it. One the run owns is closed, since its scope gate and capture may not be on; any other is resumed and detached,
+/// as a page that is not the run's is. Its paint keeper goes too, so no cast outlives it.
+async fn release_popup(
+    shared: &Arc<Shared>,
+    target_id: &str,
+    opener_id: &str,
+    session_id: Option<&str>,
+    error: &BrowserError,
+) {
+    let session = shared.session();
+    let (owned, keeper) = {
+        let mut state = shared.state.lock().unwrap();
+        (state.owned.contains(target_id), state.keepers.remove(target_id))
+    };
+    // Over the extension the keeper is the tab's own session, which is not the run's to detach.
+    if let Some(keeper) = keeper.filter(|_| !session.over_extension()) {
+        let _ = session.send("Target.detachFromTarget", json!({"sessionId": keeper}), None).await;
+    }
+    // The error's message may carry page text, so only its kind is named.
+    if owned {
+        warn(&format!("A new tab could not be set up and was closed ({})", error.kind()));
+        // A popup that shares its opener's renderer is paused on that renderer's thread, and closing the popup does
+        // not end the pause: only a resume does, and Chrome takes one from any page on that thread. The popup's own
+        // sessions end with it, so the opener's carries the resume, and only once the popup is gone: resumed any
+        // earlier, `window.open` goes on to load its address outside the scope gate. One still open stays paused.
+        let mut destroyed = shared.popup_signal.subscribe();
+        let closed = session.send("Target.closeTarget", json!({"targetId": target_id}), None).await;
+        if closed.is_err() {
+            return;
+        }
+        // Not `wait_for`: its check runs under the signal's lock, and `begin_popup` bumps the signal under the state's.
+        // Bounded, so a destruction Chrome never reports leaves the opener held, never the popup loading.
+        let gone = timeout(secs(CDP_PAGE_SECONDS), async {
+            while shared.state.lock().unwrap().owned.contains(target_id) {
+                if destroyed.changed().await.is_err() {
+                    return false;
+                }
+            }
+            true
+        });
+        if !matches!(gone.await, Ok(true)) {
+            return;
+        }
+        let opener = {
+            let state = shared.state.lock().unwrap();
+            state.tabs.iter().find(|t| t.target_id == opener_id).map(|t| t.session_id.clone())
+        };
+        if let Some(opener) = opener {
+            let _ = session.send("Runtime.runIfWaitingForDebugger", json!({}), Some(&opener)).await;
+        }
+    } else if let Some(session_id) = session_id {
+        warn(&format!("A new tab could not be set up and was let go ({})", error.kind()));
+        let _ = session.send("Runtime.runIfWaitingForDebugger", json!({}), Some(session_id)).await;
+        let _ = session.send("Target.detachFromTarget", json!({"sessionId": session_id}), None).await;
+    }
 }
 
 struct AdoptionSettled<'a> {
@@ -1655,17 +2213,26 @@ async fn handle_paused(shared: &Arc<Shared>, event: Value, session_id: String) {
     let headers = response_headers(&event["responseHeaders"]);
     let disposition = headers.get("content-disposition").cloned().unwrap_or_default();
     let mime = headers.get("content-type").cloned().unwrap_or_default();
-    if is_download(&mime, &disposition) {
+    // Chrome shows a PDF in its viewer, whose text never reaches the page's DOM: it is kept as a file is, so its text
+    // reaches the run the way a downloaded file's does.
+    if is_download(&mime, &disposition) || response_mime(&mime) == "application/pdf" {
         let complete = event["responseStatusCode"] == 200 && !headers.contains_key("content-range");
         let url = str_of(&event["request"]["url"]);
         let content_length = headers.get("content-length").and_then(|value| content_length(value));
-        let _ = capture_download(shared, &request_id, &session_id, &url, &disposition, &mime, complete, content_length)
-            .await;
+        if capture_download(shared, &request_id, &session_id, &url, &disposition, &mime, complete, content_length)
+            .await
+            .is_err()
+        {
+            warn("Download capture failed");
+            refuse_download(shared, download_filename(&disposition, &url), &url, Refusal::Failed);
+        }
     }
     // Never leave a request paused, even if capture above failed. The request or session may already be gone
     // (navigation, tab close), which is fine to swallow here.
     let _ = shared.session().send("Fetch.continueRequest", json!({"requestId": request_id}), Some(&session_id)).await;
     shared.state.lock().unwrap().paused.remove(&(request_id, session_id));
+    // Wakes `download_settled`.
+    shared.lifecycle.send_modify(|generation| *generation += 1);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1685,7 +2252,7 @@ async fn capture_download(
     if let Some(stated) = content_length
         && stated > shared.max_download_bytes as u64
     {
-        refuse_download(shared, name, url, stated);
+        refuse_download(shared, name, url, too_large(shared, stated));
         return Ok(());
     }
     let body =
@@ -1694,35 +2261,28 @@ async fn capture_download(
     let raw = if body["base64Encoded"] == true { BASE64.decode(text.as_bytes())? } else { text.as_bytes().to_vec() };
     if raw.len() > shared.max_download_bytes {
         // Bounded size: refuse to hold an oversized body in memory as an artifact, and say that it was refused.
-        refuse_download(shared, name, url, raw.len() as u64);
+        refuse_download(shared, name, url, too_large(shared, raw.len() as u64));
         return Ok(());
     }
     let kind = response_mime(mime);
     let stored_mime = if kind.is_empty() { "application/octet-stream".to_owned() } else { kind.clone() };
-    let readable = readable_text(mime, &raw);
-    let size = raw.len();
+    let readable = readable_text(mime, &name, &raw, shared.max_download_bytes).await;
     let artifact = shared.artifact_sink.put(ArtifactKind::Download, &name, &stored_mime, &raw).await?;
     let mut state = shared.state.lock().unwrap();
     state.artifacts.push(artifact);
     state.downloads_captured += 1;
     state.download_keys.push(Some((url.to_owned(), crate::page::sha256_bytes(&raw))));
-    if let Some(text) = readable {
-        state.download_texts.push(DownloadText {
-            mime: kind,
-            name,
-            url: url.to_owned(),
-            text,
-            complete: complete && size <= DOWNLOAD_TEXT_BYTES,
-        });
-        while state.download_texts.iter().map(|d| d.text.chars().count()).sum::<usize>() > DOWNLOAD_TEXT_TOTAL {
-            state.download_texts.remove(0);
-            state.download_texts_shown = state.download_texts_shown.saturating_sub(1);
+    match readable {
+        Ok(Some(text)) => {
+            state.download_texts.push(DownloadText { mime: kind, name, url: url.to_owned(), text, complete })
         }
+        Ok(None) => {}
+        Err(reason) => state.download_unread.push(DownloadUnread { name, url: url.to_owned(), reason }),
     }
     Ok(())
 }
 
-/// `_together`: send independent commands at once and wait for all of them, failing with the first error as
+/// Send independent commands at once and wait for all of them, failing with the first error as
 /// sequential sends would, and dropping the rest when one fails so none outlives the session it was sent on.
 pub async fn together(commands: Vec<FBoxFuture<'_, Result<(), BrowserError>>>) -> Result<(), BrowserError> {
     try_join_all(commands).await.map(drop)
@@ -1762,15 +2322,14 @@ fn download_filename(disposition: &str, url: &str) -> String {
     safe_filename(&name)
 }
 
-fn refuse_download(shared: &Arc<Shared>, name: String, url: &str, size_bytes: u64) {
+fn too_large(shared: &Shared, size_bytes: u64) -> Refusal {
+    Refusal::TooLarge { size_bytes, limit_bytes: shared.max_download_bytes as u64 }
+}
+
+fn refuse_download(shared: &Arc<Shared>, name: String, url: &str, reason: Refusal) {
     let mut state = shared.state.lock().unwrap();
     state.download_keys.push(None);
-    state.download_refusals.push(DownloadRefused {
-        name,
-        url: url.to_owned(),
-        size_bytes,
-        limit_bytes: shared.max_download_bytes as u64,
-    });
+    state.download_refusals.push(DownloadRefused { name, url: url.to_owned(), reason });
 }
 
 fn repeated(keys: &[Option<(String, String)>], since: usize) -> bool {
@@ -1832,10 +2391,10 @@ fn percent_decode(encoded: &str, charset: &str) -> String {
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] == b'%'
-            && index + 2 < bytes.len()
-            && let Ok(byte) = u8::from_str_radix(&encoded[index + 1..index + 3], 16)
+            && let [high, low, ..] = bytes[index + 1..]
+            && let (Some(high), Some(low)) = (char::from(high).to_digit(16), char::from(low).to_digit(16))
         {
-            out.push(byte);
+            out.push((high * 16 + low) as u8);
             index += 3;
             continue;
         }
@@ -1871,7 +2430,7 @@ fn safe_filename(name: &str) -> String {
 /// one is a download and aborts. A `content-disposition: attachment` (or a save-as filename) is the site saying so
 /// explicitly; a bare `text/csv` says it by type. This is a property of the response, not of any one site, so a link
 /// whose target is a file is captured the same way everywhere.
-const DOWNLOAD_MIME_TYPES: [&str; 10] = [
+const DOWNLOAD_MIME_TYPES: [&str; 11] = [
     "text/csv",
     "application/csv",
     "application/octet-stream",
@@ -1882,6 +2441,7 @@ const DOWNLOAD_MIME_TYPES: [&str; 10] = [
     "application/x-7z-compressed",
     "application/vnd.ms-excel",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ];
 
 fn response_mime(mime: &str) -> String {
@@ -1897,26 +2457,50 @@ fn is_download(mime: &str, disposition: &str) -> bool {
     DOWNLOAD_MIME_TYPES.contains(&response_mime(mime).as_str())
 }
 
-/// The response's text when it is a text file the run should be able to read, else None.
-fn readable_text(mime: &str, raw: &[u8]) -> Option<String> {
+/// The response's text when it is a text file or a PDF the run should be able to read, None for any other file, and
+/// why a PDF went unread.
+async fn readable_text(
+    mime: &str,
+    name: &str,
+    raw: &[u8],
+    max_bytes: usize,
+) -> Result<Option<String>, crate::PdfUnread> {
     let kind = response_mime(mime);
+    let declared = match kind.as_str() {
+        "" | "application/octet-stream" | "binary/octet-stream" => {
+            match name.rsplit('.').next().unwrap_or_default().to_ascii_lowercase().as_str() {
+                "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "zip" => "application/zip",
+                "pdf" => "application/pdf",
+                _ => &kind,
+            }
+        }
+        _ => &kind,
+    };
+    let request = match declared {
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => Some(crate::helper::XLSX_TEXT),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => Some(crate::helper::DOCX_TEXT),
+        "application/zip" => Some(crate::helper::ZIP_TEXT),
+        _ => None,
+    };
+    if let Some(request) = request {
+        return crate::pdf::document_text(&format!("{request}:{max_bytes}"), raw.to_vec()).await;
+    }
+    if declared == "application/pdf" {
+        return crate::pdf::text(raw.to_vec()).await;
+    }
     if !(kind.starts_with("text/") || kind == "application/csv" || kind == "application/json") {
-        return None;
+        return Ok(None);
     }
-    let mut text = String::from_utf8_lossy(&raw[..raw.len().min(DOWNLOAD_TEXT_BYTES)]).into_owned();
-    if raw.len() > DOWNLOAD_TEXT_BYTES {
-        let omitted = raw.len() - DOWNLOAD_TEXT_BYTES;
-        text.push_str(&format!("\n[Download cut: {omitted} bytes omitted; full file in artifact]"));
-    }
-    Some(text)
+    Ok(Some(String::from_utf8_lossy(raw).into_owned()))
 }
 
 pub fn str_of(value: &Value) -> String {
     value.as_str().unwrap_or_default().to_owned()
 }
 
-/// `json.dumps` with Python's default separators (`", "` and `": "`) and `ensure_ascii`, so a script built here is
-/// the script Python builds, byte for byte.
+/// JSON as `json.dumps` writes it by default: `", "` and `": "` separators and `ensure_ascii`.
 pub fn py_json(value: &Value) -> String {
     let mut out = String::new();
     write_py_json(value, &mut out);
@@ -1977,7 +2561,7 @@ fn write_py_str(s: &str, out: &mut String) {
     out.push('"');
 }
 
-/// Python's `repr` of a str, for messages Python builds with `!r`.
+/// Python's `repr` of a str, the quoting these messages use.
 pub fn py_repr(s: &str) -> String {
     let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
     let mut out = String::new();
@@ -2009,9 +2593,31 @@ fn empty_window(target: &Value) -> bool {
     target["type"] == "page" && target["url"] == "about:blank" && target["openerId"].as_str().is_none_or(str::is_empty)
 }
 
+/// The body length a response's headers declare, whatever case they arrive in.
+fn declared_length(headers: &Value) -> Option<i64> {
+    let headers = headers.as_object()?;
+    let (_, length) = headers.iter().find(|(name, _)| name.eq_ignore_ascii_case("content-length"))?;
+    length.as_str()?.trim().parse().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cookie_refusal_bundle_reaches_only_native_timers() {
+        // A call through `window` skips the lexical binding to the native timers and reaches the wrapped one that
+        // attributes work to the run's action.
+        for through_window in ["window.setTimeout(", "window.clearTimeout("] {
+            assert!(!REFUSE_COOKIES_JS.contains(through_window), "{through_window}");
+        }
+    }
+
+    #[test]
+    fn test_a_percent_before_a_multibyte_character_is_kept() {
+        assert_eq!(percent_decode("100%\u{e9}t\u{e9}.pdf", "utf-8"), "100%\u{e9}t\u{e9}.pdf");
+        assert_eq!(percent_decode("a%20b%", "utf-8"), "a b%");
+    }
 
     #[test]
     fn downloads_are_told_by_disposition_or_type() {
@@ -2022,9 +2628,8 @@ mod tests {
         assert_eq!(filename_from_disposition("inline"), None);
     }
 
-    /// Saving the file an earlier click already saved changes nothing, so the click that saved it again is idle.
     #[test]
-    fn a_repeat_download_is_not_an_effect() {
+    fn a_download_an_earlier_click_already_saved_is_told_apart() {
         let saved = Some(("https://example.test/a.csv".to_owned(), "d1".to_owned()));
         let keys = [saved.clone(), saved.clone()];
         assert!(repeated(&keys, 1));
@@ -2091,12 +2696,26 @@ mod tests {
         assert_eq!(content_length("-1"), None);
     }
 
-    #[test]
-    fn long_text_downloads_are_cut_with_a_note() {
-        let raw = vec![b'a'; DOWNLOAD_TEXT_BYTES + 5];
-        let text = readable_text("text/csv", &raw).unwrap();
-        assert!(text.ends_with("\n[Download cut: 5 bytes omitted; full file in artifact]"));
-        assert_eq!(readable_text("application/zip", b"PK"), None);
+    #[tokio::test]
+    async fn generic_mime_downloads_use_their_declared_filename() {
+        for mime in ["", "application/octet-stream"] {
+            for name in ["report.xlsx", "report.DOCX", "report.zip"] {
+                assert!(readable_text(mime, name, b"invalid document", 1024).await.is_err(), "{mime}: {name}");
+            }
+        }
+        assert!(readable_text("application/octet-stream", "data.bin", b"binary", 1024).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn text_and_pdf_downloads_are_read_whole() {
+        crate::helper::register(crate::testing::test_binary_helper("pdf::tests::helper_child"));
+        let raw = vec![b'a'; 100_000];
+        assert_eq!(readable_text("text/csv", "data.csv", &raw, usize::MAX).await.unwrap().unwrap().len(), raw.len());
+        assert!(readable_text("application/zip", "data.zip", b"PK", usize::MAX).await.is_err());
+        let pdf =
+            readable_text("application/pdf", "wind.pdf", include_bytes!("../tests/fixtures/wind.pdf"), usize::MAX)
+                .await;
+        assert_eq!(pdf, Ok(Some("Fairbanks Wind".to_owned())));
     }
 
     #[test]

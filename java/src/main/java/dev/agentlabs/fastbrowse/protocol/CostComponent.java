@@ -12,5 +12,7 @@ public enum CostComponent {
     @JsonProperty("browser")
     BROWSER,
     @JsonProperty("proxy")
-    PROXY
+    PROXY,
+    @JsonProperty("search")
+    SEARCH
 }

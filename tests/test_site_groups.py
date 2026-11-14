@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from fastbrowse.evals.site_groups import RunFacts, group_files
+from fastbrowse.evals.site_groups import GroupFacts, RunFacts, group_files
 
 STAGED = Path("docs/results/benchmark-candidate.json")
 PUBLISHED = Path("docs/results/benchmarks.json")
@@ -18,7 +18,7 @@ def test_the_live_suite_names_the_head_to_head_group_and_its_exact_rows() -> Non
     files = group_files(content, FACTS, CURRENT)
     candidate = json.loads(content)
     rows = f"data/benchmark-{candidate['campaign_id']}.json"
-    assert set(files) == {rows, "data/benchmarks/live-suite.json"}
+    assert set(files) == {rows, "data/benchmarks/live-suite.json", "data/benchmarks/live-suite-fastbrowse.json"}
     assert files[rows] == content
     live = json.loads(files["data/benchmarks/live-suite.json"])
     assert (live["tasks"], live["repeats"], live["published"]) == (None, None, [])
@@ -33,7 +33,7 @@ def test_the_live_suite_names_the_head_to_head_group_and_its_exact_rows() -> Non
         "judge": "anthropic/claude-opus-5.5",
         "systems": {"fastbrowse": "fastbrowse", "browser-use": "browser-use"},
         "cost_not_reported": [],
-        "not_measured": ["browser-use-ultrafast", "browser-harness"],
+        "not_measured": ["browser-use-ultrafast", "browser-harness", "browser-use-oss"],
     }
 
 
@@ -46,13 +46,15 @@ def test_a_vendor_without_a_cost_or_without_rows_has_its_own_state() -> None:
     live = json.loads(group_files(content, FACTS, CURRENT)["data/benchmarks/live-suite.json"])["measured"]
     assert live["systems"] == {"fastbrowse": "fastbrowse", "browser-use": "browser-use"}
     assert live["cost_not_reported"] == ["browser-use"]
-    assert live["not_measured"] == ["browser-use-ultrafast", "browser-harness"]
+    assert live["not_measured"] == ["browser-use-ultrafast", "browser-harness", "browser-use-oss"]
 
 
-def test_a_fastbrowse_only_campaign_shows_fastbrowse_alone() -> None:
-    live = json.loads(group_files(PUBLISHED.read_bytes(), FACTS, CURRENT)["data/benchmarks/live-suite.json"])
-    assert live["measured"]["group"] == "internal-fastbrowse"
-    assert live["measured"]["systems"] == {"fastbrowse": "fastbrowse"}
+def test_a_fastbrowse_only_campaign_has_its_own_card_and_writes_it_the_first_time() -> None:
+    files = group_files(PUBLISHED.read_bytes(), FACTS, {**CURRENT, "live-suite": {"measured": None}})
+    assert "data/benchmarks/live-suite.json" not in files
+    alone = json.loads(files["data/benchmarks/live-suite-fastbrowse.json"])
+    assert alone["measured"]["group"] == "internal-fastbrowse"
+    assert alone["measured"]["systems"] == {"fastbrowse": "fastbrowse"}
 
 
 def test_a_group_bound_to_an_earlier_campaign_is_refused() -> None:
@@ -98,3 +100,60 @@ def test_a_measured_official_group_keeps_only_vendor_rows_on_its_task_set() -> N
 
     assert published(same) == [same]
     assert published(other, summary) == []
+
+    reference = {"system": "browser-use", "suite": "BU Bench V1", "summary": {"attempts": 100, "passed": 78}}
+    facts = FACTS.model_copy(
+        update={"groups": {"online-mind2web": GroupFacts(run_on="2026-10-29", judge="upstream judge")}}
+    )
+    current = {
+        **CURRENT,
+        "live-suite": PUBLISHED_ONLY,
+        "online-mind2web": {"measured": None, "published": [], "reference": reference},
+    }
+    written = json.loads(
+        group_files(json.dumps(candidate).encode(), facts, current)["data/benchmarks/online-mind2web.json"]
+    )
+    assert written["reference"] == reference
+    assert (written["measured"]["run_on"], written["measured"]["judge"]) == ("2026-10-29", "upstream judge")
+
+
+def test_the_live_suite_names_what_each_measured_system_ran() -> None:
+    """The version and models each arm's source recorded reach the group file, so the site shows them from the data."""
+    candidate = json.loads(STAGED.read_bytes())
+    group = next(g for g in candidate["groups"] if g["id"] == "internal-hosted")
+    run = {"run_id": "r1", "agent_sha": group["agent_sha"], "runner_sha": group["runner_sha"]}
+    run["measured_on"] = "2026-11-01"
+
+    def tasks(arm: str) -> list[str]:
+        return sorted({r["task"] for r in group["rows"] if r["arm"] == arm})
+
+    setup = {"version": "browser-use-sdk==3.12.1 API v4", "models": ["anthropic:claude-opus-4.7"]}
+    group["sources"] = [
+        {**run, "arm": "browser-use", "tasks": tasks("browser-use"), **setup},
+        {**run, "arm": "fastbrowse", "tasks": tasks("fastbrowse")},
+    ]
+    live = json.loads(group_files(json.dumps(candidate).encode(), FACTS, CURRENT)["data/benchmarks/live-suite.json"])
+    assert live["measured"]["setups"] == {"browser-use": setup}
+
+
+def test_an_arm_pooled_from_several_runs_shows_every_model_and_refuses_split_versions() -> None:
+    """A late rerun supplies some of an arm's tasks, so its setup is every source's, never only the newest one's."""
+    candidate = json.loads(STAGED.read_bytes())
+    group = next(g for g in candidate["groups"] if g["id"] == "internal-hosted")
+    run = {"agent_sha": group["agent_sha"], "runner_sha": group["runner_sha"], "measured_on": "2026-11-01"}
+    bu = sorted({r["task"] for r in group["rows"] if r["arm"] == "browser-use"})
+    fb = sorted({r["task"] for r in group["rows"] if r["arm"] == "fastbrowse"})
+    version = "browser-use-sdk==3.12.1 API v4"
+
+    def write(late_version: str) -> dict:
+        group["sources"] = [
+            {**run, "run_id": "r2", "arm": "browser-use", "tasks": bu[:1], "version": late_version, "models": ["b"]},
+            {**run, "run_id": "r1", "arm": "browser-use", "tasks": bu[1:], "version": version, "models": ["a"]},
+            {**run, "run_id": "r1", "arm": "fastbrowse", "tasks": fb},
+        ]
+        files = group_files(json.dumps(candidate).encode(), FACTS, CURRENT)
+        return json.loads(files["data/benchmarks/live-suite.json"])["measured"]["setups"]
+
+    assert write(version) == {"browser-use": {"version": version, "models": ["b", "a"]}}
+    with pytest.raises(ValueError, match="different versions"):
+        write("browser-use-sdk==3.13.0 API v4")

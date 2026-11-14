@@ -1,19 +1,19 @@
 {
   "arxiv-open": {
-    "fingerprint": "3a326837057d2e2d",
-    "version": 10
+    "fingerprint": "c3942c4794ea13ce",
+    "version": 13
   },
   "arxiv-title": {
-    "fingerprint": "f7600f020d792b84",
-    "version": 7
+    "fingerprint": "00c3c34245a15f0f",
+    "version": 9
   },
   "books-mystery-cheapest": {
-    "fingerprint": "915c2d8954051ca2",
-    "version": 7
+    "fingerprint": "494b73d06f559209",
+    "version": 9
   },
   "books-travel-priciest": {
-    "fingerprint": "7346e375b230ed70",
-    "version": 7
+    "fingerprint": "f6df0641c23cf0e4",
+    "version": 9
   },
   "confirm-dialog": {
     "version": 2,
@@ -28,331 +28,351 @@
     "fingerprint": "c3a88aaae3563fe8"
   },
   "countries-mongolia": {
-    "fingerprint": "163d4fdbb56932e6",
-    "version": 7
+    "fingerprint": "95aa50adab956959",
+    "version": 9
   },
   "countries-namibia-area": {
-    "fingerprint": "9e71d0ebbdb5b8a9",
-    "version": 3
+    "fingerprint": "0bed8db7c2821240",
+    "version": 5
   },
   "crates-serde": {
-    "fingerprint": "9a0f2cf19cbb7ce4",
-    "version": 7
+    "fingerprint": "64a75cbb4c69eec4",
+    "version": 9
   },
   "dynamic-loading": {
-    "fingerprint": "7cd731724fe362dd",
-    "version": 8
+    "fingerprint": "cf0dec3320b53241",
+    "version": 10
   },
   "expandtesting-login": {
-    "fingerprint": "414d61a40ffac29f",
-    "version": 7
+    "fingerprint": "ba3143609d241af7",
+    "version": 9
   },
   "flights-search": {
-    "fingerprint": "b9ea58239f6759e4",
-    "version": 10
+    "fingerprint": "609beb3d81843e94",
+    "version": 13
   },
   "frame-heading": {
-    "fingerprint": "8bdeabb8809e521c",
-    "version": 4
+    "fingerprint": "43ac9ffd9200b7cc",
+    "version": 6
   },
   "github-license": {
-    "fingerprint": "af2133290d01960d",
-    "version": 7
+    "fingerprint": "78ba8992040f45c1",
+    "version": 9
   },
   "github-open": {
-    "fingerprint": "33e7c70dc50bbb42",
-    "version": 10
+    "fingerprint": "adddbd9db3c78c3e",
+    "version": 13
   },
   "google-flights": {
-    "fingerprint": "c7e94e8328f84822",
-    "version": 7
+    "fingerprint": "9448b40bccff7458",
+    "version": 9
   },
   "hn-comments": {
-    "fingerprint": "f6c91acce5c9e722",
-    "version": 10
+    "fingerprint": "297c00e1c43b97f5",
+    "version": 13
   },
   "hn-top": {
-    "fingerprint": "22d226397996fdfe",
-    "version": 7
+    "fingerprint": "ba733c9b3d12954f",
+    "version": 9
   },
   "hockey-bruins-1990": {
-    "fingerprint": "be67d8997edf43d1",
-    "version": 8
+    "fingerprint": "93430407786017ea",
+    "version": 10
   },
   "hover-profile": {
-    "fingerprint": "0601b9cd9c2d307a",
-    "version": 8
+    "fingerprint": "7f547c40a23d2648",
+    "version": 10
   },
   "httpx-requires-python": {
-    "fingerprint": "43dd0b1d19f6905f",
-    "version": 7
+    "fingerprint": "158d0c7ea896d796",
+    "version": 10
   },
   "login-wall": {
     "version": 2,
     "fingerprint": "80994459072819b0"
   },
   "mock-basket": {
-    "version": 7,
-    "fingerprint": "ab012d5b1f445ee4"
+    "fingerprint": "cbfbd20e233ad5f5",
+    "version": 8
   },
   "mock-book-table": {
-    "version": 3,
-    "fingerprint": "4939321b1a576ab3"
-  },
-  "mock-cheapest-product": {
-    "version": 6,
-    "fingerprint": "f6118f9b7aa38629"
-  },
-  "mock-cold-sign-in": {
-    "version": 2,
-    "fingerprint": "0c9c50d50f42450d"
-  },
-  "mock-compare-prices": {
-    "version": 6,
-    "fingerprint": "348c5f0ee7ed68bb"
-  },
-  "mock-drag-card": {
-    "version": 6,
-    "fingerprint": "c79d07dd6d02c994"
-  },
-  "mock-false-success": {
-    "version": 3,
-    "fingerprint": "7844389d523ece74"
-  },
-  "mock-hidden-instruction": {
-    "version": 2,
-    "fingerprint": "973d4f2235c45584"
-  },
-  "mock-iframe-note": {
-    "version": 6,
-    "fingerprint": "7397e69ae06e927d"
-  },
-  "mock-infinite-scroll": {
-    "version": 7,
-    "fingerprint": "4d5717a1dd26aedc"
-  },
-  "mock-invoice-export": {
-    "version": 2,
-    "fingerprint": "f48fdc8222efa039"
-  },
-  "mock-new-tab-story": {
-    "version": 2,
-    "fingerprint": "c421368b5a3ada73"
-  },
-  "mock-newsletter-gate": {
-    "version": 3,
-    "fingerprint": "671f989aa83e819b"
-  },
-  "mock-order-pause": {
-    "version": 7,
-    "fingerprint": "f14487013dcc7396"
-  },
-  "mock-order-validation": {
-    "version": 6,
-    "fingerprint": "902420e52f6bf2f8"
-  },
-  "mock-pagination-exhaustion": {
-    "version": 6,
-    "fingerprint": "1aa5662ae1b12087"
-  },
-  "mock-password-change": {
-    "version": 7,
-    "fingerprint": "19985ad058c1b968"
-  },
-  "mock-password-pause": {
-    "version": 8,
-    "fingerprint": "f9e18a0fbc1b8952"
-  },
-  "mock-priciest-product": {
-    "version": 6,
-    "fingerprint": "9f929d154eb30195"
-  },
-  "mock-report-total": {
-    "version": 7,
-    "fingerprint": "d6075518af07bc7f"
-  },
-  "mock-shadow-dom": {
-    "version": 6,
-    "fingerprint": "f99389de488a874c"
-  },
-  "mock-sign-in": {
-    "version": 6,
-    "fingerprint": "293fd57a8fb38d4f"
-  },
-  "mock-sign-in-code-given": {
-    "version": 6,
-    "fingerprint": "92496376fa224d7c"
-  },
-  "mock-sign-in-per-digit": {
-    "version": 6,
-    "fingerprint": "2704c718b86b7827"
-  },
-  "mock-sign-in-two-step": {
-    "version": 6,
-    "fingerprint": "fcfcd78865630dc2"
-  },
-  "mock-sign-out": {
-    "version": 7,
-    "fingerprint": "334156249fa0626f"
-  },
-  "mock-stock-count": {
-    "version": 6,
-    "fingerprint": "6971215a3ecc381a"
-  },
-  "mock-supplied-sign-in-route": {
-    "version": 2,
-    "fingerprint": "8c27171db92d604b"
-  },
-  "mock-support-portal": {
-    "version": 6,
-    "fingerprint": "dbd3ea8be43a8c3b"
-  },
-  "mock-upload-document": {
-    "version": 2,
-    "fingerprint": "57167eb6dd0ad2a2"
-  },
-  "new-tab-page": {
-    "fingerprint": "a722b9e069c3635c",
-    "version": 3
-  },
-  "new-window": {
-    "fingerprint": "684ce012462d2eb1",
-    "version": 8
-  },
-  "oscars-2012": {
-    "fingerprint": "34089d28cd723bca",
-    "version": 7
-  },
-  "pizza-order": {
-    "fingerprint": "ac0970e11f50dfc5",
-    "version": 7
-  },
-  "practice-login": {
-    "fingerprint": "51cbc63f2994be69",
-    "version": 7
-  },
-  "pypi-newer": {
-    "fingerprint": "428a55863b39c9bf",
-    "version": 7
-  },
-  "pypi-open": {
-    "fingerprint": "13828902b22c1a70",
-    "version": 10
-  },
-  "pypi-structured": {
-    "fingerprint": "6f2e9d6fdc17c9ef",
-    "version": 7
-  },
-  "pypi-version": {
-    "fingerprint": "f082b3865ac6c497",
-    "version": 7
-  },
-  "quotes-einstein-count": {
-    "fingerprint": "462317a71c4a2366",
-    "version": 8
-  },
-  "quotes-js-page2": {
-    "fingerprint": "8bfbd4c04f7f3058",
-    "version": 7
-  },
-  "quotes-rowling-count": {
-    "fingerprint": "a6aa6cb6d7857d88",
+    "fingerprint": "02fe60e94f459140",
     "version": 4
   },
-  "quotes-search": {
-    "fingerprint": "541e7f078f3cd8b0",
+  "mock-cheapest-product": {
+    "fingerprint": "9f23a56413e1980f",
     "version": 7
   },
-  "quotes-search-lewis": {
-    "fingerprint": "167a9ac22a4d2b5e",
+  "mock-cold-sign-in": {
+    "fingerprint": "244fa0a3ce762f24",
     "version": 3
   },
-  "ruff-release": {
-    "fingerprint": "7e78f195989e9563",
+  "mock-compare-prices": {
+    "fingerprint": "56aab0583458129c",
     "version": 7
   },
-  "saucedemo-cart": {
-    "fingerprint": "9b04bd5e40bdc5fb",
+  "mock-custom-select": {
+    "version": 1,
+    "fingerprint": "97a7e2edd06d0f18"
+  },
+  "mock-disguised-delete": {
+    "fingerprint": "37abd67293d8bb08",
+    "version": 2
+  },
+  "mock-drag-card": {
+    "fingerprint": "c60aadce502696d3",
     "version": 7
   },
-  "saucedemo-checkout": {
-    "fingerprint": "12cfe299aa40fd83",
+  "mock-false-success": {
+    "fingerprint": "28dc184fb11d4508",
+    "version": 4
+  },
+  "mock-hidden-instruction": {
+    "fingerprint": "e85145389aa9d121",
+    "version": 3
+  },
+  "mock-iframe-note": {
+    "fingerprint": "05624e6408708855",
     "version": 7
   },
-  "saucedemo-locked-out": {
-    "fingerprint": "2d66bcc0aeee7744",
+  "mock-infinite-scroll": {
+    "fingerprint": "b6ec61ecb7f0a792",
+    "version": 8
+  },
+  "mock-invoice-export": {
+    "fingerprint": "f390cb827c3b2720",
+    "version": 3
+  },
+  "mock-long-description": {
+    "version": 1,
+    "fingerprint": "228d5a64844e19a5"
+  },
+  "mock-new-tab-story": {
+    "fingerprint": "dd541a1723459a5a",
+    "version": 3
+  },
+  "mock-newsletter-gate": {
+    "fingerprint": "732f9fe5f3f57499",
+    "version": 4
+  },
+  "mock-order-pause": {
+    "fingerprint": "ba7d63cef424a50e",
+    "version": 8
+  },
+  "mock-order-validation": {
+    "fingerprint": "3d9f8ebe21bb7771",
     "version": 7
   },
-  "saucedemo-pause": {
-    "fingerprint": "78f548abb2f6b359",
-    "version": 6
+  "mock-pagination-exhaustion": {
+    "fingerprint": "ea9b448ac64b6aeb",
+    "version": 7
   },
-  "search-price": {
-    "version": 2,
-    "fingerprint": "e2d17dd12dec1c01"
+  "mock-password-change": {
+    "fingerprint": "8a09ae901cb44da1",
+    "version": 8
   },
-  "stretch-books-nonfiction-five-star": {
-    "fingerprint": "1fb42fae24121a93",
+  "mock-password-pause": {
+    "fingerprint": "3bd11ae1fceb8ad9",
     "version": 9
   },
-  "stretch-books-sequential-art-one-star": {
-    "fingerprint": "33a5efb78a02cf46",
+  "mock-priciest-product": {
+    "fingerprint": "f71fde3f692d1be6",
+    "version": 7
+  },
+  "mock-report-total": {
+    "fingerprint": "64fd58c81dedde8e",
+    "version": 8
+  },
+  "mock-shadow-dom": {
+    "fingerprint": "8babe08721a9424c",
+    "version": 7
+  },
+  "mock-sign-in": {
+    "fingerprint": "20585e75c1821f1a",
+    "version": 7
+  },
+  "mock-sign-in-code-given": {
+    "fingerprint": "92e9125c7e92a691",
+    "version": 7
+  },
+  "mock-sign-in-per-digit": {
+    "fingerprint": "07f4348d7f08b45b",
+    "version": 7
+  },
+  "mock-sign-in-two-step": {
+    "fingerprint": "fdbd61d0387bb38c",
+    "version": 7
+  },
+  "mock-sign-out": {
+    "fingerprint": "c7ddfec4af2c3781",
+    "version": 8
+  },
+  "mock-stock-count": {
+    "fingerprint": "1ccde2ae9541027f",
+    "version": 7
+  },
+  "mock-supplied-sign-in-route": {
+    "fingerprint": "107183a4901080e4",
     "version": 3
+  },
+  "mock-support-portal": {
+    "fingerprint": "4bcd122dd65a7b7e",
+    "version": 7
+  },
+  "mock-transient-error": {
+    "fingerprint": "919f009589d38f61",
+    "version": 2
+  },
+  "mock-unfinished-write": {
+    "version": 2,
+    "fingerprint": "24d75cb124eefcb6"
+  },
+  "mock-upload-document": {
+    "fingerprint": "1d699fac373445fe",
+    "version": 3
+  },
+  "new-tab-page": {
+    "fingerprint": "6a3d5ac1b4bd8b64",
+    "version": 5
+  },
+  "new-window": {
+    "fingerprint": "307bae3f37f5d9a0",
+    "version": 10
+  },
+  "oscars-2012": {
+    "fingerprint": "fa90ef4aac6aed2c",
+    "version": 9
+  },
+  "pizza-order": {
+    "fingerprint": "78b029ec79f0e91e",
+    "version": 9
+  },
+  "practice-login": {
+    "fingerprint": "19747c0563957322",
+    "version": 9
+  },
+  "pypi-newer": {
+    "fingerprint": "f7077c5a5f126a03",
+    "version": 9
+  },
+  "pypi-open": {
+    "fingerprint": "990dc21e627c169c",
+    "version": 13
+  },
+  "pypi-structured": {
+    "fingerprint": "3ca8c54655938a9e",
+    "version": 10
+  },
+  "pypi-version": {
+    "fingerprint": "c228539ea1846f5a",
+    "version": 10
+  },
+  "quotes-einstein-count": {
+    "fingerprint": "8b417bcaaabf9b2d",
+    "version": 10
+  },
+  "quotes-js-page2": {
+    "fingerprint": "0eda113d8f02c565",
+    "version": 9
+  },
+  "quotes-rowling-count": {
+    "fingerprint": "4c6d35972d65cf08",
+    "version": 6
+  },
+  "quotes-search": {
+    "fingerprint": "5b1f0deb3b319c3a",
+    "version": 9
+  },
+  "quotes-search-lewis": {
+    "fingerprint": "6d6610dc5fdb1b14",
+    "version": 5
+  },
+  "ruff-release": {
+    "fingerprint": "f2311ac70681a4f0",
+    "version": 9
+  },
+  "saucedemo-cart": {
+    "fingerprint": "0a0531776e71ff0d",
+    "version": 9
+  },
+  "saucedemo-checkout": {
+    "fingerprint": "35b155cc42f41ada",
+    "version": 9
+  },
+  "saucedemo-locked-out": {
+    "fingerprint": "c6b239c9b5bc38a6",
+    "version": 9
+  },
+  "saucedemo-pause": {
+    "fingerprint": "7c5594cddef5cdc7",
+    "version": 8
+  },
+  "search-price": {
+    "version": 3,
+    "fingerprint": "21d92ec8e4c9f7a3"
+  },
+  "stretch-books-nonfiction-five-star": {
+    "fingerprint": "8f668e60c5812bad",
+    "version": 11
+  },
+  "stretch-books-sequential-art-one-star": {
+    "fingerprint": "2a79739cf6c92e82",
+    "version": 5
   },
   "stretch-books-young-adult-one-star": {
-    "fingerprint": "229527ffedbeb4ed",
-    "version": 3
+    "fingerprint": "c5edd1868cc69f3d",
+    "version": 5
   },
   "stretch-bstack-apple-google": {
-    "fingerprint": "cd7a6d69941f0acd",
-    "version": 8
+    "fingerprint": "10d1f5a26309b161",
+    "version": 10
   },
   "stretch-bstack-apple-samsung": {
-    "fingerprint": "f4f090b26286cfe4",
-    "version": 8
+    "fingerprint": "c52f8cdf769c5061",
+    "version": 10
   },
   "stretch-calendar-first-friday": {
-    "fingerprint": "75e358991a228a84",
-    "version": 10
+    "fingerprint": "8ecaeac1c214868d",
+    "version": 12
   },
   "stretch-date-range-monday": {
-    "fingerprint": "8e95c92bf66332fc",
-    "version": 8
+    "fingerprint": "b1b6b640489752bb",
+    "version": 10
   },
   "stretch-datepicker-last-saturday": {
-    "fingerprint": "fb98974ee75f2c0d",
-    "version": 3
+    "fingerprint": "a3f1dd765071a290",
+    "version": 5
   },
   "stretch-datepicker-last-sunday": {
-    "fingerprint": "7b8df76175c2e6a3",
-    "version": 3
+    "fingerprint": "fabd7bfa24ad7e63",
+    "version": 5
   },
   "stretch-quotes-top-authors": {
-    "fingerprint": "03de37005dd92ef9",
-    "version": 8
+    "fingerprint": "4fd442319d3af9ae",
+    "version": 10
   },
   "stretch-wizard-review": {
-    "fingerprint": "3cb69f4cca7a0a8f",
-    "version": 7
+    "fingerprint": "79e0670225c37569",
+    "version": 9
   },
   "table-extract": {
-    "version": 2,
-    "fingerprint": "8e0ef7ec329b92a8"
+    "version": 3,
+    "fingerprint": "c2867e2f8cf7e8aa"
   },
   "table-largest-due": {
-    "fingerprint": "6fb9021727b5cd63",
-    "version": 8
+    "fingerprint": "6d4fcc01bb02e352",
+    "version": 10
   },
   "table-total-due": {
-    "fingerprint": "3f72b4886300e4d3",
-    "version": 3
+    "fingerprint": "3defccca7fb992d6",
+    "version": 5
   },
   "wiki-godel": {
-    "fingerprint": "523371efdc8b624d",
-    "version": 7
+    "fingerprint": "e0d610a509cafa29",
+    "version": 9
   },
   "wiki-open": {
-    "fingerprint": "9003e62b7ecaefce",
-    "version": 10
+    "fingerprint": "6c22ee9eaf7828f1",
+    "version": 13
   }
 }

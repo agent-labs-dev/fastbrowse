@@ -1,3 +1,5 @@
+import pytest
+
 from fastbrowse.jev import Evaluation, NoulAnswer
 from fastbrowse.models import CostBasis, CostBreakdown, CostComponent, CostLine
 
@@ -26,3 +28,19 @@ def test_unknown_cost_is_flagged_not_counted_as_zero() -> None:
     )
     assert cost.known_dollars == 0.01
     assert cost.has_unknown
+
+
+@pytest.mark.parametrize(
+    ("basis", "incomplete"),
+    [
+        (CostBasis.METERED, False),
+        (CostBasis.ESTIMATED, False),
+        (CostBasis.BOUNDED, False),
+        (CostBasis.UNSETTLED, True),
+        (CostBasis.UNKNOWN, True),
+    ],
+)
+def test_provisional_cost_keeps_the_total_incomplete(basis: CostBasis, incomplete: bool) -> None:
+    cost = CostBreakdown(lines=(CostLine(component=CostComponent.PROXY, basis=basis, dollars=0.01),))
+    assert cost.known_dollars == 0.01
+    assert cost.has_unknown is incomplete

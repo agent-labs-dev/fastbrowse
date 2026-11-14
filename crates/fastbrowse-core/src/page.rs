@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/page.py`: the seam between the browser layer and the decision loop.
+//! The seam between the browser layer and the decision loop.
 //!
 //! The browser layer produces `Observation` (bounded, for Jev's action choice) and `Capture` (complete, for reading),
 //! and executes `Action`s. Nothing above this seam touches CDP.
@@ -6,13 +6,14 @@
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Value, json};
 
 use crate::BoxFuture;
-use crate::models::{Artifact, Attachment, MaybeUnavailable, Operation, SourceControl, StepOutcome};
+use crate::models::{Artifact, Attachment, Link, MaybeUnavailable, Operation, SourceControl, StepOutcome};
 use crate::py::datetime::DateTime;
-use crate::py::json::{Style, dumped_len, write};
-use crate::py::{lax, sha256_hex, text};
+use crate::py::json::dumped_len;
+use crate::py::{lax, text};
+
+pub mod json;
 
 pub fn cut_marker(omitted_chars: usize) -> String {
     format!("\n[Viewport text cut: {omitted_chars} characters omitted; read the page for the rest]")
@@ -21,6 +22,11 @@ pub fn cut_marker(omitted_chars: usize) -> String {
 /// `text` within `max_chars`, ending with how much was cut so a model knows the page goes on. Lengths are Python's,
 /// in code points; with `json_encoded` they are of the text as `json.dumps` writes it, quotes excluded.
 pub fn cut_text(text: &str, max_chars: usize, json_encoded: bool) -> String {
+    cut_with(text, max_chars, json_encoded, cut_marker)
+}
+
+/// [`cut_text`] ending with `marker`, which is told how many characters were left out.
+pub fn cut_with(text: &str, max_chars: usize, json_encoded: bool, marker: impl Fn(usize) -> String) -> String {
     // A JSON state escapes quotes and newlines; its budget must count those extra characters.
     let size = |value: &str| if json_encoded { dumped_len(value) } else { text::len(value) };
     if size(text) <= max_chars {
@@ -28,7 +34,7 @@ pub fn cut_text(text: &str, max_chars: usize, json_encoded: bool) -> String {
     }
     let bounds: Vec<usize> = text.char_indices().map(|(at, _)| at).chain([text.len()]).collect();
     let total = bounds.len() - 1;
-    let cut = |keep: usize| format!("{}{}", &text[..bounds[keep]], cut_marker(total - keep));
+    let cut = |keep: usize| format!("{}{}", &text[..bounds[keep]], marker(total - keep));
     let fits = |keep: usize| size(&cut(keep)) <= max_chars;
     // The longest prefix that fits with its marker. Escaping makes one character cost up to six, so an excess
     // measured in encoded characters cannot be subtracted from a count of source characters.
@@ -74,6 +80,9 @@ pub struct Control {
     /// Current value; masked for sensitive fields.
     #[serde(default)]
     pub value: Option<String>,
+    /// Whether this control owns keyboard focus in its document, when the browser reports it.
+    #[serde(default, deserialize_with = "lax::opt_boolean", skip_serializing_if = "Option::is_none")]
+    pub focused: Option<bool>,
     #[serde(default)]
     pub href: Option<String>,
     #[serde(default)]
@@ -82,6 +91,9 @@ pub struct Control {
     pub input_type: Option<String>,
     #[serde(default)]
     pub input_name: Option<String>,
+    /// The most characters this field accepts, when it sets a limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_length: Option<usize>,
     #[serde(default)]
     pub autocomplete: Option<String>,
     /// The form submission triggered by Enter in a field or clicking a submit button.
@@ -97,15 +109,34 @@ pub struct Control {
     pub sensitive: bool,
     #[serde(default, deserialize_with = "lax::boolean")]
     pub offscreen: bool,
-    /// A field its form will not submit without: required and still empty, or marked invalid by the page.
+    /// A field the page marks required (`required` or `aria-required`).
     #[serde(default, deserialize_with = "lax::opt_boolean")]
-    pub blocking: Option<bool>,
+    pub required: Option<bool>,
+    /// A field marked invalid by ARIA or a failed native constraint, without implying submission.
+    #[serde(default, deserialize_with = "lax::opt_boolean")]
+    pub invalid: Option<bool>,
+    /// The browser's own words for why a native constraint refuses this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation_message: Option<String>,
     /// A link the page marks `rel="next"`: the next page of the list it belongs to.
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub next_page: Option<bool>,
     /// A link the page marks with a `download` attribute: activating it saves a file instead of opening a page.
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub download: Option<bool>,
+    /// An image, canvas or video the page takes input on: what it shows is pixels, with no page elements inside it
+    /// to read or act on, such as a streamed remote browser or a canvas app.
+    #[serde(default, deserialize_with = "lax::opt_boolean", skip_serializing_if = "Option::is_none")]
+    pub drawn: Option<bool>,
+    /// A link to a page the run has already read, as a browser styles a visited link: the agent marks it, the page
+    /// never does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub already_read: Option<bool>,
+    /// The step this run took that showed this control without leaving the page, such as "clicking Depart" for a
+    /// date popup the page attaches at the end of its body, far from the field that opened it: the agent marks it,
+    /// the page never does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shown_by: Option<String>,
 }
 
 impl Control {
@@ -122,10 +153,12 @@ impl Control {
             context: None,
             operations: operations.into_iter().collect(),
             value: None,
+            focused: None,
             href: None,
             options: Vec::new(),
             input_type: None,
             input_name: None,
+            max_length: None,
             autocomplete: None,
             submit_semantics: None,
             checked: None,
@@ -133,71 +166,43 @@ impl Control {
             expanded: None,
             sensitive: false,
             offscreen: false,
-            blocking: None,
+            required: None,
+            invalid: None,
+            validation_message: None,
             next_page: None,
             download: None,
+            drawn: None,
+            already_read: None,
+            shown_by: None,
         }
     }
 }
 
-/// The chevrons pagers draw.
-const ARROWS: [char; 4] = ['\u{203a}', '\u{bb}', '\u{2192}', '>'];
+/// The native date and time input types, whose value is the one form HTML defines for each type whatever the
+/// browser displays. The browser sets their value directly, and a value in any other form leaves the field empty.
+pub const NATIVE_DATE_INPUT_TYPES: [&str; 5] = ["date", "datetime-local", "month", "week", "time"];
 
-/// `_NEXT_PAGE.fullmatch` on a label with its space squashed:
-/// `(?:next(?: page)?|more results|older(?: posts)?)\s*[arrows]*|[arrows]{1,2}`, ignoring case.
-fn reads_next_page(label: &str) -> bool {
-    let arrows = label.chars().filter(|c| ARROWS.contains(c)).count();
-    if (1..=2).contains(&arrows) && arrows == label.chars().count() {
-        return true;
-    }
-    ["next page", "next", "more results", "older posts", "older"].iter().any(|word| {
-        text::starts_with_ignore_case(label, word)
-            .is_some_and(|at| label[at..].trim_start_matches(text::is_space).chars().all(|c| ARROWS.contains(&c)))
+/// The value form HTML defines for a native date or time input type, with an example, or `None` for any other type.
+/// A field writer that saw only the label wrote a date the way the page displays it (`11/16/2026`), which a `date`
+/// input refuses, so the writer is told this form.
+pub fn native_date_form(input_type: &str) -> Option<&'static str> {
+    Some(match input_type {
+        "date" => "YYYY-MM-DD, such as 2026-11-16",
+        "datetime-local" => "YYYY-MM-DDThh:mm in 24-hour time, such as 2026-11-16T09:30",
+        "month" => "YYYY-MM, such as 2026-11",
+        "week" => "YYYY-Www with the ISO week number, such as 2026-W47",
+        "time" => "hh:mm in 24-hour time, such as 09:30",
+        _ => return None,
     })
 }
 
-/// Whether a link is a pager's way to the next page of a list: marked `rel="next"`, or labelled like one.
-///
-/// "next", "Next" and an arrow, "Next page", a lone chevron. The page's own mark says so in any language and behind
-/// an icon, so the label is only the fallback.
-pub fn pages_forward(control: &Control) -> bool {
-    control.next_page == Some(true) || reads_next_page(&text::squash(&control.label))
-}
-
-/// `_LOAD_MORE.fullmatch`: `(?:show|view|load|see)(?: \d+)? more(?: [\w-]+){0,3}`, ignoring case.
-fn reads_load_more(label: &str) -> bool {
-    let words: Vec<&str> = label.split(' ').collect();
-    let Some((verb, rest)) = words.split_first() else { return false };
-    if !["show", "view", "load", "see"].iter().any(|v| text::starts_with_ignore_case(verb, v) == Some(verb.len())) {
-        return false;
-    }
-    let rest = match rest.first() {
-        Some(count) if !count.is_empty() && count.chars().all(char::is_numeric) => &rest[1..],
-        _ => rest,
-    };
-    let Some((more, tail)) = rest.split_first() else { return false };
-    text::starts_with_ignore_case(more, "more") == Some(more.len())
-        && tail.len() <= 3
-        && tail.iter().all(|w| !w.is_empty() && w.chars().all(|c| text::is_word(c) || c == '-'))
-}
-
-/// Whether a control is labelled as loading more of the list it ends: "View more flights", "Show 20 more".
-///
-/// It sits at the foot of the list like a pager does, past what the off-screen cap keeps, and may carry no mark but
-/// its words: Google Flights' button has only its label. "Learn more" and the like do not match.
-pub fn loads_more(control: &Control) -> bool {
-    control.operations.contains(&Operation::Click) && reads_load_more(&text::squash(&control.label))
-}
-
-/// Whether this control is one the loop could actually walk a list with: a link, to an address.
-///
-/// A carousel's arrow and a wizard's button read exactly like a pager, and a busy page draws many of them. Only a
-/// link to somewhere else is ever followed, so anything else by that name earns no special treatment.
+/// Whether the page marks this control as the link to the next page of a list (`rel="next"`), in any language and
+/// behind any icon. Its label is never read for it: Jev picks a pager the page does not mark.
 pub fn pager_link(control: &Control) -> bool {
     control.role == "link"
+        && control.next_page == Some(true)
         && control.operations.contains(&Operation::Click)
         && control.href.as_deref().is_some_and(|href| !href.is_empty())
-        && pages_forward(control)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -230,6 +235,40 @@ fn http_status<'de, D: Deserializer<'de>>(d: D) -> Result<Option<i64>, D::Error>
     }
 }
 
+/// A CAPTCHA the browser's own solver took on in the active tab's document, as Browser Use Cloud reports it with its
+/// `BrowserUse.captchaSolverStarted` and `BrowserUse.captchaSolverFinished` events. A solve that succeeded is no
+/// longer held: the page it cleared moves on by itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaptchaSolve {
+    /// The address of the page the CAPTCHA is on.
+    pub url: String,
+    /// The CAPTCHA's provider as the solver names it, such as `cloudflare` or `recaptcha`.
+    pub vendor: String,
+    /// True while the solver works on it, false once it finished without solving it.
+    pub working: bool,
+}
+
+/// One audio or video player's state, read from the element when the page was observed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Media {
+    /// `audio` or `video`.
+    pub kind: String,
+    /// The player's own accessible name, when it has one.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// The nearest heading before the player, which tells unnamed players apart.
+    #[serde(default)]
+    pub heading: Option<String>,
+    pub paused: bool,
+    pub ended: bool,
+    pub muted: bool,
+    pub elapsed_seconds: f64,
+    /// None while the length is unknown or the stream has no end.
+    #[serde(default)]
+    pub duration_seconds: Option<f64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Observation {
@@ -246,14 +285,23 @@ pub struct Observation {
     #[serde(default)]
     pub document_key: String,
     pub controls: Vec<Control>,
-    /// Controls present but not offered because of observation limits.
-    #[serde(deserialize_with = "lax::int_ge0")]
-    pub omitted_controls: i64,
+    /// The visible text in the viewport of every frame the observation read; a cross-origin frame's text follows
+    /// the page's own under a `[Frame: origin]` line.
     pub viewport_text: String,
+    /// The visible text outside the viewport, from every frame the observation read in the same order and form.
+    #[serde(default)]
+    pub offscreen_text: String,
     /// Whether the page's visible state is carried by pixels: a chart, picture, drawing or video with no control
     /// for it. snapshot.js reads it from the viewport, so page text and the control list cannot stand in for it.
     #[serde(default, deserialize_with = "lax::boolean")]
     pub visual_content: bool,
+    /// The name of the open modal the rest of the page sits behind, empty when it has none. The page hides what is
+    /// under a modal from assistive technology, so those controls leave the observation without leaving the document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modal: Option<String>,
+    /// Every audio and video player on the page, shown or not: their state lives in the element, not the page text.
+    #[serde(default)]
+    pub media: Vec<Media>,
     pub tabs: Vec<Tab>,
     #[serde(default)]
     pub dialog: Option<Dialog>,
@@ -266,29 +314,6 @@ pub struct Observation {
     /// The tab's browser history entry this page is. None when the browser would not say.
     #[serde(default)]
     pub history_entry: Option<String>,
-}
-
-impl Observation {
-    /// The capture date with its weekday. Given 2026-09-27 alone, a Sunday, the field writer booked "the next Monday
-    /// strictly after today" as 2026-10-05 in three runs of three.
-    ///
-    /// The coming months are named too, each by its distance: told only the date in September, Jev took "the month
-    /// after next" as October in one run of four, and listed bare the last of three was taken for it in six of six.
-    pub fn today(&self) -> String {
-        let mut first = self.captured_at.first_of_month();
-        let mut months = Vec::new();
-        for _ in 0..2 {
-            first = first.add_days(32).first_of_month();
-            months.push(format!("{} {}", first.month_name(), first.year));
-        }
-        format!(
-            "{} ({}). In one month: {}; in two months: {}",
-            self.captured_at.date_string(),
-            self.captured_at.weekday_name(),
-            months[0],
-            months[1]
-        )
-    }
 }
 
 str_enum! {
@@ -327,14 +352,15 @@ pub struct Block {
     pub control_context: Option<SourceControl>,
     #[serde(default)]
     pub href: Option<String>,
-    #[serde(default)]
-    pub list_id: Option<String>,
-    #[serde(default, deserialize_with = "lax::opt_int_ge0")]
-    pub list_count: Option<i64>,
-    /// The capture saw no frame inside this block's list element, so a frame it could not open elsewhere on the page
-    /// cannot hold one of the list's members.
-    #[serde(default, deserialize_with = "lax::boolean")]
-    pub list_frameless: bool,
+    /// The links inside this block, with their text's place in `Capture.text`: a link's text alone does not say
+    /// where it leads, nor where a value the page set apart as its own element ends.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<Link>,
+    /// This block is all the text the page renders for one item it repeats, such as a comment, card or list row, with
+    /// each part of it that shows no text named in square brackets: what the block does not show, that item does not
+    /// show. A record can be a `list_item` as well as a `record`, so its kind does not say this.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub whole_record: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -349,6 +375,9 @@ pub struct Capture {
     pub blocks: Vec<Block>,
     #[serde(default, deserialize_with = "lax::int_ge0")]
     pub inaccessible_frames: i64,
+    /// Where code blanked a secret value in `text`, as code point ranges: a `•` there is a mask, not page text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub masked: Vec<(i64, i64)>,
 }
 
 impl Capture {
@@ -360,18 +389,6 @@ impl Capture {
             None => "",
         };
         text::prefix(rest, (block.end - block.start).max(0) as usize)
-    }
-
-    pub fn read_key(&self) -> String {
-        let contexts: Vec<Value> = self
-            .blocks
-            .iter()
-            .filter_map(|block| block.control_context.as_ref().map(|context| json!([block.source_id, context])))
-            .collect();
-        if contexts.is_empty() {
-            return self.sha256.clone();
-        }
-        sha256_hex(write(&json!([self.sha256, contexts]), Style::DUMPS.sorted()).as_bytes())
     }
 }
 
@@ -401,9 +418,6 @@ pub struct Action {
     pub files: Vec<Attachment>,
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub accept_dialog: Option<bool>,
-    /// Check whether this ordinary fill leaves the observed form safe to continue without another observation.
-    #[serde(default, deserialize_with = "lax::boolean")]
-    pub form_fill: bool,
 }
 
 impl Action {
@@ -419,7 +433,6 @@ impl Action {
             secret_origin: None,
             files: Vec::new(),
             accept_dialog: None,
-            form_fill: false,
         }
     }
 }
@@ -452,6 +465,9 @@ pub enum BrowserError {
     /// The browser session no longer has a page available for this run.
     #[error("{0}")]
     Unavailable(String),
+    /// The browser answered, but the renderer for this page stopped answering commands.
+    #[error("{0}")]
+    PageUnresponsive(String),
     /// A page cannot safely attribute pixels to its permitted documents.
     #[error("{0}")]
     ScreenshotsUnavailable(String),
@@ -463,9 +479,8 @@ pub enum BrowserError {
     /// resolve is not one of these; that can be a mistyped address.
     #[error("{0}")]
     SiteUnreachable(String),
-    /// Python's `fetch.NeedsBrowser`: a page with no browser behind it was asked to act, render or read what it
-    /// could not fetch. Nothing failed, so the run ends `blocked`, and no handler that recovers from a browser
-    /// failure may catch it: Python's is not a `BrowserError`, so its `except BrowserError` clauses let it pass.
+    /// A page with no browser behind it was asked to act, render or read what it could not fetch. Nothing failed, so
+    /// the run ends `blocked`, and no handler that recovers from a browser failure may catch it.
     #[error("{0}")]
     NeedsBrowser(String),
 }
@@ -490,8 +505,6 @@ pub struct ActResult {
     pub page_changed: bool,
     #[serde(default)]
     pub detail: Option<String>,
-    #[serde(default, deserialize_with = "lax::boolean")]
-    pub form_unchanged: bool,
     /// The action itself took the page elsewhere: its own input event began a navigation or changed the address, or
     /// it opened a tab. A page that moves on its own time is not.
     #[serde(default, deserialize_with = "lax::boolean")]
@@ -501,9 +514,58 @@ pub struct ActResult {
 pub type PageResult<T> = Result<T, BrowserError>;
 
 pub trait Page: Send + Sync {
+    /// The documented maximum price of one configured web-search request. None leaves search unavailable.
+    fn search_price(&self) -> Option<f64> {
+        None
+    }
+
+    /// Replace the view with the provider's real result links, retaining any browser session behind it.
+    fn search<'a>(&'a self, _query: &'a str, _timeout_seconds: f64) -> BoxFuture<'a, SearchOutcome> {
+        Box::pin(async {
+            SearchOutcome {
+                cost: crate::models::CostLine::new(
+                    crate::models::CostComponent::Search,
+                    crate::models::CostBasis::Metered,
+                    Some(0.0),
+                ),
+                error: Some("web search is not configured".into()),
+                page_changed: false,
+            }
+        })
+    }
+    /// Whether this page was fetched over HTTP: its scripts never ran, and it can only follow links.
+    fn over_http(&self) -> bool {
+        false
+    }
+
+    /// The error that ends this run's page and sends it on to a browser.
+    fn needs_browser(&self, message: String) -> BrowserError {
+        BrowserError::NeedsBrowser(message)
+    }
+
+    /// The address a browser opens to carry on from this page, when it is not the page's own. A page fetched over HTTP
+    /// was redirected by a server answering a client that is not a browser, so a browser asks for the address the
+    /// read asked for and meets the server's answer to a browser: Google Flights sends the reader's request to its
+    /// unsupported-browser page, and a browser opened there started past a warning it was never shown.
+    fn browser_address(&self) -> Option<String> {
+        None
+    }
+
     fn artifacts(&self) -> Vec<Artifact>;
 
+    /// Keeps a capture's masked text as a `capture` artifact where this page keeps its downloads. A page with nowhere
+    /// to keep one, such as a page fetched over HTTP, keeps none.
+    fn keep_capture<'a>(&'a self, _name: &'a str, _text: &'a str) -> BoxFuture<'a, PageResult<Option<Artifact>>> {
+        Box::pin(async { Ok(None) })
+    }
+
     fn observe(&self) -> BoxFuture<'_, PageResult<Observation>>;
+
+    /// A fresh reading for screenshot safety, without replacing action guards or consuming pending notices.
+    /// Implementations whose observations bind actions or drain notices must override this default.
+    fn glance(&self) -> BoxFuture<'_, PageResult<Observation>> {
+        self.observe()
+    }
 
     /// Whether the current URL or document differs, without indexing the page's controls again.
     fn document_changed<'a>(&'a self, observation: &'a Observation) -> BoxFuture<'a, PageResult<bool>>;
@@ -515,7 +577,20 @@ pub trait Page: Send + Sync {
     fn capture(&self) -> BoxFuture<'_, PageResult<Capture>>;
 
     /// Dispatch at most once. Returns STALE or COVERED without dispatching when guards fail.
+    /// A Wait passed directly here has no deadline; use `wait` for a bounded wait or cancel the action.
     fn act<'a>(&'a self, action: &'a Action, observation: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>>;
+
+    /// Dispatch a WAIT that lasts until the page changes by itself, for at most `seconds` (`f64::INFINITY` for a
+    /// run with no time limit), and report what changed as `act` does. A page that cannot watch itself change acts on
+    /// the WAIT as on any other action.
+    fn wait<'a>(
+        &'a self,
+        action: &'a Action,
+        observation: &'a Observation,
+        _seconds: f64,
+    ) -> BoxFuture<'a, PageResult<ActResult>> {
+        self.act(action, observation)
+    }
 
     /// Whether `target_id`, or with none any control `observation` offered, changed within `timeout_seconds`.
     ///
@@ -530,11 +605,28 @@ pub trait Page: Send + Sync {
 
     fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>>;
 
+    /// Click at `x` and `y`, fractions of the viewport's width and height as `screenshot` shows it, and report what
+    /// changed as `act` does. A page that draws no screenshot has no point to click.
+    fn click_viewport(&self, _x: f64, _y: f64) -> BoxFuture<'_, PageResult<ActResult>> {
+        Box::pin(async { Err(BrowserError::ScreenshotsUnavailable("this page has no viewport to click".into())) })
+    }
+
     /// Hold back live and recorded frames while the page may show a secret, which pixels cannot mask.
     fn withhold_frames(&self, withheld: bool);
 
+    /// Leave the current tab open when the run ends, because an irreversible action was sent from it: what it
+    /// committed may still be in flight, and the result page is the user's to see. A page with no tab to keep does
+    /// nothing.
+    fn hand_over_tab(&self) {}
+
     /// The address the current document was served from, after any redirect.
     fn address(&self) -> BoxFuture<'_, PageResult<String>>;
+
+    /// The active tab's URL as the browser reports it, which answers while the renderer is hung. None when the page
+    /// cannot tell apart from its document.
+    fn active_url(&self) -> BoxFuture<'_, PageResult<Option<String>>> {
+        Box::pin(async { Ok(None) })
+    }
 
     /// The HTTP status the current document was served with, or None when the browser does not say.
     fn response_status(&self) -> BoxFuture<'_, PageResult<Option<i64>>>;
@@ -542,14 +634,32 @@ pub trait Page: Send + Sync {
     /// The page's current lifecycle generation, for a caller waiting on the next transition.
     fn lifecycle_mark(&self) -> u64;
 
-    /// Wait for a lifecycle event newer than `mark`, returning whether one arrived before `seconds`.
+    /// Wait for a lifecycle event newer than `mark`, returning whether one arrived before `seconds`; with
+    /// `f64::INFINITY` the wait has no bound. A change in [`Page::captcha_solve`] is one.
     fn wait_for_lifecycle(&self, mark: u64, seconds: f64) -> BoxFuture<'_, bool>;
+
+    /// The CAPTCHA the browser's own solver has taken on in the active tab's document, for a browser that reports one.
+    fn captcha_solve(&self) -> Option<CaptchaSolve> {
+        None
+    }
+
+    /// The seconds a top-level navigation or a frame's document load in flight in the active tab is still waited on:
+    /// the page is on its way, and the end of that load is a lifecycle event. `None` when no load is, including one
+    /// that has had as long as a navigation is given and so may never end.
+    fn loading(&self) -> Option<f64> {
+        None
+    }
+}
+
+/// A search attempt keeps its receipt even when the provider refused it or returned an invalid response.
+pub struct SearchOutcome {
+    pub page_changed: bool,
+    pub cost: crate::models::CostLine,
+    pub error: Option<String>,
 }
 
 #[cfg(test)]
 mod tests {
-    //! The parts of tests/test_page.py about the page types; the browser's own (`_capped`, `_same_http_origin`,
-    //! `_browser_error`) belong to the browser layer.
     use super::*;
 
     fn link(label: &str, next_page: Option<bool>, i: usize) -> Control {
@@ -560,54 +670,18 @@ mod tests {
     }
 
     #[test]
-    fn test_labels_that_turn_the_page() {
-        for label in [
-            "next",
-            "Next",
-            "Next page",
-            "Next \u{203a}",
-            "\u{203a}",
-            "\u{bb}",
-            "  next\n",
-            "Older posts",
-            "More results",
-        ] {
-            assert!(pages_forward(&link(label, None, 0)), "{label:?}");
-        }
-    }
-
-    #[test]
-    fn test_labels_that_do_not() {
-        for label in ["Nextel", "Book 3", "previous", "Next steps for the team", "Home"] {
-            assert!(!pages_forward(&link(label, None, 0)), "{label:?}");
-        }
-    }
-
-    #[test]
-    fn test_a_link_the_page_marks_rel_next_turns_the_page_whatever_it_says() {
-        assert!(pages_forward(&link("Suivant", Some(true), 0)));
-    }
-
-    #[test]
-    fn test_a_calendar_next_without_a_destination_is_not_a_pager() {
-        let mut control = link("Next", None, 0);
-        control.role = "button".into();
-        control.href = None;
-        assert!(!pager_link(&control));
-    }
-
-    #[test]
-    fn test_a_control_that_only_looks_like_a_pager_is_not_one() {
-        let mut button = link("next", None, 0);
+    fn test_only_a_link_the_page_marks_rel_next_is_a_pager() {
+        assert!(pager_link(&link("Suivant", Some(true), 0)));
+        assert!(!pager_link(&link("Next", None, 0)));
+        let mut button = link("next", Some(true), 0);
         button.role = "button".into();
         assert!(!pager_link(&button));
-        let mut nowhere = link("next", None, 0);
+        let mut nowhere = link("next", Some(true), 0);
         nowhere.href = None;
         assert!(!pager_link(&nowhere));
-        let mut inert = link("next", None, 0);
+        let mut inert = link("next", Some(true), 0);
         inert.operations.clear();
         assert!(!pager_link(&inert));
-        assert!(pager_link(&link("next", None, 0)));
     }
 
     #[test]
@@ -627,46 +701,6 @@ mod tests {
         let cut = cut_text(&"a".repeat(200), 100, false);
         assert_eq!(text::len(&cut), 100);
         assert!(cut.ends_with("[Viewport text cut: 172 characters omitted; read the page for the rest]"));
-    }
-
-    #[test]
-    fn a_list_footer_that_loads_more_is_told_from_one_that_does_not() {
-        for (label, loads) in [
-            ("View more flights", true),
-            ("Show 20 more", true),
-            ("load more  results now please", true),
-            ("Load more of the latest results today", false),
-            ("Learn more", false),
-            ("See more of the best-sellers", true),
-            ("Show more", true),
-        ] {
-            assert_eq!(loads_more(&Control::new("b", "button", label, [Operation::Click])), loads, "{label}");
-        }
-    }
-
-    #[test]
-    fn today_names_the_weekday_and_the_coming_months() {
-        let observation = Observation {
-            url: "https://example.test/".into(),
-            title: "t".into(),
-            page_key: "k".into(),
-            captured_at: DateTime::new(2026, 9, 27, 10, 0, 0).utc(),
-            response_status: None,
-            document_key: String::new(),
-            controls: vec![],
-            omitted_controls: 0,
-            viewport_text: String::new(),
-            visual_content: false,
-            tabs: vec![],
-            dialog: None,
-            inaccessible_frames: 0,
-            can_go_back: false,
-            history_entry: None,
-        };
-        assert_eq!(
-            observation.today(),
-            "2026-09-27 (Sunday). In one month: October 2026; in two months: November 2026"
-        );
     }
 
     #[test]

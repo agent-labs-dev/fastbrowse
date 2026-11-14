@@ -34,7 +34,9 @@ among them, raises `pkgrel` by hand in both files.
 
 The AUR workflow also runs weekly. It builds the committed package, since Arch moves between our changes, and
 runs `scripts/aur_package.py` without `--write`, which fails while `packaging/aur` is older than the PyPI
-release in `pyproject.toml`. A release that skipped this step shows there.
+release in `pyproject.toml`. A release that skipped this step shows there. The same run asks the AUR's RPC
+which version it holds and fails while that is not the PyPI release, which a release whose publish step was
+skipped or had no key leaves behind.
 
 ## Publishing it
 
@@ -53,6 +55,8 @@ keeps its `aur` artifact, and the run says in a warning what did not happen:
   `packaging/aur` from the PyPI release and opens the PR that puts those bytes on `main`; the token is needed
   because a PR opened with the run's own token starts no checks, and the required `check` could never report on
   it. When it is unset the job says so and `main` keeps the previous package.
+
+Rerunning `aur-sync` reuses its release PR branch and preserves the rendered package files across the branch switch.
 
 To publish by hand, with the same key:
 

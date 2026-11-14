@@ -1,5 +1,4 @@
-//! Seams for the integration tests, standing in for the private attributes tests/browser reaches into
-//! (`session._background`, `session._on_target_created(...)`, `page._last`). Nothing here changes behavior: each
+//! Seams for the Rust integration tests, which reach private state through them. Nothing here changes behavior: each
 //! function reads state, feeds the session an event as Chrome would, or runs one internal step on its own.
 
 use std::sync::Arc;
@@ -12,7 +11,6 @@ use crate::page::CdpPage;
 use crate::session::{BrowserSession, Frame, Shared, adopt_popup, deliver_frames};
 
 pub mod browser;
-pub mod dispatch;
 pub mod lifecycle;
 pub mod misc;
 pub mod safety;
@@ -27,7 +25,7 @@ pub fn dispatch(session: &BrowserSession, method: &str, params: Value, session_i
     Shared::on_event(shared(session), &event);
 }
 
-/// `await asyncio.gather(*session._background)`: wait for the background work started so far.
+/// Wait for the background work started so far.
 pub async fn settle_background(session: &BrowserSession) {
     loop {
         let tasks = std::mem::take(&mut shared(session).state.lock().unwrap().background);
@@ -60,7 +58,7 @@ pub fn keepers(session: &BrowserSession) -> Vec<(String, String)> {
     keepers
 }
 
-/// `session._popups`: (popup target id, opener target id, adopted if known), in the order they opened.
+/// The session's popups: (popup target id, opener target id, adopted if known), in the order they opened.
 pub fn popups(session: &BrowserSession) -> Vec<(String, String, Option<bool>)> {
     shared(session)
         .state
@@ -72,7 +70,7 @@ pub fn popups(session: &BrowserSession) -> Vec<(String, String, Option<bool>)> {
         .collect()
 }
 
-/// `session._popups[target] = (opener, future)` then `await session._adopt_popup(target, opener)`.
+/// Record `target_id` as a popup of `opener_id`, then adopt it.
 pub async fn adopt(session: &BrowserSession, target_id: &str, opener_id: &str) {
     {
         let shared = shared(session);
@@ -93,7 +91,7 @@ pub async fn open_owned_tab(session: &BrowserSession, url: &str) -> Result<(), B
 }
 
 pub async fn prepare_session(session: &BrowserSession, session_id: &str) -> Result<(), BrowserError> {
-    session.prepare_session(session_id).await
+    session.prepare_session(session_id, true).await
 }
 
 pub fn has_pending_frame(session: &BrowserSession) -> bool {
@@ -104,8 +102,7 @@ pub fn frame_scheduled(session: &BrowserSession) -> bool {
     shared(session).state.lock().unwrap().frame_scheduled
 }
 
-/// `session._pending_frame = _Frame(data, ack, session_id); session._frame_scheduled = True;
-/// session._spawn(session._deliver_frames())`.
+/// Make this frame the pending one and start a delivery for it.
 pub fn deliver_frame(session: &BrowserSession, data: &str, ack_id: i64, session_id: Option<&str>) {
     let shared = shared(session).clone();
     let mut state = shared.state.lock().unwrap();
@@ -124,22 +121,43 @@ pub async fn settle_delivery(session: &BrowserSession) {
     }
 }
 
-/// `page._last.page_key`.
+/// The last observation's page key.
 pub fn last_page_key(page: &CdpPage) -> Option<String> {
     page.state.lock().unwrap().last.as_ref().map(|l| l.page_key.clone())
 }
 
-/// `page._last.controls[control_id]`: (session id, frame key, local node id, guard digest).
+/// The last observation's target for `control_id`: (session id, frame key, local node id, guard digest).
 pub fn last_target(page: &CdpPage, control_id: &str) -> Option<(String, String, i64, Option<String>)> {
     page.state.lock().unwrap().last.as_ref().and_then(|l| l.controls.get(control_id).cloned())
 }
 
-/// `page._back_to`.
+/// The page's `back_to` entries.
 pub fn back_to(page: &CdpPage) -> Vec<(String, String)> {
     page.state.lock().unwrap().back_to.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
 }
 
-/// `page._status_worlds`.
+/// The page's `status_worlds` entries.
 pub fn status_worlds(page: &CdpPage) -> Vec<(String, String)> {
     page.state.lock().unwrap().status_worlds.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+}
+
+/// Drop the kept document read, so the next observation reads the status again through the kept world.
+pub fn forget_document(page: &CdpPage) {
+    page.state.lock().unwrap().document = None;
+}
+
+/// The running test binary as a PDF helper: it runs the test `test_name` alone, which serves the request.
+pub fn test_binary_helper(test_name: &str) -> crate::helper::HelperCommand {
+    let exe = std::env::current_exe().expect("the test binary's path");
+    ["--exact", test_name, "--nocapture", "-q"]
+        .into_iter()
+        .fold(crate::helper::HelperCommand::new(exe), crate::helper::HelperCommand::arg)
+}
+
+/// In a test named as [`test_binary_helper`] was given: when this run of the binary is a helper, serve and exit.
+pub fn serve_if_helper() {
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(at) = args.iter().position(|arg| arg == crate::helper::MARKER) {
+        std::process::exit(crate::helper::serve(&args[at..]).unwrap_or(1));
+    }
 }

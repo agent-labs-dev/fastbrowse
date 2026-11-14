@@ -1,22 +1,22 @@
-//! tests/test_mcp_server.py: the MCP server's gates and the shape of what it returns, driven through MCP messages
+//! The MCP server's gates and the shape of what it returns, driven through MCP messages
 //! with `run_task` replaced by a recorder, so no browser and no model keys.
 
 mod common;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use common::{CHROME, START, browser_event, result, runner, step, step_event};
+use common::{Call, START, browser_event, result, runner, step, step_event};
 use fastbrowse_cli::mcp::{
-    self, DeclaredSecret, McpServer, Outbox, ServerConfig, Session, bounded, configure, is_loopback, output_model,
-    parse,
+    self, DeclaredSecret, McpServer, Outbox, ServerConfig, Session, bounded, configure, is_loopback, parse,
 };
-use fastbrowse_cli::runner::{RunArgs, RunError, Runner};
-use fastbrowse_clients::environment::{DecisionSource, Secret, Settings};
+use fastbrowse_cli::runner::{RunError, Runner};
+use fastbrowse_clients::environment::{DecisionSource, Settings};
 use fastbrowse_core::models::{BudgetResource, BudgetStop, CostBreakdown, Limits, RunResult, Status};
-use indexmap::IndexMap;
+use fastbrowse_core::protocol::CancellationReceipt;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Notify, mpsc};
@@ -52,7 +52,7 @@ fn answered(status: Status) -> RunResult {
 #[derive(Clone)]
 struct Recorder {
     result: RunResult,
-    calls: Arc<Mutex<Vec<RunArgs>>>,
+    calls: Arc<Mutex<Vec<Call>>>,
 }
 
 impl Recorder {
@@ -62,11 +62,11 @@ impl Recorder {
 
     fn runner(&self) -> Arc<dyn Runner> {
         let recorder = self.clone();
-        runner(move |args: RunArgs| {
+        runner(move |args: Call| {
             let recorder = recorder.clone();
             async move {
                 recorder.calls.lock().unwrap().push(args.clone());
-                let on_event = args.on_event.clone().unwrap();
+                let on_event = args.host.on_event.clone().unwrap();
                 on_event(browser_event(Some("https://live.example.com/session"), None)).await;
                 for index in 0..recorder.result.steps.len() {
                     on_event(step_event(index as i64, None)).await;
@@ -76,7 +76,7 @@ impl Recorder {
         })
     }
 
-    fn last(&self) -> RunArgs {
+    fn last(&self) -> Call {
         self.calls.lock().unwrap().last().cloned().expect("a run was started")
     }
 
@@ -211,7 +211,7 @@ async fn test_authorize_is_refused_unless_the_operator_allowed_it() {
     assert!(!recorder.called());
     let config = ServerConfig { allow_authorize: true, ..ServerConfig::default() };
     call(config, &recorder, json!({"task": "Buy it", "start": START, "authorize": true})).await;
-    assert!(recorder.last().authorization.unwrap().irreversible_actions);
+    assert!(recorder.last().task.authorization.unwrap().irreversible_actions);
 }
 
 #[tokio::test]
@@ -229,7 +229,7 @@ async fn test_a_call_cannot_raise_the_servers_limits() {
     let config = ServerConfig { ceilings, ..ServerConfig::default() };
     let arguments = json!({"task": "t", "start": START, "max_steps": 500, "max_dollars": 9.0, "max_seconds": 10});
     call(config, &recorder, arguments).await;
-    let limits = recorder.last().limits.unwrap();
+    let limits = recorder.last().task.limits.unwrap();
     assert_eq!((limits.max_steps, limits.max_dollars, limits.max_seconds), (Some(20), Some(0.5), Some(10.0)));
 }
 
@@ -247,12 +247,12 @@ async fn test_secrets_reach_a_run_only_on_their_own_origin() {
     let config = ServerConfig { secrets: vec![secret], ..ServerConfig::default() };
     let recorder = Recorder::new(answered(Status::Complete));
     call(config.clone(), &recorder, json!({"task": "Sign in", "start": START})).await;
-    let resolver = recorder.last().secrets.unwrap();
+    let resolver = recorder.last().host.secrets.unwrap();
     assert_eq!(resolver.available().iter().map(|r| r.name.clone()).collect::<Vec<_>>(), ["password"]);
     assert_eq!(resolver.resolve("password", "https://shop.example.com").await.as_deref(), Some("hunter2"));
     assert_eq!(resolver.resolve("password", "https://evil.example.com").await, None);
     call(config, &recorder, json!({"task": "Sign in", "start": "https://other.example.com/"})).await;
-    assert!(recorder.last().secrets.is_none());
+    assert!(recorder.last().host.secrets.is_none());
 }
 
 #[tokio::test]
@@ -292,29 +292,15 @@ async fn test_fields_become_the_runs_output_schema() {
     let recorder = Recorder::new(answered(Status::Complete));
     let fields = json!({"price": {"type": "number", "description": "In USD"}, "listed": {"type": "date"}});
     call(ServerConfig::default(), &recorder, json!({"task": "t", "start": START, "fields": fields})).await;
-    let schema = recorder.last().output_schema.unwrap();
-    let price = &schema.fields()[0];
-    assert_eq!((price.name.as_str(), price.description.as_deref()), ("price", Some("In USD")));
-    assert_eq!(price.ty, fastbrowse_core::output_schema::OutputType::Number(Vec::new()));
-    assert_eq!(schema.fields()[1].name, "listed");
-}
-
-fn fields(names: &[&str]) -> IndexMap<String, (String, Option<String>)> {
-    names.iter().map(|name| (name.to_string(), ("string".to_string(), None))).collect()
-}
-
-#[test]
-fn test_field_names_that_cannot_be_a_model_field_are_refused() {
-    for name in ["_private", "model_config", "class", "two words", "json"] {
-        assert!(output_model(&fields(&[name])).is_err(), "{name}");
-    }
-}
-
-#[test]
-fn test_too_many_fields_are_refused() {
-    let names: Vec<String> = (0..21).map(|i| format!("f{i}")).collect();
-    let names: Vec<&str> = names.iter().map(String::as_str).collect();
-    assert!(output_model(&fields(&names)).is_err());
+    let schema = recorder.last().task.output_schema.unwrap();
+    assert_eq!(
+        Value::Object(schema),
+        json!({
+            "type": "object",
+            "properties": {"price": {"type": "number", "description": "In USD"}, "listed": {"type": "string"}},
+            "required": ["price", "listed"],
+        })
+    );
 }
 
 #[tokio::test]
@@ -326,13 +312,32 @@ async fn test_a_configuration_error_in_a_run_is_a_tool_error() {
     assert!(text(&result).contains("OPENROUTER_API_KEY"));
 }
 
-fn settings(change: impl Fn(&mut Settings)) -> Settings {
-    let mut settings = Settings {
-        openrouter_api_key: Some(Secret::new("or")),
-        ai_gateway_api_key: Some(Secret::new("gw")),
-        chrome: Some(CHROME.into()),
-        ..Settings::default()
+#[tokio::test]
+async fn test_a_cancelled_run_keeps_its_receipt_beside_the_tool_error() {
+    let receipt = CancellationReceipt {
+        steps: vec![step(0)],
+        cost: answered(Status::Complete).cost,
+        recordings: vec![PathBuf::from("run.mp4")],
+        ..Default::default()
     };
+    let spent = receipt.clone();
+    let stopped = runner(move |_| {
+        let spent = spent.clone();
+        async move { Err(RunError::Cancelled(spent)) }
+    });
+    let (result, _) = Client::new(ServerConfig::default(), stopped).call(json!({"task": "t", "start": START})).await;
+    assert_eq!(result["isError"], true);
+    assert_eq!(text(&result), "Error executing tool browse: the run was cancelled");
+    // Not structured content: that is checked against the browse output schema, which a receipt is not.
+    assert!(result.get("structuredContent").is_none());
+    let kept: CancellationReceipt = parsed(result["_meta"]["fastbrowse.ai/cancellation"].clone());
+    assert_eq!(kept, receipt);
+    // The unpriced browser stays unpriced rather than becoming $0.
+    assert_eq!(result["_meta"]["fastbrowse.ai/cancellation"]["cost"]["lines"][1]["dollars"], Value::Null);
+}
+
+fn settings(change: impl Fn(&mut Settings)) -> Settings {
+    let mut settings = common::model_settings();
     change(&mut settings);
     settings
 }
@@ -353,7 +358,15 @@ fn test_configure_reads_secrets_and_ceilings_from_flags() {
     ]))
     .unwrap();
     let environ = HashMap::from([("SHOP_PASSWORD".to_string(), "hunter2".to_string())]);
-    let config = configure(&args, &settings(|s| s.ai_gateway_api_key = None), &environ).unwrap();
+    let config = configure(
+        &args,
+        &settings(|s| {
+            s.ai_gateway_api_key = None;
+            s.chrome = None;
+        }),
+        &environ,
+    )
+    .unwrap();
     assert_eq!(
         config.secrets,
         [DeclaredSecret {
@@ -364,6 +377,12 @@ fn test_configure_reads_secrets_and_ceilings_from_flags() {
     );
     assert_eq!(config.ceilings.max_dollars, Some(0.25));
     assert!(config.allow_authorize);
+    // #1005: `--local` runs every call in the operator's own Chrome; `--launch` starts a separate one.
+    assert!(config.extension);
+    let configured_binary = configure(&args, &settings(|_| {}), &environ).unwrap();
+    assert!(!configured_binary.extension, "an explicitly configured binary selects a launched browser");
+    let launched = configure(&parse(&argv(&["--launch"])).unwrap(), &settings(|_| {}), &environ).unwrap();
+    assert!(!launched.extension && launched.browser_api_key.is_none());
 }
 
 #[test]
@@ -373,7 +392,7 @@ fn test_configure_refuses_a_setup_that_cannot_work() {
         (&["--secret", "password=UNSET@https://a.example"], |_| {}, "unset variables: UNSET"),
         (&["--profile", "p", "--max-concurrent", "2"], |_| {}, "one Chrome at a time"),
         (&[], |_| {}, "BROWSER_USE_API_KEY"),
-        (&["--local", "--cloud-profile", "p"], |_| {}, "--cloud-profile needs the cloud browser"),
+        (&["--local", "--cloud-profile", "p"], |_| {}, "cloud_profile needs the cloud browser"),
         (&["--headed"], |s| s.chrome = Some("no-such-chrome".into()), "Chrome was not found"),
         // FASTBROWSE_HEADED alone still means local Chrome, as it did before cloud became the default.
         (
@@ -419,6 +438,11 @@ fn test_a_secret_flag_must_name_an_origin() {
 }
 
 #[test]
+fn test_a_stand_in_run_that_names_nothing_is_refused() {
+    assert!(matches!(parse(&argv(&["--run-task", "nope"])), Err(fastbrowse_cli::argparse::Exit::Usage(_))));
+}
+
+#[test]
 fn test_a_secret_origin_is_parsed_as_an_origin() {
     let args = parse(&argv(&["--secret", "p=V@https://a.example:8443"])).unwrap();
     assert_eq!(args.secret, [("p".to_string(), "V".to_string(), "https://a.example:8443".to_string())]);
@@ -428,6 +452,37 @@ fn test_a_secret_origin_is_parsed_as_an_origin() {
 fn test_loopback_hosts() {
     for (host, loopback) in [("127.0.0.1", true), ("::1", true), ("localhost", true), ("0.0.0.0", false)] {
         assert_eq!(is_loopback(host), loopback, "{host}");
+    }
+}
+
+/// Every loopback address runs without a token, so each needs the Host and Origin checks that stop DNS rebinding.
+#[tokio::test]
+async fn test_every_loopback_address_checks_host_and_origin() {
+    let server = McpServer::new(ServerConfig::default(), Recorder::new(answered(Status::Complete)).runner());
+    let listener = tokio::net::TcpListener::bind("127.0.0.2:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move { mcp::http::serve_on(listener, server, "127.0.0.2").await });
+    let post = async |headers: &str| {
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.2", port)).await.unwrap();
+        let request = format!(
+            "POST /mcp HTTP/1.1\r\n{headers}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\
+             Connection: close\r\n\r\n{{}}"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        response
+    };
+    for host in ["evil.test:80", "evil.test", "localhost.evil.test", "localhost:80@evil.test", "evil@localhost"] {
+        assert!(post(&format!("Host: {host}")).await.starts_with("HTTP/1.1 421"), "{host}");
+    }
+    let origin = format!("Host: 127.0.0.2:{port}\r\nOrigin: http://evil.test:80");
+    assert!(post(&origin).await.starts_with("HTTP/1.1 403"));
+    for host in
+        [format!("127.0.0.2:{port}"), "127.0.0.2".into(), "localhost".into(), "LOCALHOST".into(), "[::1]".into()]
+    {
+        let own = post(&format!("Host: {host}\r\nOrigin: http://{host}")).await;
+        assert!(own.starts_with("HTTP/1.1 406"), "{host}: {own}");
     }
 }
 
@@ -464,15 +519,159 @@ async fn test_http_needs_the_bearer_token_except_for_the_health_check() {
 }
 
 #[tokio::test]
-async fn test_a_run_that_overruns_its_deadline_is_abandoned() {
-    let hangs = runner(|args: RunArgs| async move {
-        args.cancel.guard(tokio::time::sleep(Duration::from_secs(30))).await?;
-        unreachable!("the deadline stops the run first")
+async fn test_a_run_that_overruns_its_deadline_keeps_its_cancellation_receipt() {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let seen = cancelled.clone();
+    let hangs = runner(move |args: Call| {
+        let seen = seen.clone();
+        async move {
+            args.host.cancel.tripped().await;
+            seen.store(true, Ordering::Release);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            Err(RunError::Cancelled(CancellationReceipt::default()))
+        }
     });
-    let config = ServerConfig { grace_seconds: 0.0, ..ServerConfig::default() };
-    let (result, _) = Client::new(config, hangs).call(json!({"task": "t", "start": START, "max_seconds": 0.05})).await;
+    let config = ServerConfig { grace_seconds: 0.05, ..ServerConfig::default() };
+    let (result, _) = Client::new(config, hangs).call(json!({"task": "t", "start": START, "max_seconds": 0.01})).await;
     assert_eq!(result["isError"], true);
-    assert!(text(&result).contains("overran max_seconds=0.05"));
+    assert_eq!(text(&result), "Error executing tool browse: the run was cancelled");
+    assert!(result["_meta"]["fastbrowse.ai/cancellation"].is_object());
+    assert!(cancelled.load(Ordering::Acquire), "the timed-out run was dropped before observing cancellation");
+}
+
+#[tokio::test]
+async fn test_a_timeout_keeps_a_completed_result_from_cleanup() {
+    let finished = runner(|args: Call| async move {
+        args.host.cancel.tripped().await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        Ok(answered(Status::Complete))
+    });
+    let config = ServerConfig { grace_seconds: 0.05, ..ServerConfig::default() };
+    let (result, _) =
+        Client::new(config, finished).call(json!({"task": "t", "start": START, "max_seconds": 0.01})).await;
+    assert_eq!(result["isError"], false);
+    assert_eq!(result["structuredContent"]["status"], "complete");
+}
+
+#[tokio::test]
+async fn test_a_noncooperative_timeout_returns_after_the_cleanup_grace() {
+    let hangs = runner(|_| async move {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        Ok(answered(Status::Complete))
+    });
+    let config = ServerConfig { grace_seconds: 0.02, ..ServerConfig::default() };
+    let (result, _) = Client::new(config, hangs).call(json!({"task": "t", "start": START, "max_seconds": 0.01})).await;
+    assert_eq!(result["isError"], true);
+    assert!(text(&result).contains("overran max_seconds=0.01"));
+}
+
+#[tokio::test]
+async fn test_an_external_cancel_replies_immediately_and_keeps_cleanup_running() {
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let cleaned = Arc::new(Notify::new());
+    let completed = Arc::new(AtomicBool::new(false));
+    let (began, allowed, finished, done) = (started.clone(), release.clone(), cleaned.clone(), completed.clone());
+    let runner = runner(move |args: Call| {
+        let (began, allowed, finished, done) = (began.clone(), allowed.clone(), finished.clone(), done.clone());
+        async move {
+            began.notify_one();
+            args.host.cancel.tripped().await;
+            allowed.notified().await;
+            done.store(true, Ordering::Release);
+            finished.notify_one();
+            Err(RunError::Cancelled(CancellationReceipt::default()))
+        }
+    });
+    let mut client = Client::new(ServerConfig::default(), runner);
+    let id = client.start_call(json!({"task": "t", "start": START}));
+    started.notified().await;
+    client.send(json!({"jsonrpc":"2.0", "method":"notifications/cancelled", "params":{"requestId": id}}));
+    let mut notices = Vec::new();
+    let reply = client.reply(id, &mut notices).await;
+    assert_eq!(reply["error"]["message"], "Request cancelled");
+    assert!(!completed.load(Ordering::Acquire), "the response must not wait for cleanup");
+    release.notify_one();
+    tokio::time::timeout(Duration::from_secs(2), cleaned.notified()).await.expect("run cleanup completed");
+    assert!(completed.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn test_cancelled_calls_stop_notifications_before_replying_but_finish_cleanup() {
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let cleaned = Arc::new(Notify::new());
+    let run = runner({
+        let (started, release, cleaned) = (started.clone(), release.clone(), cleaned.clone());
+        move |args: Call| {
+            let (started, release, cleaned) = (started.clone(), release.clone(), cleaned.clone());
+            async move {
+                let on_event = args.host.on_event.as_ref().unwrap();
+                on_event(step_event(0, None)).await;
+                started.notify_one();
+                args.host.cancel.tripped().await;
+                release.notified().await;
+                on_event(step_event(1, None)).await;
+                on_event(browser_event(Some("https://live.example.com/late"), None)).await;
+                cleaned.notify_one();
+                Err(RunError::Cancelled(CancellationReceipt::default()))
+            }
+        }
+    });
+    let mut client = Client::new(ServerConfig::default(), run);
+    let id = client.start_call(json!({"task":"t", "start":START}));
+    tokio::time::timeout(Duration::from_secs(2), started.notified()).await.unwrap();
+    client.send(json!({"jsonrpc":"2.0", "method":"notifications/cancelled", "params":{"requestId":id}}));
+    let mut notices = Vec::new();
+    assert_eq!(client.reply(id, &mut notices).await["error"]["message"], "Request cancelled");
+    assert_eq!(notices.len(), 1, "active progress must still be delivered");
+    release.notify_one();
+    tokio::time::timeout(Duration::from_secs(2), cleaned.notified()).await.unwrap();
+    assert!(client.inbox.try_recv().is_err(), "cleanup must not publish events for an answered call");
+}
+
+#[tokio::test]
+async fn test_a_cancelled_cleanup_cannot_remove_a_reused_request_id() {
+    let first_started = Arc::new(Notify::new());
+    let second_started = Arc::new(Notify::new());
+    let release_first = Arc::new(Notify::new());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let runner = runner({
+        let first_started = first_started.clone();
+        let second_started = second_started.clone();
+        let release_first = release_first.clone();
+        let calls = calls.clone();
+        move |args: Call| {
+            let n = calls.fetch_add(1, Ordering::SeqCst);
+            let first_started = first_started.clone();
+            let second_started = second_started.clone();
+            let release_first = release_first.clone();
+            async move {
+                if n == 0 {
+                    first_started.notify_one();
+                    args.host.cancel.tripped().await;
+                    release_first.notified().await;
+                } else {
+                    second_started.notify_one();
+                    args.host.cancel.tripped().await;
+                }
+                Err(RunError::Cancelled(CancellationReceipt::default()))
+            }
+        }
+    });
+    let mut client = Client::new(ServerConfig::default(), runner);
+    let first = client.start_call(json!({"task": "first", "start": START}));
+    assert_eq!(first, 1);
+    tokio::time::timeout(Duration::from_secs(2), first_started.notified()).await.expect("first run started");
+    client.send(json!({"jsonrpc":"2.0", "method":"notifications/cancelled", "params":{"requestId":1}}));
+    assert_eq!(client.reply(1, &mut Vec::new()).await["error"]["message"], "Request cancelled");
+
+    // Reuse id 1 while the first call is still inside its cleanup grace.
+    client.send(json!({"jsonrpc":"2.0", "id":1, "method":"tools/call", "params":{"name":"browse", "arguments":{"task":"second", "start":START}}}));
+    release_first.notify_one();
+    tokio::time::timeout(Duration::from_secs(2), second_started.notified()).await.expect("second run started");
+    client.send(json!({"jsonrpc":"2.0", "method":"notifications/cancelled", "params":{"requestId":1}}));
+    assert_eq!(client.reply(1, &mut Vec::new()).await["error"]["message"], "Request cancelled");
 }
 
 #[tokio::test]
@@ -481,10 +680,10 @@ async fn test_a_call_waiting_for_a_slot_does_not_spend_its_own_time_limit() {
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let (on_start, on_release) = (started.clone(), release.clone());
-    let both = runner(move |args: RunArgs| {
+    let both = runner(move |args: Call| {
         let (started, release) = (on_start.clone(), on_release.clone());
         async move {
-            if args.task == "first" {
+            if args.task.task == "first" {
                 started.notify_one();
                 release.notified().await;
             }
@@ -521,4 +720,57 @@ async fn test_budget_stop_details_survive_the_mcp_transport() {
     let (result, _) =
         call(ServerConfig::default(), &Recorder::new(run), json!({"task": "Find it", "start": START})).await;
     assert_eq!(result["structuredContent"]["budget"], json!({"resource": "steps", "limit": 20.0}));
+}
+
+#[tokio::test]
+async fn an_assembly_error_keeps_its_receipt_beside_the_tool_error() {
+    let receipt = CancellationReceipt {
+        steps: vec![step(0)],
+        cost: answered(Status::Complete).cost,
+        recordings: vec![PathBuf::from("run.mp4")],
+        ..Default::default()
+    };
+    let spent = receipt.clone();
+    let failed = runner(move |_| {
+        let receipt = spent.clone();
+        async move {
+            Err(RunError::AfterSpending {
+                error: Box::new(RunError::Configuration("browser key missing".into())),
+                receipt,
+            })
+        }
+    });
+    let (result, _) = Client::new(ServerConfig::default(), failed).call(json!({"task": "t", "start": START})).await;
+    assert_eq!(result["isError"], true);
+    assert!(text(&result).contains("browser key missing"));
+    assert!(result.get("structuredContent").is_none());
+    let kept: CancellationReceipt = parsed(result["_meta"]["fastbrowse.ai/receipt"].clone());
+    assert_eq!(kept, receipt);
+}
+
+#[tokio::test]
+async fn a_deadline_keeps_an_assembly_error_receipt_returned_during_cleanup() {
+    let receipt = CancellationReceipt {
+        steps: vec![step(0)],
+        cost: answered(Status::Complete).cost,
+        recordings: vec![PathBuf::from("run.mp4")],
+        ..Default::default()
+    };
+    let spent = receipt.clone();
+    let failed = runner(move |args: Call| {
+        let receipt = spent.clone();
+        async move {
+            args.host.cancel.tripped().await;
+            Err(RunError::AfterSpending {
+                error: Box::new(RunError::Recording("recording failed during cleanup".into())),
+                receipt,
+            })
+        }
+    });
+    let config = ServerConfig { grace_seconds: 1.0, ..ServerConfig::default() };
+    let (result, _) = Client::new(config, failed).call(json!({"task": "t", "start": START, "max_seconds": 0.01})).await;
+    assert_eq!(result["isError"], true);
+    assert!(text(&result).contains("recording failed during cleanup"));
+    let kept: CancellationReceipt = parsed(result["_meta"]["fastbrowse.ai/receipt"].clone());
+    assert_eq!(kept, receipt);
 }

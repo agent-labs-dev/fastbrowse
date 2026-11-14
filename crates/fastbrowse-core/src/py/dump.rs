@@ -198,8 +198,10 @@ impl ser::Serializer for Dumper {
     ) -> Result<Seq, DumpError> {
         Ok(Seq { dumper: self, items: Vec::with_capacity(len), variant: Some(variant) })
     }
-    fn serialize_map(self, _: Option<usize>) -> Result<Object, DumpError> {
-        Ok(Object { dumper: self, map: Map::new(), key: None, model: false, variant: None })
+    /// serde's derive opens a struct with a `#[serde(flatten)]` field as a map of unknown length, and that struct
+    /// is a model; every map type opens with its length.
+    fn serialize_map(self, len: Option<usize>) -> Result<Object, DumpError> {
+        Ok(Object { dumper: self, map: Map::new(), key: None, model: len.is_none(), variant: None })
     }
     fn serialize_struct(self, _: &'static str, _: usize) -> Result<Object, DumpError> {
         Ok(Object { dumper: self, map: Map::new(), key: None, model: true, variant: None })

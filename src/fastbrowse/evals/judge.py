@@ -22,9 +22,9 @@ ACCEPTED = 0.5
 """The probability at which Jev is taken to have said a claim holds."""
 
 OPENROUTER_URL = "https://openrouter.ai/api"
-OPENROUTER_MODEL = "jev-1.13"
+OPENROUTER_MODEL = "jev-1.14"
 TYPESAFE_URL = "https://api.typesafe.ai"
-TYPESAFE_MODEL = "jev-1.13.0"
+TYPESAFE_MODEL = "jev-1.14.0"
 GATEWAY_URL = "https://ai-gateway.vercel.sh"
 
 RETRY_DELAYS = (0.5, 1.5, 4.0, 8.0)
@@ -98,7 +98,7 @@ class GatewayJev(Jev):
     """Jev through the Vercel AI Gateway, which names a yes/no question `boolean` and its P(yes) `probability`."""
 
     def __init__(self, http: httpx.AsyncClient, *, api_key: str, base_url: str = GATEWAY_URL) -> None:
-        super().__init__(http, api_key=api_key, base_url=base_url, model="typesafe-ai/jev")
+        super().__init__(http, api_key=api_key, base_url=base_url, model="typesafe-ai/jev-1.14.0")
 
     def _request(
         self, state: JsonValue, questions: Mapping[str, JsonValue]
@@ -119,17 +119,33 @@ class GatewayJev(Jev):
         return float(answer["probability"])
 
 
+JEV_KEYS = {"openrouter": "OPENROUTER_API_KEY", "typesafe": "TYPESAFE_API_KEY", "gateway": "AI_GATEWAY_API_KEY"}
+"""Each Jev source and its key, in the order the core picks the first keyed one when FASTBROWSE_DECISION_SOURCE is
+unset."""
+
+
+def jev_source(env: Mapping[str, str]) -> str:
+    """The source Jev starts on: FASTBROWSE_DECISION_SOURCE, else the first keyed one, else the gateway."""
+    if chosen := env.get("FASTBROWSE_DECISION_SOURCE"):
+        if chosen not in JEV_KEYS:
+            raise ValueError(f"FASTBROWSE_DECISION_SOURCE is {chosen!r}, not one of {', '.join(JEV_KEYS)}")
+        return chosen
+    return next((source for source, key in JEV_KEYS.items() if env.get(key)), "gateway")
+
+
 def jev_from_environment(http: httpx.AsyncClient) -> Jev:
-    """The judge on the provider a run would start on: the direct API, else OpenRouter, else the gateway."""
+    """The judge on the source a run would start on."""
     # Matched without case, as the core reads its settings.
-    keys = {name.upper(): value for name, value in environment().items()}
-    if key := keys.get("TYPESAFE_API_KEY"):
+    env = {name.upper(): value for name, value in environment().items()}
+    source = jev_source(env)
+    key = env.get(JEV_KEYS[source])
+    if not key:
+        raise RuntimeError(f"the judge needs {JEV_KEYS[source]} for the {source} route")
+    if source == "typesafe":
         return Jev(http, api_key=key, base_url=TYPESAFE_URL, model=TYPESAFE_MODEL)
-    if key := keys.get("OPENROUTER_API_KEY"):
+    if source == "openrouter":
         return Jev(http, api_key=key, base_url=OPENROUTER_URL, model=OPENROUTER_MODEL)
-    if key := keys.get("AI_GATEWAY_API_KEY"):
-        return GatewayJev(http, api_key=key)
-    raise RuntimeError("the judge needs TYPESAFE_API_KEY, OPENROUTER_API_KEY or AI_GATEWAY_API_KEY")
+    return GatewayJev(http, api_key=key)
 
 
 async def judge(
@@ -138,7 +154,7 @@ async def judge(
     task: str,
     answer: str | None = None,
     data: JsonValue = None,
-    submitted: Mapping[str, object] | None = None,
+    submitted: Mapping[str, list[dict[str, str]]] | None = None,
     claims: Sequence[Claim] = (),
 ) -> str | None:
     """Why the run's output does not state every claim, or None when it states them all.
@@ -149,7 +165,9 @@ async def judge(
         return None
     state: dict[str, JsonValue] = {"task": task, "answer": (answer or "").strip() or None, "data": data}
     if submitted:
-        state["submitted"] = {name: str(value) for name, value in submitted.items()}
+        state["submitted"] = {
+            path: [{name: value for name, value in post.items()} for post in posts] for path, posts in submitted.items()
+        }
     questions: dict[str, JsonValue] = {
         f"claim_{index}": {
             "instructions": (

@@ -4,6 +4,9 @@ Every case is a record: an id, a tier, the command to run, the exit code and sta
 and the assertions that decide whether it passed. The runner in `fastbrowse.audit.runner` executes them,
 so no case is written as loose shell.
 
+Tier 0 is the contract and static checks, tier 1 local fixtures, tier 2 live sites and tier 3 integration
+surfaces. Tiers 1 to 3 call paid models.
+
 A command's tokens may stand in for a resolved path. `{python}` is the interpreter running the suite,
 `{cli}` is the `fastbrowse` console script, `{mcp}` is `fastbrowse-mcp`, and `{base_url}` is the local
 fixture server's address, substituted only for a case with `fixture=True`.
@@ -20,8 +23,8 @@ Assertion sources
 Assertion operators
 -------------------
 
-`eq`, `ne`, `contains`, `not_contains`, `present`, `absent`, `is_true`, `is_false`, `ge`, `le`, `matches`,
-`list_eq`, `list_contains`, `list_excludes`, `count_eq`, `count_ge`, `exists`, `nonempty`.
+`eq`, `ne`, `contains`, `not_contains`, `present`, `is_true`, `matches`, `list_eq`, `count_eq`, `count_ge`,
+`keys_present`, `nonempty`, and `claim`, which asks Jev whether the claim holds for the output.
 """
 
 from dataclasses import dataclass
@@ -32,8 +35,8 @@ from fastbrowse.models import RunResult
 # RunResult field cannot slip past T0.2 unnoticed.
 _RUN_RESULT_KEYS: tuple[str, ...] = tuple(RunResult.model_json_schema(mode="serialization")["properties"])
 
-# The task texts come from the repository's own local eval tasks, so a fixture case asks for the same
-# thing the eval suite grades.
+# The contact, login and price task texts come from the repository's own local eval tasks, so a fixture
+# case asks for the same thing the eval suite grades. The download task is the audit's own.
 CONTACT_TASK = (
     "Tell support, as Ada Lovelace (ada@example.com), that my kettle arrived broken. Use the damaged item topic."
 )
@@ -84,6 +87,8 @@ CLI_FLAGS: tuple[str, ...] = (
     "--version",
     "--start",
     "--local",
+    "--extension",
+    "--cloud",
     "--headed",
     "--profile",
     "--cloud-profile",
@@ -100,7 +105,6 @@ CLI_FLAGS: tuple[str, ...] = (
 )
 
 CASES: tuple[AuditCase, ...] = (
-    # ------------------------------------------------------------------ tier 0: contract and static
     AuditCase(
         id="T0.1",
         tier=0,
@@ -110,7 +114,13 @@ CASES: tuple[AuditCase, ...] = (
             a("help exits 0", "json", "eq", 0, "help_exit"),
             a("version exits 0", "json", "eq", 0, "version_exit"),
             a("help lists every documented flag", "json", "list_eq", [], "missing_flags"),
-            a("version is a semantic version", "json", "matches", r"^fastbrowse \d+\.\d+\.\d+$", "version"),
+            a(
+                "version is a semantic version",
+                "json",
+                "matches",
+                r"^fastbrowse \d+\.\d+\.\d+( \([0-9a-f]{7,40}(, dirty)?\))?$",
+                "version",
+            ),
         ),
         expect_exit=0,
         expect_status="ok",
@@ -120,7 +130,7 @@ CASES: tuple[AuditCase, ...] = (
         id="T0.2",
         tier=0,
         purpose="With no model key, the run is refused and --json still prints the whole refused result.",
-        argv=("{cli}", "anything at all", "--local", "--json"),
+        argv=("{cli}", "anything at all", "--extension", "--json"),
         assertions=(
             a("refused shape is a run result", "json", "keys_present", _RUN_RESULT_KEYS, ""),
             a("status is error", "json", "eq", "error", "status"),
@@ -200,7 +210,7 @@ CASES: tuple[AuditCase, ...] = (
         id="T0.8",
         tier=0,
         purpose="A cloud browser asked for with no BROWSER_USE_API_KEY is refused cleanly, not with a traceback.",
-        argv=("{cli}", "anything at all", "--json"),
+        argv=("{cli}", "anything at all", "--cloud", "--json"),
         assertions=(
             a("names the browser key", "stderr", "contains", "BROWSER_USE_API_KEY"),
             a("no traceback", "stderr", "not_contains", "Traceback"),
@@ -224,14 +234,15 @@ CASES: tuple[AuditCase, ...] = (
         expect_status="refused",
         timeout_s=30,
     ),
-    # ------------------------------------------------------------------ tier 1: local fixtures (paid models)
     AuditCase(
         id="T1.1",
         tier=1,
         purpose="A local shop lookup follows search results and reads the product price.",
-        argv=("{cli}", PRICE_TASK, "--start", "{base_url}/shop.html", "--local", "--json"),
+        argv=("{cli}", PRICE_TASK, "--start", "{base_url}/shop.html", "--extension", "--json"),
         fixture=True,
-        assertions=(a("the answer contains the price", "json", "contains", "34.50", "answer"),),
+        assertions=(
+            a("the answer gives the price", "json", "claim", "The output gives the Blue Kettle's price as 34.50."),
+        ),
         expect_exit=0,
         expect_status="complete",
         spends=True,
@@ -249,7 +260,7 @@ CASES: tuple[AuditCase, ...] = (
             "--start",
             "{base_url}/contact.html",
             "--authorize",
-            "--local",
+            "--extension",
             "--json",
         ),
         fixture=True,
@@ -271,7 +282,7 @@ CASES: tuple[AuditCase, ...] = (
         id="T1.3",
         tier=1,
         purpose="The same form without --authorize stops at needs_confirmation and records no submission.",
-        argv=("{cli}", CONTACT_TASK, "--start", "{base_url}/contact.html", "--local", "--json"),
+        argv=("{cli}", CONTACT_TASK, "--start", "{base_url}/contact.html", "--extension", "--json"),
         fixture=True,
         assertions=(
             a("no contact submission", "recorder", "count_eq", 0, "posts./submit/contact"),
@@ -288,7 +299,7 @@ CASES: tuple[AuditCase, ...] = (
         id="T1.4",
         tier=1,
         purpose="A login wall stops at needs_login and records no sign-in attempt.",
-        argv=("{cli}", LOGIN_TASK, "--start", "{base_url}/account.html", "--local", "--json"),
+        argv=("{cli}", LOGIN_TASK, "--start", "{base_url}/account.html", "--extension", "--json"),
         fixture=True,
         assertions=(
             a("no sign-in attempt", "recorder", "count_eq", 0, "posts./submit/login"),
@@ -311,7 +322,7 @@ CASES: tuple[AuditCase, ...] = (
             DOWNLOAD_TASK,
             "--start",
             "{base_url}/download.html",
-            "--local",
+            "--extension",
             "--downloads",
             "{downloads}",
             "--json",
@@ -337,7 +348,7 @@ CASES: tuple[AuditCase, ...] = (
             PRICE_TASK,
             "--start",
             "{base_url}/shop.html",
-            "--local",
+            "--extension",
             "--record",
             "{record}",
             "--json",
@@ -364,7 +375,7 @@ CASES: tuple[AuditCase, ...] = (
             "--start",
             "{base_url}/contact.html",
             "--authorize",
-            "--local",
+            "--extension",
             "--max-steps",
             "1",
             "--json",
@@ -391,7 +402,7 @@ CASES: tuple[AuditCase, ...] = (
             "--start",
             "{base_url}/contact.html",
             "--authorize",
-            "--local",
+            "--extension",
             "--max-dollars",
             "0.0001",
             "--json",
@@ -410,7 +421,6 @@ CASES: tuple[AuditCase, ...] = (
         timeout_s=300,
         budget_usd=0.05,
     ),
-    # ------------------------------------------------------------------ tier 2: live sites (paid models)
     AuditCase(
         id="T2.1",
         tier=2,
@@ -420,7 +430,7 @@ CASES: tuple[AuditCase, ...] = (
             "What is the latest version of httpx? Answer with the version and cite the page.",
             "--start",
             "https://pypi.org/project/httpx/",
-            "--local",
+            "--extension",
             "--json",
         ),
         assertions=(
@@ -440,7 +450,7 @@ CASES: tuple[AuditCase, ...] = (
         id="T2.2",
         tier=2,
         purpose="--start is honoured: the run ends on the address it was told to open.",
-        argv=("{cli}", "What is the title of this page?", "--start", "https://example.com/", "--local", "--json"),
+        argv=("{cli}", "What is the title of this page?", "--start", "https://example.com/", "--extension", "--json"),
         assertions=(a("final_url is the start", "json", "eq", "https://example.com/", "final_url"),),
         expect_exit=0,
         expect_status="complete",
@@ -453,7 +463,7 @@ CASES: tuple[AuditCase, ...] = (
         id="T2.3",
         tier=2,
         purpose="With no --start, an address is proposed from the task and reached.",
-        argv=("{cli}", "What is the population of Lyon, France, according to Wikipedia?", "--local", "--json"),
+        argv=("{cli}", "What is the population of Lyon, France, according to Wikipedia?", "--extension", "--json"),
         assertions=(
             a("a final address was reached", "json", "present", None, "final_url"),
             a("the address is http", "json", "matches", r"^https?://", "final_url"),
@@ -480,7 +490,7 @@ CASES: tuple[AuditCase, ...] = (
             "https://www.saucedemo.com/",
             "--secret",
             "Password=FB_AUDIT_SAUCE_PASSWORD@https://www.saucedemo.com",
-            "--local",
+            "--extension",
             "--json",
         ),
         env=(("FB_AUDIT_SAUCE_PASSWORD", "secret_sauce"),),
@@ -507,7 +517,7 @@ CASES: tuple[AuditCase, ...] = (
             "https://www.saucedemo.com/",
             "--secret",
             "Password=FB_AUDIT_SAUCE_PASSWORD@https://www.saucedemo.com",
-            "--local",
+            "--extension",
             "--json",
         ),
         env=(("FB_AUDIT_SAUCE_PASSWORD", "secret_sauce"),),
@@ -532,7 +542,7 @@ CASES: tuple[AuditCase, ...] = (
             "What does this page say?",
             "--start",
             "{base_url}/bot-check.html",
-            "--local",
+            "--extension",
             "--json",
         ),
         fixture=True,
@@ -579,7 +589,6 @@ CASES: tuple[AuditCase, ...] = (
         timeout_s=300,
         budget_usd=0.10,
     ),
-    # ------------------------------------------------------------------ tier 3: integration surfaces
     AuditCase(
         id="T3.5",
         tier=3,
@@ -618,7 +627,7 @@ CASES: tuple[AuditCase, ...] = (
         env=(("FASTBROWSE_PROFILE", "/proc/fastbrowse-audit-unused-profile"), ("FASTBROWSE_HEADED", "1")),
         assertions=(
             a("opened a cloud browser", "stderr", "contains", "watch live:"),
-            a("returned the heading", "json", "contains", "Example Domain", "answer"),
+            a("returned the heading", "json", "claim", "The output gives the page heading as Example Domain."),
         ),
         expect_exit=0,
         expect_status="complete",

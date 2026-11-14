@@ -15,6 +15,10 @@ const suffix = process.platform === 'win32' ? '.exe' : '';
 const rust = process.env.FASTBROWSE_TEST_RUST_BINARY;
 export const serverBinary = rust ?? join(repository, '.venv', scripts, `fastbrowse${suffix}`);
 
+const pyproject = readFileSync(join(repository, 'pyproject.toml'), 'utf8');
+/** The version every server under test reports. */
+export const packageVersion = /^version = "(.+)"$/m.exec(pyproject)?.[1];
+
 export interface Launcher {
   /** What `binaryPath` takes. */
   path: string;

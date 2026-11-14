@@ -76,7 +76,9 @@ def test_unstarted_budget_refusal_remains_visible_without_filling_coverage(tmp_p
     directory = tmp_path / "docs/validation"
     directory.mkdir(parents=True)
     path = directory / "refused.jsonl"
-    row = {"attempt": {"task": "example", "arm": "fastbrowse", "budget_refused": True, "started": False}}
+    row = {
+        "attempt": {"task": "example", "suite": "local", "arm": "fastbrowse", "budget_refused": True, "started": False}
+    }
     path.write_text(json.dumps(row) + "\n")
     result = campaign(path, tmp_path)
     assert len(result.attempts) == 1
@@ -85,11 +87,24 @@ def test_unstarted_budget_refusal_remains_visible_without_filling_coverage(tmp_p
     assert result.attempts[0].unknown_cost is True
 
 
+@pytest.mark.parametrize("missing", ["task", "suite", "arm"])
+def test_a_row_without_its_identity_is_refused(tmp_path: Path, missing: str) -> None:
+    directory = tmp_path / "docs/validation"
+    directory.mkdir(parents=True)
+    path = directory / "example.jsonl"
+    row = {"task": "example", "suite": "local", "arm": "fastbrowse", "status": "complete", "passed": True}
+    path.write_text(json.dumps({k: v for k, v in row.items() if k != missing}) + "\n")
+    with pytest.raises(KeyError, match=missing):
+        campaign(path, tmp_path)
+
+
 @pytest.mark.parametrize("field,value", [("answer", "private"), ("dollars", float("nan")), ("id", "duplicate")])
 def test_public_schema_rejects_content_and_invalid_measures(tmp_path: Path, field: str, value: object) -> None:
     directory = tmp_path / "docs/validation"
     directory.mkdir(parents=True)
-    (directory / "example.jsonl").write_text(json.dumps({"task": "example", "arm": "fastbrowse"}) + "\n")
+    (directory / "example.jsonl").write_text(
+        json.dumps({"task": "example", "suite": "local", "arm": "fastbrowse"}) + "\n"
+    )
     data = export(tmp_path).model_dump()
     data["campaigns"][0]["attempts"][0][field] = value
     with pytest.raises(ValidationError):
@@ -100,7 +115,7 @@ def test_legacy_trials_without_repeat_ids_remain_distinct(tmp_path: Path) -> Non
     directory = tmp_path / "docs/validation"
     directory.mkdir(parents=True)
     path = directory / "legacy.jsonl"
-    row = {"task": "example", "arm": "fastbrowse", "passed": True, "status": "complete"}
+    row = {"task": "example", "suite": "local", "arm": "fastbrowse", "passed": True, "status": "complete"}
     path.write_text((json.dumps(row) + "\n") * 3)
     result = campaign(path, tmp_path)
     assert [attempt.repeat for attempt in result.attempts] == [0, 1, 2]
@@ -113,7 +128,15 @@ def test_started_attempt_without_final_status_is_interrupted(tmp_path: Path) -> 
     path = directory / "interrupted.jsonl"
     path.write_text(
         json.dumps(
-            {"task": "example", "arm": "fastbrowse", "started": True, "status": None, "seconds": 9.6, "dollars": None}
+            {
+                "task": "example",
+                "suite": "local",
+                "arm": "fastbrowse",
+                "started": True,
+                "status": None,
+                "seconds": 9.6,
+                "dollars": None,
+            }
         )
         + "\n"
     )
@@ -132,7 +155,15 @@ def test_remaining_campaign_projection_binds_the_exact_budget_journal(tmp_path: 
     directory.mkdir(parents=True)
     path = directory / "campaign.jsonl"
     path.write_text(
-        json.dumps({"task": "example", "arm": "fastbrowse", "run": {"budget_policy": "remaining-campaign-v1"}}) + "\n"
+        json.dumps(
+            {
+                "task": "example",
+                "suite": "local",
+                "arm": "fastbrowse",
+                "run": {"budget_policy": "remaining-campaign-v1"},
+            }
+        )
+        + "\n"
     )
     with pytest.raises(FileNotFoundError):
         campaign(path, tmp_path)

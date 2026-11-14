@@ -4,12 +4,12 @@ An `Observation` is bounded, for Jev's action choice; a `Capture` is complete, f
 page is asked to do.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import StrEnum
 
 from pydantic import Field, field_serializer
 
-from fastbrowse.models import Attachment, Frozen, Operation, SourceControl, StepOutcome, Unavailable
+from fastbrowse.models import Attachment, Frozen, Link, Operation, SourceControl, StepOutcome, Unavailable
 
 
 class Control(Frozen):
@@ -30,6 +30,8 @@ class Control(Frozen):
     operations: frozenset[Operation]
     value: str | None = None
     """Current value; masked for sensitive fields."""
+    focused: bool | None = Field(default=None, exclude_if=lambda focused: focused is None)
+    """Whether this control owns keyboard focus in its document, when the browser reports it."""
     href: str | None = None
     options: tuple[str, ...] = ()
     input_type: str | None = None
@@ -42,12 +44,19 @@ class Control(Frozen):
     expanded: bool | None = None
     sensitive: bool = False
     offscreen: bool = False
-    blocking: bool | None = None
-    """A field its form will not submit without: required and still empty, or marked invalid by the page."""
+    required: bool | None = None
+    """A field the page marks required (`required` or `aria-required`)."""
+    invalid: bool | None = None
+    """A field marked invalid by ARIA or a failed native constraint, without implying submission."""
+    validation_message: str | None = Field(default=None, exclude_if=lambda message: message is None)
+    """The browser's own words for why a native constraint refuses this field."""
     next_page: bool | None = None
     """A link the page marks `rel="next"`: the next page of the list it belongs to."""
     download: bool | None = None
     """A link the page marks with a `download` attribute: activating it saves a file instead of opening a page."""
+    drawn: bool | None = Field(default=None, exclude_if=lambda drawn: drawn is None)
+    """An image, canvas or video the page takes input on: what it shows is pixels, with no page elements inside it
+    to read or act on, such as a streamed remote browser or a canvas app."""
 
     @field_serializer("operations", when_used="json")
     def _sorted_operations(self, operations: frozenset[Operation]) -> list[Operation]:
@@ -70,6 +79,23 @@ class Dialog(Frozen):
     default_prompt: str | None = None
 
 
+class Media(Frozen):
+    """One audio or video player's state, read from the element when the page was observed."""
+
+    kind: str
+    """`audio` or `video`."""
+    label: str | None = None
+    """The player's own accessible name, when it has one."""
+    heading: str | None = None
+    """The nearest heading before the player, which tells unnamed players apart."""
+    paused: bool
+    ended: bool
+    muted: bool
+    elapsed_seconds: float
+    duration_seconds: float | None = None
+    """None while the length is unknown or the stream has no end."""
+
+
 class Observation(Frozen):
     url: str
     title: str
@@ -82,12 +108,20 @@ class Observation(Frozen):
     document_key: str = ""
     """Document identity, independent of field edits and scrolling, for access-wall checks."""
     controls: tuple[Control, ...]
-    omitted_controls: int = Field(ge=0)
-    """Controls present but not offered because of observation limits."""
     viewport_text: str
+    """The visible text in the viewport of every frame the observation read; a cross-origin frame's text follows the
+    page's own under a `[Frame: origin]` line."""
+    offscreen_text: str = ""
+    """The visible text outside the viewport, from every frame the observation read in the same order and form: what
+    a read takes in that `viewport_text` leaves out."""
     visual_content: bool = False
     """A visible image, canvas, drawing or video carries state the text and the controls do not, so the verifier
     needs the screenshot even on a text-rich page whose state is the picture itself."""
+    modal: str | None = None
+    """The accessible name of the open modal dialog the rest of the page sits behind, empty when it has none; None
+    when no modal is open. Controls behind an open modal are left out of `controls`."""
+    media: tuple[Media, ...] = ()
+    """Every audio and video player on the page, shown or not: their state lives in the element, not the page text."""
     tabs: tuple[Tab, ...]
     dialog: Dialog | None = None
     inaccessible_frames: int = Field(default=0, ge=0)
@@ -98,21 +132,6 @@ class Observation(Frozen):
     history_entry: str | None = None
     """The tab's browser history entry this page is: Back, Forward and a reload return to the same one, and a
     navigation, a new tab or `pushState` makes another. None when the browser would not say."""
-
-    @property
-    def today(self) -> str:
-        """The capture date with its weekday. Given 2026-09-27 alone, a Sunday, the field writer booked "the next
-        Monday strictly after today" as 2026-10-05 in three runs of three.
-
-        The coming months are named too: told only the date in September, Jev took "the month after next" as
-        October, clicking a calendar's Next once, in one run of four. Each is named by its distance: listed bare
-        as "the next three months", the last of them was taken for it in six runs of six."""
-        first = self.captured_at.replace(day=1)
-        months = []
-        for _ in range(2):
-            first = (first + timedelta(days=32)).replace(day=1)
-            months.append(f"{first:%B %Y}")
-        return f"{self.captured_at:%Y-%m-%d (%A)}. In one month: {months[0]}; in two months: {months[1]}"
 
 
 class BlockKind(StrEnum):
@@ -139,11 +158,13 @@ class Block(Frozen):
     heading_path: tuple[str, ...] = ()
     control_context: SourceControl | None = None
     href: str | None = None
-    list_id: str | None = None
-    list_count: int | None = Field(default=None, ge=0)
-    list_frameless: bool = False
-    """The capture saw no frame inside this block's list element, so a frame it could not open elsewhere on the page
-    cannot hold one of the list's members."""
+    links: tuple[Link, ...] = Field(default=(), exclude_if=lambda links: not links)
+    """The links inside this block, with their text's place in `Capture.text`: a link's text alone does not say where
+    it leads, nor where a value the page set apart as its own element ends."""
+    whole_record: bool = Field(default=False, exclude_if=lambda whole: not whole)
+    """This block is all the text the page renders for one item it repeats, such as a comment, card or list row, with
+    each part of it that shows no text named in square brackets. A record can be a `list_item` as well as a `record`,
+    so its kind does not say this."""
 
 
 class Capture(Frozen):
@@ -172,8 +193,6 @@ class Action(Frozen):
     """Origin authorized by the resolver; the receiving document must still match at insertion."""
     files: tuple[Attachment, ...] = ()
     accept_dialog: bool | None = None
-    form_fill: bool = False
-    """Check whether this ordinary fill leaves the observed form safe to continue without another observation."""
 
 
 class BrowserError(RuntimeError):
@@ -233,7 +252,6 @@ class ActResult(Frozen):
     outcome: StepOutcome
     page_changed: bool
     detail: str | None = None
-    form_unchanged: bool = False
     moved: bool = False
     """The action itself took the page elsewhere: its own input event began a navigation or changed the address,
     or it opened a tab. A page that moves on its own time, even to a new document just after the action, is not."""

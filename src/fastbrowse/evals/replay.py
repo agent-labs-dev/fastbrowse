@@ -17,10 +17,12 @@ A miss is the signal that two runs asked different questions. Each is logged wit
 unified diff against the nearest body recorded on the same path.
 """
 
+import contextlib
 import difflib
 import gzip
 import hashlib
 import json
+import math
 import re
 import sys
 import threading
@@ -42,13 +44,8 @@ LLM_MOUNT = "/llm"
 UPSTREAMS = {JEV_MOUNT: "https://openrouter.ai/api", LLM_MOUNT: "https://openrouter.ai/api/v1"}
 """Where `record` sends each mount: the hosts a run with only OPENROUTER_API_KEY set would call."""
 
-OPENROUTER_PROVIDER_ROUTING = {"require_parameters": True, "sort": "latency"}
-"""The OpenRouter routing a run keyed with OPENROUTER_API_KEY sends, which one aimed at the proxy leaves out."""
-
 MISS_STATUS = 404
 """Not a status the clients retry, so a miss ends the call at once instead of costing a backoff."""
-
-MAX_DIFF_LINES = 200
 
 
 class Latency(StrEnum):
@@ -59,21 +56,15 @@ class Latency(StrEnum):
 
 
 _WEEKDAY = r"(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)"
-_MONTH = r"(?:January|February|March|April|May|June|July|August|September|October|November|December)"
 
 CANONICAL_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
-    # Fixture sites are served on fixed ports, but a port is never what tells two questions apart.
+    # Fixture sites may use different loopback ports, but a port is never what tells two questions apart.
     (re.compile(r"(?<=//127\.0\.0\.1:)\d{1,5}|(?<=//localhost:)\d{1,5}|(?<=//\[::1\]:)\d{1,5}"), "<port>"),
     (re.compile(r"(?<=\b127\.0\.0\.1:)\d{1,5}|(?<=\blocalhost:)\d{1,5}"), "<port>"),
-    # `Observation.today`: the capture date, its weekday and the two months after it.
-    (
-        re.compile(
-            rf"\d{{4}}-\d{{2}}-\d{{2}} \({_WEEKDAY}\)\. In one month: {_MONTH} \d{{4}}; in two months: {_MONTH} \d{{4}}"
-        ),
-        "<today>",
-    ),
-    # `page.next_days`: the week after the capture date.
-    (re.compile(rf"\b{_WEEKDAY} \d{{4}}-\d{{2}}-\d{{2}}\b"), "<next day>"),
+    # A date with its weekday: the capture date, and each date the task names worked out from it.
+    (re.compile(rf"\d{{4}}-\d{{2}}-\d{{2}} \({_WEEKDAY}\)"), "<today>"),
+    # A screenshot sent to Jev as an asset is named by its pixels' digest, which differs from run to run.
+    (re.compile(r"\bscreenshot-[0-9a-f]{64}\b"), "screenshot-<image>"),
     # A capture time, should one reach a prompt.
     (re.compile(r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b"), "<timestamp>"),
 )
@@ -127,6 +118,9 @@ def canonical_value(value: Any) -> Any:
     if isinstance(value, list):
         return [canonical_value(item) for item in value]
     if isinstance(value, dict):
+        if value.get("type") == "image" and "data_base64" in value:
+            # A screenshot asset's pixels, for the reason a data URL's are keyed as one image.
+            value = {**value, "data_base64": "<image>"}
         return {canonical_text(str(key)): canonical_value(item) for key, item in value.items()}
     raise TypeError(f"not a JSON value: {type(value).__name__}")
 
@@ -135,6 +129,23 @@ TARGET_ID = re.compile(r"\b[0-9A-F]{32}\b")
 """A Chrome target id. Each browser makes up its own, and the agent offers tabs to Jev by id, so the ids are
 numbered by first appearance in the body as the agent wrote it, before members are sorted (sorting first would
 number them by the random ids themselves), and swapped back into the response (`translate_targets`)."""
+
+NOTE_ID = re.compile(r"\b([0-9a-f]{64}:\d+:\d+):([0-9a-f]{16})(?::([0-9a-f]{16}))?\b")
+"""A note id (`evidence_id` in `fastbrowse-agent`). Its fourth part digests the page's address, which holds the
+fixture server's port, and an optional fifth part digests a control's frame, whose key Chrome makes up for a
+cross-site frame. Both change every run, and the port rule cannot reach inside a digest, so every request citing a
+note missed. The digests are numbered by first appearance, as target ids are, and swapped back into the response
+(`translate_notes`). Numbering hides no change of control: every note the agent renders with a control writes that
+control's dump beside its id (`control_context=`), and its source block follows from the span the id keeps, so a quote
+moved to another control still changes the key."""
+
+
+def _note_digests(match: re.Match[str]) -> list[str]:
+    return [digest for digest in match.group(2, 3) if digest]
+
+
+def _rewrite_note(match: re.Match[str], digests: dict[str, str]) -> str:
+    return ":".join([match.group(1), *(digests.get(digest, digest) for digest in _note_digests(match))])
 
 
 def _as_written(body: bytes | str | Any) -> str:
@@ -148,12 +159,20 @@ def target_ids(body: bytes | str | Any) -> list[str]:
     return list(dict.fromkeys(TARGET_ID.findall(_as_written(body))))
 
 
+def note_digests(body: bytes | str | Any) -> list[str]:
+    """The digests in the note ids a request names, in the order it first names them."""
+    return list(dict.fromkeys(d for match in NOTE_ID.finditer(_as_written(body)) for d in _note_digests(match)))
+
+
 def canonical_json(body: bytes | str | Any) -> str:
     """The body as one canonical JSON string. A body that is not JSON is canonicalized as text."""
     text = _as_written(body)
     numbers = {target: f"<target {n}>" for n, target in enumerate(target_ids(text), 1)}
     if numbers:
         text = TARGET_ID.sub(lambda match: numbers[match.group()], text)
+    digests = {digest: f"<digest {n}>" for n, digest in enumerate(note_digests(text), 1)}
+    if digests:
+        text = NOTE_ID.sub(lambda match: _rewrite_note(match, digests), text)
     try:
         parsed = json.loads(text)
     except ValueError:
@@ -167,6 +186,57 @@ def translate_targets(response: str, recorded: Any, requested: Any) -> str:
     if not swaps:
         return response
     return TARGET_ID.sub(lambda match: swaps.get(match.group(), match.group()), response)
+
+
+def translate_notes(response: str, recorded: Any, requested: Any) -> str:
+    """A recorded response with the note ids it cites rewritten to the digests the new request named, so a composed
+    answer cites notes the replayed run holds."""
+    swaps = dict(zip(note_digests(recorded), note_digests(requested), strict=False))
+    if not swaps:
+        return response
+    return NOTE_ID.sub(lambda match: _rewrite_note(match, swaps), response)
+
+
+def translate_origin(response: str, recorded_origin: str | None, requested_origin: str | None) -> str:
+    """Replace the exact fixture origin in a recorded response, without touching other URLs or port-shaped text."""
+    if not recorded_origin or not requested_origin or recorded_origin == requested_origin:
+        return response
+    escaped = re.escape(recorded_origin)
+    return re.sub(rf"(?<![\w.@-]){escaped}(?![\w@])", requested_origin, response)
+
+
+def translate_response_origin(response: str, recorded_origin: str | None, requested_origin: str | None) -> str:
+    """Translate fixture URLs in JSON string values, retaining the original body when nothing changes."""
+    try:
+        decoded = json.loads(response)
+    except (TypeError, ValueError):
+        return translate_origin(response, recorded_origin, requested_origin)
+
+    def visit(value: Any) -> tuple[Any, bool]:
+        if isinstance(value, str):
+            translated = translate_origin(value, recorded_origin, requested_origin)
+            changed = translated != value
+            try:
+                embedded = json.loads(translated)
+            except ValueError:
+                return translated, changed
+            if not isinstance(embedded, (dict, list)):
+                return translated, changed
+            nested, nested_changed = visit(embedded)
+            if nested_changed:
+                translated = json.dumps(nested, ensure_ascii=False, separators=(",", ":"))
+                changed = True
+            return translated, changed
+        if isinstance(value, list):
+            values = [visit(item) for item in value]
+            return [item for item, _ in values], any(changed for _, changed in values)
+        if isinstance(value, dict):
+            values = {key: visit(item) for key, item in value.items()}
+            return {key: item for key, (item, _) in values.items()}, any(changed for _, changed in values.values())
+        return value, False
+
+    translated, changed = visit(decoded)
+    return json.dumps(translated, ensure_ascii=False, separators=(",", ":")) if changed else response
 
 
 def request_key(path: str, body: bytes | str | Any) -> str:
@@ -187,7 +257,7 @@ def describe_request(path: str, body: Any) -> tuple[str, str | None]:
     names = sorted(questions) if isinstance(questions, dict) else []
     if isinstance(questions, list):
         names = sorted(str(q.get("id") or q.get("name") or "?") for q in questions if isinstance(q, dict))
-    return f"jev:{','.join(names)[:120]}", model
+    return f"jev:{','.join(names)}", model
 
 
 def _pretty(body: Any) -> list[str]:
@@ -198,14 +268,11 @@ def _pretty(body: Any) -> list[str]:
         return keyed.splitlines()
 
 
-def miss_diff(body: Any, nearest: Any | None, *, limit: int = MAX_DIFF_LINES) -> str:
-    """A unified diff from the nearest recorded body to the one that missed, cut at `limit` lines."""
+def miss_diff(body: Any, nearest: Any | None) -> str:
+    """A unified diff from the nearest recorded body to the one that missed."""
     if nearest is None:
         return "(nothing recorded on this path)"
-    lines = list(difflib.unified_diff(_pretty(nearest), _pretty(body), "recorded", "requested", n=2, lineterm=""))
-    if len(lines) > limit:
-        lines = [*lines[:limit], f"... {len(lines) - limit} more lines"]
-    return "\n".join(lines)
+    return "\n".join(difflib.unified_diff(_pretty(nearest), _pretty(body), "recorded", "requested", n=2, lineterm=""))
 
 
 def nearest_body(body: Any, candidates: Iterable[Any]) -> Any | None:
@@ -239,6 +306,7 @@ class Exchange:
     body: str
     latency: float
     cost: float | None = None
+    fixture_origin: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -252,6 +320,7 @@ class Exchange:
             "cost": self.cost,
             "request": self.request,
             "body": self.body,
+            "fixture_origin": self.fixture_origin,
         }
 
     @classmethod
@@ -267,6 +336,7 @@ class Exchange:
             body=data["body"],
             latency=data["latency"],
             cost=data.get("cost"),
+            fixture_origin=data.get("fixture_origin"),
         )
 
 
@@ -302,6 +372,20 @@ class Cassette:
         ):
             out.write(("\n".join(lines) + "\n").encode())
 
+    def fixture_port(self) -> int | None:
+        """The port to serve the fixture on so a replay sends the requests this cassette recorded.
+
+        A note id digests its page address, port included, which the key's port placeholder cannot reach. Each fill
+        pass appends its whole note-citing tail at its own port, so the newest exchange's port reproduces the current
+        pass. A cassette with no per-exchange origin falls back to the port its head records.
+        """
+        for exchange in reversed(self.exchanges):
+            if exchange.fixture_origin:
+                with contextlib.suppress(ValueError):
+                    return int(exchange.fixture_origin.rsplit(":", 1)[1])
+        port = self.meta.get("recorded_port", self.meta.get("port"))
+        return port if isinstance(port, int) and 0 < port <= 65535 else None
+
     @classmethod
     def load(cls, path: Path) -> Self:
         with gzip.open(path, "rt", encoding="utf-8") as lines:
@@ -313,10 +397,6 @@ class Cassette:
         head.pop("cassette")
         return cls(task=task, exchanges=exchanges, meta=head)
 
-    @property
-    def cost(self) -> float:
-        return sum(exchange.cost or 0.0 for exchange in self.exchanges)
-
 
 def response_cost(body: str) -> float | None:
     """The dollars OpenRouter reported for a response, for Jev and the LLM alike."""
@@ -325,7 +405,13 @@ def response_cost(body: str) -> float | None:
         cost = usage.get("cost") if isinstance(usage, dict) else None
     except (ValueError, AttributeError):
         return None
-    return float(cost) if isinstance(cost, int | float) and not isinstance(cost, bool) else None
+    if not isinstance(cost, int | float) or isinstance(cost, bool):
+        return None
+    try:
+        dollars = float(cost)
+    except OverflowError:
+        return None
+    return dollars if math.isfinite(dollars) and dollars >= 0 else None
 
 
 type Forward = Callable[[str, bytes], tuple[int, str, str]]
@@ -336,9 +422,13 @@ def openrouter_forward(api_key: str, *, timeout: float = 120.0) -> Forward:
     """Forward to OpenRouter as a run keyed only with OPENROUTER_API_KEY would call it.
 
     A run pointed at a custom LLM endpoint leaves out OpenRouter's provider routing, which a normal run sends, so it
-    is put back here: the recorded answers then come from the endpoints a normal run is routed to. Usage accounting
-    is asked for so every response carries its cost; the key is computed from the body the agent sent.
+    is put back here: the recorded answers then come from the endpoints a normal run is routed to. The core builds
+    that routing for the request's model, endpoint pins included, so the proxy keeps no copy of it. The core is
+    loaded here rather than on import, since reading or replaying a cassette needs none. Usage accounting is asked
+    for so every response carries its cost; the key is computed from the body the agent sent.
     """
+    from fastbrowse.routing import openrouter_routing
+
     client = httpx.Client(timeout=timeout)
 
     def forward(path: str, body: bytes) -> tuple[int, str, str]:
@@ -346,7 +436,7 @@ def openrouter_forward(api_key: str, *, timeout: float = 120.0) -> Forward:
         url = UPSTREAMS[mount] + path[len(mount) :]
         payload = json.loads(body)
         if mount == LLM_MOUNT and isinstance(payload, dict):
-            payload.setdefault("provider", OPENROUTER_PROVIDER_ROUTING)
+            payload.setdefault("provider", openrouter_routing(str(payload.get("model", ""))))
             payload.setdefault("usage", {"include": True})
         try:
             response = client.post(url, json=payload, headers={"Authorization": f"Bearer {api_key}"})
@@ -373,7 +463,6 @@ class Proxy:
         forward: Forward | None = None,
         replay: bool = True,
         latency: Latency = Latency.ZERO,
-        on_miss: Callable[[Miss], None] | None = None,
     ) -> None:
         if forward is None and not replay:
             raise ValueError("a proxy that neither replays nor forwards has nothing to answer with")
@@ -381,7 +470,6 @@ class Proxy:
         self._forward = forward
         self._replay = replay
         self._latency = latency
-        self._on_miss = on_miss
         self._lock = threading.Lock()
         self._served: dict[str, int] = {}
         self._by_key: dict[str, list[Exchange]] = {}
@@ -389,12 +477,50 @@ class Proxy:
             for exchange in cassette.exchanges:
                 self._by_key.setdefault(exchange.key, []).append(exchange)
         self.misses: list[Miss] = []
+        # Every request this run sent, beside the response it got, as trace lines: a cassette also keeps exchanges
+        # the agent no longer sends, so measuring what a run sends reads these, not the cassette.
+        self.sent: list[dict[str, Any]] = []
         self.requests = 0
         self.forwarded = 0
         self._server: ThreadingHTTPServer | None = None
+        self._fixture_origin: tuple[str, str] | None = None
+        self._requested_origin: str | None = None
+        self._recording = forward is not None and not replay
+
+    @property
+    def replays(self) -> bool:
+        """Whether recorded responses are served: a replay or a fill, not a record."""
+        return self._replay
+
+    def set_fixture_origin(self, requested_origin: str) -> None:
+        """Set the live fixture origin used when translating URLs in recorded model responses."""
+        self._requested_origin = requested_origin
+        if self._recording:
+            with contextlib.suppress(ValueError, IndexError):
+                self.cassette.meta["port"] = int(requested_origin.rsplit(":", 1)[1])
+            return
+        recorded_port = self.cassette.meta.get("recorded_port", self.cassette.meta.get("port"))
+        if isinstance(recorded_port, int) and 0 < recorded_port <= 65535:
+            self._fixture_origin = (f"http://127.0.0.1:{recorded_port}", requested_origin)
 
     def answer(self, path: str, raw: bytes) -> tuple[int, str, str, float]:
         """The response to one request, and how long to hold it before sending."""
+        status, content_type, text, hold = self._answer(path, raw)
+        try:
+            request: Any = json.loads(raw)
+        except ValueError:
+            request = raw.decode("utf-8", "replace")
+        try:
+            response: Any = json.loads(text)
+        except ValueError:
+            response = text
+        with self._lock:
+            self.sent.append(
+                {"event": "http", "path": path, "status": status, "request": request, "response": response}
+            )
+        return status, content_type, text, hold
+
+    def _answer(self, path: str, raw: bytes) -> tuple[int, str, str, float]:
         try:
             body: Any = json.loads(raw)
         except ValueError:
@@ -409,15 +535,19 @@ class Proxy:
                 self._served[key] = index + 1
                 exchange = stored[min(index, len(stored) - 1)]
                 hold = exchange.latency if self._latency is Latency.RECORDED else 0.0
-                text = translate_targets(exchange.body, exchange.request, body)
+                text = translate_notes(translate_targets(exchange.body, exchange.request, body), exchange.request, body)
+                if exchange.fixture_origin and self._requested_origin:
+                    recorded, requested = exchange.fixture_origin, self._requested_origin
+                    text = translate_response_origin(text, recorded, requested)
+                elif self._fixture_origin:
+                    recorded, requested = self._fixture_origin
+                    text = translate_response_origin(text, recorded, requested)
                 return exchange.status, exchange.content_type, text, hold
         if self._replay:
             nearest = nearest_body(body, (e.request for e in self.cassette.exchanges if e.path == path))
             miss = Miss(path=path, purpose=purpose, model=model, key=key, diff=miss_diff(body, nearest))
             with self._lock:
                 self.misses.append(miss)
-            if self._on_miss is not None:
-                self._on_miss(miss)
         if self._forward is None:
             message = f"replay miss: no recorded response for {purpose} ({model}) on {path}"
             return MISS_STATUS, "application/json", json.dumps({"error": {"message": message}}), 0.0
@@ -434,6 +564,7 @@ class Proxy:
             body=text,
             latency=time.monotonic() - started,
             cost=response_cost(text),
+            fixture_origin=self._requested_origin,
         )
         with self._lock:
             self.forwarded += 1

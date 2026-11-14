@@ -1,4 +1,4 @@
-//! tests/test_serve_run.py: `run` over the serve protocol, as a client sees it, with `run_task` replaced by a recorder.
+//! `run` over the serve protocol, as a client sees it, with `run_task` replaced by a recorder.
 
 mod common;
 
@@ -8,15 +8,16 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use common::{
-    CHROME, Recorder, START, binary, browser_event, result, run_params, runner, serving, settings, settings_with,
-    step_event,
+    CHROME, Recorder, START, browser_event, isolated_binary, result, run_params, runner, serving, settings,
+    settings_with, step_event,
 };
 use fastbrowse_cli::runner::RunError;
 use fastbrowse_core::models::{Authorization, Limits, LocalChrome, Status};
+use fastbrowse_core::protocol::PROTOCOL_VERSION;
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 
-async fn received(fields: Value) -> fastbrowse_cli::runner::RunArgs {
+async fn received(fields: Value) -> common::Call {
     let recorder = Recorder::default();
     let mut client = serving(recorder.runner(), settings());
     client.result("run", Some(run_params("run-1", fields))).await;
@@ -78,7 +79,51 @@ async fn test_run_calls_run_task_and_replies_with_its_result() {
     assert_eq!(response["result"]["status"], "complete");
     assert_eq!(response["result"]["answer"], "The latest version is 0.28.1");
     assert_eq!(response["result"]["final_url"], "https://pypi.org/project/httpx/");
-    assert_eq!(recorder.calls()[0].task, "What is the latest version of httpx?");
+    assert_eq!(recorder.calls()[0].task.task, "What is the latest version of httpx?");
+}
+
+#[tokio::test]
+async fn test_run_exposes_a_safe_final_frame_as_a_screenshot_artifact() {
+    use fastbrowse_core::models::{Artifact, ArtifactKind, RunResult};
+    use fastbrowse_core::py::{base64, sha256_hex};
+    let bytes = b"png-bytes".to_vec();
+    let digest = sha256_hex(&bytes);
+    for (status, prior) in [
+        (Status::Complete, None),
+        (Status::Blocked, None),
+        (Status::Complete, Some(digest.clone())),
+        (Status::Complete, Some("other-image".into())),
+    ] {
+        let artifacts = prior
+            .as_ref()
+            .map(|sha256| Artifact {
+                kind: ArtifactKind::Screenshot,
+                name: "previous.png".into(),
+                mime_type: "image/png".into(),
+                size_bytes: bytes.len() as i64,
+                sha256: sha256.clone(),
+                uri: format!("data:image/png;base64,{}", base64::encode(&bytes)),
+            })
+            .into_iter()
+            .collect();
+        let recorder = Recorder {
+            result: Some(RunResult { final_frame: Some(bytes.clone()), artifacts, ..result(status) }),
+            ..Recorder::default()
+        };
+        let mut client = serving(recorder.runner(), settings());
+        let response = client.request("run", Some(json!({"run_id":"run-1", "task":"show the page"}))).await;
+        assert_eq!(response["result"]["status"], status.as_str());
+        let artifacts = response["result"]["artifacts"].as_array().unwrap();
+        let expected = if prior.as_deref().is_some_and(|hash| hash != digest) { 2 } else { 1 };
+        assert_eq!(artifacts.len(), expected);
+        let artifact = artifacts.iter().find(|a| a["sha256"] == digest).unwrap();
+        assert_eq!(artifact["kind"], "screenshot");
+        assert_eq!(artifact["mime_type"], "image/png");
+        assert_eq!(artifact["size_bytes"], bytes.len());
+        let encoded = artifact["uri"].as_str().unwrap().strip_prefix("data:image/png;base64,").unwrap();
+        assert_eq!(base64::decode(encoded).unwrap(), bytes);
+        assert!(response["result"].get("final_frame").is_none());
+    }
 }
 
 #[tokio::test]
@@ -93,22 +138,20 @@ async fn test_the_fields_that_describe_the_task_arrive_as_run_tasks_arguments() 
         "authorization": {"irreversible_actions": true},
         "downloads": tools.path.join("downloads"),
         "viewport": [1280, 720],
-        "cloud_allow_resizing": true,
     }))
     .await;
-    assert_eq!(call.task, "Add the kettle to the cart");
-    assert_eq!(call.start.as_deref(), Some(START));
-    assert_eq!(call.inputs.unwrap()["email"], "ada@example.com");
-    assert_eq!(call.attachments[0].name, "receipt.pdf");
-    assert_eq!(call.attachments[0].content.0, b"\xfb\xff\xfe");
+    assert_eq!(call.task.task, "Add the kettle to the cart");
+    assert_eq!(call.task.start.as_deref(), Some(START));
+    assert_eq!(call.task.inputs.unwrap()["email"], "ada@example.com");
+    assert_eq!(call.task.attachments[0].name, "receipt.pdf");
+    assert_eq!(call.task.attachments[0].content.0, b"\xfb\xff\xfe");
     assert_eq!(
-        call.limits,
+        call.task.limits,
         Some(Limits { max_steps: Some(12), max_dollars: Some(0.5), max_seconds: Some(90.0), ..Limits::default() })
     );
-    assert_eq!(call.authorization, Some(Authorization { irreversible_actions: true }));
-    assert_eq!(call.downloads, Some(tools.path.join("downloads")));
-    assert_eq!(call.viewport, Some((1280, 720)));
-    assert!(call.cloud_allow_resizing);
+    assert_eq!(call.task.authorization, Some(Authorization { irreversible_actions: true }));
+    assert_eq!(call.task.downloads, Some(tools.path.join("downloads")));
+    assert_eq!(call.task.viewport, Some((1280, 720)));
 }
 
 /// One `run` with `record` to the binary, whose PATH is `path`: the reply, or the refusal.
@@ -149,30 +192,30 @@ fn test_a_recording_without_ffmpeg_is_a_configuration_error() {
 #[tokio::test]
 async fn test_fields_left_out_leave_run_task_its_own_defaults() {
     let call = received(json!({})).await;
-    assert!(call.start.is_none() && call.inputs.is_none() && call.attachments.is_empty());
+    assert!(call.task.start.is_none() && call.task.inputs.is_none() && call.task.attachments.is_empty());
     // None is what `run_task` reads as "the default limits" and "nothing authorized".
-    assert!(call.limits.is_none() && call.authorization.is_none());
-    assert!(call.downloads.is_none() && call.record.is_none() && call.viewport.is_none());
-    assert!(!call.cloud_allow_resizing && !call.attach);
+    assert!(call.task.limits.is_none() && call.task.authorization.is_none());
+    assert!(call.task.downloads.is_none() && call.task.record.is_none() && call.task.viewport.is_none());
+    assert!(!call.task.attach);
     // A run in a visible window stays behind it unless the caller asks to watch.
-    assert!(!call.foreground && received(json!({"foreground": true})).await.foreground);
+    assert!(!call.task.foreground && received(json!({"foreground": true})).await.task.foreground);
 }
 
 #[tokio::test]
 async fn test_the_browser_is_the_cloud_one_unless_the_run_asks_for_another() {
     let call = received(json!({})).await;
-    assert_eq!(call.browser_api_key.as_deref(), Some("bu"));
-    assert!(call.cdp_url.is_none() && call.cdp_port.is_none());
-    // The CLI's default country, since an unset one would browse from wherever the cloud put the browser.
-    assert_eq!(call.proxy_country.as_deref(), Some("us"));
+    assert_eq!(call.host.browser_api_key.as_deref(), Some("bu"));
+    assert!(call.task.cdp_url.is_none() && call.task.cdp_port.is_none());
+    // Unset here: the run browses from the United States when no country is asked for.
+    assert!(call.task.proxy_country.is_none());
 }
 
 #[tokio::test]
 async fn test_cloud_options_reach_the_cloud_browser() {
     let call = received(json!({"cloud_profile": "prof_1", "proxy_country": "UK"})).await;
-    assert_eq!(call.browser_api_key.as_deref(), Some("bu"));
-    assert_eq!(call.cloud_profile.as_deref(), Some("prof_1"));
-    assert_eq!(call.proxy_country.as_deref(), Some("uk"));
+    assert_eq!(call.host.browser_api_key.as_deref(), Some("bu"));
+    assert_eq!(call.task.cloud_profile.as_deref(), Some("prof_1"));
+    assert_eq!(call.task.proxy_country.as_deref(), Some("UK"));
 }
 
 #[tokio::test]
@@ -189,8 +232,8 @@ async fn test_local_chrome_runs_without_the_cloud_key() {
     ] {
         // A headed window and a kept profile are things only local Chrome has, so each implies it, as in the CLI.
         let call = received(fields).await;
-        assert!(call.browser_api_key.is_none());
-        assert_eq!(call.chrome, Some(expected));
+        assert!(call.host.browser_api_key.is_none());
+        assert_eq!(call.task.chrome, Some(expected));
     }
 }
 
@@ -214,9 +257,9 @@ async fn test_headed_and_profile_from_the_environment_count_as_they_do_for_the_c
     );
     client.result("run", Some(run_params("run-1", json!({})))).await;
     let call = &recorder.calls()[0];
-    assert!(call.browser_api_key.is_none());
+    assert!(call.host.browser_api_key.is_none());
     assert_eq!(
-        call.chrome,
+        call.task.chrome,
         Some(LocalChrome { binary: Some(CHROME.into()), headed: true, profile: Some("/tmp/from-env".into()) })
     );
 }
@@ -227,7 +270,7 @@ async fn test_a_chrome_binary_named_by_the_run_replaces_the_one_in_the_environme
     let mut client =
         serving(recorder.runner(), settings_with(|settings| settings.chrome = Some("not-installed-anywhere".into())));
     client.result("run", Some(run_params("run-1", json!({"local": true, "chrome": {"binary": CHROME}})))).await;
-    assert_eq!(recorder.calls()[0].chrome.as_ref().unwrap().binary.as_deref(), Some(CHROME));
+    assert_eq!(recorder.calls()[0].task.chrome.as_ref().unwrap().binary.as_deref(), Some(CHROME));
 }
 
 #[tokio::test]
@@ -241,10 +284,10 @@ async fn test_a_browser_handed_over_is_driven_without_starting_one() {
         (json!({"cdp_port": 9222, "attach": true, "target_match": "Inbox"}), None, Some(9222)),
     ] {
         let call = received(fields.clone()).await;
-        assert_eq!((call.cdp_url.as_deref(), call.cdp_port), (url, port));
-        assert!(call.browser_api_key.is_none());
-        assert_eq!(call.attach, fields.get("attach").is_some());
-        assert_eq!(call.target_match.as_deref(), fields.get("target_match").and_then(Value::as_str));
+        assert_eq!((call.task.cdp_url.as_deref(), call.task.cdp_port), (url, port));
+        assert!(call.host.browser_api_key.is_none());
+        assert_eq!(call.task.attach, fields.get("attach").is_some());
+        assert_eq!(call.task.target_match.as_deref(), fields.get("target_match").and_then(Value::as_str));
     }
 }
 
@@ -313,10 +356,17 @@ async fn test_invalid_params_are_refused_before_run_task_is_called() {
                 "run-1",
                 json!({"attachments": [{"name": "a", "mime_type": "text/plain", "content": "not base64!"}]}),
             ),
-            "attachments.0.content",
+            "attachments[0].content",
         ),
         (run_params("run-1", json!({"viewport": [1280]})), "viewport"),
         (run_params("run-1", json!({"proxy_country": "gb"})), "proxy_country"),
+        (run_params("run-1", json!({"local": true, "cloud_profile": "prof_1"})), "cloud_profile needs the cloud"),
+        (run_params("run-1", json!({"local": true, "proxy_country": "uk"})), "proxy_country needs the cloud"),
+        (run_params("run-1", json!({"cdp_url": "ws://b.test/devtools", "cdp_port": 9222})), "cdp_port both"),
+        (run_params("run-1", json!({"cdp_url": "http://b.test/devtools"})), "ws://"),
+        (run_params("run-1", json!({"cdp_port": 70000})), "cdp_port"),
+        (run_params("run-1", json!({"attach": true})), "attach and target_match need"),
+        (run_params("run-1", json!({"cdp_port": 9222, "chrome": {"headed": true}})), "chrome.headed"),
     ] {
         let recorder = Recorder::default();
         let mut client = serving(recorder.runner(), settings());
@@ -326,6 +376,17 @@ async fn test_invalid_params_are_refused_before_run_task_is_called() {
         assert!(recorder.calls().is_empty());
         assert!(client.inbox.is_empty());
     }
+}
+
+#[tokio::test]
+async fn test_a_profile_from_the_environment_counts_against_a_handed_over_browser() {
+    let recorder = Recorder::default();
+    let settings = settings_with(|settings| settings.profile = Some("/tmp/from-env".into()));
+    let mut client = serving(recorder.runner(), settings);
+    let response = client.request("run", Some(run_params("run-1", json!({"cdp_port": 9222})))).await;
+    assert_eq!(response["error"]["code"], -32602, "{response}");
+    assert!(response["error"]["message"].as_str().unwrap().contains("chrome.profile"), "{response}");
+    assert!(recorder.calls().is_empty());
 }
 
 #[tokio::test]
@@ -339,15 +400,7 @@ async fn test_a_configuration_error_is_refused_before_run_task_is_called() {
         (no_model_keys, json!({}), "OPENROUTER_API_KEY"),
         (no_model_keys, json!({"local": true}), "OPENROUTER_API_KEY"),
         (|s| s.browser_use_api_key = None, json!({}), "BROWSER_USE_API_KEY"),
-        (|s| s.chrome = Some("not-installed-anywhere".into()), json!({"local": true}), "Chrome was not found"),
-        (|_| {}, json!({"local": true, "cloud_profile": "prof_1"}), "--cloud-profile"),
-        (|_| {}, json!({"local": true, "proxy_country": "uk"}), "--proxy-country"),
-        (|_| {}, json!({"cdp_url": "ws://b.test/devtools", "cdp_port": 9222}), "--cdp-port"),
-        (|_| {}, json!({"cdp_url": "http://b.test/devtools"}), "ws://"),
-        (|_| {}, json!({"cdp_port": 70000}), "65535"),
-        (|_| {}, json!({"attach": true}), "--attach"),
-        (|_| {}, json!({"cdp_port": 9222, "chrome": {"headed": true}}), "--headed"),
-        (|s| s.profile = Some("/tmp/from-env".into()), json!({"cdp_port": 9222}), "--profile"),
+        (|s| s.chrome = Some("not-installed-anywhere".into()), json!({"launch": true}), "Chrome was not found"),
     ];
     for (change, fields, named) in cases {
         let recorder = Recorder::default();
@@ -393,7 +446,7 @@ async fn test_a_run_after_the_first_has_finished_succeeds() {
     let first = client.result("run", Some(run_params("run-1", json!({})))).await;
     let second = client.result("run", Some(run_params("run-2", json!({"task": "Then check out"})))).await;
     assert_eq!((first["status"].clone(), second["status"].clone()), (json!("complete"), json!("complete")));
-    let tasks: Vec<String> = recorder.calls().into_iter().map(|call| call.task).collect();
+    let tasks: Vec<String> = recorder.calls().into_iter().map(|call| call.task.task).collect();
     assert_eq!(tasks, ["Add the kettle to the cart", "Then check out"]);
 }
 
@@ -415,10 +468,10 @@ async fn test_the_server_answers_other_requests_while_a_run_is_active() {
     let hold = Arc::new(Notify::new());
     let mut client = serving(Recorder { hold: Some(hold.clone()), ..Recorder::default() }.runner(), settings());
     let run = client.call("run", Some(run_params("run-1", json!({}))));
-    let handshake = client.result("initialize", Some(json!({"protocol_version": 1}))).await;
+    let handshake = client.result("initialize", Some(json!({"protocol_version": PROTOCOL_VERSION}))).await;
     hold.notify_one();
     let reply = client.reply(run).await;
-    assert_eq!(handshake["protocol_version"], 1);
+    assert_eq!(handshake["protocol_version"], PROTOCOL_VERSION);
     assert_eq!(reply["result"]["status"], "complete");
 }
 
@@ -429,7 +482,7 @@ async fn test_a_run_that_raises_ends_as_an_error_result_and_the_server_keeps_ser
         let attempt = attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         async move {
             if attempt == 0 {
-                return Err(RunError::Failed("RuntimeError: Chrome went away".into()));
+                return Err(RunError::Invalid("Chrome went away".into()));
             }
             Ok(result(Status::Complete))
         }
@@ -439,13 +492,13 @@ async fn test_a_run_that_raises_ends_as_an_error_result_and_the_server_keeps_ser
     let result = client.result("run", Some(run_params("run-2", json!({})))).await;
     assert_eq!(
         (failed["result"]["status"].clone(), failed["result"]["error"].clone()),
-        (json!("error"), json!("RuntimeError: Chrome went away"))
+        (json!("error"), json!("Chrome went away"))
     );
     assert_eq!(result["status"], "complete");
 }
 
 fn command(arguments: &[&str]) -> Command {
-    let mut command = Command::new(binary());
+    let mut command = isolated_binary();
     command.arg("serve").args(arguments).env("OPENROUTER_API_KEY", "unused").env("AI_GATEWAY_API_KEY", "unused");
     command
 }
@@ -507,5 +560,44 @@ fn test_a_name_that_is_not_a_callable_is_a_usage_error() {
         assert_eq!(served.status.code(), Some(2));
         assert!(served.stdout.is_empty());
         assert!(String::from_utf8_lossy(&served.stderr).contains(name));
+    }
+}
+
+#[tokio::test]
+async fn an_assembly_error_keeps_its_code_and_receipt_after_spending() {
+    use fastbrowse_core::models::{CostBasis, CostBreakdown, CostComponent, CostLine};
+    use fastbrowse_core::protocol::CancellationReceipt;
+    let receipt = CancellationReceipt {
+        steps: vec![common::step(0)],
+        cost: CostBreakdown { lines: vec![CostLine::new(CostComponent::Jev, CostBasis::Metered, Some(0.01))] },
+        recordings: vec![PathBuf::from("run.mp4")],
+        ..Default::default()
+    };
+    for recording in [false, true] {
+        let kept = receipt.clone();
+        let failed = runner(move |_| {
+            let receipt = kept.clone();
+            async move {
+                let error = if recording {
+                    RunError::Recording("recording unavailable".into())
+                } else {
+                    RunError::Configuration("browser key missing".into())
+                };
+                Err(RunError::AfterSpending { error: Box::new(error), receipt })
+            }
+        });
+        let mut client = serving(failed, settings());
+        let response = client.request("run", Some(run_params("run-1", json!({})))).await;
+        let received = if recording {
+            assert_eq!(response["result"]["status"], "error");
+            &response["result"]
+        } else {
+            assert_eq!(response["error"]["code"], -32003);
+            &response["error"]["data"]
+        };
+        assert_eq!(received["cost"], serde_json::to_value(&receipt.cost).unwrap());
+        assert_eq!(received["steps"], serde_json::to_value(&receipt.steps).unwrap());
+        assert_eq!(received["recordings"], json!(["run.mp4"]));
+        assert!(received.get("answer").is_none_or(Value::is_null));
     }
 }

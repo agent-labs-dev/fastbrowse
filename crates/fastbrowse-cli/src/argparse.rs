@@ -2,10 +2,12 @@
 //!
 //! Long options with unique-prefix abbreviation and `--flag=value`, one positional, `-h`, repeatable options and a
 //! mutually exclusive pair. Errors are argparse's words, after the usage, with exit status 2. The help text is
-//! argparse's own output at 80 columns, kept beside the source, since reflowing it here would be a second formatter
-//! to keep in step.
+//! in `generated/*.txt`, kept by hand in argparse's layout at 80 columns, since reflowing it here would be a second
+//! formatter to keep in step. Each usage paragraph has to follow the parser's options by hand too.
 
 use std::collections::HashMap;
+
+pub use fastbrowse_core::py::lax::py_float;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -243,25 +245,6 @@ pub fn py_int(text: &str) -> Option<i64> {
         && !digits.contains("__")
         && digits.chars().all(|c| c.is_ascii_digit() || c == '_');
     if !well_formed {
-        return None;
-    }
-    trimmed.replace('_', "").parse().ok()
-}
-
-/// `float(text)`.
-pub fn py_float(text: &str) -> Option<f64> {
-    let trimmed = text.trim();
-    let lower = trimmed.to_ascii_lowercase();
-    let unsigned = lower.trim_start_matches(['+', '-']);
-    if matches!(unsigned, "inf" | "infinity" | "nan") {
-        return lower.replace("infinity", "inf").parse().ok();
-    }
-    let bad_underscore = trimmed.starts_with('_')
-        || trimmed.ends_with('_')
-        || trimmed.contains("__")
-        || trimmed.split('_').skip(1).any(|part| !part.starts_with(|c: char| c.is_ascii_digit()))
-        || trimmed.split('_').rev().skip(1).any(|part| !part.ends_with(|c: char| c.is_ascii_digit()));
-    if trimmed.is_empty() || bad_underscore || !trimmed.bytes().all(|b| b.is_ascii_digit() || b"+-.eE_".contains(&b)) {
         return None;
     }
     trimmed.replace('_', "").parse().ok()

@@ -13,9 +13,10 @@ what to do next. The full table is in [Results](cli.md#results).
 | [blocked](#blocked-exit-6) | 6 | a bot check or a refusal |
 | [budget_exceeded](#budget_exceeded-exit-7) | 7 | a limit you set was reached |
 | [unavailable](#unavailable-exit-8) | 8 | a model or browser provider stayed down |
-| [stuck](#stuck-exit-9) | 9 | recovery found no way forward |
-| [unverified](#unverified-exit-10) | 10 | the answer could not be backed by quotes |
-| [observation_limit](#observation_limit-exit-11) | 11 | the page or evidence does not fit the prompt budget |
+| [stuck](#stuck-exit-9) | 9 | Jev found no way forward |
+| [unverified](#unverified-exit-10) | 10 | the requested data could not be filled from the page, or the site refused a requested step |
+| [observation_limit](#observation_limit-exit-11) | 11 | the page does not fit the prompt budget |
+| [cancelled](#cancelled-exit-12) | 12 | you stopped an `--extension` run in your browser |
 
 ## Reading a stopped run
 
@@ -23,8 +24,11 @@ The CLI prints the status, cost and step count, then the error and anything the 
 `--json` prints the whole result, including every step and the quotes behind the answer.
 
 A run that stops `stuck`, `unverified`, `budget_exceeded`, `observation_limit`, `unavailable` or `error` after
-reading something still returns those cited quotes, so check `evidence` before you browse again. A `stuck` or `unverified` run also writes an answer from them, marked `Answer (unverified)`, when
-the task asks for one.
+reading something still returns those cited quotes, so check `evidence` before you browse again. A `stuck` or
+`unverified` run can also write an answer from them when the task asks for one. Other stops can retain an already
+checked partial answer while its source evidence remains unchanged, including a sign-in wall or pending
+authorization. Preserve any returned answer as partial. Some partial answers start with `Partial evidence only.`;
+use the status to determine whether the task completed.
 
 The causes below name Jev, the model that picks each action from the controls on the page; the LLM
 plans, reads and writes. See [Models](cli.md#models).
@@ -36,8 +40,8 @@ Configuration refusals also exit 1.
 
 **Common causes.**
 
-- A model or browser call failed in a way retries do not cover. `error` holds the failure, cut to 500
-  characters with any secret redacted.
+- A model or browser call failed in a way retries do not cover. `error` holds the whole failure, with any
+  secret redacted.
 - The browser could not be reached as configured, for example `no DevTools endpoint at
   http://127.0.0.1:<port>/json/version (<cause>)` from `--cdp-port`, or a pair of browser options that
   cannot go together, such as `cdp_url and cdp_port both name a browser to attach to; pass one`.
@@ -57,11 +61,11 @@ Configuration refusals also exit 1.
 ## needs_confirmation (exit 3)
 
 **What it means.** The run stopped before an action Jev judged irreversible, such as submit, pay, delete or
-send, because the run was not authorized to take it. That action was not taken.
+send, because the run was not authorized to take it, or was authorized but Jev judged the task did not ask
+for it. That action was not taken.
 
 **Common causes.** The task leads to an irreversible action, and the run had no authorization. The error is
-`<operation> '<control>' needs confirmation`, and the refusal appears as a failed step. An uncertain pick of
-such an action goes to recovery instead of stopping here.
+`<operation> '<control>' needs confirmation`, and the refusal appears as a failed step.
 
 **Next step.** Read the step the run stopped on, since the irreversible check can be wrong. If the action is
 what you want, run again with authorization:
@@ -78,10 +82,11 @@ what you want, run again with authorization:
 **Common causes.**
 
 - Jev judged a fresh page to be a sign-in wall, and no secret is declared for that page's origin. The error is
-  `sign-in required at <origin>`.
+  `sign-in required at <origin>`. It names the fields the page asks for, and `a security key or passkey`
+  when the page marks a passkey field (`autocomplete="webauthn"`).
 - The run reached a field that takes a secret, such as a password, and none is stored. The error is
   `'<field>' wants a secret and none is stored`.
-- The site answered HTTP 401 and recovery found no way on. The error is
+- The site answered HTTP 401 and Jev found no way on. The error is
   `Could not complete the task after HTTP 401 at <url> in this browser session; the cause is unknown.`
 - A secret is declared, but for a different origin. A field is offered only the secrets declared for the
   origin of the frame it sits in, so this reads the same as no secret.
@@ -97,8 +102,9 @@ caller can route it without parsing the error; see [Results](cli.md#results).
 - `--secret NAME=ENV_VAR@https://host`, with the value in that environment variable. Without `@ORIGIN` the
   secret is scoped to the `--start` origin. Check that origin against the address the form is on.
 - `--bitwarden ITEM`, when the vault item's saved URIs match `--start`.
-- `--profile DIR` for local Chrome you signed into once by hand, or `--cloud-profile ID` for a Browser Use
-  Cloud profile. See [Signed-in sites](cli.md#signed-in-sites).
+- `--extension`, to run in your own Chrome where you are already signed in. See
+  [Your own Chrome](cli.md#your-own-chrome).
+- `--cloud --cloud-profile ID` for a Browser Use Cloud profile, or a local profile through the SDK. See [Signed-in sites](cli.md#signed-in-sites).
 - Over MCP, the server's operator adds the secret with `--secret` or `--bitwarden`, or signs in once in the
   server's `--profile`.
 
@@ -113,7 +119,8 @@ limit.
 
 - The run opened no page: `the task names no page to start from, and none was given`.
 - A field needs a value the task never states. The run first tries to go on without it, then stops with
-  `'<field>' needs a value the task does not give`, or with recovery's diagnosis.
+  `'<field>' needs a value the task does not give`, followed by the reason it gave up. A field the task asks
+  nothing of is left as it is, and is named here only when the page marks it required.
 - The page asks for a file and the run has none: `the page asks for a file and none was provided`.
 - A file is larger than `Config.max_upload_bytes` (25 MiB by default): `<name> exceeds the upload size limit`.
 - A password change without a replacement secret: `A replacement password requires --secret
@@ -140,24 +147,23 @@ limit.
 
 **Common causes.**
 
-- A bot check, such as a CAPTCHA, that did not clear. The run first waits for a check that clears itself once
-  its script runs, and stops only when the page stays put. The error is `bot check at <origin>; it is not a
-  sign-in and no credential passes it. Retry using an attached local browser or choose another source for
-  this research.`
-- The site answered HTTP 403 and recovery found no way on. The error is
-  `Could not complete the task after HTTP 403 at <url> in this browser session; the cause is unknown.`
+- A bot check, such as a CAPTCHA, that did not clear. The run waits while the page is still loading, or while
+  a Browser Use Cloud browser's CAPTCHA solver works on the check, up to the run's time limit. A load counts as
+  still loading for as long as a navigation is given, 225 s from its start. It stops at once
+  when nothing is working on the check or the solver gives up. The error is `bot check at <origin>; it is not a
+  sign-in and no credential passes it, and no other route to the task was found. Retry after the check clears
+  or choose another source for the task.`
+- The site answered HTTP 403 and Jev found no way on. The error is
+  `Could not complete the task after HTTP 403 at <url>: the site refused this browser session, which may be an access or bot check or a sign-in it requires.`
 
 A bot check can block a cloud browser before any task step runs. Credentials do not pass a CAPTCHA, so
 `--secret` and `--bitwarden` do not help here.
 
 **Next step.**
 
-- Retry with an attached local browser (`--cdp-url` or `--cdp-port`, see
-  [Open windows and Electron apps](cli.md#open-windows-and-electron-apps)), or choose another source for
-  the research.
+- Retry in your own Chrome through the extension (the CLI default), or choose another source for the research.
 - Give `--start` a URL past the check.
-- Run headed with a kept profile (`--headed --profile DIR`), solve the check once by hand in that profile,
-  and point later runs at it.
+- Solve the check by hand in the Chrome profile with the extension installed, then retry.
 
 ## budget_exceeded (exit 7)
 
@@ -193,7 +199,9 @@ known charges may still be under the cap. A run without a dollar cap does not st
 ## unavailable (exit 8)
 
 **What it means.** A model or browser provider stayed unavailable through every retry. The task itself may
-be fine, and the same run later may pass.
+be fine, and the same run later may pass. A run that had already taken a step that may have changed the site,
+such as a click on Post, ends `error` instead: its error names those steps, so check the site before running
+the task again.
 
 **Common causes.**
 
@@ -202,11 +210,22 @@ be fine, and the same run later may pass.
   retryable status.
 - Before the first step, the start page never loaded, or Chrome reported a dropped, refused or empty
   connection. A name that does not resolve is not counted here, since it can be a mistyped address.
-- The site answered HTTP 408, 419, 429 or a 5xx status, and recovery found no way on.
-- A browser command went unanswered. One that stays unanswered for 120 seconds ends the run, even if the
-  browser still answers health checks, and the error says the page did not answer or the browser stopped
-  answering.
+- The site answered HTTP 408, 419, 429 or a 5xx status, and Jev found no way on.
+- Mid-run, the browser could not open an address the run chose, after its own retries:
+  `Could not complete the task after opening <url> failed in this browser session: <error>.`
+- Jev judged that the page reports the site failed, such as an error shown in place of search results, a
+  maintenance notice or a load that never finished, and reloading found no way past it:
+  `Could not complete the task after the page at <url> reported that the site failed to deliver what was asked.`
+- A browser command went unanswered while the browser still answered health checks. A command to a page that
+  goes unanswered for 10 seconds has the page asked whether it still answers, and one that does not answer in 10
+  more is hung; an input event gets 15 seconds and any other command 120 seconds. The first page that stops
+  answering an action is reopened once at the address the tab shows; a second hang, or one outside an action, ends
+  the run, and the error says the page did not answer or the browser stopped answering.
 - The run's tab closed and no tab it owns remains.
+- With `--extension`, Chrome took the run's tab away because the page loaded another extension's frame; see
+  [Another extension's frame takes the tab away](#another-extensions-frame-takes-the-tab-away).
+- With `--extension`, no browser has the fastbrowse extension connected. The error is `no browser has the
+  fastbrowse extension connected`.
 
 **Next step.**
 
@@ -214,11 +233,11 @@ be fine, and the same run later may pass.
 - For a deadline, set `Limits(max_seconds=...)` in the embedding API, or `--max-seconds` on the MCP server.
   Step and dollar limits do not bound elapsed time.
 - For a stalled run, write its trace with `--trace FILE` or `FASTBROWSE_TRACE=FILE` and keep the last event
-  with the result.
+  with the result. Each `decide_choices` event lists the controls a step was chosen from, the chosen one marked.
 
 ### An attached Chrome that waits for approval
 
-With `--cdp-url` or `--cdp-port`, the run connects to a browser you started. If that browser never completes
+With SDK `cdp_url` or `cdp_port`, the run connects to a browser you started. The CLI requires the extension instead. If that browser never completes
 the DevTools handshake, the run ends `unavailable` with:
 
 ```text
@@ -228,53 +247,101 @@ the browser window and the address, then retry.
 ```
 
 **Next step.** Look at the Chrome window for a prompt to allow remote debugging and accept it, check that the
-address is the browser's current one, and run again.
+address is the browser's current one, and run again. Chrome asks again on every connection, so for your
+everyday Chrome use `--extension` instead, which needs no approval; see [Your own Chrome](cli.md#your-own-chrome).
+
+### The extension is not connected
+
+`--extension` reaches Chrome through the fastbrowse extension, which Chrome connects to fastbrowse when the
+browser starts. When the run ends `unavailable` with `no browser has the fastbrowse extension connected`:
+
+- Check that `fastbrowse extension install` ran for this user, and run it again after moving or reinstalling
+  fastbrowse, since it records where fastbrowse is.
+- Check that the [store extension](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop)
+  is installed and on at `chrome://extensions`, and that Chrome is open.
+- After installing, restart Chrome or turn the extension off and on, so it connects.
+- The error names the directory the run looked in. A connected browser's host writes there too, and on Linux
+  both use `$XDG_RUNTIME_DIR/fastbrowse-hosts`, or `/run/user/<uid>/fastbrowse-hosts` when the variable is
+  unset. A run started with `FASTBROWSE_EXTENSION_DIR` set, or with a different `XDG_RUNTIME_DIR` from
+  Chrome's, looks somewhere else.
+
+If the error says the extension does not report its supported commands, it is too old for this build.
+Extension 0.1.1 or later must advertise every required command. Store 0.1.0 cannot do that. Update the
+extension, or run `fastbrowse extension path` and load its folder unpacked through **Developer mode** at
+`chrome://extensions`. A newer version number alone does not establish compatibility.
+
+### Another extension's frame takes the tab away
+
+Chrome lets no extension debug a tab while the page holds a frame from another extension, and takes the tab
+away from fastbrowse as soon as one appears. Screen recorders, password managers and writing assistants add
+such frames to every page. The run ends `unavailable` with `Chrome detached fastbrowse from the run's tab when
+the page loaded a frame from another extension (chrome-extension://<id>)`.
+
+**Next step.** Open `chrome://extensions/?id=<id>` from the error, set **Site access** to **On click**, and run
+again. The extension then adds its frame only on pages where you click it. With `--trace FILE`, every message
+between the run and the extension is in the trace as an `extension` event, with screenshots and screencast
+frames replaced by their length, and an `extension_tab_lost` event names the frame that took the tab.
 
 ### DevToolsActivePort and finding the DevTools address
 
-`--cdp-port PORT` reads the browser's websocket address from `http://127.0.0.1:PORT/json/version`. When nothing
+SDK `cdp_port=PORT` reads the browser's websocket address from `http://127.0.0.1:PORT/json/version`. When nothing
 there answers with one, the run ends `error` with `no DevTools endpoint at
 http://127.0.0.1:PORT/json/version (<cause>)` or `... named no webSocketDebuggerUrl`. Pass the browser's `ws://`
-address with `--cdp-url` instead.
+address with SDK `cdp_url` instead.
 
 A local Chrome that fastbrowse starts itself picks its own DevTools port and writes it to a file named
 `DevToolsActivePort` in its profile directory, which the run reads. If Chrome exits first, or does not answer
 on the port it wrote within 90 seconds, the run fails before any status is reported, with
 `Chrome exited with status <code> before DevTools started` or `Chrome did not start DevTools within 90s`.
-Both messages end with Chrome's own last output, which names the cause; fix that and run again.
+Both messages end with Chrome's complete diagnostic output, which names the cause; fix that and run again.
 
 ## stuck (exit 9)
 
-**What it means.** Recovery ran out without reaching a page state the run had not seen.
+**What it means.** The stall budget ran out without reaching a page state the run had not seen.
 
 **Common causes.**
 
-- Recovery found no way forward and gave up. `error` holds its diagnosis.
+- Jev, told each time what failed, found no way forward before `max_recoveries` ran out.
+- The task says to change nothing, so the run cannot type into fields, pick options or tick boxes. A run
+  that needs a value entered must not forbid edits. Typing a search is still allowed.
 - The run chose to open an address that neither the task nor `--start` supplied:
   `navigation address was not supplied by the caller`.
+- The page does not exist: `Could not complete the task after HTTP 404 at <url>: the page does not exist.`, or
+  the same with HTTP 410. When the address the run started at answers this, a run that leaves it and stalls on
+  another page still ends with this error. Check the address, or whether the page is public yet.
 - The site answered an HTTP error that maps to no other status:
   `Could not complete the task after HTTP <status> at <url> in this browser session; the cause is unknown.`
+- The run stopped with a canvas, a picture or a video in view, and reading its screenshot did not answer the
+  task. The error then ends with `This page shows a canvas, picture or video beside its text, and its
+  screenshot was not read as answering the task.` The page may still carry everything in its text: the
+  stall can have another cause.
 
 **Next step.**
 
 - Try a `--start` URL closer to the goal, or a narrower task.
 - Name any address the run needs in the task or in `--start`.
+- On a drawn page, fastbrowse reads the DOM first, so it has two limits: a control that exists only in the
+  pixels has no element to act on, and text that exists only in the pixels is not in the page text it quotes.
+  The screenshot is the fallback for reading. When Jev's route accepts images, each step on a drawn page sends
+  Jev the viewport, and before the run answers or gives up, the LLM reads the screenshot for text that answers
+  the task, cited as read from the image. A drawn control still cannot be clicked, so start from a page of the
+  site that offers the same action as an HTML control.
 - Open an issue with the task, the start page, the status and the `--json` step trace, as
   [CONTRIBUTING.md](../CONTRIBUTING.md) describes.
 
 ## unverified (exit 10)
 
-**What it means.** The run believes it finished, but could not back every requirement or claim with a quote
-from the page. Treat the answer as unconfirmed.
+**What it means.** Jev finished, but the data the run was asked for could not be filled from the page, or a step the
+task asks for was not carried out because the site does not allow it. Treat the result as unconfirmed.
 
 **Common causes.**
 
-- A claim in the answer, or a field of the requested data, was not backed by the page.
-- The checks rejected the finish, and recovery could not gather the missing answer outputs.
-- The task asked for a screenshot, and the run could not hand it over: a secret on screen, a dialog or a
-  timeout can withhold it.
+- A field of the requested data was not backed by the page.
 - The output schema has a field the run cannot fill. A run fills a flat object of required string, number,
   integer and boolean fields; with any other field it ends `unverified` with no data.
+- The site refused a requested step, for example an option it marks unavailable or a control it shows disabled. The
+  run ends with its answer, which says what was and was not done, and the error says a requested step was not carried
+  out because the site does not allow it.
 
 **Next step.**
 
@@ -284,17 +351,31 @@ from the page. Treat the answer as unconfirmed.
 
 ## observation_limit (exit 11)
 
-**What it means.** The page, or the evidence the run must report, cannot fit the configured prompt budget.
+**What it means.** The page cannot fit the configured prompt budget.
 
 **Common causes.**
 
 - A page whose state exceeds Jev's input limits even with no controls offered:
   `the state on <url> exceeds Jev's input limits with no controls`.
-- Requirement evidence that cannot fit the notes budget without losing facts:
-  `Requirement evidence exceeds the <n> character notes budget`, or
-  `The final page cannot fit every earlier record in its collected evidence`.
 
 **Next step.**
 
 - Try a `--start` URL closer to the goal, or a narrower task that needs fewer facts in one answer.
 - To raise the budgets, set `observation` and `tokens` in `Config` in the embedding API.
+
+## cancelled (exit 12)
+
+**What it means.** You stopped an `--extension` run in your browser before it finished.
+
+**Common causes.**
+
+- **Stop** in the fastbrowse extension's popup.
+- **Cancel** on Chrome's bar saying an extension started debugging the browser. That bar belongs to the whole
+  browser, so it stops every run the extension is driving.
+- Closing every tab in the run's tab group.
+
+The result keeps the steps the run took and what it spent.
+
+**Next step.** Run it again if you still want it done. To watch a run without stopping it, leave the bar and the
+run's tabs alone; the run closes its own tabs when it ends.
+

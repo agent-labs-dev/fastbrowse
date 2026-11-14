@@ -2,12 +2,11 @@
 
 mod common;
 
-use std::sync::Mutex;
-
 use common::*;
 use fastbrowse_agent::batches::evaluate_batches;
 use fastbrowse_core::config::TokenBudget;
-use fastbrowse_core::decision::{Answer, Question};
+use fastbrowse_core::decision::Question;
+use fastbrowse_core::models::JevPurpose;
 use fastbrowse_core::py::dump::Dump;
 use indexmap::IndexMap;
 use serde_json::json;
@@ -19,15 +18,13 @@ fn batches_send_what_python_sends() {
         let questions: IndexMap<String, Question> = parse(&case["questions"]);
         let tokens: TokenBudget = parse(&case["tokens"]);
         let ledger = ledger(&case["ledger"]);
-        let seen = Mutex::new(Vec::<String>::new());
-        let record = |key: &str, _: &Answer| seen.lock().unwrap().push(key.to_string());
         let result = block_on(evaluate_batches(
+            JevPurpose::Verify,
             &jev,
             &case["state"],
             &questions,
             &tokens,
             ledger.as_ref(),
-            Some(&record),
             case["allow_failed_batches"].as_bool().unwrap(),
         ));
         jev.finish();
@@ -40,7 +37,6 @@ fn batches_send_what_python_sends() {
                     "input_tokens": answered.input_tokens,
                     "requests": answered.requests,
                 })),
-                "on_answer": seen.into_inner().unwrap(),
             }),
         };
         assert_outcome(&case, outcome);

@@ -73,11 +73,13 @@ test('each option reaches the server under its wire name with its value intact',
       authorization: { irreversibleActions: true },
       downloads: '/tmp/fastbrowse-downloads',
       record: '/tmp/fastbrowse-downloads/run.mp4',
+      recipe: '/tmp/source-recipe.json',
+      saveRecipe: '/tmp/healed-recipe.json',
       cursor: true,
       local: true,
+      launch: true,
       chrome: { binary: process.execPath, headed: true, profile: '/tmp/fastbrowse-profile' },
       viewport: [1280, 720],
-      cloudAllowResizing: true,
     });
     assert.deepEqual(onLocalChrome, {
       task: 'Add the kettle to the cart',
@@ -87,11 +89,13 @@ test('each option reaches the server under its wire name with its value intact',
       authorization: { irreversible_actions: true },
       downloads: '/tmp/fastbrowse-downloads',
       record: '/tmp/fastbrowse-downloads/run.mp4',
+      recipe: '/tmp/source-recipe.json',
+      save_recipe: '/tmp/healed-recipe.json',
       cursor: true,
       local: true,
+      launch: true,
       chrome: { binary: process.execPath, headed: true, profile: '/tmp/fastbrowse-profile' },
       viewport: [1280, 720],
-      cloud_allow_resizing: true,
     });
 
     const attached = await sent(fb, { ...ownBrowser, attach: true, targetMatch: 'Checkout' });
@@ -104,27 +108,78 @@ test('each option reaches the server under its wire name with its value intact',
 
     assert.deepEqual(await sent(fb, { cdpPort: 9222 }), { task: 'Add the kettle to the cart', cdp_port: 9222 });
 
-    assert.deepEqual(await sent(fb, { cloudProfile: 'signed-in', proxyCountry: 'de' }), {
+    const extension = '0f4c7a52-3b1e-4d8a-9c6f-2e5b8d1a7c30';
+    assert.deepEqual(
+      await sent(fb, {
+        cloudProfile: 'signed-in',
+        proxyCountry: 'de',
+        cloudExtensions: [extension],
+        cloudTimeoutMinutes: 60,
+        browser: true,
+      }),
+      {
+        task: 'Add the kettle to the cart',
+        cloud_profile: 'signed-in',
+        proxy_country: 'de',
+        cloud_extensions: [extension],
+        cloud_timeout_minutes: 60,
+        browser: true,
+      },
+    );
+
+    assert.deepEqual(await sent(fb, { fetch: true, allowedOrigins: ['https://shop.example'] }), {
       task: 'Add the kettle to the cart',
-      cloud_profile: 'signed-in',
-      proxy_country: 'de',
+      fetch: true,
+      allowed_origins: ['https://shop.example'],
+    });
+  });
+});
+
+test('the server refuses fetch and browser together, so both reach it', async () => {
+  await withServer(scriptedRun('echo'), async fb => {
+    await assert.rejects(fb.run('Add the kettle to the cart', { fetch: true, browser: true }), (error: unknown) => {
+      assert.ok(error instanceof RpcError);
+      assert.equal(error.code, INVALID_PARAMS);
+      assert.match(error.message, /fetch never starts a browser and browser always does/);
+      return true;
+    });
+  });
+});
+
+test('cloud browser defaults given to start reach every run, and a per-run null takes them out', async () => {
+  const defaults = { cloudExtensions: ['0f4c7a52-3b1e-4d8a-9c6f-2e5b8d1a7c30'], cloudTimeoutMinutes: 90 };
+  await withServer({ ...scriptedRun('echo'), ...defaults }, async fb => {
+    assert.deepEqual(await sent(fb, {}), {
+      task: 'Add the kettle to the cart',
+      cloud_extensions: defaults.cloudExtensions,
+      cloud_timeout_minutes: 90,
+    });
+    assert.deepEqual(await sent(fb, { cloudTimeoutMinutes: 30 }), {
+      task: 'Add the kettle to the cart',
+      cloud_extensions: defaults.cloudExtensions,
+      cloud_timeout_minutes: 30,
+    });
+    // An attached browser is refused beside cloud extensions, so the null is what lets this run attach.
+    assert.deepEqual(await sent(fb, { ...ownBrowser, cloudExtensions: null, cloudTimeoutMinutes: null }), {
+      task: 'Add the kettle to the cart',
+      cdp_url: ownBrowser.cdpUrl,
     });
   });
 });
 
 test('browser defaults given to start are part of every run, and a per-run option wins', async () => {
-  const defaults = { local: true, chrome: { binary: process.execPath }, viewport: [800, 600] as [number, number] };
+  const defaults = { launch: true, chrome: { binary: process.execPath }, viewport: [800, 600] as [number, number] };
   await withServer({ ...scriptedRun('echo'), ...defaults }, async fb => {
     assert.deepEqual(await sent(fb, {}), {
       task: 'Add the kettle to the cart',
-      local: true,
+      launch: true,
       chrome: { binary: process.execPath },
       viewport: [800, 600],
     });
     assert.deepEqual(await sent(fb, { viewport: [1024, 768], start: 'https://shop.example/' }), {
       task: 'Add the kettle to the cart',
       start: 'https://shop.example/',
-      local: true,
+      launch: true,
       chrome: { binary: process.execPath },
       viewport: [1024, 768],
     });
@@ -140,19 +195,19 @@ test('a per-run option left undefined leaves the default from start in place', a
 });
 
 test('a per-run null takes a default from start out of that run, and the next run has it again', async () => {
-  const defaults = { cdpPort: 9222, attach: true, viewport: [800, 600] as [number, number] };
+  const defaults = { cdpPort: 9222, attach: true, targetMatch: 'Checkout' };
   await withServer({ ...scriptedRun('echo'), ...defaults }, async fb => {
     // The server refuses `cdp_port` beside `cdp_url`, so without the null this run could not name its own browser.
     assert.deepEqual(await sent(fb, { cdpPort: null, attach: null, ...ownBrowser }), {
       task: 'Add the kettle to the cart',
       cdp_url: ownBrowser.cdpUrl,
-      viewport: [800, 600],
+      target_match: 'Checkout',
     });
     assert.deepEqual(await sent(fb, {}), {
       task: 'Add the kettle to the cart',
       cdp_port: 9222,
       attach: true,
-      viewport: [800, 600],
+      target_match: 'Checkout',
     });
   });
 });

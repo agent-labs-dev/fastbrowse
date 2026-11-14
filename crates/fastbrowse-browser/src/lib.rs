@@ -1,16 +1,19 @@
-//! fastbrowse's browser layer in Rust: `crates/fastbrowse-browser/js/` and `src/fastbrowse/adapters/`, ported.
+//! fastbrowse's browser layer: the CDP connection, the session and page on it, and the adapters that supply a browser.
 //!
 //! CDP goes over a raw websocket ([ADR 0003](../../../docs/adr/0003-cdp-over-raw-websocket.md)): one reader task
-//! routes replies by id and events by method and session. `session` is `browser/session.py`'s `BrowserSession`,
-//! `page` is `browser/page.py`'s `CdpPage`, and the page scripts (`snapshot.js`, `capture.js`, autoconsent) are
-//! the Python package's own files, included unchanged.
+//! routes replies by id and events by method and session. `session` holds `BrowserSession`, `page` holds
+//! `CdpPage`, and the page scripts (`snapshot.js`, `capture.js`, autoconsent) live in `js/`.
 
 pub mod adapters;
 pub mod cdp;
 #[cfg(feature = "cursor")]
 pub mod cursor;
 pub mod error;
+pub mod extension;
+pub mod helper;
 pub mod page;
+mod pdf;
+pub mod pointer;
 #[cfg(feature = "recording")]
 pub mod recording;
 pub mod session;
@@ -18,10 +21,30 @@ pub mod session;
 pub mod testing;
 pub mod urlsplit;
 
-/// A warning Python logs through `logging`: written to stderr when `FASTBROWSE_LOG` is set, else dropped. Never
-/// pass an error's message here, only its kind: transport errors can carry credentials or page text.
-pub(crate) fn warn(message: &str) {
-    if std::env::var_os("FASTBROWSE_LOG").is_some() {
-        eprintln!("fastbrowse: {message}");
+pub use pdf::PdfUnread;
+mod documents;
+
+/// A warning for whoever runs this, on stderr. Never pass an error's message here, only its kind: transport errors
+/// can carry credentials or page text.
+pub fn warn(message: &str) {
+    eprintln!("fastbrowse: {message}");
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_warning_reaches_stderr_with_nothing_configured() {
+        if std::env::var_os("FASTBROWSE_TEST_WARN").is_some() {
+            super::warn("left running");
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("tests::a_warning_reaches_stderr_with_nothing_configured")
+            .env("RUST_TEST_NOCAPTURE", "1")
+            .env("FASTBROWSE_TEST_WARN", "1")
+            .env_remove("FASTBROWSE_LOG")
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&output.stderr).contains("fastbrowse: left running"));
     }
 }

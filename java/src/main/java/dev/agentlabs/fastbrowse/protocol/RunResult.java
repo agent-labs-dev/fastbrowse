@@ -3,13 +3,14 @@
 package dev.agentlabs.fastbrowse.protocol;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.databind.JsonNode;
 import java.util.List;
+import tools.jackson.databind.JsonNode;
 
 /**
  * @param finalUrl Where the browser was last observed; what a caller checks when the task was to arrive somewhere.
  * @param recordings The videos this run finished writing, captioned then plain; empty when it recorded nothing or encoding failed.
  * @param wall The sign-in or bot wall a {@code needs_login} or {@code blocked} run stopped at, when the page showed one.
+ * @param browser The browser the run drove, and how it reached it; none when it read every page over HTTP.
  */
 public record RunResult(
     @JsonProperty("status") Status status,
@@ -24,7 +25,8 @@ public record RunResult(
     @JsonProperty("error") String error,
     @JsonProperty("final_url") String finalUrl,
     @JsonProperty("recordings") List<String> recordings,
-    @JsonProperty("wall") Wall wall) {
+    @JsonProperty("wall") Wall wall,
+    @JsonProperty("browser") BrowserUsed browser) {
 
     /** A builder for a {@code RunResult}, every field unset. */
     public static Builder builder() {
@@ -46,6 +48,7 @@ public record RunResult(
         private String finalUrl;
         private List<String> recordings;
         private Wall wall;
+        private BrowserUsed browser;
 
         private Builder() {}
 
@@ -114,8 +117,13 @@ public record RunResult(
             return this;
         }
 
+        public Builder browser(BrowserUsed browser) {
+            this.browser = browser;
+            return this;
+        }
+
         public RunResult build() {
-            return new RunResult(status, budget, answer, data, evidence, steps, cost, artifacts, citations, error, finalUrl, recordings, wall);
+            return new RunResult(status, budget, answer, data, evidence, steps, cost, artifacts, citations, error, finalUrl, recordings, wall, browser);
         }
     }
 }

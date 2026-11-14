@@ -8,9 +8,6 @@ from pydantic import BaseModel
 from fastbrowse.models import CostLine, Frozen, LLMPurpose, Unavailable
 from fastbrowse.telemetry import Ledger
 
-# Planning and field responses are short; readers and composers pass their larger configured caps.
-DEFAULT_MAX_OUTPUT_TOKENS = 2000
-
 
 class Message(Frozen):
     role: Literal["system", "user", "assistant"]
@@ -39,7 +36,6 @@ class LLMClient(Protocol):
         messages: Sequence[Message],
         schema: type[T],
         *,
-        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
         ledger: Ledger | None = None,
     ) -> Generation[T]:
         """Return `schema`-validated data. `purpose` lets callers route models and attribute cost.

@@ -1,0 +1,793 @@
+{
+  "$defs": {
+    "Operation": {
+      "enum": [
+        "click",
+        "hover",
+        "drag",
+        "fill",
+        "press",
+        "blur",
+        "select",
+        "enter",
+        "escape",
+        "scroll",
+        "scroll_up",
+        "back",
+        "switch_tab",
+        "upload",
+        "dialog",
+        "wait",
+        "read",
+        "done",
+        "navigate",
+        "search"
+      ],
+      "title": "Operation",
+      "type": "string"
+    },
+    "Recipe": {
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "task": {
+          "title": "Task",
+          "type": "string"
+        },
+        "start": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A credential-free HTTP(S) address. Validate its URL semantics with validate_recipe before use.",
+          "title": "Start"
+        },
+        "steps": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RecipeStep"
+              },
+              {
+                "maxItems": 7,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "$ref": "#/$defs/Operation"
+                  },
+                  {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/RecipePage"
+                      },
+                      {
+                        "maxItems": 4,
+                        "minItems": 2,
+                        "prefixItems": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        ],
+                        "type": "array"
+                      }
+                    ]
+                  },
+                  {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/RecipeTarget"
+                      },
+                      {
+                        "maxItems": 7,
+                        "minItems": 2,
+                        "prefixItems": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        ],
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  {
+                    "anyOf": [
+                      {
+                        "const": "live",
+                        "type": "string"
+                      },
+                      {
+                        "$ref": "#/$defs/RecipeLive"
+                      },
+                      {
+                        "$ref": "#/$defs/RecipeLiteral"
+                      },
+                      {
+                        "$ref": "#/$defs/RecipeInput"
+                      },
+                      {
+                        "$ref": "#/$defs/RecipeSecret"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ],
+                "type": "array"
+              }
+            ]
+          },
+          "title": "Steps",
+          "type": "array"
+        }
+      },
+      "required": [
+        "version",
+        "task",
+        "steps"
+      ],
+      "title": "Recipe",
+      "type": "object"
+    },
+    "RecipeInput": {
+      "additionalProperties": false,
+      "properties": {
+        "input": {
+          "title": "Input",
+          "type": "string"
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "title": "RecipeInput",
+      "type": "object"
+    },
+    "RecipeLiteral": {
+      "additionalProperties": false,
+      "properties": {
+        "literal": {
+          "title": "Literal",
+          "type": "string"
+        }
+      },
+      "required": [
+        "literal"
+      ],
+      "title": "RecipeLiteral",
+      "type": "object"
+    },
+    "RecipeLive": {
+      "additionalProperties": false,
+      "properties": {
+        "live": {
+          "title": "Live",
+          "type": "null"
+        }
+      },
+      "required": [
+        "live"
+      ],
+      "title": "RecipeLive",
+      "type": "object"
+    },
+    "RecipePage": {
+      "additionalProperties": false,
+      "properties": {
+        "origin": {
+          "title": "Origin",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "query": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Query"
+        },
+        "fragment": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fragment"
+        }
+      },
+      "required": [
+        "origin",
+        "path"
+      ],
+      "title": "RecipePage",
+      "type": "object"
+    },
+    "RecipeSecret": {
+      "additionalProperties": false,
+      "properties": {
+        "secret": {
+          "title": "Secret",
+          "type": "string"
+        }
+      },
+      "required": [
+        "secret"
+      ],
+      "title": "RecipeSecret",
+      "type": "object"
+    },
+    "RecipeStep": {
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "$ref": "#/$defs/Operation"
+        },
+        "page": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RecipePage"
+            },
+            {
+              "maxItems": 4,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              ],
+              "type": "array"
+            }
+          ],
+          "title": "Page"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RecipeTarget"
+            },
+            {
+              "maxItems": 7,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target"
+        },
+        "text": {
+          "anyOf": [
+            {
+              "const": "live",
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/RecipeLive"
+            },
+            {
+              "$ref": "#/$defs/RecipeLiteral"
+            },
+            {
+              "$ref": "#/$defs/RecipeInput"
+            },
+            {
+              "$ref": "#/$defs/RecipeSecret"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text"
+        },
+        "option": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Option"
+        },
+        "read_first": {
+          "default": false,
+          "title": "Read First",
+          "type": "boolean"
+        },
+        "replay": {
+          "default": true,
+          "title": "Replay",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "operation",
+        "page"
+      ],
+      "title": "RecipeStep",
+      "type": "object"
+    },
+    "RecipeTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "title": "Role",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context"
+        },
+        "href": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Href"
+        },
+        "input_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Input Type"
+        },
+        "input_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Input Name"
+        },
+        "frame_origin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Frame Origin"
+        }
+      },
+      "required": [
+        "role",
+        "label"
+      ],
+      "title": "RecipeTarget",
+      "type": "object"
+    }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/Recipe"
+    },
+    {
+      "maxItems": 4,
+      "minItems": 4,
+      "prefixItems": [
+        {
+          "const": 1,
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RecipeStep"
+              },
+              {
+                "maxItems": 7,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "$ref": "#/$defs/Operation"
+                  },
+                  {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/RecipePage"
+                      },
+                      {
+                        "maxItems": 4,
+                        "minItems": 2,
+                        "prefixItems": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        ],
+                        "type": "array"
+                      }
+                    ]
+                  },
+                  {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/RecipeTarget"
+                      },
+                      {
+                        "maxItems": 7,
+                        "minItems": 2,
+                        "prefixItems": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        ],
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  {
+                    "anyOf": [
+                      {
+                        "const": "live",
+                        "type": "string"
+                      },
+                      {
+                        "$ref": "#/$defs/RecipeLive"
+                      },
+                      {
+                        "$ref": "#/$defs/RecipeLiteral"
+                      },
+                      {
+                        "$ref": "#/$defs/RecipeInput"
+                      },
+                      {
+                        "$ref": "#/$defs/RecipeSecret"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ],
+                "type": "array"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      ],
+      "type": "array"
+    }
+  ]
+}

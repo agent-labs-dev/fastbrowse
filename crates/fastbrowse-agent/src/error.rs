@@ -11,8 +11,9 @@ use fastbrowse_core::telemetry::BudgetExceeded;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum AgentError {
+    /// Never `DecisionError::Budget`: that one arrives as [`AgentError::Budget`].
     #[error(transparent)]
-    Jev(#[from] DecisionError),
+    Jev(DecisionError),
     /// Never `LLMError::Budget`: that one arrives as [`AgentError::Budget`].
     #[error(transparent)]
     Llm(LLMError),
@@ -21,12 +22,21 @@ pub enum AgentError {
     /// `policy.ObservationTooLarge`: the page's state cannot fit Jev's limits even with no controls offered.
     #[error("{0}")]
     ObservationTooLarge(String),
-    /// `memory.NotesTooLarge`: a verdict cannot fit its requirement evidence without losing facts.
+    /// `memory.NotesTooLarge`: a verdict cannot fit its evidence without losing facts.
     #[error("{0}")]
     NotesTooLarge(String),
     /// Python's `ValueError`: an answer or an argument the code cannot use.
     #[error("{0}")]
     Invalid(String),
+}
+
+impl From<DecisionError> for AgentError {
+    fn from(error: DecisionError) -> Self {
+        match error {
+            DecisionError::Budget(budget) => AgentError::Budget(budget),
+            other => AgentError::Jev(other),
+        }
+    }
 }
 
 impl From<LLMError> for AgentError {

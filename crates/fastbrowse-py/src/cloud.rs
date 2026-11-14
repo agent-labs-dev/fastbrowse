@@ -2,7 +2,7 @@
 //! started with the request `run_task` sends for its own, and stopped later by its id.
 
 use fastbrowse_browser::adapters::browser_use_cloud::{
-    API_ORIGIN, BrowserUseCloudBrowser, BrowserUseCloudError, BrowserUseCloudOptions, CloudApi, real_time,
+    API_ORIGIN, BrowserUseCloudBrowser, BrowserUseCloudError, BrowserUseCloudOptions, real_time,
 };
 use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
@@ -32,7 +32,6 @@ struct Options {
     timeout_minutes: i64,
     proxy_country: Option<String>,
     viewport: Option<(i64, i64)>,
-    allow_resizing: bool,
     origin: Option<String>,
 }
 
@@ -56,7 +55,7 @@ impl Drop for Unclaimed {
 }
 
 /// Start a cloud browser that no run owns: `options` as JSON. Awaiting it gives the browser's id, CDP and live view
-/// addresses and API version as JSON. A start that fails or is cancelled stops what it created.
+/// addresses as JSON. A start that fails or is cancelled stops what it created.
 #[pyfunction]
 pub fn open_cloud_browser(py: Python<'_>, options: &str) -> PyResult<Py<PyAny>> {
     let options: Options = serde_json::from_str(options).map_err(|error| PyValueError::new_err(error.to_string()))?;
@@ -73,7 +72,6 @@ pub fn open_cloud_browser(py: Python<'_>, options: &str) -> PyResult<Py<PyAny>> 
         timeout_minutes,
         profile: options.profile,
         viewport,
-        allow_resizing: options.allow_resizing,
         extensions: options.extensions,
         ..BrowserUseCloudOptions::default()
     };
@@ -92,41 +90,29 @@ pub fn open_cloud_browser(py: Python<'_>, options: &str) -> PyResult<Py<PyAny>> 
     };
     let opened = awaitable(py, opening, |py, started| {
         let mut cloud = started.map_err(failed)?.0.take().expect("a browser is claimed once");
-        let version = cloud.version();
         let connection = cloud.keep().map_err(failed)?;
         let browser = json!({
             "id": connection.browser_id,
             "cdp_url": connection.cdp_url,
             "live_url": connection.live_url,
-            "api": version,
         });
         Ok(browser.to_string().into_pyobject(py)?.into_any().unbind())
     })?;
     Ok(opened.unbind())
 }
 
-/// Stop the cloud browser `browser_id`, created on `api` (`v3` or `v4`). Awaiting it gives None once the service took
-/// the stop.
+/// Stop the cloud browser `browser_id`. Awaiting it gives None once the service took the stop.
 #[pyfunction]
-#[pyo3(signature = (browser_api_key, browser_id, api, *, origin=None))]
+#[pyo3(signature = (browser_api_key, browser_id, *, origin=None))]
 pub fn stop_cloud_browser(
     py: Python<'_>,
     browser_api_key: &str,
     browser_id: &str,
-    api: &str,
     origin: Option<String>,
 ) -> PyResult<Py<PyAny>> {
-    let version: CloudApi = serde_json::from_value(json!(api))
-        .map_err(|_| PyValueError::new_err(format!("no Browser Use Cloud API {api:?}")))?;
     let (clock, sleep) = real_time();
-    let mut cloud = BrowserUseCloudBrowser::running_with_seams(
-        browser_api_key,
-        browser_id,
-        version,
-        &self::origin(origin),
-        clock,
-        sleep,
-    );
+    let mut cloud =
+        BrowserUseCloudBrowser::running_with_seams(browser_api_key, browser_id, &self::origin(origin), clock, sleep);
     let stopping = async move { cloud.stop().await };
     let stopped = awaitable(py, stopping, |py, stopped| {
         stopped.map_err(failed)?;

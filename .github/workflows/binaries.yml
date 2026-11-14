@@ -80,8 +80,10 @@ jobs:
           else
             build=(cargo build --target "$TRIPLE")
           fi
-          "${build[@]}" --locked --profile release-small -p fastbrowse-cli
+          "${build[@]}" --locked --profile release-small -p fastbrowse-cli --features scripted
           "${build[@]}" --locked --release -p fastbrowse-node
+      - name: Test core filesystem contracts
+        run: cargo test --locked --release --target "$TRIPLE" -p fastbrowse-core
       - name: Stage the build
         run: |
           mkdir -p stage/fastbrowse
@@ -104,7 +106,7 @@ jobs:
       - name: Install Chromium
         if: matrix.target == 'linux-arm64'
         run: |
-          npx --yes playwright@1.63.0 install --with-deps chromium
+          npx --yes playwright@1.64.1 install --with-deps chromium
           chrome="$(find "$HOME/.cache/ms-playwright" -type f -name chrome -path '*chromium-*' | head -n 1)"
           test -x "$chrome"
           echo "FASTBROWSE_CHROME=$chrome" >> "$GITHUB_ENV"
@@ -171,7 +173,7 @@ jobs:
             zig=(--with ziglang==0.17.0)
             linux=(--zig --compatibility "$MANYLINUX")
           fi
-          uvx "${zig[@]}" maturin==1.15.0 build --release --locked --out wheels "${linux[@]}"
+          uvx "${zig[@]}" maturin==1.16.0 build --release --locked --out wheels "${linux[@]}"
       - name: Install the wheel alone
         run: |
           uv venv --no-project "$RUNNER_TEMP/wheel"
@@ -182,7 +184,7 @@ jobs:
       - name: Install Chromium
         if: matrix.target == 'linux-arm64'
         run: |
-          npx --yes playwright@1.63.0 install --with-deps chromium
+          npx --yes playwright@1.64.1 install --with-deps chromium
           chrome="$(find "$HOME/.cache/ms-playwright" -type f -name chrome -path '*chromium-*' | head -n 1)"
           test -x "$chrome"
           echo "FASTBROWSE_CHROME=$chrome" >> "$GITHUB_ENV"

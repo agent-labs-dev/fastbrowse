@@ -1,15 +1,18 @@
-//! tests/test_serve_secrets.py: secrets over the serve protocol. The refs go to the server, and a value comes back
+//! Secrets over the serve protocol. The refs go to the server, and a value comes back
 //! only when it is typed.
 
 mod common;
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
-use common::{CHROME, FakeClient, binary, browser_event, result, run_params, runner, serving, settings, step_event};
-use fastbrowse_cli::runner::{RunArgs, RunError, Runner};
+use common::{
+    CHROME, Call, FakeClient, browser_event, isolated_binary, result, run_params, runner, serving, settings, step_event,
+};
+use fastbrowse_cli::runner::{RunError, Runner};
 use fastbrowse_core::models::{RunResult, SecretRef, Status};
+use fastbrowse_core::protocol::PROTOCOL_VERSION;
 use serde_json::{Value, json};
 
 const SHOP: &str = "https://shop.example.com";
@@ -36,20 +39,24 @@ impl Typist {
 
     fn runner(&self) -> Arc<dyn Runner> {
         let typist = self.clone();
-        runner(move |args: RunArgs| {
+        runner(move |args: Call| {
             let typist = typist.clone();
             async move {
-                *typist.got_resolver.lock().unwrap() = Some(args.secrets.is_some());
-                *typist.refs.lock().unwrap() = args.secrets.as_ref().map(|secrets| secrets.available());
-                (args.on_event.as_ref().unwrap())(browser_event(None, None)).await;
+                *typist.got_resolver.lock().unwrap() = Some(args.host.secrets.is_some());
+                *typist.refs.lock().unwrap() = args.host.secrets.as_ref().map(|secrets| secrets.available());
+                (args.host.on_event.as_ref().unwrap())(browser_event(None, None)).await;
                 for (index, (name, origin)) in typist.typed.iter().enumerate() {
-                    let secrets = args.secrets.clone().unwrap();
-                    let value = args.cancel.guard(secrets.resolve(name, origin)).await?;
-                    if args.cancel.is_tripped() {
-                        return Err(RunError::Cancelled);
+                    let secrets = args.host.secrets.clone().unwrap();
+                    let value = args
+                        .host
+                        .cancel
+                        .guard(fastbrowse_core::safety::resolve_secret(&*secrets, name, origin))
+                        .await?;
+                    if args.host.cancel.is_tripped() {
+                        return Err(RunError::Cancelled(Default::default()));
                     }
                     typist.resolved.lock().unwrap().push(value);
-                    (args.on_event.as_ref().unwrap())(step_event(index as i64 + 1, None)).await;
+                    (args.host.on_event.as_ref().unwrap())(step_event(index as i64 + 1, None)).await;
                 }
                 let count = typist.resolved.lock().unwrap().iter().filter(|value| value.is_some()).count();
                 Ok(RunResult {
@@ -206,7 +213,7 @@ async fn test_the_value_is_in_no_message_the_server_wrote() {
     let done = exchange(&mut client, params, vec![json!(VALUE), json!(VALUE)]).await;
     // An answer nobody is waiting for any more, as after a run that was stopped with its question out.
     client.send(json!({"jsonrpc": "2.0", "id": 99, "result": VALUE}));
-    client.request("initialize", Some(json!({"protocol_version": 1}))).await;
+    client.request("initialize", Some(json!({"protocol_version": PROTOCOL_VERSION}))).await;
     assert_eq!(typist.resolved(), [Some(VALUE.to_string()), Some(VALUE.to_string())]);
     assert_eq!(done.reply["result"]["answer"], "typed 2 of 2");
     let written = String::from_utf8_lossy(&client.written).to_string();
@@ -221,8 +228,8 @@ async fn test_an_answer_to_no_request_gets_no_reply() {
     let mut client = serving(Typist::new(&[]).runner(), settings());
     client.send(json!({"jsonrpc": "2.0", "id": 99, "result": VALUE}));
     client.send(json!({"jsonrpc": "2.0", "id": 98, "error": {"code": -32000, "message": "no vault"}}));
-    let handshake = client.request("initialize", Some(json!({"protocol_version": 1}))).await;
-    assert_eq!(handshake["result"]["protocol_version"], 1);
+    let handshake = client.request("initialize", Some(json!({"protocol_version": PROTOCOL_VERSION}))).await;
+    assert_eq!(handshake["result"]["protocol_version"], PROTOCOL_VERSION);
     assert!(client.inbox.is_empty());
 }
 
@@ -234,7 +241,7 @@ async fn test_a_reply_that_is_neither_text_nor_null_raises_without_repeating_it(
         let done = exchange(&mut client, run_params("run-1", json!({"secrets": [password()]})), vec![answer]).await;
         assert_eq!(
             done.reply["result"]["error"],
-            "secrets/resolve: the result cannot be used: Input should be a valid string"
+            "secrets/resolve: the result cannot be used: expected a string or null"
         );
         assert!(typist.resolved().is_empty());
         let written = String::from_utf8_lossy(&client.written).to_string();
@@ -250,10 +257,10 @@ async fn test_the_server_answers_other_requests_while_a_value_is_awaited() {
     let mut client = serving(typist.runner(), settings());
     let run = client.call("run", Some(run_params("run-1", json!({"secrets": [password()]}))));
     let asked = client.asked("secrets/resolve").await;
-    let handshake = client.result("initialize", Some(json!({"protocol_version": 1}))).await;
+    let handshake = client.result("initialize", Some(json!({"protocol_version": PROTOCOL_VERSION}))).await;
     client.respond(&asked, json!(VALUE));
     let reply = client.reply(run).await;
-    assert_eq!(handshake["protocol_version"], 1);
+    assert_eq!(handshake["protocol_version"], PROTOCOL_VERSION);
     assert_eq!(reply["result"]["status"], "complete");
     assert_eq!(typist.resolved(), [Some(VALUE.to_string())]);
 }
@@ -272,15 +279,15 @@ async fn test_input_ending_while_a_value_is_awaited_stops_the_server() {
 #[tokio::test]
 async fn test_secrets_that_are_not_refs_are_refused_without_repeating_them() {
     for (secrets, named) in [
-        (json!([{"name": "SHOP_PASSWORD"}]), "secrets.0.origins"),
-        (json!([{"name": "SHOP_PASSWORD", "origins": [SHOP], "value": VALUE}]), "secrets.0.value"),
+        (json!([{"name": "SHOP_PASSWORD"}]), "secrets[0]: missing field `origins`"),
+        (json!([{"name": "SHOP_PASSWORD", "origins": [SHOP], "value": VALUE}]), "secrets[0].value"),
         (json!({"SHOP_PASSWORD": VALUE}), "secrets"),
     ] {
         let typist = Typist::new(&[]);
         let mut client = serving(typist.runner(), settings());
         let response = client.request("run", Some(run_params("run-1", json!({"secrets": secrets})))).await;
         assert_eq!(response["error"]["code"], -32602);
-        assert!(response["error"]["message"].as_str().unwrap().contains(named));
+        assert!(response["error"]["message"].as_str().unwrap().contains(named), "{response}");
         assert!(!response.to_string().contains(VALUE));
         assert!(typist.got_resolver.lock().unwrap().is_none());
     }
@@ -292,7 +299,7 @@ fn test_the_served_command_keeps_the_value_out_of_stdout_and_stderr() {
         "run-1",
         json!({"local": true, "chrome": {"binary": CHROME}, "start": format!("{SHOP}/login"), "secrets": [password()]}),
     );
-    let mut process = Command::new(binary())
+    let mut process = isolated_binary()
         .args(["serve", "--stdio", "--run-task", "tests.serve_scripts:type_secret"])
         .env("OPENROUTER_API_KEY", "unused")
         .env("AI_GATEWAY_API_KEY", "unused")

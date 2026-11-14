@@ -2,26 +2,31 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Literal, Protocol
+from typing import TYPE_CHECKING, Annotated, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, PlainSerializer
 
+if TYPE_CHECKING:
+    from fastbrowse.protocol import CancellationReceipt
+
 
 class Frozen(BaseModel):
-    # A field's docstring is the model's only guidance for that field when the class is a response schema.
+    # A field's docstring is its description in `model_json_schema`, which embedders read.
     model_config = ConfigDict(frozen=True, extra="forbid", use_attribute_docstrings=True)
 
 
 class Status(StrEnum):
     COMPLETE = "complete"
-    """Every planner requirement is evidenced and the caller's `until` check (if any) passed."""
+    """Jev judged the task done and the caller's `until` check (if any) passed."""
     UNVERIFIED = "unverified"
-    """The run believes it finished but could not evidence every requirement."""
+    """Jev finished, but code could not confirm the result: for example, an answer failed its check against the page,
+    part of a list the task covers went unread, or the site refused a requested step."""
     NEEDS_CONFIRMATION = "needs_confirmation"
     """Stopped before an irreversible action the caller has not authorized, having committed nothing."""
     NEEDS_LOGIN = "needs_login"
@@ -32,14 +37,19 @@ class Status(StrEnum):
     NEEDS_INPUT = "needs_input"
     """A required value or file is missing, or an upload exceeds the configured size limit."""
     STUCK = "stuck"
-    """Recovery was exhausted without progress."""
+    """The stall budget ran out without the run reaching a page state it had not seen or reading anything new."""
     BUDGET_EXCEEDED = "budget_exceeded"
+    """A resource limit (steps, seconds, dollars or Jev calls) was reached, or a missing cost prevents enforcing the
+    dollar cap."""
     OBSERVATION_LIMIT = "observation_limit"
-    """The page or requirement evidence could not fit the configured input budgets."""
+    """The page or the run's notes could not fit the configured prompt budget."""
     UNAVAILABLE = "unavailable"
     """A model or browser provider stayed unavailable through every retry. Nothing about the task failed; the same
     run later may pass."""
+    CANCELLED = "cancelled"
+    """Stopped before it finished, by its caller or by the user in the browser it drove."""
     ERROR = "error"
+    """A model or browser failure."""
 
 
 class Unavailable(RuntimeError):
@@ -49,9 +59,26 @@ class Unavailable(RuntimeError):
 class ConfigurationError(RuntimeError):
     """A missing key or an invalid setting in the environment, reported without a traceback."""
 
+    receipt: CancellationReceipt | None = None
+    """Work already done before configuration prevented the run from continuing."""
+
 
 class RecordingError(RuntimeError):
     """ffmpeg is missing. Later failures are logged instead: a video is never worth a run's result."""
+
+    receipt: CancellationReceipt | None = None
+    """Work and browser charges incurred before recording could start."""
+
+
+class RunCancelled(asyncio.CancelledError):
+    """A run that was cancelled, raised once its browser has closed. It is a `CancelledError`, so `asyncio`
+    treats it as one, and `receipt` holds what the run did and spent before it stopped: the steps it reported,
+    every known charge, an unpriced one as an `unknown` line, and its finished videos. A cancelled run proved
+    nothing, so the receipt has no status and no answer."""
+
+    def __init__(self, *args: object, receipt: CancellationReceipt) -> None:
+        super().__init__(*args)
+        self.receipt = receipt
 
 
 class Operation(StrEnum):
@@ -59,6 +86,8 @@ class Operation(StrEnum):
     HOVER = "hover"
     DRAG = "drag"
     FILL = "fill"
+    PRESS = "press"
+    BLUR = "blur"
     SELECT = "select"
     ENTER = "enter"
     ESCAPE = "escape"
@@ -68,18 +97,19 @@ class Operation(StrEnum):
     SWITCH_TAB = "switch_tab"
     UPLOAD = "upload"
     DIALOG = "dialog"
+    WAIT = "wait"
     READ = "read"
     DONE = "done"
-    ESCALATE = "escalate"
     NAVIGATE = "navigate"
+    SEARCH = "search"
 
 
 class Decider(StrEnum):
-    """The model whose choice a step carries out, even when code dispatches it: the next page of a list is the
-    reader's, because the reader asked for the rest of the list."""
+    """Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev."""
 
     JEV = "jev"
-    LLM = "llm"
+    CODE = "code"
+    RECIPE = "recipe"
 
 
 class StepOutcome(StrEnum):
@@ -95,6 +125,15 @@ class SourceControl(Frozen):
     role: str
     label: str
     context: str | None = None
+
+
+# A link inside quoted page text: its text, where that text sits in `Capture.text` (code points, as `start` and `end`
+# of the quote around it), and the address it leads to.
+class Link(Frozen):
+    text: str
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+    href: str
 
 
 class Evidence(Frozen):
@@ -113,13 +152,16 @@ class Evidence(Frozen):
     """False for typed DOM observations whose quote is not literal rendered page text."""
     heading_path: tuple[str, ...] = ()
     """The headings the quote sits under on the page: which record a bare "£10.69" is the price of."""
+    capture_artifact: str | None = Field(default=None, exclude_if=lambda uri: uri is None)
+    """The `uri` of the `capture` artifact holding the page text `start` and `end` index into, if one was kept."""
+    links: tuple[Link, ...] = Field(default=(), exclude_if=lambda links: not links)
+    """The links inside the quote and where each leads, which its text alone does not say."""
 
 
 class Citation(Frozen):
     id: int = Field(ge=1)
     """The number used by this fact's links in the answer, stable within a run."""
     text: str
-    requirement_id: str | None = None
     url: str
     quote: str
     deep_link: str
@@ -127,12 +169,11 @@ class Citation(Frozen):
 
 class FactReader(StrEnum):
     JEV_CHOICE = "jev_choice"
-    LLM = "llm"
+    LLM_IMAGE = "llm_image"
 
 
 class StepFact(Frozen):
     text: str
-    requirement_id: str | None = None
     quote: str | None = None
     """None for a count, total or winner derived from other facts rather than read from the page."""
     url: str | None = None
@@ -154,6 +195,8 @@ class StepChoice(Frozen):
 
 class ArtifactKind(StrEnum):
     DOWNLOAD = "download"
+    SCREENSHOT = "screenshot"
+    CAPTURE = "capture"
 
 
 class Artifact(Frozen):
@@ -171,6 +214,7 @@ class CostComponent(StrEnum):
     LLM = "llm"
     BROWSER = "browser"
     PROXY = "proxy"
+    SEARCH = "search"
 
 
 class CostBasis(StrEnum):
@@ -181,18 +225,33 @@ class CostBasis(StrEnum):
     BOUNDED = "bounded"
     """No charge was reported, and `dollars` is the most the call could have cost: its model's whole context
     window at the highest token price any of its routes lists. Never less than the charge."""
+    UNSETTLED = "unsettled"
+    """The provider's figure so far, read before it finished metering: the final charge can be higher."""
     UNKNOWN = "unknown"
     """No charge information; never counted as zero."""
 
 
 class LLMPurpose(StrEnum):
-    PLAN = "plan"
-    READ = "read"
-    FIELD_TEXT = "field_text"
-    RECOVER = "recover"
-    VERIFY = "verify"
+    START = "start"
     COMPOSE = "compose"
-    SHORTCUT = "shortcut"
+    IMAGE_READ = "image_read"
+    FILL = "fill"
+    PAGES = "pages"
+    DATES = "dates"
+    KNOWN_PAGES = "known_pages"
+    RECOVERY_PAGES = "recovery_pages"
+    SEARCH = "search"
+    UNOBTAINABLE = "unobtainable"
+    GROUPS = "groups"
+
+
+class JevPurpose(StrEnum):
+    ACTION = "action"
+    AUTHORIZATION = "authorization"
+    RELEVANCE = "relevance"
+    READ = "read"
+    VERIFY = "verify"
+    LOCATE = "locate"
 
 
 class CostLine(Frozen):
@@ -200,13 +259,18 @@ class CostLine(Frozen):
     basis: CostBasis
     dollars: float | None = Field(default=None, ge=0)
     purpose: LLMPurpose | None = None
+    decision_purpose: JevPurpose | None = Field(default=None, exclude_if=lambda purpose: purpose is None)
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     seconds: float | None = Field(default=None, ge=0)
-    """Wall time of the call, retries included. None for a line that is not one call, such as browser time."""
+    """Wall time of the call, retries included, or the time a metered browser was held. None when unknown."""
+    physical_requests: int | None = Field(default=None, ge=0, exclude_if=lambda requests: requests is None)
+    """Physical provider requests represented by this line; absent on historical receipts."""
 
     @property
     def label(self) -> str:
+        if self.component == CostComponent.JEV and self.decision_purpose is not None:
+            return f"{self.component.value}:{self.decision_purpose.value}"
         return self.component.value if self.purpose is None else f"{self.component.value}:{self.purpose.value}"
 
 
@@ -214,13 +278,25 @@ class CostBreakdown(Frozen):
     lines: tuple[CostLine, ...] = ()
 
     def seconds_by_call(self) -> dict[str, float]:
-        """Wall time per kind of call. Calls can overlap (the plan runs beside the first steps), so the sum
-        can exceed the run's wall time."""
+        """Wall time per kind of call. Calls can overlap (the plan runs beside the first steps), and the browser's
+        line covers the whole time it was held, so the sum can exceed the run's wall time."""
         totals: dict[str, float] = {}
         for line in self.lines:
             if line.seconds is not None:
                 totals[line.label] = round(totals.get(line.label, 0.0) + line.seconds, 2)
         return totals
+
+    def jev_calls_by_purpose(self) -> dict[str, int]:
+        """Jev requests per decision purpose, the requests a line represents or one where it records none. A line that
+        names no purpose counts under "unnamed", so the counts always add up to the run's Jev calls."""
+        counts: dict[str, int] = {}
+        for line in self.lines:
+            if line.component is CostComponent.JEV:
+                purpose = "unnamed" if line.decision_purpose is None else line.decision_purpose.value
+                counts[purpose] = counts.get(purpose, 0) + (
+                    1 if line.physical_requests is None else line.physical_requests
+                )
+        return counts
 
     @property
     def known_dollars(self) -> float:
@@ -228,7 +304,7 @@ class CostBreakdown(Frozen):
 
     @property
     def has_unknown(self) -> bool:
-        return any(line.basis is CostBasis.UNKNOWN for line in self.lines)
+        return any(line.basis in (CostBasis.UNKNOWN, CostBasis.UNSETTLED) for line in self.lines)
 
 
 class StepResult(Frozen):
@@ -244,7 +320,7 @@ class StepResult(Frozen):
     facts: tuple[StepFact, ...] = ()
     """Facts added to the notes by this step, with resolved secrets redacted."""
     page_changed: bool | None = None
-    """Whether the page's fingerprint changed; None for steps that do not act (read, escalate)."""
+    """Whether the page's fingerprint changed; None for steps that do not act (read)."""
     duration_ms: int = Field(ge=0)
     choices: tuple[StepChoice, ...] = Field(default=(), exclude_if=lambda choices: not choices)
     """The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them."""
@@ -280,6 +356,30 @@ class Wall(Frozen):
     """When the run stopped at it, in UTC epoch milliseconds."""
 
 
+class BrowserVia(StrEnum):
+    """How a run reached the browser it drove."""
+
+    CLOUD = "cloud"
+    """A Browser Use Cloud browser started for the run."""
+    LAUNCHED = "launched"
+    """A local Chrome the run launched."""
+    ATTACHED = "attached"
+    """A browser the caller was already running, reached over its DevTools address."""
+    EXTENSION = "extension"
+    """The user's own browser, reached through the fastbrowse extension."""
+
+
+class BrowserUsed(Frozen):
+    """The browser a run drove."""
+
+    via: BrowserVia
+    profile: str | None = None
+    """The profile it ran in, when one was named: a local profile directory, a cloud profile, or the label of a
+    browser connected through the extension."""
+    browser: str | None = None
+    """The browser's product and version, when known, such as `Chrome 150.0.7400.2`."""
+
+
 class RunResult(Frozen):
     status: Status
     budget: BudgetStop | None = None
@@ -294,15 +394,33 @@ class RunResult(Frozen):
     final_url: str | None = None
     """Where the browser was last observed; what a caller checks when the task was to arrive somewhere."""
     final_frame: bytes | None = Field(default=None, exclude=True, repr=False)
-    """A safe final PNG when step frames are enabled; kept out of text results."""
+    """A safe final PNG requested by the task or enabled with step frames; kept out of text results."""
     recordings: tuple[Path, ...] = ()
     """The videos this run finished writing, captioned then plain; empty when it recorded nothing or encoding failed."""
     wall: Wall | None = None
     """The sign-in or bot wall a `needs_login` or `blocked` run stopped at, when the page showed one."""
+    browser: BrowserUsed | None = None
+    """The browser the run drove, and how it reached it; none when it read every page over HTTP."""
 
     @property
     def succeeded(self) -> bool:
         return self.status is Status.COMPLETE
+
+
+class Build(Frozen):
+    """The build that produced a result."""
+
+    fastbrowse_version: str | None
+    git_sha: str | None
+    """The full commit, or None when no commit is known (the standalone binary or a released wheel)."""
+    git_dirty: bool | None
+    """Whether the tree had uncommitted changes; None outside a checkout."""
+
+
+class CliResult(RunResult):
+    """What `fastbrowse --json` prints: the run's result and the build that produced it."""
+
+    build: Build
 
 
 class LocalChrome(Frozen):
@@ -332,9 +450,6 @@ class CloudBrowser(Frozen):
     """Browser-level DevTools WebSocket URL (`ws://` or `wss://`), for `run_task(cdp_url=..., attach=True)`."""
     live_url: str | None = None
     """The service's live view of the browser, when it gave one."""
-    api: Literal["v3", "v4"]
-    """The API version the browser was created on, which its stop goes to as well: a browser with extensions is
-    a V4 one, and the service's V3 and V4 ids are not interchangeable."""
 
 
 class Attachment(Frozen):

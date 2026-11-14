@@ -1,17 +1,19 @@
 //! The CDP connection: one reader task owns the websocket's read half, one writer task its write half, and
-//! `send` is `session.py`'s `_BrowserClient.send_raw`, with its liveness probe and command deadlines.
+//! commands use a liveness probe and deadlines to detect an unresponsive browser.
 //!
 //! Replies route to callers by id through oneshot channels, so any number of calls are in flight at once. Events
 //! go to handlers synchronously and in socket order, so a handler sees every event before the reply that follows
 //! it on the socket is delivered: state a handler keeps (frames, dialogs, tabs) is current by the time a caller
-//! wakes, as cdp-use's callbacks are.
+//! wakes.
 //!
 //! Dropping a `call` future removes its pending entry, so a late reply is read and discarded. When the socket
 //! closes, every pending call and every later one fails with `CdpError::Closed`.
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -25,15 +27,23 @@ use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 
 use crate::error::BrowserError;
 
-/// How long a CDP command waits before the browser is asked whether it is still there. A cloud browser's proxy can
-/// keep the socket open, answering pings, after losing the browser behind it, and a run with no wall-clock limit
-/// would otherwise wait on that reply forever. A slow reply is not a lost one: `Page.navigate` waits for a slow
+/// How long an ordinary CDP command waits before the browser is asked whether it is still there. A cloud browser's
+/// proxy can keep the socket open, answering pings, after losing the browser behind it, and a run with no wall-clock
+/// limit would otherwise wait on that reply forever. A slow reply is not a lost one: `Page.navigate` waits for a slow
 /// server's headers, so a live browser can keep waiting until `CDP_COMMAND_SECONDS`.
 pub const CDP_REPLY_SECONDS: f64 = 60.0;
-/// A responsive browser can still leave one document command pending forever.
+/// The deadline for an ordinary CDP command. A responsive browser can still leave one document command pending forever.
 pub const CDP_COMMAND_SECONDS: f64 = 120.0;
+/// Chrome's hung-renderer delay for an input event. An input that reached a renderer blocked in script must return
+/// before the next input can be dispatched, so it gets Chrome's own shorter deadline.
+pub const CDP_INPUT_SECONDS: f64 = 15.0;
 /// `Browser.getVersion` is answered at once by any browser that is there.
 pub const CDP_ALIVE_SECONDS: f64 = 10.0;
+/// How long a command to a page waits before the page is asked whether it still answers. A renderer whose main thread
+/// never returns, as after a click handler that loops, answers nothing it is sent, while a page waiting on a slow
+/// server still answers a trivial evaluation. Only a page that leaves that unanswered for `CDP_ALIVE_SECONDS` too
+/// is unresponsive, so a hung page is known in about 20 seconds rather than at `CDP_COMMAND_SECONDS`.
+pub const CDP_PAGE_SECONDS: f64 = 10.0;
 /// Command deadlines one session may meet before its commands fail at once, as `PageUnresponsive`. A read
 /// that waits out the deadline is often one whose caller treats a failed read as an unreadable page and carries on,
 /// so the next read waited it out again: one login run met it thirteen times, 26 minutes on a page it could not
@@ -51,11 +61,28 @@ const OPEN_SECONDS: f64 = 10.0;
 const PING_SECONDS: f64 = 20.0;
 /// cdp-use's frame bound: a full-page screenshot or a large document's evaluation fits under it.
 const MAX_MESSAGE_BYTES: usize = 100 * 1024 * 1024;
-/// Statuses that say nothing about the request, so a repeat can clear them (`clients/validation.py`).
+/// Transient response statuses permit retrying a failed handshake or cloud browser request.
 pub const RETRYABLE_STATUS: [u16; 12] = [408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529];
+
+/// A command past its deadline: its reply if one has landed, however late, else whether the browser still answers.
+async fn after_deadline<R>(
+    mut reply: Pin<&mut impl Future<Output = R>>,
+    alive: impl Future<Output = bool>,
+) -> Result<R, bool> {
+    // A reply taken here is returned, never polled for again: a finished future must not be resumed.
+    if let Ok(reply) = timeout(Duration::ZERO, &mut reply).await {
+        return Ok(reply);
+    }
+    let alive = alive.await;
+    timeout(Duration::ZERO, &mut reply).await.map_err(|_| alive)
+}
 
 pub fn secs(seconds: f64) -> Duration {
     Duration::from_secs_f64(seconds)
+}
+
+fn command_seconds(method: &str) -> f64 {
+    if method.starts_with("Input.") { CDP_INPUT_SECONDS } else { CDP_COMMAND_SECONDS }
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +115,20 @@ struct Incoming {
     error: Option<RemoteError>,
 }
 
+impl Incoming {
+    /// An event with no session.
+    fn event(method: &str, params: Value) -> Incoming {
+        Incoming {
+            id: None,
+            method: Some(method.to_owned()),
+            session_id: None,
+            params,
+            result: Value::Null,
+            error: None,
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct RemoteError {
     code: i64,
@@ -118,26 +159,15 @@ struct Inner {
     /// every command while its remote debugging approval prompt waits, which would otherwise read as a lost browser
     /// only after `CDP_REPLY_SECONDS`.
     answered: AtomicBool,
-    /// Commands that outlived `CDP_COMMAND_SECONDS`, by the session they addressed. A cloud browser's connection
+    /// Commands that outlived their method-specific deadline, by the session they addressed. A cloud browser's connection
     /// carries every target the run attached, third-party frames and workers included, and one of those hanging says
-    /// nothing about the tab the run drives: on The Pi Hut a frame's `Page.addScriptToEvaluateOnNewDocument` met its
-    /// deadline twice and every command to the answering main tab was refused.
+    /// nothing about the tab the run drives. A child target's deadline must not prevent commands to an answering tab.
     deadlines: Mutex<HashMap<String, u32>>,
     pong: AtomicBool,
 }
 
 #[derive(Clone)]
 pub struct Cdp(Arc<Inner>);
-
-/// A handler holds this, not a `Cdp`, so the connection does not own a reference to itself.
-#[derive(Clone)]
-pub struct WeakCdp(Weak<Inner>);
-
-impl WeakCdp {
-    pub fn upgrade(&self) -> Option<Cdp> {
-        self.0.upgrade().map(Cdp)
-    }
-}
 
 /// `_unreachable`: a connection the browser's endpoint dropped or refused for now, as a cloud browser still starting
 /// does. A malformed reply, such as a proxy's bare 401, and a TLS failure both need the configuration changed.
@@ -177,7 +207,11 @@ fn handshake_detail(error: &WsError) -> &'static str {
 
 impl Cdp {
     /// `_BrowserClient.start`: open the DevTools socket.
-    pub async fn connect(url: &str) -> Result<Self, BrowserError> {
+    /// `trace` records the extension relay's traffic; a DevTools socket records nothing to it.
+    pub async fn connect(url: &str, trace: &fastbrowse_core::telemetry::Trace) -> Result<Self, BrowserError> {
+        if let Some(record) = url.strip_prefix(crate::extension::SCHEME) {
+            return Self::connect_extension(record, trace).await;
+        }
         // The websocket's TLS provider for wss:// (cloud browsers); a second install is refused and harmless.
         let _ = rustls::crypto::ring::default_provider().install_default();
         let mut config = WebSocketConfig::default();
@@ -272,8 +306,64 @@ impl Cdp {
         Ok(Self(inner))
     }
 
-    pub fn downgrade(&self) -> WeakCdp {
-        WeakCdp(Arc::downgrade(&self.0))
+    /// Reach a browser through the fastbrowse extension: `record` is the path of its host's record, optionally
+    /// followed by `#` and the run's task, which names the run's tab group.
+    async fn connect_extension(record: &str, trace: &fastbrowse_core::telemetry::Trace) -> Result<Self, BrowserError> {
+        let (path, task) = record.split_once('#').unwrap_or((record, ""));
+        let text = std::fs::read_to_string(path).map_err(|_| {
+            BrowserError::Unavailable("the fastbrowse extension is no longer connected: open the browser".into())
+        })?;
+        let host: crate::extension::protocol::HostRecord = serde_json::from_str(&text)
+            .map_err(|_| BrowserError::Unavailable(format!("{path} is not a fastbrowse host record")))?;
+        let endpoint = crate::extension::shim::connect(&host, task, trace.clone()).await?;
+        let (out, mut outgoing) = mpsc::unbounded_channel::<Outgoing>();
+        let inner = Arc::new(Inner {
+            state: Mutex::default(),
+            handlers: Mutex::default(),
+            out,
+            answered: AtomicBool::new(false),
+            deadlines: Mutex::default(),
+            pong: AtomicBool::new(true),
+        });
+        let commands = endpoint.commands;
+        tokio::spawn(async move {
+            // Liveness is checked by `Browser.getVersion`, which the shim answers with a round trip to the extension.
+            while let Some(message) = outgoing.recv().await {
+                match message {
+                    Outgoing::Text(text) => {
+                        if commands.send(text).is_err() {
+                            return;
+                        }
+                    }
+                    Outgoing::Ping => {}
+                    Outgoing::Close => return,
+                }
+            }
+        });
+        let weak = Arc::downgrade(&inner);
+        let mut replies = endpoint.replies;
+        tokio::spawn(async move {
+            let why: Arc<str> = loop {
+                let Some(text) = replies.recv().await else { break "ConnectionClosed".into() };
+                let Some(inner) = weak.upgrade() else { return };
+                if let Ok(closed) = serde_json::from_str::<Value>(&text)
+                    && let Some(why) = closed["closed"].as_str()
+                {
+                    if why == crate::extension::shim::CANCELLED {
+                        let by = json!({"by": closed["by"]});
+                        inner.dispatch(Incoming::event(crate::extension::STOPPED_EVENT, by));
+                    }
+                    break why.into();
+                }
+                if let Ok(message) = serde_json::from_str::<Incoming>(&text) {
+                    inner.dispatch(message);
+                }
+            };
+            if let Some(inner) = weak.upgrade() {
+                inner.close(why);
+            }
+        });
+        Ok(Self(inner))
     }
 
     /// One command with no deadline of its own: the reply, or why there is none.
@@ -313,9 +403,13 @@ impl Cdp {
         }
         let reply = self.call(method, params, session);
         tokio::pin!(reply);
-        let deadline = Instant::now() + secs(CDP_COMMAND_SECONDS);
+        let deadline = Instant::now() + secs(command_seconds(method));
         let outcome = loop {
-            let wait = if self.answered() { CDP_REPLY_SECONDS } else { CDP_ALIVE_SECONDS };
+            let wait = match (self.answered(), session) {
+                (false, _) => CDP_ALIVE_SECONDS,
+                (true, Some(_)) => CDP_PAGE_SECONDS,
+                (true, None) => CDP_REPLY_SECONDS,
+            };
             let until = (Instant::now() + secs(wait)).min(deadline);
             match timeout_at(until, &mut reply).await {
                 Ok(outcome) => break Some(outcome),
@@ -324,9 +418,16 @@ impl Cdp {
             }
             // The probe runs inside the command deadline, as Python's does under `asyncio.timeout`.
             let Ok(alive) = timeout_at(deadline, self.alive()).await else { break None };
-            // A reply that landed while the probe waited still counts, however the probe ended.
+            let page_answers = match session {
+                Some(id) if alive => timeout_at(deadline, self.page_answers(id)).await.unwrap_or(false),
+                _ => true,
+            };
+            // A reply that landed while a probe waited still counts, however the probe ended.
             if let Ok(outcome) = timeout(Duration::ZERO, &mut reply).await {
                 break Some(outcome);
+            }
+            if !page_answers {
+                break None;
             }
             if !alive {
                 if !self.answered() {
@@ -345,24 +446,22 @@ impl Cdp {
             None => {
                 // The browser can go during the last wait, after the probe before it answered, so it is asked once
                 // more: only a browser that is still there makes this the page's failure rather than an outage.
-                let mut alive = true;
-                if timeout(Duration::ZERO, &mut reply).await.is_err() {
-                    alive = self.alive().await;
-                }
-                if let Ok(outcome) = timeout(Duration::ZERO, &mut reply).await {
+                match after_deadline(reply.as_mut(), self.alive()).await {
                     // The page answered while the browser was being asked: the command is done, however late.
-                    outcome
-                } else if !alive {
-                    return Err(BrowserError::BrowserUnresponsive(format!(
-                        "{method} got no reply, and the browser stopped answering"
-                    )));
-                } else {
-                    if let Some(id) = session {
-                        *self.deadlines().entry(id.to_string()).or_default() += 1;
+                    Ok(outcome) => outcome,
+                    Err(false) => {
+                        return Err(BrowserError::BrowserUnresponsive(format!(
+                            "{method} got no reply, and the browser stopped answering"
+                        )));
                     }
-                    return Err(BrowserError::PageUnresponsive(format!(
-                        "{method} exceeded its command deadline; the page did not answer while the browser did"
-                    )));
+                    Err(true) => {
+                        if let Some(id) = session {
+                            *self.deadlines().entry(id.to_string()).or_default() += 1;
+                        }
+                        return Err(BrowserError::PageUnresponsive(format!(
+                            "{method} exceeded its command deadline; the page did not answer while the browser did"
+                        )));
+                    }
                 }
             }
         };
@@ -385,6 +484,28 @@ impl Cdp {
         self.0.deadlines.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// Count a deadline the caller met on `session` itself, as when it cancelled an evaluation the renderer did not
+    /// answer in time, so `wedged` probes that renderer before the next navigation.
+    pub fn missed_deadline(&self, session: &str) {
+        *self.deadlines().entry(session.to_string()).or_default() += 1;
+    }
+
+    /// Whether this session's renderer is stuck, so a new target is needed. A met deadline alone does not say so: a
+    /// slow server's `Page.navigate` meets one on a live renderer. Past `CDP_DEADLINES_BEFORE_STOP` its commands are
+    /// refused anyway; below it the renderer is asked to evaluate once, outside the deadline count.
+    pub async fn wedged(&self, session: &str) -> bool {
+        let deadlines = self.deadlines().get(session).copied().unwrap_or(0);
+        if deadlines == 0 {
+            return false;
+        }
+        if deadlines >= CDP_DEADLINES_BEFORE_STOP {
+            return true;
+        }
+        let probe = self.call("Runtime.evaluate", json!({"expression": "1"}), Some(session));
+        // An error reply is an answer: mid-navigation the context is gone, but the renderer is live.
+        !matches!(timeout(secs(CDP_ALIVE_SECONDS), probe).await, Ok(Ok(_) | Err(CdpError::Protocol { .. })))
+    }
+
     fn answered(&self) -> bool {
         self.0.answered.load(Ordering::Relaxed)
     }
@@ -399,6 +520,13 @@ impl Cdp {
         alive
     }
 
+    /// Whether the page behind `session` still runs anything: an error reply is an answer too, since the page read
+    /// the command.
+    async fn page_answers(&self, session: &str) -> bool {
+        let probe = self.call("Runtime.evaluate", json!({"expression": "0"}), Some(session));
+        matches!(timeout(secs(CDP_ALIVE_SECONDS), probe).await, Ok(Ok(_) | Err(CdpError::Protocol { .. })))
+    }
+
     /// Run `handler` on every event, on the reader task, before any later message is routed. It must not block.
     pub fn on_event(&self, handler: Handler) {
         self.0.handlers.lock().unwrap().push(Arc::new(handler));
@@ -407,10 +535,6 @@ impl Cdp {
     /// Calls still waiting for a reply.
     pub fn pending(&self) -> usize {
         self.0.state.lock().unwrap().pending.len()
-    }
-
-    pub fn is_closed(&self) -> bool {
-        self.0.state.lock().unwrap().closed.is_some()
     }
 
     /// `_BrowserClient.stop`: close the socket; every call still pending fails, and so does every later one.
@@ -479,5 +603,37 @@ struct PendingGuard<'a> {
 impl Drop for PendingGuard<'_> {
     fn drop(&mut self) {
         self.inner.state.lock().unwrap().pending.remove(&self.id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_reply_already_landed_at_the_deadline_is_the_answer() {
+        let (tx, rx) = oneshot::channel::<u8>();
+        tx.send(7).unwrap();
+        tokio::pin!(rx);
+        // The browser is not asked: the reply settles it.
+        assert_eq!(after_deadline(rx.as_mut(), async { false }).await.map(Result::unwrap), Ok(7));
+    }
+
+    #[tokio::test]
+    async fn a_reply_that_lands_while_the_browser_is_asked_is_the_answer() {
+        let (tx, rx) = oneshot::channel::<u8>();
+        tokio::pin!(rx);
+        let alive = async move {
+            tx.send(7).unwrap();
+            true
+        };
+        assert_eq!(after_deadline(rx.as_mut(), alive).await.map(Result::unwrap), Ok(7));
+    }
+
+    #[tokio::test]
+    async fn no_reply_reports_whether_the_browser_answered() {
+        let (_tx, rx) = oneshot::channel::<u8>();
+        tokio::pin!(rx);
+        assert!(matches!(after_deadline(rx.as_mut(), async { true }).await, Err(true)));
     }
 }

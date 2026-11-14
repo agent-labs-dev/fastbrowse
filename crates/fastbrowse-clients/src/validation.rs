@@ -1,4 +1,4 @@
-//! Port of `clients/validation.py`: shared wire encoding and strict validation for both Jev transports, and the retry
+//! Shared wire encoding and strict validation for every decision client, and the retry
 //! and accounting every model request goes through.
 //!
 //! Python cancels a call by raising `CancelledError` into it and lets each frame settle its receipts on the way out.
@@ -13,9 +13,10 @@ use std::time::Duration;
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::decision::{
-    Answer, ChoiceAnswer, DecisionError, Evaluation, NoulAnswer, Question, RetriesExhausted, ScoreAnswer,
+    Answer, BoxAnswer, ChoiceAnswer, DecisionError, Edges, Evaluation, NoulAnswer, Question, RetriesExhausted,
+    ScoreAnswer,
 };
-use fastbrowse_core::models::{CostBasis, CostComponent, CostLine};
+use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, JevPurpose};
 use fastbrowse_core::py::json::{dumps, float_str};
 use fastbrowse_core::py::lax::float_of;
 use fastbrowse_core::py::{self, text};
@@ -54,6 +55,10 @@ pub fn wire_questions(questions: &IndexMap<String, Question>, gateway: bool) -> 
                 body.insert("instructions".into(), q.instructions.clone().into());
                 body.insert("type".into(), "score".into());
                 body.insert("criteria".into(), q.criteria.clone().into());
+            }
+            Question::Box(q) => {
+                body.insert("instructions".into(), q.instructions.clone().into());
+                body.insert("type".into(), "box".into());
             }
         }
         result.insert(key.clone(), Value::Object(body));
@@ -116,11 +121,7 @@ pub fn json_object(response: &Response) -> Result<Map<String, Value>, String> {
 ///
 /// Some providers echo the rejected key back in an authentication error, and error text is logged.
 pub fn body_excerpt(response: &Response) -> String {
-    text::prefix(&scrubbed(response, &response.text()), 400).to_string()
-}
-
-fn scrubbed(response: &Response, text: &str) -> String {
-    if response.credential.is_empty() { text.to_string() } else { text.replace(&response.credential, "[api key]") }
+    text::prefix(&response.scrub(&response.text()), 400).to_string()
 }
 
 fn field<'a>(value: Option<&'a Value>, keys: &[&str]) -> Option<&'a Value> {
@@ -152,21 +153,21 @@ pub fn describe(response: &Response) -> String {
         field(body.as_ref(), &["providerMetadata", "gateway", "routing", "resolvedProvider"]).and_then(Value::as_str);
     // Scrubbed before it is cut: a cut through an echoed key leaves a fragment no exact replacement matches.
     let mut text = format!("HTTP {}{}: ", response.status, kind.map(|kind| format!(" {kind}")).unwrap_or_default());
-    text += text::prefix(&scrubbed(response, message), 300);
+    text += text::prefix(&response.scrub(message), 300);
     if let Some(upstream) = upstream {
         text += &format!(" (via {upstream})");
     }
     if let Some(reason) = wrapped_reason(body.as_ref())
         && reason != message
     {
-        text += &format!("; the provider said: {}", text::prefix(&scrubbed(response, reason), 200));
+        text += &format!("; the provider said: {}", text::prefix(&response.scrub(reason), 200));
     }
-    scrubbed(response, &text)
+    response.scrub(&text)
 }
 
 pub fn response_error(response: &Response, detail: &str) -> DecisionError {
     // `detail` can quote the body, as a validation error's input does.
-    DecisionError::Failed(format!("{}; {}", text::prefix(&scrubbed(response, detail), 300), describe(response)))
+    DecisionError::Failed(format!("{}; {}", text::prefix(&response.scrub(detail), 300), describe(response)))
 }
 
 /// About 22s in all. With 6s, a Jev 503 ended 5 of 311 eval runs, and each time the next run, started 0 to 15s later,
@@ -193,12 +194,14 @@ pub fn retryable(response: &Response) -> bool {
 }
 
 const MAX_BACKOFF_SECONDS: f64 = 10.0;
-/// Jev answers in about a second, so an attempt this old is stuck upstream, and a retry beats waiting on it.
+/// Jev answers in about a second, so a Jev provider silent this long is stuck upstream, and a retry beats waiting on it.
 pub const JEV_ATTEMPT_SECONDS: f64 = 15.0;
 /// A Jev call slower than this is the provider's outage: 45 measured gateway calls from 10 to 600 controls (670 to 25k
 /// input tokens) took 0.40 to 0.48s median and 0.93s at worst. Retries and backoff count toward it.
 pub const JEV_SLOW_SECONDS: f64 = 2.0;
-/// Leaves room for long reads and verification while bounding upstream stalls; flash-lite plans take about 0.8s.
+/// How long an LLM provider may stay silent before the attempt is retried. It bounds a stall, not an answer: OpenRouter
+/// sends its response head at once and a keep-alive byte every few seconds while the model writes, so a long read or
+/// verification answer is read to its end however long it takes.
 pub const LLM_ATTEMPT_SECONDS: f64 = 30.0;
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -247,7 +250,7 @@ pub fn exhausted(requests: i64, seconds: f64, last: &str) -> String {
 /// that answered, as an estimate. A bound holds for any request with that input, so it stays a bound.
 pub fn with_discarded(cost: CostLine, usage: &RequestUsage) -> CostLine {
     if usage.unaccounted_requests == 0 {
-        return cost;
+        return CostLine { physical_requests: (usage.requests > 0).then_some(usage.requests), ..cost };
     }
     let sent = 1 + usage.unaccounted_requests;
     let basis =
@@ -256,6 +259,7 @@ pub fn with_discarded(cost: CostLine, usage: &RequestUsage) -> CostLine {
         basis: if cost.dollars.is_none() { CostBasis::Unknown } else { basis },
         dollars: cost.dollars.map(|dollars| dollars * sent as f64),
         input_tokens: cost.input_tokens * sent,
+        physical_requests: Some(usage.requests),
         ..cost
     }
 }
@@ -417,7 +421,7 @@ async fn send(
             let failure = describe(&response);
             (Some(response), failure)
         }
-        Err(TransportError::Timeout(name)) => (None, format!("no response within {attempt_seconds:.0}s ({name})")),
+        Err(TransportError::Timeout(name)) => (None, format!("silent for {attempt_seconds:.0}s ({name})")),
         // The type names the failure; its text can quote the request, credential included.
         Err(TransportError::Transient(name)) => (None, format!("no response ({name})")),
         Err(TransportError::Fatal(name)) => {
@@ -458,15 +462,16 @@ impl AskError {
     }
 }
 
-/// Characters `json.dumps` writes for `body`, the measure Python prices a request by.
+/// Serialized request size for the text-only token estimate.
 fn dumped_chars(body: &Value) -> usize {
     dumps(body).len()
 }
 
-/// Records the input estimate of a Jev request dropped in flight, as Python's `except CancelledError` does.
+/// Retains the input estimate or documented image bound when a dispatched request loses its response.
 struct CancelledJev<'a> {
     spend: Option<JevSpend>,
-    body: &'a Value,
+    cost: CostLine,
+    image_input: bool,
     price: Option<f64>,
     usage: &'a Usage,
     trace: &'a Trace,
@@ -479,17 +484,20 @@ impl Drop for CancelledJev<'_> {
             return;
         }
         // Cancellation loses reported usage, so retain the dispatched input estimate rather than a free call.
-        let tokens = (dumped_chars(self.body) as f64 / TokenBudget::default().chars_per_token).ceil() as i64;
         let unaccounted = self.usage.lock().unaccounted_requests;
         if let Some(spend) = &self.spend {
-            spend.record((0..unaccounted).map(|_| estimated_cost(self.price, tokens, 0)));
+            spend.record((0..unaccounted).map(|_| self.cost.clone()));
         }
         if unaccounted > 0 {
             self.trace.event("cancelled_request_cost", || {
-                let mut fields = Map::new();
+                let mut fields = jev_trace_fields();
                 fields.insert("call".into(), "jev".into());
                 fields.insert("requests".into(), unaccounted.into());
-                fields.insert("estimated_input_tokens".into(), tokens.into());
+                if !self.image_input {
+                    fields.insert("estimated_input_tokens".into(), self.cost.input_tokens.into());
+                } else {
+                    fields.insert("cost".into(), serde_json::to_value(&self.cost).unwrap());
+                }
                 fields.insert("dollars_per_input_token".into(), self.price.into());
                 fields
             });
@@ -508,10 +516,16 @@ pub(crate) async fn post(
     start_attempt: usize,
     split_batch: bool,
     price: Option<f64>,
+    image_context: Option<i64>,
 ) -> Result<Response, AskError> {
     let spend = JevSpend::current();
     // Priced before sending, so a split single or a retry cannot carry the run past its dollar cap.
-    let estimate = body_dollars(body, price);
+    let cost = input_cost(body, price, image_context);
+    let estimate = if image_context.is_some() {
+        cost.dollars.unwrap_or(0.0)
+    } else {
+        dumped_chars(body) as f64 / TokenBudget::default().chars_per_token * price.unwrap_or(0.0)
+    };
     let check = || check_jev_spend(spend.as_ref(), estimate);
     check().map_err(DecisionError::Budget)?;
     let started = Instant::now();
@@ -528,9 +542,20 @@ pub(crate) async fn post(
         start_attempt,
         split_batch,
     };
-    let mut cancelled = CancelledJev { spend: spend.clone(), body, price, usage, trace: &http.trace, armed: true };
+    let mut cancelled = CancelledJev {
+        spend: spend.clone(),
+        cost,
+        image_input: image_context.is_some(),
+        price,
+        usage,
+        trace: &http.trace,
+        armed: true,
+    };
     let sent = post_with_retry(http, url, body, &auth, &attempts, usage).await;
-    cancelled.armed = false;
+    // A call that ends without an answer keeps its unanswered requests, as a cancelled one does: they may have been
+    // billed, and a caller that carries on after the failure records nothing for them. An answer or a split carries
+    // them in its usage instead.
+    cancelled.armed = matches!(sent, Err(RetryStop::Budget(_) | RetryStop::Fatal(_)) | Ok(None));
     let response = match sent {
         Ok(response) => response,
         Err(RetryStop::Budget(error)) => return Err(DecisionError::Budget(error).into()),
@@ -559,6 +584,7 @@ pub(crate) async fn post(
         .into());
     };
     if retryable(&response) {
+        cancelled.armed = true;
         let last = describe(&response);
         return Err(DecisionError::RetriesExhausted(Box::new(RetriesExhausted {
             message: exhausted(usage.requests, seconds, &last),
@@ -575,6 +601,12 @@ pub(crate) async fn post(
     let too_large = ["max_tokens_exceeded", "request body too large"].iter().any(|r| text.contains(r));
     if response.status == 413 || (response.status == 400 && too_large) {
         return Err(DecisionError::InputTooLarge(format!("Jev input too large; {}", describe(&response))).into());
+    }
+    if matches!(response.status, 401 | 403) {
+        let host = url::Url::parse(url).ok().and_then(|url| url.host_str().map(str::to_string)).unwrap_or_default();
+        return Err(
+            DecisionError::Rejected(format!("Jev {} ({host} rejected the API key)", describe(&response))).into()
+        );
     }
     if !response.is_success() {
         return Err(response_error(&response, "Jev request failed").into());
@@ -650,9 +682,6 @@ fn probabilities(value: Option<&Value>, keys: &[String]) -> Result<IndexMap<Stri
     Ok(result)
 }
 
-/// The wire's two-decimal probability step.
-const ROUNDING_UNIT: f64 = 0.01;
-
 pub fn parse_answers(
     value: Option<&Value>,
     questions: &IndexMap<String, Question>,
@@ -671,6 +700,7 @@ pub fn parse_answers(
             Question::Noul(_) if gateway => "boolean",
             Question::Noul(_) => "noul",
             Question::Score(_) => "score",
+            Question::Box(_) => "box",
         };
         if answer.get("type").and_then(Value::as_str) != Some(expected_type) {
             return Err(format!("incorrect answer type for {key}"));
@@ -684,12 +714,6 @@ pub fn parse_answers(
                     Some(choice) if probs.contains_key(choice) => choice.to_string(),
                     _ => return Err(format!("choice outside criteria for {key}")),
                 };
-                // Probabilities are rounded to sum to one, which can move an option by one unit and put a near-tie a
-                // hundredth the wrong way round: a live run failed on escalate 0.40 chosen over read 0.41.
-                let top = probs.values().copied().fold(f64::NEG_INFINITY, f64::max);
-                if probs[&choice] < top - ROUNDING_UNIT - 1e-6 {
-                    return Err(format!("chosen option is not maximal for {key}"));
-                }
                 let confidence = probability(confidence_value)?;
                 Answer::Choice(ChoiceAnswer { kind: Default::default(), choice, probabilities: probs, confidence })
             }
@@ -709,6 +733,20 @@ pub fn parse_answers(
                 let confidence = probability(confidence_value)?;
                 Answer::Score(ScoreAnswer { kind: Default::default(), score, probabilities: probs, confidence })
             }
+            Question::Box(_) => {
+                let edges = object_value(answer.get("box"))?;
+                let edge = |name: &str| probability(edges.get(name));
+                let edges =
+                    Edges { top: edge("top")?, bottom: edge("bottom")?, left: edge("left")?, right: edge("right")? };
+                if edges.top > edges.bottom || edges.left > edges.right {
+                    return Err(format!("box edges cross for {key}"));
+                }
+                let confidence = match confidence_value {
+                    None | Some(Value::Null) => None,
+                    value => Some(probability(value)?),
+                };
+                Answer::Box(BoxAnswer { kind: Default::default(), edges, confidence })
+            }
         };
         answers.insert(key.clone(), parsed);
     }
@@ -717,6 +755,39 @@ pub fn parse_answers(
 
 tokio::task_local! {
     static SPEND: JevSpend;
+    static PURPOSE: JevPurpose;
+}
+
+fn current_jev_purpose() -> Option<JevPurpose> {
+    PURPOSE.try_with(|purpose| *purpose).ok()
+}
+
+pub(crate) fn jev_trace_fields() -> Map<String, Value> {
+    current_jev_purpose()
+        .map(|purpose| Map::from_iter([("decision_purpose".into(), purpose.as_str().into())]))
+        .unwrap_or_default()
+}
+
+/// The caller names the decision before dispatch, so retries and dropped futures retain the same purpose.
+pub async fn jev_purpose<F>(purpose: JevPurpose, future: F) -> Result<Evaluation, DecisionError>
+where
+    F: Future<Output = Result<Evaluation, DecisionError>>,
+{
+    PURPOSE
+        .scope(purpose, async {
+            let mut result = future.await;
+            match &mut result {
+                Ok(evaluation) => evaluation.cost.decision_purpose = Some(purpose),
+                Err(DecisionError::RetriesExhausted(exhausted)) => {
+                    for evaluation in &mut exhausted.answered {
+                        evaluation.cost.decision_purpose = Some(purpose);
+                    }
+                }
+                Err(_) => {}
+            }
+            result
+        })
+        .await
 }
 
 /// Cost lines a caller collects. Python passes a list and appends to it in place; this is that list, shared.
@@ -798,7 +869,13 @@ impl JevSpend {
 
     /// `record_jev_spend`.
     pub fn record(&self, costs: impl IntoIterator<Item = CostLine>) {
-        self.0.lines.extend(costs);
+        let purpose = current_jev_purpose();
+        self.0.lines.extend(costs.into_iter().map(|mut cost| {
+            if cost.component == CostComponent::Jev && cost.decision_purpose.is_none() {
+                cost.decision_purpose = purpose;
+            }
+            cost
+        }));
     }
 }
 
@@ -847,9 +924,19 @@ pub fn record_jev_spend(costs: impl IntoIterator<Item = CostLine>) {
     }
 }
 
-/// A request's input estimate at `price`; an unpriced model reserves nothing, and its receipt says what it cost.
-fn body_dollars(body: &Value, price: Option<f64>) -> f64 {
-    dumped_chars(body) as f64 / TokenBudget::default().chars_per_token * price.unwrap_or(0.0)
+/// Image tokenization is unpublished, so only the route's documented context bounds an unanswered image call.
+fn input_cost(body: &Value, price: Option<f64>, image_context: Option<i64>) -> CostLine {
+    if let Some(context) = image_context {
+        let mut cost = CostLine::new(
+            CostComponent::Jev,
+            if price.is_some() { CostBasis::Bounded } else { CostBasis::Unknown },
+            price.map(|price| context as f64 * price),
+        );
+        cost.decision_purpose = current_jev_purpose();
+        return cost;
+    }
+    let tokens = (dumped_chars(body) as f64 / TokenBudget::default().chars_per_token).ceil() as i64;
+    estimated_cost(price, tokens, 0)
 }
 
 /// Refuse a request whose estimate, beside every receipt held so far, would break the ledger's limits.
@@ -864,7 +951,7 @@ pub fn check_jev_spend(spend: Option<&JevSpend>, estimate_dollars: f64) -> Resul
     for paid in held.iter().filter(|paid| paid.id() != own) {
         lines.extend(paid.snapshot());
     }
-    let probe = Ledger::new(ledger.limits.clone());
+    let probe = Ledger::continuing(ledger.stated().clone(), ledger.limits.clone());
     probe.set_started(ledger.started());
     *probe.state() = LedgerState { lines, ..state };
     probe.reserve(CostComponent::Jev, estimate_dollars, 0)
@@ -884,21 +971,25 @@ pub fn merged_cost(lines: &[CostLine]) -> CostLine {
             Some(py::sum(lines.iter().map(|line| line.dollars.unwrap_or(0.0))))
         },
         purpose: None,
+        decision_purpose: current_jev_purpose().or_else(|| {
+            let purpose = lines.first()?.decision_purpose?;
+            lines.iter().all(|line| line.decision_purpose == Some(purpose)).then_some(purpose)
+        }),
         input_tokens: lines.iter().map(|line| line.input_tokens).sum(),
         output_tokens: lines.iter().map(|line| line.output_tokens).sum(),
         seconds: Some(py::sum(lines.iter().map(|line| line.seconds.unwrap_or(0.0)))),
+        physical_requests: lines.iter().map(|line| line.physical_requests).sum(),
     }
 }
 
 pub(crate) type Ask<'a> =
     dyn Fn(IndexMap<String, Question>, usize, bool) -> BoxFuture<'a, Result<Evaluation, AskError>> + Sync + 'a;
 
-/// Records a split's paid singles into the enclosing scope when the split is dropped, as Python's `except
-/// BaseException` does on cancellation.
-struct PaidOnDrop {
-    paid: Paid,
-    parent: Option<JevSpend>,
-    armed: bool,
+/// Records what the providers were paid into the enclosing scope when the call is dropped.
+pub(crate) struct PaidOnDrop {
+    pub(crate) paid: Paid,
+    pub(crate) parent: Option<JevSpend>,
+    pub(crate) armed: bool,
 }
 
 impl Drop for PaidOnDrop {
@@ -970,12 +1061,14 @@ pub(crate) async fn asking_split(
         let discarded = estimated_cost(price, input_tokens * usage.unaccounted_requests, 0);
         cost = merged_cost(&[cost, discarded]);
     }
+    let requests = usage.requests + answered.iter().map(|result| result.requests).sum::<i64>();
+    cost.physical_requests = Some(requests);
     Ok(Evaluation {
         model: answered[0].model.clone(),
         answers: answered.iter().flat_map(|result| result.answers.clone()).collect(),
         input_tokens,
         cost: CostLine { seconds: Some(started.elapsed().as_secs_f64()), ..cost },
-        requests: usage.requests + answered.iter().map(|result| result.requests).sum::<i64>(),
+        requests,
     })
 }
 
@@ -1047,9 +1140,11 @@ pub fn reported_cost(
             basis: CostBasis::Metered,
             dollars: Some(cost),
             purpose: None,
+            decision_purpose: current_jev_purpose(),
             input_tokens,
             output_tokens,
             seconds: None,
+            physical_requests: None,
         }),
         _ => Ok(estimated_cost(price, input_tokens, output_tokens)),
     }
@@ -1062,9 +1157,11 @@ pub fn estimated_cost(price: Option<f64>, input_tokens: i64, output_tokens: i64)
         basis: if price.is_some() { CostBasis::Estimated } else { CostBasis::Unknown },
         dollars: price.map(|price| input_tokens as f64 * price),
         purpose: None,
+        decision_purpose: current_jev_purpose(),
         input_tokens,
         output_tokens,
         seconds: None,
+        physical_requests: None,
     }
 }
 
@@ -1075,5 +1172,8 @@ pub(crate) fn invalid_response(response: &Response, what: &str, detail: &str) ->
 
 /// A Jev response's `cost.seconds`: the call's wall time.
 pub(crate) fn timed(cost: CostLine, usage: &RequestUsage, started: Instant) -> CostLine {
-    CostLine { seconds: Some(started.elapsed().as_secs_f64()), ..with_discarded(cost, usage) }
+    let mut cost = with_discarded(cost, usage);
+    cost.physical_requests = Some(usage.requests);
+    cost.seconds = Some(started.elapsed().as_secs_f64());
+    cost
 }

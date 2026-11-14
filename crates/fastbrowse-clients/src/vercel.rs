@@ -1,4 +1,4 @@
-//! Port of `clients/vercel.py`: the Vercel AI Gateway v4 evaluation transport.
+//! The Vercel AI Gateway v4 evaluation transport.
 //!
 //! Integrator's observed response, with choice, noul (wire boolean), and score:
 //!
@@ -16,7 +16,9 @@
 //! implementation makes no discovery calls.
 
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::decision::{DecisionClient, DecisionError, Evaluation, JEV_DOLLARS_PER_INPUT_TOKEN, Question};
+use fastbrowse_core::decision::{
+    DecisionClient, DecisionError, DecisionProfile, Evaluation, JEV_DOLLARS_PER_INPUT_TOKEN, Question,
+};
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
@@ -28,7 +30,8 @@ use crate::validation::{
 };
 
 pub const GATEWAY_URL: &str = "https://ai-gateway.vercel.sh";
-const MODEL: &str = "typesafe-ai/jev";
+/// Pinned like every other Jev route: the bare `typesafe-ai/jev` alias moves to each new release before it is measured.
+pub const MODEL: &str = "typesafe-ai/jev-1.14.0";
 const PRICE: Option<f64> = Some(JEV_DOLLARS_PER_INPUT_TOKEN);
 
 pub struct VercelGatewayJevClient {
@@ -50,7 +53,14 @@ impl VercelGatewayJevClient {
         split_batch: bool,
     ) -> Result<Evaluation, AskError> {
         // The span covers the parse as well as the request: a 200 whose body is not a valid answer is a failed call.
-        self.http.trace.call_span("jev", Map::new(), self.request(state, &questions, start_attempt, split_batch)).await
+        self.http
+            .trace
+            .call_span(
+                "jev",
+                crate::validation::jev_trace_fields(),
+                self.request(state, &questions, start_attempt, split_batch),
+            )
+            .await
     }
 
     async fn request(
@@ -71,7 +81,8 @@ impl VercelGatewayJevClient {
             ("ai-evaluation-model-specification-version", "4"),
         ];
         let response =
-            post(&self.http, &url, &self.api_key, &body, &headers, &sent, start_attempt, split_batch, PRICE).await?;
+            post(&self.http, &url, &self.api_key, &body, &headers, &sent, start_attempt, split_batch, PRICE, None)
+                .await?;
         let sent = sent.snapshot();
         let empty = Value::Object(Map::new());
         let parsed = (|| {
@@ -114,5 +125,9 @@ impl DecisionClient for VercelGatewayJevClient {
             MODEL,
             PRICE,
         ))
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile::for_model(MODEL)
     }
 }

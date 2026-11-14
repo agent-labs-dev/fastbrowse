@@ -6,7 +6,9 @@ Two cases, and it stays at two. They exist to catch what only a build breaks: a 
 start, or a page script it does not carry. Everything else is the test suite's to find, on the checkout.
 
 The handshake case also asks the executable for `--version` and holds it to the version `initialize` reports.
-That is no third case: it is how the one executable is shown to run as the CLI as well as the server.
+That is no third case: it is how the one executable is shown to run as the CLI as well as the server. It also hands
+the executable a PDF as the helper process a run reads PDFs in, since the build decides whether the parser and the
+helper's entry are there.
 
 The run needs no model and no key. Its models are the scripted ones the binary carries behind `--run-task`, and the
 page is served from this process, so the one thing it needs from the machine is Chrome.
@@ -28,7 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import IO, Any
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 3
 
 # The click leaves a mark on the server as well as on the page, so the run is known to have reached a real
 # document, which a result that only says "complete" would not show.
@@ -53,6 +55,10 @@ TASK = "click Add one"
 # A cold Chrome on a CI runner has taken over 30 seconds to start, and the run follows it.
 RUN_SECONDS = 240.0
 HANDSHAKE_SECONDS = 60.0
+
+HELPER = ("__fastbrowse-helper", "pdf-text", "1")
+HELPER_REPLY = b"\0fastbrowse-helper-reply\0"
+PDF = Path(__file__).resolve().parent.parent / "crates/fastbrowse-browser/tests/fixtures/wind.pdf"
 
 MODEL_KEYS = ("TYPESAFE_API_KEY", "AI_GATEWAY_API_KEY", "OPENROUTER_API_KEY", "BROWSER_USE_API_KEY")
 
@@ -158,9 +164,23 @@ def check_initialize(executable: Path) -> None:
         raise Failed(f"--version exited with status {told.returncode}: {told.stderr.strip()}")
     with serving(executable) as client:
         version = handshake(client)
-    if told.stdout.split() != ["fastbrowse", version]:
+    if told.stdout.split()[:2] != ["fastbrowse", version]:
         raise Failed(f"--version printed {told.stdout.strip()!r} and initialize reported {version!r}")
-    print(f"initialize: fastbrowse {version}, protocol {PROTOCOL_VERSION}")
+    check_pdf_helper(executable)
+    print(f"initialize: fastbrowse {version}, protocol {PROTOCOL_VERSION}, PDF helper reads the fixture")
+
+
+def check_pdf_helper(executable: Path) -> None:
+    """Run as the PDF helper, the executable replies with a PDF's text and refuses bytes that are no PDF."""
+    for raw, kind, code, text in ((PDF.read_bytes(), 0, 0, "Fairbanks Wind"), (b"not a pdf", 1, 1, "")):
+        done = subprocess.run(
+            [str(executable), *HELPER], input=raw, capture_output=True, env=environment(), timeout=HANDSHAKE_SECONDS
+        )
+        start = done.stdout.find(HELPER_REPLY)
+        reply = done.stdout[start + len(HELPER_REPLY) :] if start >= 0 else b""
+        body = reply[9 : 9 + int.from_bytes(reply[1:9], "little")] if len(reply) >= 9 else b""
+        if done.returncode != code or reply[:1] != bytes([kind]) or body.decode().strip() != text:
+            raise Failed(f"PDF helper: exit {done.returncode}, reply {done.stdout!r}, stderr {done.stderr!r}")
 
 
 @contextmanager
@@ -201,7 +221,7 @@ def check_run(executable: Path) -> None:
     """One run on local Chrome ends `complete`, having clicked the page's button."""
     with fixture_site() as (start, marks), serving(executable, "--run-task", "fastbrowse.scripted:run_task") as client:
         handshake(client)
-        params = {"run_id": "smoke", "task": TASK, "start": start, "local": True}
+        params = {"run_id": "smoke", "task": TASK, "start": start, "launch": True, "browser": True}
         result, ahead = client.request("run", params, RUN_SECONDS)
     events = [message["params"]["event"] for message in ahead if message["method"] == "run/event"]
     clicks = [

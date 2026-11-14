@@ -10,7 +10,7 @@ from fastbrowse.evals import judge as judging
 from fastbrowse.evals.judge import Claim, GatewayJev, Jev, jev_from_environment, judge
 
 CLAIMS = (Claim("The answer gives the total as 43.25."),)
-KEYS = ("TYPESAFE_API_KEY", "OPENROUTER_API_KEY", "AI_GATEWAY_API_KEY")
+KEYS = ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "AI_GATEWAY_API_KEY")
 
 
 def _http(*responses: httpx.Response | Exception, sent: list[httpx.Request]) -> httpx.AsyncClient:
@@ -68,7 +68,7 @@ async def test_the_gateway_is_asked_a_boolean_and_answers_a_probability() -> Non
         failure = await judge(GatewayJev(http, api_key="k"), task="t", answer="34.25", claims=CLAIMS)
     assert failure is not None
     assert str(sent[0].url) == "https://ai-gateway.vercel.sh/v4/ai/evaluation-model"
-    assert sent[0].headers["ai-model-id"] == "typesafe-ai/jev"
+    assert sent[0].headers["ai-model-id"] == "typesafe-ai/jev-1.14.0"
     body = json.loads(sent[0].content)
     assert "model" not in body
     assert body["questions"]["claim_0"]["type"] == "boolean"
@@ -77,8 +77,8 @@ async def test_the_gateway_is_asked_a_boolean_and_answers_a_probability() -> Non
 @pytest.mark.parametrize(
     ("keys", "url"),
     [
-        (KEYS, "https://api.typesafe.ai/v1/systemone"),
-        (KEYS[1:], "https://openrouter.ai/api/v1/systemone"),
+        (KEYS, "https://openrouter.ai/api/v1/systemone"),
+        (KEYS[1:], "https://api.typesafe.ai/v1/systemone"),
         (KEYS[2:], "https://ai-gateway.vercel.sh/v4/ai/evaluation-model"),
     ],
 )
@@ -96,9 +96,30 @@ async def test_the_judge_starts_on_the_provider_a_run_would(
     assert str(sent[0].url) == url
 
 
+async def test_the_judge_follows_the_chosen_decision_source(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    for name in (*KEYS, "FASTBROWSE_DECISION_SOURCE"):
+        monkeypatch.delenv(name, raising=False)
+    env = "".join(f"{name}=k\n" for name in KEYS) + "FASTBROWSE_DECISION_SOURCE=gateway\n"
+    (tmp_path / ".env").write_text(env, encoding="utf-8")
+    sent: list[httpx.Request] = []
+    async with _http(_answers("probability", 0.9), sent=sent) as http:
+        assert await judge(jev_from_environment(http), task="t", answer="43.25", claims=CLAIMS) is None
+    assert str(sent[0].url) == "https://ai-gateway.vercel.sh/v4/ai/evaluation-model"
+
+
 def test_no_key_says_which_the_judge_takes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     for name in KEYS:
         monkeypatch.delenv(name, raising=False)
     with pytest.raises(RuntimeError, match="AI_GATEWAY_API_KEY"):
         jev_from_environment(httpx.AsyncClient())
+
+
+async def test_the_judge_reads_every_post_the_run_sent() -> None:
+    sent: list[httpx.Request] = []
+    posts = {"/submit/contact": [{"message": "first"}, {"message": "second"}]}
+    async with _http(_answers("noul", 0.9), sent=sent) as http:
+        jev = Jev(http, api_key="k", base_url=judging.OPENROUTER_URL, model=judging.OPENROUTER_MODEL)
+        assert await judge(jev, task="t", answer="43.25", submitted=posts, claims=CLAIMS) is None
+    assert json.loads(sent[0].content)["state"]["submitted"] == posts

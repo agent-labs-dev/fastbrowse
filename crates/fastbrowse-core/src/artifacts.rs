@@ -1,4 +1,4 @@
-//! Port of `src/fastbrowse/artifacts.py`: a filesystem `ArtifactSink`. Hosts with their own storage implement the
+//! A filesystem `ArtifactSink`. Hosts with their own storage implement the
 //! trait instead.
 
 use std::path::{Path, PathBuf};
@@ -22,16 +22,29 @@ impl DirectorySink {
 }
 
 /// `Path.as_uri()`: `file://` and the path percent-encoded with `/` kept, as `urllib.parse.quote` encodes it.
-fn file_uri(path: &Path) -> String {
-    format!("file://{}", text::quote_path(&path.to_string_lossy()))
+fn file_uri(path: &Path) -> std::io::Result<String> {
+    let uri = url::Url::from_file_path(path)
+        .map_err(|()| std::io::Error::new(std::io::ErrorKind::InvalidInput, "artifact path has no file URI"))?;
+    let decoded = percent_encoding::percent_decode_str(uri.path()).decode_utf8_lossy();
+    #[cfg(windows)]
+    let quoted = {
+        use std::path::{Component, Prefix};
+        match path.components().next() {
+            Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)) => {
+                // The drive colon belongs to the file URL prefix, not the filename being escaped.
+                format!("{}:{}", &decoded[..2], text::quote_path(&decoded[3..]))
+            }
+            _ => text::quote_path(&decoded),
+        }
+    };
+    #[cfg(not(windows))]
+    let quoted = text::quote_path(&decoded);
+    Ok(format!("{}{quoted}", &uri[..url::Position::BeforePath]))
 }
 
 /// The last component of `name`, as `Path(name).name`: a hostile name cannot climb out with `..` or a separator.
 fn base_name(name: &str) -> &str {
-    match name.rsplit('/').next().unwrap_or("") {
-        "." | ".." => "",
-        last => last,
-    }
+    Path::new(name).file_name().and_then(|name| name.to_str()).unwrap_or("")
 }
 
 impl ArtifactSink for DirectorySink {
@@ -60,7 +73,7 @@ impl ArtifactSink for DirectorySink {
                 mime_type: mime_type.to_string(),
                 size_bytes: content.len() as i64,
                 sha256: digest,
-                uri: file_uri(&path),
+                uri: file_uri(&path)?,
             })
         })
     }
@@ -84,5 +97,34 @@ mod tests {
         let unnamed = block_on(sink.put(ArtifactKind::Download, "..", "text/plain", b"")).unwrap();
         assert!(unnamed.uri.ends_with("/artifact"));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_absolute_artifact_name_cannot_replace_the_storage_root() {
+        let scratch = std::env::temp_dir().join(format!("fastbrowse-artifact-root-{}", std::process::id()));
+        let root = scratch.join("artifacts");
+        let outside = scratch.join("outside.txt");
+        let sink = DirectorySink::new(&root).unwrap();
+        let content = b"downloaded bytes";
+        let artifact =
+            block_on(sink.put(ArtifactKind::Download, outside.to_str().unwrap(), "text/plain", content)).unwrap();
+        let stored = root.join("download").join(&sha256_hex(content)[..16]).join("outside.txt");
+        assert_eq!(std::fs::read(&stored).unwrap(), content);
+        assert!(!outside.exists(), "an artifact must not be written outside its storage root");
+        assert!(artifact.uri.ends_with("/outside.txt"));
+        assert_eq!(url::Url::parse(&artifact.uri).unwrap().to_file_path().unwrap(), stored);
+        std::fs::remove_dir_all(scratch).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_file_uris_keep_drive_and_unc_prefixes() {
+        for (path, expected) in [
+            (r"C:\Downloads\a b(1).csv", "file:///C:/Downloads/a%20b%281%29.csv"),
+            (r"\\server\share\a b(1).csv", "file://server/share/a%20b%281%29.csv"),
+            (r"\\?\C:\Downloads\a b(1).csv", "file:///C:/Downloads/a%20b%281%29.csv"),
+        ] {
+            assert_eq!(file_uri(Path::new(path)).unwrap(), expected);
+        }
     }
 }

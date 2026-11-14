@@ -6,7 +6,8 @@ Guidance for an agent working in this repository.
 
 A browser agent built on one idea: **it picks instead of generating**. Every page is indexed into the
 controls it actually has, and [Jev](https://typesafe.ai), a choice model, picks one of them. An LLM plans,
-reads and writes prose. Code owns authorization gates, secret resolution and cost limits.
+reads and writes prose. Jev also decides when a page is read and when the run is done. Code owns authorization
+gates, secret resolution and cost limits, and states what it knows to Jev instead of overruling it.
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) for what a PR needs, [README.md](README.md) for the product, [docs/design.md](docs/design.md) for the browser layer,
 [docs/evals.md](docs/evals.md) for how it is measured, and [docs/jev.md](docs/jev.md) for every Jev
@@ -26,8 +27,20 @@ These hold for every change, and a reviewer rejects a change that breaks one.
 - **Jev decides.** Steps, reads and when the task is done move toward Jev, never away from it; the LLM is the
   fallback for what Jev cannot be asked. When Jev picks wrong, give it the fact it lacked in its question. A code
   gate that overrules Jev is deleted, not stacked with another.
-- **No heuristics.** A keyword list, a regex over page text or a length cutoff standing in for
-  a judgement is a bug: ask Jev, or the LLM where Jev cannot answer.
+- **Fix the producer.** A wrong answer is fixed where the wrong value is first made: the capture that left text
+  out, the request that misled a model, the schema that made it commit too early. Find it by reading what the
+  model was given, and replay that request to prove the cause before changing anything. A retry or redraft that
+  hopes for a different answer, a check that catches the symptom downstream, or a rule fitted to the failing case
+  is not a fix, and a reviewer rejects it.
+- **No heuristics.** A keyword list, a regex over page text, a cutoff, a threshold fitted to the cases seen, or a
+  patch around a known Jev or LLM weakness masks the bug it works around. Fix the producer: the information a
+  model was not given, or work it was asked to do that it cannot (counting, arithmetic, comparing numbers, which
+  code does). A heuristic stays only when it is the correct design, with the reason beside it in the code. An
+  eval gain from adding one is not a fix, and a reviewer rejects it.
+- **Jev judges, code computes.** Jev does not count, do arithmetic, compare numbers or order dates, and it
+  reads instructions literally ([docs/jev.md](docs/jev.md#where-jev-is-not-used)). Code does those exactly: a
+  count is one Jev question per item, summed in code; a total, comparison or date order is computed from values
+  Jev or the LLM extracted. A Jev question never asks it to verify a number it would have to work out.
 - **No caps.** Nothing a model reads or writes is cut short, except by a limit its provider documents, named as
   that provider's in the code.
 - **Measure before claiming.** A claim about the agent rests on a run made for it, compared with a baseline on
@@ -60,14 +73,12 @@ npm ci --ignore-scripts && npm run check:browser
 npm run generate:sdk && git diff --exit-code -- packages/sdk/src/protocol.ts
 npm run check:sdk                                   # starts `fastbrowse serve` from the uv environment
 go -C go generate ./... && git diff --exit-code -- go && go -C go vet ./...
-FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" go -C go test -race ./...   # after cargo build -p fastbrowse-cli
+FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" go -C go test -race ./...   # after cargo build -p fastbrowse-cli --features scripted
 python3 scripts/java_types.py && git diff --exit-code -- java
 FASTBROWSE_TEST_BINARY="$PWD/target/debug/fastbrowse" mvn -B -f java/pom.xml verify    # Java 17+, Maven
 python3 scripts/dotnet_types.py && git diff --exit-code -- dotnet
 cd dotnet && FASTBROWSE_TEST_BINARY="$PWD/../target/debug/fastbrowse" dotnet test --solution Fastbrowse.slnx; cd ..
 uv run actionlint
-uv run python .sloppatrol/agents.py check
-uv run python .sloppatrol/gate.py --base origin/main
 just rust                                           # the Rust workspace (docs/adr/0001, 0004); needs cargo and just
 ```
 
@@ -88,8 +99,6 @@ in `crates/fastbrowse-browser/tests/capture.rs`; `FASTBROWSE_UPDATE_GOLDEN=1` re
 behaviour change) and timed by CodSpeed
 (`.github/workflows/codspeed.yml`, locally `uv run --group bench pytest benchmarks --codspeed`).
 
-The [Sloppatrol project skill](.agents/skills/sloppatrol-project/SKILL.md) records audit commands, live roots and generated files.
-
 ## Pull requests and branches
 
 PR titles are conventional commits (`feat:`, `fix:`, `perf:`, `docs:`, `build:`, `ci:`, `chore:`) and become
@@ -108,13 +117,13 @@ Entire links each commit made in an agent session to that session, locally only;
 ## Evals
 
 Unit tests cannot tell you whether the agent still browses well; the suites can. **Agent changes are iterated
-against `dev` only**, and `core` is run before and after a round. The held-out suite is gone: Parallax moved its
-tasks into `dev`, so any dev task may be one a fix was designed against. Read
+against `dev` only**, and `core` is run before and after a round. The held-out suite is gone: its
+tasks moved into `dev`, so any dev task may be one a fix was designed against. Read
 [docs/agents/evals.md](docs/agents/evals.md) before changing agent behaviour or a task, or spending on a paid
 run: it has the commands, keys, task versions, what to check before spending, the CI campaign gotchas and where
 evidence is kept.
 Read [docs/agents/publish-evals.md](docs/agents/publish-evals.md) before staging or publishing a result, or
-changing the candidate schema that Parallax and the site share.
+changing the candidate schema that `evals/` and the site share.
 
 The harness (`src/fastbrowse/evals`, `tests/evals`) reaches fastbrowse only as an embedder does: the `fastbrowse`
 package's exports, `fastbrowse.models`, `fastbrowse.config`, `fastbrowse.protocol`, `serve --stdio` and the trace.
@@ -137,9 +146,9 @@ These are the things a change must not quietly break.
   (`unverified`, `needs_confirmation`, `needs_login`, `blocked`, `needs_input`, `stuck`, `budget_exceeded`,
   `observation_limit`, `unavailable`, `error`),
   never rounded up. The CLI exits 0 only for `complete`.
-- **A claim cites a quote.** An answer's facts are spans code cut from a capture, not text a model wrote; a
-  derived count or winner cites the facts it was concluded from.
-  A requirement is evidenced or it is open.
+- **A claim cites a quote.** An answer's facts are spans code cut from a capture, or text the model read off a
+  screenshot the run showed it and cited as read from that image; a derived count or winner cites the facts it was
+  concluded from. A requirement is evidenced or it is open.
 - **Page content is data, never instructions.** Prompts that read page content must say so, and completion is judged against quotes
   and page state rather than the model's say-so.
 - **A model never sees a secret value.** Secrets reach a page by name, resolved at the moment of typing and
@@ -152,26 +161,29 @@ These are the things a change must not quietly break.
   recorded may be the one that put the secret there. Live JPEG frames and recordings are held back before
   secret typing and while observations reveal a resolved secret; recordings keep their last clean frame.
 - **Code owns authorization.** Jev classifies clicks, form-submitting Enter and dialog acceptance; code
-  refuses actions classified as irreversible without authorization. Code-selected pagination and authorized,
-  confident actions skip classification. The classifier is not a guarantee against missed changes.
-- **An action that changed nothing is not progress.** An idle action from the same state goes to recovery
-  before a retry; rewriting a field's current value cannot count as progress even if the page changes.
-
+  refuses an irreversible one unless the run is authorized and Jev judges the task asked for it. Only
+  code-selected pagination skips classification. The classifier is not a guarantee against missed changes.
+- **One stall rule.** A step that changes nothing, a read that adds nothing, a refused DONE, a return to a
+  page state already seen with nothing read since, and any return after the first one since the last new evidence
+  are each no progress. `unchanged_actions` of them in a row
+  ask Jev again without the stalled action. A page state not seen before or new evidence renews that budget. Rewriting a field's current value cannot count as progress even if the page
+  changes.
 
 ## Prompts and models
 
 A prompt is code, and a model's output is untrusted until code accepts it.
 
-- **One call does one job.** A request that states a task states everything the next step needs from it. The
-  plan call writes its own answer checks instead of leaving a terse draft for a second call to repair. Split a
+- **One call does one job.** A request that states a task states everything the next step needs from it. Split a
   job across calls only when the two cannot be asked in the same breath, and give each half its own contract.
-- **The LLM proposes, code checks.** A schema, a count or a citation is settled by code against the quotes or
-  the page state. Trust a model's output only where code can prove it
+- **The LLM proposes.** A schema or a citation is checked by code against the quotes or the page
+  state, and the run's next step and its end are Jev's. Trust an LLM's output only where code can prove it
   complete; where it cannot, repair it deterministically or ask again. A partial result is reported as
   partial.
 - **Every call leaves a receipt.** The ledger records each call's purpose, tokens and dollars, and a budget
   is checked before the call that would break it. A change to the calls a run makes is measured by calls per
   purpose, not wall clock.
+- **Nothing a model reads is cut short.** No text, control or output cap, except one a provider documents, named as
+  that provider's (Jev's in `DecisionProfile`). A rule that overrides a model is stated to that model.
 - **A prompt change is a behaviour change.** It is iterated against the eval suites like any other agent
   change, and a unit test pins any instruction the behaviour depends on.
 
@@ -198,8 +210,8 @@ is stale there too. A doc found trailing the code is fixed on its own, not left 
 not whether a sentence is true. When you write or review prose, check each claim against the code, put the
 useful point first, and keep prerequisites, limits and recovery steps.
 
-**Agent instructions stay short.** `.sloppatrol/agents.py check` holds this file to 300 lines. Detail only some tasks
-need goes in `docs/agents/` behind a line here that says when to read it.
+**Agent instructions stay short.** Keep this file under 300 lines. Detail only some tasks need goes in
+`docs/agents/` behind a line here that says when to read it.
 
 ## Agent skills
 
@@ -214,6 +226,21 @@ need goes in `docs/agents/` behind a line here that says when to read it.
 
 A fix for a reported bug, a feature someone asked for, or someone's merged code credits them in its changelog bullet
 and in [CREDITS.md](CREDITS.md). The rule is in [docs/agents/credits.md](docs/agents/credits.md).
+
+## Blog posts
+
+`blog/` holds the posts the site publishes at https://www.fastbrowse.ai/blog/, one Markdown file each with YAML
+frontmatter: `title`, `description`, `topic`, `published`, `updated`, `verifiedAgainst` and `verifiedOn`. The site
+fetches this directory at the commit it builds from, so a post ships by merging here, and `verifiedAgainst` is the
+released version it was checked against, which is the version the post shows a reader.
+
+A post that names a flag, a status, a field or a symbol is a claim about this tree, so each one is bound in
+`drift.lock` to the files that carry its claims and `drift check` runs on every pull request. When it fails, read
+the post against the change, fix the words, then re-stamp the post and bump its dates in the same commit:
+
+```sh
+drift link blog/<slug>.md --doc-is-still-accurate   # after the words are correct again
+```
 
 ## Releasing
 

@@ -3,6 +3,7 @@
   {
    "autocomplete": null,
    "context": "Product 0",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -10,6 +11,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Add to cart",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -22,6 +24,7 @@
   {
    "autocomplete": null,
    "context": "Product 0",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -29,6 +32,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "trash 2 icon",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -41,6 +45,7 @@
   {
    "autocomplete": null,
    "context": "Product 0",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -49,6 +54,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Details",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -61,6 +67,7 @@
   {
    "autocomplete": null,
    "context": "Product 1",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -68,6 +75,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Add to cart",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -80,6 +88,7 @@
   {
    "autocomplete": null,
    "context": "Product 1",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -87,6 +96,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "trash 2 icon",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -99,6 +109,7 @@
   {
    "autocomplete": null,
    "context": "Product 1",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -107,6 +118,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Details",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -119,6 +131,7 @@
   {
    "autocomplete": null,
    "context": "Product 2",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -126,6 +139,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Add to cart",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -138,6 +152,7 @@
   {
    "autocomplete": null,
    "context": "Product 2",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -145,6 +160,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "trash 2 icon",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -157,6 +173,7 @@
   {
    "autocomplete": null,
    "context": "Product 2",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -165,6 +182,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Details",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -177,6 +195,7 @@
   {
    "autocomplete": null,
    "context": "Product 3",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -184,6 +203,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Add to cart",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -196,6 +216,7 @@
   {
    "autocomplete": null,
    "context": "Product 3",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -203,6 +224,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "trash 2 icon",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -215,6 +237,7 @@
   {
    "autocomplete": null,
    "context": "Product 3",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -223,6 +246,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Details",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -293,8 +317,20 @@
    "value": null
   },
   {
+   "frame_origin": "http://fixture",
+   "frame_path": null,
+   "id": 33,
+   "label": "Vertical scroll area: Page",
+   "offscreen": false,
+   "operations": [
+    "scroll"
+   ],
+   "role": "region"
+  },
+  {
    "autocomplete": null,
    "context": "Product 4",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -303,6 +339,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Details",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"
@@ -315,6 +352,7 @@
   {
    "autocomplete": null,
    "context": "Product 5",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -323,6 +361,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Details",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"
@@ -335,6 +374,7 @@
   {
    "autocomplete": null,
    "context": "Product 6",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -343,6 +383,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Details",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"
@@ -355,6 +396,7 @@
   {
    "autocomplete": null,
    "context": "Product 7",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -363,6 +405,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Details",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"
@@ -375,6 +418,7 @@
   {
    "autocomplete": null,
    "context": "Product 4",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -382,6 +426,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Add to cart",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"
@@ -394,6 +439,7 @@
   {
    "autocomplete": null,
    "context": "Product 4",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -401,6 +447,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "trash 2 icon",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"
@@ -413,6 +460,7 @@
   {
    "autocomplete": null,
    "context": "Product 5",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -420,6 +468,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Add to cart",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"
@@ -432,6 +481,7 @@
   {
    "autocomplete": null,
    "context": "Product 5",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -439,6 +489,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "trash 2 icon",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"
@@ -451,6 +502,7 @@
   {
    "autocomplete": null,
    "context": "Product 6",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -458,6 +510,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Add to cart",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"
@@ -470,6 +523,7 @@
   {
    "autocomplete": null,
    "context": "Product 6",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -477,6 +531,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "trash 2 icon",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"
@@ -489,6 +544,7 @@
   {
    "autocomplete": null,
    "context": "Product 7",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -496,6 +552,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Add to cart",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"
@@ -508,6 +565,7 @@
   {
    "autocomplete": null,
    "context": "Product 7",
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -515,6 +573,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "trash 2 icon",
+   "max_length": null,
    "offscreen": true,
    "operations": [
     "click"
@@ -634,7 +693,7 @@
   "11": [
    11,
    "button",
-   "",
+   "trash 2 icon",
    "",
    null,
    null,
@@ -700,7 +759,7 @@
   "14": [
    14,
    "button",
-   "",
+   "trash 2 icon",
    "",
    null,
    null,
@@ -766,7 +825,7 @@
   "17": [
    17,
    "button",
-   "",
+   "trash 2 icon",
    "",
    null,
    null,
@@ -832,7 +891,7 @@
   "2": [
    2,
    "button",
-   "",
+   "trash 2 icon",
    "",
    null,
    null,
@@ -854,7 +913,7 @@
   "20": [
    20,
    "button",
-   "",
+   "trash 2 icon",
    "",
    null,
    null,
@@ -920,7 +979,7 @@
   "23": [
    23,
    "button",
-   "",
+   "trash 2 icon",
    "",
    null,
    null,
@@ -964,7 +1023,7 @@
   "25": [
    25,
    null,
-   "Product 0 \n     $0.99 \n     Ships in 0 days \n     Add to cart \n      \n     Details \n     Options",
+   "Product 0 $0.99 Add to cart Details Options",
    null,
    null,
    null,
@@ -986,7 +1045,7 @@
   "26": [
    26,
    null,
-   "Product 1 \n     $7.99 \n     Ships in 1 days \n     Add to cart \n      \n     Details \n     Options",
+   "Product 1 $7.99 Add to cart Details Options",
    null,
    null,
    null,
@@ -1008,7 +1067,7 @@
   "27": [
    27,
    null,
-   "Product 2 \n     $14.99 \n     Ships in 2 days \n     Add to cart \n      \n     Details \n     Options",
+   "Product 2 $14.99 Add to cart Details Options",
    null,
    null,
    null,
@@ -1030,7 +1089,7 @@
   "28": [
    28,
    null,
-   "Product 3 \n     $21.99 \n     Ships in 3 days \n     Add to cart \n      \n     Details \n     Options",
+   "Product 3 $21.99 Add to cart Details Options",
    null,
    null,
    null,
@@ -1052,7 +1111,7 @@
   "29": [
    29,
    null,
-   "Product 4 \n     $28.99 \n     Ships in 4 days \n     Add to cart \n      \n     Details \n     Options",
+   "Product 4 $28.99 Add to cart Details Options",
    null,
    null,
    null,
@@ -1096,7 +1155,7 @@
   "30": [
    30,
    null,
-   "Product 5 \n     $35.99 \n     Ships in 0 days \n     Add to cart \n      \n     Details \n     Options",
+   "Product 5 $35.99 Add to cart Details Options",
    null,
    null,
    null,
@@ -1118,7 +1177,7 @@
   "31": [
    31,
    null,
-   "Product 6 \n     $42.99 \n     Ships in 1 days \n     Add to cart \n      \n     Details \n     Options",
+   "Product 6 $42.99 Add to cart Details Options",
    null,
    null,
    null,
@@ -1140,7 +1199,7 @@
   "32": [
    32,
    null,
-   "Product 7 \n     $49.99 \n     Ships in 2 days \n     Add to cart \n      \n     Details \n     Options",
+   "Product 7 $49.99 Add to cart Details Options",
    null,
    null,
    null,
@@ -1158,6 +1217,28 @@
    null,
    null,
    32
+  ],
+  "33": [
+   34,
+   null,
+   "Product 0 $0.99 Add to cart Details Options Product 1 $7.99 Add to cart Details Options Product 2 $14.99 Add to cart Details Options Product 3 $21.99 Add to cart Details Options Product 4 $28.99 Add to cart Details Options Product 5 $35.99 Add to cart Details Options Product 6 $42.99 Add to cart Details Options Product 7 $49.99 Add to cart Details Options",
+   null,
+   null,
+   null,
+   null,
+   false,
+   false,
+   null,
+   null,
+   null,
+   null,
+   "",
+   "http://fixture",
+   null,
+   null,
+   null,
+   null,
+   34
   ],
   "4": [
    4,
@@ -1184,7 +1265,7 @@
   "5": [
    5,
    "button",
-   "",
+   "trash 2 icon",
    "",
    null,
    null,
@@ -1250,7 +1331,7 @@
   "8": [
    8,
    "button",
-   "",
+   "trash 2 icon",
    "",
    null,
    null,
@@ -1293,8 +1374,10 @@
   ]
  },
  "inaccessible_frames": 0,
+ "media": [],
+ "offscreen_text": "Product 4\n$28.99\nAdd to cart\nDetails\nOptions\nProduct 5\n$35.99\nAdd to cart\nDetails\nOptions\nProduct 6\n$42.99\nAdd to cart\nDetails\nOptions\nProduct 7\n$49.99\nAdd to cart\nDetails\nOptions",
  "title": "Cards",
  "url": "http://fixture/cards.html?n=8",
  "viewport_text": "Product 0\n$0.99\nAdd to cart\nDetails\nOptions\nProduct 1\n$7.99\nAdd to cart\nDetails\nOptions\nProduct 2\n$14.99\nAdd to cart\nDetails\nOptions\nProduct 3\n$21.99\nAdd to cart\nDetails\nOptions",
- "visual_content": 0
+ "visual_content": 1
 }

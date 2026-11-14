@@ -1,0 +1,41 @@
+<!doctype html>
+<html><head><title>Media</title>
+<style>.item { display: inline-block; width: 160px; margin: 8px; position: relative; } .item img { width: 160px; height: 90px; }
+.edit-button, .delete-button { width: 32px; height: 32px; }</style></head>
+<body>
+  <h1>Media</h1>
+  <div id="items">
+    <div class="item" id="m1"><img src="data:," alt=""><p>The map menu with tick boxes</p></div>
+    <div class="item" id="m2"><img src="data:," alt=""><p>The quest log grouped by zone</p></div>
+    <div class="item" id="m3"><img src="data:," alt=""><p>The settings panel</p></div>
+  </div>
+  <p id="status"></p>
+  <script>
+    // The controls exist only while the pointer is over a card, as a framework renders them from hover state: no
+    // stylesheet rule mentions them and they are not in the document until a real pointer enters.
+    for (const item of document.querySelectorAll('.item')) {
+      // Like a real gallery's, the controls carry no name, title or icon class: only their own class says which
+      // one edits and which deletes.
+      item.addEventListener('pointerenter', () => {
+        const edit = document.createElement('button');
+        edit.className = 'edit-button';
+        edit.innerHTML = '<svg viewBox="0 0 16 16"><path d="M2 12l8-8 2 2-8 8H2z"/></svg>';
+        edit.addEventListener('click', () => {
+          document.getElementById('status').textContent = 'Edited ' + item.id;
+        });
+        const remove = document.createElement('button');
+        remove.className = 'delete-button';
+        remove.innerHTML = '<svg viewBox="0 0 16 16"><path d="M4 4h8l-1 10H5zM3 3h10"/></svg>';
+        remove.addEventListener('click', () => {
+          item.remove();
+          document.getElementById('status').textContent = 'Deleted ' + item.id;
+        });
+        item.append(edit, remove);
+      });
+      item.addEventListener('pointerleave', () => {
+        item.querySelector('.edit-button')?.remove();
+        item.querySelector('.delete-button')?.remove();
+      });
+    }
+  </script>
+</body></html>

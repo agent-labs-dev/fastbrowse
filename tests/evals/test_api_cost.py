@@ -60,6 +60,7 @@ def test_estimated_cost_never_fills_recorded_dollars_or_changes_grade(tmp_path: 
         json.dumps(
             {
                 "task": "example",
+                "suite": "dev",
                 "arm": "cua-codex",
                 "status": "complete",
                 "passed": False,
@@ -84,7 +85,7 @@ def test_legacy_projection_omits_the_optional_estimate(tmp_path: Path) -> None:
     folder = tmp_path / "docs/validation"
     folder.mkdir(parents=True)
     ledger = folder / "example.jsonl"
-    ledger.write_text('{"task":"example","arm":"fastbrowse"}\n')
+    ledger.write_text('{"task":"example","suite":"local","arm":"fastbrowse"}\n')
     assert "estimated_api_cost" not in campaign(ledger, tmp_path).model_dump_json()
 
 

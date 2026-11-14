@@ -1,30 +1,32 @@
-//! Port of `src/fastbrowse/cli.py`: run one task from the terminal.
+//! Run one task from the terminal.
 //!
 //! ```text
 //! fastbrowse "What is the latest version of httpx?" --start https://pypi.org/
 //! fastbrowse "Send the form" --start https://example.com/contact --authorize --json
 //! ```
 //!
-//! A Browser Use Cloud browser by default, with a URL printed to watch it live. The answer goes to stdout, progress
-//! and warnings to stderr, and the exit code says how the run ended: 0 only for `complete`.
+//! The user's browser through the extension by default; `--cloud` opts into Browser Use Cloud. The answer goes to
+//! stdout, progress and warnings to stderr, and the exit code says how the run ended: 0 only for `complete`.
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use fastbrowse_clients::environment::ConfigurationError;
+use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{Authorization, Event, Limits, LocalChrome, SecretValue, Status};
+use fastbrowse_core::protocol::{Base64Bytes, RunAttachment};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{self, Style};
 use fastbrowse_core::safety::{ScopedSecrets, origin_of};
-use fastbrowse_core::telemetry::{TRACE_ENV, trace_to};
+use fastbrowse_core::telemetry::{TRACE_ENV, Trace, trace_to};
 use indexmap::IndexMap;
 
 use crate::argparse::{Exit, Opt, Parsed, Parser, py_float, py_int};
 use crate::bitwarden;
-use crate::options::{self, HandOver};
-use crate::runner::{RunArgs, RunError, Runner};
+use crate::options;
+use crate::runner::{Host, RunError, RunTask, Runner};
 use crate::serve::SettingsSource;
 
 pub fn exit_code(status: Status) -> i32 {
@@ -40,6 +42,7 @@ pub fn exit_code(status: Status) -> i32 {
         Status::Stuck => 9,
         Status::Unverified => 10,
         Status::ObservationLimit => 11,
+        Status::Cancelled => 12,
     }
 }
 
@@ -72,13 +75,45 @@ pub struct Context {
     pub settings: SettingsSource,
     pub environ: HashMap<String, String>,
     pub streams: Streams,
+    pub build: Build,
 }
 
-pub fn parser() -> Parser {
+/// Which commit is running, as `fastbrowse.build.identity()` works it out: the Python command passes it in, and the
+/// binary on its own knows only its version, so both are None there.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Build {
+    pub git_sha: Option<String>,
+    pub git_dirty: Option<bool>,
+    /// The environment the Python package was installed into, which `self-update` names; None for the binary.
+    pub wheel: Option<crate::update::Wheel>,
+}
+
+impl Build {
+    /// `fastbrowse 0.9.0 (e1d478b, dirty)` from a checkout, and `fastbrowse 0.9.0` from a release.
+    pub fn version_line(&self) -> String {
+        let mut line = format!("fastbrowse {}", env!("CARGO_PKG_VERSION"));
+        if let Some(sha) = &self.git_sha {
+            let short: String = sha.chars().take(7).collect();
+            let dirty = if self.git_dirty == Some(true) { ", dirty" } else { "" };
+            line.push_str(&format!(" ({short}{dirty})"));
+        }
+        line
+    }
+
+    fn fields(&self) -> serde_json::Map<String, serde_json::Value> {
+        serde_json::Map::from_iter([
+            ("fastbrowse_version".into(), env!("CARGO_PKG_VERSION").into()),
+            ("git_sha".into(), self.git_sha.clone().into()),
+            ("git_dirty".into(), self.git_dirty.into()),
+        ])
+    }
+}
+
+pub fn parser(build: &Build) -> Parser {
     Parser {
         prog: "fastbrowse",
         help: include_str!("../generated/cli.txt"),
-        version: Some(format!("fastbrowse {}", env!("CARGO_PKG_VERSION"))),
+        version: Some(build.version_line()),
         options: vec![
             Opt::version(),
             Opt::value("--start"),
@@ -94,16 +129,24 @@ pub fn parser() -> Parser {
             Opt::value("--target-match"),
             Opt::flag("--foreground"),
             Opt::value("--proxy-country"),
+            Opt::value("--viewport"),
             Opt::flag("--authorize"),
             Opt::append("--secret"),
             Opt::value("--bitwarden"),
+            Opt::append("--input"),
+            Opt::append("--file"),
             Opt::value("--max-steps"),
             Opt::value("--max-dollars"),
             Opt::value("--downloads"),
             Opt::flag("--json"),
             Opt::value("--record"),
+            Opt::value("--recipe"),
+            Opt::value("--save-recipe"),
             Opt::flag("--fetch"),
-            Opt::flag("--fetch-first"),
+            Opt::flag("--browser"),
+            Opt::flag("--extension"),
+            Opt::value("--extension-browser"),
+            Opt::value("--desktop"),
             Opt::value("--trace"),
             Opt::flag("--cursor"),
             Opt::flag("--no-cursor"),
@@ -129,16 +172,29 @@ pub struct Args {
     pub target_match: Option<String>,
     pub foreground: bool,
     pub proxy_country: Option<String>,
+    pub viewport: Option<(u32, u32)>,
     pub authorize: bool,
     pub secret: Vec<(String, String, Option<String>)>,
     pub bitwarden: Option<String>,
+    /// Named values a fill may type, which a saved recipe types again by name: `--input NAME=VALUE`.
+    pub input: Vec<(String, String)>,
+    /// Local files the run may attach to a page's file input: `--file PATH`.
+    pub file: Vec<PathBuf>,
     pub max_steps: Option<i64>,
     pub max_dollars: Option<f64>,
     pub downloads: Option<PathBuf>,
     pub json: bool,
     pub record: Option<PathBuf>,
+    pub recipe: Option<PathBuf>,
+    pub save_recipe: Option<PathBuf>,
     pub fetch: bool,
-    pub fetch_first: bool,
+    pub browser: bool,
+    /// Drive the user's own browser through the fastbrowse extension.
+    pub extension: bool,
+    /// Which browser the extension is connected in, by its label; implies `extension`.
+    pub extension_browser: Option<String>,
+    /// The desktop app to start and drive through deskpilot instead of a browser, as a command line.
+    pub desktop: Option<String>,
     /// Where the run's trace is appended as JSON lines, or `-` for stderr.
     pub trace: Option<String>,
     /// `--cursor` or `--no-cursor`; neither draws the cursor wherever it can be placed.
@@ -162,12 +218,14 @@ fn float_value(value: &str) -> Result<(), String> {
     py_float(value).map(drop).ok_or_else(|| format!("invalid float value: {}", fastbrowse_core::py::text::repr(value)))
 }
 
-pub fn parse(argv: &[String]) -> Result<Args, Exit> {
-    let parsed: Parsed = parser().parse(argv, |flag, value| match flag {
+pub fn parse(argv: &[String], build: &Build) -> Result<Args, Exit> {
+    let parsed: Parsed = parser(build).parse(argv, |flag, value| match flag {
         "--cdp-port" | "--max-steps" => int_value(value),
         "--max-dollars" => float_value(value),
-        "--proxy-country" => options::country_code(value).map(drop),
+        "--proxy-country" => fastbrowse_run::country_code(value).map(drop),
+        "--viewport" => viewport_value(value),
         "--secret" => options::scoped_secret(value).map(drop),
+        "--input" => named_input(value).map(drop),
         _ => Ok(()),
     })?;
     let text = |flag: &str| parsed.value(flag).map(str::to_string);
@@ -186,20 +244,111 @@ pub fn parse(argv: &[String]) -> Result<Args, Exit> {
         attach: parsed.flag("--attach"),
         target_match: text("--target-match"),
         foreground: parsed.flag("--foreground"),
-        proxy_country: parsed.value("--proxy-country").and_then(|value| options::country_code(value).ok()),
+        proxy_country: parsed.value("--proxy-country").and_then(|value| fastbrowse_run::country_code(value).ok()),
+        viewport: parsed.value("--viewport").and_then(|value| parse_viewport(value).ok()),
         authorize: parsed.flag("--authorize"),
         secret: parsed.all("--secret").iter().filter_map(|value| options::scoped_secret(value).ok()).collect(),
         bitwarden: text("--bitwarden"),
+        input: parsed.all("--input").iter().filter_map(|value| named_input(value).ok()).collect(),
+        file: parsed.all("--file").iter().map(PathBuf::from).collect(),
         max_steps: parsed.value("--max-steps").and_then(py_int),
         max_dollars: parsed.value("--max-dollars").and_then(py_float),
         downloads: path("--downloads"),
         json: parsed.flag("--json"),
         record: path("--record"),
+        recipe: path("--recipe"),
+        save_recipe: path("--save-recipe"),
         fetch: parsed.flag("--fetch"),
-        fetch_first: parsed.flag("--fetch-first"),
+        browser: parsed.flag("--browser"),
+        extension: parsed.flag("--extension"),
+        extension_browser: text("--extension-browser"),
+        desktop: text("--desktop"),
         trace: text("--trace"),
         cursor: cursor_choice(parsed.flag("--cursor"), parsed.flag("--no-cursor")),
     })
+}
+
+/// The files `--file` names, read now, each under its own file name. A task can only name a path, and a run had no way
+/// to put that file in a page's file input, so an upload it was asked for stopped `stuck` (#878).
+fn attachments(paths: &[PathBuf]) -> Result<Vec<RunAttachment>, ConfigurationError> {
+    let attachments = paths
+        .iter()
+        .map(|path| {
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .ok_or_else(|| ConfigurationError(format!("--file {} names no file", path.display())))?;
+            let content = std::fs::read(path)
+                .map_err(|error| ConfigurationError(format!("--file cannot read {}: {error}", path.display())))?;
+            // The type a browser's own file picker would give: by extension, and none for one it does not know.
+            let mime_type = mime_guess::from_path(path).first_raw().unwrap_or_default().to_owned();
+            Ok(RunAttachment { name, mime_type, content: Base64Bytes(content) })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    // Every upload past the limit fails, so a run given more would only end stuck after spending its steps.
+    let total: usize = attachments.iter().map(|attachment| attachment.content.0.len()).sum();
+    let limit = Config::default().max_upload_bytes;
+    if total as i64 > limit {
+        return Err(ConfigurationError(format!("--file totals {total} bytes, over the {limit} byte upload limit")));
+    }
+    Ok(attachments)
+}
+
+/// `NAME=VALUE`, the value taken as given, `=` and all.
+fn named_input(value: &str) -> Result<(String, String), String> {
+    match value.split_once('=') {
+        Some((name, input)) if !name.trim().is_empty() => Ok((name.trim().to_string(), input.to_string())),
+        _ => Err(format!("expected NAME=VALUE, got {}", fastbrowse_core::py::text::repr(value))),
+    }
+}
+
+fn viewport_value(value: &str) -> Result<(), String> {
+    parse_viewport(value).map(|_| ()).map_err(|error| error.to_string())
+}
+
+fn parse_viewport(value: &str) -> Result<(u32, u32), &'static str> {
+    let Some((width, height)) = value.split_once('x') else { return Err("expected WIDTHxHEIGHT") };
+    let width = width.parse().map_err(|_| "expected WIDTHxHEIGHT")?;
+    let height = height.parse().map_err(|_| "expected WIDTHxHEIGHT")?;
+    if width == 0 || height == 0 {
+        return Err("expected WIDTHxHEIGHT greater than zero");
+    }
+    Ok((width, height))
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod viewport_tests {
+    use super::*;
+
+    /// A file no upload can carry is refused when the run starts, not after it spends its steps (#878).
+    #[test]
+    fn a_file_over_the_upload_limit_or_without_a_name_is_refused_at_start() {
+        let dir = std::env::temp_dir().join(format!("fastbrowse-file-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let big = dir.join("big.bin");
+        std::fs::File::create(&big).unwrap().set_len(Config::default().max_upload_bytes as u64 + 1).unwrap();
+        assert!(attachments(std::slice::from_ref(&big)).unwrap_err().0.contains("upload limit"));
+        assert!(attachments(&[PathBuf::from("..")]).unwrap_err().0.contains("names no file"));
+        std::fs::remove_file(&big).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+    }
+
+    fn args(value: &str) -> Vec<String> {
+        vec!["read".into(), "--local".into(), "--viewport".into(), value.into()]
+    }
+
+    #[test]
+    fn viewport_flag_parses_typed_dimensions() {
+        assert_eq!(parse(&args("640x480"), &Build::default()).unwrap().viewport, Some((640, 480)));
+    }
+
+    #[test]
+    fn viewport_flag_rejects_malformed_and_zero_dimensions() {
+        for value in ["640", "0x480", "640x0", "640by480"] {
+            assert!(parse(&args(value), &Build::default()).is_err(), "{value}");
+        }
+    }
 }
 
 /// Values read now, so a missing one fails before a browser is opened.
@@ -293,127 +442,108 @@ fn progress(streams: Streams) -> fastbrowse_core::models::EventHandler {
     })
 }
 
-/// `cli.run(args)`: the exit code of a run that got as far as starting, or the configuration error that stopped it.
+/// The exit code of a run that got as far as starting, or the configuration error that stopped it.
 pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationError> {
-    // Flags that contradict each other are named before anything about the machine, such as a missing ffmpeg.
-    if args.fetch && args.fetch_first {
+    let handed = args.cdp_url.is_some() || args.cdp_port.is_some();
+    let explicit_extension = args.extension || args.extension_browser.is_some();
+    let extension = explicit_extension || (!args.cloud && !args.fetch && args.desktop.is_none());
+    if args.cloud && (args.headed || args.profile.is_some() || handed || args.fetch || explicit_extension) {
         return Err(ConfigurationError(
-            "--fetch never starts a browser and --fetch-first may start one, so pass one of them".into(),
+            "--cloud cannot be combined with --headed, --profile, --cdp-url, --cdp-port, --fetch or --extension".into(),
         ));
     }
-    if args.fetch_first {
-        // A recording or an attached window has to exist from the first step, and the fetched attempt has neither.
-        for (flag, asked) in [
-            ("--record", args.record.is_some()),
-            ("--attach", args.attach),
-            ("--target-match", args.target_match.is_some()),
-        ] {
-            if asked {
-                return Err(ConfigurationError(format!(
-                    "--fetch-first may finish with no browser, so it cannot be combined with {flag}"
-                )));
-            }
-        }
-    }
-    options::recording(args.record.as_deref())?;
+    let cdp_port = args
+        .cdp_port
+        .map(|port| {
+            u16::try_from(port)
+                .map_err(|_| ConfigurationError(format!("--cdp-port expects a port from 1 to 65535, got {port}")))
+        })
+        .transpose()?;
     let limits = limits(args)?;
-    // The operator's own flags are checked before the browser key: with the cloud browser the default, a missing key
-    // would otherwise hide a secret that could never be typed anywhere.
+    // Check secrets before browser setup so a missing credential names what the operator needs to supply.
     let secrets = secrets(&args.secret, args.bitwarden.as_deref(), args.start.as_deref(), &context.environ)?;
     let settings = (context.settings)()?;
-    if args.cloud && (args.headed || args.profile.is_some()) {
-        return Err(ConfigurationError("--cloud cannot be combined with --headed or --profile".into()));
-    }
-    if args.fetch {
-        // No browser is started, so the flags that shape one are refused rather than resolved: a cloud key demanded for
-        // a browserless run would be a key never used.
-        for (flag, asked) in [
-            ("--cloud", args.cloud),
-            ("--local", args.local),
-            ("--headed", args.headed),
-            ("--profile", args.profile.is_some()),
-            ("--cloud-profile", args.cloud_profile.is_some()),
-            ("--cdp-url", args.cdp_url.is_some()),
-            ("--cdp-port", args.cdp_port.is_some()),
-            ("--attach", args.attach),
-            ("--target-match", args.target_match.is_some()),
-            ("--foreground", args.foreground),
-            ("--proxy-country", args.proxy_country.is_some()),
-            ("--record", args.record.is_some()),
-            ("--cursor", args.cursor == Some(true)),
-            ("--downloads", args.downloads.is_some()),
-        ] {
-            if asked {
-                return Err(ConfigurationError(format!(
-                    "--fetch starts no browser, so it cannot be combined with {flag}"
-                )));
-            }
-        }
-    }
     let chrome = if args.cloud {
-        LocalChrome::default()
-    } else {
-        options::chrome(&settings, args.headed, args.profile.as_deref(), None)
-    };
-    let handed_over = options::handed_over(&HandOver {
-        cdp_url: args.cdp_url.as_deref(),
-        cdp_port: args.cdp_port,
-        attach: args.attach,
-        target_match: args.target_match.as_deref(),
-        local: args.local,
-        cloud_asked: args.cloud,
-        chrome: &chrome,
-        cloud_profile: args.cloud_profile.as_deref(),
-        proxy_country: args.proxy_country.as_deref(),
-    })?;
-    let browser_api_key = if args.fetch || handed_over {
         None
     } else {
-        let on_cloud =
-            options::cloud(args.local, &chrome, args.cloud_profile.as_deref(), args.proxy_country.as_deref())?;
-        options::browser_key(&settings, on_cloud)?
+        // An existing browser cannot take launch options, and a browserless run has no window to shape.
+        (args.headed || args.profile.is_some()).then(|| LocalChrome {
+            binary: None,
+            headed: args.headed,
+            profile: args.profile.clone(),
+        })
     };
-    let mut call = RunArgs::new(args.task.clone());
-    call.start = args.start.clone();
-    call.context = args.context.clone();
-    call.browser_api_key = browser_api_key;
-    call.chrome = (!args.fetch).then_some(chrome);
-    call.cloud_profile = args.cloud_profile.clone();
-    call.cdp_url = args.cdp_url.clone();
-    call.cdp_port = args.cdp_port;
-    call.attach = args.attach;
-    call.target_match = args.target_match.clone();
-    call.foreground = args.foreground;
-    call.proxy_country = Some(options::proxy_country(args.proxy_country.as_deref()));
-    call.secrets = secrets.map(|secrets| Arc::new(secrets) as _);
-    call.limits = Some(limits);
-    call.authorization = Some(Authorization { irreversible_actions: args.authorize });
-    call.downloads = args.downloads.clone();
-    call.on_event = Some(progress(context.streams.clone()));
-    call.record = args.record.clone();
-    call.cursor = args.cursor;
-    call.fetch = args.fetch;
-    call.fetch_first = args.fetch_first;
-    let mut result = match context.runner.run(call).await {
+    let task = RunTask {
+        task: args.task.clone(),
+        start: args.start.clone(),
+        context: args.context.clone(),
+        limits: Some(limits),
+        authorization: Some(Authorization { irreversible_actions: args.authorize }),
+        downloads: args.downloads.clone(),
+        record: args.record.clone(),
+        recipe: args.recipe.clone(),
+        save_recipe: args.save_recipe.clone(),
+        inputs: (!args.input.is_empty()).then(|| args.input.iter().cloned().collect()),
+        attachments: attachments(&args.file)?,
+        cursor: args.cursor,
+        local: args.local && !extension,
+        chrome,
+        cloud_profile: args.cloud_profile.clone(),
+        cdp_url: args.cdp_url.clone(),
+        cdp_port,
+        attach: args.attach,
+        target_match: args.target_match.clone(),
+        foreground: args.foreground,
+        viewport: args.viewport,
+        proxy_country: args.proxy_country.clone(),
+        fetch: args.fetch,
+        browser: args.browser,
+        extension,
+        extension_browser: args.extension_browser.clone(),
+        desktop: args.desktop.clone(),
+        ..RunTask::default()
+    };
+    fastbrowse_run::check(&task).map_err(|error| ConfigurationError(error.to_string()))?;
+    let extension = task.wants_extension();
+    let recipe_sink =
+        (args.recipe.is_some() || args.save_recipe.is_some()).then(fastbrowse_agent::agent::RecipeSink::default);
+    let host = Host {
+        recipe_sink: recipe_sink.clone(),
+        browser_api_key: options::environment(&task, &settings)?,
+        secrets: secrets.map(|secrets| Arc::new(secrets) as _),
+        on_event: Some(progress(context.streams.clone())),
+        ..Host::default()
+    };
+    let mut result = match context.runner.run(task, host).await {
         Ok(result) => result,
-        Err(RunError::Configuration(message)) => return Err(ConfigurationError(message)),
-        Err(RunError::Cancelled) => options::error_result("the run was cancelled"),
-        // An exception out of `run_task` reaches the terminal as a traceback, exit 1, nothing on stdout.
-        Err(RunError::Failed(message)) => {
-            context.streams.eprint(&format!("Traceback (most recent call last):\n{message}"));
-            return Ok(1);
-        }
+        // Stopped from the browser: the extension's Stop, Cancel on Chrome's debugging bar, or the user closing the
+        // run's last tab. The reason says which.
+        Err(RunError::Cancelled(receipt)) => fastbrowse_core::models::RunResult {
+            status: Status::Cancelled,
+            ..options::cancelled_result(receipt.why().to_owned(), receipt)
+        },
+        Err(RunError::AfterSpending { error, receipt }) => options::cancelled_result(error.to_string(), receipt),
+        Err(error) => return Err(ConfigurationError(error.to_string())),
     };
+    if let Some(sink) = recipe_sink
+        && let Some(outcome) = sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref()
+    {
+        context.streams.eprint(&format!(
+            "  recipe: {} actions reused, {} unmatched observations",
+            outcome.replayed, outcome.fell_back
+        ));
+    }
     if result.status == Status::NeedsLogin {
         result.error = Some(format!(
             "{}. Pass --secret NAME=ENV_VAR@https://host with the password in that environment variable; credentials \
-             in task text are not used.",
-            result.error.as_deref().unwrap_or("Sign-in credentials required")
+             in task text are not used.{}",
+            result.error.as_deref().unwrap_or("Sign-in credentials required"),
+            if extension { "" } else { " Or pass --extension to run in your own Chrome, where you are signed in." }
         ));
     }
     let streams = &context.streams;
     if args.json {
-        streams.print(&json::write(&result.dump(), Style::PYDANTIC.indented(2)));
+        streams.print(&json::write(&with_build(result.dump(), &context.build), Style::PYDANTIC.indented(2)));
     } else {
         // A local LLM endpoint reports no price, and printing only the priced calls would read as the whole bill.
         let mut spend = format!("${:.4}", result.cost.known_dollars());
@@ -446,10 +576,10 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
     Ok(exit_code(result.status))
 }
 
-/// `cli.main()` after the `serve` check: parse, run, and report a configuration error on both streams when `--json`
+/// What follows the `serve` check: parse, run, and report a configuration error on both streams when `--json`
 /// was asked for, so a caller parsing stdout still gets a result.
 pub async fn main(argv: &[String], context: &Context) -> i32 {
-    let args = match parse(argv) {
+    let args = match parse(argv, &context.build) {
         Ok(args) => args,
         Err(Exit::Print(text)) => {
             let mut out = context.streams.out.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -469,13 +599,15 @@ pub async fn main(argv: &[String], context: &Context) -> i32 {
         context.streams.eprint(&format!("fastbrowse: cannot write the trace to {destination}: {error}"));
         return 1;
     }
+    Trace::disabled().event("build", || context.build.fields());
     match run(&args, context).await {
         Ok(code) => code,
         Err(error) => {
             if args.json {
-                context
-                    .streams
-                    .print(&json::write(&options::error_result(&error.0).dump(), Style::PYDANTIC.indented(2)));
+                context.streams.print(&json::write(
+                    &with_build(options::error_result(&error.0).dump(), &context.build),
+                    Style::PYDANTIC.indented(2),
+                ));
             }
             context.streams.eprint(&format!("fastbrowse: {}", error.0));
             1
@@ -483,7 +615,10 @@ pub async fn main(argv: &[String], context: &Context) -> i32 {
     }
 }
 
-/// A path as `Path.resolve()` would leave it, for messages that name one.
-pub fn shown(path: &Path) -> String {
-    path.display().to_string()
+/// The result `--json` prints, with the build that produced it, so a result file names its commit.
+fn with_build(mut result: serde_json::Value, build: &Build) -> serde_json::Value {
+    if let serde_json::Value::Object(fields) = &mut result {
+        fields.insert("build".into(), build.fields().into());
+    }
+    result
 }

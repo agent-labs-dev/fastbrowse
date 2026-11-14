@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -21,7 +22,7 @@ func serverBinary(t *testing.T) string {
 	}
 	built, _ := filepath.Abs(filepath.Join("..", "target", "debug", executable()))
 	if _, err := os.Stat(built); err != nil {
-		t.Skip("no fastbrowse binary: run `cargo build -p fastbrowse-cli`, or set FASTBROWSE_TEST_BINARY")
+		t.Skip("no fastbrowse binary: run `cargo build -p fastbrowse-cli --features scripted`, or set FASTBROWSE_TEST_BINARY")
 	}
 	return built
 }
@@ -117,6 +118,62 @@ func TestARunsOwnBrowserReplacesTheClients(t *testing.T) {
 	}
 }
 
+// sent is the run request's params as the server read them, without its run_id.
+func sent(t *testing.T, client *Client, options RunOptions) map[string]any {
+	t.Helper()
+	var echoed struct {
+		Params map[string]any `json:"params"`
+	}
+	if err := run(t, client, "t", options).DecodeData(&echoed); err != nil {
+		t.Fatal(err)
+	}
+	delete(echoed.Params, "run_id")
+	return echoed.Params
+}
+
+func TestCloudBrowserAndRoutingOptionsReachTheServerUnderTheirWireNames(t *testing.T) {
+	extension := "0f4c7a52-3b1e-4d8a-9c6f-2e5b8d1a7c30"
+	client := scripted(t, "echo", Options{
+		Browser: BrowserOptions{CloudExtensions: []string{extension}, CloudTimeoutMinutes: 90},
+	})
+	got := sent(t, client, RunOptions{BrowserFirst: true, AllowedOrigins: []string{"https://shop.example"}})
+	want := map[string]any{
+		"task": "t", "cloud_extensions": []any{extension}, "cloud_timeout_minutes": float64(90), "browser": true,
+		"allowed_origins": []any{"https://shop.example"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("params: got %v, want %v", got, want)
+	}
+
+	// A run's own browser replaces the Client's, cloud options with it, which is what lets this run fetch.
+	got = sent(t, client, RunOptions{Browser: &BrowserOptions{}, Fetch: true})
+	if want := map[string]any{"task": "t", "fetch": true}; !reflect.DeepEqual(got, want) {
+		t.Errorf("params: got %v, want %v", got, want)
+	}
+}
+
+func TestFetchAndBrowserFirstTogetherAreRefusedByTheServer(t *testing.T) {
+	client := scripted(t, "echo", Options{})
+	_, err := client.Run(context.Background(), "t", RunOptions{Fetch: true, BrowserFirst: true})
+	var refused *RPCError
+	if !errors.As(err, &refused) || refused.Code != ErrorCodeInvalidParams ||
+		!strings.Contains(refused.Message, "fetch never starts a browser and browser always does") {
+		t.Fatalf("err: %v", err)
+	}
+}
+
+func TestAnEmptyAllowedOriginsIsRefusedRatherThanSentAsUnscoped(t *testing.T) {
+	client := scripted(t, "echo", Options{})
+	_, err := client.Run(context.Background(), "t", RunOptions{AllowedOrigins: []string{}})
+	if err == nil || !strings.Contains(err.Error(), "allowed_origins is empty") {
+		t.Fatalf("err: %v", err)
+	}
+	// The refusal is the client's, so the server is still free for the next run.
+	if result := run(t, client, "t", RunOptions{}); result.Status != StatusComplete {
+		t.Fatalf("status: %s", result.Status)
+	}
+}
+
 func TestEventsArriveInTheOrderTheRunProducedThem(t *testing.T) {
 	client := scripted(t, "three_events", Options{})
 	var events []Event
@@ -133,6 +190,21 @@ func TestAnEventCallbackThatFailsEndsTheRunWithStatusError(t *testing.T) {
 	result := run(t, client, "t", RunOptions{OnEvent: func(Event) error { calls++; return errors.New("full disk") }})
 	if result.Status != StatusError || *result.Error != "run/event: full disk" || calls != 1 {
 		t.Fatalf("got %s %v after %d calls", result.Status, result.Error, calls)
+	}
+}
+
+func TestANotificationThatCannotBeDecodedEndsItsRun(t *testing.T) {
+	for _, notification := range []struct{ method, params string }{
+		{string(ServerMethodRunEvent), `{"run_id":"r","event":7}`},
+		{string(ServerMethodRunFrame), `{"run_id":"r","frame":"not base64!"}`},
+	} {
+		cancelled := false
+		run := &served{cancel: func() { cancelled = true }}
+		client := &Client{runs: map[string]*served{"r": run}}
+		client.notify(notification.method, json.RawMessage(notification.params))
+		if !cancelled || run.failure == "" {
+			t.Fatalf("%s: cancelled %v, failure %q", notification.method, cancelled, run.failure)
+		}
 	}
 }
 
@@ -211,12 +283,36 @@ func TestCancellingTheContextStopsTheRunAfterItsBrowserCloses(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err: %v", err)
 	}
+	// What the run did and spent before it stopped, with the unpriced browser left unpriced.
+	var stopped *CancelledError
+	if !errors.As(err, &stopped) {
+		t.Fatalf("err: %T %v", err, err)
+	}
+	lines := stopped.Receipt.Cost.Lines
+	if len(stopped.Receipt.Steps) != 1 || len(lines) != 2 || lines[0].Basis != CostBasisMetered ||
+		*lines[0].Dollars != 0.004 || lines[1].Basis != CostBasisUnknown || lines[1].Dollars != nil {
+		t.Fatalf("receipt: %+v", stopped.Receipt)
+	}
 	if _, err := os.Stat(closed); err != nil {
 		t.Fatal("Run returned before the browser closed")
 	}
 	// The process is still there for the next run.
 	if result := run(t, client, "t", RunOptions{}); result.Status != StatusComplete {
 		t.Fatalf("next run: %s", result.Status)
+	}
+}
+
+func TestARunAFailedCallbackStoppedKeepsWhatItDidAndSpent(t *testing.T) {
+	client := scripted(t, "until_cancelled", Options{})
+	result := run(t, client, "t", RunOptions{
+		Inputs:  map[string]string{"closed": filepath.Join(t.TempDir(), "closed")},
+		OnEvent: func(Event) error { return errors.New("full disk") },
+	})
+	if result.Status != StatusError || *result.Error != "run/event: full disk" {
+		t.Fatalf("got %s %v", result.Status, result.Error)
+	}
+	if len(result.Steps) != 1 || len(result.Cost.Lines) != 2 || result.Cost.Lines[1].Dollars != nil {
+		t.Fatalf("steps %d, cost %+v", len(result.Steps), result.Cost)
 	}
 }
 

@@ -2,8 +2,7 @@
 
 use crate::session::BrowserSession;
 
-/// `await asyncio.shield(session._popups[target][1])`: whether the popup was adopted, once that is known. False for
-/// a target the session never began as a popup.
+/// Whether the popup was adopted, once that is known. False for a target the session never began as a popup.
 pub async fn popup_adopted(session: &BrowserSession, target_id: &str) -> bool {
     let adopted = {
         let state = super::shared(session).state.lock().unwrap();

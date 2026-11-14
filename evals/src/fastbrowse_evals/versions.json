@@ -1,0 +1,226 @@
+{
+  "arxiv-open": {
+    "fingerprint": "c3942c4794ea13ce",
+    "version": 13
+  },
+  "arxiv-title": {
+    "fingerprint": "00c3c34245a15f0f",
+    "version": 9
+  },
+  "books-mystery-cheapest": {
+    "fingerprint": "494b73d06f559209",
+    "version": 9
+  },
+  "books-travel-priciest": {
+    "fingerprint": "f6df0641c23cf0e4",
+    "version": 9
+  },
+  "countries-mongolia": {
+    "fingerprint": "95aa50adab956959",
+    "version": 9
+  },
+  "countries-namibia-area": {
+    "fingerprint": "0bed8db7c2821240",
+    "version": 5
+  },
+  "crates-serde": {
+    "fingerprint": "64a75cbb4c69eec4",
+    "version": 9
+  },
+  "dynamic-loading": {
+    "fingerprint": "cf0dec3320b53241",
+    "version": 10
+  },
+  "expandtesting-login": {
+    "fingerprint": "ba3143609d241af7",
+    "version": 9
+  },
+  "flights-search": {
+    "fingerprint": "609beb3d81843e94",
+    "version": 13
+  },
+  "frame-heading": {
+    "fingerprint": "43ac9ffd9200b7cc",
+    "version": 6
+  },
+  "github-license": {
+    "fingerprint": "78ba8992040f45c1",
+    "version": 9
+  },
+  "github-open": {
+    "fingerprint": "adddbd9db3c78c3e",
+    "version": 13
+  },
+  "google-flights": {
+    "fingerprint": "9448b40bccff7458",
+    "version": 9
+  },
+  "hn-comments": {
+    "fingerprint": "297c00e1c43b97f5",
+    "version": 13
+  },
+  "hn-top": {
+    "fingerprint": "ba733c9b3d12954f",
+    "version": 9
+  },
+  "hockey-bruins-1990": {
+    "fingerprint": "93430407786017ea",
+    "version": 10
+  },
+  "hover-profile": {
+    "fingerprint": "7f547c40a23d2648",
+    "version": 10
+  },
+  "httpx-requires-python": {
+    "fingerprint": "158d0c7ea896d796",
+    "version": 10
+  },
+  "new-tab-page": {
+    "fingerprint": "6a3d5ac1b4bd8b64",
+    "version": 5
+  },
+  "new-window": {
+    "fingerprint": "307bae3f37f5d9a0",
+    "version": 10
+  },
+  "oscars-2012": {
+    "fingerprint": "fa90ef4aac6aed2c",
+    "version": 9
+  },
+  "pizza-order": {
+    "fingerprint": "78b029ec79f0e91e",
+    "version": 9
+  },
+  "practice-login": {
+    "fingerprint": "19747c0563957322",
+    "version": 9
+  },
+  "pypi-newer": {
+    "fingerprint": "f7077c5a5f126a03",
+    "version": 9
+  },
+  "pypi-open": {
+    "fingerprint": "990dc21e627c169c",
+    "version": 13
+  },
+  "pypi-structured": {
+    "fingerprint": "3ca8c54655938a9e",
+    "version": 10
+  },
+  "pypi-version": {
+    "fingerprint": "c228539ea1846f5a",
+    "version": 10
+  },
+  "quotes-einstein-count": {
+    "fingerprint": "8b417bcaaabf9b2d",
+    "version": 10
+  },
+  "quotes-js-page2": {
+    "fingerprint": "0eda113d8f02c565",
+    "version": 9
+  },
+  "quotes-rowling-count": {
+    "fingerprint": "4c6d35972d65cf08",
+    "version": 6
+  },
+  "quotes-search": {
+    "fingerprint": "5b1f0deb3b319c3a",
+    "version": 9
+  },
+  "quotes-search-lewis": {
+    "fingerprint": "6d6610dc5fdb1b14",
+    "version": 5
+  },
+  "ruff-release": {
+    "fingerprint": "f2311ac70681a4f0",
+    "version": 9
+  },
+  "saucedemo-cart": {
+    "fingerprint": "0a0531776e71ff0d",
+    "version": 9
+  },
+  "saucedemo-checkout": {
+    "fingerprint": "35b155cc42f41ada",
+    "version": 9
+  },
+  "saucedemo-locked-out": {
+    "fingerprint": "c6b239c9b5bc38a6",
+    "version": 9
+  },
+  "saucedemo-pause": {
+    "fingerprint": "7c5594cddef5cdc7",
+    "version": 8
+  },
+  "stretch-books-nonfiction-five-star": {
+    "fingerprint": "8f668e60c5812bad",
+    "version": 11
+  },
+  "stretch-books-sequential-art-one-star": {
+    "fingerprint": "2a79739cf6c92e82",
+    "version": 5
+  },
+  "stretch-books-young-adult-one-star": {
+    "fingerprint": "c5edd1868cc69f3d",
+    "version": 5
+  },
+  "stretch-bstack-apple-google": {
+    "fingerprint": "10d1f5a26309b161",
+    "version": 10
+  },
+  "stretch-bstack-apple-samsung": {
+    "fingerprint": "c52f8cdf769c5061",
+    "version": 10
+  },
+  "stretch-calendar-first-friday": {
+    "fingerprint": "8ecaeac1c214868d",
+    "version": 12
+  },
+  "stretch-date-range-monday": {
+    "fingerprint": "b1b6b640489752bb",
+    "version": 10
+  },
+  "stretch-datepicker-last-saturday": {
+    "fingerprint": "a3f1dd765071a290",
+    "version": 5
+  },
+  "stretch-datepicker-last-sunday": {
+    "fingerprint": "fabd7bfa24ad7e63",
+    "version": 5
+  },
+  "stretch-quotes-top-authors": {
+    "fingerprint": "4fd442319d3af9ae",
+    "version": 10
+  },
+  "stretch-wizard-review": {
+    "fingerprint": "79e0670225c37569",
+    "version": 9
+  },
+  "table-largest-due": {
+    "fingerprint": "6d4fcc01bb02e352",
+    "version": 10
+  },
+  "table-total-due": {
+    "fingerprint": "3defccca7fb992d6",
+    "version": 5
+  },
+  "wiki-godel": {
+    "fingerprint": "e0d610a509cafa29",
+    "version": 9
+  },
+  "wiki-open": {
+    "fingerprint": "6c22ee9eaf7828f1",
+    "version": 13
+  },
+  "sweep-curseforge-page": {
+    "fingerprint": "e1c7b7ee3f776348",
+    "version": 2
+  },
+  "sweep-curseforge-comments": {
+    "fingerprint": "b11a3a9f7eb5ed67",
+    "version": 2
+  },
+  "sweep-wago-listing": {
+    "fingerprint": "f7bbbe4d9a8c5301",
+    "version": 2
+  }
+}

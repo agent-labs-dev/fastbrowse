@@ -13,15 +13,23 @@ fastbrowse-agent = { workspace = true }
 fastbrowse-browser = { workspace = true, features = ["recording", "cursor"] }
 fastbrowse-clients = { workspace = true }
 fastbrowse-core = { workspace = true }
-# gzip and deflate bodies, which httpx decodes for the Python reader; miniz_oxide is pure Rust.
-flate2 = "1.1"
-# The HTML5 character reference tables `html.unescape` decodes a fetched document with.
-htmlize = { version = "1.1.0", features = ["unescape"] }
-indexmap = "2"
-serde_json = { version = "1", features = ["preserve_order"] }
-tokio = { version = "1", features = ["rt", "time", "macros", "sync", "fs"] }
-url = "2.5"
+# The WHATWG Encoding Standard's decoders, by the labels a response or a document names.
+encoding_rs = "0.8.44"
+# gzip and deflate bodies; miniz_oxide is pure Rust.
+flate2 = "1.1.10"
+# The WHATWG HTML tokenizer, which reads a fetched document's tags, raw text and character references as a browser does.
+html5ever = "0.40.1"
+indexmap = "2.14.2"
+# A fragment names an id percent-encoded, as a browser decodes it before looking the id up.
+percent-encoding = "2.3.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+# `desktop` takes the app to start as one command line, split into words as a POSIX shell splits them.
+shlex = "2.0.1"
+# `desktop` speaks to `deskpilot mcp` over its stdin and stdout.
+tokio = { version = "1.54.1", features = ["rt", "time", "macros", "sync", "fs", "process", "io-util"] }
+url = "2.5.8"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "time", "macros", "sync", "net", "io-util"] }
-url = "2.5"
+tokio = { version = "1.54.1", features = ["rt", "time", "macros", "sync", "net", "io-util"] }
+url = "2.5.8"

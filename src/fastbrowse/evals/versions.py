@@ -27,33 +27,36 @@ import json
 import platform
 import re
 import statistics
-import subprocess
 import sys
 import textwrap
 import tokenize
 import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, datetime
-from importlib.metadata import PackageNotFoundError, distribution, version
 from pathlib import Path
 from types import CodeType
 from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from fastbrowse.build import identity
 from fastbrowse.evals import baseline
+from fastbrowse.evals.status import Ending
 
 LOCK = Path(__file__).with_name("versions.json")
 ROOT = Path(__file__).parents[3]
 RESULTS = ROOT / "docs" / "results"
 _ADDRESS = re.compile(r" at 0x[0-9a-f]+")
-_OWN = ("fastbrowse.evals", "parallax.browser_use")
+# The eval helpers a task reaches, hashed by their source: this package's, and the internal tasks' in evals/.
+_OWN = ("fastbrowse.evals", "fastbrowse_evals")
 _CONSTANT = (str, bytes, int, float, bool, tuple, frozenset, dict, re.Pattern, enum.Enum)
 _SKIP = {tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT, tokenize.ENDMARKER}
 ARM_LABELS = {
     "fastbrowse": "fastbrowse",
     "browser-use": "Browser Use agent",
-    "jev-ultrafast": "Browser Use Ultrafast",
+    "browser-use-ultrafast": "Browser Use Ultrafast",
+    # No comparison runs it any more, but the releases that published its rows still summarize them.
+    "jev-ultrafast": "Jev Ultrafast",
 }
 
 
@@ -181,48 +184,13 @@ def suite_version(task_ids: Iterable[str], lock: Mapping[str, Mapping[str, Any]]
     return hashlib.sha256(body.encode()).hexdigest()[:8]
 
 
-def _git(*args: str) -> str | None:
-    # An installed package can sit inside another project's checkout, so parent discovery is not build identity.
-    if not (ROOT / "src" / "fastbrowse" / "evals" / "versions.py").is_file():
-        return None
-    try:
-        done = subprocess.run(
-            ["git", *args], cwd=Path(__file__).parent, capture_output=True, text=True, timeout=10, check=True
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return done.stdout.strip()
-
-
 def provenance(**extra: object) -> dict[str, object]:
-    """Who ran: the build, its commit, the interpreter, and a run id shared by every row of one invocation.
-
-    `git_dirty` is None outside a checkout (an installed wheel) and True when tracked files had uncommitted
-    changes or untracked, non-ignored files were present, so a score from an unreviewed tree is marked as one.
-    Ignored paths (an `artifacts/` directory) do not dirty a build; an untracked executable does.
-    """
-    try:
-        build = version("fastbrowse")
-    except PackageNotFoundError:
-        build = None
-    sha = _git("rev-parse", "HEAD")
-    status = None if sha is None else _git("status", "--porcelain")
-    dirty = None if status is None else bool(status)
-    if sha is None:
-        try:
-            receipt = json.loads(distribution("fastbrowse").read_text("direct_url.json") or "{}")
-        except (PackageNotFoundError, ValueError):
-            receipt = {}
-        vcs = receipt.get("vcs_info") if isinstance(receipt, dict) else None
-        commit = vcs.get("commit_id") if isinstance(vcs, dict) else None
-        if isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit):
-            sha, dirty = commit, False
+    """Who ran: the build (`fastbrowse.build.identity`), the interpreter, and a run id shared by every row of one
+    invocation."""
     return {
         "run_id": uuid.uuid4().hex[:12],
         "run_started": datetime.now(UTC).isoformat(timespec="seconds"),
-        "fastbrowse_version": build,
-        "git_sha": sha,
-        "git_dirty": dirty,
+        **identity(),
         "python": platform.python_version(),
         **extra,
     }
@@ -256,22 +224,22 @@ def all_tasks() -> tuple[dict[str, tuple[Any, ...]], tuple[Any, ...]]:
 # Published results.
 
 _KEPT = ("arm", "task", "repeat", "category", "suite", "suite_version", "task_version", "status",
-         "normalized_status", "task_successful", "passed", "correct",
+         "normalized_status", "task_successful", "passed",
          "seconds", "dollars", "retries", "failure", "model", "text_model", "transient_seconds", "at",
-         "answered", "session_seconds", "replaces_run_id", "final_url", "final_page", "failure_class", "site_probe",
-         "actions", "decisions", "step_cap", "step_cap_unit", "decision_cap", "provenance")  # fmt: skip
+         "answered", "session_seconds", "timing_basis", "session_open_seconds", "session_close_seconds",
+         "replaces_run_id", "final_url", "final_page", "failure_class", "site_probe",
+         "llm_calls", "llm_calls_basis", "tokens_per_second", "step_cap", "step_cap_unit", "provenance")  # fmt: skip
 _RUN_KEPT = ("run_id", "run_started", "fastbrowse_version", "git_sha", "git_dirty", "providers", "max_steps",
-             "concurrency", "jev_ultrafast", "arms", "python", "argv", "benchmark_family", "benchmark_origin",
+             "concurrency", "arms", "python", "argv", "benchmark_family", "benchmark_origin",
              "benchmark_suite", "benchmark_runner_sha", "benchmark_runner_dirty",
              "benchmark_catalog_sha256", "agent_limits", "budget_policy", "budget_usd", "max_seconds", "max_dollars",
-             "hosted_max_cost_usd", "browsers", "provider_limits")  # fmt: skip
+             "hosted_max_cost_usd", "browsers", "provider_limits", "timing_basis",
+             "session_open_limit_seconds")  # fmt: skip
 
 
 def slim(row: Mapping[str, Any]) -> dict[str, Any]:
     """What a published row keeps: its grade and provenance, not the traces that make a raw row 9 KB."""
     kept = {key: row.get(key) for key in _KEPT}
-    if isinstance(kept["failure"], str):
-        kept["failure"] = kept["failure"][:300]
     run = row.get("run") or {}
     kept["run"] = {key: run.get(key) for key in _RUN_KEPT}
     # The browser record is what the gate reads to tell a real browser from a throwaway one, so it is kept; a local
@@ -296,25 +264,21 @@ def publish(release: str, source: Path) -> Path:
     Each live task needs three distinct measured repeats, and each fastbrowse task is compared at the task version
     it ran against the newest published release that ran the same protocol and model route with three attempts.
     """
-    from fastbrowse.evals.publication import gate, ledger_path
-
-    def read(file: Path) -> list[dict[str, Any]]:
-        return [json.loads(line) for line in file.read_text(encoding="utf-8").splitlines() if line.strip()]
+    from fastbrowse.evals.publication import _release_of, gate, ledger_path, read_jsonl
 
     if release == "auto":
-        rows = read(source)
-        releases = {(row.get("run") or {}).get("fastbrowse_version") for row in rows}
-        if len(releases) != 1 or None in releases:
+        found = _release_of(read_jsonl(source))
+        if found is None:
             raise ValueError("rows must identify one fastbrowse release")
-        release = str(releases.pop())
+        release = found
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", release):
         raise ValueError("release must be a numeric x.y.z version")
     target = RESULTS / f"{release}.jsonl"
     if target.exists() or ledger_path(target).exists() or any(name == release for name, _ in published()):
         raise ValueError(f"{target} exists: published results are never rewritten; publish under a new release")
-    rows = read(source)
+    rows = read_jsonl(source)
     ledger_file = ledger_path(source)
-    ledger = read(ledger_file) if ledger_file.exists() else None
+    ledger = read_jsonl(ledger_file) if ledger_file.exists() else None
     report = gate(
         rows,
         release=release,
@@ -356,8 +320,10 @@ def published() -> list[tuple[str, list[dict[str, Any]]]]:
 
 def _measured(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     """The attempts that measured the arm. One that ended `unavailable` was stopped by a provider outage outlasting
-    every retry, so it says nothing about the arm."""
-    return [r for r in rows if r.get("normalized_status") != "unavailable"]
+    every retry, or by a first navigation that timed out or could not reach the site, so it says nothing about the
+    arm. One whose agent ended `blocked` reached the site and was refused by its bot check, which another agent may
+    get past, so it is the arm's failure."""
+    return [r for r in rows if r.get("normalized_status") != Ending.UNAVAILABLE or r.get("status") == "blocked"]
 
 
 def _arm_rank(arm: str) -> int:
@@ -379,46 +345,80 @@ class _Comparison:
     rows: list[Mapping[str, Any]]
     """Selected results, including unavailable outcomes. Earlier retries remain in the attempt ledger."""
     scored: list[Mapping[str, Any]]
-    """The attempts every figure is taken from: as many per arm at each task."""
-    left_out: list[str]
-    """Tasks some arm has no measured attempt at, so none of their attempts are scored."""
+    """The attempts every figure is taken from: as many per arm at each task. An arm the catalog says cannot run a
+    task has a failed attempt there for each one the other arms measured, marked `unsupported` with the reason; it
+    ran nothing, so it has no time or cost."""
+
+
+def unsupported(task: str, task_version: object) -> dict[str, str]:
+    """The arms the catalog says cannot run `task`, with the reason each cannot, when the row measured the task as
+    the catalog defines it. A task an arm cannot run is a failure for that arm in every comparison: the comparison
+    is fair across any browser agent only if a capability one lacks counts against it."""
+    from fastbrowse.evals.catalog import SUITES
+
+    for entries in SUITES.values():
+        for entry in entries:
+            if entry.id == task and entry.task_version == task_version:
+                return dict(entry.excluded)
+    return {}
 
 
 def _by_comparison(rows: Sequence[Mapping[str, Any]]) -> list[_Comparison]:
-    """`rows` split by the arms their task ran on, each scored on matched attempts.
+    """`rows` split by the arms their task is compared on, each scored on matched attempts.
 
-    A task runs only on the arms it grades on equal terms (`LiveTask.arms`): pooled, a suite set fastbrowse on 21
-    tasks beside Browser Use on 14. An attempt a provider outage ended measured nothing; dropping it from one arm
-    alone would score the arms on different attempts, so at each task an attempt counts only where every arm measured
-    the same repeat of it (rows from before repeats were recorded pair earliest first), and a task some arm has none at
+    A task is compared on the arms that ran it and on the arms of the suite the catalog says cannot run it, which
+    fail it at every attempt. An `unavailable` attempt measured nothing; dropping it from one arm alone would score
+    the arms on different attempts, so at each task an attempt counts only where every arm that ran it measured the
+    same repeat of it (rows from before repeats were recorded pair earliest first), and a task some arm has none at
     is left out. Groups with most arms first."""
+    present = {row["arm"] for row in rows}
     ran: dict[str, set[str]] = {}
+    cannot: dict[str, dict[str, str]] = {}
     for row in rows:
         ran.setdefault(row["task"], set()).add(row["arm"])
+        reasons = unsupported(row["task"], row.get("task_version"))
+        cannot.setdefault(row["task"], {}).update({arm: why for arm, why in reasons.items() if arm in present})
+    for task, arms in ran.items():
+        cannot[task] = {arm: reason for arm, reason in cannot[task].items() if arm not in arms}
     groups: dict[tuple[str, ...], list[Mapping[str, Any]]] = {}
     for row in rows:
-        groups.setdefault(tuple(sorted(ran[row["task"]], key=_arm_rank)), []).append(row)
+        task = row["task"]
+        groups.setdefault(tuple(sorted(ran[task] | cannot[task].keys(), key=_arm_rank)), []).append(row)
     comparisons = []
     for arms, group in sorted(groups.items(), key=lambda item: (-len(item[0]), [_arm_rank(a) for a in item[0]])):
         tasks: dict[str, dict[str, list[Mapping[str, Any]]]] = {}
         for row in _measured(group):
             tasks.setdefault(row["task"], {}).setdefault(row["arm"], []).append(row)
         scored: list[Mapping[str, Any]] = []
-        for per_arm in tasks.values():
-            if len(per_arm) == len(arms):
-                scored += _paired(per_arm)
-        left_out = sorted({r["task"] for r in group} - {r["task"] for r in scored})
-        comparisons.append(_Comparison(arms, group, scored, left_out))
+        for task, per_arm in tasks.items():
+            if len(per_arm) + len(cannot[task]) == len(arms):
+                scored += _paired(per_arm, cannot[task])
+        comparisons.append(_Comparison(arms, group, scored))
     return comparisons
 
 
-def _paired(per_arm: Mapping[str, list[Mapping[str, Any]]]) -> list[Mapping[str, Any]]:
-    """The attempts at one task every arm measured: matched by repeat, or earliest first for rows without one."""
+def _paired(
+    per_arm: Mapping[str, list[Mapping[str, Any]]], cannot: Mapping[str, str] | None = None
+) -> list[Mapping[str, Any]]:
+    """The attempts at one task every arm that ran it measured: matched by repeat, or earliest first for rows without
+    one. Each arm in `cannot`, which cannot run the task, fails every one of those attempts for the reason given."""
     if all(r.get("repeat") is not None for attempts in per_arm.values() for r in attempts):
         shared = set.intersection(*({_pass(r) for r in attempts} for attempts in per_arm.values()))
-        return [r for attempts in per_arm.values() for r in attempts if _pass(r) in shared]
-    fewest = min(map(len, per_arm.values()))
-    return [r for attempts in per_arm.values() for r in sorted(attempts, key=lambda r: r.get("at") or 0.0)[:fewest]]
+        paired = [r for attempts in per_arm.values() for r in attempts if _pass(r) in shared]
+        slots: list[int | None] = sorted(repeat for _, repeat in shared)
+    else:
+        fewest = min(map(len, per_arm.values()))
+        paired = [
+            r for attempts in per_arm.values() for r in sorted(attempts, key=lambda r: r.get("at") or 0.0)[:fewest]
+        ]
+        slots = [None] * fewest
+    task = next(iter(per_arm.values()))[0]["task"]
+    failed = [
+        {"arm": arm, "task": task, "repeat": repeat, "passed": False, "unsupported": reason}
+        for arm, reason in (cannot or {}).items()
+        for repeat in slots
+    ]
+    return [*paired, *failed]
 
 
 def _pass(row: Mapping[str, Any]) -> tuple[object, int]:
@@ -440,9 +440,13 @@ class MetricSummary(BaseModel):
 class ArmSummary(BaseModel):
     passed: int
     total: int
+    """Attempts scored, the `unsupported` ones included."""
     excluded: int = 0
-    """Attempts made but not scored: those a provider outage ended, and as many of this arm's at the same task when
+    """Attempts made but not scored: those that ended `unavailable`, and as many of this arm's at the same task when
     another arm lost one, so every arm is scored on the same attempts."""
+    unsupported: int = 0
+    """Failed attempts at tasks the catalog says this arm cannot run. They ran nothing, so time and cost are averaged
+    over the other attempts."""
     priced: int
     seconds: MetricSummary
     dollars: MetricSummary
@@ -499,15 +503,21 @@ def summary(releases: Sequence[tuple[str, list[dict[str, Any]]]] | None = None) 
             group = comparison.rows
             arms = {}
             scored = _by_arm(comparison.scored)
-            for arm, attempts in _by_arm(group).items():
-                arm_rows = scored.get(arm, [])
+            ran = [r for r in comparison.scored if "unsupported" not in r]
+            # Seconds on two clocks say nothing about either arm, so such a comparison reports none.
+            timed = len({r.get("timing_basis") for r in ran}) <= 1
+            attempts = _by_arm(group)
+            for arm in comparison.arms:
+                counted = scored.get(arm, [])
+                arm_rows = [r for r in counted if "unsupported" not in r]
                 prices = [r["dollars"] for r in arm_rows if r["dollars"] is not None]
                 arms[arm] = ArmSummary(
-                    passed=sum(bool(r["passed"]) for r in arm_rows),
-                    total=len(arm_rows),
-                    excluded=len(attempts) - len(arm_rows),
+                    passed=sum(bool(r["passed"]) for r in counted),
+                    total=len(counted),
+                    excluded=len(attempts.get(arm, [])) - len(arm_rows),
+                    unsupported=len(counted) - len(arm_rows),
                     priced=len(prices),
-                    seconds=_metrics([r["seconds"] for r in arm_rows]),
+                    seconds=_metrics([r["seconds"] for r in arm_rows] if timed else []),
                     dollars=_metrics(prices if len(prices) == len(arm_rows) else []),
                 )
             changes = [

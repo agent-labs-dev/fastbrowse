@@ -1,0 +1,4 @@
+[env]
+# Chrome writes its built-in messages, such as a refused field's validation message, in the language this names, and
+# the browser tests' golden snapshots hold them: pin it so a snapshot is the same on every machine.
+LANGUAGE = { value = "en_US", force = true }

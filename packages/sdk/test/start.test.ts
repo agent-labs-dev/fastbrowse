@@ -5,10 +5,7 @@ import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
 
 import { Fastbrowse, FastbrowseError } from '../src/index.ts';
-import { launcher, scriptedServer, serverBinary } from './server.ts';
-
-const pyproject = readFileSync(new URL('../../../pyproject.toml', import.meta.url), 'utf8');
-const packageVersion = /^version = "(.+)"$/m.exec(pyproject)?.[1];
+import { launcher, packageVersion, scriptedServer, serverBinary } from './server.ts';
 
 afterEach(() => {
   delete process.env.FASTBROWSE_BINARY;
@@ -69,11 +66,11 @@ test('start rejects when the process exits before it answers', async () => {
 });
 
 test('a binary on another protocol version is refused with both versions named, and stopped', async () => {
-  const server = scriptedServer('protocol_2');
+  const server = scriptedServer('other_protocol');
   await assert.rejects(Fastbrowse.start({ binaryPath: server.path }), (error: unknown) => {
     assert.ok(error instanceof FastbrowseError);
-    assert.match(error.message, /protocol version 1\b/);
-    assert.match(error.message, /protocol version 2\b/);
+    assert.match(error.message, /protocol version 3\b/);
+    assert.match(error.message, /protocol version 4\b/);
     return true;
   });
   assert.equal(server.running(), false);

@@ -6,7 +6,7 @@ package fastbrowse
 import "encoding/json"
 
 // ProtocolVersion is the version of the wire format this client speaks.
-const ProtocolVersion = 1
+const ProtocolVersion = 3
 
 // What a client can ask of the server.
 const (
@@ -29,7 +29,9 @@ type Artifact struct {
 type ArtifactKind string
 
 const (
-	ArtifactKindDownload ArtifactKind = "download"
+	ArtifactKindDownload   ArtifactKind = "download"
+	ArtifactKindScreenshot ArtifactKind = "screenshot"
+	ArtifactKindCapture    ArtifactKind = "capture"
 )
 
 type Authorization struct {
@@ -47,19 +49,51 @@ type BrowserEvent struct {
 	BrowserID *string `json:"browser_id"`
 }
 
+// The browser a run drove.
+type BrowserUsed struct {
+	Via BrowserVia `json:"via"`
+	// The profile it ran in, when one was named: a local profile directory, a cloud profile, or the label of a
+	// browser connected through the extension.
+	Profile *string `json:"profile"`
+	// The browser's product and version, when known, such as `Chrome 150.0.7400.2`.
+	Browser *string `json:"browser"`
+}
+
+// How a run reached the browser it drove.
+type BrowserVia string
+
+const (
+	BrowserViaCloud     BrowserVia = "cloud"
+	BrowserViaLaunched  BrowserVia = "launched"
+	BrowserViaAttached  BrowserVia = "attached"
+	BrowserViaExtension BrowserVia = "extension"
+)
+
 type BudgetStop struct {
 	Resource string  `json:"resource"`
 	Limit    float64 `json:"limit"`
 }
 
+// What a cancelled run did before it stopped: the `data` of its `cancelled` error.
+//
+// A cancelled run proved nothing, so this has no status and no answer. It holds what the caller is owed
+// whatever the run became: the steps it reported, every charge known when it stopped, an unpriced one as an
+// `unknown` line, and the videos finished before its browser closed. A step cut off before its event was sent
+// was never reported, so it is not among the steps.
+type CancellationReceipt struct {
+	Steps      []StepResult  `json:"steps"`
+	Cost       CostBreakdown `json:"cost"`
+	Recordings []string      `json:"recordings"`
+	Browser    *BrowserUsed  `json:"browser"`
+}
+
 type Citation struct {
 	// The number used by this fact's links in the answer, stable within a run.
-	ID            int64   `json:"id"`
-	Text          string  `json:"text"`
-	RequirementID *string `json:"requirement_id"`
-	URL           string  `json:"url"`
-	Quote         string  `json:"quote"`
-	DeepLink      string  `json:"deep_link"`
+	ID       int64  `json:"id"`
+	Text     string `json:"text"`
+	URL      string `json:"url"`
+	Quote    string `json:"quote"`
+	DeepLink string `json:"deep_link"`
 }
 
 type CostBasis string
@@ -68,6 +102,7 @@ const (
 	CostBasisMetered   CostBasis = "metered"
 	CostBasisEstimated CostBasis = "estimated"
 	CostBasisBounded   CostBasis = "bounded"
+	CostBasisUnsettled CostBasis = "unsettled"
 	CostBasisUnknown   CostBasis = "unknown"
 )
 
@@ -82,31 +117,36 @@ const (
 	CostComponentLLM     CostComponent = "llm"
 	CostComponentBrowser CostComponent = "browser"
 	CostComponentProxy   CostComponent = "proxy"
+	CostComponentSearch  CostComponent = "search"
 )
 
 type CostLine struct {
-	Component    CostComponent `json:"component"`
-	Basis        CostBasis     `json:"basis"`
-	Dollars      *float64      `json:"dollars"`
-	Purpose      *LLMPurpose   `json:"purpose"`
-	InputTokens  int64         `json:"input_tokens"`
-	OutputTokens int64         `json:"output_tokens"`
-	// Wall time of the call, retries included. None for a line that is not one call, such as browser time.
+	Component       CostComponent `json:"component"`
+	Basis           CostBasis     `json:"basis"`
+	Dollars         *float64      `json:"dollars"`
+	Purpose         *LLMPurpose   `json:"purpose"`
+	DecisionPurpose *JevPurpose   `json:"decision_purpose,omitempty"`
+	InputTokens     int64         `json:"input_tokens"`
+	OutputTokens    int64         `json:"output_tokens"`
+	// Wall time of the call, retries included, or the time a metered browser was held. None when unknown.
 	Seconds *float64 `json:"seconds"`
+	// Physical provider requests represented by this line; absent on historical receipts.
+	PhysicalRequests *int64 `json:"physical_requests,omitempty"`
 }
 
-// The model whose choice a step carries out, even when code dispatches it: the next page of a list is the
-// reader's, because the reader asked for the rest of the list.
+// Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev.
 type Decider string
 
 const (
-	DeciderJev Decider = "jev"
-	DeciderLLM Decider = "llm"
+	DeciderJev    Decider = "jev"
+	DeciderCode   Decider = "code"
+	DeciderRecipe Decider = "recipe"
 )
 
 type Error struct {
-	Code    ErrorCode `json:"code"`
-	Message string    `json:"message"`
+	Code    ErrorCode            `json:"code"`
+	Message string               `json:"message"`
+	Data    *CancellationReceipt `json:"data,omitempty"`
 }
 
 // Every code an error reply can carry: the JSON-RPC standard ones, then this protocol's own.
@@ -146,13 +186,17 @@ type Evidence struct {
 	RenderedText bool `json:"rendered_text"`
 	// The headings the quote sits under on the page: which record a bare "£10.69" is the price of.
 	HeadingPath []string `json:"heading_path"`
+	// The `uri` of the `capture` artifact holding the page text `start` and `end` index into, if one was kept.
+	CaptureArtifact *string `json:"capture_artifact,omitempty"`
+	// The links inside the quote and where each leads, which its text alone does not say.
+	Links []Link `json:"links,omitempty"`
 }
 
 type FactReader string
 
 const (
 	FactReaderJevChoice FactReader = "jev_choice"
-	FactReaderLLM       FactReader = "llm"
+	FactReaderLLMImage  FactReader = "llm_image"
 )
 
 // The client's side of the handshake.
@@ -168,16 +212,31 @@ type InitializeResult struct {
 	FastbrowseVersion string `json:"fastbrowse_version"`
 }
 
+type JevPurpose string
+
+const (
+	JevPurposeAction        JevPurpose = "action"
+	JevPurposeAuthorization JevPurpose = "authorization"
+	JevPurposeRelevance     JevPurpose = "relevance"
+	JevPurposeRead          JevPurpose = "read"
+	JevPurposeVerify        JevPurpose = "verify"
+	JevPurposeLocate        JevPurpose = "locate"
+)
+
 type LLMPurpose string
 
 const (
-	LLMPurposePlan      LLMPurpose = "plan"
-	LLMPurposeRead      LLMPurpose = "read"
-	LLMPurposeFieldText LLMPurpose = "field_text"
-	LLMPurposeRecover   LLMPurpose = "recover"
-	LLMPurposeVerify    LLMPurpose = "verify"
-	LLMPurposeCompose   LLMPurpose = "compose"
-	LLMPurposeShortcut  LLMPurpose = "shortcut"
+	LLMPurposeStart         LLMPurpose = "start"
+	LLMPurposeCompose       LLMPurpose = "compose"
+	LLMPurposeImageRead     LLMPurpose = "image_read"
+	LLMPurposeFill          LLMPurpose = "fill"
+	LLMPurposePages         LLMPurpose = "pages"
+	LLMPurposeDates         LLMPurpose = "dates"
+	LLMPurposeKnownPages    LLMPurpose = "known_pages"
+	LLMPurposeRecoveryPages LLMPurpose = "recovery_pages"
+	LLMPurposeSearch        LLMPurpose = "search"
+	LLMPurposeUnobtainable  LLMPurpose = "unobtainable"
+	LLMPurposeGroups        LLMPurpose = "groups"
 )
 
 type Limits struct {
@@ -192,6 +251,13 @@ type Limits struct {
 	MaxDollars *float64 `json:"max_dollars,omitempty"`
 	// Stops active work at the time budget. Returning also waits for owned request and browser cleanup.
 	MaxSeconds *float64 `json:"max_seconds,omitempty"`
+}
+
+type Link struct {
+	Text  string `json:"text"`
+	Start int64  `json:"start"`
+	End   int64  `json:"end"`
+	Href  string `json:"href"`
 }
 
 type LocalChrome struct {
@@ -221,6 +287,8 @@ const (
 	OperationHover     Operation = "hover"
 	OperationDrag      Operation = "drag"
 	OperationFill      Operation = "fill"
+	OperationPress     Operation = "press"
+	OperationBlur      Operation = "blur"
 	OperationSelect    Operation = "select"
 	OperationEnter     Operation = "enter"
 	OperationEscape    Operation = "escape"
@@ -230,10 +298,11 @@ const (
 	OperationSwitchTab Operation = "switch_tab"
 	OperationUpload    Operation = "upload"
 	OperationDialog    Operation = "dialog"
+	OperationWait      Operation = "wait"
 	OperationRead      Operation = "read"
 	OperationDone      Operation = "done"
-	OperationEscalate  Operation = "escalate"
 	OperationNavigate  Operation = "navigate"
+	OperationSearch    Operation = "search"
 )
 
 // A method's params. An unknown field is refused, so a misspelled option is never dropped in silence.
@@ -281,37 +350,47 @@ type RunFrame struct {
 	Frame string `json:"frame"`
 }
 
-// One run. Apart from `run_id`, each field is the `run_task` argument or the CLI flag of the same name.
+// One run: the run's arguments, and what the server needs to talk to the client about it.
 //
 // The reply is the `RunResult`. No API key is among the fields: model and browser keys come from the
 // environment the server inherited.
 type RunParams struct {
-	RunID              string            `json:"run_id"`
-	Task               string            `json:"task"`
-	Start              *string           `json:"start,omitempty"`
-	Context            *string           `json:"context,omitempty"`
-	Inputs             map[string]string `json:"inputs,omitempty"`
-	Attachments        []RunAttachment   `json:"attachments,omitempty"`
-	Limits             *Limits           `json:"limits,omitempty"`
-	Authorization      *Authorization    `json:"authorization,omitempty"`
-	OutputSchema       json.RawMessage   `json:"output_schema,omitempty"`
-	Secrets            []SecretRef       `json:"secrets,omitempty"`
-	Frames             bool              `json:"frames,omitempty"`
-	Until              bool              `json:"until,omitempty"`
-	Downloads          *string           `json:"downloads,omitempty"`
-	Record             *string           `json:"record,omitempty"`
-	Cursor             *bool             `json:"cursor,omitempty"`
-	Local              bool              `json:"local,omitempty"`
-	Chrome             *LocalChrome      `json:"chrome,omitempty"`
-	CloudProfile       *string           `json:"cloud_profile,omitempty"`
-	CDPURL             *string           `json:"cdp_url,omitempty"`
-	CDPPort            *int64            `json:"cdp_port,omitempty"`
-	Attach             bool              `json:"attach,omitempty"`
-	TargetMatch        *string           `json:"target_match,omitempty"`
-	Foreground         bool              `json:"foreground,omitempty"`
-	ProxyCountry       *string           `json:"proxy_country,omitempty"`
-	Viewport           *[2]int64         `json:"viewport,omitempty"`
-	CloudAllowResizing bool              `json:"cloud_allow_resizing,omitempty"`
+	RunID               string            `json:"run_id"`
+	Secrets             []SecretRef       `json:"secrets,omitempty"`
+	Frames              bool              `json:"frames,omitempty"`
+	Until               bool              `json:"until,omitempty"`
+	Task                string            `json:"task"`
+	Start               *string           `json:"start,omitempty"`
+	Context             *string           `json:"context,omitempty"`
+	Inputs              map[string]string `json:"inputs,omitempty"`
+	Attachments         []RunAttachment   `json:"attachments,omitempty"`
+	Limits              *Limits           `json:"limits,omitempty"`
+	Authorization       *Authorization    `json:"authorization,omitempty"`
+	OutputSchema        json.RawMessage   `json:"output_schema,omitempty"`
+	Downloads           *string           `json:"downloads,omitempty"`
+	Record              *string           `json:"record,omitempty"`
+	Recipe              *string           `json:"recipe,omitempty"`
+	SaveRecipe          *string           `json:"save_recipe,omitempty"`
+	Cursor              *bool             `json:"cursor,omitempty"`
+	Local               bool              `json:"local,omitempty"`
+	Launch              bool              `json:"launch,omitempty"`
+	Chrome              *LocalChrome      `json:"chrome,omitempty"`
+	CloudProfile        *string           `json:"cloud_profile,omitempty"`
+	CDPURL              *string           `json:"cdp_url,omitempty"`
+	CDPPort             *int64            `json:"cdp_port,omitempty"`
+	Attach              bool              `json:"attach,omitempty"`
+	TargetMatch         *string           `json:"target_match,omitempty"`
+	Foreground          bool              `json:"foreground,omitempty"`
+	ProxyCountry        *string           `json:"proxy_country,omitempty"`
+	Viewport            *[2]int64         `json:"viewport,omitempty"`
+	CloudExtensions     []string          `json:"cloud_extensions,omitempty"`
+	CloudTimeoutMinutes *int64            `json:"cloud_timeout_minutes,omitempty"`
+	AllowedOrigins      []string          `json:"allowed_origins,omitempty"`
+	Fetch               bool              `json:"fetch,omitempty"`
+	Browser             bool              `json:"browser,omitempty"`
+	Extension           bool              `json:"extension,omitempty"`
+	ExtensionBrowser    *string           `json:"extension_browser,omitempty"`
+	Desktop             *string           `json:"desktop,omitempty"`
 }
 
 type RunResult struct {
@@ -331,6 +410,8 @@ type RunResult struct {
 	Recordings []string `json:"recordings"`
 	// The sign-in or bot wall a `needs_login` or `blocked` run stopped at, when the page showed one.
 	Wall *Wall `json:"wall"`
+	// The browser the run drove, and how it reached it; none when it read every page over HTTP.
+	Browser *BrowserUsed `json:"browser"`
 }
 
 // The params of `run/until`: the address a run ended on. The reply is a boolean, and false keeps the run
@@ -393,6 +474,7 @@ const (
 	StatusBudgetExceeded    Status = "budget_exceeded"
 	StatusObservationLimit  Status = "observation_limit"
 	StatusUnavailable       Status = "unavailable"
+	StatusCancelled         Status = "cancelled"
 	StatusError             Status = "error"
 )
 
@@ -417,8 +499,7 @@ type StepEvent struct {
 }
 
 type StepFact struct {
-	Text          string  `json:"text"`
-	RequirementID *string `json:"requirement_id"`
+	Text string `json:"text"`
 	// None for a count, total or winner derived from other facts rather than read from the page.
 	Quote    *string    `json:"quote"`
 	URL      *string    `json:"url"`
@@ -447,7 +528,7 @@ type StepResult struct {
 	Note       *string  `json:"note"`
 	// Facts added to the notes by this step, with resolved secrets redacted.
 	Facts []StepFact `json:"facts"`
-	// Whether the page's fingerprint changed; None for steps that do not act (read, escalate).
+	// Whether the page's fingerprint changed; None for steps that do not act (read).
 	PageChanged *bool `json:"page_changed"`
 	DurationMs  int64 `json:"duration_ms"`
 	// The controls Jev was offered for this step's decision, when `Config.step_choices` asked for them.

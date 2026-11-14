@@ -1,5 +1,3 @@
-//! tests/browser/test_lifecycle.py: failure and cancellation paths that need deterministic transport responses.
-//!
 //! Each test drives a `BrowserSession` against `FakeChrome`, test_lifecycle.py's `CdpTransport` behind a socket.
 //!
 //! Ported as unit tests in adapters, src/adapters/browser_use_cloud.rs:
@@ -131,6 +129,60 @@ async fn test_a_keeper_that_cannot_attach_leaves_the_tab_to_the_run() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_the_cloud_solver_reports_the_captcha_it_works_on_and_wakes_a_wait() {
+    // Browser Use Cloud sends these on the browser's own connection, as seen live on a Cloudflare challenge.
+    let fake = FakeChrome::start().await;
+    let session = fake.session(fake.connection()).await;
+    let target = session.active_target_id();
+    let url = "https://shop.test/check";
+    let event = |method: &str, extra: Value| {
+        let mut params = json!({"targetId": target, "url": url, "vendor": "cloudflare"});
+        params.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        testing::dispatch(&session, method, params, None);
+    };
+    assert_eq!(session.captcha_solve(), None);
+    let mark = session.lifecycle_mark();
+    event("BrowserUse.captchaSolverStarted", json!({"startedAt": 1}));
+    assert!(session.wait_for_lifecycle(mark, 0.0).await);
+    let solve = session.captcha_solve().expect("a solve");
+    assert!(solve.working && solve.url == url && solve.vendor == "cloudflare");
+    event("BrowserUse.captchaSolverFinished", json!({"success": true, "durationMs": 1419}));
+    assert_eq!(session.captcha_solve(), None);
+    event("BrowserUse.captchaSolverStarted", json!({}));
+    let mark = session.lifecycle_mark();
+    event("BrowserUse.captchaSolverFinished", json!({"success": false}));
+    assert!(session.wait_for_lifecycle(mark, 0.0).await);
+    assert!(!session.captcha_solve().expect("a solve given up on").working);
+    // Another tab's solve is not this one's.
+    testing::dispatch(&session, "BrowserUse.captchaSolverStarted", json!({"targetId": "other", "url": url}), None);
+    assert!(!session.captcha_solve().unwrap().working);
+    // A subframe's navigation leaves the tab's document, and its solve, as they were.
+    let tab = session.active_session_id().unwrap();
+    let frame = |parent: Option<&str>| json!({"frame": {"id": "f", "parentId": parent, "url": url}});
+    testing::dispatch(&session, "Page.frameNavigated", frame(Some("top")), Some(&tab));
+    assert!(session.captcha_solve().is_some());
+    // The tab's next document is not the one the solver gave up on.
+    testing::dispatch(&session, "Page.frameNavigated", json!({"frame": {"id": "top", "url": url}}), Some(&tab));
+    assert_eq!(session.captcha_solve(), None);
+    session.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_on_the_cloud_solver_with_no_bound_waits_for_its_next_event() {
+    let fake = FakeChrome::start().await;
+    let session = fake.session(fake.connection()).await;
+    let mark = session.lifecycle_mark();
+    let waiting = tokio::spawn({
+        let session = session.clone();
+        async move { session.wait_for_lifecycle(mark, f64::INFINITY).await }
+    });
+    let target = session.active_target_id();
+    testing::dispatch(&session, "BrowserUse.captchaSolverStarted", json!({"targetId": target, "url": "u"}), None);
+    assert!(waiting.await.unwrap());
+    session.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_a_run_nobody_sits_in_front_of_activates_its_target() {
     let fake = FakeChrome::start().await;
     let session = fake.session(fake.connection()).await;
@@ -139,7 +191,9 @@ async fn test_a_run_nobody_sits_in_front_of_activates_its_target() {
     let script = fake.script();
     assert_eq!(script.count("Target.activateTarget"), 2);
     assert_eq!(script.requested("Target.createTarget", &json!({"url": "about:blank"}), None), 1);
-    assert!(!script.calls.iter().any(|m| m == "Emulation.setFocusEmulationEnabled" || m == "Page.startScreencast"));
+    assert!(!script.calls.iter().any(|m| m == "Page.startScreencast"));
+    // Anything can take the front from the tab, and a hidden tab leaves input unanswered without this.
+    assert_eq!(script.count("Emulation.setFocusEmulationEnabled"), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -611,6 +665,77 @@ async fn test_attach_existing_tab_and_non_destructive_teardown() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_attach_skips_browser_internal_pages_and_prefers_web_pages() {
+    // An extension's options page is open beside a web page, or alone. Without a name it is never the window the run
+    // drives: a web page comes first, and when none is open the run opens its own window rather than taking one over.
+    // Electron and app windows are not browser-internal, and a caller may still name an extension page.
+    let cases: [(&str, Value, Option<&str>, &str, bool); 4] = [
+        (
+            "extension before a web page",
+            json!({"targetInfos": [
+                {"targetId": "options", "type": "page", "url": "chrome-extension://abc/options.html", "title": "Options"},
+                {"targetId": "web", "type": "page", "url": "https://example.com/app", "title": "My App"},
+            ]}),
+            None,
+            "web",
+            false,
+        ),
+        (
+            "extension alone",
+            json!({"targetInfos": [
+                {"targetId": "options", "type": "page", "url": "chrome-extension://abc/options.html", "title": "Options"},
+            ]}),
+            None,
+            "owned",
+            true,
+        ),
+        (
+            "an Electron window still attaches",
+            json!({"targetInfos": [
+                {"targetId": "app", "type": "page", "url": "file:///home/me/app/index.html", "title": "App"},
+            ]}),
+            None,
+            "app",
+            false,
+        ),
+        (
+            "a named extension page still attaches",
+            json!({"targetInfos": [
+                {"targetId": "options", "type": "page", "url": "chrome-extension://abc/options.html", "title": "Options"},
+            ]}),
+            Some("Options"),
+            "options",
+            false,
+        ),
+    ];
+    for (name, targets, target_match, expected, opens) in cases {
+        let fake = FakeChrome::start().await;
+        fake.queue("Target.getTargets", [targets]);
+        let connection = BrowserConnection {
+            attach: true,
+            target_match: target_match.map(str::to_owned),
+            ..BrowserConnection::new(fake.url.clone(), false)
+        };
+        let session = fake.session(connection).await;
+        assert_eq!(session.active_target_id(), expected, "{name}");
+        {
+            let script = fake.script();
+            assert_eq!(script.count("Target.createTarget"), usize::from(opens), "{name}");
+            if opens {
+                assert_eq!(
+                    script.params_of("Target.createTarget"),
+                    [json!({"url": "about:blank", "background": true})],
+                    "{name}"
+                );
+            }
+        }
+        session.close().await.unwrap();
+        // Whatever the page, an attached window is left open, including the extension tab that was not taken.
+        assert!(!fake.calls().iter().any(|m| m == "Target.closeTarget"), "{name}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_attach_adopts_its_popups_and_windows_without_opener_only_when_matched() {
     // A window with no opener is an Electron app's, or a tab its user opened by hand in a browser.
     let cases: [(Option<&str>, &[&str]); 2] = [(None, &["popup"]), (Some("App"), &["popup", "window"])];
@@ -644,7 +769,12 @@ async fn test_attach_adopts_its_popups_and_windows_without_opener_only_when_matc
             if let Some(opener) = opener {
                 info["openerId"] = opener.into();
             }
-            testing::dispatch(&session, "Target.targetCreated", json!({"targetInfo": info}), None);
+            testing::dispatch(
+                &session,
+                "Target.attachedToTarget",
+                json!({"targetInfo": info, "sessionId": format!("session-{target_id}"), "waitingForDebugger": target_id != "other"}),
+                None,
+            );
         }
         assert_eq!(session.popups(), adopted, "{target_match:?}");
         assert!(testing::popups(&session).iter().all(|(_, opener, _)| opener == "app"));

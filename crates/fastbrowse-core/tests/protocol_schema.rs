@@ -48,7 +48,7 @@ fn what_the_client_sends_keeps_its_defaults_optional() {
 #[test]
 fn the_version_the_codes_and_the_method_names_are_beside_the_models() {
     let constants = &schema()["constants"];
-    assert_eq!(constants["PROTOCOL_VERSION"], 1);
+    assert_eq!(constants["PROTOCOL_VERSION"], 3);
     assert_eq!(constants["ErrorCode"]["CANCELLED"], -32002);
     assert_eq!(constants["ErrorCode"]["UNSUPPORTED_SCHEMA"], -32004);
     assert_eq!(

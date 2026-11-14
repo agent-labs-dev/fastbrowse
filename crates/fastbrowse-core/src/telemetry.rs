@@ -1,9 +1,8 @@
-//! Port of `src/fastbrowse/telemetry.py`: spend and call accounting against `Limits`, checked before each call rather
+//! Spend and call accounting against `Limits`, checked before each call rather
 //! than discovered after, and the trace a run keeps of why it went the way it did.
 //!
-//! Python shares one `Ledger` between the tasks of a run on one thread; here the counters sit behind a mutex so the
-//! clients a run calls side by side can reserve against it from any thread. A reservation is still checked against
-//! the receipts recorded when it is made, as in Python.
+//! A `Ledger`'s counters sit behind a mutex so the clients a run calls side by side can reserve against it from any
+//! thread. A reservation is checked against the receipts recorded when it is made.
 
 use std::future::Future;
 use std::io::Write;
@@ -65,16 +64,45 @@ pub struct LedgerState {
 
 #[derive(Debug)]
 pub struct Ledger {
+    /// What the run may still spend, which every check enforces.
     pub limits: Limits,
+    /// The limits as the caller set them, which every stop names: a run that carries on after a fetched attempt
+    /// enforces what is left of them but stops on the limit the caller chose.
+    stated: Limits,
     /// When the run's clock started; None while it has not, so no call can run over a time limit before the run
-    /// takes the ledger over (Python's `started = math.inf`).
-    started: Mutex<Option<Instant>>,
-    state: Mutex<LedgerState>,
+    /// takes the ledger over.
+    started: Arc<Mutex<Option<Instant>>>,
+    state: Arc<Mutex<LedgerState>>,
 }
 
 impl Ledger {
     pub fn new(limits: Limits) -> Ledger {
-        Ledger { limits, started: Mutex::new(Some(Instant::now())), state: Mutex::new(LedgerState::default()) }
+        Ledger::continuing(limits.clone(), limits)
+    }
+
+    /// A ledger for a run that carries on a budget `stated` of which only `allowance` is left.
+    pub fn continuing(stated: Limits, allowance: Limits) -> Ledger {
+        Ledger {
+            limits: allowance,
+            stated,
+            started: Arc::new(Mutex::new(Some(Instant::now()))),
+            state: Arc::new(Mutex::new(LedgerState::default())),
+        }
+    }
+
+    /// Final reporting spends calls and dollars but performs no further browser steps.
+    pub fn for_answer(&self) -> Ledger {
+        Ledger {
+            limits: Limits { max_steps: None, ..self.limits.clone() },
+            stated: self.stated.clone(),
+            started: self.started.clone(),
+            state: self.state.clone(),
+        }
+    }
+
+    /// The limits as the caller set them, for a stop to name.
+    pub fn stated(&self) -> &Limits {
+        &self.stated
     }
 
     pub fn started(&self) -> Option<Instant> {
@@ -100,6 +128,7 @@ impl Ledger {
         match component {
             CostComponent::Jev => {
                 if let Some(max) = self.limits.max_jev_calls.filter(|max| state.jev_calls + calls > *max) {
+                    let max = self.stated.max_jev_calls.unwrap_or(max);
                     return Err(BudgetExceeded::new(
                         format!("Jev call limit {max} reached"),
                         BudgetResource::JevCalls,
@@ -109,6 +138,7 @@ impl Ledger {
             }
             CostComponent::Llm => {
                 if let Some(max) = self.limits.max_llm_calls.filter(|max| state.llm_calls + calls > *max) {
+                    let max = self.stated.max_llm_calls.unwrap_or(max);
                     return Err(BudgetExceeded::new(
                         format!("LLM call limit {max} reached"),
                         BudgetResource::LlmCalls,
@@ -116,19 +146,19 @@ impl Ledger {
                     ));
                 }
             }
-            CostComponent::Browser | CostComponent::Proxy => {}
+            CostComponent::Browser | CostComponent::Proxy | CostComponent::Search => {}
         }
         self.check_state(&state, estimate_dollars)?;
         if let Some(max) = self.limits.max_dollars
             && breakdown(&state).known_dollars() >= max
         {
-            return Err(spend_reached(max));
+            return Err(spend_reached(self.stated.max_dollars.unwrap_or(max)));
         }
         // Failed requests still consume a call, including retries after an input-size rejection.
         match component {
             CostComponent::Jev => state.jev_calls += calls,
             CostComponent::Llm => state.llm_calls += calls,
-            CostComponent::Browser | CostComponent::Proxy => {}
+            CostComponent::Browser | CostComponent::Proxy | CostComponent::Search => {}
         }
         Ok(())
     }
@@ -150,14 +180,16 @@ impl Ledger {
         if let Some(max) = limits.max_seconds
             && self.started().is_some_and(|started| started.elapsed().as_secs_f64() > max)
         {
+            let max = self.stated.max_seconds.unwrap_or(max);
             return Err(BudgetExceeded::new(
                 format!("time limit {}s reached", float_str(max)),
                 BudgetResource::Seconds,
                 max,
             ));
         }
-        check_spend(limits, state, extra_dollars)?;
+        check_spend(limits, &self.stated, state, extra_dollars)?;
         if let Some(max) = limits.max_steps.filter(|max| state.steps >= *max) {
+            let max = self.stated.max_steps.unwrap_or(max);
             return Err(BudgetExceeded::new(format!("step limit {max} reached"), BudgetResource::Steps, max as f64));
         }
         Ok(())
@@ -165,7 +197,7 @@ impl Ledger {
 
     /// Check settled costs without treating a finished step allowance as another operation.
     pub fn check_spend(&self, extra_dollars: f64) -> Result<(), BudgetExceeded> {
-        check_spend(&self.limits, &self.state(), extra_dollars)
+        check_spend(&self.limits, &self.stated, &self.state(), extra_dollars)
     }
 
     /// Keep the lines, then check: a receipt that breaks a limit is still recorded, so the result reports it.
@@ -188,8 +220,15 @@ fn spend_reached(max: f64) -> BudgetExceeded {
     BudgetExceeded::new(format!("spend limit ${} reached", dollars(max)), BudgetResource::Dollars, max)
 }
 
-fn check_spend(limits: &Limits, state: &LedgerState, extra_dollars: f64) -> Result<(), BudgetExceeded> {
-    if let Some(max) = limits.max_dollars {
+/// Check `state` against the allowance in `limits`, naming the limit as `stated` when one is reached.
+fn check_spend(
+    limits: &Limits,
+    stated: &Limits,
+    state: &LedgerState,
+    extra_dollars: f64,
+) -> Result<(), BudgetExceeded> {
+    if let Some(allowance) = limits.max_dollars {
+        let max = stated.max_dollars.unwrap_or(allowance);
         let spent = breakdown(state);
         // An unpriced call could have spent anything, so a dollar cap cannot be enforced past it.
         if spent.has_unknown() {
@@ -199,7 +238,7 @@ fn check_spend(limits: &Limits, state: &LedgerState, extra_dollars: f64) -> Resu
                 max,
             ));
         }
-        if spent.known_dollars() + extra_dollars > max {
+        if spent.known_dollars() + extra_dollars > allowance {
             return Err(spend_reached(max));
         }
     }
@@ -217,10 +256,10 @@ pub const TRACE_ENV: &str = "FASTBROWSE_TRACE";
 
 type Sink = Mutex<Box<dyn std::io::Write + Send>>;
 
-/// The process's trace destination once [`trace_to`] set one: Python's handler on the `fastbrowse.trace` logger.
+/// The process's trace destination once [`trace_to`] set one.
 static SINK: OnceLock<Sink> = OnceLock::new();
 
-/// `trace_to`: write every trace event as one JSON line, to stderr for `-` or `1` and otherwise appended to the file
+/// Write every trace event as one JSON line, to stderr for `-` or `1` and otherwise appended to the file
 /// named.
 ///
 /// The events say why a run went the way it did: each model call with its purpose, schema and timing, which reader
@@ -244,23 +283,22 @@ pub fn trace_to(destination: Option<&str>) -> std::io::Result<()> {
     Ok(())
 }
 
-/// One event as `_JsonLines` writes it: when it was made, then the event.
+/// One event as a JSON line: when it was made, then the event.
 fn write_line(sink: &Sink, record: &Map<String, Value>) {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |at| at.as_secs_f64());
     let mut line = Map::new();
     line.insert("at".into(), crate::py::round(now, 3).into());
     line.extend(record.iter().map(|(key, value)| (key.clone(), value.clone())));
     let mut stream = sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    // A trace that cannot be written is the trace's loss, never the run's, as logging's handleError leaves it.
+    // A trace that cannot be written is the trace's loss, never the run's.
     let _ = writeln!(stream, "{}", crate::py::json::dumps(&Value::Object(line))).and_then(|()| stream.flush());
 }
 
 /// Why a run went the way it did, one record per judgement, for evals to keep beside each result: ids, verdicts,
 /// scores and redacted addresses. The `http` events hold each model request and reply in full, page text included.
 ///
-/// Python collects these through a logger and a context variable, so runs that overlap keep separate traces. Here a
-/// run owns its `Trace` and hands it to what it calls; a disabled one builds nothing unless [`trace_to`] set a
-/// destination for the process, which every trace writes to, as every logger record reaches Python's handler.
+/// A run owns its `Trace` and hands it to what it calls, so runs that overlap keep separate traces. A disabled one
+/// builds nothing unless [`trace_to`] set a destination for the process, which every trace writes to.
 #[derive(Debug, Clone, Default)]
 pub struct Trace {
     events: Option<Arc<Mutex<Vec<Value>>>>,
@@ -270,7 +308,7 @@ pub struct Trace {
 }
 
 impl Trace {
-    /// A trace that keeps nothing, as when DEBUG is off on `fastbrowse.trace`.
+    /// A trace that keeps nothing.
     pub fn disabled() -> Trace {
         Trace { events: None, redactor: None }
     }
@@ -294,7 +332,7 @@ impl Trace {
         self.events.is_some() || SINK.get().is_some()
     }
 
-    /// `trace(event, **fields)`. The fields are built only when the trace keeps or writes them.
+    /// Record one event. The fields are built only when the trace keeps or writes them.
     pub fn event(&self, event: &str, fields: impl FnOnce() -> Map<String, Value>) {
         let sink = SINK.get();
         if self.events.is_none() && sink.is_none() {
@@ -322,7 +360,7 @@ impl Trace {
             .map_or_else(Vec::new, |events| events.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone())
     }
 
-    /// `call_span`: trace one model call's span on every exit, with how it ended.
+    /// Trace one model call's span on every exit, with how it ended.
     ///
     /// Calls overlap, so summed seconds per kind of call cannot say which of them a run was waiting on; each span can.
     /// A failed or cancelled call is billed too, and left out of the trace it made the time look free. A future
@@ -335,6 +373,32 @@ impl Trace {
         let result = future.await;
         span.outcome = if result.is_ok() { "ok" } else { "error" };
         result
+    }
+
+    /// Trace how long the run waited on one phase of a step, on the clock `call` spans use, so a run's time can be
+    /// split into what it waited on: a browser round trip is in no model call's span. A phase dropped before it
+    /// finished is traced too, as a redraw drops one.
+    pub async fn phase<F: Future>(&self, phase: &'static str, future: F) -> F::Output {
+        let _phase = Phase { trace: self, phase, began: monotonic() };
+        future.await
+    }
+}
+
+struct Phase<'a> {
+    trace: &'a Trace,
+    phase: &'static str,
+    began: f64,
+}
+
+impl Drop for Phase<'_> {
+    fn drop(&mut self) {
+        self.trace.event("phase", || {
+            let mut record = Map::new();
+            record.insert("phase".into(), self.phase.into());
+            record.insert("began".into(), self.began.into());
+            record.insert("ended".into(), monotonic().into());
+            record
+        });
     }
 }
 
@@ -361,34 +425,8 @@ impl Drop for Span<'_> {
     }
 }
 
-/// Time within `began..ended` that calls spent on transient provider failures, calls that overlapped counted once.
-/// Evals run an attempt with any of it again rather than subtract it, which would credit the one arm whose requests
-/// are visible. An upper bound on the delay: a call running beside the failed one may have taken as long anyway.
-pub fn transient_seconds(events: &[Value], began: f64, ended: f64) -> f64 {
-    let mut spans: Vec<(f64, f64)> = events
-        .iter()
-        .filter(|event| event.get("event").and_then(Value::as_str) == Some("request_transient"))
-        .filter_map(|event| {
-            let start = event.get("began")?.as_f64()?;
-            let end = event.get("ended")?.as_f64()?;
-            Some((start.max(began), end.min(ended)))
-        })
-        .collect();
-    spans.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let (mut total, mut reach) = (0.0, began);
-    for (start, end) in spans {
-        let start = start.max(reach);
-        if end > start {
-            total += end - start;
-            reach = end;
-        }
-    }
-    total
-}
-
 #[cfg(test)]
 mod tests {
-    //! tests/test_telemetry.py.
     use super::*;
     use crate::models::CostBasis;
     use crate::testing::block_on;
@@ -407,16 +445,6 @@ mod tests {
     }
 
     #[test]
-    fn test_transient_time_counts_overlapping_calls_once_and_only_within_the_run() {
-        let span = |began: f64, ended: f64| json!({"event": "request_transient", "call": "jev", "began": began, "ended": ended});
-        // Parallel batches failing over 2..5 and 4..6 lost 4s, not 5; a span before the run and other events add none.
-        let events =
-            [span(4.0, 6.0), span(2.0, 5.0), span(-3.0, -1.0), json!({"event": "request_retry"}), json!("a message")];
-        assert!((transient_seconds(&events, 0.0, 10.0) - 4.0).abs() < 1e-9);
-        assert!((transient_seconds(&events, 0.0, 3.0) - 1.0).abs() < 1e-9);
-    }
-
-    #[test]
     fn test_budget_stop_names_the_exhausted_limit() {
         let ledger = Ledger::new(Limits { max_steps: Some(1), ..Limits::default() });
         ledger.state().steps = 1;
@@ -424,6 +452,28 @@ mod tests {
         assert_eq!(error.budget.resource, BudgetResource::Steps);
         assert_eq!(error.budget.limit, 1.0);
         assert_eq!(error.status(), Status::BudgetExceeded);
+    }
+
+    #[test]
+    fn final_reporting_shares_receipts_and_keeps_spend_and_call_limits() {
+        let ledger = Ledger::new(Limits {
+            max_steps: Some(1),
+            max_dollars: Some(1.0),
+            max_llm_calls: Some(1),
+            ..Limits::default()
+        });
+        ledger.state().steps = 1;
+        let reporting = ledger.for_answer();
+        reporting.reserve(CostComponent::Llm, 0.25, 1).unwrap();
+        reporting.record([CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.25))]).unwrap();
+        assert_eq!(ledger.breakdown().known_dollars(), 0.25);
+        assert_eq!(ledger.state().llm_calls, 1);
+        assert_eq!(
+            reporting.reserve(CostComponent::Llm, 0.0, 1).unwrap_err().budget.resource,
+            BudgetResource::LlmCalls
+        );
+        assert_eq!(reporting.reserve(CostComponent::Jev, 1.0, 1).unwrap_err().budget.resource, BudgetResource::Dollars);
+        assert_eq!(ledger.check(0.0).unwrap_err().budget.resource, BudgetResource::Steps);
     }
 
     #[test]

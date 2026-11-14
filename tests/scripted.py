@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from pydantic import BaseModel, JsonValue
 
 from fastbrowse.jev import Answer, ChoiceAnswer, ChoiceQuestion, Evaluation, NoulAnswer, NoulQuestion, Question
-from fastbrowse.llm import DEFAULT_MAX_OUTPUT_TOKENS, Generation, Message
+from fastbrowse.llm import Generation, Message
 from fastbrowse.models import CostBasis, CostComponent, CostLine, Frozen, LLMPurpose, Operation
 from fastbrowse.telemetry import Ledger
 
@@ -36,17 +36,34 @@ def steps(task: str) -> tuple[Step, ...]:
     return tuple(found)
 
 
+_READING = frozenset(
+    {
+        Operation.READ,
+        Operation.DONE,
+        Operation.NAVIGATE,
+        Operation.SCROLL,
+        Operation.SCROLL_UP,
+        Operation.BACK,
+        Operation.SWITCH_TAB,
+        Operation.WAIT,
+    }
+)
+
+
 class ScriptedJev:
     """Answers each choice as the script's current step says, and every yes/no so that the run goes on.
 
     A run's options do not cross the protocol, so the thresholds are the shipped ones. A flat probability
-    cannot serve them all: the walls and the irreversible check stop a run above theirs, and the done check
-    stops it below its own.
+    cannot serve them all: the walls and the irreversible check stop a run above theirs, and the check that the
+    answer covers the task stops it below its own.
     """
 
     def __init__(self, script: Sequence[Step]) -> None:
         self._ahead = list(script)
         self._step: Step | None = None
+        # What the task asks to be done on a page is answered from the script: whether it takes a step besides
+        # opening and reading pages.
+        self._acts = any(step.operation not in _READING for step in script)
 
     async def evaluate(self, state: JsonValue, questions: Mapping[str, Question]) -> Evaluation:
         if "operation" in questions:
@@ -66,7 +83,7 @@ class ScriptedJev:
                         confidence=1.0,
                     )
                 case NoulQuestion():
-                    answers[key] = NoulAnswer(probability=float(key == "complete"))
+                    answers[key] = NoulAnswer(probability=float(key in ("coverage", "exact")))
                 case _:
                     raise AssertionError(f"the scripted Jev has no answer for {key!r}")
         return Evaluation(
@@ -77,6 +94,8 @@ class ScriptedJev:
         )
 
     def _choice(self, key: str, question: ChoiceQuestion) -> str | None:
+        if key == "steps":
+            return "acts" if self._acts else "reads"
         step = self._step
         if key == "operation":
             return (step.operation if step else Operation.DONE).value
@@ -95,16 +114,10 @@ class ScriptedJev:
 
 
 class ScriptedLLM:
-    """A plan that requires nothing, no shortcut, and a verifier that agrees: the answer by what is asked.
+    """Proposes `start` as the start page, and knows no page that holds what the task names."""
 
-    Planning and the shortcut are asked for at the same moment, so the order of the calls says nothing.
-    """
-
-    _REPLIES: Mapping[LLMPurpose, JsonValue] = {
-        LLMPurpose.PLAN: {"requirements": [], "answer_expected": False},
-        LLMPurpose.SHORTCUT: {"url": None},
-        LLMPurpose.VERIFY: {"complete": True, "missing": []},
-    }
+    def __init__(self, start: str | None = None) -> None:
+        self.start = start
 
     async def generate[T: BaseModel](
         self,
@@ -112,12 +125,12 @@ class ScriptedLLM:
         messages: Sequence[Message],
         schema: type[T],
         *,
-        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
         ledger: Ledger | None = None,
     ) -> Generation[T]:
         if ledger is not None:
             ledger.reserve(CostComponent.LLM)
+        answer = {"urls": []} if purpose is LLMPurpose.KNOWN_PAGES else {"url": self.start}
         return Generation(
-            data=schema.model_validate(self._REPLIES[purpose]),
+            data=schema.model_validate(answer),
             cost=CostLine(component=CostComponent.LLM, basis=CostBasis.ESTIMATED, dollars=0.0, purpose=purpose),
         )

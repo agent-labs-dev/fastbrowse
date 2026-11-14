@@ -3,55 +3,100 @@
 mod common;
 
 use common::*;
-use fastbrowse_agent::policy::{RelevanceCache, StepContext, build_request, decide, fits};
+use fastbrowse_agent::batches::{Known, knowing};
+use fastbrowse_agent::policy::{StepContext, build_request, decide, fits};
 use fastbrowse_core::config::Config;
 use fastbrowse_core::page::Observation;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{Style, write};
 use fastbrowse_core::telemetry::Trace;
 use serde_json::{Map, Value, json};
+use std::sync::Arc;
+
+/// Both tests read and re-record policy.json whole, so under `FASTBROWSE_UPDATE_GOLDEN=1` one running beside the other
+/// would save over its update.
+static POLICY_FILE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
 fn decisions_ask_and_choose_as_python_does() {
-    let golden = golden("policy.json");
-    let cases = golden["cases"].as_array().unwrap();
+    let _file = POLICY_FILE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut golden = golden("policy.json");
+    let updating = capture::updating();
+    let cases = golden["cases"].as_array_mut().unwrap();
     assert!(cases.len() > 50);
-    for case in cases {
+    for case in cases.iter_mut() {
         let jev = ReplayJev::new(case);
         let ledger = ledger(&case["ledger"]);
-        let cache = case["cache"].as_bool().unwrap().then(RelevanceCache::default);
+        // A case recorded with relevance scores kept across its steps runs as a run does, knowing its answers.
+        let known = case["cache"].as_bool().unwrap().then(|| Arc::new(Known::default()));
         let mut outcomes = Vec::new();
         for step in case["steps"].as_array().unwrap() {
             let observation: Observation = parse(&step["observation"]);
             let context: StepContext = parse(&step["context"]);
             let config: Config = parse(&step["config"]);
             let trace = Trace::collecting();
-            let result =
-                block_on(decide(&jev, &observation, &context, &config, ledger.as_ref(), cache.as_ref(), &trace));
+            let deciding = decide(&jev, &observation, &context, &config, ledger.as_ref(), &trace);
+            let result = match &known {
+                Some(known) => block_on(knowing(known.clone(), deciding)),
+                None => block_on(deciding),
+            };
             let result = match result {
                 Ok(decision) => json!({"decision": decision.dump()}),
                 Err(error) => error_outcome(&error),
             };
             outcomes.push(json!({"result": result, "trace": trace.events()}));
         }
+        if updating {
+            let mut asked = jev.2.into_inner().unwrap().into_iter();
+            // Calls the change no longer makes drop out of the recording, and the diff shows them.
+            case["calls"].as_array_mut().unwrap().retain_mut(|call| {
+                if call.get("jev").is_none() {
+                    return true;
+                }
+                asked.next().is_some_and(|(state, questions)| {
+                    call["jev"] = json!({"state": state, "questions": questions});
+                    true
+                })
+            });
+            case["outcome"] = Value::Array(outcomes);
+            case["ledger_after"] = ledger_state(ledger.as_ref());
+            continue;
+        }
         jev.finish();
         assert_outcome(case, Value::Array(outcomes));
         assert_eq!(ledger_state(ledger.as_ref()), case["ledger_after"], "{}: ledger", case["name"]);
+    }
+    if updating {
+        save("policy.json", &golden);
     }
 }
 
 #[test]
 fn requests_are_built_as_python_builds_them() {
-    let golden = golden("policy.json");
-    for case in golden["build_request"].as_array().unwrap() {
+    let _file = POLICY_FILE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut golden = golden("policy.json");
+    let updating = capture::updating();
+    for case in golden["build_request"].as_array_mut().unwrap() {
         let observation: Observation = parse(&case["observation"]);
         let context: StepContext = parse(&case["context"]);
         let config: Config = parse(&case["config"]);
-        let request =
-            build_request(&observation, &observation.controls, &context, &config, case["compact"].as_bool().unwrap());
-        assert_eq!(write(&request.state, Style::HTTPX), case["state"].as_str().unwrap());
+        let options = case_profile(case).max_choice_options;
+        let request = build_request(&observation, &observation.controls, &context, &config, options);
         let questions: Map<String, Value> = request.questions.iter().map(|(k, q)| (k.clone(), q.dump())).collect();
-        assert_eq!(write(&Value::Object(questions), Style::HTTPX), case["questions"].as_str().unwrap());
-        assert_eq!(json!(fits(&request, &config)), case["fits"]);
+        let built = json!({
+            "state": write(&request.state, Style::HTTPX),
+            "questions": write(&Value::Object(questions), Style::HTTPX),
+            "fits": fits(&request, &config),
+        });
+        for key in ["state", "questions", "fits"] {
+            if updating {
+                case[key] = built[key].clone();
+            } else {
+                assert_eq!(built[key], case[key], "{key}");
+            }
+        }
+    }
+    if updating {
+        save("policy.json", &golden);
     }
 }

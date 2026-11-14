@@ -40,6 +40,12 @@ def name_of(path):
 if args[0] == "view":
     field = args[2] if len(args) > 2 else ""
     if field == "dist-tags.latest":
+        if state["lag"].get(args[1], 0) > 0:
+            # The registry's cache still serves the document from before the publish.
+            state["lag"][args[1]] -= 1
+            save()
+            print("0.9.0")
+            sys.exit(0)
         if args[1] not in state["latest"]:
             sys.exit(1)
         print(state["latest"][args[1]])
@@ -57,6 +63,10 @@ if args[0] == "dist-tag":
     sys.exit(0)
 
 if args[0] == "publish":
+    if not args[1].startswith(("/", "./", "../")) and "/" in args[1]:
+        # npm reads `owner/name` as a GitHub repository and clones it.
+        print("npm error code 128\\nnpm error git dep preparation failed", file=sys.stderr)
+        sys.exit(128)
     name = name_of(args[1])
     if name in state["tlog"]:
         print(
@@ -81,7 +91,9 @@ sys.exit(2)
 '''
 
 
-def run_script(tmp_path: Path, **state: object) -> tuple[subprocess.CompletedProcess[str], dict]:
+def run_script(
+    tmp_path: Path, sdk: str | None = None, settle: float = 0, **state: object
+) -> tuple[subprocess.CompletedProcess[str], dict]:
     """Run the publish script against a fresh fixture registry."""
     state = {
         "version": VERSION,
@@ -90,6 +102,7 @@ def run_script(tmp_path: Path, **state: object) -> tuple[subprocess.CompletedPro
         "tlog": [],
         "flaky": [],
         "drift": [],
+        "lag": {},
         **state,
     }
     (tmp_path / "registry.json").write_text(json.dumps(state))
@@ -101,7 +114,7 @@ def run_script(tmp_path: Path, **state: object) -> tuple[subprocess.CompletedPro
     platforms = tmp_path / "platforms"
     for target in TARGETS:
         (platforms / target).mkdir(parents=True)
-    (tmp_path / "sdk").mkdir()
+    (tmp_path / "packages" / "sdk").mkdir(parents=True)
     environment = {
         **os.environ,
         "PATH": f"{bin_directory}{os.pathsep}{os.environ['PATH']}",
@@ -116,8 +129,11 @@ def run_script(tmp_path: Path, **state: object) -> tuple[subprocess.CompletedPro
             "--platforms",
             str(platforms),
             "--sdk",
-            str(tmp_path / "sdk"),
+            sdk or str(tmp_path / "packages" / "sdk"),
+            "--settle",
+            str(settle),
         ],
+        cwd=tmp_path,
         capture_output=True,
         text=True,
         env=environment,
@@ -176,3 +192,17 @@ def test_a_published_version_whose_latest_tag_did_not_move_fails(tmp_path: Path)
     assert result.returncode == 1
     assert f"npm dist-tag add fastbrowse@{VERSION} latest" in result.stderr
     assert state["latest"].get("fastbrowse") != VERSION
+
+
+def test_a_latest_tag_the_registry_cache_shows_late_is_not_drift(tmp_path: Path) -> None:
+    # 0.10.0: the SDK's publish was accepted, and the first read of `latest` still showed 0.9.1.
+    result, _ = run_script(tmp_path, settle=1, lag={"fastbrowse": 1})
+    assert result.returncode == 0, result.stderr
+    assert f"npm serves {VERSION} as `latest` for 6 packages" in result.stdout
+
+
+def test_the_sdk_given_as_the_workflow_gives_it_is_published(tmp_path: Path) -> None:
+    # release.yml passes `--sdk packages/sdk`, relative to the checkout.
+    result, state = run_script(tmp_path, sdk="packages/sdk")
+    assert result.returncode == 0, result.stderr
+    assert f"fastbrowse@{VERSION}" in state["published"]

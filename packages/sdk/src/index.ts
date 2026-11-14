@@ -9,11 +9,12 @@ export {
   type StandardOutputSchema,
   type TypedRunResult,
 } from './output.ts';
-// The result and the events are the wire's own shapes, so their fields keep the Python models' snake_case names.
+// The result and the events are the wire's own shapes, so their fields keep the protocol's snake_case names.
 export type {
   Artifact,
   BrowserEvent,
   BudgetStop,
+  CancellationReceipt,
   Citation,
   CostBreakdown,
   CostLine,

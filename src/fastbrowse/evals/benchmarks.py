@@ -4,17 +4,25 @@ import argparse
 import hashlib
 import json
 import re
-import statistics
 import subprocess
 import tempfile
 from collections.abc import Collection
 from pathlib import Path
-from typing import Annotated, Literal, NamedTuple, Self
+from typing import Annotated, Any, Literal, NamedTuple, Self
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    ValidationError,
+    model_serializer,
+    model_validator,
+)
 
 from fastbrowse.evals.catalog import CatalogTask, eligible
-from fastbrowse.evals.publication import REGRESSION_FACTOR
+from fastbrowse.evals.publication import moves
 from fastbrowse.models import Status
 
 Identifier = Annotated[str, Field(pattern=r"^[a-zA-Z0-9_.:+-]{1,160}$")]
@@ -22,6 +30,20 @@ Sha = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Amount = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 Limit = Annotated[str, Field(pattern=r"^[A-Za-z0-9 ,.;:()'%+_=-]{1,240}$")]
+LINK = re.compile(r"https?:|www\.|\.(?:com|org|net|io|ai|dev|app)\b", re.IGNORECASE)
+"""What the site refuses in public text as naming a link (`LIMIT_LINK` in fastbrowse-site's
+`src/lib/benchmark-feed.ts`). It is that parser's contract, matched exactly, not a judgment of the text."""
+
+
+def _no_link(text: str) -> str:
+    if LINK.search(text):
+        raise ValueError("public text names a link")
+    return text
+
+
+ExclusionReason = Annotated[str, Field(pattern=r"^[A-Za-z0-9 ,.;:()'%+_=-]{1,500}$"), AfterValidator(_no_link)]
+"""The catalog's reason an arm cannot run a task, as the site parses it (`EXCLUSION_REASON` and `LIMIT_LINK` in
+`src/lib/benchmark-feed.ts`): plain words and punctuation, no slash and no link."""
 GroupId = Literal[
     "internal-fastbrowse",
     "internal-hosted",
@@ -30,7 +52,15 @@ GroupId = Literal[
     "bu-bench",
     "online-mind2web",
 ]
-Arm = Literal["fastbrowse", "fastbrowse-pool", "browser-use", "jev-ultrafast", "browser-harness"]
+Arm = Literal[
+    "fastbrowse",
+    "fastbrowse-pool",
+    "browser-use",
+    "browser-use-ultrafast",
+    "jev-ultrafast",
+    "browser-harness",
+    "browser-use-oss",
+]
 FASTBROWSE_ARMS: frozenset[Arm] = frozenset({"fastbrowse", "fastbrowse-pool"})
 RESULTS = Path("docs/results")
 PUBLISHED = RESULTS / "benchmarks.json"
@@ -42,7 +72,15 @@ class PublicModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
+def _without_empty(data: dict[str, Any], names: tuple[str, ...]) -> dict[str, Any]:
+    """`data` without the named fields that hold nothing, so a model from before them keeps its old bytes."""
+    return {k: v for k, v in data.items() if k not in names or v not in (None, [])}
+
+
 class Row(PublicModel):
+    """One graded slot. `seconds` retains every attempt on its declared clock. Explicit clocks can share outcomes,
+    while speed comparisons require matched bases. A row without a basis belongs to a legacy measurement."""
+
     task: Identifier
     repeat: Annotated[int, Field(ge=0)]
     arm: Arm
@@ -51,28 +89,130 @@ class Row(PublicModel):
     score: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
     seconds: Amount
     dollars: Amount | None
-    """None when the arm does not report its cost, so its rows carry a pass rate and seconds and the site shows
-    "cost not reported" in place of a cost."""
+    """None when the comparator's complete cost is unavailable. Its outcome and seconds remain measured, while
+    every row of that arm withholds cost rather than reporting a partial total."""
     physical_runs: Annotated[int, Field(gt=0)]
     # The efficiency figures a comparison is normalized onto, so a slow page or a provider's margin cannot move it.
-    # A build from before they existed omits them and they read as zero; the site then shows them as not recorded
-    # rather than falling back to the measured wall clock or billed charge they replace.
-    llm_calls: Annotated[int, Field(ge=0)] = 0
+    # Historical omitted metrics keep their old zero default; an explicit basis requires a recorded count.
+    llm_calls: Annotated[int, Field(ge=0)] | None = 0
+    llm_calls_basis: Literal["physical_requests", "cost_lines"] | None = None
     jev_calls: Annotated[int, Field(ge=0)] = 0
     tokens_per_second: Amount = 0.0
     input_tokens: Annotated[int, Field(ge=0)] = 0
     output_tokens: Annotated[int, Field(ge=0)] = 0
+    timing_basis: Literal["session-ready-to-answer", "physical-attempt-wall-time"] | None = None
+    session_open_seconds: Amount | None = None
+    """Opening the browser session, totalled like `seconds` and outside them."""
+    session_close_seconds: Amount | None = None
+    """Closing the browser session, totalled like `seconds` and outside them."""
+    timing_note: Limit | None = None
+    """Browser setup or dispatch interruptions retained in `seconds`. A physical wall-time retry has a note and
+    withholds phase totals that its original attempts did not record."""
+    failure: Limit | None = None
+    """Why a failed slot failed when the verdict alone does not say: a run the site's bot check refused is the
+    agent's failure, since another agent may get past it."""
+
+    @model_validator(mode="after")
+    def physical_timing_is_described(self) -> Self:
+        if self.timing_basis == "physical-attempt-wall-time" and (
+            not self.timing_note
+            or self.physical_runs < 2
+            or self.session_open_seconds is not None
+            or self.session_close_seconds is not None
+        ):
+            raise ValueError("physical attempt timing needs its interruption note and retry count without phase totals")
+        return self
+
+    @model_serializer(mode="wrap")
+    def without_unrecorded_timing(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A row from before these fields keeps its old bytes, so approved candidates still match."""
+        data = handler(self)
+        for name in (
+            "timing_basis",
+            "session_open_seconds",
+            "session_close_seconds",
+            "timing_note",
+            "llm_calls_basis",
+            "failure",
+        ):
+            if data.get(name) is None:
+                data.pop(name, None)
+        return data
 
     @model_validator(mode="after")
     def completion(self) -> Self:
+        if self.llm_calls_basis is not None and "llm_calls" not in self.model_fields_set:
+            self.llm_calls = None
         # fastbrowse-pool is fastbrowse itself on another browser, so its completion is its own run status too.
         if self.arm in FASTBROWSE_ARMS:
-            status = Status(self.status)
-            if self.completed != (status is Status.COMPLETE):
+            finished = Status(self.status) is Status.COMPLETE
+            if self.completed != finished:
                 raise ValueError("Fastbrowse completion must agree with its run status")
             if self.dollars is None:
                 raise ValueError("Fastbrowse rows report their cost")
         return self
+
+
+class BlockedSlot(PublicModel):
+    """The legacy form of a scheduled slot the site kept from any outcome on every attempt, kept so approved
+    candidates keep their bytes. It is a failed attempt: another agent may get past what stopped this one, so the site
+    and the regression check count it as one. A new candidate records such a slot as a `Row` whose `failure` says
+    why. Its time and spend are what the attempts took."""
+
+    task: Identifier
+    repeat: Annotated[int, Field(ge=0)]
+    arm: Arm
+    seconds: Amount
+    dollars: Amount | None
+    physical_runs: Annotated[int, Field(gt=0)]
+
+
+class UnjudgedSlot(PublicModel):
+    """A scheduled slot with no verdict on the current task, so it is outside every score and counts as neither a pass
+    nor a failure. `evidence-unavailable`: the judge found the run's evidence unavailable on a run that ended in an
+    error of the harness or its model provider, which the agent did not cause. `no-verdict`: the judge
+    reached no verdict on the evidence it had. `task-changed`: the run measured an earlier version of the task, so its
+    verdict is not compared, as the release gate does not compare it."""
+
+    task: Identifier
+    repeat: Annotated[int, Field(ge=0)]
+    arm: Arm
+    reason: Literal["evidence-unavailable", "no-verdict", "task-changed"]
+
+
+class ExcludedTask(PublicModel):
+    """A task of the group's task set the catalog says this arm cannot run, with the catalog's reason. It stands for
+    `repeats` failed attempts in every pass rate: a comparison across browser agents counts a capability one lacks
+    against it. It ran nothing, so it has no time or cost, and those are averaged over the rows."""
+
+    arm: Arm
+    task: Identifier
+    reason: ExclusionReason
+
+
+class Source(PublicModel):
+    """One campaign run a group's rows of one arm came from, and the tasks it supplied for that arm. A late fix reruns
+    only the tasks it affects, so a group may take an arm's tasks from more than one run of a campaign: each from the
+    newest run that measured the arm at every repeat of it. The head-to-head may so take fastbrowse from a newer
+    fastbrowse-only run while each competitor keeps its own. `run_id` is the run's recorded id, which its traces in the
+    private Langfuse project carry."""
+
+    run_id: Identifier
+    arm: Arm
+    agent_sha: Sha
+    runner_sha: Sha
+    measured_on: Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2}$")]
+    tasks: Annotated[list[Identifier], Field(min_length=1)]
+    version: Limit | None = None
+    """What the arm ran, as the run recorded its pin: the vendor's package and API, or a commit. None for a fastbrowse
+    arm, whose build is `agent_sha`, and on a source recorded before this field."""
+    models: list[Limit] = []
+    """The models the arm's attempts in this run reported, model ids with slashes shown as colons."""
+
+    @model_serializer(mode="wrap")
+    def without_unrecorded_setup(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A source from before these fields keeps its old bytes, so approved candidates still match."""
+        return _without_empty(handler(self), ("version", "models"))
 
 
 class Coverage(NamedTuple):
@@ -98,19 +238,34 @@ class Coverage(NamedTuple):
 # current catalog by `check_catalog`. The hosted group grew to 52 when the hosted agent's final page became readable,
 # so it runs the six navigation tasks too.
 #
-# The head-to-head (internal-hosted) is one Parallax invocation over one task set, the tasks fastbrowse and the hosted
-# Browser Use agent both run, with rows from whichever of its arms ran. Browser Use
-# Ultrafast returns no answer, so it runs only the tasks of that set graded without one; Browser Harness, a coding agent
-# given no credentials, runs only its credential-free completion tasks. The official suites publish
-# the fastbrowse arm; a vendor arm's rows reach a candidate only when Parallax marks them publishable.
-HEAD_TO_HEAD: tuple[Arm, ...] = ("fastbrowse", "browser-use", "jev-ultrafast", "browser-harness")
+# The head-to-head (internal-hosted) is one Parallax invocation over fastbrowse's tasks, with rows from whichever of its
+# arms ran, each on the tasks the catalog lists it for. Browser Harness takes no credentials or authorization setting,
+# and the hosted Browser Use agents (its default model and bu-ultrafast) no authorization setting; the catalog states
+# why each skips a task. The Ultrafast comparison (internal-ultrafast) is fastbrowse on its own browser pool against
+# the hosted agent on bu-ultrafast, each product on its own backend, over the tasks both run. The official suites
+# publish the fastbrowse arm; a vendor arm's rows reach a candidate only when Parallax marks them publishable.
+HEAD_TO_HEAD: tuple[Arm, ...] = (
+    "fastbrowse",
+    "browser-use",
+    "browser-use-ultrafast",
+    "browser-harness",
+    "browser-use-oss",
+)
 OFFICIAL: tuple[Arm, ...] = ("fastbrowse", "browser-use")
 COVERAGE: dict[GroupId, Coverage] = {
     "internal-fastbrowse": Coverage(frozenset({53, 54}), 3, "task-success", ("fastbrowse",)),
     "internal-hosted": Coverage(
-        frozenset({46, 47, 52}), 3, "task-success", HEAD_TO_HEAD, (), ("jev-ultrafast", "browser-harness")
+        frozenset({46, 47, 52, 53}),
+        3,
+        "task-success",
+        HEAD_TO_HEAD,
+        (),
+        # jev-ultrafast stays partial for the figures approved before BU_ULTRAFAST_SCHEMA (`group_arms`).
+        ("browser-use", "browser-use-ultrafast", "jev-ultrafast", "browser-harness", "browser-use-oss"),
     ),
-    "internal-ultrafast": Coverage(frozenset({6}), 3, "task-success", ("fastbrowse-pool", "jev-ultrafast")),
+    "internal-ultrafast": Coverage(
+        frozenset({6, 47, 52}), 3, "task-success", ("fastbrowse-pool", "browser-use-ultrafast")
+    ),
     "internal-backend": Coverage(frozenset({53, 54}), 3, "task-success", ("fastbrowse", "fastbrowse-pool")),
     "bu-bench": Coverage(frozenset({200}), None, "weighted-rubric", OFFICIAL, ("fastbrowse",)),
     "online-mind2web": Coverage(frozenset({300}), None, "full-task-success", OFFICIAL, ("fastbrowse",)),
@@ -119,25 +274,88 @@ POOL_ULTRAFAST_SCHEMA = 5
 """From this schema the Ultrafast comparison is fastbrowse with its own browser pool against `jev-ultrafast`: the
 two whole products, each on its own backend. Before it, fastbrowse ran there on a Browser Use Cloud browser, so
 figures approved under an older schema keep that pairing."""
+BU_ULTRAFAST_SCHEMA = 7
+"""From this schema the Ultrafast comparison is fastbrowse on its own browser pool against the hosted Browser Use
+agent on bu-ultrafast (`browser-use-ultrafast`), and no group measures `jev-ultrafast`, which the harness no longer
+runs. Figures approved under an older schema keep the pairing they were measured under."""
 
 
 def group_arms(group: GroupId, schema_version: int) -> tuple[Arm, ...]:
     """The arms a group may measure under the candidate's schema."""
     if group == "internal-ultrafast" and schema_version < POOL_ULTRAFAST_SCHEMA:
         return ("fastbrowse", "jev-ultrafast")
+    if group == "internal-ultrafast" and schema_version < BU_ULTRAFAST_SCHEMA:
+        return ("fastbrowse-pool", "jev-ultrafast")
+    if group == "internal-hosted" and schema_version < BU_ULTRAFAST_SCHEMA:
+        return (*HEAD_TO_HEAD, "jev-ultrafast")
     return COVERAGE[group].arms
+
+
+class ReferenceArm(PublicModel):
+    """A competitor whose rows in a group were measured once, by an earlier run, and are not of this build."""
+
+    arm: Arm
+    vendor: Limit
+    measured_on: Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2}$")]
+    version: Limit
+    browser: Limit
+    campaign_id: Identifier
+    models: list[Limit] = []
+    """The models the arm's rows reported in the run that measured them, as its `Source` records them."""
+
+    @model_serializer(mode="wrap")
+    def without_unrecorded_models(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A reference from before this field keeps its old bytes."""
+        return _without_empty(handler(self), ("models",))
 
 
 class Group(PublicModel):
     id: GroupId
-    agent_sha: Sha | None = None
-    runner_sha: Sha | None = None
+    agent_sha: Sha
+    runner_sha: Sha
     metric: Literal["task-success", "weighted-rubric", "full-task-success"]
     source_sha256: Digest
     task_ids: list[Identifier]
     repeats: Annotated[int, Field(gt=0)]
     limits: Annotated[list[Limit], Field(min_length=1, max_length=12)]
     rows: list[Row]
+    blocked: list[BlockedSlot] = []
+    unjudged: list[UnjudgedSlot] = []
+    excluded: list[ExcludedTask] = []
+    """Each (arm, task) of the task set the catalog says the arm cannot run, sorted by arm and task."""
+    references: list[ReferenceArm] = []
+    """Which arms' rows come from the fixed competitor reference; an arm not named here was measured on this build."""
+    sources: list[Source] = []
+    """The runs the rows came from, newest first, when the group records them; `agent_sha` and `runner_sha` are then
+    the newest run's."""
+
+    @model_serializer(mode="wrap")
+    def without_empty_lists(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """A group with nothing blocked, unjudged, excluded, referenced or sourced keeps its old bytes, so approved
+        candidates still match."""
+        data = handler(self)
+        for name in ("blocked", "unjudged", "excluded", "references", "sources"):
+            if not data[name]:
+                del data[name]
+        return data
+
+    @model_validator(mode="after")
+    def provenance(self) -> Self:
+        """Each arm's task comes from exactly one source, and the group names the newest one's build. An arm whose rows
+        are a fixed competitor reference has no source."""
+        if not self.sources:
+            return self
+        referenced = {r.arm for r in self.references}
+        for arm in {r.arm for r in (*self.rows, *self.blocked, *self.unjudged)} - referenced:
+            tasks = [task for source in self.sources if source.arm == arm for task in source.tasks]
+            own = {r.task for r in (*self.rows, *self.blocked, *self.unjudged) if r.arm == arm}
+            if len(tasks) != len(set(tasks)) or set(tasks) != own:
+                raise ValueError(f"the sources must supply every task of {arm} exactly once")
+        if {source.arm for source in self.sources} & referenced:
+            raise ValueError("an arm from the competitor reference has no source run")
+        if (self.agent_sha, self.runner_sha) != (self.sources[0].agent_sha, self.sources[0].runner_sha):
+            raise ValueError("a group with sources names the newest source's agent and runner build")
+        return self
 
     @model_validator(mode="after")
     def coverage(self) -> Self:
@@ -150,6 +368,15 @@ class Group(PublicModel):
             raise ValueError("binary source grades cannot contain partial scores")
         return self
 
+    @model_validator(mode="after")
+    def one_clock(self) -> Self:
+        """Legacy times lack a measurement basis. Explicit clocks can share outcomes, but consumers compare speed
+        only across matched bases, retaining interruption time rather than dropping the slow row."""
+        bases = {r.timing_basis for r in self.rows}
+        if None in bases and len(bases) > 1:
+            raise ValueError("rows timed on different bases cannot be compared in one group")
+        return self
+
     def measured_arms(self, arms: tuple[Arm, ...]) -> tuple[Arm, ...]:
         """The arms of `arms` this group has rows for, in `arms` order."""
         present = {r.arm for r in self.rows}
@@ -158,22 +385,31 @@ class Group(PublicModel):
     def check_slots(self, arms: tuple[Arm, ...]) -> None:
         """The arms depend on the candidate's schema, so the candidate checks each group's slots against them.
 
-        Each measured arm has one row for every repeat of every task it runs: the whole task set, or for a partial
-        arm the part of it its rows name, which `check_catalog` holds to the catalog. Its cost is reported on every
-        row or on none."""
+        Each measured arm has one row, one blocked slot or one unjudged slot for every repeat of every task it runs,
+        and an excluded entry for every other task of the task set: only a partial arm has those, and
+        `check_catalog` holds them to the catalog. Its cost is reported on every row or on none."""
         spec = COVERAGE[self.id]
         measured = self.measured_arms(arms)
-        if {r.arm for r in self.rows} - set(arms) or not measured:
+        ungraded = (*self.blocked, *self.unjudged)
+        if {r.arm for r in (*self.rows, *ungraded)} - set(arms) or not measured:
             raise ValueError(f"{self.id} measures only {', '.join(arms)}")
         if missing := [arm for arm in (arms if spec.required is None else spec.required) if arm not in measured]:
             raise ValueError(f"{self.id} must measure {', '.join(missing)}")
+        if {slot.arm for slot in ungraded} - set(measured):
+            raise ValueError(f"{self.id} has an ungraded slot for an arm with no graded row")
+        pairs = [(e.arm, e.task) for e in self.excluded]
+        if pairs != sorted(set(pairs)) or {arm for arm, _ in pairs} - (set(measured) & set(spec.partial)):
+            raise ValueError(f"{self.id}: excluded tasks are unique, sorted, and only of a measured partial arm")
         for arm in measured:
             rows = [r for r in self.rows if r.arm == arm]
-            slots = [(r.task, r.repeat) for r in rows]
-            tasks = {task for task, _ in slots} if arm in spec.partial else set(self.task_ids)
-            expected = {(task, repeat) for task in tasks for repeat in range(self.repeats)}
-            if len(slots) != len(set(slots)) or set(slots) != expected or not tasks <= set(self.task_ids):
+            slots = [(r.task, r.repeat) for r in (*rows, *(b for b in ungraded if b.arm == arm))]
+            tasks = {task for task, _ in slots}
+            excluded = {task for excluded_arm, task in pairs if excluded_arm == arm}
+            expected = {(task, repeat) for task in set(self.task_ids) - excluded for repeat in range(self.repeats)}
+            if len(slots) != len(set(slots)) or set(slots) != expected or not excluded <= set(self.task_ids):
                 raise ValueError("every scheduled slot must have exactly one measured row")
+            if tasks & excluded:
+                raise ValueError(f"{self.id}/{arm} has rows for a task it is excluded from")
             if len({r.dollars is None for r in rows}) > 1:
                 raise ValueError(f"{self.id}/{arm} reports its cost on every row or on none")
 
@@ -181,8 +417,14 @@ class Group(PublicModel):
 class Fixture(PublicModel):
     head_sha: Sha
     run_id: Annotated[int, Field(gt=0)]
-    passed: Literal[108]
-    total: Literal[108]
+    passed: Annotated[int, Field(gt=0)]
+    total: Annotated[int, Field(gt=0)]
+
+    @model_validator(mode="after")
+    def all_passed(self) -> Self:
+        if self.passed != self.total:
+            raise ValueError("every fixture row must pass")
+        return self
 
 
 class ExportReceipt(PublicModel):
@@ -203,8 +445,38 @@ class ExportReceipt(PublicModel):
     trace_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9_.:-]{1,64}$")]
 
 
+SCHEMA = 7
+"""The schema a new or changed record is written under. Older schemas still read: Parallax writes schema 2 for a
+candidate of official suites alone, and the approved published figures and the staged candidate were written under
+earlier ones, where an approval binds the bytes it approved."""
+TIMED_SCHEMA = 6
+"""From this schema every row records its timing basis."""
+
+
+class CompetitorReference(PublicModel):
+    """Competitor rows measured once by a `refresh_competitors` campaign, checked in at `REFERENCE_PATH`. Later
+    campaigns read them only to publish them beside their own rows; no campaign runs these vendors otherwise. Public
+    fields only: the same rows a candidate carries, with task versions so a changed task is refused, not dropped."""
+
+    catalog_sha256: Digest
+    judge_policy: Identifier
+    task_versions: dict[Identifier, Annotated[int, Field(gt=0)]]
+    arms: Annotated[list[ReferenceArm], Field(min_length=1)]
+    rows: Annotated[list[Row], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def closed(self) -> Self:
+        named = {a.arm for a in self.arms}
+        if named & set(FASTBROWSE_ARMS) or {r.arm for r in self.rows} != named:
+            raise ValueError("a competitor reference holds exactly the rows of its named competitors")
+        return self
+
+
+REFERENCE_PATH = "docs/results/competitor-reference.json"
+
+
 class Candidate(PublicModel):
-    schema_version: Literal[1, 2, 3, 4, 5]
+    schema_version: Literal[2, 3, 4, 5, 6, 7]
     campaign_id: Identifier
     agent_sha: Sha
     runner_sha: Sha
@@ -216,22 +488,22 @@ class Candidate(PublicModel):
 
     @model_validator(mode="after")
     def suites(self) -> Self:
-        expected = {"internal-hosted", "internal-ultrafast", "bu-bench", "online-mind2web"}
         ids = {g.id for g in self.groups}
         if not self.groups or len(ids) != len(self.groups):
             raise ValueError("at least one complete, unique benchmark group is required")
-        if self.schema_version == 1 and (len(self.groups) != 4 or ids != expected):
-            raise ValueError("all four full benchmark groups are required")
-        if self.schema_version == 2 and not ids <= expected:
-            raise ValueError("schema 2 supports only the four original benchmark groups")
-        if self.schema_version < 4 and "internal-backend" in ids:
-            raise ValueError("the internal-backend group requires schema 4")
         for group in self.groups:
             group.check_slots(group_arms(group.id, self.schema_version))
-            for field in ("agent_sha", "runner_sha"):
-                measured = getattr(group, field)
-                if (self.schema_version >= 2 or measured is not None) and measured != getattr(self, field):
-                    raise ValueError("each group must identify the measured agent and runner build")
+            if self.schema_version >= TIMED_SCHEMA and any(r.timing_basis is None for r in group.rows):
+                raise ValueError(f"{group.id}: every row must record its timing basis")
+            # A group with sources names its newest run's build, which may predate the candidate's: the publisher
+            # checks that every source build is in the candidate build's history.
+            if not group.sources and (group.agent_sha, group.runner_sha) != (self.agent_sha, self.runner_sha):
+                raise ValueError("each group must identify the measured agent and runner build")
+        if not any(
+            self.agent_sha in {group.agent_sha, *(source.agent_sha for source in group.sources)}
+            for group in self.groups
+        ):
+            raise ValueError("the candidate's agent build must be one a group measured")
         if (self.fixture is None) == (self.export is None):
             raise ValueError(
                 "a candidate carries exactly one measurement receipt: a live fixture run or a verified export"
@@ -307,11 +579,13 @@ def check_catalog(candidate: Candidate, path: Path) -> None:
         if group.id in {"bu-bench", "online-mind2web"}:
             continue
         # Approved figures keep the pairing they were measured under, but a new measurement is held to the current
-        # one: fastbrowse with its own browser pool against jev-ultrafast.
-        if group.id == "internal-ultrafast" and candidate.schema_version < POOL_ULTRAFAST_SCHEMA:
-            raise ValueError(f"new internal-ultrafast rows pair fastbrowse-pool, from schema {POOL_ULTRAFAST_SCHEMA}")
+        # one: fastbrowse with its own browser pool against browser-use-ultrafast.
+        if group.id == "internal-ultrafast" and candidate.schema_version < BU_ULTRAFAST_SCHEMA:
+            raise ValueError(
+                f"new internal-ultrafast rows pair browser-use-ultrafast, from schema {BU_ULTRAFAST_SCHEMA}"
+            )
         # A comparison covers the tasks every one of its arms is eligible for: the pool runs every fastbrowse task,
-        # so the Ultrafast comparison covers the tasks fastbrowse and jev-ultrafast share whichever backend it ran.
+        # so the Ultrafast comparison covers the tasks fastbrowse and browser-use-ultrafast share.
         # A partial arm is left out of the task set, which is the same whichever arms ran, and runs its own part.
         arms = group_arms(group.id, candidate.schema_version)
         partial = COVERAGE[group.id].partial
@@ -319,10 +593,16 @@ def check_catalog(candidate: Candidate, path: Path) -> None:
         if set(group.task_ids) != required or group.source_sha256 != candidate.catalog_sha256:
             kind = "fastbrowse" if group.id == "internal-fastbrowse" else "matched"
             raise ValueError(f"internal rows must cover the exact {kind} catalog")
+        excluded = []
         for arm in group.measured_arms(partial):
             own = {task.id for task in tasks if task.id in required and eligible(arm, task)}
-            if {r.task for r in group.rows if r.arm == arm} != own:
+            if {r.task for r in (*group.rows, *group.blocked, *group.unjudged) if r.arm == arm} != own:
                 raise ValueError(f"{group.id}/{arm} must run exactly the tasks of its set the catalog lists it for")
+            excluded += [
+                (arm, task.id, task.excluded.get(arm)) for task in tasks if task.id in required and task.id not in own
+            ]
+        if [(e.arm, e.task, e.reason) for e in group.excluded] != sorted(excluded, key=lambda e: (e[0], e[1])):
+            raise ValueError(f"{group.id}: excluded tasks must be the catalog's, with its reasons")
 
 
 CATALOG_PATH = "src/fastbrowse/evals/benchmark-catalog.json"
@@ -475,22 +755,35 @@ def regressions(
         for task in group.task_ids:
             now = [r for r in group.rows if r.arm == arm and r.task == task]
             before = [r for r in old.rows if r.arm == arm and r.task == task]
-            if sum(r.score for r in now) / len(now) < sum(r.score for r in before) / len(before):
+            # A legacy blocked slot is a failed attempt, as the site reads it (`BlockedSlot`).
+            now_blocked = sum(b.arm == arm and b.task == task for b in group.blocked)
+            before_blocked = sum(b.arm == arm and b.task == task for b in old.blocked)
+            # A task with no measured repeat (all unjudged), here or in the baseline, has nothing to compare.
+            if not (now or now_blocked) or not (before or before_blocked):
+                continue
+            if _rate([r.score for r in now], now_blocked) < _rate([r.score for r in before], before_blocked):
                 raise ValueError(f"source-score regression: {group.id}/{task}")
             # A rate, like the score above: the two runs need not have the same number of repeats.
-            if sum(r.completed for r in now) / len(now) < sum(r.completed for r in before) / len(before):
+            if _rate([r.completed for r in now], now_blocked) < _rate([r.completed for r in before], before_blocked):
                 raise ValueError(f"completion regression: {group.id}/{task}")
-            # Wall time moves with cloud load, so it is not compared; the calls a run made and its model
-            # throughput are properties of the build. `dollars` is kept: it is a charge, not a duration.
-            for field, floor in (("llm_calls", 1.0), ("jev_calls", 1.0), ("dollars", 0.001)):
-                a = statistics.median(getattr(r, field) for r in now)
-                b = statistics.median(getattr(r, field) for r in before)
-                if a > b * REGRESSION_FACTOR and a - b > floor:
-                    raise ValueError(f"{field} regression: {group.id}/{task}")
-            now_tps = statistics.median(r.tokens_per_second for r in now)
-            before_tps = statistics.median(r.tokens_per_second for r in before)
-            if before_tps > 0 and now_tps < before_tps / REGRESSION_FACTOR and before_tps - now_tps > 1.0:
-                raise ValueError(f"tokens_per_second regression: {group.id}/{task}")
+            if not now or not before:
+                continue
+            moved = [
+                finding
+                for finding in moves(f"{group.id}/{task}", "the published figures", _dumped(before), _dumped(now))
+                if finding.blocking
+            ]
+            if moved:
+                raise ValueError(f"{moved[0].check} regression: {moved[0].detail}")
+
+
+def _rate(values: list[float] | list[bool], failed: int) -> float:
+    """The mean of `values` with `failed` more attempts that scored nothing."""
+    return sum(values) / (len(values) + failed)
+
+
+def _dumped(rows: list[Row]) -> list[dict]:
+    return [row.model_dump() for row in rows]
 
 
 def github_run(run_id: int) -> dict:
@@ -516,6 +809,14 @@ def on_main(sha: str) -> bool:
     return result.stdout.strip() in {"ahead", "identical"}
 
 
+def fixture_slots() -> set[tuple[str, int]]:
+    """Every (task, repeat) a fixture receipt covers: each local and mock task, three times."""
+    from fastbrowse.evals.runner import _tasks
+
+    tasks, _ = _tasks([], ["local", "mock"])
+    return {(task.id, repeat) for _, task in tasks for repeat in range(3)}
+
+
 def check_fixture(candidate: Candidate) -> None:
     if candidate.export is not None:
         # A verified export stands in for the live fixture run: the campaign was measured on a build `main` has
@@ -537,10 +838,7 @@ def check_fixture(candidate: Candidate) -> None:
         or (run["head_branch"] != "main" and not on_main(run["head_sha"]))
     ):
         raise ValueError("a successful fixture workflow receipt on the measured build is required")
-    from fastbrowse.evals.runner import _tasks
-
-    tasks, _ = _tasks([], ["local", "mock"])
-    expected = {(task.id, repeat) for _, task in tasks for repeat in range(3)}
+    expected = fixture_slots()
     with tempfile.TemporaryDirectory(prefix="benchmark-fixture-") as directory:
         subprocess.run(
             [
@@ -564,8 +862,10 @@ def check_fixture(candidate: Candidate) -> None:
             raise ValueError("the fixture artifact must contain one complete ledger")
         rows = [json.loads(line) for line in paths[0].read_text().splitlines() if line.strip()]
     slots = [(row["task"], row["repeat"]) for row in rows]
-    if len(slots) != len(set(slots)) or set(slots) != expected or len(rows) != 108:
-        raise ValueError("fixture artifact coverage must be 36 tasks across three repeats")
+    if len(slots) != len(set(slots)) or set(slots) != expected:
+        raise ValueError("fixture artifact coverage must be every fixture task across three repeats")
+    if candidate.fixture.total != len(rows):
+        raise ValueError("the fixture receipt must claim every row the artifact holds")
     if any(
         row["passed"] is not True
         or row["run"]["git_sha"] != candidate.agent_sha
@@ -696,6 +996,8 @@ def check_diff(base: str, catalog: Path) -> None:
         candidate = read(path)
         if git_file(base, str(path)) == path.read_bytes():
             continue
+        if candidate.schema_version != SCHEMA:
+            raise ValueError(f"a new or changed benchmark record must use schema {SCHEMA}")
         check_catalog(candidate, catalog)
         check_fixture(candidate)
         if baseline is None or old is None or old_approval is None:

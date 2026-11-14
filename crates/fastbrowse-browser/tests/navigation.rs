@@ -1,19 +1,23 @@
 mod common;
 mod misc_support;
+mod safety_support;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use common::{Harness, chrome, harness, harness_on, harness_with, sites};
+use common::{
+    Harness, chrome, eval_value, find, harness, harness_on, harness_with, js, observe_until, sites, try_eval,
+    wait_until,
+};
 use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::session::SessionOptions;
 use fastbrowse_browser::testing::misc::rereads;
-use fastbrowse_core::config::{Config, ObservationLimits};
+use fastbrowse_core::config::Config;
 use fastbrowse_core::models::{BrowserConnection, Operation, StepOutcome};
 use fastbrowse_core::page::Action;
-use misc_support::{eval_value, find, js, observe_until, try_eval, wait_until};
 use relay::{Relay, Verdict};
+use safety_support::{Reply, serve_on};
 use serde_json::{Value, json};
 use tokio::time::timeout;
 
@@ -186,6 +190,31 @@ fn click(target_id: &str) -> Action {
     Action { target_id: Some(target_id.to_owned()), ..Action::new(Operation::Click) }
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn test_hung_input_reports_before_the_normal_command_deadline() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let page = r#"<button id=a onclick="while(true){}">Go</button><button id=b>Next</button>"#;
+    let port = serve_on(listener, Arc::new(move |_: &str| Reply::html(page)));
+    let Some(h) = harness().await else { return };
+    let url = format!("http://127.0.0.1:{port}/");
+    h.page.navigate(&url, None).await.expect("navigate");
+    let observation = h.observe().await;
+    let started = Instant::now();
+    // The input event waits 10 seconds for its answer and the page as long again for a read, well inside the
+    // 120 second command deadline.
+    let error = timeout(Duration::from_secs(30), h.page.act(&click(&find(&observation, "Go").id), &observation))
+        .await
+        .expect("a hung input must not use the ordinary command deadline")
+        .expect_err("the renderer is hung");
+    assert!(matches!(error, BrowserError::PageUnresponsive(_)), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(30));
+    h.page.navigate(&url, None).await.expect("fresh target");
+    let fresh = h.observe().await;
+    let result = h.page.act(&click(&find(&fresh, "Next").id), &fresh).await.expect("next");
+    assert_eq!(result.outcome, StepOutcome::Executed);
+    h.close().await;
+}
+
 // -- test_navigation.py: directed navigation to a caller-supplied address, through the real browser -------------
 
 #[tokio::test(flavor = "multi_thread")]
@@ -314,6 +343,13 @@ async fn test_failed_navigation_is_a_recoverable_step_unreachable() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_failed_navigation_is_a_recoverable_step_browser() {
+    // A mistyped address is the caller's own: the failure says nothing about the site.
+    failed_navigation("net::ERR_NAME_NOT_RESOLVED", "ERR_NAME_NOT_RESOLVED").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_failed_navigation_is_a_recoverable_step_certificate() {
+    // A chain the browser refuses is the site giving nothing, as a refused connection is.
     failed_navigation("net::ERR_CERT_AUTHORITY_INVALID", "ERR_CERT_AUTHORITY_INVALID").await;
 }
 
@@ -391,7 +427,11 @@ async fn push_state_between_history_and_snapshot(pushes: u32) {
             return Verdict::Forward;
         }
         let (command, relay, snapped) = (command.clone(), relay.clone(), snapped.clone());
-        if method(&command) == "Runtime.evaluate" && expression(&command).contains(")('snapshot', ") {
+        if method(&command) == "Runtime.evaluate"
+            && [")('snapshot')", ")('snapshot-reuse')", ")('snapshot-delta',"]
+                .iter()
+                .any(|mode| expression(&command).contains(mode))
+        {
             // snapshot_first: the snapshot's reply is let through before history is read.
             return Verdict::Later(Box::pin(async move {
                 let reply = relay.call(&command).await;
@@ -423,6 +463,8 @@ async fn push_state_between_history_and_snapshot(pushes: u32) {
     };
     *tab.lock().unwrap() = h.session.active_session_id().unwrap();
     h.goto("/dispatch.html").await;
+    // A document's first look also keeps its listener reader, a second snapshot evaluate; the race is a later look's.
+    h.observe().await;
     armed.store(true, Ordering::SeqCst);
     let observed = h.observe().await;
     armed.store(false, Ordering::SeqCst);
@@ -504,6 +546,29 @@ async fn test_accepting_a_dialog_that_navigates_is_a_move_the_run_made() {
     let accepted = accept_dialog(&h).await;
     assert_eq!(accepted.outcome, StepOutcome::Executed);
     assert!(accepted.moved);
+    h.close().await;
+}
+
+/// A dialog blocks the page, so no fingerprint is read before accepting it, and a settle with none ignored open
+/// requests: the confirm's delete request was still out when the step ended, and the next observation still showed the
+/// draft, so the run asked for another step.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_accepting_a_confirm_settles_after_the_request_it_starts() {
+    let Some(h) = harness().await else { return };
+    h.goto("/").await;
+    let session_id = h.session.active_session_id().unwrap();
+    let form = "<p id=draft>Holiday post</p><button onclick=\"if (confirm('Delete?')) fetch('/slow?ms=1500')\
+                .then(() => document.getElementById('draft').remove())\">Delete</button>";
+    assert_eq!(
+        eval_value(&h.session, &session_id, &format!("document.body.innerHTML = {}; true", js(form))).await,
+        true
+    );
+    let obs = h.observe().await;
+    let clicked = h.page.act(&click(&find(&obs, "Delete").id), &obs).await.expect("act");
+    assert_eq!(clicked.outcome, StepOutcome::Executed);
+    let accepted = accept_dialog(&h).await;
+    assert_eq!(accepted.outcome, StepOutcome::Executed);
+    assert_eq!(eval_value(&h.session, &session_id, "!document.getElementById('draft')").await, true);
     h.close().await;
 }
 
@@ -706,22 +771,38 @@ async fn test_a_javascript_error_is_not_read_again() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_the_pager_and_load_more_at_the_foot_of_a_long_listing_are_still_offered() {
-    // The listing is sized against a 40-control offscreen cap; the default pool now holds all of it.
-    let max_offscreen_controls = 40;
-    let config = Config {
-        observation: ObservationLimits { max_offscreen_controls, ..ObservationLimits::default() },
-        ..Config::default()
-    };
-    let Some(h) = harness_with(config, SessionOptions::default()).await else { return };
+    let Some(h) = harness_with(Config::default(), SessionOptions::default()).await else { return };
     h.goto("/long-list.html").await;
-    let observation = observe_until(&h.page, "Book 1", 5.0).await;
+    let observation = observe_until(&h.page, "Book 1").await;
     let labels: Vec<&str> = observation.controls.iter().map(|c| c.label.as_str()).collect();
-    assert!(observation.omitted_controls > 0, "the page must be long enough to hit the cap");
     assert!(labels.contains(&"next"));
     assert!(labels.contains(&"Show more books"));
-    assert!(
-        labels.len() as i64
-            <= max_offscreen_controls + observation.controls.iter().filter(|c| !c.offscreen).count() as i64
+    h.close().await;
+}
+
+/// A hover cursor on decoration must not replace the parent's explicit click handler after pointer entry.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_onclick_property_keeps_its_target_when_a_child_gains_a_hover_cursor() {
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    let session_id = h.session.active_session_id().unwrap();
+    eval_value(
+        &h.session,
+        &session_id,
+        r#"(() => {
+      document.body.innerHTML = `<style>.tile {width:200px;height:100px}.tile:hover img {cursor:pointer}</style>
+        <div class="tile"><img alt="Choose a game" width="200" height="100"></div><output id="result"></output>`;
+      document.querySelector('.tile').onclick = () => document.querySelector('#result').textContent = 'Chosen';
+    })()"#,
+    )
+    .await;
+    let before = h.observe().await;
+    let target = find(&before, "Choose a game");
+    let result = h.page.act(&click(&target.id), &before).await.expect("click");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+    assert_eq!(
+        eval_value(&h.session, &session_id, "document.querySelector('#result').textContent").await,
+        json!("Chosen")
     );
     h.close().await;
 }

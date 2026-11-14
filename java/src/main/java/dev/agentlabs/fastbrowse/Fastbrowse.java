@@ -1,11 +1,13 @@
 package dev.agentlabs.fastbrowse;
 
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.json.JsonMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import dev.agentlabs.fastbrowse.protocol.BrowserEvent;
+import dev.agentlabs.fastbrowse.protocol.CancellationReceipt;
 import dev.agentlabs.fastbrowse.protocol.CostBreakdown;
 import dev.agentlabs.fastbrowse.protocol.InitializeParams;
 import dev.agentlabs.fastbrowse.protocol.InitializeResult;
@@ -32,6 +34,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
@@ -50,7 +53,7 @@ import java.util.concurrent.TimeoutException;
 public final class Fastbrowse implements AutoCloseable {
     private static final ObjectMapper JSON = JsonMapper.builder()
             .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-            .defaultPropertyInclusion(JsonInclude.Value.construct(JsonInclude.Include.NON_NULL, JsonInclude.Include.NON_NULL))
+            .changeDefaultPropertyInclusion(inclusion -> JsonInclude.Value.construct(JsonInclude.Include.NON_NULL, JsonInclude.Include.NON_NULL))
             .build();
 
     private final Process process;
@@ -182,21 +185,15 @@ public final class Fastbrowse implements AutoCloseable {
      * run on this client is active; and with a {@link ProcessExitedException} when the process is gone.
      *
      * <p>Cancelling the future stops the run. The future is cancelled at once, and the run's browser goes on closing:
-     * the next run on this client starts once it has.
+     * the next run on this client starts once it has. {@link #cancellation(Future)} has what the run did and spent
+     * by then.
      */
     public CompletableFuture<RunResult> run(String task, RunOptions options) {
         String runId = UUID.randomUUID().toString();
         RunParams params = params(runId, task, options.browser() != null ? options.browser() : browser, options);
         CompletableFuture<JsonNode> reply = new CompletableFuture<>();
         Served served = new Served(runId, options);
-        CompletableFuture<RunResult> result = new CompletableFuture<>() {
-            @Override
-            public boolean cancel(boolean mayInterruptIfRunning) {
-                settling = reply.handle((value, error) -> null);
-                served.cancel();
-                return super.cancel(mayInterruptIfRunning);
-            }
-        };
+        RunFuture result = new RunFuture(reply, served);
         // The server names the run in every message it sends, which is how a run refused as busy hears nothing of the
         // one that is active.
         runs.put(runId, served);
@@ -209,21 +206,66 @@ public final class Fastbrowse implements AutoCloseable {
         }));
         reply.whenComplete((value, failure) -> {
             runs.remove(runId);
+            Optional<CancellationReceipt> spent = Optional.empty();
+            RunResult finished = null;
             boolean cancelled = failure instanceof RpcException refused && refused.code() == Protocol.ERROR_CANCELLED;
-            if (served.failure != null && (failure == null || cancelled)) {
+            if (cancelled) {
+                spent = ((RpcException) failure).receipt();
+            } else if (failure == null) {
+                try {
+                    finished = JSON.treeToValue(value, RunResult.class);
+                    // A run can finish before the cancellation reaches it, and what it spent is owed all the same.
+                    spent = Optional.of(new CancellationReceipt(finished.steps(), finished.cost(), finished.recordings(), finished.browser()));
+                } catch (JacksonException e) {
+                    failure = new FastbrowseException("the result could not be read", e);
+                }
+            }
+            if (served.failure != null && (finished != null || cancelled)) {
                 // A run can finish before the cancellation reaches it, and its callback failed all the same.
-                result.complete(endedBy(served.failure));
+                result.complete(endedBy(served.failure, spent.orElse(null)));
             } else if (failure != null) {
                 result.completeExceptionally(failure);
             } else {
-                try {
-                    result.complete(JSON.treeToValue(value, RunResult.class));
-                } catch (IOException e) {
-                    result.completeExceptionally(new FastbrowseException("the result could not be read", e));
-                }
+                result.complete(finished);
             }
+            result.receipt.complete(result.isCancelled() ? spent : Optional.empty());
         });
         return result;
+    }
+
+    /**
+     * What a run this client started did and spent before it was cancelled: the steps it reported, every known
+     * charge, an unpriced one as an {@code unknown} line, and its finished videos. Cancelling the future returns before the run's
+     * browser has closed, so this completes later, once the server's reply arrives. It is empty for a run that was not
+     * cancelled through its future, or that was cancelled before it was sent. A cancelled run proved nothing, so the
+     * receipt has no status and no answer.
+     *
+     * @throws IllegalArgumentException for a future that {@link #run(String, RunOptions)} did not return
+     */
+    public static CompletableFuture<Optional<CancellationReceipt>> cancellation(Future<RunResult> run) {
+        if (run instanceof RunFuture started) {
+            return started.receipt.copy();
+        }
+        throw new IllegalArgumentException("not a future that Fastbrowse.run returned");
+    }
+
+    /** The future {@link #run(String, RunOptions)} returns, which stops the run when it is cancelled. */
+    private final class RunFuture extends CompletableFuture<RunResult> {
+        private final CompletableFuture<JsonNode> reply;
+        private final Served served;
+        final CompletableFuture<Optional<CancellationReceipt>> receipt = new CompletableFuture<>();
+
+        RunFuture(CompletableFuture<JsonNode> reply, Served served) {
+            this.reply = reply;
+            this.served = served;
+        }
+
+        @Override
+        public boolean cancel(boolean mayInterruptIfRunning) {
+            settling = reply.handle((value, error) -> null);
+            served.cancel();
+            return super.cancel(mayInterruptIfRunning);
+        }
     }
 
     /**
@@ -255,7 +297,7 @@ public final class Fastbrowse implements AutoCloseable {
     }
 
     private void notify(String method, JsonNode params) {
-        Served run = runs.get(params.path("run_id").asText());
+        Served run = runs.get(params.path("run_id").asString());
         if (run == null || run.failure != null) {
             return;
         }
@@ -263,7 +305,7 @@ public final class Fastbrowse implements AutoCloseable {
             if (method.equals(Protocol.SERVER_METHOD_RUN_EVENT) && run.options.onEvent() != null) {
                 run.options.onEvent().accept(event(params.path("event")));
             } else if (method.equals(Protocol.SERVER_METHOD_RUN_FRAME) && run.options.onFrame() != null) {
-                run.options.onFrame().accept(Base64.getDecoder().decode(params.path("frame").asText()));
+                run.options.onFrame().accept(Base64.getDecoder().decode(params.path("frame").asString()));
             }
         } catch (Exception e) {
             run.failure = method + ": " + e.getMessage();
@@ -298,8 +340,8 @@ public final class Fastbrowse implements AutoCloseable {
         throw new RpcException(Protocol.ERROR_METHOD_NOT_FOUND, "unknown method '" + method + "'");
     }
 
-    private static Event event(JsonNode event) throws IOException {
-        return switch (event.path("type").asText()) {
+    private static Event event(JsonNode event) {
+        return switch (event.path("type").asString()) {
             case "browser" -> new Event(JSON.treeToValue(event, BrowserEvent.class), null);
             case "step" -> new Event(null, JSON.treeToValue(event, StepEvent.class));
             default -> throw new FastbrowseException("an event of unknown type " + event.path("type"));
@@ -328,8 +370,14 @@ public final class Fastbrowse implements AutoCloseable {
                 .until(options.until() != null ? true : null)
                 .downloads(options.downloads())
                 .record(options.record())
+                .recipe(options.recipe())
+                .saveRecipe(options.saveRecipe())
                 .cursor(options.cursor())
+                .allowedOrigins(options.allowedOrigins())
+                .fetch(options.fetch() ? true : null)
+                .browser(options.browserFirst() ? true : null)
                 .local(browser.local() ? true : null)
+                .launch(browser.launch() ? true : null)
                 .chrome(browser.chrome())
                 .cloudProfile(browser.cloudProfile())
                 .cdpUrl(browser.cdpUrl())
@@ -339,21 +387,29 @@ public final class Fastbrowse implements AutoCloseable {
                 .foreground(browser.foreground() ? true : null)
                 .proxyCountry(browser.proxyCountry())
                 .viewport(viewport)
-                .cloudAllowResizing(browser.cloudAllowResizing() ? true : null)
+                .cloudExtensions(browser.cloudExtensions())
+                .cloudTimeoutMinutes(browser.cloudTimeoutMinutes() == null ? null : (long) browser.cloudTimeoutMinutes())
+                .extension(browser.extension() ? true : null)
+                .extensionBrowser(browser.extensionBrowser())
                 .build();
     }
 
-    /** The result of a run that a throwing callback ended, in the shape the server gives one. */
-    private static RunResult endedBy(String failure) {
+    /**
+     * The result of a run that a throwing callback ended, in the shape the server gives one, with the steps, cost and
+     * videos of what it did when the reply carried them.
+     */
+    private static RunResult endedBy(String failure, CancellationReceipt spent) {
+        CancellationReceipt kept = spent != null ? spent : new CancellationReceipt(List.of(), new CostBreakdown(List.of()), List.of(), null);
         return RunResult.builder()
                 .status(Status.ERROR)
                 .evidence(List.of())
-                .steps(List.of())
-                .cost(new CostBreakdown(List.of()))
+                .steps(kept.steps())
+                .cost(kept.cost())
                 .artifacts(List.of())
                 .citations(List.of())
                 .error(failure)
-                .recordings(List.of())
+                .recordings(kept.recordings())
+                .browser(kept.browser())
                 .build();
     }
 

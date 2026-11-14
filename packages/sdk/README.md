@@ -8,20 +8,19 @@ a native binary, so the machine needs no Python.
 
 ```sh
 npm install fastbrowse
-export TYPESAFE_API_KEY=...
 export OPENROUTER_API_KEY=...
 ```
 
-`TYPESAFE_API_KEY` is the recommended Jev route. `OPENROUTER_API_KEY` serves the LLM and, when it is the
-only Jev key, Jev text; it is not the recommended Jev route and never receives Jev image input. Without it,
-the LLM uses `AI_GATEWAY_API_KEY`.
+`OPENROUTER_API_KEY` is the recommended route for Jev and the LLM. Without it, the LLM uses `AI_GATEWAY_API_KEY`
+and Jev uses `TYPESAFE_API_KEY` when set.
 
 With it npm installs the binary for your platform as an optional dependency: `@fastbrowse/darwin-arm64`,
 `darwin-x64`, `linux-arm64`, `linux-x64` or `win32-x64`. No install script runs and nothing is downloaded on
 first use. It needs Node.js 20 or newer, and on Linux it needs glibc.
 
-The binary brings no browser. `local: true` drives the Chrome on your machine. Without it a run starts a
-Browser Use Cloud browser, which needs `BROWSER_USE_API_KEY`.
+The binary brings no browser. `local: true` drives your own Chrome through the
+[fastbrowse extension](../../docs/cli.md#your-own-chrome), signed in as you are; add `launch: true` to start a separate
+Chrome instead. Without either a run starts a Browser Use Cloud browser, which needs `BROWSER_USE_API_KEY`.
 
 ## First run
 
@@ -52,16 +51,32 @@ stopped it in `result.wall`: `kind` is `password`, `one_time_code`, `sign_in` or
 a second `run` while one is active rejects with the busy error, so start more instances to run side by side.
 `close()` shuts the process down and waits for it, and the process also exits when yours does.
 
+`Fastbrowse.start({ inProcess: true })` runs on the native addon in your Node process. PDF reading still uses a
+helper binary, selected by `binaryPath`, then `FASTBROWSE_BINARY`, then the installed platform package. Keep the
+addon and helper on matching fastbrowse versions.
+
 `run` rejects when no run took place or none finished: with `RpcError` when the server refuses the request before
 a browser opens (a bad option, a missing key, a busy server), with `AbortError` when `signal` stopped the run, and
 with `ProcessExitedError` when the process is gone. It also rejects with `OutputValidationError` when a run
 finished but its data fails the `output` schema. A run that fails after it starts, including one whose
 callback throws, resolves with status `error`.
 
+Jev cost lines include `decision_purpose` when the agent named the decision: `action`, `authorization`,
+`relevance`, `read`, `verify` or `locate`. LLM lines keep their existing `purpose`. An unscoped decision
+client call omits the optional field, and older receipts remain readable.
+
+An `AbortError` carries `receipt` once the server has closed the browser: the steps it reported, known cost
+lines and finished recordings. A cancelled `RpcError` carries the same receipt. A cancellation before the run
+starts has none. The receipt has no status or answer, and an unpriced charge remains `unknown`.
+
 ## Options
 
 The result is the `RunResult` the Python library returns. Its fields keep their Python names, such as
 `final_url`, since the types are generated from the protocol's schema; the options are camelCase.
+
+A safe final screenshot is returned in `result.artifacts` with `kind: "screenshot"`, `mime_type: "image/png"`,
+a SHA-256 digest and a base64 data URI in `uri`. A task can request the screenshot without enabling step frames.
+If a resolved secret is visible, the image is withheld.
 
 `output` is `data` after a Zod (4.2 or newer) or ArkType schema's validation and transforms, or a Valibot schema
 wrapped by `@valibot/to-json-schema`, typed as the schema's output. Data the schema refuses rejects with
@@ -70,11 +85,22 @@ wrapped by `@valibot/to-json-schema`, typed as the schema's output. Data the sch
 any other keyword by name, but a run fills only a flat object of required string, number, integer and boolean
 fields. With any other field it ends `unverified` with no data.
 
-`run` also takes `context`, `inputs`, `attachments` as bytes, `downloads`, `record`, `onFrame` (JPEG frames of the
+`run` also takes `context`, `inputs`, `attachments` as bytes, `downloads`, `record`, `recipe`, `saveRecipe`, `onFrame` (JPEG frames of the
 active tab; none are sent without it), and the browser choices `chrome`, `cloudProfile`, `cdpUrl`, `cdpPort`,
-`attach`, `targetMatch`, `foreground`, `proxyCountry`, `viewport` and `cloudAllowResizing`. `Fastbrowse.start`
-takes the browser choices as defaults for every run, and a run passes `null` for one to go without that default.
+`attach`, `targetMatch`, `foreground`, `proxyCountry`, `viewport`, `cloudExtensions` and `cloudTimeoutMinutes`.
+`Fastbrowse.start` takes the browser choices as defaults for every run, and a run passes `null` for one to go
+without that default.
+
+A run reads pages over HTTP until the task needs a browser. `fetch: true` never starts one, and `browser: true`
+starts one from the first step; the server refuses the two together. `allowedOrigins` limits the documents a run
+may open, read and control to those exact origins: navigations, redirects, frames and popups elsewhere are refused
+before they are sent, so a sign-in that redirects through another origin needs it listed too. It scopes documents,
+not the network, and a scoped run sends no frames and cannot `record`.
+Set `EXA_API_KEY` in the server environment to offer browserless web search. Jev picks among LLM-proposed queries;
+result fields become citable records and links use the same origin checks. Search charges appear under `search`.
 `env` in `Fastbrowse.start` adds to the environment the process inherits.
+Recipe paths name files on the server running fastbrowse. `saveRecipe` writes after a completed run; a write failure is logged without changing the task status, so check the file before replay;
+`recipe` reuses saved values for matching live actions with the same task.
 
 ## Platforms
 

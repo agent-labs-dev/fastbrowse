@@ -4,9 +4,10 @@
 //! does: a quote cut one character apart from Python's is another citation id.
 
 use fastbrowse_core::page::Capture;
-use fastbrowse_core::py::text;
+use fastbrowse_core::py::text::{is_space, is_word};
 
-use crate::pyre::{Pat, byte_offsets, is_digit, is_space, is_word};
+use crate::pyre::{Pat, byte_offsets, is_digit};
+use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 
 /// A capture with its text indexed by code point.
 pub(crate) struct Page<'a> {
@@ -35,12 +36,6 @@ impl<'a> Page<'a> {
             return "";
         }
         &self.capture.text[self.bytes[start]..self.bytes[end]]
-    }
-
-    /// `capture.text.find(needle, start, end)`.
-    pub fn find(&self, needle: char, start: i64, end: i64) -> Option<i64> {
-        let (start, end) = (self.clamp(start), self.clamp(end));
-        (start..end).find(|at| self.chars[*at] == needle).map(|at| at as i64)
     }
 }
 
@@ -92,86 +87,6 @@ pub(crate) fn lines_of(value: &str) -> Vec<String> {
             chars[start..stop].iter().collect()
         })
         .collect()
-}
-
-/// `str.isalnum` for one character.
-fn alnum(c: char) -> bool {
-    is_word(c) && c != '_'
-}
-
-/// A model asked to quote a page rewrites its punctuation: a curly apostrophe becomes a straight one, an en dash a
-/// hyphen, an ellipsis three dots. The words are still the page's own, so a byte-exact test drops a correct value.
-/// Built from code points because scripts/no_slop.py fails the build on a line holding one of these characters.
-fn families() -> [Vec<char>; 3] {
-    let chars = |codes: &[u32]| codes.iter().filter_map(|code| char::from_u32(*code)).collect::<Vec<char>>();
-    [
-        chars(&[0x27, 0x2018, 0x2019, 0x02BC, 0x00B4, 0x60]),
-        chars(&[0x22, 0x201C, 0x201D, 0x201E, 0x201F, 0x00AB, 0x00BB]),
-        chars(&[0x2D, 0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015, 0x2212]),
-    ]
-}
-
-const ELLIPSIS: char = '\u{2026}';
-
-/// `_loose(value)`: `value` as a pattern tolerating the punctuation shape a model rewrites, and the backslash a capture
-/// puts before a table cell's own pipe. The words, their order and their spacing all still have to be there.
-pub(crate) fn loose(value: &str) -> Pat {
-    let chars: Vec<char> = value.chars().collect();
-    let families = families();
-    let mut parts = Vec::new();
-    let mut at = 0;
-    // re.findall(r"\s+|\.\.\.|.", value, flags=re.DOTALL)
-    while at < chars.len() {
-        if is_space(chars[at]) {
-            while at < chars.len() && is_space(chars[at]) {
-                at += 1;
-            }
-            parts.push(Pat::plus(Pat::class(is_space)));
-            continue;
-        }
-        if chars[at..].starts_with(&['.', '.', '.']) || chars[at] == ELLIPSIS {
-            at += if chars[at] == ELLIPSIS { 1 } else { 3 };
-            parts.push(Pat::alt(vec![Pat::lit("..."), Pat::Lit(vec![ELLIPSIS])]));
-            continue;
-        }
-        let c = chars[at];
-        at += 1;
-        if alnum(c) {
-            parts.push(Pat::Lit(vec![c]));
-            continue;
-        }
-        let family = families.iter().find(|members| members.contains(&c)).cloned().unwrap_or_else(|| vec![c]);
-        parts.push(Pat::Seq(vec![Pat::opt(Pat::lit("\\")), Pat::class(move |x| family.contains(&x))]));
-    }
-    Pat::Seq(parts)
-}
-
-/// `_found(text, value)`: how `text` itself writes `value`, allowing for the punctuation shape and the markdown
-/// escaping. The match is what gets kept, so a field carries the page's own punctuation.
-pub(crate) fn found(text: &str, value: &str) -> Option<String> {
-    let squashed: Vec<char> = text::squash(text).chars().collect();
-    let (start, end) = loose(value).search(&squashed, 0)?;
-    Some(squashed[start..end].iter().collect::<String>().replace("\\|", "|"))
-}
-
-/// `_names(task, value)`: how the task writes `value` when it gives it as a whole word or phrase.
-pub(crate) fn names(task: &str, value: &str) -> Option<String> {
-    let squashed: Vec<char> = text::squash(task).chars().collect();
-    let pattern = Pat::Seq(vec![Pat::not_behind(is_word), loose(value), Pat::not_ahead(Pat::class(is_word))]);
-    let (start, end) = pattern.search(&squashed, 0)?;
-    Some(squashed[start..end].iter().collect())
-}
-
-/// `list(_loose(value).finditer(text))` as code point spans of `text`.
-pub(crate) fn loose_matches(value: &str, text: &str) -> Vec<(usize, usize)> {
-    let chars: Vec<char> = text.chars().collect();
-    loose(value).find_iter(&chars)
-}
-
-/// `_loose(value).search(text) is not None`.
-pub(crate) fn loose_search(value: &str, text: &str) -> bool {
-    let chars: Vec<char> = text.chars().collect();
-    loose(value).search(&chars, 0).is_some()
 }
 
 /// `re.fullmatch(r"\s*\|?[\s:|\-]+\|?\s*", line) and "---" in line`: a markdown table's separator row.
@@ -288,7 +203,7 @@ fn sentences(chars: &[char]) -> Vec<(usize, usize)> {
     found
 }
 
-fn currency(c: char) -> bool {
+pub(crate) fn currency(c: char) -> bool {
     matches!(c, '$' | '\u{a3}' | '\u{20ac}' | '\u{a5}')
 }
 
@@ -353,107 +268,69 @@ pub(crate) fn spans(value: &str, kind: SpanKind) -> Vec<(usize, usize, String)> 
     found.into_iter().map(|(start, end)| (start, end, chars[start..end].iter().collect())).collect()
 }
 
-/// `re.findall(r"[^\W_]+", text)`.
-pub(crate) fn alnum_runs(value: &str) -> Vec<String> {
-    let mut runs = Vec::new();
-    let mut current = String::new();
-    for c in value.chars() {
-        if alnum(c) {
-            current.push(c);
-        } else if !current.is_empty() {
-            runs.push(std::mem::take(&mut current));
-        }
-    }
-    if !current.is_empty() {
-        runs.push(current);
-    }
-    runs
-}
-
-/// `re.findall(r"\b\d[\d,]*\b", text)`.
-pub(crate) fn numbers(value: &str) -> Vec<String> {
-    let chars: Vec<char> = value.chars().collect();
-    let pattern = Pat::Seq(vec![
-        Pat::Boundary,
-        Pat::class(is_digit),
-        Pat::star(Pat::class(|c| is_digit(c) || c == ',')),
-        Pat::Boundary,
-    ]);
-    pattern.find_iter(&chars).into_iter().map(|(start, end)| chars[start..end].iter().collect()).collect()
-}
-
-/// `re.fullmatch(r"[^\n()]*[^\s()]\s*\(\s*(\d+)\s*\)\s*", title)`: a heading that states its count, and the count.
-pub(crate) fn counted_heading(title: &str) -> Option<String> {
-    let chars: Vec<char> = title.chars().collect();
-    // The label before the count holds no parenthesis or newline, so the count opens at the first "(".
-    let open = chars.iter().position(|c| *c == '(')?;
-    let label_end = chars[..open].iter().rposition(|c| !is_space(*c))?;
-    // The space before the count may break the line; the label itself may not, nor hold a closing parenthesis.
-    if chars[..=label_end].iter().any(|c| matches!(c, '\n' | ')')) {
-        return None;
-    }
-    let mut at = open + 1;
-    while chars.get(at).is_some_and(|c| is_space(*c)) {
-        at += 1;
-    }
-    let digits_start = at;
-    while chars.get(at).is_some_and(|c| is_digit(*c)) {
-        at += 1;
-    }
-    if at == digits_start {
-        return None;
-    }
-    let count: String = chars[digits_start..at].iter().collect();
-    while chars.get(at).is_some_and(|c| is_space(*c)) {
-        at += 1;
-    }
-    if chars.get(at) != Some(&')') {
-        return None;
-    }
-    chars[at + 1..].iter().all(|c| is_space(*c)).then_some(count)
-}
-
-/// The empty-result sentence `_counted_collections` accepts in place of members, `re.IGNORECASE`, between `\b`s.
-pub(crate) fn states_empty(value: &str) -> bool {
-    let words = |options: &[&str]| Pat::alt(options.iter().map(|option| Pat::ilit(option)).collect());
-    let pattern = Pat::Seq(vec![
-        Pat::Boundary,
-        Pat::alt(vec![
-            Pat::Seq(vec![
-                Pat::ilit("no "),
-                Pat::opt(Pat::ilit("matching ")),
-                words(&["comments", "reviews", "results", "items", "records", "messages", "posts", "entries"]),
-                Pat::lit(" "),
-                words(&["yet", "found", "available"]),
-            ]),
-            Pat::Seq(vec![
-                Pat::ilit("be the first to "),
-                words(&["post", "add", "write", "leave"]),
-                Pat::lit(" "),
-                words(&["a", "an"]),
-                Pat::lit(" "),
-                words(&["comment", "review", "reply", "message", "post"]),
-            ]),
-        ]),
-        Pat::Boundary,
-    ]);
-    let chars: Vec<char> = value.chars().collect();
-    pattern.search(&chars, 0).is_some()
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    #[test]
+    fn a_word_past_a_limit_is_cut_into_numbered_pieces() {
+        let cut = super::words("code 42 x", Some(1));
+        let pieces: Vec<_> = cut.iter().map(|word| (word.start, word.piece)).collect();
+        assert_eq!(cut.len(), 7);
+        assert_eq!(pieces[4], (5, Some((1, 2))));
+        assert_eq!(pieces[6], (8, None));
+    }
 
     #[test]
-    fn a_counted_heading_needs_a_label_and_one_count() {
-        assert_eq!(counted_heading("Reviews (3)").as_deref(), Some("3"));
-        assert_eq!(counted_heading("Reviews ( 12 ) ").as_deref(), Some("12"));
-        assert_eq!(counted_heading("(3)"), None);
-        assert_eq!(counted_heading("Reviews (3) more"), None);
-        assert_eq!(counted_heading("A (b) (3)"), None);
-        assert_eq!(counted_heading("Reviews\n(3)").as_deref(), Some("3"));
+    fn a_word_keeps_the_bounds_of_the_token_it_was_trimmed_from() {
+        let found = super::words("@a_b c.", None);
+        let bounds: Vec<_> =
+            found.iter().map(|word| (word.outer_start, word.start, word.end, word.outer_end)).collect();
+        assert_eq!(bounds, [(0, 1, 4, 4), (5, 5, 6, 7)]);
+        // A cut word's punctuation belongs to its first piece's beginning and its last piece's end only.
+        let cut = super::words("@abcdef.", Some(2));
+        let bounds: Vec<_> = cut.iter().map(|word| (word.outer_start, word.start, word.end, word.outer_end)).collect();
+        assert_eq!(bounds, [(0, 1, 3, 3), (3, 3, 5, 5), (5, 5, 7, 8)]);
     }
+
+    #[test]
+    fn a_pictograph_is_a_word_and_the_quote_after_it_an_edge() {
+        let found = super::words("note 'by the door ☕' now", None);
+        let bounds: Vec<_> =
+            found.iter().map(|word| (word.outer_start, word.start, word.end, word.outer_end)).collect();
+        assert_eq!(bounds[4], (18, 18, 19, 20));
+        // A token of punctuation alone is still no word.
+        assert_eq!(super::words("a - b", None).len(), 2);
+    }
+
+    #[test]
+    fn edge_options_cut_the_punctuation_next_to_a_value() {
+        let task = "say @x y. now";
+        let chars: Vec<char> = task.chars().collect();
+        let found = super::words(task, None);
+        let one = super::edge_options(&chars, (&found[1], &found[1]), (0, 0), None, 255);
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].0, "lead");
+        assert_eq!(one[0].1, [(0, "x".to_string()), (1, "@x".to_string())]);
+        let both = super::edge_options(&chars, (&found[1], &found[2]), (0, 0), None, 255);
+        assert_eq!(both.iter().map(|edge| edge.0).collect::<Vec<_>>(), ["lead", "trail"]);
+        assert_eq!(both[0].1, [(0, "x y".to_string()), (1, "@x y".to_string())]);
+        assert_eq!(both[1].1, [(0, "x y".to_string()), (1, "x y.".to_string())]);
+        // A field that holds three characters is offered no longer cut, so nothing is left to ask.
+        assert!(super::edge_options(&chars, (&found[1], &found[2]), (0, 0), Some(3), 255).is_empty());
+        // A run longer than the provider's options keeps the cuts nearest the word.
+        let task = "(((x)))";
+        let chars: Vec<char> = task.chars().collect();
+        let found = super::words(task, None);
+        let few = super::edge_options(&chars, (&found[0], &found[0]), (0, 0), None, 3);
+        let cuts = |values: &[&str]| values.iter().enumerate().map(|(n, v)| (n, v.to_string())).collect::<Vec<_>>();
+        assert_eq!(few, [("lead", cuts(&["x", "(x", "((x"])), ("trail", cuts(&["x", "x)", "x))"]))]);
+        // A field limit drops the longer cuts, and an end asked after the beginning keeps only what fits beside it.
+        let fit = super::edge_options(&chars, (&found[0], &found[0]), (0, 0), Some(3), 255);
+        assert_eq!(fit, [("lead", cuts(&["x", "(x", "((x"])), ("trail", cuts(&["x", "x)", "x))"]))]);
+        let after = super::edge_options(&chars, (&found[0], &found[0]), (1, 0), Some(3), 255);
+        assert_eq!(after[1], ("trail", cuts(&["(x", "(x)"])));
+    }
+
+    use super::*;
 
     #[test]
     fn cells_keep_escaped_pipes_and_skip_the_separator() {
@@ -473,13 +350,121 @@ mod tests {
             spans("$1,234.50 and -\u{20ac} 3 but 1234,567 x9", SpanKind::Number).into_iter().map(|s| s.2).collect();
         assert_eq!(found, ["$1,234.50", "-\u{20ac} 3"]);
     }
+}
 
-    #[test]
-    fn a_loose_match_takes_the_pages_punctuation() {
-        assert_eq!(found("It\u{2019}s  here", "It's here").as_deref(), Some("It\u{2019}s here"));
-        assert_eq!(found("a \\| b", "a | b").as_deref(), Some("a | b"));
-        assert_eq!(names("Compare Birchwood and Oak", "Birch"), None);
-        assert_eq!(names("Compare Birch and Oak", "birch"), None);
-        assert_eq!(names("Compare Birch and Oak", "Birch").as_deref(), Some("Birch"));
+/// One word of a text, by character offset, with where the words around it reach.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Word {
+    pub index: usize,
+    pub start: usize,
+    pub end: usize,
+    /// Where the whitespace-separated token this word was trimmed from begins and ends, so the punctuation next to it
+    /// can be offered as part of a value. Equal to `start` and `end` where there is none, and inside a cut word.
+    pub outer_start: usize,
+    pub outer_end: usize,
+    /// Which piece this is, and of how many, of a word cut to a limit.
+    pub piece: Option<(usize, usize)>,
+    /// The start of each word, this one's included, so context around it is found by counting words.
+    starts: std::sync::Arc<Vec<usize>>,
+    ends: std::sync::Arc<Vec<usize>>,
+}
+
+impl Word {
+    /// Where the word `count` before this one starts.
+    pub fn before(&self, count: usize) -> usize {
+        self.starts[self.index.saturating_sub(count)]
     }
+
+    /// Where the word `count` after this one ends.
+    pub fn after(&self, count: usize) -> usize {
+        self.ends[(self.index + count).min(self.ends.len() - 1)]
+    }
+}
+
+/// `value`'s whitespace-separated words with the punctuation around each trimmed off.
+/// A token with no letter, digit or pictograph is no word.
+/// A word longer than `limit` characters is cut into pieces of that size.
+pub(crate) fn words(value: &str, limit: Option<usize>) -> Vec<Word> {
+    let chars: Vec<char> = value.chars().collect();
+    // Each word's alphanumeric span, inside the token's own bounds.
+    let mut spans: Vec<(usize, usize, usize, usize)> = Vec::new();
+    let mut from = None;
+    for (at, ch) in chars.iter().chain(std::iter::once(&' ')).enumerate() {
+        match (ch.is_whitespace(), from) {
+            (false, None) => from = Some(at),
+            (true, Some(start)) => {
+                let word = &chars[start..at];
+                // Letters, digits and pictographs (`So`, such as an emoji) are the value; the punctuation and signs
+                // around them are offered as edges to keep or leave.
+                let edge = |ch: &char| ch.is_alphanumeric() || ch.general_category() == GeneralCategory::OtherSymbol;
+                if let (Some(first), Some(last)) = (word.iter().position(edge), word.iter().rposition(edge)) {
+                    spans.push((start, start + first, start + last + 1, at));
+                }
+                from = None;
+            }
+            _ => {}
+        }
+    }
+    let mut pieces = vec![None; spans.len()];
+    if let Some(limit) = limit.filter(|limit| *limit > 0) {
+        (spans, pieces) = spans
+            .iter()
+            .flat_map(|&(outer_start, start, end, outer_end)| {
+                let count = (end - start).div_ceil(limit);
+                (start..end).step_by(limit).enumerate().map(move |(n, from)| {
+                    let to = (from + limit).min(end);
+                    let lead = if n == 0 { outer_start } else { from };
+                    let trail = if to == end { outer_end } else { to };
+                    ((lead, from, to, trail), (count > 1).then_some((n + 1, count)))
+                })
+            })
+            .unzip();
+    }
+    let starts: std::sync::Arc<Vec<usize>> = std::sync::Arc::new(spans.iter().map(|span| span.1).collect());
+    let ends: std::sync::Arc<Vec<usize>> = std::sync::Arc::new(spans.iter().map(|span| span.2).collect());
+    spans
+        .iter()
+        .enumerate()
+        .map(|(index, &(outer_start, start, end, outer_end))| Word {
+            index,
+            start,
+            end,
+            outer_start,
+            outer_end,
+            piece: pieces[index],
+            starts: starts.clone(),
+            ends: ends.clone(),
+        })
+        .collect()
+}
+
+/// The questions that decide whether the punctuation at the edges of the value `first` to `last` belongs to it: for
+/// each edge with punctuation, every cut of that run from none to all, keyed by how many characters it keeps, each as
+/// the complete value with the other edge cut as `kept` says (how many characters the beginning and the end keep).
+///
+/// A cut longer than `max_length` is not offered, and a run with more cuts than `max_options`, the decision provider's
+/// limit on one choice, keeps those nearest the word. Keeping none is always offered, so every question has a valid
+/// answer, and an edge is asked only when some longer cut is left.
+pub(crate) fn edge_options(
+    chars: &[char],
+    (first, last): (&Word, &Word),
+    kept: (usize, usize),
+    max_length: Option<usize>,
+    max_options: usize,
+) -> Vec<(&'static str, Vec<(usize, String)>)> {
+    let edges = [("lead", first.start - first.outer_start), ("trail", last.outer_end - last.end)];
+    edges
+        .into_iter()
+        .filter_map(|(edge, run)| {
+            let options: Vec<(usize, String)> = (0..=run)
+                .take(max_options)
+                .map(|cut| {
+                    let (lead, trail) = if edge == "lead" { (cut, kept.1) } else { (kept.0, cut) };
+                    (cut, chars[first.start - lead..last.end + trail].iter().collect::<String>())
+                })
+                .filter(|(_, value)| max_length.is_none_or(|limit| value.chars().count() <= limit))
+                .collect();
+            (options.len() > 1).then_some((edge, options))
+        })
+        .collect()
 }

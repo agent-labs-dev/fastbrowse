@@ -11,6 +11,8 @@ public enum CostBasis {
     ESTIMATED,
     @JsonProperty("bounded")
     BOUNDED,
+    @JsonProperty("unsettled")
+    UNSETTLED,
     @JsonProperty("unknown")
     UNKNOWN
 }

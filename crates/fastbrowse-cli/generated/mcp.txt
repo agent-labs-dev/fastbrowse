@@ -1,9 +1,10 @@
 usage: fastbrowse-mcp [-h] [--transport {stdio,http}] [--host HOST]
-                      [--port PORT] [--local] [--headed] [--profile PROFILE]
-                      [--foreground] [--cloud-profile ID] [--allow-authorize]
-                      [--secret NAME=ENV_VAR@ORIGIN] [--bitwarden ITEM]
-                      [--max-steps MAX_STEPS] [--max-dollars MAX_DOLLARS]
-                      [--max-seconds MAX_SECONDS]
+                      [--port PORT] [--local] [--launch] [--headed]
+                      [--profile PROFILE] [--foreground] [--cloud-profile ID]
+                      [--extension] [--extension-browser LABEL]
+                      [--allow-authorize] [--secret NAME=ENV_VAR@ORIGIN]
+                      [--bitwarden ITEM] [--max-steps MAX_STEPS]
+                      [--max-dollars MAX_DOLLARS] [--max-seconds MAX_SECONDS]
                       [--max-concurrent MAX_CONCURRENT]
                       [--downloads DOWNLOADS] [--cursor | --no-cursor]
 
@@ -14,14 +15,22 @@ options:
   --transport {stdio,http}
   --host HOST           HTTP only: address to bind
   --port PORT           HTTP only: port to bind
-  --local               run on local Chrome instead of Browser Use Cloud
-  --headed              show the local Chrome window (implies --local)
+  --local               run in your own Chrome through the fastbrowse
+                        extension instead of Browser Use Cloud
+  --launch              start a separate local Chrome instead of using your
+                        own (implies --local)
+  --headed              show the launched Chrome window (implies --launch)
   --profile PROFILE     Chrome profile directory kept between runs (implies
-                        --local)
+                        --launch)
   --foreground          bring each run's tab and its browser window to the
                         front, to watch it; otherwise a visible window stays
                         in the background
   --cloud-profile ID    a Browser Use Cloud profile to run signed in as
+  --extension           run every call in your own Chrome through the
+                        fastbrowse extension
+  --extension-browser LABEL
+                        which browser, when the extension is connected in more
+                        than one (implies --extension)
   --allow-authorize     let a call pass authorize
   --secret NAME=ENV_VAR@ORIGIN
                         repeatable

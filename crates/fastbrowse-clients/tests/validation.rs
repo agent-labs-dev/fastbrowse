@@ -1,52 +1,67 @@
-//! tests/clients/test_validation.py: retries and the accounting of what they cost, seen through the Jev clients
+//! Retries and the accounting of what they cost, seen through the Jev clients
 //! since the request loop itself is crate-private.
 
 mod common;
+
+use fastbrowse_clients::validation::jev_purpose;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use common::{Script, answering, reply, text};
-use fastbrowse_clients::http::{Http, Request, Response, TransportError};
-use fastbrowse_clients::system_one::SystemOneClient;
+use common::{Script, answering, direct, keys, noul, one, reply, text};
+use fastbrowse_clients::http::{Response, TransportError};
+use fastbrowse_clients::system_one::{SystemOneClient, TYPESAFE_URL};
 use fastbrowse_clients::validation::{Lines, Paid, RETRY_DELAYS_SECONDS, RequestUsage, jev_spend, with_discarded};
 use fastbrowse_clients::vercel::{GATEWAY_URL, VercelGatewayJevClient};
-use fastbrowse_core::decision::{DecisionClient, DecisionError, JEV_DOLLARS_PER_INPUT_TOKEN, NoulQuestion, Question};
-use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, MaybeUnavailable};
+use fastbrowse_core::decision::{
+    DecisionClient, DecisionError, Images, JEV_DOLLARS_PER_INPUT_TOKEN, JEV_MODEL, Question,
+};
+use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, JevPurpose, Limits, MaybeUnavailable};
 use fastbrowse_core::py::json::dumps;
-use fastbrowse_core::telemetry::Trace;
+use fastbrowse_core::telemetry::{Ledger, Trace};
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 
-fn noul(instructions: &str) -> Question {
-    NoulQuestion::new(instructions, None, None).into()
-}
-
-fn one() -> IndexMap<String, Question> {
-    IndexMap::from([("q".to_string(), noul("Is it?"))])
-}
-
 fn pair() -> IndexMap<String, Question> {
     IndexMap::from([("a".to_string(), noul("Is it?")), ("b".to_string(), noul("Is it?"))])
-}
-
-fn keys(request: &Request) -> Vec<String> {
-    let body: Value = serde_json::from_slice(&request.body).unwrap();
-    body["questions"].as_object().unwrap().keys().cloned().collect()
 }
 
 fn answered() -> Response {
     Response::json(200, &json!({"answers": {"q": {"type": "noul", "noul": 1}}, "usage": {"input_tokens": 100}}))
 }
 
-fn direct(http: Http) -> SystemOneClient {
-    SystemOneClient::direct("key", http)
-}
-
 fn events(trace: &Trace, kind: &str) -> Vec<Value> {
     trace.events().into_iter().filter(|event| event["event"] == kind).collect()
+}
+
+#[tokio::test(start_paused = true)]
+async fn concurrent_decisions_keep_distinct_purposes_without_changing_costs() {
+    let script = Script::new((0..3).map(|_| common::Step::Reply(answered())));
+    let trace = Trace::collecting();
+    let client = direct(script.traced(&trace));
+    let page = json!("page");
+    let questions = one();
+    let (read, verify) = tokio::join!(
+        jev_purpose(JevPurpose::Read, client.evaluate(&page, &questions)),
+        jev_purpose(JevPurpose::Verify, client.evaluate(&page, &questions)),
+    );
+    let read = read.unwrap();
+    let verify = verify.unwrap();
+    let unscoped = client.evaluate(&page, &questions).await.unwrap();
+    assert_eq!(read.cost.decision_purpose, Some(JevPurpose::Read));
+    assert_eq!(verify.cost.decision_purpose, Some(JevPurpose::Verify));
+    assert_eq!(unscoped.cost.decision_purpose, None);
+    assert_eq!(read.cost.purpose, None);
+    assert_eq!(read.cost.dollars, unscoped.cost.dollars);
+    assert_eq!(verify.cost.dollars, unscoped.cost.dollars);
+    assert_eq!(read.cost.input_tokens, unscoped.cost.input_tokens);
+    let spans = events(&trace, "call");
+    assert_eq!(spans.len(), 3);
+    assert_eq!(spans[0]["decision_purpose"], "read");
+    assert_eq!(spans[1]["decision_purpose"], "verify");
+    assert!(spans[2].get("decision_purpose").is_none());
 }
 
 #[tokio::test(start_paused = true)]
@@ -119,7 +134,11 @@ async fn test_an_exhausted_split_counts_every_request_it_sent() {
         } else {
             Box::new(direct(http))
         };
-        let message = client.evaluate(&json!("page"), &pair()).await.unwrap_err().to_string();
+        let error = jev_purpose(JevPurpose::Read, client.evaluate(&json!("page"), &pair())).await.unwrap_err();
+        let DecisionError::RetriesExhausted(exhausted) = &error else { panic!("expected exhausted split") };
+        assert!(!exhausted.answered.is_empty());
+        assert!(exhausted.answered.iter().all(|answer| answer.cost.decision_purpose == Some(JevPurpose::Read)));
+        let message = error.to_string();
         let sent = sent.load(Ordering::SeqCst);
         assert!(sent > 3);
         assert!(message.contains(&format!("after {sent} requests in ")), "{message}");
@@ -137,7 +156,11 @@ async fn test_retry_waits_for_the_servers_retry_after() {
     let result = direct(script.traced(&trace)).evaluate(&json!("page"), &one()).await.unwrap();
     let waits: Vec<Value> = events(&trace, "request_retry").iter().map(|event| event["wait"].clone()).collect();
     assert_eq!(waits, [json!(0.25)]);
-    assert_eq!((result.requests, result.cost.input_tokens), (2, 100), "a refused request costs nothing");
+    assert_eq!(
+        (result.requests, result.cost.input_tokens, result.cost.physical_requests),
+        (2, 100, Some(2)),
+        "a refused request costs nothing"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -169,7 +192,7 @@ async fn test_exhausted_status_keeps_timing_usage_and_redacts_the_key() {
     let mut steps = vec![common::Step::Fail(TransportError::Timeout("ReadTimeout"))];
     steps.extend((0..5).map(|_| text(503, &format!("secret-key{}", "x".repeat(1000)))));
     let script = Script::new(steps);
-    let client = SystemOneClient::direct("secret-key", script.http());
+    let client = SystemOneClient::new("secret-key", script.http(), TYPESAFE_URL, JEV_MODEL).typesafe();
     let error = client.evaluate(&json!("page"), &one()).await.unwrap_err();
     let DecisionError::RetriesExhausted(exhausted) = &error else { panic!("exhausted") };
     assert_eq!(exhausted.unaccounted_requests, 1);
@@ -178,12 +201,32 @@ async fn test_exhausted_status_keeps_timing_usage_and_redacts_the_key() {
     assert!(error.to_string().len() < 500);
 }
 
+/// A request that timed out may still have been billed, so a call that then fails keeps its estimate, as a cancelled
+/// one does: a caller that carries on after the failure would otherwise report the run's cost without it.
+#[tokio::test(start_paused = true)]
+async fn test_a_failed_call_keeps_the_estimate_of_a_request_that_timed_out() {
+    let mut steps = vec![common::Step::Fail(TransportError::Timeout("ReadTimeout"))];
+    steps.extend((0..5).map(|_| text(503, "overloaded")));
+    let script = Script::new(steps);
+    let paid = Paid::default();
+    let client = direct(script.http());
+    let error = jev_spend(Lines::Paid(paid.clone()), None, client.evaluate(&json!("page"), &one())).await.unwrap_err();
+    assert!(matches!(error, DecisionError::RetriesExhausted(_)), "{error}");
+    let costs = paid.lines();
+    assert_eq!(costs.len(), 1, "{costs:?}");
+    assert_eq!((costs[0].component, costs[0].basis), (CostComponent::Jev, CostBasis::Estimated));
+    assert!(costs[0].input_tokens > 0);
+}
+
 #[tokio::test(start_paused = true)]
 async fn test_a_request_that_can_never_be_sent_is_not_an_outage() {
     // Retrying it would fail the same way every time, and an eval would re-run the task forever.
     let script = Script::new([common::Step::Fail(TransportError::Fatal("UnsupportedProtocol"))]);
-    let error =
-        SystemOneClient::direct("secret-key", script.http()).evaluate(&json!("page"), &one()).await.unwrap_err();
+    let error = SystemOneClient::new("secret-key", script.http(), TYPESAFE_URL, JEV_MODEL)
+        .typesafe()
+        .evaluate(&json!("page"), &one())
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("could not be sent"), "{error}");
     assert_eq!(script.requests().len(), 1);
     assert!(!error.is_unavailable());
@@ -259,17 +302,42 @@ async fn test_cancelled_dispatched_request_retains_estimated_input_cost() {
     let page = json!("page");
     let questions = one();
     tokio::select! {
-        _ = jev_spend(Lines::Paid(paid.clone()), None, client.evaluate(&page, &questions)) => panic!("cancelled"),
+        _ = jev_spend(Lines::Paid(paid.clone()), None, jev_purpose(JevPurpose::Read, client.evaluate(&page, &questions))) => panic!("cancelled"),
         _ = sent.notified() => {}
     }
     let costs = paid.lines();
     assert_eq!(costs.len(), 1);
-    // Priced as Python prices it: `json.dumps(body)` characters over three per token.
+    assert_eq!(costs[0].decision_purpose, Some(JevPurpose::Read));
+    // Text without usage retains the request-length estimate, independent of the image path.
     let body: Value = serde_json::from_slice(&bodies.lock().unwrap()[0]).unwrap();
     let tokens = (dumps(&body).len() as f64 / 3.0).ceil() as i64;
     assert_eq!((costs[0].component, costs[0].basis), (CostComponent::Jev, CostBasis::Estimated));
     assert_eq!(costs[0].input_tokens, tokens);
     assert_eq!(costs[0].dollars, Some(tokens as f64 * JEV_DOLLARS_PER_INPUT_TOKEN));
+}
+
+#[tokio::test(start_paused = true)]
+async fn text_cancellation_preserves_trace_tokens_without_a_price() {
+    for unpriced in [false, true] {
+        let script = Script::new([common::Step::Cancel]);
+        let trace = Trace::collecting();
+        let mut client = direct(script.traced(&trace));
+        if unpriced {
+            client = client.unpriced();
+        }
+        let page = json!("page");
+        let questions = one();
+        tokio::select! {
+            _ = client.evaluate(&page, &questions) => panic!("cancelled"),
+            _ = script.cancel.notified() => {}
+        }
+        let body = script.bodies().remove(0);
+        let tokens = (dumps(&body).len() as f64 / 3.0).ceil() as i64;
+        let receipts = events(&trace, "cancelled_request_cost");
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0]["estimated_input_tokens"], tokens);
+        assert!(receipts[0].get("cost").is_none());
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -303,12 +371,88 @@ async fn test_split_cancellation_retains_answered_and_cancelled_costs_once() {
     let page = json!("page");
     let questions = IndexMap::from([("first".to_string(), noul("First")), ("second".to_string(), noul("Second"))]);
     tokio::select! {
-        _ = jev_spend(Lines::Paid(paid.clone()), None, client.evaluate(&page, &questions)) => panic!("cancelled"),
+        _ = jev_spend(Lines::Paid(paid.clone()), None, jev_purpose(JevPurpose::Read, client.evaluate(&page, &questions))) => panic!("cancelled"),
         _ = sent.notified() => {}
     }
     let costs = paid.lines();
     assert_eq!(costs.len(), 2);
+    assert!(costs.iter().all(|cost| cost.decision_purpose == Some(JevPurpose::Read)));
     assert_eq!((costs[0].basis, costs[0].dollars), (CostBasis::Metered, Some(0.01)));
     assert_eq!(costs[1].basis, CostBasis::Estimated);
     assert_eq!(costs[1].dollars, Some(costs[1].input_tokens as f64 * JEV_DOLLARS_PER_INPUT_TOKEN));
+}
+
+#[tokio::test]
+async fn image_cancellation_keeps_a_context_bound_without_inventing_tokens() {
+    for (long_context, unpriced) in [(false, false), (true, false), (true, true)] {
+        let script = Script::new([common::Step::Cancel]);
+        let trace = Trace::collecting();
+        let mut client = SystemOneClient::new("key", script.traced(&trace), TYPESAFE_URL, JEV_MODEL).images();
+        if long_context {
+            client = client.long_context();
+        }
+        if unpriced {
+            client = client.unpriced();
+        }
+        let paid = Paid::default();
+        let images = Images::from([("viewport".into(), vec![0; 300_000])]);
+        let page = json!({"screenshot": "viewport"});
+        let questions = one();
+        tokio::select! {
+            _ = jev_spend(Lines::Paid(paid.clone()), None, jev_purpose(JevPurpose::Locate, client.evaluate_images(&page, &questions, &images))) => panic!("cancelled"),
+            _ = script.cancel.notified() => {}
+        }
+        let costs = paid.lines();
+        assert_eq!(costs.len(), 1);
+        assert_eq!(costs[0].decision_purpose, Some(JevPurpose::Locate));
+        assert_eq!(events(&trace, "cancelled_request_cost")[0]["decision_purpose"], "locate");
+        assert_eq!(events(&trace, "call")[0]["decision_purpose"], "locate");
+        assert_eq!(costs[0].input_tokens, 0);
+        if unpriced {
+            assert_eq!(costs[0].basis, CostBasis::Unknown);
+            assert_eq!(costs[0].dollars, None);
+        } else {
+            assert_eq!(costs[0].basis, CostBasis::Bounded);
+            let context = if long_context { 262_144 } else { 64_000 };
+            assert_eq!(costs[0].dollars, Some(context as f64 * JEV_DOLLARS_PER_INPUT_TOKEN));
+        }
+    }
+}
+
+#[tokio::test]
+async fn image_budget_admission_uses_the_context_bound_before_dispatch() {
+    for bytes in [1, 300_000] {
+        let script = Script::new([common::Step::Reply(answered())]);
+        let client = direct(script.http()).images();
+        let images = Images::from([("viewport".into(), vec![0; bytes])]);
+        let ledger = Arc::new(Ledger::new(Limits { max_dollars: Some(0.001), ..Limits::default() }));
+        let result = jev_spend(
+            Lines::Ledger(ledger.clone()),
+            Some(ledger.clone()),
+            client.evaluate_images(&json!({"screenshot":"viewport"}), &one(), &images),
+        )
+        .await;
+        assert!(matches!(result, Err(DecisionError::Budget(_))));
+        assert!(script.requests().is_empty());
+        assert!(ledger.state().lines.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn image_budget_does_not_charge_transport_encoding_as_text() {
+    let script = Script::new([common::Step::Reply(answered())]);
+    let client = SystemOneClient::new("key", script.http(), TYPESAFE_URL, JEV_MODEL).images();
+    let images = Images::from([("viewport".into(), vec![0; 300_000])]);
+    let ledger = Arc::new(Ledger::new(Limits { max_dollars: Some(0.003), ..Limits::default() }));
+    let result = jev_spend(
+        Lines::Ledger(ledger.clone()),
+        Some(ledger),
+        client.evaluate_images(&json!({"screenshot":"viewport"}), &one(), &images),
+    )
+    .await
+    .unwrap();
+    assert_eq!(script.requests().len(), 1);
+    assert_eq!(result.cost.input_tokens, 100);
+    assert_eq!(result.cost.basis, CostBasis::Estimated);
+    assert_eq!(result.cost.dollars, Some(100.0 * JEV_DOLLARS_PER_INPUT_TOKEN));
 }

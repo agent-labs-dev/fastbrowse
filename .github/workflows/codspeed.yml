@@ -29,7 +29,7 @@ jobs:
       - run: uv sync --locked --group bench
       # `uv sync` builds the Rust core with the dev profile `[tool.uv]` sets, minutes faster and about half the
       # speed; the benchmarks time the release build a wheel ships. rustup reads rust-toolchain.toml.
-      - run: uvx maturin==1.15.0 develop --release --uv
+      - run: uvx maturin==1.16.0 develop --release --uv
         env: {VIRTUAL_ENV: "${{ github.workspace }}/.venv"}
       # The runner image's Node is 18, and Playwright needs 20 or newer.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -37,7 +37,7 @@ jobs:
       # Macro runners are arm64 Linux, which Chrome has no build for; Playwright publishes a Chromium for it.
       - name: Install Chromium
         run: |
-          npx --yes playwright@1.63.0 install --with-deps chromium
+          npx --yes playwright@1.64.1 install --with-deps chromium
           chrome="$(find "$HOME/.cache/ms-playwright" -type f -name chrome -path '*chromium-*' | head -n 1)"
           test -x "$chrome"
           echo "FASTBROWSE_CHROME=$chrome" >> "$GITHUB_ENV"
@@ -45,7 +45,7 @@ jobs:
           if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
-      - uses: CodSpeedHQ/action@78102a468f96d8e0ccb92d0ec49425753fc42062 # v5.6.0
+      - uses: CodSpeedHQ/action@af75f77f17a054769abefaa42fe8dc2975469b5f # v5.6.3
         with:
           mode: walltime
           run: uv run --no-sync pytest benchmarks --codspeed -q

@@ -41,10 +41,13 @@ public sealed record StartOptions
 /// </summary>
 public sealed record BrowserOptions
 {
-    /// <summary>Local Chrome instead of a Browser Use Cloud browser.</summary>
+    /// <summary>A browser on this machine instead of a Browser Use Cloud browser: your own Chrome through the fastbrowse extension, unless <see cref="Launch"/> asks for a separate one.</summary>
     public bool Local { get; init; }
 
-    /// <summary>Which local Chrome, and how. A headed window or a kept profile implies <see cref="Local"/>.</summary>
+    /// <summary>Start a separate local Chrome instead of driving your own through the extension. Implies <see cref="Local"/>.</summary>
+    public bool Launch { get; init; }
+
+    /// <summary>Which local Chrome, and how. A headed window or a kept profile implies <see cref="Launch"/>.</summary>
     public LocalChrome? Chrome { get; init; }
 
     /// <summary>The Browser Use Cloud profile a cloud browser starts with.</summary>
@@ -71,8 +74,17 @@ public sealed record BrowserOptions
     /// <summary>The page's width and height in CSS pixels.</summary>
     public (int Width, int Height)? Viewport { get; init; }
 
-    /// <summary>Let a cloud browser's window be resized.</summary>
-    public bool CloudAllowResizing { get; init; }
+    /// <summary>Up to three IDs of ready extensions on the Browser Use Cloud account, loaded into a cloud browser.</summary>
+    public IReadOnlyList<string>? CloudExtensions { get; init; }
+
+    /// <summary>How long a cloud browser may live, in minutes: 15 when null, and the service allows up to 240.</summary>
+    public int? CloudTimeoutMinutes { get; init; }
+
+    /// <summary>Drive the user's own Chrome through the fastbrowse extension, in a tab group of the run's own.</summary>
+    public bool Extension { get; init; }
+
+    /// <summary>The label of the connected browser to use when more than one has the extension.</summary>
+    public string? ExtensionBrowser { get; init; }
 }
 
 /// <summary>A file a run may upload.</summary>
@@ -112,8 +124,30 @@ public sealed record RunOptions
     /// <summary>Where to write a video of the run. The server needs ffmpeg for it.</summary>
     public string? Record { get; init; }
 
+    /// <summary>Replay a recipe file and heal unmatched steps.</summary>
+    public string? Recipe { get; init; }
+
+    /// <summary>Save completed steps to a recipe file.</summary>
+    public string? SaveRecipe { get; init; }
+
     /// <summary>The agent's cursor over visible local Chrome on Linux X11 with the Cua Driver: unset draws it wherever it can be placed, true also brings the window to the front for it, false turns it off.</summary>
     public bool? Cursor { get; init; }
+
+    /// <summary>
+    /// The only <c>http(s)://host[:port]</c> origins whose documents the run may open, read and control, each exact. A
+    /// navigation, redirect, frame or popup elsewhere is refused before it is sent. It scopes documents, not the
+    /// network, and a scoped run sends no frames and cannot <see cref="Record"/>. Null is unscoped.
+    /// </summary>
+    public IReadOnlyList<string>? AllowedOrigins { get; init; }
+
+    /// <summary>Read every page over HTTP and start no browser, for a task that only reads.</summary>
+    public bool Fetch { get; init; }
+
+    /// <summary>
+    /// Start a browser from the first step, rather than reading over HTTP until the task needs one. It is the request's
+    /// <c>browser</c> field; <see cref="Browser"/> says which browser that is.
+    /// </summary>
+    public bool BrowserFirst { get; init; }
 
     /// <summary>The secrets the run may type, by name and origin. The values stay with <see cref="ResolveSecret"/>.</summary>
     public IReadOnlyList<SecretRef>? Secrets { get; init; }

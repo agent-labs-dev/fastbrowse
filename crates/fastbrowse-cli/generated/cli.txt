@@ -1,15 +1,19 @@
 usage: fastbrowse [-h] [--version] [--start START] [--context CONTEXT]
-                  [--cloud | --local] [--headed] [--profile PROFILE]
-                  [--cloud-profile ID] [--cdp-url URL] [--cdp-port PORT]
-                  [--attach] [--target-match PATTERN] [--foreground]
-                  [--proxy-country CC] [--authorize]
+                  [--cloud | --local] [--headed]
+                  [--profile PROFILE] [--cloud-profile ID] [--cdp-url URL]
+                  [--cdp-port PORT] [--attach] [--target-match PATTERN]
+                  [--foreground] [--proxy-country CC]
+                  [--viewport WIDTHxHEIGHT] [--authorize]
                   [--secret NAME=ENV_VAR[@ORIGIN]] [--bitwarden ITEM]
-                  [--max-steps MAX_STEPS] [--max-dollars MAX_DOLLARS]
-                  [--downloads DOWNLOADS] [--json] [--record FILE] [--fetch]
-                  [--fetch-first] [--trace FILE] [--cursor | --no-cursor]
+                  [--input NAME=VALUE] [--file PATH] [--max-steps MAX_STEPS]
+                  [--max-dollars MAX_DOLLARS] [--downloads DOWNLOADS] [--json]
+                  [--record FILE] [--recipe FILE] [--save-recipe FILE]
+                  [--fetch] [--browser] [--extension]
+                  [--extension-browser LABEL] [--desktop APP] [--trace FILE]
+                  [--cursor | --no-cursor]
                   task
 
-Run one browser task.
+Run one browser task in your own Chrome through the fastbrowse extension.
 
 positional arguments:
   task
@@ -21,18 +25,14 @@ options:
                         the task if omitted
   --context CONTEXT     background the run may use but never treats as part of
                         the task, such as where the request came from
-  --cloud               use cloud Chrome, overriding local environment
-                        defaults
-  --local               use local Chrome instead of a Browser Use Cloud
-                        browser
-  --headed              show the local Chrome window (implies --local)
-  --profile PROFILE     Chrome profile directory kept between runs (implies
-                        --local)
+  --cloud               use Browser Use Cloud instead of the extension
+  --local               use your own Chrome through the extension (the default)
+  --headed              unsupported: local CLI browsing requires the extension
+  --profile PROFILE     unsupported: use a profile with the extension installed
   --cloud-profile ID    a Browser Use Cloud profile to run signed in as
-  --cdp-url URL         attach to a browser already running at this CDP
-                        websocket URL, instead of starting one
-  --cdp-port PORT       attach to a browser or Electron app on this DevTools
-                        port (http://127.0.0.1:<port>/json/version)
+                        (requires --cloud)
+  --cdp-url URL         unsupported in the CLI: use the SDK for CDP connections
+  --cdp-port PORT       unsupported in the CLI: use the SDK for CDP connections
   --attach              attach to an existing page/window without creating a
                         new tab or closing it on exit
   --target-match PATTERN
@@ -42,13 +42,23 @@ options:
                         front, to watch it; otherwise a visible window stays
                         in the background
   --proxy-country CC    country the cloud browser browses from, as Browser
-                        Use's two-letter code, e.g. uk (default: us)
+                        Use's two-letter code, e.g. uk (default: us;
+                        requires --cloud)
+  --viewport WIDTHxHEIGHT
+                        screen size requested from cloud Chrome (requires
+                        --cloud); this does not
+                        emulate mobile, touch, device scale, or user agent
   --authorize           allow irreversible actions without confirmation
   --secret NAME=ENV_VAR[@ORIGIN]
                         secret from an environment variable, scoped to ORIGIN
                         or the --start origin (repeatable)
   --bitwarden ITEM      type this vault login's username, password and
-                        authenticator code (unlocked bw CLI)
+                        authenticator code (rbw, or an unlocked bw CLI)
+  --input NAME=VALUE    a named value the task can refer to, typed into a field
+                        by name, so a recipe types the next run's value
+                        (repeatable)
+  --file PATH           a local file the run may attach to a file input on the
+                        page (repeatable)
   --max-steps MAX_STEPS
                         optional step limit (default: no step limit)
   --max-dollars MAX_DOLLARS
@@ -57,15 +67,26 @@ options:
   --downloads DOWNLOADS
                         directory for downloaded files
   --json                print the full result as JSON
+  --recipe FILE         replay a saved run: Jev is offered each saved action
+                        alone where its page and control match
+  --save-recipe FILE    save the steps of a completed run as recipe JSON
   --record FILE         save a video of the run, ending on its answer (needs
                         ffmpeg)
-  --fetch               read pages over HTTP with no browser: for a task that
-                        only has to read one (no clicking, forms or
-                        screenshots; a step that needs the browser ends the
-                        run blocked)
-  --fetch-first         read over HTTP first and start a browser only if the
-                        run needs one: a step that clicks, fills or looks at
-                        the page, or a page the static read cannot see
+  --fetch               never start a browser: a step that needs one ends the
+                        run blocked
+  --browser             start a browser from the first step, rather than reading
+                        over HTTP until the run needs one
+  --extension           run in your own Chrome (the default), signed in, through
+                        the fastbrowse extension (see: fastbrowse extension
+                        install)
+  --extension-browser LABEL
+                        which browser to use when the extension is connected
+                        in more than one, by the label its popup shows
+                        (implies --extension)
+  --desktop APP         start the native desktop app APP (a command line) and
+                        drive it instead of a browser, through deskpilot on
+                        Hyprland, without moving your pointer or focus; it
+                        closes when the run ends
   --trace FILE          append the run's trace to FILE as JSON lines, or - for
                         stderr: every model call with its purpose and timing,
                         which reader answered each read and why, and every
@@ -75,6 +96,9 @@ options:
   --no-cursor           do not draw the agent's cursor (by default it is
                         drawn over a visible Chrome with the Cua Driver on
                         Linux X11, and skipped where unsupported)
+
+Update: fastbrowse self-update names how this copy was installed and the
+command that upgrades it.
 
 Exit codes: 2 usage error; 0 complete; 1 error; 3 needs_confirmation; 4
 needs_login; 5 needs_input; 6 blocked; 7 budget_exceeded; 8 unavailable; 9

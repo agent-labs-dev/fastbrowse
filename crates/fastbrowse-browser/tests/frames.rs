@@ -173,7 +173,6 @@ async fn test_live_frames_follow_tabs_ack_after_delivery_and_keep_only_the_lates
     fake.stopped().await;
 
     assert_eq!(testing::background_len(&session), 0);
-    // Asserted last, so the rest of the test still checks what it can while the library bug below stands.
     let scheduled = testing::frame_scheduled(&session);
     {
         let script = fake.script();
@@ -221,7 +220,7 @@ async fn test_live_frames_follow_tabs_ack_after_delivery_and_keep_only_the_lates
 }
 
 /// Python also checks every failure is logged as a warning that quotes nothing private; the Rust warnings go to
-/// stderr only when `FASTBROWSE_LOG` is set, and a test cannot read its own stderr. Python's handler that raises has
+/// stderr, and a test cannot read its own stderr. Python's handler that raises has
 /// no case here: core's `FrameHandler` returns nothing, so it cannot fail.
 #[tokio::test]
 async fn test_live_view_failures_are_warnings_and_leave_the_session_usable() {
@@ -250,6 +249,34 @@ async fn test_live_view_failures_are_warnings_and_leave_the_session_usable() {
         assert!(calls.iter().any(|m| m == "Page.screencastFrameAck"), "{failure}");
         assert!(calls.iter().any(|m| m == "Target.activateTarget"), "{failure}");
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_stalled_frame_ack_does_not_block_delivery_or_tab_input() {
+    let fake = FakeChrome::start().await;
+    fake.block("Page.screencastFrameAck");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let on_frame: FrameHandler = Arc::new({
+        let calls = calls.clone();
+        move |_frame| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {})
+        }
+    });
+    let options = SessionOptions { on_frame: Some(on_frame), ..Default::default() };
+    let session = fake.session_with(fake.connection(), options).await;
+    settle(&session).await;
+    emit_frame(&session, 1, b"jpeg", "session");
+    fake.sent("Page.screencastFrameAck").await;
+    emit_frame(&session, 2, b"next jpeg", "session");
+    testing::settle_delivery(&session).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    session.switch_tab("owned").await.unwrap();
+    settle(&session).await;
+    assert_eq!(testing::background_len(&session), 0);
+    let client = session.client().unwrap();
+    session.close().await.unwrap();
+    assert_eq!(client.pending(), 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -421,9 +448,10 @@ async fn test_close_does_not_wait_on_a_frame_callback_that_ignores_cancellation(
 
 // -- test_command_deadline.py: a live browser can leave one page command unanswered indefinitely --------------------
 //
-// These run on the real `CDP_REPLY_SECONDS` (60s), `CDP_ALIVE_SECONDS` (10s) and `CDP_COMMAND_SECONDS` (120s), which
-// are constants a test cannot shorten as Python's monkeypatch does, so each takes minutes and is ignored by default.
-// Each Python scenario is kept, its times scaled to these.
+// These run on the real `CDP_REPLY_SECONDS` (60s), `CDP_PAGE_SECONDS` (10s), `CDP_ALIVE_SECONDS` (10s) and
+// `CDP_COMMAND_SECONDS` (120s), which are constants a test cannot shorten as Python's monkeypatch does, so each takes
+// half a minute or more and is ignored by default. Each Python scenario is kept, its times scaled to these. A command
+// to a page also asks the page whether it answers, and the fake holds that `Runtime.evaluate` with the command.
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "slow: waits out the real CDP_COMMAND_SECONDS, about 120s"]
@@ -449,7 +477,7 @@ async fn test_unanswered_command_from_live_browser_has_a_deadline() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "slow: waits out the real CDP_COMMAND_SECONDS, about 120s"]
+#[ignore = "slow: waits out the real CDP_PAGE_SECONDS and CDP_ALIVE_SECONDS, about 20s"]
 async fn test_repeated_command_deadlines_stop_the_tab_instead_of_recurring() {
     let fake = FakeChrome::start().await;
     let session = fake.session(fake.connection()).await;
@@ -478,7 +506,7 @@ async fn test_repeated_command_deadlines_stop_the_tab_instead_of_recurring() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "slow: waits out the real CDP_COMMAND_SECONDS and CDP_ALIVE_SECONDS, about 130s"]
+#[ignore = "slow: waits out the real CDP_PAGE_SECONDS and two CDP_ALIVE_SECONDS, about 30s"]
 async fn test_a_browser_gone_by_the_command_deadline_is_an_outage() {
     let fake = FakeChrome::start().await;
     let session = fake.session(fake.connection()).await;
@@ -486,8 +514,8 @@ async fn test_a_browser_gone_by_the_command_deadline_is_an_outage() {
     let client = session.client().unwrap();
     let sending = client.send("Runtime.evaluate", json!({"expression": "1"}), Some("session"));
     let gone = async {
-        // The probe after the first wait answers; the browser goes before the deadline ends the second.
-        tokio::time::sleep(Duration::from_secs(65)).await;
+        // The browser answers the probe after the first wait, and goes while the page is asked whether it answers.
+        tokio::time::sleep(Duration::from_secs(15)).await;
         fake.block("Browser.getVersion");
     };
     let (raised, ()) = tokio::join!(sending, gone);
@@ -499,15 +527,15 @@ async fn test_a_browser_gone_by_the_command_deadline_is_an_outage() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "slow: waits out the 120s command deadline"]
+#[ignore = "slow: waits out the real CDP_PAGE_SECONDS and two CDP_ALIVE_SECONDS, about 30s"]
 async fn test_a_reply_that_lands_during_the_deadline_probe_is_kept() {
     let fake = FakeChrome::start().await;
     let session = fake.session(fake.connection()).await;
-    // The probe at the deadline waits on a browser slow to answer, and the page's reply lands meanwhile. Python's
-    // probe at the first wait is cut short by the deadline; the Rust probe is shorter than the wait, so it answers.
+    // The page leaves the probe unanswered, so the command is past its deadline, and the browser probe that follows
+    // waits on a browser slow to answer; the page's reply lands meanwhile. The first browser probe answers.
     fake.queue("Browser.getVersion", [json!({})]);
     fake.block("Browser.getVersion");
-    fake.delay("Runtime.evaluate", 125.0);
+    fake.delay("Runtime.evaluate", 22.0);
     let reply = session.client().unwrap().send("Runtime.evaluate", json!({"expression": "1"}), Some("session")).await;
     session.close().await.unwrap();
     assert_eq!(reply.unwrap(), json!({"result": {"value": "loading"}}));
@@ -612,6 +640,9 @@ mod cursor {
     /// A `cua-driver` that completes the handshake and then fails every tool call, as Python's mock driver does.
     const FAILING_DRIVER: &str = r#"#!/usr/bin/env python3
 import json, sys
+if len(sys.argv) > 1 and sys.argv[1] == "cursor-theme":
+    print(json.dumps(["fastbrowse.focus.v1"]))
+    sys.exit(0)
 tools = ["start_session", "end_session", "list_windows", "move_cursor", "set_agent_cursor_enabled"]
 started = False
 for line in sys.stdin:
@@ -622,7 +653,7 @@ for line in sys.stdin:
     if method == "initialize":
         reply = {"result": {"capabilities": {}}}
     elif method == "tools/list":
-        schema = {"properties": {"scope": {"enum": ["window", "desktop"]}}}
+        schema = {"properties": {"scope": {"enum": ["window", "desktop"]}, "cursor_theme": {"type": "object"}}}
         reply = {"result": {"tools": [{"name": name, "inputSchema": schema} for name in tools]}}
     elif message["params"]["name"] == "start_session" and not started:
         started = True
@@ -686,4 +717,28 @@ for line in sys.stdin:
         assert!(cursor_geometry(&page, "session", "document").await.is_some());
         session.close().await.unwrap();
     }
+}
+
+/// A server that never answers leaves Chrome loading with no further event, so a load is waited on for as long as a
+/// navigation is given one, from its own start, and no longer.
+#[tokio::test]
+async fn a_load_that_never_ends_stops_being_waited_on_once_it_has_had_a_navigations_time() {
+    let fake = FakeChrome::start().await;
+    let session = fake.session_with(fake.connection(), SessionOptions::default()).await;
+    settle(&session).await;
+    assert_eq!(session.loading_left(), None);
+    tokio::time::pause();
+    testing::dispatch(&session, "Page.frameStartedLoading", json!({"frameId": "top"}), Some("session"));
+    assert_eq!(session.loading_left(), Some(225.0));
+    tokio::time::advance(Duration::from_secs(200)).await;
+    // The same load reported again is no new time to wait.
+    testing::dispatch(&session, "Page.frameStartedLoading", json!({"frameId": "top"}), Some("session"));
+    assert_eq!(session.loading_left(), Some(25.0));
+    tokio::time::advance(Duration::from_secs(25)).await;
+    assert_eq!(session.loading_left(), None);
+    assert!(session.navigating(), "the load is still in flight; only the wait on it ends");
+    // A load that lands ends; the next one, as a challenge page that keeps navigating starts, has its own time.
+    testing::dispatch(&session, "Page.frameStoppedLoading", json!({"frameId": "top"}), Some("session"));
+    testing::dispatch(&session, "Page.frameStartedLoading", json!({"frameId": "top"}), Some("session"));
+    assert_eq!(session.loading_left(), Some(225.0));
 }

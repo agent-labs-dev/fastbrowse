@@ -97,6 +97,11 @@ pub struct HostJev {
 }
 
 impl DecisionClient for HostJev {
+    /// The host protocol names no model, so a host client is asked as Jev, at Jev's limits and thresholds.
+    fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+        fastbrowse_core::decision::DecisionProfile::jev()
+    }
+
     fn evaluate<'a>(
         &'a self,
         state: &'a Value,
@@ -143,7 +148,6 @@ pub struct LlmCall {
     pub messages: String,
     pub name: String,
     pub schema: String,
-    pub max_output_tokens: i64,
     pub context: Context,
 }
 
@@ -191,8 +195,7 @@ impl Context {
 /// What answers a [`Context`] and closes it when the call ends. A call dropped while its client had begun spending
 /// (it reserved, recorded or validated) keeps answering until the wrapper says the client's cleanup is done: that is
 /// where a cancelled request records the charge it may have run up, and the ledger is only borrowed until this
-/// returns. Python's `run_task` joins a cancelled client the same way, with no time limit. A client that had asked
-/// nothing yet has nothing to record.
+/// returns. A client that had asked nothing yet has nothing to record.
 struct Answering<'a> {
     slot: Arc<Mutex<Option<UnboundedSender<Ask>>>>,
     asked: UnboundedReceiver<Ask>,
@@ -292,7 +295,6 @@ impl LLMClient for HostLlm {
         purpose: LLMPurpose,
         messages: &'a [Message],
         schema: &'a dyn ResponseSchema,
-        max_output_tokens: i64,
         ledger: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<Value>, LLMError>> {
         Box::pin(async move {
@@ -306,7 +308,6 @@ impl LLMClient for HostLlm {
                 messages: messages_json(messages),
                 name: schema.name(),
                 schema: schema.json_schema().to_string(),
-                max_output_tokens,
                 context: Context { asks: slot, ledger: ledger.is_some() },
             });
             tokio::pin!(call);

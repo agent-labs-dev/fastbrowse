@@ -1,6 +1,6 @@
 [project]
 name = "fastbrowse"
-version = "0.9.1"
+version = "0.11.0"
 description = "Browser automation with cited answers, structured output and code-controlled credentials and authorization."
 readme = "README.md"
 license = "MIT"
@@ -9,8 +9,9 @@ authors = [{ name = "Agent Labs" }]
 requires-python = ">=3.13"
 classifiers = ["Development Status :: 4 - Beta"]
 dependencies = [
-    "httpx[http2]>=0.28,<1",
-    "pydantic>=2.11,<3",
+    "httpx[http2]>=0.28.1,<1",
+    "packaging>=24,<27",  # the bench walks distribution metadata: fastbrowse/evals/bench.py (#764)
+    "pydantic>=2.14.2,<3",
 ]
 
 [project.urls]
@@ -19,14 +20,17 @@ Repository = "https://github.com/agent-labs-dev/fastbrowse"
 Issues = "https://github.com/agent-labs-dev/fastbrowse/issues"
 
 [project.optional-dependencies]
-eval-data = ["pyyaml>=6,<7"]
+eval-data = ["pyyaml>=6.0.3,<7"]
+evals = ["parallax-evals==2.0.0.dev22"]
 
 [project.scripts]
 fastbrowse = "fastbrowse.commands:fastbrowse"
 fastbrowse-mcp = "fastbrowse.commands:fastbrowse_mcp"
 
 [build-system]
-requires = ["maturin>=1.9,<2"]
+# The oldest maturin that builds the package, not the one CI pins: the AUR package builds the sdist with Arch's own
+# python-maturin, which refuses a bound above its version.
+requires = ["maturin>=1.15,<2"]
 build-backend = "maturin"
 
 # One abi3 wheel per platform: the Python package with the Rust core beside it as `fastbrowse._native`
@@ -54,23 +58,22 @@ cache-keys = [
 
 [dependency-groups]
 dev = [
-    "pytest>=8.4,<10",
-    "pytest-asyncio>=1,<2",
-    "ruff>=0.14,<1",
-    "vale==3.25.1.0",
-    "pytest-timeout>=2.3,<3",
-    "ty==0.0.92",          # preview: pinned, and moved with the pre-commit hook
-    "pre-commit>=4.6.2",
+    "parallax-evals==2.0.0.dev22",
+    "pytest>=9.2,<10",
+    "pytest-asyncio>=1.4.1,<2",
+    "ruff>=0.17.3,<1",
+    "vale==3.26.0.1",
+    "pytest-timeout>=2.4,<3",
+    "ty==0.0.99",          # preview: pinned, and moved with the pre-commit hook
+    "pre-commit>=4.7.0",
     "actionlint-py==1.7.12.25",
 ]
 # snapshot.js benchmarks (`benchmarks/`), which CodSpeed runs when the script changes.
-bench = ["pytest-codspeed>=5,<6"]
+bench = ["pytest-codspeed>=5.0.4,<6"]
 
 [tool.ruff]
 line-length = 120
 target-version = "py313"
-# Keep vendored helpers byte-for-byte identical to upstream.
-extend-exclude = [".sloppatrol/gate.py", ".sloppatrol/agents.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF", "ASYNC"]
@@ -82,11 +85,16 @@ pythonpath = ["."]
 asyncio_mode = "auto"
 # A hung browser call otherwise holds CI for its full hour with no output; this fails the test and dumps every stack.
 timeout = 120
+# The cassette replay runs in its own CI job, which installs Chrome, so the gate's plain run leaves it out.
+addopts = "-m 'not cassette_replay'"
+markers = [
+    "cassette_replay: replays every bench cassette at zero latency (the replay CI job)",
+]
 
 [tool.ty.src]
-# The package and its tests, which is the scope the checker has always had. `scripts/` runs jev-ultrafast in its own environment
-# and imports modules that are not installed here, which is the point of it.
 include = ["src", "tests", "benchmarks"]
 
 [tool.ty.environment]
 python-version = "3.13"
+# The release gate and its tests reach the eval plugin, which lives in its own project under evals/.
+extra-paths = ["evals/src"]

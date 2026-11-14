@@ -12,6 +12,10 @@ bench-baseline out="artifacts/bench/baseline" agent=".venv/bin/fastbrowse serve 
     uv run python -m fastbrowse.evals.bench replay --agent {{quote(agent)}} --latency recorded --out {{out}}/recorded.json
     uv run python -m fastbrowse.evals.bench report {{out}}/zero-*.json {{out}}/recorded.json --footprint --markdown {{out}}/report.md --json {{out}}/summary.json
 
+# Report how Jev's recorded choices depend on option order; --yes-spend --max-dollars N asks them again reversed.
+jev-order-probe *args:
+    uv run python -m fastbrowse.evals.order_probe {{args}}
+
 # Validate and publish rows under their recorded release, then regenerate all outputs.
 evals-publish rows:
     uv run python -m fastbrowse.evals.versions --publish auto {{quote(rows)}}
@@ -35,3 +39,8 @@ rust:
     cp target/release/libfastbrowse_node.$(test "$(uname)" = Darwin && echo dylib || echo so) crates/fastbrowse-node/fastbrowse.node
     node --test crates/fastbrowse-node/test/core.test.ts
     FASTBROWSE_TEST_ADDON="$PWD/crates/fastbrowse-node/fastbrowse.node" npm run check:sdk
+
+# The Store package omits the development key while checking that it identifies the existing item.
+# Bump `version` in the manifest before uploading a revision.
+extension-zip out="dist/fastbrowse-extension.zip":
+    python3 scripts/extension_store.py build --package {{quote(out)}}

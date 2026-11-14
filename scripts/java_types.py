@@ -37,6 +37,11 @@ SKIPPED = {
 }
 RAW = {"JsonValue", "RequestId"}
 BOXED = {"long": "Long", "double": "Double", "boolean": "Boolean"}
+# Each constructor shape a release published, as the protocol keys added since: a new field joins every set here, and
+# the shape before it is added as a set of its own, so no published constructor goes away.
+PUBLISHED_SHAPES = {
+    "RunParams": [{"recipe", "save_recipe", "desktop", "launch"}, {"desktop", "launch"}, {"launch"}],
+}
 
 
 def camel(name: str) -> str:
@@ -104,7 +109,7 @@ class Generator:
         imports = ["com.fasterxml.jackson.annotation.JsonProperty"]
         body = " ".join(java for _, _, java, _ in fields)
         if "JsonNode" in body:
-            imports.append("com.fasterxml.jackson.databind.JsonNode")
+            imports.append("tools.jackson.databind.JsonNode")
         if "List<" in body:
             imports.append("java.util.List")
         if "Map<" in body:
@@ -118,6 +123,14 @@ class Generator:
             out.append(javadoc(doc + ("\n\n" if doc and params else "") + params, ""))
         components = [f'    @JsonProperty("{key}") {java} {field}' for key, field, java, _ in fields]
         out.append(f"public record {name}(\n" + ",\n".join(components) + ") {\n\n")
+        # A record's canonical constructor changes with every field, so each shape a release published keeps a
+        # constructor of its own, passing null for the fields it predates, and callers compiled against it still build.
+        for later in PUBLISHED_SHAPES.get(name, []):
+            kept = [(field, java) for key, field, java, _ in fields if key not in later]
+            signature = ", ".join(f"{java} {field}" for field, java in kept)
+            values = ", ".join("null" if key in later else field for key, field, _, _ in fields)
+            out.append(f"    public {name}({signature}) {{\n")
+            out.append(f"        this({values});\n    }}\n\n")
         out.append(f"    /** A builder for a {{@code {name}}}, every field unset. */\n")
         out.append("    public static Builder builder() {\n        return new Builder();\n    }\n\n")
         out.append(f"    /** Builds a {{@code {name}}}. A field left unset is null, or the zero of a primitive. */\n")

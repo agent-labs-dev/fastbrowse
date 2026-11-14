@@ -1,6 +1,6 @@
 package dev.agentlabs.fastbrowse;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import dev.agentlabs.fastbrowse.protocol.Authorization;
 import dev.agentlabs.fastbrowse.protocol.Limits;
 import dev.agentlabs.fastbrowse.protocol.SecretRef;
@@ -25,6 +25,12 @@ import java.util.function.Predicate;
  * @param record where to write a video of the run; the server needs ffmpeg for it
  * @param cursor the agent's cursor over visible local Chrome on Linux X11 with the Cua Driver: null draws it wherever
  *     it can be placed, true also brings the window to the front for it, false turns it off
+ * @param allowedOrigins the only {@code http(s)://host[:port]} origins whose documents the run may open, read and
+ *     control, each exact; a navigation, redirect, frame or popup elsewhere is refused before it is sent. It scopes
+ *     documents, not the network, and a scoped run sends no frames and cannot record. Null is unscoped
+ * @param fetch read every page over HTTP and start no browser, for a task that only reads
+ * @param browserFirst start a browser from the first step, rather than reading over HTTP until the task needs one;
+ *     the request's {@code browser} field, while {@code browser} here says which browser that is
  * @param secrets the secrets the run may type, by name and origin; the values stay with {@code resolver}
  * @param resolver gives a secret's value when the run is about to type it
  * @param until called with the address the run ended on; false keeps it from {@code complete}
@@ -44,12 +50,39 @@ public record RunOptions(
         JsonNode outputSchema,
         String downloads,
         String record,
+        String recipe,
+        String saveRecipe,
         Boolean cursor,
+        List<String> allowedOrigins,
+        boolean fetch,
+        boolean browserFirst,
         List<SecretRef> secrets,
         SecretResolver resolver,
         Predicate<String> until,
         Consumer<Event> onEvent,
         Consumer<byte[]> onFrame) {
+
+    /** Keeps source compatibility with clients created before recipe recording was added. */
+    public RunOptions(
+            BrowserOptions browser,
+            String start,
+            String context,
+            Map<String, String> inputs,
+            List<Attachment> attachments,
+            Limits limits,
+            Authorization authorization,
+            JsonNode outputSchema,
+            String downloads,
+            String record,
+            Boolean cursor,
+            List<SecretRef> secrets,
+            SecretResolver resolver,
+            Predicate<String> until,
+            Consumer<Event> onEvent,
+            Consumer<byte[]> onFrame) {
+        this(browser, start, context, inputs, attachments, limits, authorization, outputSchema, downloads, record,
+                null, null, cursor, null, false, false, secrets, resolver, until, onEvent, onFrame);
+    }
 
     public static RunOptions defaults() {
         return builder().build();
@@ -70,7 +103,12 @@ public record RunOptions(
         private JsonNode outputSchema;
         private String downloads;
         private String record;
+        private String recipe;
+        private String saveRecipe;
         private Boolean cursor;
+        private List<String> allowedOrigins;
+        private boolean fetch;
+        private boolean browserFirst;
         private List<SecretRef> secrets;
         private SecretResolver resolver;
         private Predicate<String> until;
@@ -129,8 +167,27 @@ public record RunOptions(
             return this;
         }
 
+        public Builder recipe(String recipe) { this.recipe = recipe; return this; }
+
+        public Builder saveRecipe(String saveRecipe) { this.saveRecipe = saveRecipe; return this; }
+
         public Builder cursor(Boolean cursor) {
             this.cursor = cursor;
+            return this;
+        }
+
+        public Builder allowedOrigins(List<String> allowedOrigins) {
+            this.allowedOrigins = List.copyOf(allowedOrigins);
+            return this;
+        }
+
+        public Builder fetch(boolean fetch) {
+            this.fetch = fetch;
+            return this;
+        }
+
+        public Builder browserFirst(boolean browserFirst) {
+            this.browserFirst = browserFirst;
             return this;
         }
 
@@ -157,7 +214,8 @@ public record RunOptions(
 
         public RunOptions build() {
             return new RunOptions(browser, start, context, inputs, attachments, limits, authorization, outputSchema,
-                    downloads, record, cursor, secrets, resolver, until, onEvent, onFrame);
+                    downloads, record, recipe, saveRecipe, cursor, allowedOrigins, fetch, browserFirst, secrets,
+                    resolver, until, onEvent, onFrame);
         }
     }
 }

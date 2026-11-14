@@ -2,6 +2,7 @@
  "controls": [
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -10,6 +11,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 0",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -21,6 +23,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -29,6 +32,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 1",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -40,6 +44,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -48,6 +53,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 2",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -59,6 +65,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -67,6 +74,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 3",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -78,6 +86,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -86,6 +95,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 4",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -97,6 +107,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -105,6 +116,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 5",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -116,6 +128,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -124,6 +137,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 6",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -135,6 +149,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -143,6 +158,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 7",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -154,6 +170,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -162,6 +179,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 8",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -173,6 +191,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -181,6 +200,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 9",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -192,6 +212,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -200,6 +221,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 10",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -211,6 +233,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -219,6 +242,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 11",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -230,6 +254,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -238,6 +263,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 12",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -249,6 +275,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -257,6 +284,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 13",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -268,6 +296,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -276,6 +305,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 14",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -287,6 +317,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -295,6 +326,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 15",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -306,6 +338,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -314,6 +347,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 16",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -325,6 +359,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -333,6 +368,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 17",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -344,6 +380,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -352,6 +389,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 18",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -363,6 +401,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -370,6 +409,7 @@
    "input_name": null,
    "input_type": "submit",
    "label": "Topic 19",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -381,6 +421,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -389,6 +430,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 20",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -400,6 +442,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -408,6 +451,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 21",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -419,6 +463,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -427,6 +472,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 22",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -438,6 +484,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -446,6 +493,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 23",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -457,6 +505,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -465,6 +514,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 24",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -476,6 +526,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -484,6 +535,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 25",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -495,6 +547,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -503,6 +556,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 26",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -514,6 +568,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -522,6 +577,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 27",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -533,6 +589,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -541,6 +598,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 28",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -552,6 +610,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -560,6 +619,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 29",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -571,6 +631,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -579,6 +640,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 30",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -590,6 +652,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -598,6 +661,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 31",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -609,6 +673,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -617,6 +682,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 32",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -628,6 +694,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -636,6 +703,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 33",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -647,6 +715,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -655,6 +724,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 34",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -666,6 +736,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -674,6 +745,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 35",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -685,6 +757,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -693,6 +766,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 36",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -704,6 +778,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -712,6 +787,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 37",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -723,6 +799,7 @@
   },
   {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -731,6 +808,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Topic 38",
+   "max_length": null,
    "offscreen": false,
    "operations": [
     "click"
@@ -741,7 +819,19 @@
    "value": null
   },
   {
+   "frame_origin": "http://fixture",
+   "frame_path": null,
+   "id": 41,
+   "label": "Vertical scroll area: Page",
+   "offscreen": false,
+   "operations": [
+    "scroll"
+   ],
+   "role": "region"
+  },
+  {
    "autocomplete": null,
+   "focused": false,
    "form_id": null,
    "frame_origin": "http://fixture",
    "frame_path": null,
@@ -750,6 +840,7 @@
    "input_name": null,
    "input_type": null,
    "label": "Next",
+   "max_length": null,
    "next_page": true,
    "offscreen": true,
    "operations": [
@@ -1533,6 +1624,28 @@
    null,
    40
   ],
+  "41": [
+   42,
+   null,
+   "Section 0 of the article, between its links Topic 0 Topic 1 Topic 2 Topic 3 Topic 4 Topic 5 Section 1 of the article, between its links Topic 6 Topic 7 Topic 8 Topic 9 Topic 10 Topic 11 Section 2 of the article, between its links Topic 12 Topic 13 Topic 14 Topic 15 Topic 16 Topic 17 Section 3 of the article, between its links Topic 18 Topic 19 Topic 20 Topic 21 Topic 22 Topic 23 Section 4 of the article, between its links Topic 24 Topic 25 Topic 26 Topic 27 Topic 28 Topic 29 Section 5 of the article, between its links Topic 30 Topic 31 Topic 32 Topic 33 Topic 34 Topic 35 Section 6 of the article, between its links Topic 36 Topic 37 Topic 38 Next",
+   null,
+   null,
+   null,
+   null,
+   false,
+   false,
+   null,
+   null,
+   null,
+   null,
+   "",
+   "http://fixture",
+   null,
+   null,
+   null,
+   null,
+   42
+  ],
   "5": [
    5,
    "link",
@@ -1645,6 +1758,8 @@
   ]
  },
  "inaccessible_frames": 0,
+ "media": [],
+ "offscreen_text": "Next",
  "title": "Links",
  "url": "http://fixture/links.html?n=40",
  "viewport_text": "Section 0 of the article, between its links\nTopic 0\nTopic 1\nTopic 2\nTopic 3\nTopic 4\nTopic 5\nSection 1 of the article, between its links\nTopic 6\nTopic 7\nTopic 8\nTopic 9\nTopic 10\nTopic 11\nSection 2 of the article, between its links\nTopic 12\nTopic 13\nTopic 14\nTopic 15\nTopic 16\nTopic 17\nSection 3 of the article, between its links\nTopic 18\nTopic 19\nTopic 20\nTopic 21\nTopic 22\nTopic 23\nSection 4 of the article, between its links\nTopic 24\nTopic 25\nTopic 26\nTopic 27\nTopic 28\nTopic 29\nSection 5 of the article, between its links\nTopic 30\nTopic 31\nTopic 32\nTopic 33\nTopic 34\nTopic 35\nSection 6 of the article, between its links\nTopic 36\nTopic 37\nTopic 38",

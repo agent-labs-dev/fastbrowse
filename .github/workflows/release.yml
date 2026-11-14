@@ -1,10 +1,14 @@
 name: Release
-# One tag publishes one version to PyPI, npm, crates.io, Maven Central, NuGet and the Go module proxy. Nothing is published until the sdist, the five wheels and
+# One tag publishes one version to PyPI, npm and the Go module proxy. Nothing is published until the sdist, the five wheels and
 # the five binaries have all passed, and then in an order that never leaves a package pointing at one that is not there
-# yet: PyPI, then the five platform packages and the SDK, and the crates each after those it depends on.
+# yet: PyPI, then the five platform packages and the SDK.
 #
-# Approval is the decision: a tag publishes once the sdist, the wheels and the binaries are green. The fixture
-# suites run nightly and on demand in evals.yml, and do not gate a release.
+# A tag publishes once the sdist, the wheels and the binaries are green and the evals of the tagged tree pass
+# (`gate`): a dispatched Evals run on that tree, and for a minor release, or a patch whose tag message has the line
+# `Benchmarks: run`, the runs of the campaign `release-<version>`, which together measure every task, compared with
+# the last release's.
+# scripts/release_gate.py says what passing means. The evals run before the tag, so the numbers a release is
+# published with are the ones it was gated on.
 #
 # Run by hand, it stops after the binaries and publishes nothing. That is how a change to the build is tried
 # without spending a version number, which no registry gives back. The one exception is `publish_npm`, which
@@ -50,9 +54,10 @@ jobs:
       # The sdist here; the wheels are one per platform, built and smoke-tested by the binaries workflow.
       - run: uv build --sdist
       # The release notes ARE the changelog entry, so the GitHub release, the repository and the site all
-      # say the same thing about a version. A tag whose version has no entry fails here rather than
-      # publishing notes nobody wrote.
-      - run: uv run python scripts/changelog.py "$(uv version --short)" > "$RUNNER_TEMP/notes.md"
+      # say the same thing about a version. An entry longer than GitHub accepts for a release body is cut at
+      # an item and ends with a link to the whole entry. A tag whose version has no entry fails here rather
+      # than publishing notes nobody wrote.
+      - run: uv run python scripts/changelog.py --release-notes "$(uv version --short)" > "$RUNNER_TEMP/notes.md"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist
@@ -70,8 +75,72 @@ jobs:
 
   # The first job that publishes. It needs every build job, and each later publish job needs the one before it,
   # so a target that fails to build or to pass its smoke test publishes nothing anywhere.
+  # The evals of exactly this tree: they ran before the tag was pushed, and this only finds and checks them.
+  gate:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.13"
+      - run: uv sync --locked --project evals
+      - run: uv run --no-sync --project evals python scripts/release_gate.py "$GITHUB_REF_NAME"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # Package publication waits for the extension version shipped by this tag to reach every Store user.
+  extension-store:
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_npm)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    environment: chrome-web-store
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      # The Store reviews on its own schedule, so this tree's required relay methods can outrun the approved
+      # package: refuse here, before any job publishes, until compat.json records what the Store serves (#1063).
+      - name: The Store package can relay what this release needs
+        run: python3 scripts/extension_store_gate.py
+      - name: Require publisher configuration
+        env:
+          CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
+          CWS_SERVICE_ACCOUNT: ${{ vars.CWS_SERVICE_ACCOUNT }}
+          CWS_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.CWS_WORKLOAD_IDENTITY_PROVIDER }}
+        run: |
+          for name in CWS_PUBLISHER_ID CWS_SERVICE_ACCOUNT CWS_WORKLOAD_IDENTITY_PROVIDER; do
+            if [[ -z "${!name}" ]]; then echo "Missing configuration: $name" >&2; exit 1; fi
+          done
+      - id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.CWS_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.CWS_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore.readonly
+          create_credentials_file: false
+      - name: Verify the published extension
+        env:
+          CWS_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
+        run: |
+          version=$(python3 -c 'import json; print(json.load(open("crates/fastbrowse-browser/extension/manifest.json"))["version"])')
+          python3 scripts/extension_store.py verify --version "$version" > store-receipt.json
+          cat store-receipt.json >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-extension-store-receipt
+          path: store-receipt.json
+          if-no-files-found: error
   github-release:
-    needs: binaries
+    needs: [binaries, gate, extension-store]
     # A run started by hand is a rehearsal and ends here, and with this job every job after it is skipped.
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -102,55 +171,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
 
-  # A minor release (vX.Y.0) measures itself once it is published: the Evals fixture run the campaign binds to, the
-  # live campaign (every group and suite, three repeats) and both official suites (three repeats), all on this tag.
-  # A patch release runs them only when its annotated tag message has the line `Benchmarks: run`. Each is a
-  # dispatch, so a campaign that runs for hours never holds this run open, and the campaign opens the site pull
-  # request when it finishes. PARALLAX_SHA, a repository variable, is the parallax commit they run.
-  benchmarks:
-    needs: [build, github-release]
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    permissions:
-      contents: read
-      actions: write
-    steps:
-      - name: Decide whether this release measures itself
-        id: decide
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.build.outputs.version }}
-        run: |
-          if test "${VERSION##*.}" = 0; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          ref="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq '.object.type + " " + .object.sha')"
-          message=""
-          if test "${ref%% *}" = tag; then
-            message="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/${ref#* }" --jq .message)"
-          fi
-          if grep -qx 'Benchmarks: run' <<< "$message"; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "$GITHUB_REF_NAME is a patch release without 'Benchmarks: run' in its tag message; no benchmarks run"
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Dispatch the evals, the campaign and the official suites
-        if: steps.decide.outputs.run == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.build.outputs.version }}
-          PARALLAX_SHA: ${{ vars.PARALLAX_SHA }}
-        run: |
-          test -n "$PARALLAX_SHA" || { echo "::error::missing repository variable PARALLAX_SHA"; exit 1; }
-          # The release already ran the fixture suites, as a called workflow; a candidate binds to a dispatched run.
-          gh workflow run evals.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
-          gh workflow run benchmark-campaign.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
-            -f campaign_id="release-$VERSION" -f fastbrowse_ref="$GITHUB_REF_NAME" -f parallax_sha="$PARALLAX_SHA" \
-            -f groups=all
-          gh workflow run official-benchmarks.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" \
-            -f fastbrowse_ref="$GITHUB_REF_NAME" -f parallax_sha="$PARALLAX_SHA" -f suites=all
-
   pypi:
     needs: github-release
     runs-on: ubuntu-latest
@@ -159,6 +179,8 @@ jobs:
     permissions:
       id-token: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
@@ -232,7 +254,7 @@ jobs:
   # repeat: PyPI refuses a version twice. The build here is this ref's, so its tarballs are new bytes and no
   # transparency-log entry left by the attempt that stopped can refuse them.
   npm-only:
-    needs: binaries
+    needs: [binaries, extension-store]
     if: github.event_name == 'workflow_dispatch' && inputs.publish_npm
     runs-on: ubuntu-latest
     environment: npm
@@ -274,130 +296,6 @@ jobs:
             --platforms "$RUNNER_TEMP/npm" \
             --sdk packages/sdk
 
-  # The Rust crates, by trusted publishing as npm is: crates.io accepts this job's OIDC identity for each crate and
-  # hands back a token that is revoked when the job ends. A crate depends on the others at this exact version, so
-  # each is published after those it depends on, and the facade `fastbrowse` last.
-  crates:
-    needs: pypi
-    runs-on: ubuntu-latest
-    environment: crates-io
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: {persist-credentials: false}
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          python-version: "3.13"
-          enable-cache: false
-      - run: echo "VERSION=$(uv version --short)" >> "$GITHUB_ENV"
-      - id: auth
-        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
-      # A version already on crates.io is passed over, so a run that stopped partway can be run again: crates.io
-      # refuses a version twice. rustup installs the toolchain rust-toolchain.toml pins on the first cargo call.
-      - name: Publish the crates
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-        run: |
-          for crate in fastbrowse-core fastbrowse-clients fastbrowse-browser fastbrowse-agent fastbrowse-run \
-            fastbrowse-cli fastbrowse; do
-            if curl -sfo /dev/null -A "fastbrowse release (github.com/agent-labs-dev/fastbrowse)" \
-              "https://crates.io/api/v1/crates/$crate/$VERSION"; then
-              echo "$crate $VERSION is already published"
-            else
-              cargo publish -p "$crate" --locked
-            fi
-          done
-
-  # The Java client on Maven Central: `dev.agentlabs:fastbrowse`, and one `natives-<target>` jar per platform holding
-  # that platform's binary from this release's archives. Central takes no OIDC identity, so the account's token and
-  # the signing key are the `maven-central` environment's secrets. Central refuses a version twice, so a run that
-  # stopped after publishing passes over it.
-  maven:
-    needs: [build, github-release]
-    runs-on: ubuntu-latest
-    environment: maven-central
-    permissions: {contents: read}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: {persist-credentials: false}
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: fastbrowse-rust-*
-          path: ${{ runner.temp }}/rust
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
-        with:
-          distribution: temurin
-          java-version: "17"
-          server-id: central
-          server-username: MAVEN_CENTRAL_USERNAME
-          server-password: MAVEN_CENTRAL_PASSWORD
-          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
-          gpg-passphrase: MAVEN_GPG_PASSPHRASE
-      # Each jar's binary sits where the client looks for it on the classpath.
-      - name: Stage the binaries
-        run: |
-          for target in darwin-arm64 darwin-x64 linux-arm64 linux-x64 win32-x64; do
-            into="java/target/natives/$target/dev/agentlabs/fastbrowse/natives/$target"
-            mkdir -p "$into"
-            tar -xzf "$RUNNER_TEMP/rust/fastbrowse-rust-$target/fastbrowse-rust-$target.tar.gz" -C "$into" --strip-components 1
-          done
-      - name: Publish
-        env:
-          VERSION: "${{ needs.build.outputs.version }}"
-          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
-          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
-          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
-        run: |
-          if curl -sfo /dev/null "https://repo1.maven.org/maven2/dev/agentlabs/fastbrowse/$VERSION/fastbrowse-$VERSION.pom"; then
-            echo "dev.agentlabs:fastbrowse $VERSION is already published"
-            exit 0
-          fi
-          # The client's tests need a binary to start; the binaries workflow ran each one already.
-          mvn -B -f java/pom.xml -P release -DskipTests deploy
-
-  # The .NET client on NuGet: `Fastbrowse`, carrying each platform's binary from this release's archives under
-  # runtimes/<rid>/native. Trusted publishing: NuGet trades this job's OIDC identity for a short-lived key, for the
-  # account the `nuget` environment's NUGET_USER variable names. A version already there is passed over.
-  nuget:
-    needs: [build, github-release]
-    runs-on: ubuntu-latest
-    environment: nuget
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: {persist-credentials: false}
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: fastbrowse-rust-*
-          path: ${{ runner.temp }}/rust
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        with: {dotnet-version: "10.0.x"}
-      # The release's targets by the runtime identifiers .NET names them with.
-      - name: Stage the binaries
-        run: |
-          for pair in darwin-arm64:osx-arm64 darwin-x64:osx-x64 linux-arm64:linux-arm64 linux-x64:linux-x64 win32-x64:win-x64; do
-            target="${pair%%:*}"
-            rid="${pair#*:}"
-            mkdir -p "dotnet/runtimes/$rid/native"
-            tar -xzf "$RUNNER_TEMP/rust/fastbrowse-rust-$target/fastbrowse-rust-$target.tar.gz" \
-              -C "dotnet/runtimes/$rid/native" --strip-components 1
-          done
-      - run: dotnet pack dotnet/src/Fastbrowse -c Release -o "$RUNNER_TEMP/nupkg"
-      - id: login
-        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
-        with:
-          user: ${{ vars.NUGET_USER }}
-      - name: Publish
-        env:
-          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
-        run: |
-          dotnet nuget push "$RUNNER_TEMP"/nupkg/Fastbrowse.*.nupkg --api-key "$NUGET_API_KEY" \
-            --source https://api.nuget.org/v3/index.json --skip-duplicate
-
   # The Go module for this release: the tag `go/vX.Y.Z`, on a commit off `main` that pins the release's binary archives
   # by their SHA-256. The module downloads its platform's archive from the GitHub release above and refuses one that
   # is not the archive pinned here, so the commit is made from the same artifacts the release holds.
@@ -433,13 +331,11 @@ jobs:
 
   # The Arch package for this release, built from the sources PyPI now holds and run in a clean Arch container,
   # then pushed to the AUR so Arch users get the release without anyone copying two files by hand. Its
-  # PKGBUILD and .SRCINFO are this run's `aur` artifact too, and it opens the PR that keeps `packaging/aur` on
-  # `main` at the same version, which is what the weekly AUR check compares against.
+  # PKGBUILD and .SRCINFO are this run's `aur` artifact too. The separate `aur-sync` job updates the
+  # committed package through a pull request.
   aur:
     needs: [build, pypi]
-    permissions:
-      contents: write
-      pull-requests: write
+    permissions: {contents: read}
     uses: ./.github/workflows/aur.yml
     with:
       version: ${{ needs.build.outputs.version }}
@@ -477,16 +373,21 @@ jobs:
             exit 0
           fi
           branch="chore/aur-$VERSION"
+          # Branch checkout must start clean, while the renderer's release bytes survive the switch.
+          rendered="$RUNNER_TEMP/aur-package"
+          mkdir -p "$rendered"
+          cp packaging/aur/PKGBUILD packaging/aur/.SRCINFO "$rendered/"
+          git restore --source=HEAD --staged --worktree -- packaging/aur/PKGBUILD packaging/aur/.SRCINFO
           # A rerun after a failure later in this job finds the branch it already pushed, so it is reused rather
           # than pushed over. Rerunning the failed jobs is the documented way to recover a half-finished release.
           git remote set-url origin "https://x-access-token:$TOKEN@github.com/$GITHUB_REPOSITORY.git"
           git fetch --quiet origin "$branch" || true
           if git rev-parse --verify --quiet "origin/$branch" > /dev/null; then
             git checkout --quiet -B "$branch" "origin/$branch"
-            git checkout --quiet "$GITHUB_SHA" -- packaging/aur
           else
             git checkout --quiet -b "$branch"
           fi
+          cp "$rendered/PKGBUILD" "$rendered/.SRCINFO" packaging/aur/
           git add packaging/aur
           if git diff --cached --quiet; then
             echo "the branch already carries this package"

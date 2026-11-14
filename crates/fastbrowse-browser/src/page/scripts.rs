@@ -1,5 +1,5 @@
-//! The scripts `page.py` evaluates in the page, transcribed from its constants piece by piece, with the comments
-//! that explain them. A script Python builds from arguments is built in `page` by a function of the same name.
+//! The scripts `CdpPage` evaluates in the page, with the comments that explain them. A script built from arguments
+//! is built in `page` by a function of the same name.
 
 use std::sync::LazyLock;
 
@@ -11,7 +11,6 @@ use crate::session::py_json;
 pub const SCROLL_EVENT_SECONDS: f64 = 3.0;
 /// A deadline, not a wait: a field with no editor to open settles on the first frame.
 pub const HANDOFF_SECONDS: f64 = 0.6;
-pub const HANDOFF_QUIET_SECONDS: f64 = 0.1;
 
 /// What a page draws over its content and means to be dealt with first. Naming a cover for recovery and routing
 /// around one read this one list: a small open menu fixed to the window looked like a band to one of them, and the
@@ -24,6 +23,18 @@ pub fn py_float(value: f64) -> String {
     let text = format!("{value}");
     if text.contains(['.', 'e', 'i', 'N']) { text } else { format!("{text}.0") }
 }
+
+/// The element a control names as its popup, or null.
+pub const OWNED_JS: &str = "(e => { const id = e.getAttribute('aria-controls') || e.getAttribute('aria-owns'); \
+     return id ? e.ownerDocument.getElementById(id) : null; })";
+
+/// Whether a field asks for suggestions.
+pub static SUGGESTS_JS: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "(e => e.getAttribute('role') === 'combobox' || e.type === 'search' || \
+         !!e.getAttribute('aria-autocomplete') || !!{OWNED_JS}(e))"
+    )
+});
 
 pub const SELECT_TEXT_JS: &str = concat!(
     "if (typeof e.select === 'function') e.select(); else { const range = e.ownerDocument.createRange(); ",
@@ -86,7 +97,16 @@ pub const HIT_TEST_JS: &str = concat!(
 /// The pointer path rechecks a control's guard before every press (`stable_point`); the keyboard path asks this.
 pub const GUARD_HOLDS_JS: &str = concat!(
     "((id, guard) => { const r = window.__fastbrowse, e = r?.nodes.get(id); ",
-    "return !!e?.isConnected && !!r.guardKey && r.guardKey(e) === guard; })",
+    "return !!e?.isConnected && !!r.guardKey && r.guardKey(e, id) === guard; })",
+);
+
+/// Leave a field without pressing anything, and only the field that was chosen: it must still be the node the guard
+/// names and still hold its root's focus, checked in the same renderer task as the blur. A field that lost focus since
+/// is left alone, since moving focus elsewhere could activate whatever took it.
+pub const BLUR_JS: &str = concat!(
+    "((id, guard) => { const r = window.__fastbrowse, e = r?.nodes.get(id); ",
+    "if (!e?.isConnected || !r.guardKey || r.guardKey(e, id) !== guard) return null; ",
+    "if (e.getRootNode().activeElement !== e) return false; e.blur(); return true; })",
 );
 
 /// Keys go to the focused control whatever is drawn over it, so a control a band still covers is pressed from the
@@ -135,7 +155,7 @@ pub const PRESENTED_JS: &str = concat!(
 pub static UNCOVER_JS: LazyLock<String> = LazyLock::new(|| {
     [
     "(async (id, guard) => { const r = window.__fastbrowse, e = r?.nodes.get(id); ",
-    "if (!e?.isConnected || r.guardKey(e) !== guard) return null; ",
+    "if (!e?.isConnected || r.guardKey(e, id) !== guard) return null; ",
     "const docs = [], scrollers = [], roots = []; ",
     // The scrolling element reports the window's scroll, whose events and scrollend go to the document instead.
     "for (let n = e; n; ) { if (n !== n.ownerDocument.scrollingElement) scrollers.push(n); ",
@@ -176,6 +196,31 @@ pub static UNCOVER_JS: LazyLock<String> = LazyLock::new(|| {
     .concat()
 });
 
+/// What is drawn at a point, through open shadow roots, and walks up through shadow hosts: an overlay drawn by a custom
+/// element keeps its fixed box, or its dialog role, inside its shadow root, where a walk by parentElement stops.
+pub const DEEP_HIT_JS: &str = "const deepHit = (doc, x, y) => { let hit = doc.elementFromPoint(x, y); \
+     while (hit?.shadowRoot) { const inner = hit.shadowRoot.elementFromPoint(x, y); \
+     if (!inner || inner === hit) break; hit = inner; } return hit; }; \
+     const up = n => n.parentElement || (n.getRootNode() instanceof ShadowRoot ? n.getRootNode().host : null); \
+     const holds = (a, b) => { for (let n = b; n; n = up(n)) if (n === a) return true; return false; }; ";
+
+/// Takes focus off the suggesting field a covered control's cover may have come from. The list a suggesting field opens
+/// often names no owner, so it cannot be tied to the field, but leaving a field presses nothing and draws nothing: it
+/// is what moving to the next field does anyway. The control is hit-tested again afterwards, and a cover that stays
+/// is refused as before. A cover holding the control is a list being picked from, which leaving would close.
+pub static LEAVE_SUGGESTING_FIELD_JS: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "((id) => {{ const e = window.__fastbrowse?.nodes.get(id); if (!e?.isConnected) return false; {DEEP_HIT_JS} \
+         let field = e.ownerDocument.activeElement; \
+         while (field?.shadowRoot?.activeElement) field = field.shadowRoot.activeElement; \
+         if (!field || field === e || field.matches('body') || !{suggests}(field)) return false; \
+         const rect = e.getBoundingClientRect(); \
+         const hit = deepHit(e.ownerDocument, rect.left + rect.width / 2, rect.top + rect.height / 2); \
+         if (hit && holds(hit, e)) return false; field.blur(); return true; }})",
+        suggests = *SUGGESTS_JS,
+    )
+});
+
 /// What covers the control's centre, through its frames: an obstruction the page means to be dealt with first (a
 /// dialog, an open menu, a popover), a band fixed to the window (an anchored ad, a sticky footer, a chat bubble)
 /// that floats over whatever is scrolled beneath it, or anything else, such as a full-window backdrop or a panel
@@ -184,18 +229,13 @@ pub static UNCOVER_JS: LazyLock<String> = LazyLock::new(|| {
 pub static COVER_JS: LazyLock<String> = LazyLock::new(|| {
     [
         "((id) => { const e = window.__fastbrowse?.nodes.get(id); if (!e?.isConnected) return null; ",
+        DEEP_HIT_JS,
         "const OBSTRUCTIONS = ",
         &py_json(&Value::from(OBSTRUCTIONS)),
         "; ",
         "const rect = e.getBoundingClientRect(); let x = rect.left + rect.width / 2, y = rect.top + rect.height / 2; ",
         "let node = e, doc = e.ownerDocument; while (true) { const view = doc.defaultView; ",
-        "let hit = doc.elementFromPoint(x, y); ",
-        "while (hit?.shadowRoot) { const inner = hit.shadowRoot.elementFromPoint(x, y); ",
-        "if (!inner || inner === hit) break; hit = inner; } ",
-        // Up through shadow hosts: an overlay drawn by a custom element keeps its fixed box, or its dialog role, inside
-        // its shadow root, where a walk by parentElement stopped, so a band was refused and a dialog could pass for one.
-        "const up = n => n.parentElement || (n.getRootNode() instanceof ShadowRoot ? n.getRootNode().host : null); ",
-        "const holds = (a, b) => { for (let n = b; n; n = up(n)) if (n === a) return true; return false; }; ",
+        "const hit = deepHit(doc, x, y); ",
         "if (hit && !holds(node, hit)) { let obstruction = null; ",
         "for (let n = hit; n && !obstruction; n = up(n)) if (n.matches(OBSTRUCTIONS)) obstruction = n; ",
         "if (obstruction && !holds(obstruction, node)) return 'obstruction'; ",
@@ -216,14 +256,18 @@ pub static COVER_JS: LazyLock<String> = LazyLock::new(|| {
 /// editor; typing into the original, now hidden behind it, reaches no suggestion list. A person types where focus
 /// went, so the fill follows focus to an editable field in the same document that covers the spot saved before the
 /// click, even if the original was detached. The editor can take focus a frame or a timer after the click, so the
-/// check waits for the click's DOM changes to go quiet, briefly, first.
+/// check waits for that focus, and the bound only ends a wait for a field that was replaced by nothing.
 pub static HANDED_FOCUS_JS: LazyLock<String> = LazyLock::new(|| {
     [
     "((id, secret) => new Promise(resolve => { const r = window.__fastbrowse, e = r?.nodes.get(id), was = r?.handoff; ",
     "if (!e || !was) { resolve(null); return; } ",
-    "const decide = () => { ",
+    "let late = false; const decide = () => { ",
     "if (e.ownerDocument !== was.doc || was.doc.defaultView?.document !== was.doc) return null; ",
     "const a = was.root.activeElement; ",
+    // An editor drawn over the field is still to take focus: the field's own focus is not the answer yet.
+    "const hit = was.doc.elementFromPoint(was.x, was.y); ",
+    "if (a === e && !late && hit && hit !== e && !e.contains(hit) && ",
+    "(hit.isContentEditable || ['INPUT', 'TEXTAREA'].includes(hit.tagName))) return null; ",
     "if (!a || a === e || e.contains(a) || secret) return e.isConnected ? id : null; ",
     "const text = a.isContentEditable || a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && ",
     "!['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit']",
@@ -234,16 +278,12 @@ pub static HANDED_FOCUS_JS: LazyLock<String> = LazyLock::new(|| {
     "if (was.x < now.left || was.x > now.right || was.y < now.top || was.y > now.bottom) ",
     "return e.isConnected ? id : null; ",
     "if (!r.ids.has(a)) r.ids.set(a, r.next++); const n = r.ids.get(a); r.nodes.set(n, a); return n; }; ",
-    &format!("const deadline = performance.now() + {}; ", py_float(HANDOFF_SECONDS * 1000.0)),
-    "const poll = () => { const choice = decide(); ",
-    "if ((choice !== null && performance.now() - (r.lastMutation ?? 0) >= ",
-    &format!("{}) || performance.now() >= deadline) resolve(choice); ", py_float(HANDOFF_QUIET_SECONDS * 1000.0)),
-    "else setTimeout(poll, 20); }; ",
-    // Chrome can hold a cross-origin frame's animation frames indefinitely, and CI hung in pytest for an hour
-    // awaiting one; the timer starts the poll anyway once the deadline has passed.
-    "let started = false; const start = () => { if (!started) { started = true; poll(); } }; ",
-    &format!("setTimeout(start, {}); ", py_float(HANDOFF_SECONDS * 1000.0)),
-    "if (was.doc.hidden) start(); else requestAnimationFrame(() => setTimeout(start, 0)); }))",
+    // A field that was replaced is waited for by the focus that names its successor.
+    "const finish = () => resolve(decide()); ",
+    "const settle = () => { was.doc.removeEventListener('focusin', settle, true); r.nativeClearTimeout(timer); ",
+    "finish(); }; ",
+    &format!("const timer = r.nativeSetTimeout(() => {{ late = true; settle(); }}, {}); ", py_float(HANDOFF_SECONDS * 1000.0)),
+    "was.doc.addEventListener('focusin', settle, true); if (decide() !== null) settle(); }))",
     ]
     .concat()
 });

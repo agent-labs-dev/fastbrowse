@@ -43,6 +43,10 @@ pub struct Request {
     /// Stop reading the body once it passes this many bytes, as a streamed `httpx` read can: the response then holds
     /// one byte more than the bound, so a caller sees it was passed without the rest landing in memory.
     pub max_bytes: Option<usize>,
+    /// The longest wait for the response head, and then for each body chunk, as an httpx timeout bounds each read. A
+    /// body that keeps arriving is read to its end, however long a model takes to write it: a provider that is still
+    /// working sends keep-alive bytes, so silence this long is a stall.
+    pub timeout: Duration,
 }
 
 impl Request {
@@ -79,6 +83,11 @@ impl Response {
         header(&self.headers, name)
     }
 
+    /// Replace the request credential in provider text before it reaches traces or errors.
+    pub(crate) fn scrub(&self, text: &str) -> String {
+        scrub(text, &self.credential)
+    }
+
     pub fn is_success(&self) -> bool {
         (200..300).contains(&self.status)
     }
@@ -94,6 +103,10 @@ impl Response {
     }
 }
 
+pub(crate) fn scrub(text: &str, credential: &str) -> String {
+    if credential.is_empty() { text.to_string() } else { text.replace(credential, "[api key]") }
+}
+
 fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
     headers.iter().find(|(key, _)| key.eq_ignore_ascii_case(name)).map(|(_, value)| value.as_str())
 }
@@ -102,7 +115,7 @@ fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
 /// a failure reports: its text can quote the request, credential included.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransportError {
-    /// `httpx.TimeoutException` or the attempt deadline: a repeat can clear it.
+    /// `httpx.TimeoutException`, or [`Request::timeout`] passed in silence: a repeat can clear it.
     Timeout(&'static str),
     /// `httpx.NetworkError`, `RemoteProtocolError`, `ProxyError` or `DecodingError`: a repeat can clear it.
     Transient(&'static str),
@@ -149,12 +162,40 @@ impl HttpEvent<'_> {
         self.trace.event("http", || {
             let mut fields = Map::new();
             fields.insert("url".into(), self.url.into());
-            fields.insert("request".into(), self.body.clone());
+            fields.insert("request".into(), traced(self.body));
             fields.insert("began".into(), self.began.into());
             fields.insert("ended".into(), monotonic().into());
             outcome(&mut fields);
             fields
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::traced;
+
+    #[test]
+    fn an_image_sent_to_jev_is_kept_by_name_and_not_by_its_bytes() {
+        let body = json!({
+            "model": "jev-1.14",
+            "state": {"viewport_screenshot": "screenshot-abc"},
+            "assets": {"screenshot-abc": {"type": "image", "format": "png", "data_base64": "iVBORw0KGgo"}},
+        });
+        let traced = traced(&body);
+        assert_eq!(traced["assets"]["screenshot-abc"]["data_base64"], "<image>");
+        assert_eq!(traced["assets"]["screenshot-abc"]["type"], "image");
+        assert_eq!(traced["state"]["viewport_screenshot"], "screenshot-abc");
+        assert_eq!(traced["model"], "jev-1.14");
+    }
+
+    #[test]
+    fn an_images_data_url_is_kept_as_one_image() {
+        let body = json!({"messages": [{"content": [{"type": "image_url",
+            "image_url": {"url": "data:image/png;base64,iVBORw0KGgo"}}]}]});
+        assert_eq!(traced(&body)["messages"][0]["content"][0]["image_url"]["url"], "data:image/<image>");
     }
 }
 
@@ -168,16 +209,49 @@ impl Drop for HttpEvent<'_> {
     }
 }
 
+/// The request body as the trace keeps it. An image is its own bulk and is already named by its pixels' digest, since a
+/// screenshot's asset name is `screenshot-<sha256>`, so the name stands in for the bytes: otherwise a run that sends a
+/// viewport screenshot on every step of a drawn page writes a 102 MB trace (BU Bench bu2-157, 51 steps), a record no
+/// tool can read.
+fn traced(body: &Value) -> Value {
+    let mut body = body.clone();
+    blank_images(&mut body);
+    body
+}
+
+/// A Jev image asset's `data_base64`, and a data URL's payload, replaced as the eval replay already replaces them.
+fn blank_images(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if map.get("type").and_then(Value::as_str) == Some("image") && map.contains_key("data_base64") {
+                map.insert("data_base64".into(), Value::String("<image>".into()));
+            }
+            for item in map.values_mut() {
+                blank_images(item);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                blank_images(item);
+            }
+        }
+        Value::String(text) if text.starts_with("data:image/") => *text = "data:image/<image>".into(),
+        _ => {}
+    }
+}
+
 /// What a run's clients share: one connection pool, one trace.
 #[derive(Clone)]
 pub struct Http {
     transport: Arc<dyn Transport>,
     pub trace: Trace,
+    /// The header a provider takes its key in, when that is none of the usual three.
+    credential_header: Option<&'static str>,
 }
 
 impl Http {
     pub fn new(transport: Arc<dyn Transport>) -> Http {
-        Http { transport, trace: Trace::disabled() }
+        Http { transport, trace: Trace::disabled(), credential_header: None }
     }
 
     /// hyper over rustls with the Mozilla roots.
@@ -190,8 +264,13 @@ impl Http {
         self
     }
 
-    /// `http.post(url, json=body, headers=headers, timeout=seconds)`, bounded by an elapsed deadline as well: HTTP
-    /// read timeouts reset on each chunk, so a trickling body would otherwise hold an attempt forever.
+    pub(crate) fn with_credential_header(mut self, header: Option<&'static str>) -> Http {
+        self.credential_header = header;
+        self
+    }
+
+    /// `http.post(url, json=body, headers=headers, timeout=seconds)`: `seconds` bounds each silence, see
+    /// [`Request::timeout`].
     pub async fn post_json(
         &self,
         url: &str,
@@ -208,15 +287,15 @@ impl Http {
             headers: all,
             body: write(body, Style::HTTPX).into(),
             max_bytes: None,
+            timeout: if seconds == f64::INFINITY { Duration::MAX } else { Duration::from_secs_f64(seconds) },
         };
         let mut event = HttpEvent { trace: &self.trace, url, body, began: monotonic(), written: false };
-        let result = self.send(request, seconds).await;
+        let result = self.send(request).await;
         event.write(|fields| match &result {
             Ok(response) => {
                 fields.insert("status".into(), response.status.into());
                 let text = response.text();
-                let text =
-                    if response.credential.is_empty() { text } else { text.replace(&response.credential, "[api key]") };
+                let text = response.scrub(&text);
                 fields.insert("response".into(), serde_json::from_str(&text).unwrap_or(Value::String(text)));
             }
             Err(error) => {
@@ -244,27 +323,25 @@ impl Http {
             headers: headers.to_vec(),
             body: Vec::new(),
             max_bytes,
+            timeout: Duration::from_secs_f64(seconds),
         };
-        self.send(request, seconds).await
+        self.send(request).await
     }
 
-    async fn send(&self, request: Request, seconds: f64) -> Result<Response, TransportError> {
-        // Anthropic takes its key as `x-api-key` and Azure as `api-key`; an error that echoes either is scrubbed too.
+    async fn send(&self, request: Request) -> Result<Response, TransportError> {
+        // Anthropic takes its key as `x-api-key` and Azure as `api-key`; an error that echoes either is scrubbed too,
+        // as is one that echoes the header a custom endpoint was configured with.
         let credential = request
             .header("authorization")
             .map(|value| value.strip_prefix("Bearer ").unwrap_or(value))
             .or_else(|| request.header("x-api-key"))
             .or_else(|| request.header("api-key"))
+            .or_else(|| self.credential_header.and_then(|name| request.header(name)))
             .map(|value| value.trim().to_string())
             .unwrap_or_default();
-        match tokio::time::timeout(Duration::from_secs_f64(seconds), self.transport.send(request)).await {
-            Ok(Ok(mut response)) => {
-                response.credential = credential;
-                Ok(response)
-            }
-            Ok(Err(error)) => Err(error),
-            Err(_) => Err(TransportError::Timeout("TimeoutError")),
-        }
+        let mut response = self.transport.send(request).await?;
+        response.credential = credential;
+        Ok(response)
     }
 }
 
@@ -301,20 +378,22 @@ impl Transport for HyperTransport {
                 Method::Get => hyper::Method::GET,
                 Method::Post => hyper::Method::POST,
             };
-            let request_max = request.max_bytes;
+            let (request_max, silence) = (request.max_bytes, request.timeout);
+            let stalled = |_| TransportError::Timeout("TimeoutError");
             let mut builder = hyper::Request::builder().method(method).uri(uri);
             for (name, value) in &request.headers {
                 builder = builder.header(name.as_str(), value.as_str());
             }
             let outgoing =
                 builder.body(Full::new(Bytes::from(request.body))).map_err(|_| TransportError::Fatal("InvalidURL"))?;
-            let response = client.request(outgoing).await.map_err(|error| {
-                if error.is_connect() {
-                    TransportError::Transient("ConnectError")
-                } else {
-                    TransportError::Transient("RemoteProtocolError")
-                }
-            })?;
+            let response =
+                tokio::time::timeout(silence, client.request(outgoing)).await.map_err(stalled)?.map_err(|error| {
+                    if error.is_connect() {
+                        TransportError::Transient("ConnectError")
+                    } else {
+                        TransportError::Transient("RemoteProtocolError")
+                    }
+                })?;
             let status = response.status().as_u16();
             let headers = response
                 .headers()
@@ -325,7 +404,7 @@ impl Transport for HyperTransport {
                 .collect();
             let mut incoming = response.into_body();
             let mut body = Vec::new();
-            while let Some(frame) = incoming.frame().await {
+            while let Some(frame) = tokio::time::timeout(silence, incoming.frame()).await.map_err(stalled)? {
                 let frame = frame.map_err(|_| TransportError::Transient("ReadError"))?;
                 if let Some(chunk) = frame.data_ref() {
                     body.extend_from_slice(chunk);

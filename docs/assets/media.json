@@ -1,26 +1,26 @@
 {
   "assets": {
     "assets/architecture-dark.svg": {
-      "surface": "5ee08339db483c1fb1341446b56d01c7d9893c6210a20f5ab783144e46088e15",
-      "shows": "The plan, the step loop and the gates, as the code runs them."
+      "surface": "def5c452d0375b09fbe4f05906b3599781e8f91f27fc1048830acd9d12d45fcb",
+      "shows": "The step loop and the gates, as the code runs them."
     },
     "assets/architecture.svg": {
-      "surface": "5ee08339db483c1fb1341446b56d01c7d9893c6210a20f5ab783144e46088e15",
-      "shows": "The plan, the step loop and the gates, as the code runs them."
+      "surface": "def5c452d0375b09fbe4f05906b3599781e8f91f27fc1048830acd9d12d45fcb",
+      "shows": "The step loop and the gates, as the code runs them."
     },
     "assets/wordmark-dark.svg": {
-      "surface": "5ee08339db483c1fb1341446b56d01c7d9893c6210a20f5ab783144e46088e15",
+      "surface": "def5c452d0375b09fbe4f05906b3599781e8f91f27fc1048830acd9d12d45fcb",
       "shows": "The fastbrowse wordmark."
     },
     "assets/wordmark.svg": {
-      "surface": "5ee08339db483c1fb1341446b56d01c7d9893c6210a20f5ab783144e46088e15",
+      "surface": "def5c452d0375b09fbe4f05906b3599781e8f91f27fc1048830acd9d12d45fcb",
       "shows": "The fastbrowse wordmark."
     },
     "docs/assets/demo.gif": {
-      "surface": "5ee08339db483c1fb1341446b56d01c7d9893c6210a20f5ab783144e46088e15",
-      "shows": "A run shopping thepihut.com: it adds a Raspberry Pi Pico 2 W and an in-stock BME280 sensor to the basket, fills in checkout without paying, and answers with each price, the delivery cost and the order total, each cited.",
-      "command": "uv run fastbrowse \"...\" --start https://thepihut.com/ --local --record demo.mp4",
-      "recorded_at": "2026-10-28"
+      "surface": "def5c452d0375b09fbe4f05906b3599781e8f91f27fc1048830acd9d12d45fcb",
+      "shows": "A run on Sauce Demo, a public practice store: it signs in, adds the backpack and the bike light to the cart, checks out as Ada Lovelace, and answers with the order total, cited.",
+      "command": "uvx fastbrowse==0.10.0 \"...\" --start https://www.saucedemo.com/ --secret password=SAUCE_PASSWORD --local --authorize --record demo.mp4",
+      "recorded_at": "2026-11-10"
     }
   }
 }

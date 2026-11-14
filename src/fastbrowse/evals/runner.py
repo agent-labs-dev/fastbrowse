@@ -35,7 +35,7 @@ from fastbrowse.evals.local import Recorder, fixture_server
 from fastbrowse.evals.mock import mock_site
 from fastbrowse.evals.mock_tasks import TASKS as MOCK_TASKS
 from fastbrowse.evals.mock_tasks import MockTask
-from fastbrowse.evals.status import normalize
+from fastbrowse.evals.status import TIMING_BASIS, normalize
 from fastbrowse.evals.tasks import TASKS, LocalTask
 from fastbrowse.evals.versions import load_lock, provenance, suite_version, task_version
 from fastbrowse.models import (
@@ -143,14 +143,22 @@ def _efficiency(cost: CostBreakdown) -> dict[str, object]:
     llm = [line for line in cost.lines if line.component is CostComponent.LLM]
     tokens_in = sum(line.input_tokens for line in llm)
     tokens_out = sum(line.output_tokens for line in llm)
-    call_seconds = sum(line.seconds or 0.0 for line in llm)
-    return {
+    # A failed generation records its tokens with no seconds, so throughput is taken over the timed calls alone.
+    timed = [(line.input_tokens + line.output_tokens, line.seconds) for line in llm if line.seconds is not None]
+    timed_tokens = sum(tokens for tokens, _ in timed)
+    timed_seconds = sum(seconds for _, seconds in timed)
+    jev = cost.jev_calls_by_purpose()
+    result = {
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
-        "llm_calls": len(llm),
-        "jev_calls": sum(1 for line in cost.lines if line.component is CostComponent.JEV),
-        "tokens_per_second": round((tokens_in + tokens_out) / call_seconds, 1) if call_seconds > 0 else None,
+        "llm_calls_basis": "physical_requests",
+        "jev_calls": sum(jev.values()),
+        "jev_calls_by_purpose": jev,
+        "tokens_per_second": round(timed_tokens / timed_seconds, 1) if timed_seconds > 0 else None,
     }
+    if all(line.physical_requests is not None for line in llm):
+        result["llm_calls"] = sum(line.physical_requests or 0 for line in llm)
+    return result
 
 
 def _row(
@@ -158,13 +166,14 @@ def _row(
 ) -> dict[str, object]:
     """The fields every suite's row carries, so one report can read both."""
     return {
-        "correct": failure is None,
         "normalized_status": normalize(result.status),
         "task": task_id,
         "passed": failure is None,
         "failure": failure,
         "status": result.status.value,
         "seconds": round(seconds, 1),
+        # The suite's Chrome starts once, before any task, so no task's seconds include opening or closing it.
+        "timing_basis": TIMING_BASIS,
         "transient_seconds": round(lost, 2),
         "dollars": None if result.cost.has_unknown else round(result.cost.known_dollars, 5),
         "unknown_cost": result.cost.has_unknown,
@@ -179,17 +188,9 @@ def _row(
     } | _efficiency(result.cost)
 
 
-def _submitted(submissions: dict[str, list[dict[str, str]]]) -> dict[str, str]:
-    """The fields the last post to each path carried, flattened for the judge to read."""
-    return {
-        f"{path} {name}": value
-        for path, posts in submissions.items()
-        for post in posts[-1:]
-        for name, value in post.items()
-    }
-
-
-async def _judge_claims(task: LocalTask | MockTask, result: RunResult, submitted: dict[str, str] | None) -> str | None:
+async def _judge_claims(
+    task: LocalTask | MockTask, result: RunResult, submitted: dict[str, list[dict[str, str]]] | None
+) -> str | None:
     """Why the run's output does not state every claim, or None when it states them all."""
     async with httpx.AsyncClient(timeout=60.0) as http:
         return await judge(
@@ -210,9 +211,9 @@ async def _drive(
     secrets: TaskSecrets | None,
     limits: Limits,
     attachments: tuple[Attachment, ...] = (),
-) -> tuple[RunResult, float, float, str | None]:
+) -> tuple[RunResult, float, float, str | None, list[object]]:
     """One run of one task through `run_task`, on whichever core the package runs, returning its result, how long
-    it took, wall and transient, and the providers it called, the last two read from the run's trace."""
+    it took, wall and transient, the providers it called, and the run's trace."""
     started = time.monotonic()
     with traced() as events:
         result = await run_fastbrowse(
@@ -229,7 +230,7 @@ async def _drive(
             downloads=downloads,
         )
     ended = time.monotonic()
-    return result, ended - started, transient_seconds(events, started, ended), providers(events)
+    return result, ended - started, transient_seconds(events, started, ended), providers(events), events
 
 
 async def run_task(
@@ -242,12 +243,12 @@ async def run_task(
     limits: Limits = LOCAL_LIMITS,
 ) -> dict[str, object]:
     recorder.clear()
-    result, seconds, lost, route = await _drive(task, base_url + task.start, cdp_url, downloads, None, limits)
+    result, seconds, lost, route, events = await _drive(task, base_url + task.start, cdp_url, downloads, None, limits)
     submitted = recorder.snapshot()
     failure = task.check(result, submitted)
     if failure is None and task.claims:
-        failure = await _judge_claims(task, result, _submitted(submitted))
-    return {"arm": "fastbrowse", "category": "fixture", "suite": "local", "providers": route} | _row(
+        failure = await _judge_claims(task, result, submitted)
+    return {"arm": "fastbrowse", "category": "fixture", "suite": "local", "providers": route, "events": events} | _row(
         result, task_id=task.id, failure=failure, seconds=seconds, lost=lost, limit=limits.max_steps
     )
 
@@ -262,10 +263,12 @@ async def run_mock_task(
     """A site of this task's own, so nothing it does can be read by, or decided by, another task's run."""
     with mock_site() as (base_url, site):
         secrets = TaskSecrets(task.secrets, base_url) if task.secrets else None
-        result, seconds, lost, route = await _drive(
+        result, seconds, lost, route, events = await _drive(
             task, base_url + task.start, cdp_url, downloads, secrets, limits, task.attachments
         )
         failure = task.check(result, site)
+        if failure is None and isinstance(result, RunResult) and result.status is not task.expect:
+            failure = f"status {result.status.value}, expected {task.expect.value}"
         if failure is None and task.claims:
             failure = await _judge_claims(task, result, None)
         extra = {
@@ -279,6 +282,7 @@ async def run_mock_task(
             "suite": "mock",
             "expected_status": task.expect.value,
             "providers": route,
+            "events": events,
         } | (
             _row(
                 result,
@@ -304,12 +308,12 @@ def _tasks(only: list[str], suites: list[str]) -> tuple[list[tuple[str, LocalTas
 def parser() -> argparse.ArgumentParser:
     argument = argparse.ArgumentParser()
     argument.add_argument("--suite", nargs="+", choices=["local", "mock"], default=["local", "mock"])
-    # Repeated flags accumulate: `--only a --only b` used to keep only `b`, so a narrowed run silently ran fewer
-    # tasks than asked for.
+    # Repeated --only flags accumulate.
     argument.add_argument("--only", nargs="*", action="extend", default=[])
     argument.add_argument("--repeat", type=int, default=1)
     argument.add_argument("--out", type=Path, default=Path("artifacts/evals/local.jsonl"))
     argument.add_argument("--budget", type=float, help="approved total model dollars for the fixture campaign")
+    argument.add_argument("--traces", type=Path, help="append each run's trace here, one JSON line per run")
     return argument
 
 
@@ -340,6 +344,7 @@ async def main(argv: list[str]) -> int:
         chrome() as cdp_url,
         tempfile.TemporaryDirectory() as downloads,
         args.out.open("a", encoding="utf-8") as out,
+        args.out.with_suffix(".attempts.jsonl").open("a", encoding="utf-8") as attempts,
     ):
         for repeat in range(args.repeat):
             for suite, task in chosen:
@@ -374,9 +379,19 @@ async def main(argv: list[str]) -> int:
                     "task_version": task_version(task.id, lock),
                     "repeat": repeat,
                 }
+                # A failure CI alone shows is replayed from its trace, so the trace is kept beside the row.
+                events = row.pop("events")
+                if args.traces is not None:
+                    with args.traces.open("a", encoding="utf-8") as traces:
+                        line = {"suite": suite, "task": task.id, "repeat": repeat, "events": events}
+                        traces.write(json.dumps(line, default=str) + "\n")
                 rows.append(row)
                 out.write(json.dumps(row) + "\n")
                 out.flush()
+                # The fixture runner never retries, so each row is its one physical attempt; the ledger is what
+                # lets `versions --publish` commit a fixture run as the baseline later runs are compared against.
+                attempts.write(json.dumps(row | {"selected": True}) + "\n")
+                attempts.flush()
                 if campaign is not None:
                     campaign.settle(CostBreakdown.model_validate(row["cost"]))
                 mark = "PASS" if row["passed"] else "FAIL"

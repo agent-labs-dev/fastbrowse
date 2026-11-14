@@ -42,7 +42,9 @@
     },
     "ArtifactKind": {
       "enum": [
-        "download"
+        "download",
+        "screenshot",
+        "capture"
       ],
       "title": "ArtifactKind",
       "type": "string"
@@ -104,6 +106,59 @@
       "title": "BrowserEvent",
       "type": "object"
     },
+    "BrowserUsed": {
+      "additionalProperties": false,
+      "description": "The browser a run drove.",
+      "properties": {
+        "via": {
+          "$ref": "#/$defs/BrowserVia"
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The profile it ran in, when one was named: a local profile directory, a cloud profile, or the label of a\nbrowser connected through the extension.",
+          "title": "Profile"
+        },
+        "browser": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The browser's product and version, when known, such as `Chrome 150.0.7400.2`.",
+          "title": "Browser"
+        }
+      },
+      "required": [
+        "via",
+        "profile",
+        "browser"
+      ],
+      "title": "BrowserUsed",
+      "type": "object"
+    },
+    "BrowserVia": {
+      "description": "How a run reached the browser it drove.",
+      "enum": [
+        "cloud",
+        "launched",
+        "attached",
+        "extension"
+      ],
+      "title": "BrowserVia",
+      "type": "string"
+    },
     "BudgetStop": {
       "additionalProperties": false,
       "properties": {
@@ -130,6 +185,48 @@
       "title": "BudgetStop",
       "type": "object"
     },
+    "CancellationReceipt": {
+      "description": "What a cancelled run did before it stopped: the `data` of its `cancelled` error.\n\nA cancelled run proved nothing, so this has no status and no answer. It holds what the caller is owed\nwhatever the run became: the steps it reported, every charge known when it stopped, an unpriced one as an\n`unknown` line, and the videos finished before its browser closed. A step cut off before its event was sent\nwas never reported, so it is not among the steps.",
+      "properties": {
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/StepResult"
+          },
+          "title": "Steps",
+          "type": "array"
+        },
+        "cost": {
+          "$ref": "#/$defs/CostBreakdown"
+        },
+        "recordings": {
+          "items": {
+            "format": "path",
+            "type": "string"
+          },
+          "title": "Recordings",
+          "type": "array"
+        },
+        "browser": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BrowserUsed"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "steps",
+        "cost",
+        "recordings",
+        "browser"
+      ],
+      "title": "CancellationReceipt",
+      "type": "object"
+    },
     "Citation": {
       "additionalProperties": false,
       "properties": {
@@ -142,18 +239,6 @@
         "text": {
           "title": "Text",
           "type": "string"
-        },
-        "requirement_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Requirement Id"
         },
         "url": {
           "title": "Url",
@@ -171,7 +256,6 @@
       "required": [
         "id",
         "text",
-        "requirement_id",
         "url",
         "quote",
         "deep_link"
@@ -184,6 +268,7 @@
         "metered",
         "estimated",
         "bounded",
+        "unsettled",
         "unknown"
       ],
       "title": "CostBasis",
@@ -212,7 +297,8 @@
         "jev",
         "llm",
         "browser",
-        "proxy"
+        "proxy",
+        "search"
       ],
       "title": "CostComponent",
       "type": "string"
@@ -250,6 +336,17 @@
           ],
           "default": null
         },
+        "decision_purpose": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JevPurpose"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "input_tokens": {
           "default": 0,
           "minimum": 0,
@@ -273,8 +370,22 @@
             }
           ],
           "default": null,
-          "description": "Wall time of the call, retries included. None for a line that is not one call, such as browser time.",
+          "description": "Wall time of the call, retries included, or the time a metered browser was held. None when unknown.",
           "title": "Seconds"
+        },
+        "physical_requests": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Physical provider requests represented by this line; absent on historical receipts.",
+          "title": "Physical Requests"
         }
       },
       "required": [
@@ -290,10 +401,11 @@
       "type": "object"
     },
     "Decider": {
-      "description": "The model whose choice a step carries out, even when code dispatches it: the next page of a list is the\nreader's, because the reader asked for the rest of the list.",
+      "description": "Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev.",
       "enum": [
         "jev",
-        "llm"
+        "code",
+        "recipe"
       ],
       "title": "Decider",
       "type": "string"
@@ -306,6 +418,17 @@
         "message": {
           "title": "Message",
           "type": "string"
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CancellationReceipt"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -437,6 +560,28 @@
           },
           "title": "Heading Path",
           "type": "array"
+        },
+        "capture_artifact": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The `uri` of the `capture` artifact holding the page text `start` and `end` index into, if one was kept.",
+          "title": "Capture Artifact"
+        },
+        "links": {
+          "default": [],
+          "description": "The links inside the quote and where each leads, which its text alone does not say.",
+          "items": {
+            "$ref": "#/$defs/Link"
+          },
+          "title": "Links",
+          "type": "array"
         }
       },
       "required": [
@@ -459,7 +604,7 @@
     "FactReader": {
       "enum": [
         "jev_choice",
-        "llm"
+        "llm_image"
       ],
       "title": "FactReader",
       "type": "string"
@@ -496,16 +641,32 @@
       "title": "InitializeResult",
       "type": "object"
     },
+    "JevPurpose": {
+      "enum": [
+        "action",
+        "authorization",
+        "relevance",
+        "read",
+        "verify",
+        "locate"
+      ],
+      "title": "JevPurpose",
+      "type": "string"
+    },
     "JsonValue": {},
     "LLMPurpose": {
       "enum": [
-        "plan",
-        "read",
-        "field_text",
-        "recover",
-        "verify",
+        "start",
         "compose",
-        "shortcut"
+        "image_read",
+        "fill",
+        "pages",
+        "dates",
+        "known_pages",
+        "recovery_pages",
+        "search",
+        "unobtainable",
+        "groups"
       ],
       "title": "LLMPurpose",
       "type": "string"
@@ -586,6 +747,37 @@
       "title": "Limits",
       "type": "object"
     },
+    "Link": {
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "start": {
+          "minimum": 0,
+          "title": "Start",
+          "type": "integer"
+        },
+        "end": {
+          "minimum": 0,
+          "title": "End",
+          "type": "integer"
+        },
+        "href": {
+          "title": "Href",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "start",
+        "end",
+        "href"
+      ],
+      "title": "Link",
+      "type": "object"
+    },
     "LocalChrome": {
       "additionalProperties": false,
       "properties": {
@@ -662,6 +854,8 @@
         "hover",
         "drag",
         "fill",
+        "press",
+        "blur",
         "select",
         "enter",
         "escape",
@@ -671,10 +865,11 @@
         "switch_tab",
         "upload",
         "dialog",
+        "wait",
         "read",
         "done",
-        "escalate",
-        "navigate"
+        "navigate",
+        "search"
       ],
       "title": "Operation",
       "type": "string"
@@ -858,12 +1053,30 @@
     },
     "RunParams": {
       "additionalProperties": false,
-      "description": "One run. Apart from `run_id`, each field is the `run_task` argument or the CLI flag of the same name.\n\nThe reply is the `RunResult`. No API key is among the fields: model and browser keys come from the\nenvironment the server inherited.",
+      "description": "One run: the run's arguments, and what the server needs to talk to the client about it.\n\nThe reply is the `RunResult`. No API key is among the fields: model and browser keys come from the\nenvironment the server inherited.",
       "properties": {
         "run_id": {
           "minLength": 1,
           "title": "Run Id",
           "type": "string"
+        },
+        "secrets": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SecretRef"
+          },
+          "title": "Secrets",
+          "type": "array"
+        },
+        "frames": {
+          "default": false,
+          "title": "Frames",
+          "type": "boolean"
+        },
+        "until": {
+          "default": false,
+          "title": "Until",
+          "type": "boolean"
         },
         "task": {
           "title": "Task",
@@ -951,24 +1164,6 @@
           "default": null,
           "title": "Output Schema"
         },
-        "secrets": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/SecretRef"
-          },
-          "title": "Secrets",
-          "type": "array"
-        },
-        "frames": {
-          "default": false,
-          "title": "Frames",
-          "type": "boolean"
-        },
-        "until": {
-          "default": false,
-          "title": "Until",
-          "type": "boolean"
-        },
         "downloads": {
           "anyOf": [
             {
@@ -995,6 +1190,32 @@
           "default": null,
           "title": "Record"
         },
+        "recipe": {
+          "anyOf": [
+            {
+              "format": "path",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recipe"
+        },
+        "save_recipe": {
+          "anyOf": [
+            {
+              "format": "path",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Save Recipe"
+        },
         "cursor": {
           "anyOf": [
             {
@@ -1010,6 +1231,11 @@
         "local": {
           "default": false,
           "title": "Local",
+          "type": "boolean"
+        },
+        "launch": {
+          "default": false,
+          "title": "Launch",
           "type": "boolean"
         },
         "chrome": {
@@ -1050,6 +1276,8 @@
         "cdp_port": {
           "anyOf": [
             {
+              "maximum": 65535,
+              "minimum": 0,
               "type": "integer"
             },
             {
@@ -1100,9 +1328,13 @@
               "minItems": 2,
               "prefixItems": [
                 {
+                  "maximum": 4294967295,
+                  "minimum": 0,
                   "type": "integer"
                 },
                 {
+                  "maximum": 4294967295,
+                  "minimum": 0,
                   "type": "integer"
                 }
               ],
@@ -1115,10 +1347,81 @@
           "default": null,
           "title": "Viewport"
         },
-        "cloud_allow_resizing": {
+        "cloud_extensions": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Cloud Extensions",
+          "type": "array"
+        },
+        "cloud_timeout_minutes": {
+          "anyOf": [
+            {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cloud Timeout Minutes"
+        },
+        "allowed_origins": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Allowed Origins"
+        },
+        "fetch": {
           "default": false,
-          "title": "Cloud Allow Resizing",
+          "title": "Fetch",
           "type": "boolean"
+        },
+        "browser": {
+          "default": false,
+          "title": "Browser",
+          "type": "boolean"
+        },
+        "extension": {
+          "default": false,
+          "title": "Extension",
+          "type": "boolean"
+        },
+        "extension_browser": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Extension Browser"
+        },
+        "desktop": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Desktop"
         }
       },
       "required": [
@@ -1244,6 +1547,18 @@
           ],
           "default": null,
           "description": "The sign-in or bot wall a `needs_login` or `blocked` run stopped at, when the page showed one."
+        },
+        "browser": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BrowserUsed"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The browser the run drove, and how it reached it; none when it read every page over HTTP."
         }
       },
       "required": [
@@ -1259,7 +1574,8 @@
         "error",
         "final_url",
         "recordings",
-        "wall"
+        "wall",
+        "browser"
       ],
       "title": "RunResult",
       "type": "object"
@@ -1414,6 +1730,7 @@
         "budget_exceeded",
         "observation_limit",
         "unavailable",
+        "cancelled",
         "error"
       ],
       "title": "Status",
@@ -1514,18 +1831,6 @@
           "title": "Text",
           "type": "string"
         },
-        "requirement_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Requirement Id"
-        },
         "quote": {
           "anyOf": [
             {
@@ -1569,7 +1874,6 @@
       },
       "required": [
         "text",
-        "requirement_id",
         "quote",
         "url",
         "reader",
@@ -1667,7 +1971,7 @@
             }
           ],
           "default": null,
-          "description": "Whether the page's fingerprint changed; None for steps that do not act (read, escalate).",
+          "description": "Whether the page's fingerprint changed; None for steps that do not act (read).",
           "title": "Page Changed"
         },
         "duration_ms": {
@@ -1767,7 +2071,7 @@
       "RUN_CANCEL": "run/cancel",
       "SHUTDOWN": "shutdown"
     },
-    "PROTOCOL_VERSION": 1,
+    "PROTOCOL_VERSION": 3,
     "ServerMethod": {
       "RUN_EVENT": "run/event",
       "RUN_FRAME": "run/frame",

@@ -1,11 +1,10 @@
 //! Record a run's active tab to a video: Chrome's screencast frames, resampled to a steady rate by ffmpeg.
-//! `browser/recording.py`.
 //!
 //! The screencast sends a frame only when the page repaints, so a ticker repeats the latest frame at `FPS`; the
 //! video's timing is then the run's real timing. The recording follows tab switches, captions each step from when
 //! its action began, and ends on a card showing the run's outcome, so one file shows both what the agent did and
-//! what it answered. A second ffmpeg pass over a lossless first one writes it twice: with the step captions burned
-//! in, and plain beside it as `<name>.plain.mp4`.
+//! what it answered. Two more ffmpeg passes over a lossless first one write it twice, one encoder at a time: with the
+//! step captions burned in, and plain beside it as `<name>.plain.mp4`.
 //!
 //! A recording shows whatever the page shows. Typed passwords are masked by the page, but an email address, an order
 //! history or an echoed key is not, so check a recording before sharing it.
@@ -25,6 +24,7 @@ use tokio::time::{sleep, timeout};
 
 use crate::adapters::local_chrome::which;
 use crate::cdp::secs;
+use crate::pointer::PointerMark;
 use crate::session::BrowserSession;
 use crate::urlsplit::urlsplit;
 use crate::warn;
@@ -92,14 +92,23 @@ pub struct Recording {
     ticker: Option<JoinHandle<()>>,
     started: Instant,
     captions: Vec<(Instant, String)>,
+    pointer_marks: Arc<Mutex<Vec<PointerMark>>>,
     card_at: Option<Instant>,
     /// The finished videos, set only once both are encoded: a failed run must not report a file it did not write.
     pub outputs: Vec<PathBuf>,
 }
 
 impl Recording {
-    /// `__aenter__`: start ffmpeg and the cast, and begin writing frames.
     pub async fn start(session: BrowserSession, path: &Path) -> Result<Self, RecordingError> {
+        Self::start_with_marks(session, path, Arc::new(Mutex::new(Vec::new()))).await
+    }
+
+    /// start ffmpeg and the cast, and begin writing frames.
+    pub async fn start_with_marks(
+        session: BrowserSession,
+        path: &Path,
+        pointer_marks: Arc<Mutex<Vec<PointerMark>>>,
+    ) -> Result<Self, RecordingError> {
         if session.grant().is_some() {
             return Err(RecordingError(
                 "a recording shows whatever the tab shows, so it cannot be used with allowed_origins".into(),
@@ -162,6 +171,7 @@ impl Recording {
             ticker: Some(ticker),
             started,
             captions: vec![],
+            pointer_marks,
             card_at: None,
             outputs: vec![],
         })
@@ -238,7 +248,7 @@ impl Recording {
         Ok(())
     }
 
-    /// `__aexit__`: stop the ticker, close the lossless pass and encode both videos.
+    /// stop the ticker, close the lossless pass and encode both videos.
     pub async fn finish(mut self) -> Vec<PathBuf> {
         if let Some(ticker) = self.ticker.take() {
             ticker.abort();
@@ -324,7 +334,7 @@ impl Recording {
         (!self.session.frames_withheld()).then_some(frame)
     }
 
-    /// Encode the final video twice from the lossless pass: with step captions, and plain.
+    /// Encode the final video twice from the lossless pass, one pass after the other: with step captions, and plain.
     async fn encode_all(&mut self, origin: Instant) {
         let subtitles = self.scratch.join("steps.srt");
         // A run that opens straight onto its answer takes no steps, and has no captions to end.
@@ -347,15 +357,30 @@ impl Recording {
             .collect();
         let srt: Vec<String> = cues.iter().enumerate().map(|(n, cue)| format!("{}\n{cue}", n + 1)).collect();
         let _ = tokio::fs::write(&subtitles, srt.join("\n")).await;
+        let marks = self.pointer_marks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        let cursor = self.scratch.join("cursor.ass");
+        let cursor_present = if marks.is_empty() {
+            false
+        } else if let Some((width, height)) = self.frame_dimensions().await {
+            let ass = cursor_ass(&marks, origin, self.card_at.unwrap_or_else(Instant::now), width, height);
+            match tokio::fs::write(&cursor, ass).await {
+                Ok(()) => true,
+                Err(error) => {
+                    warn(&format!("could not write the recording cursor: {error}"));
+                    false
+                }
+            }
+        } else {
+            warn("could not read the recording dimensions, so the cursor is omitted");
+            false
+        };
         // BorderStyle 3 draws a box behind the text, coloured by OutlineColour (alpha first, 00 opaque).
         let style = "Fontsize=10,BorderStyle=3,Outline=6,Shadow=0,OutlineColour=&H50000000,MarginV=16,Alignment=2";
         // libass cannot open an empty subtitle file. The filter names it relative to ffmpeg's working directory: an
         // absolute path's drive colon and backslashes are filter syntax, and a Windows run failed on them.
-        let burn =
-            if cues.is_empty() { "null".to_owned() } else { format!("subtitles=steps.srt:force_style='{style}'") };
-        let mut error = self.encode(&burn).await;
+        let mut error = self.encode(&filter_chain(!cues.is_empty(), cursor_present, style)).await;
         if let Some(failure) = &error
-            && !cues.is_empty()
+            && (!cues.is_empty() || cursor_present)
         {
             // An ffmpeg built without libass has no subtitles filter; the plain video is still worth keeping.
             warn(&format!(
@@ -380,42 +405,96 @@ impl Recording {
         self.outputs = written;
     }
 
-    /// Write both videos into scratch through `burn` on the captioned one; return ffmpeg's error, if any.
-    async fn encode(&self, burn: &str) -> Option<String> {
-        // H.264 needs even dimensions, and yuv420p is what phones and social sites play.
-        let graph = format!(
-            "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p,split=2[plain][steps];[steps]{burn}[captioned]"
-        );
-        // Page text is the subject of a shared clip; x264's default quality blurs small type.
-        let encode = ["-c:v", "libx264", "-crf", "18", "-preset", "slow", "-movflags", "+faststart"];
-        let output = Command::new(&self.ffmpeg_path)
-            .args(["-loglevel", "error", "-y", "-i"])
+    async fn frame_dimensions(&self) -> Option<(u32, u32)> {
+        let sibling = self.ffmpeg_path.with_file_name(format!("ffprobe{}", std::env::consts::EXE_SUFFIX));
+        let probe = if sibling.is_file() { sibling } else { PathBuf::from(which("ffprobe")?) };
+        let result = Command::new(probe)
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "csv=s=x:p=0",
+            ])
             .arg(self.scratch.join("uncaptioned.mkv"))
-            .args(["-filter_complex", &graph, "-map", "[captioned]"])
-            .args(encode)
-            .args(["captioned.mp4", "-map", "[plain]"])
-            .args(encode)
-            .arg("plain.mp4")
-            .current_dir(&self.scratch)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
             .output()
-            .await;
-        match output {
-            Ok(done) if done.status.success() => None,
-            Ok(done) => {
-                let error = String::from_utf8_lossy(&done.stderr).trim().to_owned();
-                Some(if error.is_empty() {
-                    format!("exit status {}", done.status.code().unwrap_or(-1))
-                } else {
-                    cut(&error, 400)
-                })
-            }
-            Err(error) => Some(error.kind().to_string()),
+            .await
+            .ok()?;
+        if !result.status.success() {
+            return None;
         }
+        let text = String::from_utf8(result.stdout).ok()?;
+        let (width, height) = text.trim().split_once('x')?;
+        let (width, height) = (width.parse().ok()?, height.parse().ok()?);
+        (width > 0 && height > 0).then_some((width, height))
     }
+
+    /// Write both videos into scratch through `burn` on the captioned one; return ffmpeg's error, if any. Each video is
+    /// its own ffmpeg pass over the lossless one, so a recording holds one x264 encoder's memory at a time; the plain
+    /// pass does not start when the captioned one failed.
+    async fn encode(&self, burn: &str) -> Option<String> {
+        for (output, filter) in encode_passes(burn) {
+            let done = Command::new(&self.ffmpeg_path)
+                .args(encode_args(&filter, output))
+                .current_dir(&self.scratch)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true)
+                .output()
+                .await;
+            match done {
+                Ok(done) if done.status.success() => {}
+                Ok(done) => {
+                    let error = String::from_utf8_lossy(&done.stderr).trim().to_owned();
+                    return Some(if error.is_empty() {
+                        format!("exit status {}", done.status.code().unwrap_or(-1))
+                    } else {
+                        cut(&error, 400)
+                    });
+                }
+                Err(error) => return Some(error.kind().to_string()),
+            }
+        }
+        None
+    }
+}
+
+/// The two final videos and the filter each is encoded through: the captioned one burns `burn` in, and the plain one
+/// carries only the cursor, when `burn` draws one.
+fn encode_passes(burn: &str) -> [(&'static str, String); 2] {
+    // H.264 needs even dimensions, and yuv420p is what phones and social sites play.
+    let base = "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p";
+    let plain = if burn.contains("cursor.ass") { format!("{base},subtitles=cursor.ass") } else { base.to_owned() };
+    [("captioned.mp4", format!("{base},{burn}")), ("plain.mp4", plain)]
+}
+
+/// One ffmpeg pass from the lossless video in scratch to `output` through `filter`, with one encoder.
+fn encode_args(filter: &str, output: &str) -> Vec<String> {
+    // Page text is the subject of a shared clip; x264's default quality blurs small type.
+    [
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        "uncaptioned.mkv",
+        "-vf",
+        filter,
+        "-c:v",
+        "libx264",
+        "-crf",
+        "18",
+        "-preset",
+        "slow",
+        "-movflags",
+        "+faststart",
+        output,
+    ]
+    .map(str::to_owned)
+    .to_vec()
 }
 
 async fn tick(session: BrowserSession, frames: Arc<Mutex<Frames>>, stdin: Arc<tokio::sync::Mutex<Option<ChildStdin>>>) {
@@ -472,11 +551,11 @@ fn describe(step: &StepResult) -> String {
     let target = step.target.as_ref().map(|t| format!(" {t}")).unwrap_or_default();
     let by = match step.decided_by {
         Decider::Jev => "picked by Jev",
-        Decider::Llm => "picked by the LLM",
+        Decider::Code => "picked by code",
+        Decider::Recipe => "recipe action confirmed by Jev",
     };
     match step.operation {
         Operation::Read => format!("read the page \u{b7} {by}"),
-        Operation::Escalate => "ask the planner".into(),
         Operation::Done => "check the answer".into(),
         operation => format!("{}{target} \u{b7} {by}", operation.as_str().replace('_', " ")),
     }
@@ -486,6 +565,68 @@ fn srt_time(seconds: f64) -> String {
     // Python's round() is half to even.
     let millis = (seconds * 1000.0).round_ties_even() as u64;
     format!("{:02}:{:02}:{:02},{:03}", millis / 3_600_000, millis / 60_000 % 60, millis / 1000 % 60, millis % 1000)
+}
+
+fn ass_time(seconds: f64) -> String {
+    let cs = (seconds.max(0.0) * 100.0).round() as u64;
+    format!("{}:{:02}:{:02}.{:02}", cs / 360_000, cs / 6_000 % 60, cs / 100 % 60, cs % 100)
+}
+
+fn filter_chain(captions: bool, cursor: bool, style: &str) -> String {
+    let mut filters = Vec::new();
+    if captions {
+        filters.push(format!("subtitles=steps.srt:force_style='{style}'"));
+    }
+    if cursor {
+        filters.push("subtitles=cursor.ass".to_owned());
+    }
+    if filters.is_empty() { "null".to_owned() } else { filters.join(",") }
+}
+
+/// The cursor as an ASS overlay: an arrow that glides into each action point in the 400 ms before the action, stays
+/// there until the next one, and a ring that swells and fades on each click. Points are CSS pixels, scaled to the frame.
+fn cursor_ass(marks: &[PointerMark], origin: Instant, until: Instant, width: u32, height: u32) -> String {
+    let mut out = format!(
+        "[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,1,0,7,0,0,0,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    );
+    // The marker is centered on the action point and stays upright as it travels.
+    let size = (f64::from(width) / 1280.0 * 140.0).round().max(100.0);
+    let seconds = |mark: &PointerMark| mark.at.saturating_duration_since(origin).as_secs_f64();
+    let point = |mark: &PointerMark| {
+        ((mark.x * f64::from(width) / mark.width).round(), (mark.y * f64::from(height) / mark.height).round())
+    };
+    let until = until.saturating_duration_since(origin).as_secs_f64();
+    for (i, mark) in marks.iter().enumerate() {
+        if seconds(mark) >= until {
+            continue;
+        }
+        let at = seconds(mark);
+        let (x, y) = point(mark);
+        let (start, placed) = match i.checked_sub(1).map(|previous| &marks[previous]) {
+            Some(previous) => {
+                let (px, py) = point(previous);
+                let start = (at - 0.4).max(seconds(previous));
+                let glide = ((at - start) * 1000.0).round();
+                (start, format!("\\move({px},{py},{x},{y},0,{glide})"))
+            }
+            None => (at, format!("\\pos({x},{y})")),
+        };
+        // The result card is no longer the page that supplied these coordinates.
+        let end = marks.get(i + 1).map_or(until, |next| (seconds(next) - 0.4).max(at)).min(until);
+        out.push_str(&format!(
+            "Dialogue: 2,{},{},Default,,0,0,0,,{{{placed}\\an5\\fscx{size}\\fscy{size}\\p1\\bord1\\shad0\\1c&H3052C5&\\3c&HFFFFFF&}}m -11 -5 l -11 -11 -5 -11 -5 -9 -9 -9 -9 -5 m 5 -11 l 11 -11 11 -5 9 -5 9 -9 5 -9 m 11 5 l 11 11 5 11 5 9 9 9 9 5 m -5 11 l -11 11 -11 5 -9 5 -9 9 -5 9 m -1 -1 l 1 -1 1 1 -1 1{{\\p0}}\n",
+            ass_time(start),
+            ass_time(end)
+        ));
+        if mark.operation == Operation::Click {
+            out.push_str(&format!(
+                "Dialogue: 1,{},{},Default,,0,0,0,,{{\\pos({x},{y})\\an5\\p1\\bord3\\1a&HFF&\\3c&H3052C5&\\fscx100\\fscy100\\t(0,400,\\fscx400\\fscy400\\3a&HFF&)}}m -6 0 b -6 -3 -3 -6 0 -6 b 3 -6 6 -3 6 0 b 6 3 3 6 0 6 b -3 6 -6 3 -6 0{{\\p0}}\n",
+                ass_time(at),
+                ass_time((at + 0.4).min(until))
+            ));
+        }
+    }
+    out
 }
 
 fn html_escape(text: &str) -> String {
@@ -549,6 +690,70 @@ mod tests {
     fn srt_times_round_half_to_even() {
         assert_eq!(srt_time(3723.012), "01:02:03,012");
         assert_eq!(srt_time(0.0), "00:00:00,000");
+    }
+
+    #[test]
+    fn cursor_ass_scales_and_times_marks() {
+        let origin = Instant::now();
+        let marks = [
+            PointerMark {
+                at: origin + std::time::Duration::from_secs(1),
+                x: 50.0,
+                y: 25.0,
+                operation: Operation::Click,
+                width: 100.0,
+                height: 50.0,
+            },
+            PointerMark {
+                at: origin + std::time::Duration::from_secs(2),
+                x: 25.0,
+                y: 25.0,
+                operation: Operation::Hover,
+                width: 50.0,
+                height: 50.0,
+            },
+        ];
+        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(3), 200, 100);
+        assert!(ass.contains("PlayResX: 200\nPlayResY: 100"));
+        assert!(ass.contains("\\pos(100,50)"));
+        assert!(ass.contains("\\move(100,50,100,50,0,400)"));
+        // The arrow stays where it clicked until the glide to the next point begins, and the last one stays put.
+        assert!(ass.contains("Dialogue: 2,0:00:01.00,0:00:01.60"));
+        assert!(ass.contains("Dialogue: 2,0:00:01.60,0:00:03.00"));
+        // Only the click pulses.
+        assert!(ass.contains("Dialogue: 1,0:00:01.00,0:00:01.40"));
+        assert_eq!(ass.matches("Dialogue: 1,").count(), 1);
+    }
+
+    #[test]
+    fn empty_cursor_leaves_existing_filter_graph_choice_unchanged() {
+        assert_eq!(filter_chain(false, false, ""), "null");
+        assert_eq!(filter_chain(true, false, "Fontsize=10"), "subtitles=steps.srt:force_style='Fontsize=10'");
+        assert_eq!(filter_chain(false, true, ""), "subtitles=cursor.ass");
+    }
+
+    #[test]
+    fn encode_passes_run_one_encoder_each() {
+        let base = "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p";
+        let steps = "subtitles=steps.srt:force_style='Fontsize=10'";
+        let [captioned, plain] = encode_passes(&filter_chain(true, false, "Fontsize=10"));
+        assert_eq!(captioned, ("captioned.mp4", format!("{base},{steps}")));
+        assert_eq!(plain, ("plain.mp4", base.to_owned()));
+
+        let [captioned, plain] = encode_passes(&filter_chain(true, true, "Fontsize=10"));
+        assert_eq!(captioned.1, format!("{base},{steps},subtitles=cursor.ass"));
+        assert_eq!(plain.1, format!("{base},subtitles=cursor.ass"));
+
+        let passes = encode_passes("null");
+        assert!(passes.iter().all(|(_, filter)| !filter.contains("subtitles")));
+
+        for (output, filter) in passes {
+            let args = encode_args(&filter, output);
+            assert_eq!(args.iter().filter(|arg| *arg == "-c:v").count(), 1);
+            assert_eq!(args.iter().filter(|arg| arg.ends_with(".mp4")).collect::<Vec<_>>(), [output]);
+            assert_eq!(args.last().map(String::as_str), Some(output));
+            assert!(!args.iter().any(|arg| arg == "-filter_complex" || arg == "-map" || arg.contains("split")));
+        }
     }
 
     #[test]

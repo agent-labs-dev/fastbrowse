@@ -3,6 +3,7 @@
 import { FastbrowseError, messageOf, RpcError } from './errors.ts';
 import {
   type BrowserEvent,
+  type CancellationReceipt,
   ErrorCode,
   type RunEvent,
   type RunFrame,
@@ -90,10 +91,10 @@ export class Callbacks {
     try {
       const result = await run();
       // A run can finish before the cancellation reaches it, and its callback failed all the same.
-      return served.failure === undefined ? result : endedBy(served.failure);
+      return served.failure === undefined ? result : endedBy(served.failure, result);
     } catch (error) {
       if (served.failure !== undefined && error instanceof RpcError && error.code === ErrorCode.CANCELLED) {
-        return endedBy(served.failure);
+        return endedBy(served.failure, error.receipt);
       }
       throw error;
     } finally {
@@ -125,21 +126,25 @@ export class Callbacks {
   }
 }
 
-/** The result of a run that a throwing callback ended, in the shape the server gives one. */
-function endedBy(failure: string): RunResult {
+/**
+ * The result of a run that a throwing callback ended, in the shape the server gives one, with the steps, cost
+ * and videos of what it did: its receipt, or its own result when it finished before the cancellation reached it.
+ */
+function endedBy(failure: string, spent?: CancellationReceipt): RunResult {
   return {
     status: 'error',
     budget: null,
     answer: null,
     data: null,
     evidence: [],
-    steps: [],
-    cost: { lines: [] },
+    steps: spent?.steps ?? [],
+    cost: spent?.cost ?? { lines: [] },
     artifacts: [],
     citations: [],
     error: failure,
     final_url: null,
-    recordings: [],
+    recordings: spent?.recordings ?? [],
     wall: null,
+    browser: spent?.browser ?? null,
   };
 }

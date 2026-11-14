@@ -29,9 +29,15 @@ interface Core {
   RunCancel: new () => RunCancel;
   version(): string;
   protocolVersion(): number;
+  setPdfHelper(path: string): boolean;
 }
 
 const core = createRequire(import.meta.url)('../fastbrowse.node') as Core;
+
+test('the first PDF helper set stands', () => {
+  assert.equal(core.setPdfHelper('/opt/fastbrowse/bin/fastbrowse'), true);
+  assert.equal(core.setPdfHelper('/elsewhere/fastbrowse'), false);
+});
 
 test('a grant entry is normalized to one exact origin', () => {
   assert.equal(core.parseOrigin('https://Example.COM'), 'https://example.com');
@@ -85,8 +91,9 @@ const ok = (value: unknown) => async () => JSON.stringify({ ok: value });
 
 test('runTask refuses what serve refuses, with its code and message', async () => {
   const reply = JSON.parse(await core.runTask(params({ tsak: 1 })));
-  assert.deepEqual(reply, { error: { code: -32602, message: 'run: tsak: Extra inputs are not permitted' } });
-  assert.equal(core.protocolVersion(), 1);
+  assert.equal(reply.error.code, -32602);
+  assert.match(reply.error.message, /^run: tsak: unknown field `tsak`/);
+  assert.equal(core.protocolVersion(), 3);
 });
 
 test('a run hands each event to onEvent, in order, before it resolves', async () => {
@@ -103,7 +110,18 @@ test('a run hands each event to onEvent, in order, before it resolves', async ()
 test('a RunCancel stops the run, which settles with the cancelled error once it has closed', async () => {
   const cancel = new core.RunCancel();
   const reply = scripted('never_ends').runTask(params(), { onEvent: async () => (cancel.cancel(), '{"ok":null}') }, cancel);
-  assert.deepEqual(JSON.parse(await reply), { error: { code: -32002, message: "run 'r' was cancelled" } });
+  const { error } = JSON.parse(await reply);
+  assert.equal(error.code, -32002);
+  assert.equal(error.message, "run 'r' was cancelled");
+  // What the run did and spent before it stopped, the unpriced browser left unpriced.
+  assert.equal(error.data.steps.length, 1);
+  assert.deepEqual(error.data.cost.lines.map((line: { dollars: number | null }) => line.dollars), [0.004, null]);
+  assert.deepEqual(error.data.recordings, []);
+});
+
+test('an error other than a cancellation has no data', async () => {
+  const reply = JSON.parse(await core.runTask(params({ tsak: 1 })));
+  assert.equal('data' in reply.error, false);
 });
 
 test('until and resolveSecret answer the run, and a failed one ends it as an error that hides what was thrown', async () => {

@@ -14,8 +14,7 @@ dist/
 recordings/
 *.mp4
 
-# Local audit output and JavaScript development tools.
-.sloppatrol/runs/
+# JavaScript development tools.
 node_modules/
 
 # Cargo output and the locally built Node addon.
@@ -30,3 +29,6 @@ crates/fastbrowse-node/*.node
 src/fastbrowse/_native*.so
 src/fastbrowse/_native*.pyd
 wheels/
+
+# Sloppatrol patrol runs, checkouts and score cache
+.sloppatrol/runs/

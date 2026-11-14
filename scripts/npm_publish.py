@@ -15,8 +15,8 @@ Two things were missing, and this script is both:
   and a publish that is refused because the version is already there (or that leaves the version on the
   registry despite reporting an error) counts as done.
 * the SDK is published only once all five platform packages are on npm at this version, and the last thing
-  this does is read every dist-tag back. A run that cannot make `latest` name the release says so with the
-  exact command that would, instead of ending green.
+  this does is read every dist-tag back, once npm's cache has had time to show them. A run that cannot make
+  `latest` name the release says so with the exact command that would, instead of ending green.
 
 Standard library only: a release runs this before anything is installed.
 """
@@ -24,12 +24,14 @@ Standard library only: a release runs this before anything is installed.
 import argparse
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 # The five platform packages, and the SDK that depends on them at the same version.
 TARGETS = ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "win32-x64")
 SDK = "fastbrowse"
+SETTLE_POLL = 10  # seconds between reads of `latest` while the registry cache catches up
 
 # The registry refuses a second probe of the same bytes with this, and will refuse every retry of the same
 # tarball the same way: the transparency-log entry is keyed on the content, not on the attempt.
@@ -71,7 +73,9 @@ def latest(package: str) -> str:
 
 def publish(path: Path, version: str) -> Attempt:
     """Publish one directory, then believe the registry rather than npm's exit code."""
-    result = run("npm", "publish", str(path), "--access", "public", "--tag", "latest")
+    # npm reads a relative `owner/name` path, such as the workflow's `packages/sdk`, as a GitHub repository and
+    # tries to clone it (0.10.0's SDK failed with git's exit code 128), so it is given the absolute path.
+    result = run("npm", "publish", str(path.resolve()), "--access", "public", "--tag", "latest")
     output = f"{result.stdout}\n{result.stderr}".strip()
     return Attempt(result.returncode == 0, output)
 
@@ -102,7 +106,7 @@ def publish_one(package: str, path: Path, version: str) -> tuple[bool, str]:
     return False, f"{package}@{version} could not be published: {retry.summary() or attempt.summary()}"
 
 
-def differences(version: str) -> list[str]:
+def differences(version: str) -> list[tuple[str, str]]:
     """Every package whose `latest` dist-tag does not name this release."""
     found = []
     for package in (SDK, *(f"@fastbrowse/{target}" for target in TARGETS)):
@@ -112,6 +116,19 @@ def differences(version: str) -> list[str]:
     return found
 
 
+def settled_differences(version: str, settle: float) -> list[tuple[str, str]]:
+    """The packages whose `latest` still does not name this release once the registry has had `settle` seconds.
+
+    npm serves package documents from a cache, so a read straight after an accepted publish can show the old
+    `latest`: 0.10.0's SDK read back 0.9.1 at 00:31:45 and became visible at 00:32:59. Drift is what remains
+    after that window, not what the first read shows.
+    """
+    deadline = time.monotonic() + settle
+    while (drifted := differences(version)) and (remaining := deadline - time.monotonic()) > 0:
+        time.sleep(min(SETTLE_POLL, remaining))
+    return drifted
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--version", required=True, help="The tag's version, which every package carries.")
@@ -119,6 +136,12 @@ def main(argv: list[str] | None = None) -> int:
         "--platforms", type=Path, required=True, help="The directory holding one built package per target."
     )
     parser.add_argument("--sdk", type=Path, required=True, help="The SDK package directory.")
+    parser.add_argument(
+        "--settle",
+        type=float,
+        default=300,
+        help="Seconds to wait for npm's cached `latest` to show the release before calling it drift.",
+    )
     arguments = parser.parse_args(argv)
     version = arguments.version
 
@@ -148,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    drifted = differences(version)
+    drifted = settled_differences(version, arguments.settle)
     if drifted:
         print(f"npm publishes {version} but `latest` does not name it:", file=sys.stderr)
         for package, named in drifted:

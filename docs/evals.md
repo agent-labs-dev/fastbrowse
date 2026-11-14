@@ -1,96 +1,73 @@
-# Measuring fastbrowse
+# Evals
 
-We measure fastbrowse with browser fixture tests and benchmark tasks run through Parallax.
+Fastbrowse's internal browser benchmark is a Parallax plugin in `evals/`.
+Parallax is the one generic eval engine. It owns task loading, world-less task
+records, browser evidence, judging, retries, budgets, run artifacts, and the
+browser harnesses.
 
-The [benchmark page](https://fastbrowse.ai/benchmarks) describes these measurements:
+## Run the benchmark
 
-| Comparison | Arms | Measurement |
-|---|---|---|
-| C1, agent against agent (`internal-hosted`) | fastbrowse, Browser Use hosted default | Source task success on matched tasks |
-| C2, backend against backend (`internal-backend`) | fastbrowse on its own browser pool, fastbrowse on a Browser Use Cloud browser | Source task success on matched tasks |
-| C3, against Ultrafast (`internal-ultrafast`) | fastbrowse on its own browser pool, Jev Ultrafast | Source task success on matched tasks |
-
-These three are the only comparisons; [benchmark results](benchmarks.md) records the figures each has. The
-upstream suites below and the Codex with Cua Driver arm are diagnostics, not comparisons:
-
-| Diagnostic | Agents | Measurement |
-|---|---|---|
-| BU Bench | fastbrowse, with Browser Use's published figures as a separate reference | Official weighted rubric score |
-| Online-Mind2Web | fastbrowse, with published figures as a separate reference | Official full-task success |
-
-Ultrafast coverage and hosted-default fallbacks are reported separately. An official benchmark's partial
-rubric score is not a solved-task percentage. A reported comparison needs matching task revision, scope,
-judge and browser protocol; missing reference configuration is disclosed rather than assumed equivalent.
-
-## Fixture checks
-
-Local and mock suites exercise real browsers, completion rules and authorization gates. They are regression
-checks, not claims about performance across the web. `.github/workflows/evals.yml` runs them nightly and on
-demand; they do not gate a release.
-
-The recorded run: `uv run python -m fastbrowse.evals.runner --suite local --repeat 1` exercises real local Chrome and grades
-what the fixture server recorded: **6/6 passed** (recorded 2026-10-15). The fixture receipt a published
-result rests on, its head sha and workflow run id, is recorded in `docs/results/benchmarks.json`, and the local
-run is listed in `docs/results/evidence.manifest.json`. The mock suite is the larger companion suite.
+Install the eval environment first:
 
 ```sh
-uv run python -m fastbrowse.evals.runner --help
-uv run python -m fastbrowse.evals.publication --help
+cd evals
+uv sync --locked
 ```
 
-## Task identity and result evidence
-
-Parallax owns internal prompts, truth functions and graders. Its generated metadata export,
-`src/fastbrowse/evals/benchmark-catalog.json`, contains task ids, versions, grader fingerprints, eligible
-agents, the reason each head-to-head agent that skips a task cannot run it, and source hashes. It deliberately omits task text. Parallax checks the export against its canonical
-sources; fastbrowse validates it against the public version lock.
-
-Recorded results name the task catalog digest, Parallax runner, fastbrowse build and provider route.
-Comparisons report task coverage, repeat counts, physical attempts, costs and regressions. Full logs,
-recordings, answers and page content stay out of Git and the public feed.
-
-Headlines use complete suites. Diagnostic campaigns report their coverage and limitations separately.
-
-`docs/results/evidence.public.json` contains public run summaries, with exact content hashes
-pinned by `evidence.manifest.json`. The site validates both files at one commit before rendering.
-
-Read [the eval workflow](agents/evals.md) before changing agent behavior or running paid checks.
-
-## Codex with Cua Driver
-
-A diagnostic arm, not one of the three comparisons.
-
-The internal comparison catalog includes the opt-in `cua-codex` arm, using Codex CLI 0.160.1
-and Cua Driver 0.34.0. Parallax runs it through browser MCP tools on a private Linux desktop,
-with the existing source task graders. Credential and safe-stop tasks are excluded.
-
-Rows record the local browser environment, and billed spend remains unknown. Local timings
-are not a controlled comparison with cloud arms. The recorded-results view shows each campaign separately. Source grades, completion,
-physical attempts and known costs are reported independently; unknown cost is never treated as zero.
-See Parallax's browser benchmark documentation for setup and retained attempt traces.
-
-### API-equivalent estimates
-
-An optional `estimated_api_cost` accompanies a recorded run without filling its `dollars` field.
-It names the model, usage digest, rate source and rate-check date. Missing usage or an unknown
-service tier stays unknown. Grade, completion and recorded time remain unchanged.
-
-Recover Cua usage from exact artifact paths in a retained private ledger:
+Run a local dry run without credentials or network calls:
 
 ```sh
-uv run python -m fastbrowse.evals.api_cost --ledger <ledger.jsonl> --artifact-root <checkout> --out <recovery.json>
+uv run parallax run fastbrowse \
+  --harness fastbrowse --repeats 1 --budget 1 --reserve 1 --dry-run
 ```
 
-The recovery file binds estimates to the ledger digest and row index. It contains token counts and
-cost ranges, without messages, answers or local artifact paths. It does not publish results or edit
-the ledger. A publication must retain the original sources and verify that digest before joining rows.
+A campaign uses the same command without `--dry-run`, normally with three
+repeats and an approved budget:
 
-GPT-6 Astra standard API rates are $10 per million uncached input tokens, $1 for cached input,
-$12.50 for cache writes and $50 for output. Reasoning tokens are included in output tokens.
-[OpenAI pricing](https://developers.openai.com/api/docs/models/gpt-6-astra) doubles input and cache
-rates and multiplies output rates by 1.5 for requests above 272,000 input tokens. CLI usage totals
-combine requests, so totals above that threshold yield a short-to-long-context range. Totals below
-it prove every request used short-context rates. Estimates exclude subscription charges, browser
-infrastructure and runs without reported turn usage. Codex may omit startup prewarm tokens from
-turn totals, so these bounds cover only recorded tokens, not the complete run. The basis is
-`recorded-token-api-equivalent-range`. Estimates remain separate from recorded spend.
+```sh
+uv run parallax run fastbrowse \
+  --harness fastbrowse,fastbrowse-pool \
+  --repeats 3 --budget 300 --reserve 3 \
+  --retry-invalid 2 --retry-wait 60 --out runs/internal-backend
+```
+
+The plugin registers `fastbrowse`, `fastbrowse-pool`, and
+`fastbrowse-hosted`. Parallax also provides `browser-use-cloud`,
+`browser-use-oss`, `browser-harness`, and `cua-codex`.
+
+Each task is world-less, has `Area.BROWSER`, and uses
+`browser-evidence-v1`. A browser harness stores the final page under trial
+metadata key `browser`, using the `plain-cdp` observer. Timing, cost
+components, and secret-free harness details use Parallax trial hooks.
+
+## Results and publication
+
+Parallax writes a run directory containing `manifest.json`, `results.jsonl`,
+`budget.jsonl`, and private trial artifacts. The publication adapter reads those
+files and maps `TrialResult` values to the existing
+`fastbrowse.evals.benchmarks.Row` schema. Physical retries are retained in the
+row's `physical_runs` count.
+
+The mapping is:
+
+- `fastbrowse` to `fastbrowse`;
+- `fastbrowse-pool` to `fastbrowse-pool`;
+- `browser-use-cloud` with `bu-ultrafast` to `browser-use-ultrafast`;
+- other `browser-use-cloud` results to `browser-use`;
+- `browser-harness` to `browser-harness`;
+- `browser-use-oss` to `browser-use-oss`.
+
+`fastbrowse-hosted` and `cua-codex` are diagnostic and have no public arm.
+Candidate schema 7, publication groups, site groups, task versions, and
+published history remain unchanged.
+
+Use `fastbrowse-evals browser catalog PATH` to export or check the public task
+catalog. Use `fastbrowse-evals browser publish-candidate RUN_DIR ...` to build a
+candidate from Parallax run directories. The command runs the existing
+publication gate before writing the candidate.
+
+The official benchmark workflow runs Parallax dev20's `bu-bench` and
+`online-mind2web` task sources. It checks out each pinned upstream judge in its
+own environment, maps the upstream judge key through Parallax's official
+bridge, and passes sanitized Parallax run directories with provenance to the
+same publication mapping. Published history remains unchanged.
