@@ -54,7 +54,7 @@ and `cua-codex`. The publication mapping is:
 | `fastbrowse-hosted` and `cua-codex` | diagnostic only |
 
 Every task record is world-less, uses `Area.BROWSER`, requires browser
-capability, and names `browser-evidence-v1`. Parallax owns evidence splitting,
+capability, and names `browser-evidence-v2`. Parallax owns evidence splitting,
 screenshots, the fallback judge, judge identity, interruption retries, typed
 timing, cost components, and harness details. The fastbrowse harness only
 provides the agent integration and final page observation.
@@ -96,7 +96,7 @@ the old figures as recorded history.
 
 ## Official suites
 
-The official workflow runs Parallax dev21's `bu-bench` and
+The official workflow runs Parallax 2.0.0.dev23's `bu-bench` and
 `online-mind2web` sources with policies `bu-bench-upstream-v1` and
 `online-mind2web-upstream-v1`. It clones each pinned upstream judge at the
 revision named by Parallax, installs its own dependencies in its own virtual

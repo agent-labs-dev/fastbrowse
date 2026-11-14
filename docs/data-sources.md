@@ -4,7 +4,7 @@ fastbrowse retains source identities in `fastbrowse.evals.sources` for its
 catalog and historical checks. The `evals/` project (`fastbrowse_evals`, a
 Parallax plugin) owns the fastbrowse task source and benchmark execution.
 
-Parallax dev20 owns the official `bu-bench` and `online-mind2web` task sources,
+Parallax 2.0.0.dev23 owns the official `bu-bench` and `online-mind2web` task sources,
 dataset checks, and upstream judge bridges. Their pinned revisions and access
 requirements are documented by Parallax's `docs/official-suites.md`.
 

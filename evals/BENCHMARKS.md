@@ -86,7 +86,7 @@ existing publication gate.
 
 ## Official suites
 
-Parallax dev20 supplies the official sources `bu-bench` and `online-mind2web`,
+Parallax 2.0.0.dev23 supplies the official sources `bu-bench` and `online-mind2web`,
 with policies `bu-bench-upstream-v1` and `online-mind2web-upstream-v1`. The
 official workflow checks out the pinned upstream judge for each source, installs
 its dependencies in that checkout's own environment, and runs:
