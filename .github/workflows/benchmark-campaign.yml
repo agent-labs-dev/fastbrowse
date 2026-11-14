@@ -7,13 +7,12 @@ run-name: Benchmark campaign ${{ inputs.campaign_id || github.event.client_paylo
 # every run drives real browsers and real model calls, so it spends money and is never triggered by a push or a pull
 # request. When every group has run,
 # publish-evals.yml opens a pull request on agent-labs-dev/fastbrowse-site with the candidate and the site's group
-# files; merging that pull request is the approval. Each group's ledger goes to the private Langfuse project from its
-# own job once the group stops, finished or not, and the candidate requires it there. A failed send fails only that
-# job, and "Re-run failed jobs" repeats it from the group's ledger artifact.
+# files; merging that pull request is the approval. Each group's Parallax run directory is uploaded from its own job,
+# finished or not, and "Re-run failed jobs" repeats it from the run artifact.
 #
-# `official_runs` names finished Official benchmarks runs of the same `fastbrowse_ref` and `harness_sha`. Their public
-# rows join this candidate as the bu-bench and online-mind2web groups: the site reads one candidate, so every group in
-# it comes from one build. Run them first; this workflow neither starts nor waits for them.
+# `official_runs` names finished Official benchmarks runs of the same `fastbrowse_ref` and `harness_sha`. Their
+# sanitized Parallax run directories join this candidate as the bu-bench and online-mind2web groups: the site reads one
+# candidate, so every group in it must come from one build. Run them first; this workflow neither starts nor waits for them.
 #
 # The campaign code is `evals/` in this repository (fastbrowse_evals, a Parallax plugin) at `harness_sha`, checked
 # out beside the measured build so the harness and the build can be different commits.
@@ -26,19 +25,16 @@ run-name: Benchmark campaign ${{ inputs.campaign_id || github.event.client_paylo
 # `extra_arms` adds arms beside them. `fastbrowse-pool` only in a smoke. `fastbrowse-hosted`, our own product's
 # public API as a customer calls it, may join a real campaign, and then always as its own group writing
 # `fastbrowse-hosted.jsonl`: publication's internal groups accept a fixed arm set, so its rows must never enter a
-# published ledger. It is a diagnostic - its dollars are the customer charge rather than metered provider cost, and
-# the API returns no copy of the final page, so the page half of a task is ungraded - and no step reads that ledger
+# published group. It is a diagnostic - its dollars are the customer charge rather than metered provider cost, and
+# the API returns no copy of the final page, so the page half of a task is ungraded - and no step reads that run
 # into a candidate. A failure there is reported on the run but does not block publication, so it costs a rerun only
 # if its own rows are wanted; every published group still fails the campaign.
 # The budget gates new attempts; Parallax gives no task time, step or dollar limit to an active arm.
-# Browser Use (its default model and bu-ultrafast) and Browser Harness are not run by default: their figures come from
-# docs/results/competitor-reference.json,
-# which only the candidate step reads, and each is labelled with the date it was measured. Without a reference that
-# matches the catalog, the candidate is refused.
+# Browser Use (its default model and bu-ultrafast) and Browser Harness are not run by default. Set
+# `refresh_competitors` or name them in `head_to_head_arms` to measure them in the current campaign.
 #
-# `refresh_competitors` adds all three to the head-to-head group for one full dispatch, and the candidate artifact gains
-# competitor-reference.json. Commit that file to docs/results/ so later campaigns reuse it. Browser Harness drives a
-# Browser Use Cloud browser through the Codex CLI on gpt-6-luna, installed only for a dispatch that runs it.
+# `refresh_competitors` adds all three to the head-to-head group for one full dispatch. Browser Harness drives a Browser
+# Use Cloud browser through the Codex CLI on gpt-6-luna, installed only for a dispatch that runs it.
 #
 # `head_to_head_arms` runs exactly the arms it names in the head-to-head group, fastbrowse included only if named, to
 # re-measure some arms alone. The candidate takes every other arm's rows from the campaign's earlier runs (below), each
@@ -46,8 +42,6 @@ run-name: Benchmark campaign ${{ inputs.campaign_id || github.event.client_paylo
 #
 # Repository configuration this file needs (checked before any paid call):
 #   secrets: OPENROUTER_BENCHMARKS_API_KEY (as OPENROUTER_API_KEY), OPENROUTER_JUDGE_API_KEY (as PARALLAX_JUDGE_API_KEY),
-#            LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY (each ledger is sent there; the candidate reads them back,
-#            with the fixture run)
 #            BROWSER_USE_API_KEY
 #   secrets when `extra_arms` names fastbrowse-hosted: FASTBROWSE_HOSTED_API_KEY (its own submit would otherwise
 #            fail one attempt at a time, after the paid groups had started)
@@ -56,12 +50,12 @@ run-name: Benchmark campaign ${{ inputs.campaign_id || github.event.client_paylo
 #   vars:    PARALLAX_JUDGE_BASE_URL, PARALLAX_JUDGE_MODELS
 #
 # `smoke` finds bugs before a release: one repeat of every task in the chosen group (`groups: all` means the head-to-head
-# group, which holds both arms), its ledger sent to Langfuse marked as smoke, and no candidate or site pull request, so it can never publish.
+# group, which holds both arms), and no candidate or site pull request, so it can never publish.
 #
 # The candidate takes each task from the newest finished run of this campaign that measured it in full, as the release
 # gate scores it, so a late fix reruns only the tasks it affects (`only`) and its stage combines that run with the
 # earlier ones. `candidate_only` runs nothing and builds the candidate from the campaign's finished runs alone; its
-# `fastbrowse_ref` is the newest run's build, which the fixture Evals dispatch must have passed on.
+# `fastbrowse_ref` is the newest run's build in the campaign's Parallax run artifacts.
 #
 # `budget` is each group's approved total. It only gates whether the next run may start: a run holds its agent,
 # browser and judge reserves (1 + 1 + 1 dollars) while in flight, and starts only
@@ -103,6 +97,10 @@ on:
         description: Approved total dollars for each group; it only gates new runs, see the header
         required: true
         default: "300"
+      reserve:
+        description: Dollars Parallax reserves before each trial starts
+        required: true
+        default: "3"
       suites:
         description: Space separated Parallax suites
         required: true
@@ -113,7 +111,7 @@ on:
         type: boolean
         default: false
       refresh_competitors:
-        description: Also run Browser Use and Browser Harness live and write the rows of the competitor reference. A smoke writes none. Needs the head-to-head group
+        description: Also run Browser Use and Browser Harness live in this campaign. A smoke writes none. Needs the head-to-head group
         required: true
         type: boolean
         default: false
@@ -159,10 +157,12 @@ concurrency:
 
 env:
   UV_PYTHON: "3.13"
+  CAMPAIGN_ID: ${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
   SUITES: ${{ inputs.suites || github.event.client_payload.suites || 'core dev stretch-dev' }}
   # A smoke run has one repeat whatever `repeat` says.
   REPEAT: ${{ (inputs.smoke || github.event.client_payload.smoke == true) && '1' || inputs.repeat || github.event.client_payload.repeat || '3' }}
   BUDGET: ${{ inputs.budget || github.event.client_payload.budget || '300' }}
+  RESERVE: ${{ inputs.reserve || github.event.client_payload.reserve || '3' }}
   SMOKE: ${{ inputs.smoke || github.event.client_payload.smoke == true }}
   REFRESH: ${{ inputs.refresh_competitors || github.event.client_payload.refresh_competitors == true }}
   GROUPS_CHOSEN: ${{ inputs.groups || github.event.client_payload.groups || 'all' }}
@@ -205,7 +205,7 @@ jobs:
           if test "$REFRESH" = true && test "$GROUPS_CHOSEN" = fastbrowse; then
             echo "::error::refresh_competitors needs the head-to-head group"; exit 1
           fi
-          # Each word becomes a Parallax argument, so anything but a catalog suite stops here.
+          # Each word names a task-source suite that the run step translates to task ids.
           read -ra chosen <<< "$SUITES"
           test "${#chosen[@]}" -gt 0 || { echo "::error::suites names no suite"; exit 1; }
           for suite in "${chosen[@]}"; do
@@ -226,7 +226,7 @@ jobs:
             jq -e --arg key "$key" '(. // {})[$key] | . == null or type == "boolean"' <<< "$PAYLOAD" > /dev/null \
               || { echo "::error::$key in client_payload must be true or false"; exit 1; }
           done
-          for key in repeat budget; do
+          for key in repeat budget reserve; do
             # A workflow_dispatch has no payload, which reads as null here.
             jq -e --arg key "$key" '. // {} | has($key) | not' <<< "$PAYLOAD" > /dev/null && continue
             jq -e --arg key "$key" '.[$key] | tonumber? // 0 | . > 0' <<< "$PAYLOAD" > /dev/null \
@@ -241,11 +241,14 @@ jobs:
           case "$BUDGET" in
             ''|*[!0-9.]*) echo "budget must be a number, got '$BUDGET'"; exit 1 ;;
           esac
+          case "$RESERVE" in
+            ''|*[!0-9.]*) echo "reserve must be a number, got '$RESERVE'"; exit 1 ;;
+          esac
           case "$OFFICIAL_RUNS" in
             *[!0-9\ ]*) echo "::error::official_runs must be run ids separated by spaces"; exit 1 ;;
           esac
           # `only` may narrow a release run: the gate scores each task on its newest run.
-          # The hosted API writes a diagnostic ledger; the pool changes a published group's browser and stays
+          # The hosted API writes a diagnostic run; the pool changes a published group's browser and stays
           # smoke-only. Concurrency applies to every group and is recorded with its invocation and attempts.
           if test "$SMOKE" != true && test -n "$EXTRA_ARMS"; then
             for arm in $EXTRA_ARMS; do
@@ -302,24 +305,9 @@ jobs:
             echo "harness_sha=$HARNESS_SHA"
             echo "run_on=$(date -u +%F)"
           } >> "$GITHUB_OUTPUT"
-      # The stage job needs a passing Evals dispatch on this build, so a campaign that will stage is refused here,
-      # however it was started, rather than after the budget is spent. A smoke never stages.
-      - name: Require an Evals dispatch on the build
-        if: ${{ !(inputs.smoke || github.event.client_payload.smoke == true) }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          FIXTURE_SHA: ${{ steps.pins.outputs.fastbrowse_sha }}
-        run: |
-          conclusion="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow evals.yml --commit "$FIXTURE_SHA" \
-            --event workflow_dispatch --limit 1 --json status,conclusion \
-            --jq '.[0] | if . == null then "missing" elif .status != "completed" then "running" else .conclusion end')"
-          case "$conclusion" in
-            success|running) ;;
-            *) echo "::error::Evals on $FIXTURE_SHA is $conclusion; dispatch evals.yml at it first"; exit 1 ;;
-          esac
       - name: Check the credentials
         id: credentials
-        # A candidate built from earlier runs spends nothing; its readback needs only the Langfuse keys.
+        # A candidate built from earlier runs spends nothing and skips this check.
         if: ${{ env.CANDIDATE_ONLY != 'true' }}
         env:
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
@@ -377,7 +365,7 @@ jobs:
           # Words only: the validation step admitted nothing but arm names.
           if test -n "$HEAD_TO_HEAD_ARMS"; then read -ra named <<< "$HEAD_TO_HEAD_ARMS"; paired="${named[*]}"; fi
           # `fastbrowse-hosted` never joins a published group: each internal group's arm set is fixed in the
-          # publication gate, so its rows would refuse the candidate. It always gets its own ledger, which no
+          # publication gate, so its rows would refuse the candidate. It always gets its own run, which no
           # candidate step reads.
           extra=""
           hosted=""
@@ -385,10 +373,10 @@ jobs:
             if test "$arm" = fastbrowse-hosted; then hosted="fastbrowse-hosted"; else extra="$extra $arm"; fi
           done
           # Every group takes the dispatch setting; empty leaves the harness default of 8.
-          fastbrowse="{\"label\":\"fastbrowse\",\"key\":\"fastbrowse\",\"arms\":\"fastbrowse$extra\",\"conc\":\"$RUN_CONCURRENCY\",\"out\":\"internal-fastbrowse.jsonl\"}"
-          head_to_head="{\"label\":\"head-to-head\",\"key\":\"head-to-head\",\"arms\":\"$paired$extra\",\"conc\":\"$RUN_CONCURRENCY\",\"out\":\"head-to-head.jsonl\"}"
+          fastbrowse="{\"label\":\"fastbrowse\",\"key\":\"fastbrowse\",\"group\":\"internal-fastbrowse\",\"arms\":\"fastbrowse$extra\",\"conc\":\"$RUN_CONCURRENCY\",\"out\":\"internal-fastbrowse\"}"
+          head_to_head="{\"label\":\"head-to-head\",\"key\":\"head-to-head\",\"group\":\"internal-hosted\",\"arms\":\"$paired$extra\",\"conc\":\"$RUN_CONCURRENCY\",\"out\":\"internal-hosted\"}"
           hosted_group=""
-          test -z "$hosted" || hosted_group=",{\"label\":\"hosted\",\"key\":\"hosted\",\"arms\":\"fastbrowse-hosted\",\"conc\":\"$RUN_CONCURRENCY\",\"out\":\"fastbrowse-hosted.jsonl\"}"
+          test -z "$hosted" || hosted_group=",{\"label\":\"hosted\",\"key\":\"hosted\",\"group\":\"fastbrowse-hosted\",\"arms\":\"fastbrowse-hosted\",\"conc\":\"$RUN_CONCURRENCY\",\"out\":\"fastbrowse-hosted\"}"
           case "$GROUP_SET" in
             fastbrowse) include="[$fastbrowse$hosted_group]" ;;
             head-to-head) include="[$head_to_head$hosted_group]" ;;
@@ -403,7 +391,7 @@ jobs:
               fastbrowse) ;;
               *) echo "Head-to-head arms: \`$paired$extra\`." ;;
             esac
-            # Named as a diagnostic where a reader first sees the arms, so its ledger is never read as a
+            # Named as a diagnostic where a reader first sees the arms, so its run is never read as a
             # like-for-like row: customer charge rather than metered cost, and the page half is ungraded.
             test -z "$hosted" || echo "Diagnostic group \`hosted\`: \`fastbrowse-hosted\` (our own hosted API, customer charge, page half ungraded; not published)."
           } >> "$GITHUB_STEP_SUMMARY"
@@ -417,7 +405,7 @@ jobs:
     permissions: {contents: read, statuses: write, id-token: write}
     # A full campaign is hours, not minutes, but a stuck cloud browser must not hold a runner for a day.
     timeout-minutes: 350
-    # The hosted diagnostic never decides whether a campaign may publish: its ledger is in no candidate, so its
+    # The hosted diagnostic never decides whether a campaign may publish: its run is in no candidate, so its
     # failure is reported on the run and does not skip the stage job. Every published group still fails the run.
     continue-on-error: ${{ matrix.label == 'hosted' }}
     strategy:
@@ -425,7 +413,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.resolve.outputs.matrix) }}
     env:
-      OUT: ${{ github.workspace }}/ledgers/${{ matrix.out }}
+      OUT: ${{ github.workspace }}/runs/${{ matrix.out }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -449,28 +437,11 @@ jobs:
           # The lock pins fastbrowse to the harness checkout; the measured build replaces it. Every later command runs
           # with --no-sync: a syncing `uv run` would put the harness's own fastbrowse back.
           uv sync --locked --no-install-package fastbrowse
-          # A git+file install records the commit in direct_url.json, so the run names the measured build
-          # (fastbrowse.evals.versions.provenance); a plain directory install records none and publication refuses it.
+          # The package metadata records the measured build, and publication checks the run provenance.
           uv pip install "fastbrowse @ git+file://$GITHUB_WORKSPACE/fastbrowse@$FASTBROWSE_SHA"
           uv run --no-sync python -c "import fastbrowse, fastbrowse_evals.live"
-      # A comparison is worth publishing only against what a user installs today, so a competitor pinned behind its
-      # latest release stops the group before its first paid call. The daily Arm pins workflow proposes the bump.
-      - name: Require every competitor at its latest release
-        env:
-          ARMS: ${{ matrix.arms }}
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          cd harness/evals
-          read -ra arms <<< "$ARMS"
-          uv run --no-sync python -m fastbrowse_evals.arm_pins check --arms "${arms[@]}"
-      # The browser-harness arm's agent, at the version the harness checkout pins: the arm checks it before each
-      # attempt, and a version written here as well drifted from it, so every attempt failed before it started.
-      - name: Install the Codex CLI Browser Harness drives
-        if: ${{ contains(matrix.arms, 'browser-harness') }}
-        run: |
-          cd harness/evals/src/fastbrowse_evals/adapters
-          version=$(uv run --no-sync --project ../../.. python -c "import browser_harness_arm; print(browser_harness_arm.CODEX_VERSION)")
-          npm install --global "@openai/codex@$version"
+      # Parallax supplies the competitor harnesses and their pin checks. The plugin only adds the
+      # fastbrowse-specific harnesses below.
       - name: Fetch the progress reporter
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -513,24 +484,108 @@ jobs:
           PARALLAX_JUDGE_API_KEY: ${{ secrets.OPENROUTER_JUDGE_API_KEY }}
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
+          LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          PARALLAX_LANGFUSE_PROJECT: fastbrowse-evals
+          FASTBROWSE_EVAL_SAUCEDEMO_USERNAME: ${{ secrets.FASTBROWSE_EVAL_SAUCEDEMO_USERNAME }}
+          FASTBROWSE_EVAL_SAUCEDEMO_PASSWORD: ${{ secrets.FASTBROWSE_EVAL_SAUCEDEMO_PASSWORD }}
+          FASTBROWSE_EVAL_EXPANDTESTING_USERNAME: ${{ secrets.FASTBROWSE_EVAL_EXPANDTESTING_USERNAME }}
+          FASTBROWSE_EVAL_EXPANDTESTING_PASSWORD: ${{ secrets.FASTBROWSE_EVAL_EXPANDTESTING_PASSWORD }}
+          FASTBROWSE_EVAL_PRACTICE_USERNAME: ${{ secrets.FASTBROWSE_EVAL_PRACTICE_USERNAME }}
+          FASTBROWSE_EVAL_PRACTICE_PASSWORD: ${{ secrets.FASTBROWSE_EVAL_PRACTICE_PASSWORD }}
           ARMS: ${{ matrix.arms }}
+          GROUP: ${{ matrix.group }}
         run: |
           cd harness/evals
           mkdir -p "$(dirname "$OUT")"
           read -ra arms <<< "$ARMS"
           read -ra suites <<< "$SUITES"
           read -ra only <<< "$ONLY"
-          narrow=()
-          test "${#only[@]}" -eq 0 || narrow+=(--only "${only[@]}")
-          # The harness records this setting in the invocation and each physical attempt.
-          test -z "${{ matrix.conc }}" || narrow+=(--concurrency "${{ matrix.conc }}")
-          uv run --no-sync fastbrowse-evals browser internal \
-            --arms "${arms[@]}" \
-            --suite "${suites[@]}" \
-            --repeat "$REPEAT" \
-            --budget "$BUDGET" \
-            "${narrow[@]}" \
-            --out "$OUT"
+          if test "${#only[@]}" -gt 0; then
+            selection=(source=fastbrowse "${only[@]}")
+          else
+            selection=(source=fastbrowse)
+            for suite in "${suites[@]}"; do
+              mapfile -t suite_tasks < <(uv run --no-sync python -c \
+                'import sys; from parallax.task import source_tasks; print(*(task.id for task in source_tasks(source_names=("fastbrowse",)) if task.data.get("suite") == sys.argv[1]), sep="\n")' \
+                "$suite")
+              selection+=("${suite_tasks[@]}")
+            done
+          fi
+          test "${#selection[@]}" -gt 0 || { echo "::error::the selected suites contain no tasks"; exit 1; }
+          mapfile -t invocations < <(uv run --no-sync python -c \
+            'import sys; from fastbrowse_evals.arms import print_invocations; print_invocations(sys.argv[1:])' \
+            "${arms[@]}")
+          for invocation in "${invocations[@]}"; do
+            IFS=$'\t' read -r public harness model <<< "$invocation"
+            run_out="$OUT/$CAMPAIGN_ID-$GROUP-$public"
+            mirror="$OUT/mirror-$CAMPAIGN_ID-$GROUP-$public"
+            mkdir -p "$run_out" "$mirror"
+            python3 - "$run_out" "$mirror" <<'PY' &
+          import os
+          import shutil
+          import sys
+          import time
+          from pathlib import Path
+
+          source, target = map(Path, sys.argv[1:])
+          def mirror_files() -> None:
+              if not source.is_dir():
+                  return
+              for path in source.rglob("*"):
+                  if not path.is_file():
+                      continue
+                  destination = target / path.relative_to(source)
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  if destination.exists():
+                      try:
+                          if destination.stat().st_ino == path.stat().st_ino:
+                              continue
+                      except FileNotFoundError:
+                          continue
+                      temporary = destination.with_suffix(destination.suffix + ".tmp")
+                      try:
+                          shutil.copy2(path, temporary)
+                          temporary.replace(destination)
+                      except FileNotFoundError:
+                          temporary.unlink(missing_ok=True)
+                      continue
+                  try:
+                      os.link(path, destination)
+                  except FileNotFoundError:
+                      pass
+                  except OSError:
+                      try:
+                          shutil.copy2(path, destination)
+                      except FileNotFoundError:
+                          pass
+          while not source.exists():
+              time.sleep(0.25)
+          while source.exists():
+              mirror_files()
+              time.sleep(0.25)
+          mirror_files()
+          PY
+            mirror_pid=$!
+            # The foreground loop is sequential, so one journal can enforce the shared campaign limit.
+            args=(--harness "$harness" --repeats "$REPEAT" --budget "$BUDGET" --reserve "$RESERVE"
+              --budget-journal "$OUT/budget.jsonl"
+              --retry-invalid 2 --retry-wait 60 --provenance "fastbrowse.group=$GROUP" --out "$run_out")
+            test -z "${model:-}" || args+=(--model "$model")
+            test -z "${{ matrix.conc }}" || args+=(--concurrency "${{ matrix.conc }}")
+            set +e
+            uv run --no-sync parallax run "${selection[@]}" "${args[@]}"
+            status=$?
+            set -e
+            if test "$status" -eq 0; then
+              run_id="$(jq -r .run_id "$mirror/manifest.json")"
+              jq -n --arg run_id "$run_id" '{verified: true, run_id: $run_id}' > "$mirror/parallax-verify.json"
+            fi
+            kill "$mirror_pid" 2> /dev/null || true
+            wait "$mirror_pid" 2> /dev/null || true
+            test "$status" -eq 0 || exit "$status"
+          done
       - name: Report the final progress
         if: always()
         env:
@@ -540,29 +595,24 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: ledger-${{ matrix.key }}
-          path: ledgers/
+          name: run-${{ matrix.key }}
+          path: ${{ github.workspace }}/runs/${{ matrix.out }}/mirror-*
           if-no-files-found: warn
           retention-days: 30
 
-  # The send is its own job so a fault at Langfuse fails only the send, not the group that measured, and "Re-run failed
-  # jobs" repeats it from the stored ledger without a paid run. A stopped group is tracked too: every arm's experiment
-  # lists what ran.
+  # Validate each run directory before publication. A stopped group remains an artifact with its budget journal.
   track:
-    name: Send ${{ matrix.label }} to Langfuse
+    name: Validate ${{ matrix.label }} Parallax run
     needs: [resolve, campaign]
     if: ${{ always() && needs.resolve.result == 'success' && needs.campaign.result != 'skipped' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {contents: read, actions: read}
-    # As in `campaign`: the stage job requires this job's success, so a failed send of the hosted diagnostic must not
-    # skip a candidate every published group measured.
-    continue-on-error: ${{ matrix.label == 'hosted' }}
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.resolve.outputs.matrix) }}
     env:
-      OUT: ${{ github.workspace }}/ledgers/${{ matrix.out }}
+      OUT: ${{ github.workspace }}/runs/${{ matrix.out }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -586,24 +636,23 @@ jobs:
           uv sync --locked --no-install-package fastbrowse
           uv pip install "fastbrowse @ git+file://$GITHUB_WORKSPACE/fastbrowse@$FASTBROWSE_SHA"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with: {path: ledgers, pattern: "ledger-${{ matrix.key }}", merge-multiple: true}
-      - name: Send the ledger to Langfuse
-        env:
-          LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
-          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
-          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
-          PARALLAX_LANGFUSE_PROJECT: fastbrowse-evals
-          CAMPAIGN_ID: ${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
+        with: {path: runs, pattern: "run-${{ matrix.key }}", merge-multiple: true}
+      - name: Check the Parallax run artifacts
         run: |
-          test -s "$OUT" || { echo "::warning::no ledger to track"; exit 0; }
-          cd harness/evals
-          uv run --no-sync fastbrowse-evals browser track-ledger "$OUT" --push ${{ env.SMOKE == 'true' && '--smoke' || '' }}
+          mapfile -t run_dirs < <(find "$OUT" -type f -name parallax-verify.json -exec dirname {} \; | sort -u)
+          test "${#run_dirs[@]}" -gt 0
+          for run_dir in "${run_dirs[@]}"; do
+            test -f "$run_dir/results.jsonl"
+            test -f "$run_dir/budget.jsonl"
+            test -f "$run_dir/provenance.json"
+            test -f "$run_dir/parallax-verify.json"
+          done
 
   stage:
     name: Build the candidate
     needs: [resolve, campaign, track]
     # A smoke builds none. A narrowed rerun, or a candidate_only dispatch that ran nothing, builds it with the
-    # campaign's earlier runs. It waits for every group's ledger to reach Langfuse, which the candidate reads back.
+    # campaign's earlier Parallax run directories.
     if: >-
       ${{ !cancelled() && needs.resolve.result == 'success'
       && (needs.campaign.result == 'success' || needs.campaign.result == 'skipped')
@@ -636,13 +685,12 @@ jobs:
         run: |
           cd harness/evals
           uv sync --locked --no-install-package fastbrowse
-          # A git+file install records the commit in direct_url.json, so the run names the measured build
-          # (fastbrowse.evals.versions.provenance); a plain directory install records none and publication refuses it.
+          # The package metadata records the measured build, and publication checks the run provenance.
           uv pip install "fastbrowse @ git+file://$GITHUB_WORKSPACE/fastbrowse@$FASTBROWSE_SHA"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: ${{ needs.campaign.result == 'success' }}
-        with: {path: ledgers, pattern: ledger-*, merge-multiple: true}
-      - name: Fetch the campaign's earlier ledgers
+        with: {path: runs, pattern: run-*, merge-multiple: true}
+      - name: Fetch the campaign's earlier runs
         # Every finished run of this campaign, found by its title as the release gate finds them. Publication takes
         # each task from the newest run that measured it in full and reads no further a run that supplies none.
         env:
@@ -654,82 +702,48 @@ jobs:
             --jq '.[] | select((.displayTitle | split(" ") | last) == env.CAMPAIGN_ID) | .databaseId')
           for run in "${runs[@]}"; do
             test "$run" = "$GITHUB_RUN_ID" && continue
-            gh run download "$run" --repo "$GITHUB_REPOSITORY" --pattern 'ledger-*' --dir "earlier-ledgers/$run" \
-              || echo "run $run kept no ledger"
+            gh run download "$run" --repo "$GITHUB_REPOSITORY" --pattern 'run-*' --dir "earlier-runs/$run" \
+              || echo "run $run kept no Parallax artifact"
           done
-      - name: Fetch the official rows
+      - name: Fetch the official Parallax runs
         if: ${{ env.OFFICIAL_RUNS != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           read -ra runs <<< "$OFFICIAL_RUNS"
           for run in "${runs[@]}"; do
-            gh run download "$run" --repo "$GITHUB_REPOSITORY" --pattern 'official-rows-*' --dir "official-rows/$run"
+            gh run download "$run" --repo "$GITHUB_REPOSITORY" --pattern 'official-run-*' --dir "official-runs/$run"
           done
       - name: Export the catalog
         run: |
           cd harness/evals
           uv run --no-sync fastbrowse-evals browser catalog "$GITHUB_WORKSPACE/catalog.json"
-      - name: Find the fixture run
-        id: fixture
-        # The candidate binds to a passing Evals dispatch on the measured build. A release dispatches one beside this
-        # campaign, so one still running is waited for rather than missed.
-        env:
-          GH_TOKEN: ${{ github.token }}
-          FIXTURE_SHA: ${{ needs.resolve.outputs.fastbrowse_sha }}
-        run: |
-          latest() {
-            gh run list --repo "$GITHUB_REPOSITORY" --workflow evals.yml --commit "$FIXTURE_SHA" \
-              --event workflow_dispatch --limit 1 --json databaseId,status --jq ".[0] | $1 // empty"
-          }
-          run="$(latest .databaseId)"
-          test -n "$run" || { echo "::error::no Evals dispatch on the measured build; dispatch evals.yml at it"; exit 1; }
-          if test "$(latest .status)" != completed; then gh run watch "$run" --repo "$GITHUB_REPOSITORY" > /dev/null; fi
-          conclusion="$(gh run view "$run" --repo "$GITHUB_REPOSITORY" --json conclusion --jq .conclusion)"
-          test "$conclusion" = success || { echo "::error::Evals run $run on the measured build ended $conclusion"; exit 1; }
-          echo "run=$run" >> "$GITHUB_OUTPUT"
       - name: Build the candidate
-        # This job runs only when every selected group finished, and the publication gate refuses a ledger whose
+        # This job runs only when every selected group finished, and the publication gate refuses a run whose
         # recorded arms differ from its group's.
         env:
           CAMPAIGN_ID: ${{ inputs.campaign_id || github.event.client_payload.campaign_id }}
-          FIXTURE_RUN: ${{ steps.fixture.outputs.run }}
-          # The fixture check reads the fixture run back from the Actions API with `gh`.
-          GH_TOKEN: ${{ github.token }}
-          # The fixture run's traces and each group's experiments are read back from fastbrowse's Langfuse project
-          # (evals/storage.py HOST).
-          LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
-          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
-          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
-          PARALLAX_LANGFUSE_PROJECT: fastbrowse-evals
           RUN_ON: ${{ needs.resolve.outputs.run_on }}
         run: |
-          mapfile -t official < <(find "$GITHUB_WORKSPACE/official-rows" -name '*.rows.json' 2> /dev/null | sort)
           cd harness/evals
           args=()
-          for spec in internal-fastbrowse.jsonl:--internal-fastbrowse head-to-head.jsonl:--hosted; do
-            mapfile -t found < <(find "$GITHUB_WORKSPACE/ledgers" "$GITHUB_WORKSPACE/earlier-ledgers" \
-              -name "${spec%%:*}" 2> /dev/null | sort)
-            if test "${#found[@]}" -gt 0; then args+=("${spec##*:}" "${found[@]}"); fi
-          done
-          if test "${#official[@]}" -gt 0; then args+=(--official-rows "${official[@]}"); fi
-          if test "$REFRESH" = true; then
-            args+=(--write-reference "$GITHUB_WORKSPACE/candidate/competitor-reference.json" --measured-on "$RUN_ON")
-          fi
+          mapfile -t found < <(find "$GITHUB_WORKSPACE/runs" "$GITHUB_WORKSPACE/earlier-runs" \
+            -type f -name parallax-verify.json -exec dirname {} \; 2> /dev/null | sort -u)
+          if test "${#found[@]}" -gt 0; then args+=("${found[@]}"); fi
+          mapfile -t official < <(find "$GITHUB_WORKSPACE/official-runs" \
+            -type f -name parallax-verify.json -exec dirname {} \; 2> /dev/null | sort -u)
+          if test "${#official[@]}" -gt 0; then args+=("${official[@]}"); fi
           mkdir -p "$GITHUB_WORKSPACE/candidate"
           uv run --no-sync fastbrowse-evals browser publish-candidate \
+            "${args[@]}" \
             --campaign-id "$CAMPAIGN_ID" \
-            --out "$GITHUB_WORKSPACE/candidate/benchmark-candidate.json" \
-            --catalog "$GITHUB_WORKSPACE/catalog.json" \
-            --fixture-run "$FIXTURE_RUN" \
-            --competitor-reference "$GITHUB_WORKSPACE/fastbrowse/docs/results/competitor-reference.json" \
-            "${args[@]}"
+            --out "$GITHUB_WORKSPACE/candidate/benchmark-candidate.json"
       - name: Record the run facts
         # What the site shows beside the figures: the run date, harness and judge. The date and harness come from the
         # candidate, the newest run's, so a candidate rebuilt later from finished runs keeps when and how they were
         # measured rather than the rebuild's own date and checkout.
         env:
-          # A group that took every task from this run lists no sources; this run's date is then the measurement's.
+          # Source records carry the measurement dates; the dispatch date is only a fallback for old artifacts.
           DISPATCHED_ON: ${{ needs.resolve.outputs.run_on }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
         run: |
@@ -737,11 +751,21 @@ jobs:
           RUN_ON="$(jq -r '[.groups[].sources[]?.measured_on] | max // empty' "$candidate")"
           RUN_ON="${RUN_ON:-$DISPATCHED_ON}"
           HARNESS_SHA="$(jq -r .runner_sha "$candidate")"
-          # An official suite has its own run date and upstream judge, read from its rows.
-          groups="$(find official-rows -name '*.rows.json' -exec jq -s '
-            sort_by(.measured_on)
-            | map({key: .group, value: {run_on: .measured_on, judge: "\(.judge_model) through OpenRouter"}})
-            | from_entries' {} + 2> /dev/null || true)"
+          # An official suite has its own run date and upstream judge, read from its Parallax manifest and results.
+          groups="$(
+            find "$GITHUB_WORKSPACE/official-runs" -type f -name parallax-verify.json -print0 2> /dev/null \
+              | while IFS= read -r -d '' marker; do
+                  directory="$(dirname "$marker")"
+                  manifest="$directory/manifest.json"
+                  group="$(jq -r '.selection | split(" ")[] | select(. == "bu-bench" or . == "online-mind2web")' "$manifest" | head -n 1)"
+                  test -n "$group" || continue
+                  run_on="$(jq -r '.created_at[0:10]' "$manifest")"
+                  judge="$(jq -r 'select(.judge_identity != null) | .judge_identity' "$directory/results.jsonl" | head -n 1)"
+                  jq -n --arg group "$group" --arg run_on "$run_on" --arg judge "$judge" \
+                    '{group: $group, value: {run_on: $run_on, judge: ($judge + " through upstream bridge")}}'
+                done \
+              | jq -s 'map({key: .group, value: .value}) | from_entries'
+          )"
           test -n "$groups" || groups='{}'
           jq -n --arg run_on "$RUN_ON" --arg harness "fastbrowse-evals at ${HARNESS_SHA:0:7}" \
             --arg judge "$PARALLAX_JUDGE_MODELS through OpenRouter" --argjson groups "$groups" \

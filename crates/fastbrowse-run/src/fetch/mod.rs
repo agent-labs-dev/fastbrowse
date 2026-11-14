@@ -101,6 +101,7 @@ fn capture(url: &str, title: String, found: Vec<Found>, unread_frames: usize) ->
         // A frame whose document was not read is missing from this read like a frame a browser could not reach: a
         // reader told nothing is missing would take the page without it as the whole page.
         inaccessible_frames: unread_frames as i64,
+        masked: Vec::new(),
     }
 }
 
