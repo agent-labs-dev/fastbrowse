@@ -134,7 +134,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
       - name: Check the credentials
         env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_BENCHMARKS_API_KEY }}
+          FASTBROWSE_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_BENCHMARKS_API_KEY }}
           PARALLAX_UPSTREAM_OPENAI_KEY: ${{ secrets.PARALLAX_UPSTREAM_OPENAI_KEY || secrets.OPENROUTER_JUDGE_API_KEY }}
           PARALLAX_JUDGE_API_KEY: ${{ secrets.PARALLAX_UPSTREAM_OPENAI_KEY || secrets.OPENROUTER_JUDGE_API_KEY }}
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
@@ -148,7 +148,7 @@ jobs:
         run: |
           missing=""
           need() { test -n "$2" || missing="$missing $1"; }
-          need OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
+          need FASTBROWSE_OPENROUTER_API_KEY "$FASTBROWSE_OPENROUTER_API_KEY"
           need PARALLAX_UPSTREAM_OPENAI_KEY "$PARALLAX_UPSTREAM_OPENAI_KEY"
           need BROWSER_USE_API_KEY "$BROWSER_USE_API_KEY"
           need LANGFUSE_PUBLIC_KEY "$LANGFUSE_PUBLIC_KEY"
@@ -255,7 +255,7 @@ jobs:
             || { echo "::error::PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT is not an age recipient"; exit 1; }
       - name: Run the Parallax official suite
         env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_BENCHMARKS_API_KEY }}
+          FASTBROWSE_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_BENCHMARKS_API_KEY }}
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           LANGFUSE_BASE_URL: https://us.cloud.langfuse.com

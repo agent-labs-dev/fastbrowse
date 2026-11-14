@@ -132,6 +132,11 @@ async def _cancel(http: httpx.AsyncClient, run_url: str, headers: dict[str, str]
         )
 
 
+def evidence_citations(run: dict[str, Any]) -> list[dict[str, str]]:
+    """The run's citations as Parallax's browser evidence holds them: the page and the quote the answer rests on."""
+    return [{"url": citation["url"], "quote": citation["quote"]} for citation in run.get("citations") or []]
+
+
 def outcome_of(run: dict[str, Any]) -> dict[str, Any]:
     return {
         "answer": run.get("answer"),
@@ -258,7 +263,7 @@ class FastbrowseHostedHarness(BrowserHarness):
             "answer": run.get("answer"),
             "error": fields.get("error"),
             "final_url": run.get("final_url"),
-            "citations": run.get("citations") or [],
+            "citations": evidence_citations(run),
             "step_log": run.get("steps") or [],
             "cost_lines": lines,
             "usage": usage,

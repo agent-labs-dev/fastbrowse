@@ -43,17 +43,17 @@ class PoolLease:
 
 
 def pool_settings() -> tuple[str, str]:
-    url, token = os.environ.get("PARALLAX_POOL_URL"), os.environ.get("PARALLAX_POOL_TOKEN")
+    url, token = os.environ.get("FASTBROWSE_POOL_URL"), os.environ.get("FASTBROWSE_POOL_TOKEN")
     if not url or not token:
-        raise RuntimeError("fastbrowse-pool needs PARALLAX_POOL_URL and PARALLAX_POOL_TOKEN")
+        raise RuntimeError("fastbrowse-pool needs FASTBROWSE_POOL_URL and FASTBROWSE_POOL_TOKEN")
     parts = urlsplit(url)
     if parts.scheme not in {"http", "https"} or not parts.netloc:
-        raise RuntimeError("PARALLAX_POOL_URL must be an http(s) URL")
+        raise RuntimeError("FASTBROWSE_POOL_URL must be an http(s) URL")
     return url.rstrip("/"), token
 
 
 def pool_host() -> str | None:
-    url = os.environ.get("PARALLAX_POOL_URL")
+    url = os.environ.get("FASTBROWSE_POOL_URL")
     return urlsplit(url).hostname if url else None
 
 
@@ -160,7 +160,7 @@ class FastbrowsePoolHarness(FastbrowseHarness):
         pins_model=False,
         cost_source=CostSource.HARNESS,
         isolation=Isolation.HOST,
-        credential_env=("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "EXA_API_KEY", "PARALLAX_POOL_TOKEN"),
+        credential_env=(*FastbrowseHarness.info.credential_env, "FASTBROWSE_POOL_TOKEN"),
         source_url="https://github.com/agent-labs-dev/fastbrowse",
     )
 
