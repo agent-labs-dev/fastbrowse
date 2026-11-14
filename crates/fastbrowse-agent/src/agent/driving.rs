@@ -1373,6 +1373,12 @@ impl Agent {
         if let Some(href) = state.followed.take()
             && landed != read_key(&before)
         {
+            // Landing on a page already read shows that the address followed leads to it, so the link is marked read
+            // from now on. Only a read records the address otherwise, and a read page is not read again: a link whose
+            // address the site redirects to an author page the run had read and left was taken back to it repeatedly.
+            if state.read_documents.contains_key(&landed) {
+                state.read_urls.insert(href.clone());
+            }
             state.arrived_by = Some((landed, href));
         }
         let Some(last) = state.history.last_mut() else { return };
