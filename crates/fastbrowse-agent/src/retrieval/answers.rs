@@ -1060,8 +1060,14 @@ async fn review_composition(
         .filter_map(|(index, claim)| {
             claim.tally.as_ref().map(|tally| {
                 // The typed composition has exactly one computed slot. Source digits are immutable text, not
-                // another occurrence of the slot the tally replaces.
-                let text = if claim.composition.is_some() { tally.written.as_str() } else { claim.text.as_str() };
+                // another occurrence of the slot the tally replaces. A record's name in that slot is checked against
+                // the whole claim: a claim copying the name and computing it again read "Galaxy S20 Ultra" at Galaxy
+                // S20 Ultra, where the task asked for the price.
+                let text = if claim.composition.is_some() && !tally.names_record() {
+                    tally.written.as_str()
+                } else {
+                    claim.text.as_str()
+                };
                 (index, tally, text, claim.evidence_ids.as_slice())
             })
         })
@@ -2465,6 +2471,34 @@ mod tests {
         };
         assert!(records.criteria["r0"].as_str().unwrap().contains("Coffee Filters"));
         assert!(!records.criteria["r0"].as_str().unwrap().contains("Paper Filters"));
+    }
+
+    /// Asked for the most expensive phones and their prices, the composer copied each phone's name, set
+    /// tally.written to that name too, and code wrote the name in the price's place: "Galaxy S20 Ultra" at Galaxy
+    /// S20 Ultra. The draft goes back with the reason instead.
+    #[tokio::test]
+    async fn a_record_name_copied_and_computed_is_sent_back() {
+        let notes =
+            Notes::new([fact(0, "Galaxy S20 Ultra $1399.00".into()), fact(1, "Galaxy Note 20 Ultra $1299.00".into())]);
+        let items = initial_items(&notes, false);
+        let tally = tallied("", "Galaxy S20 Ultra", Op::Max, "Samsung phone", Some("price"), vec![]).tally;
+        let bound = bind_claim(
+            &items,
+            json!([{"prose": "The most expensive is "}, {"note":"e0", "quoted":true, "part": "Galaxy S20 Ultra"}, {"prose": " at "}, {"computed":true}, {"prose": "."}]),
+            tally,
+        );
+        let jev = Tallying::new("Galaxy", "1399.00|1299.00");
+        let task = "Tell me the most expensive Samsung phone and its price";
+        let checked =
+            review_composition(&jev, &READS, task, None, vec![bound], &notes, None, false, &[]).await.unwrap();
+        assert!(checked.claims.is_empty(), "{:?}", checked.claims);
+        let rejection = format!("{:?} {:?}", checked.problem, checked.rejection);
+        assert!(
+            rejection.contains(
+                "Claim 0 names the record already: set tally.written to the 'price' as its computed part writes it"
+            ),
+            "{rejection}"
+        );
     }
 
     #[test]

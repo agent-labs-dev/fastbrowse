@@ -1102,6 +1102,18 @@ pub(super) async fn work_selected(
                      as claim {index} writes it, or rewrite claim {index} to write {written} once, with the record that \
                      has it when the task asks which record it is."
                 )
+            } else if tally.names_record() {
+                // A name as written means the claim names the record at the extreme without its field value, so a
+                // claim that also copies the name has the slot meant for the value repeat the record instead.
+                format!(
+                    "Claim {index} writes its tally.written {written} {times} times. A record's name as tally.written \
+                     means claim {index} names the record at the {} {} without stating it, and code writes the name in \
+                     the computed part. Claim {index} names the record already: set tally.written to the {} as its \
+                     computed part writes it, or remove its other mention of {written}.",
+                    if tally.op == Op::Min { "lowest" } else { "highest" },
+                    text::repr(tally.field.as_deref().unwrap_or("value")),
+                    text::repr(tally.field.as_deref().unwrap_or("value")),
+                )
             } else {
                 format!(
                     "Claim {index} writes its tally.written {written} {times} times, and code writes the worked value \
