@@ -22,7 +22,7 @@ from parallax.harnesses.browser import BrowserHarness
 from parallax.harnesses.browser.site import Unavailable, retryable_status, transient_transport
 from parallax.models import Capability, CostSource, HarnessInfo, HarnessKind, Isolation, Task, TurnInput
 
-from fastbrowse_evals.evidence import step_action
+from fastbrowse_evals.evidence import result_answer, step_action
 
 DEFAULT_URL = "https://api.fastbrowse.ai"
 POLL_SECONDS = 2.0
@@ -262,7 +262,7 @@ class FastbrowseHostedHarness(BrowserHarness):
         ]
         return {
             "status": _turn_status(self._product_status),
-            "answer": run.get("answer"),
+            "answer": result_answer(run.get("answer"), run.get("data")),
             "error": fields.get("error"),
             "final_url": run.get("final_url"),
             "citations": evidence_citations(run),

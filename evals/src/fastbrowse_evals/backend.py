@@ -21,7 +21,7 @@ from parallax.harnesses.browser import BrowserHarness
 from parallax.harnesses.browser.cloud import Browser, cloud_browser
 from parallax.models import Capability, CostSource, HarnessInfo, HarnessKind, Isolation, Task, TurnInput
 
-from fastbrowse_evals.evidence import step_action
+from fastbrowse_evals.evidence import result_answer, step_action
 from fastbrowse_evals.task_specs import answer_model
 
 PROVIDER_KEYS = ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "EXA_API_KEY")
@@ -243,7 +243,7 @@ def _run_result(
         steps.append(item)
     return {
         "status": _turn_status(output.status),
-        "answer": output.answer,
+        "answer": result_answer(output.answer, output.data),
         "error": output.error,
         "final_page": page,
         "final_url": output.final_url,

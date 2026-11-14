@@ -13,6 +13,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.11.1] - 2026-11-14
 
+- **Structured benchmark answers reach the judge as JSON.** The local and hosted eval adapters now submit returned structured data instead of substituting its prose description ([#1139](https://github.com/agent-labs-dev/fastbrowse/issues/1139)).
+
 - **Structured answers follow the requested list across pages.** A task asking for JSON could stop on the first page even when it needed the whole list, leaving a cheapest-product answer unverified. Structured output now uses the same pagination as a plain-text answer ([#1136](https://github.com/agent-labs-dev/fastbrowse/issues/1136)).
 - **Benchmark judges distinguish a safe pause from an unfinished authorized action.** The Parallax judge receives whether the task authorizes irreversible actions, so a run that correctly pauses before placing an unauthorized order is judged against that boundary. The eval plugin pins Parallax 2.0.0.dev23 and its `browser-evidence-v2` policy. Its action evidence retains each step's outcome and reason, so a click withheld for confirmation is distinguishable from a click that ran.
 - **An answer that says it is partial no longer ends complete.** Asked how many quotes an author has across a site, a run that read two of its pages answered that the total was not established because the list continued, and still ended `complete`. The composer now says when its answer leaves a requested value unestablished and names what is missing: a finished run ends `unverified` with that as its error, and a stuck run keeps its status instead of being upgraded to `complete`.
