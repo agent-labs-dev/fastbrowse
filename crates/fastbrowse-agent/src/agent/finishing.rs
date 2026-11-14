@@ -110,8 +110,7 @@ impl Agent {
         // unread: Jev judged the extent from the task, and finishing from the pages reached called part of the list the
         // whole (#750), or ended on one record's own page after leaving the list (#798). A page past the ones the task
         // names is not opened (#824). Each such page is opened once at most.
-        if output_schema.is_none()
-            && state.extent.walks()
+        if state.extent.walks()
             && let Some(next) = state.unread_pager_page().cloned()
         {
             return self.open_unread_page(state, observation, next).await;
