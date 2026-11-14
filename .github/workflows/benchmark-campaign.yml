@@ -439,6 +439,7 @@ jobs:
           uv sync --locked --no-install-package fastbrowse
           # The package metadata records the measured build, and publication checks the run provenance.
           uv pip install "fastbrowse @ git+file://$GITHUB_WORKSPACE/fastbrowse@$FASTBROWSE_SHA"
+          uv pip install "parallax-evals[browser] @ git+https://github.com/agent-labs-dev/parallax@2a16cbddf615c82a8b4b23f62d132231079446e5"
           uv run --no-sync python -c "import fastbrowse, fastbrowse_evals.live"
       # Parallax supplies the competitor harnesses and their pin checks. The plugin only adds the
       # fastbrowse-specific harnesses below.
