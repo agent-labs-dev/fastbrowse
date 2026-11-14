@@ -66,7 +66,7 @@ catalog. Use `fastbrowse-evals browser publish-candidate RUN_DIR ...` to build a
 candidate from Parallax run directories. The command runs the existing
 publication gate before writing the candidate.
 
-The official benchmark workflow runs Parallax 2.0.0.dev25's `bu-bench` and
+The official benchmark workflow runs Parallax 2.0.0.dev26's `bu-bench` and
 `online-mind2web` task sources. It checks out each pinned upstream judge in its
 own environment, maps the upstream judge key through Parallax's official
 bridge, and passes sanitized Parallax run directories with provenance to the

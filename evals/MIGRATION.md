@@ -1,6 +1,6 @@
 # Migration notes
 
-Fastbrowse evals now consume Parallax 2.0.0.dev25 directly from PyPI. The old live
+Fastbrowse evals now consume Parallax 2.0.0.dev26 directly from PyPI. The old live
 runner, duplicate evidence and judging code, request wallets, spend proxy,
 tracking ledger, and competitor adapter modules are deleted.
 
