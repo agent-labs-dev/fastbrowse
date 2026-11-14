@@ -813,7 +813,14 @@ impl Agent {
                 }
             }
         }
-        Some(Wall { kind: kind.unwrap_or_else(|| wall_kind(&credentials)), origin, fields, seen_at_ms: now_ms() })
+        // A page offering nothing to act on cannot be signed into (#635): a refusal that leaves no way in is a bot or
+        // access check, and naming it `sign_in` sends a caller to a password that cannot pass it.
+        let kind = match kind {
+            Some(kind) => kind,
+            None if raw.as_ref().is_some_and(|raw| raw.controls.is_empty()) => WallKind::BotCheck,
+            None => wall_kind(&credentials),
+        };
+        Some(Wall { kind, origin, fields, seen_at_ms: now_ms() })
     }
 
     fn public_fact(&self, fact: &Fact, notes: &Notes) -> StepFact {
