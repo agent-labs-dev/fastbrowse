@@ -14,7 +14,7 @@ The package registers these entry points:
 - `fastbrowse`: one `parallax.task_sources` source containing the core, dev, stretch-dev, and sweep task records.
 
 Every task is world-less, uses `Area.BROWSER`, and names Parallax's
-`browser-evidence-v1` policy. The task record carries the start URL, task
+`browser-evidence-v2` policy. The task record carries the start URL, task
 metadata, authorization setting, and secret names. Secret values stay in the
 fastbrowse harness.
 

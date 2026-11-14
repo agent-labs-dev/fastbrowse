@@ -298,7 +298,7 @@ def _verify_upload(run: LoadedRun) -> bool:
 
 
 def _validate_run(run: LoadedRun, source: GroupId | None) -> None:
-    expected_policy = "browser-evidence-v1" if source is None else EXPECTED_POLICIES[source]
+    expected_policy = "browser-evidence-v2" if source is None else EXPECTED_POLICIES[source]
     policy_parts = set(run.manifest.grading_policy.split(":"))
     if expected_policy not in policy_parts:
         raise ValueError(f"{run.path}: grading policy differs from the catalog")

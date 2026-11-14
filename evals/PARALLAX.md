@@ -1,13 +1,14 @@
 # Parallax pin
 
-The eval plugin pins `parallax-evals[browser]==2.0.0.dev22` in
+The eval plugin pins `parallax-evals[browser]==2.0.0.dev23` in
 `evals/pyproject.toml` and `evals/uv.lock`. The dependency resolves directly
 from PyPI. No local source override is used.
 
-Dev21 supplies the generic pieces that fastbrowse previously duplicated:
+The pinned version supplies:
 
 - world-less `TaskRecord` sources and `Area.BROWSER`;
-- `browser-evidence-v1`, including evidence splitting and screenshots;
+- `browser-evidence-v2`, including evidence splitting and screenshots;
+- task authorization in the judge state, so an irreversible action is required only when authorized;
 - judge identity and retry handling for `environment interruption: `;
 - typed timing, cost components, and harness details;
 - campaign budgets, reserves, `budget.jsonl`, processes, and run artifacts;

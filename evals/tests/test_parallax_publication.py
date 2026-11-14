@@ -97,7 +97,7 @@ def result(
         timing_breakdown={"open": 250.0, "agent": 1_000.0, "close": 250.0},
         cost_by_component={"agent": 0.01},
         details=details or {"status": "complete"},
-        judge_identity="browser-evidence-v1",
+        judge_identity="browser-evidence-v2",
     )
 
 
@@ -216,7 +216,7 @@ def test_synthetic_parallax_run_projects_to_a_candidate(tmp_path: Path) -> None:
     manifest = RunManifest(
         run_id="synthetic-run",
         created_at=datetime(2026, 11, 13, tzinfo=UTC),
-        parallax_version="2.0.0.dev22",
+        parallax_version="2.0.0.dev23",
         harnesses=(),
         models=("test/model",),
         tasks=tuple((task.id, source_task_map[task.id].hash) for task in tasks),
@@ -224,7 +224,7 @@ def test_synthetic_parallax_run_projects_to_a_candidate(tmp_path: Path) -> None:
         judge=("test/judge",),
         isolation=Isolation.HOST,
         selection="fastbrowse",
-        grading_policy="browser-evidence-v1",
+        grading_policy="browser-evidence-v2",
     )
     (run / "manifest.json").write_text(manifest.model_dump_json() + "\n")
     (run / "results.jsonl").write_text(
@@ -280,7 +280,7 @@ def test_official_run_uses_upstream_score_and_execution_completion(tmp_path: Pat
     manifest = RunManifest(
         run_id="official-run",
         created_at=datetime(2026, 11, 13, tzinfo=UTC),
-        parallax_version="2.0.0.dev22",
+        parallax_version="2.0.0.dev23",
         harnesses=(),
         models=("test/model",),
         tasks=tuple((task_id, "c" * 64) for task_id in task_ids),
@@ -331,7 +331,7 @@ def test_official_groups_use_their_own_selected_task_ids(tmp_path: Path) -> None
         manifest = RunManifest(
             run_id=f"{source}-run",
             created_at=datetime(2026, 11, 13, tzinfo=UTC),
-            parallax_version="2.0.0.dev22",
+            parallax_version="2.0.0.dev23",
             harnesses=(),
             models=("test/model",),
             tasks=tuple((task_id, "c" * 64) for task_id in task_ids),

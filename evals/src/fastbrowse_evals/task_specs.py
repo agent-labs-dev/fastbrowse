@@ -1,6 +1,6 @@
 """Parallax task records for the live browser catalog.
 
-Each record describes a task and leaves grading to Parallax's browser-evidence-v1 policy. A record names the
+Each record describes a task and leaves grading to Parallax's browser-evidence-v2 policy. A record names the
 environment variables that hold its site login; the values are read at trial start and never enter a TaskRecord.
 """
 
@@ -778,7 +778,7 @@ def record(spec: TaskSpec) -> TaskRecord:
         area=Area.BROWSER,
         summary=spec.task,
         prompt=_task_prompt(spec),
-        grading="browser-evidence-v1",
+        grading="browser-evidence-v2",
         requires=frozenset(requires),
         maturity=Maturity.ASPIRATIONAL if spec.suite == "sweep" else Maturity.CANDIDATE,
         provenance=Provenance.CONVERTED,
