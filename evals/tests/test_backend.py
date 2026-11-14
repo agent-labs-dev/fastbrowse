@@ -155,3 +155,12 @@ def test_campaign_metadata_preserves_model_requests_outside_judge_evidence() -> 
     metadata = json.loads(json.dumps(harness.trial_metadata))
     assert metadata["events"] == [event]
     assert "events" not in metadata["browser"]
+
+
+def test_campaign_traces_scrub_bound_task_secrets() -> None:
+    harness = backend.FastbrowseHarness(observer="plain-cdp")
+    harness._secret_values = {"PASSWORD": "fixture-private-value"}
+    harness._events.append({"event": "llm_request", "text": "Use fixture-private-value"})
+    metadata = harness.trial_metadata
+    assert "fixture-private-value" not in json.dumps(metadata)
+    assert metadata["events"] == [{"event": "llm_request", "text": "Use <secret>PASSWORD</secret>"}]

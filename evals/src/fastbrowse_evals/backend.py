@@ -149,7 +149,7 @@ class FastbrowseHarness(BrowserHarness):
 
     @property
     def trial_metadata(self) -> dict[str, object]:
-        return super().trial_metadata | {"events": json.loads(json.dumps(self._events, default=str))}
+        return super().trial_metadata | {"events": self._scrub(json.loads(json.dumps(self._events, default=str)))}
 
     def trial_details(self) -> dict[str, object]:
         details = super().trial_details()
