@@ -672,11 +672,19 @@ impl RunState {
 
     /// Mark each link that leads to a page already read. A mark on the link itself tells apart links that share a
     /// label, as every quote's "(about)" does, where a list of labels could not.
+    ///
+    /// A path with and without its trailing slash is one page: a server serving one redirects the other to it, as a
+    /// directory-style site does. A page reached by an address the run built, such as a known page, is read under the
+    /// form the run asked for, while the site's own links can use the other form; unmarked, a link to the author page
+    /// the run had read and left was taken again for the page holding that author's quotes.
     pub fn mark_read_links(&self, observation: &mut Observation) {
         let here = url::Url::parse(&observation.url).ok();
         for control in &mut observation.controls {
             let leads_to = control.href.as_ref().and_then(|href| here.as_ref()?.join(href).ok());
-            if leads_to.is_some_and(|url| self.read_urls.contains(url.as_str())) {
+            if leads_to.is_some_and(|url| {
+                self.read_urls.contains(url.as_str())
+                    || slash_twin(&url).is_some_and(|twin| self.read_urls.contains(twin.as_str()))
+            }) {
                 control.already_read = Some(true);
             }
         }
@@ -846,6 +854,20 @@ impl RunState {
 /// in one document, and each address shows its own page.
 pub(crate) fn read_key(observation: &Observation) -> (String, String) {
     (observation.document_key.clone(), observation.url.clone())
+}
+
+/// `url` with its path's trailing slash added or taken off; none for a site's root, which has only the one form.
+fn slash_twin(url: &url::Url) -> Option<url::Url> {
+    let path = url.path();
+    if path == "/" || path.is_empty() {
+        return None;
+    }
+    let mut twin = url.clone();
+    match path.strip_suffix('/') {
+        Some(bare) => twin.set_path(bare),
+        None => twin.set_path(&format!("{path}/")),
+    }
+    Some(twin)
 }
 
 /// The task with each input it names by `input <name>` followed by the input's value. Jev, offered an input as a

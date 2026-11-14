@@ -6695,6 +6695,31 @@ fn a_link_to_a_page_already_read_is_marked_on_the_link_so_links_sharing_its_labe
     assert!(Agent::page_facts(&state, &page).iter().all(|fact| !fact.contains("already read")));
 }
 
+/// A known page is read under the address the run built for it, while the site links to the same page without the
+/// trailing slash: unmarked, the run took that link back to the author page it had read and left, and stalled there.
+#[test]
+fn a_link_differing_from_a_read_page_by_its_trailing_slash_leads_to_that_page() {
+    let link = |id: &str, href: &str| Control {
+        href: Some(href.into()),
+        ..Control::new(id, "link", "(about)", [Operation::Click])
+    };
+    let mut state = run_state();
+    state.mark_read(&at("https://quotes.test/author/J-K-Rowling/", &[]));
+    state.mark_read(&at("https://quotes.test/page/2", &[]));
+    let mut page = at(
+        "https://quotes.test/",
+        &[
+            link("a", "/author/J-K-Rowling"),
+            link("b", "/page/2/"),
+            link("c", "/author/Jane-Austen"),
+            link("d", "/author/J-K-Rowling?tab=books"),
+        ],
+    );
+    state.mark_read_links(&mut page);
+    let marks: Vec<_> = page.controls.iter().map(|control| control.already_read).collect();
+    assert_eq!(marks, [Some(true), Some(true), None, None]);
+}
+
 // -- A page that stops answering during an action ------------------------------------------------------------------
 
 /// A page whose first `hangs` acts find the renderer stopped, counting the navigations that reopen it.
