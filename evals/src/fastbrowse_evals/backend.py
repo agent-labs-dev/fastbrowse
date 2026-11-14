@@ -26,14 +26,25 @@ PROVIDER_KEYS = ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "EXA_API_KEY")
 """The provider keys a fastbrowse arm is given: Jev, its LLM and optional web search use these.
 The Browser Use key stays with the harness, which starts every cloud browser itself."""
 
+OPENROUTER_KEY_ENV = "FASTBROWSE_OPENROUTER_API_KEY"
+"""Where the arm's OpenRouter key comes from. Parallax keeps `OPENROUTER_API_KEY` for its meter, which forwards only
+chat and responses calls; fastbrowse also calls Jev's `/v1/systemone`, so the arm cannot be metered, reports its own
+spend, and takes its key under its own name. fastbrowse itself still reads it as `OPENROUTER_API_KEY`."""
+
 
 class MissingKey(RuntimeError):
     """A key the selected arms need is not set."""
 
 
 def environment() -> dict[str, str]:
-    """The process environment and `.env`, read as fastbrowse reads them; the one place the harness reads keys."""
-    return harness.environment()
+    """The process environment and `.env`, read as fastbrowse reads them; the one place the harness reads keys.
+
+    The arm's OpenRouter key is `OPENROUTER_KEY_ENV` alone: a plain `OPENROUTER_API_KEY` beside it is ignored."""
+    env = harness.environment()
+    env.pop("OPENROUTER_API_KEY", None)
+    if key := env.pop(OPENROUTER_KEY_ENV, None):
+        env["OPENROUTER_API_KEY"] = key
+    return env
 
 
 def jev_source(env: Mapping[str, str] | None = None) -> str:
@@ -78,7 +89,7 @@ class FastbrowseHarness(BrowserHarness):
         pins_model=False,
         cost_source=CostSource.HARNESS,
         isolation=Isolation.HOST,
-        credential_env=("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "EXA_API_KEY"),
+        credential_env=(OPENROUTER_KEY_ENV, "TYPESAFE_API_KEY", "EXA_API_KEY"),
         source_url="https://github.com/agent-labs-dev/fastbrowse",
     )
 

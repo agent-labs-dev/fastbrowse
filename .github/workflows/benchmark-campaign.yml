@@ -41,7 +41,7 @@ run-name: Benchmark campaign ${{ inputs.campaign_id || github.event.client_paylo
 # run's build named beside its rows.
 #
 # Repository configuration this file needs (checked before any paid call):
-#   secrets: OPENROUTER_BENCHMARKS_API_KEY (as OPENROUTER_API_KEY), OPENROUTER_JUDGE_API_KEY (as PARALLAX_JUDGE_API_KEY),
+#   secrets: OPENROUTER_BENCHMARKS_API_KEY (as FASTBROWSE_OPENROUTER_API_KEY), OPENROUTER_JUDGE_API_KEY (as PARALLAX_JUDGE_API_KEY),
 #            BROWSER_USE_API_KEY
 #   secrets when `extra_arms` names fastbrowse-hosted: FASTBROWSE_HOSTED_API_KEY (its own submit would otherwise
 #            fail one attempt at a time, after the paid groups had started)
@@ -311,7 +311,7 @@ jobs:
         if: ${{ env.CANDIDATE_ONLY != 'true' }}
         env:
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_BENCHMARKS_API_KEY }}
+          FASTBROWSE_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_BENCHMARKS_API_KEY }}
           PARALLAX_JUDGE_API_KEY: ${{ secrets.OPENROUTER_JUDGE_API_KEY }}
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
@@ -321,7 +321,7 @@ jobs:
         run: |
           missing=""
           need() { test -n "$2" || missing="$missing $1"; }
-          need OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
+          need FASTBROWSE_OPENROUTER_API_KEY "$FASTBROWSE_OPENROUTER_API_KEY"
           need PARALLAX_JUDGE_API_KEY "$PARALLAX_JUDGE_API_KEY"
           need PARALLAX_JUDGE_BASE_URL "$PARALLAX_JUDGE_BASE_URL"
           need PARALLAX_JUDGE_MODELS "$PARALLAX_JUDGE_MODELS"
@@ -342,7 +342,7 @@ jobs:
           # The hosted diagnostic group spends too, on the same OpenRouter key for its steps and its judge.
           case " $EXTRA_ARMS " in *" fastbrowse-hosted "*) groups=$((groups + 1)) ;; esac
           # Both keys must cover every group before browsers begin billing.
-          for key in "$OPENROUTER_API_KEY" "$PARALLAX_JUDGE_API_KEY"; do
+          for key in "$FASTBROWSE_OPENROUTER_API_KEY" "$PARALLAX_JUDGE_API_KEY"; do
             KEY="$key" NEED="$(python3 -c "print($BUDGET * $groups)")" python3 - <<'PYTHON'
           import json, os, sys, urllib.request
 
@@ -475,12 +475,12 @@ jobs:
           for _ in $(seq 30); do curl -s -o /dev/null http://127.0.0.1:18090/ && break; sleep 1; done
           token="$(gcloud secrets versions access latest --secret FBH_BROWSER_POOL_TOKEN --project fastbrowse-hosted)"
           echo "::add-mask::$token"
-          { echo "PARALLAX_POOL_URL=http://127.0.0.1:18090"; echo "PARALLAX_POOL_TOKEN=$token"; } >> "$GITHUB_ENV"
+          { echo "FASTBROWSE_POOL_URL=http://127.0.0.1:18090"; echo "FASTBROWSE_POOL_TOKEN=$token"; } >> "$GITHUB_ENV"
       - name: Run the group
         env:
           FASTBROWSE_HOSTED_API_KEY: ${{ secrets.FASTBROWSE_HOSTED_API_KEY }}
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_BENCHMARKS_API_KEY }}
+          FASTBROWSE_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_BENCHMARKS_API_KEY }}
           PARALLAX_JUDGE_API_KEY: ${{ secrets.OPENROUTER_JUDGE_API_KEY }}
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
@@ -488,12 +488,15 @@ jobs:
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
           LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
           PARALLAX_LANGFUSE_PROJECT: fastbrowse-evals
-          FASTBROWSE_EVAL_SAUCEDEMO_USERNAME: ${{ secrets.FASTBROWSE_EVAL_SAUCEDEMO_USERNAME }}
-          FASTBROWSE_EVAL_SAUCEDEMO_PASSWORD: ${{ secrets.FASTBROWSE_EVAL_SAUCEDEMO_PASSWORD }}
-          FASTBROWSE_EVAL_EXPANDTESTING_USERNAME: ${{ secrets.FASTBROWSE_EVAL_EXPANDTESTING_USERNAME }}
-          FASTBROWSE_EVAL_EXPANDTESTING_PASSWORD: ${{ secrets.FASTBROWSE_EVAL_EXPANDTESTING_PASSWORD }}
-          FASTBROWSE_EVAL_PRACTICE_USERNAME: ${{ secrets.FASTBROWSE_EVAL_PRACTICE_USERNAME }}
-          FASTBROWSE_EVAL_PRACTICE_PASSWORD: ${{ secrets.FASTBROWSE_EVAL_PRACTICE_PASSWORD }}
+          # The demo logins each practice site prints on its own login page. They are public, so they live here
+          # rather than in repository secrets; they are still task secrets, scoped to the start origin and scrubbed
+          # from evidence.
+          FASTBROWSE_EVAL_SAUCEDEMO_USERNAME: standard_user
+          FASTBROWSE_EVAL_SAUCEDEMO_PASSWORD: secret_sauce
+          FASTBROWSE_EVAL_EXPANDTESTING_USERNAME: practice
+          FASTBROWSE_EVAL_EXPANDTESTING_PASSWORD: SuperSecretPassword!
+          FASTBROWSE_EVAL_PRACTICE_USERNAME: student
+          FASTBROWSE_EVAL_PRACTICE_PASSWORD: Password123
           ARMS: ${{ matrix.arms }}
           GROUP: ${{ matrix.group }}
         run: |

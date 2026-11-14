@@ -312,7 +312,11 @@ def test_settings_match_campaign_backend_and_reject_credential_inputs(monkeypatc
     monkeypatch.syspath_prepend(str(evals_src))
     backend = runpy.run_path(str(evals_src / "fastbrowse_evals/backend.py"))
     probe = helper.Probe(task="read", allowed_origins=["https://example.invalid"])
-    assert helper.run_settings(probe) == backend["run_settings"]()
+    diagnosed = helper.run_settings(probe)
+    # The campaign arm takes its OpenRouter key under its own name, since Parallax keeps the plain one for its meter.
+    campaign = {"FASTBROWSE_OPENROUTER_API_KEY" if k == "OPENROUTER_API_KEY" else k: v for k, v in supplied.items()}
+    monkeypatch.setattr(harness, "environment", lambda: dict(campaign))
+    assert diagnosed == backend["run_settings"]()
     assert "AI_GATEWAY_API_KEY" not in helper.run_settings(probe)
     for name in ("OPENROUTER_API_KEY", "FASTBROWSE_LLM_BASE_URL"):
         with pytest.raises(ValueError):
