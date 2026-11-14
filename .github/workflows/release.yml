@@ -105,6 +105,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
+      # The Store reviews on its own schedule, so this tree's required relay methods can outrun the approved
+      # package: refuse here, before any job publishes, until compat.json records what the Store serves (#1063).
+      - name: The Store package can relay what this release needs
+        run: python3 scripts/extension_store_gate.py
       - name: Require publisher configuration
         env:
           CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
@@ -135,7 +139,6 @@ jobs:
           name: release-extension-store-receipt
           path: store-receipt.json
           if-no-files-found: error
-
   github-release:
     needs: [binaries, gate, extension-store]
     # A run started by hand is a rehearsal and ends here, and with this job every job after it is skipped.
@@ -176,6 +179,8 @@ jobs:
     permissions:
       id-token: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
