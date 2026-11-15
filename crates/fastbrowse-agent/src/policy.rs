@@ -541,9 +541,6 @@ pub async fn decide(
                     return Ok(decision);
                 }
                 Err(AgentError::Jev(DecisionError::InputTooLarge(_))) => {}
-                Err(AgentError::Jev(DecisionError::RetriesExhausted(error))) => {
-                    return Err(AgentError::Jev(DecisionError::RetriesExhausted(error)));
-                }
                 Err(error) => return Err(error),
             }
         }
