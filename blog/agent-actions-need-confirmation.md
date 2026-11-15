@@ -24,10 +24,6 @@ When the next action is classified as irreversible, an unauthorized run ends wit
 
 Only `complete` exits 0. The full table, including the statuses that stop before anything is typed, is in [run statuses and exit codes](/docs/results/).
 
-## The tab stays open where it stopped
-
-A run that stops at `needs_confirmation`, `needs_input` or `needs_login` leaves the tab it stopped in open, outside its tab group, so you can finish the step in the page it already filled. That is the difference between an agent that refuses and an agent that makes you start over: the form is still there, with the values the run typed into it.
-
 ## Opting in, one run at a time
 
 `--authorize` allows submit, pay, delete and send. It does not override a task that says to change nothing or not to download, so a task carrying its own constraint is still refused.
@@ -47,7 +43,7 @@ Without `--authorize`, the run stops if an action is classified as irreversible.
 ## What to branch on in your own code
 
 1. Stop the loop on exit 3 rather than retrying it. A retry spends another run to arrive at the same refusal.
-2. Hand the open tab to a person when the step is one they should take, or re-run with `--authorize` once you have decided the task may complete on its own.
+2. Inspect the stopped result and let a person complete the step, or re-run with `--authorize` once you have decided the task may complete on its own.
 3. Keep `--json`. It carries the status, the step count, the cost and each quote behind the answer, which is what an audit of the run reads.
 
 ```sh
