@@ -724,11 +724,11 @@ async fn test_an_upload_script_checks_the_origin_it_runs_in() {
     s.page.navigate(&format!("{}/", sites.granted), None).await.expect("navigate");
     let control = find(&s.page.observe().await.expect("observe"), "Resume").clone();
     let files = [Attachment { name: "cv.txt".into(), mime_type: "text/plain".into(), content: Bytes(b"cv".to_vec()) }];
-    let (outcome, _) = testing::safety::upload(&s.page, &control.id, &files, None).await.expect("upload");
+    let (outcome, _, _) = testing::safety::upload(&s.page, &control.id, &files, None).await.expect("upload");
     assert_eq!(outcome, StepOutcome::Executed);
     // The document changed between the check in `act` and the write: the grant no longer names this origin.
     let grant = Some(vec![sites.foreign("127.0.0.1")]);
-    let (outcome, _) = testing::safety::upload(&s.page, &control.id, &files, grant).await.expect("upload");
+    let (outcome, _, _) = testing::safety::upload(&s.page, &control.id, &files, grant).await.expect("upload");
     assert_eq!(outcome, StepOutcome::Stale);
     s.close().await;
 }
