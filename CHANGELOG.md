@@ -13,6 +13,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.11.1] - 2026-11-14
 
+- **Counts use a whole record as their membership example when one is captured.** A name cited before the counted records could become their example, leaving page labels confused with records and the count unresolved. The question now uses a cited whole record when the capture proves one ([#1141](https://github.com/agent-labs-dev/fastbrowse/issues/1141)).
+
 - **Selected values retain their source record when the answer is composed.** Reading one field could discard the record name from the composer input even though its citation retained it, leaving a country area described as unestablished. The composer now receives the source record alongside the selected field, using the existing source binding and context packing ([#1142](https://github.com/agent-labs-dev/fastbrowse/issues/1142)).
 
 - **Structured benchmark answers reach the judge as JSON.** The local and hosted eval adapters now submit returned structured data instead of substituting its prose description ([#1139](https://github.com/agent-labs-dev/fastbrowse/issues/1139)).
