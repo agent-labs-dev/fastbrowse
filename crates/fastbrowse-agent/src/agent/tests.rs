@@ -2949,7 +2949,8 @@ impl Page for Screenshots {
 
     fn click_viewport(&self, x: f64, y: f64) -> BoxFuture<'_, PageResult<ActResult>> {
         self.0.lock().unwrap().push((x, y));
-        let clicked = ActResult { outcome: StepOutcome::Executed, page_changed: true, detail: None, moved: false };
+        let clicked =
+            ActResult { outcome: StepOutcome::Executed, failure: None, page_changed: true, detail: None, moved: false };
         Box::pin(async move { Ok(clicked) })
     }
 
@@ -4818,7 +4819,13 @@ impl Page for LeavingPage {
         assert_eq!(action.operation, self.expected);
         *self.now.lock().unwrap() = self.left.clone();
         Box::pin(async {
-            Ok(ActResult { outcome: StepOutcome::Executed, page_changed: false, detail: None, moved: false })
+            Ok(ActResult {
+                outcome: StepOutcome::Executed,
+                failure: None,
+                page_changed: false,
+                detail: None,
+                moved: false,
+            })
         })
     }
 
@@ -5214,7 +5221,7 @@ impl Page for Scripted {
         assert_eq!(action.operation, expected);
         let page_changed = landed != *self.now.lock().unwrap();
         *self.now.lock().unwrap() = landed;
-        Box::pin(async move { Ok(ActResult { outcome, page_changed, detail: None, moved: false }) })
+        Box::pin(async move { Ok(ActResult { outcome, failure: None, page_changed, detail: None, moved: false }) })
     }
 
     fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
@@ -5428,7 +5435,13 @@ impl Page for Unmoved {
         let target = action.target_id.as_ref().and_then(|id| observation.controls.iter().find(|c| c.id == *id));
         self.sent.lock().unwrap().push((action.operation, target.map(|c| c.label.clone())));
         Box::pin(async {
-            Ok(ActResult { outcome: StepOutcome::Executed, page_changed: false, detail: None, moved: false })
+            Ok(ActResult {
+                outcome: StepOutcome::Executed,
+                failure: None,
+                page_changed: false,
+                detail: None,
+                moved: false,
+            })
         })
     }
 
@@ -6841,7 +6854,13 @@ impl Page for HungPage {
             if hang {
                 Err(BrowserError::PageUnresponsive("the renderer stopped answering".into()))
             } else {
-                Ok(ActResult { outcome: StepOutcome::Executed, page_changed: false, detail: None, moved: false })
+                Ok(ActResult {
+                    outcome: StepOutcome::Executed,
+                    failure: None,
+                    page_changed: false,
+                    detail: None,
+                    moved: false,
+                })
             }
         })
     }
@@ -8079,7 +8098,13 @@ impl Page for Picker {
             field.expanded = Some(false);
         }
         Box::pin(async {
-            Ok(ActResult { outcome: StepOutcome::Executed, page_changed: true, detail: None, moved: false })
+            Ok(ActResult {
+                outcome: StepOutcome::Executed,
+                failure: None,
+                page_changed: true,
+                detail: None,
+                moved: false,
+            })
         })
     }
 
