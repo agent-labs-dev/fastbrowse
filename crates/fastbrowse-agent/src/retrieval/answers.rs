@@ -281,6 +281,23 @@ struct Composition {
 }
 
 impl Composition {
+    fn context(&self) -> Value {
+        let parts = |parts: &[BoundPart]| {
+            parts
+                .iter()
+                .map(|part| match part {
+                    BoundPart::Prose(text) => json!({"prose": text}),
+                    BoundPart::Source { item, .. } => json!({"copied": item.text}),
+                    BoundPart::Computed => json!({"computed": true}),
+                })
+                .collect::<Vec<_>>()
+        };
+        match &self.cells {
+            Some(cells) => json!({"cells": cells.iter().map(|cell| parts(cell)).collect::<Vec<_>>()}),
+            None => json!(parts(&self.text)),
+        }
+    }
+
     fn render(parts: &[BoundPart], value: &str) -> String {
         parts
             .iter()
@@ -1150,9 +1167,10 @@ async fn review_composition(
     let copied: Vec<Value> = claims
         .iter()
         .flat_map(|claim| {
+            let context = claim.composition.as_ref().map(Composition::context);
             claim.copied().into_iter().map(move |item| {
                 let mut element = copied_element(&item.text, &item.sources, notes);
-                element["claim"] = json!(claim.text);
+                element["claim"] = json!(context);
                 element
             })
         })
@@ -1933,7 +1951,7 @@ fn exact_question(task: &str, claims: &[Claim], notes: &Notes) -> Question {
 fn copied_question(task: &str, copied: &[Value]) -> Question {
     Question::Noul(NoulQuestion::new(
         format!(
-            "{UNTRUSTED} A written answer copies these texts from the page. Is every copied text free of page information the task neither asks for nor names, such as another field's value, an identifier, another record, or a whole date where the task asks for one part of it? Text that repeats the task's own words, such as the name of what it asks about, and a sentence stating only an asked value, carry nothing beyond it.{} The rest of the answer is checked separately. Each copied text includes the claim it contributes to, as context for the role of that text in the answer. Judge only the copied text, not the rest of the claim. Task: {} Copied: {}",
+            "{UNTRUSTED} A written answer copies these texts from the page. Is every copied text free of page information the task neither asks for nor names, such as another field's value, an identifier, another record, or a whole date where the task asks for one part of it? Text that repeats the task's own words, such as the name of what it asks about, and a sentence stating only an asked value, carry nothing beyond it.{} The rest of the answer is checked separately. Each copied text includes the claim it contributes to, as context for the role of that text in the answer. The claim is an array of parts: prose is the writer's wording, copied is page text, and computed is a slot code fills with a worked result. A table claim gives each cell as its own array under cells. Judge only the copied text, not the rest of the claim. Task: {} Copied: {}",
             element_rule(copied),
             dumps(&json!(task)),
             dumps(&json!(copied))
@@ -2595,7 +2613,7 @@ mod tests {
             &notes,
             None,
             false,
-            false,
+            true,
             None,
             &[],
         )
@@ -2608,6 +2626,19 @@ mod tests {
         );
         assert_eq!(checked.claims[0].evidence_ids, vec![items[1].sources[0].clone(), items[0].sources[0].clone()]);
         let asked = jev.asked.lock().unwrap();
+        let exact = asked.iter().find_map(|questions| questions.get("exact")).unwrap();
+        let Question::Noul(exact) = exact else { panic!("exactness is yes-or-no") };
+        let copied: Value = serde_json::from_str(exact.instructions.rsplit_once(" Copied: ").unwrap().1).unwrap();
+        assert_eq!(
+            copied[0]["claim"],
+            json!([
+                {"prose": "The source says "},
+                {"copied": "Paper Filters - GBP 4.60"},
+                {"prose": "; the minimum price is "},
+                {"computed": true},
+                {"prose": "."}
+            ])
+        );
         let Question::Choice(records) = asked.iter().find_map(|questions| questions.get("claim0/record")).unwrap()
         else {
             panic!("record check is a choice")
@@ -2798,6 +2829,12 @@ mod tests {
         .unwrap()
         .bind(&items)
         .unwrap();
+        assert_eq!(
+            bound.composition.as_ref().unwrap().context(),
+            json!({
+                "cells": [[{"copied": "A | B\n\nGBP 4.60"}], [{"computed": true}]]
+            })
+        );
         let claim = bound.worked("GBP 4.20", items[0].sources.clone());
         assert_eq!(claim.cells.as_ref().unwrap()[0], items[0].text);
         let answer = tabled(Some(vec!["Source".into(), "Minimum".into()]), assemble_answer(&[claim], &notes, &[]));
@@ -3899,7 +3936,13 @@ mod tests {
                 let payload: Value = serde_json::from_str(&exact.dump_json()).unwrap();
                 let instructions = payload["instructions"].as_str().unwrap();
                 let copied: Value = serde_json::from_str(instructions.rsplit_once(" Copied: ").unwrap().1).unwrap();
-                assert_eq!(copied[0]["claim"], "The site received Received stocktake.txt (34 bytes).");
+                assert_eq!(
+                    copied[0]["claim"],
+                    json!([
+                        {"prose": "The site received "},
+                        {"copied": "Received stocktake.txt (34 bytes)."}
+                    ])
+                );
             }
             let found = checked.problem.as_deref();
             assert_eq!(

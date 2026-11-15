@@ -13,6 +13,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.11.1] - 2026-11-14
 
+- **Copied-text checks retain the claim's typed parts.** Prose and computed slots stay distinct from page text while the check judges each copied span in context ([#1145](https://github.com/agent-labs-dev/fastbrowse/issues/1145)).
+
 - **String fields retain their observed source context while selecting words.** A table row without its header could supply a population as a city name. Whole-row candidates now retain their headers, and word-boundary questions carry the selected source context ([#1152](https://github.com/agent-labs-dev/fastbrowse/issues/1152)).
 
 - **Documentation and workflow commits skip the Python type check.** Python edits, deletions and typing configuration changes still check the whole project without rebuilding the native extension. A manual all-files check still runs ([#1110](https://github.com/agent-labs-dev/fastbrowse/issues/1110)).
