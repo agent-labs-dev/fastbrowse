@@ -542,18 +542,7 @@ pub async fn decide(
                 }
                 Err(AgentError::Jev(DecisionError::InputTooLarge(_))) => {}
                 Err(AgentError::Jev(DecisionError::RetriesExhausted(error))) => {
-                    let Some((smaller, reduced)) = shed(&request, &controls, config, reduction) else {
-                        return Err(AgentError::Jev(DecisionError::RetriesExhausted(error)));
-                    };
-                    trace.event("decide_shed", || {
-                        let mut fields = Map::new();
-                        fields.insert("offered".into(), controls.len().into());
-                        fields.insert("retry_with".into(), smaller.len().into());
-                        fields.insert("reason".into(), error.message.clone().into());
-                        fields
-                    });
-                    (controls, reduction) = (smaller, reduced);
-                    continue;
+                    return Err(AgentError::Jev(DecisionError::RetriesExhausted(error)));
                 }
                 Err(error) => return Err(error),
             }
@@ -715,28 +704,6 @@ fn protected_first(controls: &[Control], limit: usize) -> HashSet<usize> {
     let others: Vec<usize> = (0..controls.len()).filter(|i| !keep.contains(i)).take(room).collect();
     keep.extend(others);
     keep
-}
-
-/// Fewer controls to offer after the provider answered a large request with 503s until its retries ran out.
-///
-/// The gateway sheds large Jev requests. A Wikipedia article's step offered 160 controls, twice over (state and target
-/// question), in 27k input tokens, and it failed six runs in six as unavailable; replayed, that same request was
-/// answered four times in ten while every request under 10k tokens but two in 29 was. So a large request is asked
-/// again once without its off-screen controls, as the fitting ladder drops them; past that the outage is reported. A
-/// request already as small as a batch is not the reason, so its failure stays an outage.
-fn shed(
-    request: &Request,
-    controls: &[Control],
-    config: &Config,
-    reduction: Reduction,
-) -> Option<(Vec<Control>, Reduction)> {
-    let ratio = config.tokens.chars_per_token;
-    let state = text::len(&dumps(&request.state)) as f64 / ratio;
-    let largest = request.questions.values().map(|q| text::len(&q.dump_json())).max().unwrap_or(0) as f64 / ratio;
-    if state + largest <= config.tokens.batch_tokens as f64 {
-        return None;
-    }
-    onscreen_rung(controls, reduction).map(|onscreen| (onscreen, Reduction::OnscreenOnly))
 }
 
 /// The fitting ladder's on-screen rung: `controls` without the off-screen ones, or None when it has no more to drop.
@@ -1731,6 +1698,7 @@ mod tests {
         options: usize,
         requests: Mutex<Vec<IndexMap<String, Question>>>,
         states: Mutex<Vec<Value>>,
+        exhaust_once: AtomicBool,
     }
 
     fn fake(pick: &[(&'static str, &str)], relevant: &'static str) -> Fake {
@@ -1742,6 +1710,7 @@ mod tests {
             options: MAX_CHOICE_OPTIONS,
             requests: Mutex::new(Vec::new()),
             states: Mutex::new(Vec::new()),
+            exhaust_once: AtomicBool::new(false),
         }
     }
 
@@ -1757,10 +1726,23 @@ mod tests {
         ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
             self.requests.lock().unwrap().push(questions.clone());
             self.states.lock().unwrap().push(state.clone());
+            let exhaust = self.exhaust_once.swap(false, Ordering::SeqCst);
             let relevance = !questions.contains_key("operation");
             let hold =
                 relevance && self.interrupt && !questions.contains_key("r0") && !self.retry.load(Ordering::SeqCst);
             Box::pin(async move {
+                if exhaust {
+                    return Err(DecisionError::RetriesExhausted(Box::new(
+                        fastbrowse_core::decision::RetriesExhausted {
+                            message: "provider retries exhausted".into(),
+                            seconds: 1.0,
+                            unaccounted_requests: 0,
+                            requests: 1,
+                            answered: Vec::new(),
+                            last: "503".into(),
+                        },
+                    )));
+                }
                 if hold {
                     std::future::pending::<()>().await;
                 }
@@ -2099,6 +2081,25 @@ mod tests {
         assert_eq!(inner.criteria.keys().collect::<Vec<_>>(), ["b8", "b9", "b10", "b11"]);
         assert_eq!(decision.cost.len(), 2);
         assert!((decision.confidence() - 0.81).abs() < 1e-9);
+    }
+
+    #[test]
+    fn retries_exhausted_does_not_retry_with_hidden_offscreen_controls() {
+        let jev = fake(&[("operation", "click")], "");
+        jev.exhaust_once.store(true, Ordering::SeqCst);
+        let mut page = observation(vec![button(0), button(1)]);
+        page.controls[1].offscreen = true;
+        let mut config = Config::default();
+        config.tokens.batch_tokens = 1;
+        let result =
+            block_on(decide(&jev, &page, &StepContext::new("press a button"), &config, None, &Trace::disabled()));
+        assert!(
+            matches!(result, Err(AgentError::Jev(DecisionError::RetriesExhausted(error))) if error.message == "provider retries exhausted")
+        );
+        assert_eq!(jev.requests.lock().unwrap().len(), 1);
+        assert!(
+            jev.states.lock().unwrap()[0]["elements"].as_array().unwrap().iter().any(|element| element["id"] == "b1")
+        );
     }
 
     #[test]

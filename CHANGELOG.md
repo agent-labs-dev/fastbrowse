@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A Jev provider that exhausts its retries is reported as unavailable without a second request that silently removes off-screen controls.
+
 ## [0.11.1] - 2026-11-14
 
 - Browser steps expose an optional `failure` code across Rust, Python and the client SDKs, so callers can distinguish missing or disconnected targets, refused secret origins, navigation failures and dialog interruptions without parsing the diagnostic note ([#1127](https://github.com/agent-labs-dev/fastbrowse/issues/1127)). Older step results without the field still parse.
