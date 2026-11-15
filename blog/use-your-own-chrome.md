@@ -3,9 +3,9 @@ title: Run a browser agent in your own signed-in Chrome
 description: "Install the fastbrowse extension, check it is connected, run a read-only task with --extension, and stop it. What the run can reach and what Chrome shows."
 topic: Browsers and logins
 published: 2026-11-12
-updated: 2026-11-12
+updated: 2026-11-14
 verifiedAgainst: v0.11.0
-verifiedOn: 2026-11-12
+verifiedOn: 2026-11-14
 ---
 
 A fresh browser has none of your sign-ins. The fastbrowse extension lets a run work in the Chrome you already use, where you are signed in. The run opens tabs of its own in that browser; it does not use the tabs you already have open. No Browser Use key is involved: the run uses your own browser and your own model key.
@@ -24,7 +24,7 @@ fastbrowse extension install
 
 Next, add the extension from the [Chrome Web Store](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop), then restart Chrome or turn the extension off and on at `chrome://extensions` so it connects. The first task below is the check: with no browser connected, the run ends `unavailable`. Open fastbrowse from Chrome's Extensions menu to see active runs and their **Stop** buttons.
 
-This build requires extension **0.1.1 or later** with its supported-command list. Store version 0.1.0 cannot connect to this build. If the store does not offer the update yet, run `fastbrowse extension path`, open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked** and select the printed folder.
+The extension has to match the fastbrowse you install: the Store's **0.1.0** works with fastbrowse **0.10.x**, and fastbrowse **0.11.0 or later** requires extension **0.1.1 or later** with its supported-command list. A run that finds an older extension stops before it spends anything and names the version it needs. If the Store does not list the version you need yet, run `fastbrowse extension path`, open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked** and select the printed folder.
 
 ## Run a read-only task first
 
