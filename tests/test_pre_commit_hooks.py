@@ -17,6 +17,15 @@ import yaml
 
 CONFIG = Path(".pre-commit-config.yaml")
 
+
+def test_ty_wrapper_runs_for_python_deletions_and_manual_all_files() -> None:
+    from scripts.pre_commit_ty import needs_ty
+
+    assert needs_ty(["src/fastbrowse/deleted.py"])
+    assert needs_ty([])
+    assert not needs_ty([".github/workflows/ci.yml", "README.md"])
+
+
 # `uv` commands whose default is to sync the environment before they run; `--no-sync` is what stops them.
 SYNCING = ("uv check", "uv run", "uv sync")
 NO_SYNC = ("--no-sync", "--frozen")
@@ -45,6 +54,5 @@ def test_a_hook_with_its_own_uv_entry_does_not_sync() -> None:
 
 
 def test_the_ty_hook_checks_without_syncing() -> None:
-    """The hook that left the stale `.so`: its inherited entry is `uv check`, so the config must add `--no-sync`."""
-    (ty,) = [hook for hook in hooks() if hook["id"] == "ty"]
-    assert set(NO_SYNC) & set(command(ty)), f"the ty hook syncs the environment: {ty}"
+    """The wrapper must keep `uv run` from rebuilding the native extension."""
+    assert "--no-sync" in Path("scripts/pre_commit_ty.py").read_text()
