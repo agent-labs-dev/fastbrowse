@@ -8,13 +8,12 @@ import sys
 
 def staged_paths() -> list[str]:
     result = subprocess.run(
-        ["git", "diff", "--cached", "--name-status", "--diff-filter=ACDMRT", "--no-renames", "-z"],
+        ["git", "diff", "--cached", "--name-only", "--no-renames", "-z"],
         check=True,
         capture_output=True,
         text=True,
     )
-    fields = [field for field in result.stdout.split("\0") if field]
-    return [field.split("\t", 1)[-1] for field in fields]
+    return [path for path in result.stdout.split("\0") if path]
 
 
 def needs_ty(paths: list[str], staged: list[str]) -> bool:

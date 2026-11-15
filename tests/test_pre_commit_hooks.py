@@ -6,25 +6,85 @@ pre-commit then puts the unstaged files back and leaves the extension built from
 gitignored, so nothing reports it, and every later run on that checkout quietly executes old native code
 ([#766](https://github.com/agent-labs-dev/fastbrowse/issues/766)).
 
-The `ty` hook's entry comes from `astral-sh/ty-pre-commit` and is `uv check ...`, which syncs first, so the project
-has to pass `--no-sync` to it itself. Any other hook this file names is checked the same way.
+The `ty` hook's wrapper must retain `--no-sync` when it invokes the project's type checker.
 """
 
+import os
+import shlex
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 CONFIG = Path(".pre-commit-config.yaml")
 
 
-def test_ty_wrapper_runs_for_python_deletions_and_manual_all_files() -> None:
-    from scripts.pre_commit_ty import needs_ty
+@pytest.mark.parametrize("change", ["docs", "all-files", "delete", "rename", "stub", "config", "newline"])
+def test_ty_hook_invocation_preserves_relevant_changes(tmp_path: Path, change: str) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (ty,) = [hook for hook in hooks() if hook["id"] == "ty"]
+    local = {
+        **ty,
+        "name": "ty",
+        "entry": shlex.join([sys.executable, str(Path("scripts/pre_commit_ty.py").resolve())]),
+        "language": "system",
+        "types_or": ["python", "pyi", "jupyter"],
+        "always_run": True,
+        "pass_filenames": ty.get("pass_filenames", False),
+    }
+    (repo / ".pre-commit-config.yaml").write_text(yaml.safe_dump({"repos": [{"repo": "local", "hooks": [local]}]}))
+    for name in ("module.py", "types.pyi", "README.md", "ty.toml", "module\nname.py"):
+        (repo / name).write_text("")
 
-    assert needs_ty([], ["src/fastbrowse/deleted.py"])
-    assert needs_ty(["src/fastbrowse/types.pyi"], [])
-    assert needs_ty(["README.md"], ["ty.toml"])
-    assert not needs_ty([".github/workflows/ci.yml", "README.md"], [])
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+    git("init", "-q")
+    git("add", ".")
+    git(
+        "-c",
+        "user.name=Hook Test",
+        "-c",
+        "user.email=hook@example.com",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-qm",
+        "base",
+    )
+    if change in {"docs", "all-files"}:
+        (repo / "README.md").write_text("Documentation changed.\n")
+    elif change == "delete":
+        (repo / "module.py").unlink()
+    elif change == "rename":
+        (repo / "module.py").rename(repo / "module.txt")
+    else:
+        name = {"stub": "types.pyi", "config": "ty.toml", "newline": "module\nname.py"}[change]
+        (repo / name).write_text("# changed\n")
+    git("add", "-A")
+    executable = tmp_path / "bin"
+    executable.mkdir()
+    uv = executable / "uv"
+    uv.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$HOOK_UV_LOG"\n')
+    uv.chmod(0o755)
+    receipt = tmp_path / "uv-args"
+    env = {**os.environ, "PATH": f"{executable}{os.pathsep}{os.environ['PATH']}", "HOOK_UV_LOG": str(receipt)}
+    result = subprocess.run(
+        [sys.executable, "-m", "pre_commit", "run", "ty", *(["--all-files"] if change == "all-files" else [])],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    if change == "docs":
+        assert not receipt.exists()
+    else:
+        assert receipt.read_text().splitlines() == ["run", "--no-sync", "ty", "check"]
 
 
 # `uv` commands whose default is to sync the environment before they run; `--no-sync` is what stops them.

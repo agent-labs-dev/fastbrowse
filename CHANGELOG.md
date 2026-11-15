@@ -13,6 +13,10 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.11.1] - 2026-11-14
 
+- **Documentation and workflow commits skip the Python type check.** Python edits, deletions and typing configuration changes still check the whole project without rebuilding the native extension. A manual all-files check still runs ([#1110](https://github.com/agent-labs-dev/fastbrowse/issues/1110)).
+
+- **Benchmark export ignores older runs that supply no selected results.** A rerun could fail the measured-build check because superseded run metadata remained loaded. The check now uses only runs supplying selected results; selected failures and unjudged slots remain unchanged ([#1151](https://github.com/agent-labs-dev/fastbrowse/issues/1151)).
+
 - **Structured string fields keep their schema context when selecting source words.** The boundary questions retain the other fields in the record, so a name is distinguished from a version beside it ([#1149](https://github.com/agent-labs-dev/fastbrowse/issues/1149)).
 
 - **A task can request multiple calculations over the same records.** An exclusive choice could reject a count in favor of a maximum when the claims described their records in different words. Each calculation is now checked independently; group counts are checked without requiring the task to name the computed winner ([#1141](https://github.com/agent-labs-dev/fastbrowse/issues/1141)).

@@ -26,6 +26,10 @@ uv run pre-commit install
 sessions: run `entire enable` after it if you use Entire ([docs/agents/entire.md](docs/agents/entire.md) has the
 commands).
 
+The pre-commit type check skips staged changes unrelated to Python. Python edits, deletions and typing
+configuration changes still check the whole project without syncing its environment.
+`uv run pre-commit run ty --all-files` checks it regardless of the staged changes.
+
 `uv sync` builds the package's Rust core, `fastbrowse._native`, so it needs a Rust toolchain: install
 [rustup](https://rustup.rs), and it reads the pinned version from `rust-toolchain.toml`.
 
