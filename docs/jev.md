@@ -250,7 +250,9 @@ needs more context than the decision model accepts. A heading or link, or a quot
 list item that is only a link, is never offered as a whole record that lacks the field, since it only names its record. For a total or extreme, one choice qualifies the record and selects its quoted
 numeric field together. A whole record with a missing field remains distinct from a note that is not a record,
 and withholds the result after deduplication. Questions narrowing large numeric offers receive the same source
-context; code computes the total or ordering.
+context; code computes the total or ordering. A worked count or total is checked for facts outside its calculation.
+That check permits a subset of the calculated facts, such as a group count without its rank spelled out; answer
+coverage is judged separately.
 
 ## Unused primitives
 

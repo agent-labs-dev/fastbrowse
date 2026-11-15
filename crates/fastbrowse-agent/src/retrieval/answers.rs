@@ -1580,16 +1580,18 @@ fn tally_checks(tally: &Tally, text: &str, winners: &[serde_json::Value]) -> Vec
                 // "Of the" record kind reads as one record, so a total over all of them would not be "only" it.
                 _ => format!("the total {field} of every {of}"),
             };
+            // "Only count and place" was read as requiring both, rejecting a count whose place code had checked.
+            // Coverage is judged separately, so this question excludes extra facts without requiring every fact.
             let question = NoulQuestion::new(
-                format!("{UNTRUSTED}\nDoes this claim state only {what}? Claim: {claim}"),
-                Some(&format!("The claim states only {what}.")),
-                Some("The claim also states something else."),
+                format!(
+                    "{UNTRUSTED}\nIs every factual statement in this claim limited to {what}? The claim may state a subset of those facts; it need not state all of them. Judge whether it adds a different fact, not whether it omits one. Claim: {claim}"
+                ),
+                Some("Every fact the claim states is among the described facts; it states no different fact."),
+                Some("The claim states a fact other than the described facts."),
             );
-            // Told only that it stated something besides its count, the composer took the place out of a ranked claim
-            // as well, and the claim then failed for not stating it: the reason names all the claim is to state.
             let reason = format!(
-                "it states something besides {what}, which is not checked there: this claim keeps its tally and states \
-                 {what}, and nothing else; give each other value a claim of its own, citing the notes it is drawn from"
+                "it states something besides {what}, which is not checked there: this claim keeps its tally and may \
+                 state {what}, and nothing else; give each other value a claim of its own, citing the notes it is drawn from"
             );
             return vec![("states", Question::Noul(question), reason)];
         }
@@ -3223,7 +3225,11 @@ mod tests {
         );
         assert!(!asked.contains_key("claim0"), "the count is not Jev's to confirm");
         let Question::Noul(states) = &asked["claim0/states"] else { panic!("states is a noul") };
-        assert!(states.instructions.contains("only how many 'quote by Ada' there are"), "{}", states.instructions);
+        assert!(
+            states.instructions.contains("limited to how many 'quote by Ada' there are"),
+            "{}",
+            states.instructions
+        );
         assert!(states.instructions.contains("There are [computed] quotes by Ada."), "{}", states.instructions);
     }
 
@@ -3503,17 +3509,15 @@ mod tests {
         let bo = placed("Bo has the second most quotes, with 4.", "Bo", 2, "4");
         let checks = tally_checks(bo.tally.as_ref().unwrap(), &bo.text, &[]);
         let (_, _, reason) = checks.iter().find(|(key, _, _)| *key == "states").unwrap();
-        assert!(reason.contains("states how many 'quote' have the 'author' 'Bo', and that it is second"), "{reason}");
+        assert!(reason.contains("state how many 'quote' have the 'author' 'Bo', and that it is second"), "{reason}");
         let task = "Which two authors have the most quotes, and how many each?";
-        let claims = vec![
-            placed("Ada has the most quotes, with 4.", "Ada", 1, "4"),
-            placed("Bo has the second most quotes, with 4.", "Bo", 2, "4"),
-        ];
+        let claims =
+            vec![placed("Ada has the most quotes, with 4.", "Ada", 1, "4"), placed("Bo has 4 quotes.", "Bo", 2, "4")];
         let jev = Tallying::new("Quote ", "");
         let checked = review_claims(&jev, &READS, task, None, claims, &notes, None, true, &[]).await.unwrap();
         assert_eq!(checked.problem, None, "{:?} {:?}", checked.rejection, checked.claims);
         let texts: Vec<&str> = checked.claims.iter().map(|claim| claim.text.as_str()).collect();
-        assert_eq!(texts, ["Ada has the most quotes, with 5.", "Bo has the second most quotes, with 4."]);
+        assert_eq!(texts, ["Ada has the most quotes, with 5.", "Bo has 4 quotes."]);
         // A place rests on every group's count, so the claim cites every quote, its own group's first.
         let by_author: Vec<String> = [0, 1, 3, 6, 10, 2, 5, 7, 11, 4, 9, 8].iter().map(|at| ids[*at].clone()).collect();
         assert_eq!(checked.claims[0].evidence_ids, by_author);
@@ -3521,6 +3525,8 @@ mod tests {
         assert_eq!(asked.keys().filter(|key| key.starts_with("t1/")).count(), 0, "the records are judged once");
         assert!(asked.keys().all(|key| !key.contains("/g")), "Jev is asked no record's group");
         let Question::Noul(states) = &asked["claim1/states"] else { panic!("states is a noul") };
+        assert!(states.instructions.contains("it need not state all of them"), "{}", states.instructions);
+        assert!(states.instructions.contains("Bo has [computed] quotes."), "{}", states.instructions);
         assert!(
             states.instructions.contains("have the 'author' 'Bo', and that it is second"),
             "{}",
