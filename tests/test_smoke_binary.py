@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from fastbrowse.evals.harness import find_chrome
-from scripts.smoke_binary import Client, Failed
+from scripts.smoke_binary import Client, Failed, serving
 
 REPO = Path(__file__).resolve().parent.parent
 SMOKE = REPO / "scripts" / "smoke_binary.py"
@@ -66,3 +66,10 @@ def test_client_reports_a_server_that_exited_before_accepting_a_request() -> Non
                 process.stdin.close()
         if process.poll() is None:
             process.kill()
+
+
+def test_serving_preserves_pipe_failure_during_context_cleanup() -> None:
+    with serving(Path(sys.executable)) as client:
+        client._process.wait()
+        with pytest.raises(Failed, match=r"initialize: server exited before accepting request, exit status 2"):
+            client.request("initialize", None, 1)

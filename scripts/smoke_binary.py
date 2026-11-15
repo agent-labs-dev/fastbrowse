@@ -25,7 +25,7 @@ import sys
 import tempfile
 import threading
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import IO, Any
@@ -144,11 +144,15 @@ def serving(executable: Path, *arguments: str) -> Iterator[Client]:
         client = Client(process)
         try:
             yield client
-            client.request("shutdown", None, HANDSHAKE_SECONDS)
-            status = process.wait(timeout=HANDSHAKE_SECONDS)
-            if status != 0:
-                raise Failed(f"the server exited with status {status} after shutdown")
+            if process.poll() is None:
+                client.request("shutdown", None, HANDSHAKE_SECONDS)
+                status = process.wait(timeout=HANDSHAKE_SECONDS)
+                if status != 0:
+                    raise Failed(f"the server exited with status {status} after shutdown")
         finally:
+            if process.stdin is not None:
+                with suppress(BrokenPipeError):
+                    process.stdin.close()
             if process.poll() is None:
                 process.kill()
 
