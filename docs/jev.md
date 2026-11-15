@@ -242,7 +242,9 @@ a claim of 9: a count is not a question for Jev.
 
 Tally membership questions about a page's notes are asked beside that page's current notes, so a record's date or
 price can be read alongside separate page labels. A note proven to be a whole record is left out of that context,
-since it is all its item shows and is judged in a question of its own. The provider's input limits still apply: a
+since it is all its item shows and is judged in a question of its own. A membership question uses a cited whole
+record as its example when the capture proves one, even when the claim cites a name or heading first. Without
+that proof, it keeps the first cited evidence as the example. The provider's input limits still apply: a
 question whose page context does not fit is not sent with missing notes, and the claim's tally reports that its page
 needs more context than the decision model accepts. A heading or link, or a quote that lies within one link's text such as a
 list item that is only a link, is never offered as a whole record that lacks the field, since it only names its record. For a total or extreme, one choice qualifies the record and selects its quoted

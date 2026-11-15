@@ -424,21 +424,20 @@ async fn by_page(
     Ok((answered, oversized))
 }
 
-/// The first note a claim cites, as a membership question shows it: the composer's own example of the record it
-/// counts, marked `whole_record` when its capture shows it is all the text of one item the page repeats.
+/// A cited whole record is the membership example when the capture proves one; a name cited before its record
+/// otherwise teaches Jev that labels are records and leaves membership unresolved. Unmarked captures keep the
+/// first cited evidence as their example.
 fn example(notes: &Notes, cited: &[String]) -> Option<serde_json::Value> {
     let facts = notes.facts_by_id();
-    notes
-        .expand_evidence_ids(cited.iter().map(String::as_str))
-        .iter()
-        .find_map(|id| facts.get(id).and_then(|fact| fact.evidence.as_ref()))
-        .map(|evidence| {
-            let mut note = shown(notes, evidence);
-            if notes.whole_record(evidence) {
-                note["whole_record"] = true.into();
-            }
-            note
-        })
+    let ids = notes.expand_evidence_ids(cited.iter().map(String::as_str));
+    let mut evidence = ids.iter().filter_map(|id| facts.get(id).and_then(|fact| fact.evidence.as_ref()));
+    evidence.clone().find(|evidence| notes.whole_record(evidence)).or_else(|| evidence.next()).map(|evidence| {
+        let mut note = shown(notes, evidence);
+        if notes.whole_record(evidence) {
+            note["whole_record"] = true.into();
+        }
+        note
+    })
 }
 
 /// Whether a count includes this whole record, rather than a mention or part of it.
@@ -1790,9 +1789,12 @@ mod tests {
             }
         }
 
-        let mut captured =
-            capture(&[(BlockKind::Record, "\"Choices\" by Ada (about)"), (BlockKind::Paragraph, "Made by Zyte")]);
-        captured.blocks[0].whole_record = true;
+        let mut captured = capture(&[
+            (BlockKind::Heading, "Ada"),
+            (BlockKind::Record, "\"Choices\" by Ada (about)"),
+            (BlockKind::Paragraph, "Made by Zyte"),
+        ]);
+        captured.blocks[1].whole_record = true;
         let page = Page::new(&captured);
         let facts = captured.blocks.iter().map(|block| {
             let quote = evidence(&page, block, block.start, block.end);
@@ -1800,7 +1802,8 @@ mod tests {
         });
         let mut notes = Notes::new(facts.collect::<Vec<_>>());
         notes.remember_capture(&captured, 0);
-        let cited = vec![candidates(&notes)[0].id.clone()];
+        let found = candidates(&notes);
+        let cited = vec![found[0].id.clone(), found[1].id.clone()];
         let tally = Tally {
             op: Op::Count,
             of: "quote".into(),
