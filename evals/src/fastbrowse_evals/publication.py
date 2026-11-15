@@ -363,9 +363,17 @@ def candidate_from_runs(run_dirs: Iterable[Path], *, campaign_id: str) -> Candid
                 selected[key] = (run, result)
     if not selected:
         raise ValueError("the Parallax runs contain no public arms")
-    measured_agent = next(iter(metadata.values()))[0]
-    measured_runner = next(iter(metadata.values()))[1]
-    if any(item[0] != measured_agent or item[1] != measured_runner for item in metadata.values()):
+    # A campaign may retain competitor references recorded by a different build. Only the selected
+    # fastbrowse arms define the measured build identity; competitor provenance stays attached to its source.
+    measured_paths = {
+        run.path for run, result in selected.values() if public_arm(result) in {"fastbrowse", "fastbrowse-pool"}
+    }
+    measured_metadata = [metadata[path] for path in measured_paths]
+    if measured_metadata:
+        measured_agent, measured_runner = measured_metadata[0][:2]
+    else:
+        measured_agent, measured_runner = next(iter(metadata.values()))[:2]
+    if measured_metadata and any(item[0] != measured_agent or item[1] != measured_runner for item in measured_metadata):
         raise ValueError("all runs in one candidate must name the same measured build and runner")
     rows_by_group: dict[GroupId, dict[str, list[Row]]] = {}
     unjudged_by_group: dict[GroupId, dict[str, list[UnjudgedSlot]]] = {}
