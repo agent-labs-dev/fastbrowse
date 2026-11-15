@@ -1,18 +1,18 @@
 ---
 title: When a browser agent should stop instead of acting
-description: fastbrowse runs read-only steps and stops before submit, pay, delete and send, ending needs_confirmation with exit 3. What that default protects, and when --authorize is the right call.
+description: fastbrowse stops before actions classified as irreversible, ending needs_confirmation with exit 3. What that default protects, and when to use --authorize.
 topic: Safety
 published: 2026-11-14
-updated: 2026-11-14
-verifiedAgainst: v0.11.0
-verifiedOn: 2026-11-14
+updated: 2026-11-15
+verifiedAgainst: v0.10.0
+verifiedOn: 2026-11-15
 ---
 
-A browser agent that cannot tell a price lookup from a purchase will eventually make one. fastbrowse runs the read-only steps of a task and treats every action that changes something on the site, such as submit, pay, delete or send, as one it does not take on its own.
+A browser agent needs to distinguish a price lookup from a purchase. fastbrowse stops before actions classified as irreversible, such as submitting an order, paying, deleting data or sending a message, unless the run is authorized. It can still fill fields and make reversible changes. Classification can miss a change, so state read-only constraints in your task and check important actions yourself.
 
 ## The default is to stop
 
-The first irreversible step ends the run with the status `needs_confirmation` and exit 3. Nothing on the page is left holding a half-finished click, and a script that only tests for a non-zero exit sees the stop without parsing the answer.
+When the next action is classified as irreversible, an unauthorized run ends with the status `needs_confirmation` and exit 3 before dispatching that action. A script that tests for a non-zero exit sees the stop without parsing the answer.
 
 | Status | Exit | What it means |
 |:--|--:|:--|
@@ -38,7 +38,7 @@ fastbrowse "Log in as standard_user with the saved password and add the backpack
   --start https://www.saucedemo.com/ --secret password=SAUCE_PASSWORD --authorize
 ```
 
-Without `--authorize` the same task stops before adding the item to the cart. Which flags the run accepts is in the [command-line reference](/docs/flags/).
+Without `--authorize`, the run stops if an action is classified as irreversible. The exact stopping point depends on that classification. Which flags the run accepts is in the [command-line reference](/docs/flags/).
 
 ## The same default behind an MCP server
 
