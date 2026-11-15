@@ -336,7 +336,8 @@ citations; on every other draft a long run's clicks would crowd out the notes it
 spend the same recovery, and when it ends without a checked answer they retain their extracted data and end `unverified`.
 Each schema field is chosen after the answer is checked, with its claims beside the candidates, or with the claims that
 passed when a rewrite is pending: a field choice alone cannot compare records, and chose the other package where the
-answer worked out which was newer. Recovery is not
+answer worked out which was newer. When a string value occupies part of a source passage, both the source
+choice and the word-boundary questions retain the record's other field names. Recovery is not
 attempted when a claim lacks a retained source quote or packed composition cannot reduce to one request.
 The composer says when its answer is partial and names what it leaves unestablished, such as a total over a list that continues unread. Such an answer is never `complete`: a finished run ends `unverified` with that account as its error, and a stuck run keeps its status. Exhausted composition recovery retains supported claims and ends `unverified`, unless a missing field value or
 site failure establishes another status. Those claims can be reused without another composition call only while

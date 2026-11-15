@@ -13,6 +13,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.11.1] - 2026-11-14
 
+- **Structured string fields keep their schema context when selecting source words.** The boundary questions retain the other fields in the record, so a name is distinguished from a version beside it ([#1149](https://github.com/agent-labs-dev/fastbrowse/issues/1149)).
+
 - **A task can request multiple calculations over the same records.** An exclusive choice could reject a count in favor of a maximum when the claims described their records in different words. Each calculation is now checked independently; group counts are checked without requiring the task to name the computed winner ([#1141](https://github.com/agent-labs-dev/fastbrowse/issues/1141)).
 
 - **A ranked count need not spell out its rank to pass the extra-fact check.** A sentence stating a group count could be rejected because it did not also say first, second or third, even after code checked that place. That question now checks only for facts outside the calculation; answer coverage remains a separate check ([#1141](https://github.com/agent-labs-dev/fastbrowse/issues/1141)).
