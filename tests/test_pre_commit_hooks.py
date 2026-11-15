@@ -21,9 +21,10 @@ CONFIG = Path(".pre-commit-config.yaml")
 def test_ty_wrapper_runs_for_python_deletions_and_manual_all_files() -> None:
     from scripts.pre_commit_ty import needs_ty
 
-    assert needs_ty(["src/fastbrowse/deleted.py"])
-    assert needs_ty([])
-    assert not needs_ty([".github/workflows/ci.yml", "README.md"])
+    assert needs_ty([], ["src/fastbrowse/deleted.py"])
+    assert needs_ty(["src/fastbrowse/types.pyi"], [])
+    assert needs_ty(["README.md"], ["ty.toml"])
+    assert not needs_ty([".github/workflows/ci.yml", "README.md"], [])
 
 
 # `uv` commands whose default is to sync the environment before they run; `--no-sync` is what stops them.

@@ -8,24 +8,28 @@ import sys
 
 def staged_paths() -> list[str]:
     result = subprocess.run(
-        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACDMRT"],
+        ["git", "diff", "--cached", "--name-status", "--diff-filter=ACDMRT", "--no-renames", "-z"],
         check=True,
         capture_output=True,
         text=True,
     )
-    return [path for path in result.stdout.splitlines() if path]
+    fields = [field for field in result.stdout.split("\0") if field]
+    return [field.split("\t", 1)[-1] for field in fields]
 
 
-def needs_ty(paths: list[str]) -> bool:
-    if not paths:
-        return True
-    return any(path.endswith(".py") or path in {"pyproject.toml", "uv.lock"} for path in paths)
+def needs_ty(paths: list[str], staged: list[str]) -> bool:
+    paths = [*paths, *staged]
+    return any(
+        path.endswith((".py", ".pyi", ".ipynb"))
+        or path.rsplit("/", 1)[-1] in {"pyproject.toml", "uv.lock", "ty.toml", ".ty.toml", ".pre-commit-config.yaml"}
+        for path in paths
+    )
 
 
 def main() -> int:
-    if not needs_ty(staged_paths()):
+    if not needs_ty(sys.argv[1:], staged_paths()):
         return 0
-    return subprocess.run(["uv", "run", "--no-sync", "ty", "check", *sys.argv[1:]], check=False).returncode
+    return subprocess.run(["uv", "run", "--no-sync", "ty", "check"], check=False).returncode
 
 
 if __name__ == "__main__":

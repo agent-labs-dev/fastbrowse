@@ -16,4 +16,3 @@ repos:
       # and leave `src/fastbrowse/_native.abi3.so` stale for every later run on this checkout (#766).
       - id: ty
         entry: python scripts/pre_commit_ty.py
-        pass_filenames: false

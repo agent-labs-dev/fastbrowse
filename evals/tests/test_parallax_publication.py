@@ -116,6 +116,8 @@ def test_measured_identity_rejects_selected_competitor_provenance_mismatch() -> 
         Path("fastbrowse"): (AGENT_SHA, RUNNER_SHA, {}),
         Path("competitor"): ("c" * 40, "d" * 40, {}),
     }
+    selected_fastbrowse = {key: value for key, value in selected.items() if key[1] == "fastbrowse"}
+    assert _measured_identity(metadata, selected_fastbrowse) == (AGENT_SHA, RUNNER_SHA)
     with pytest.raises(ValueError, match="same measured build"):
         _measured_identity(metadata, selected)
     mismatched = dict(selected)
