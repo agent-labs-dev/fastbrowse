@@ -2782,6 +2782,10 @@ async fn step_failures_preserve_the_producer_cause() {
     let navigation = act(&h.page, invalid, &obs).await;
     assert_eq!((navigation.outcome, navigation.failure), (StepOutcome::Failed, Some(StepFailure::NavigationFailed)));
     let field = find(&obs, "Username");
+    let unknown_drop =
+        Action { operation: Operation::Drag, destination_id: Some("not-observed".into()), ..fill(field, "") };
+    let missing_drop = act(&h.page, unknown_drop, &obs).await;
+    assert_eq!((missing_drop.outcome, missing_drop.failure), (StepOutcome::Stale, Some(StepFailure::MissingTarget)));
     let unauthorized = Action { secret: true, ..fill(field, "private") };
     let refused = act(&h.page, unauthorized, &obs).await;
     assert_eq!((refused.outcome, refused.failure), (StepOutcome::Failed, Some(StepFailure::UnauthorizedOrigin)));

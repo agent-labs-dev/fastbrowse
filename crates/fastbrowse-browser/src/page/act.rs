@@ -336,7 +336,7 @@ fn parse_cover(value: &Value) -> Result<Cover, BrowserError> {
 type TargetState = (String, Option<String>, Point, bool, bool, String, bool);
 
 fn parse_target_state(value: &Value) -> Result<TargetState, BrowserError> {
-    let shape = "tuple[str, str | None, _Point, bool, bool, str]";
+    let shape = "tuple[str, str | None, _Point, bool, bool, str, viewport, bool]";
     // The viewport stays at index six; connection is measured beside the guard so hidden controls are not called gone.
     let Some(items) = value.as_array().filter(|items| items.len() >= 8) else {
         return Err(bad(shape));
@@ -1138,7 +1138,7 @@ impl CdpPage {
             return Ok((
                 StepOutcome::Failed,
                 Some("clicked field has no replacement in the same document and position".into()),
-                Some(StepFailure::TargetGone),
+                Some(StepFailure::BrowserError),
             ));
         };
         local_id = handed;
@@ -1866,7 +1866,7 @@ impl CdpPage {
             Point::At(x, y) => (x, y),
         };
         let Some(drop) = self.last().and_then(|last| last.controls.get(destination_id).cloned()) else {
-            return Ok((StepOutcome::Stale, Some("unknown drop target id".into()), Some(StepFailure::TargetGone)));
+            return Ok((StepOutcome::Stale, Some("unknown drop target id".into()), Some(StepFailure::MissingTarget)));
         };
         if drop.0 != target.0 {
             return Ok((
