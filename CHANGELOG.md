@@ -13,6 +13,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.11.1] - 2026-11-14
 
+- **Successful diagnostic fills release their unresolved budget hold.** Execution, report completeness, pricing, grading and budget checks must all pass before the hold is cleared ([#1153](https://github.com/agent-labs-dev/fastbrowse/issues/1153)).
+
 - **Copied-text checks retain the claim's typed parts.** Prose and computed slots stay distinct from page text while the check judges each copied span in context ([#1145](https://github.com/agent-labs-dev/fastbrowse/issues/1145)).
 
 - **String fields retain their observed source context while selecting words.** A table row without its header could supply a population as a city name. Whole-row candidates now retain their headers, and word-boundary questions carry the selected source context ([#1152](https://github.com/agent-labs-dev/fastbrowse/issues/1152)).

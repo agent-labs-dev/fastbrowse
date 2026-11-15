@@ -200,16 +200,17 @@ def test_encryption_retains_raw_artifacts_without_plaintext_upload(tmp_path, mon
 
 
 @pytest.mark.parametrize(
-    "changes,expected",
+    "changes,returncode,expected",
     [
-        ({}, 0),
-        ({"unpriced_exchanges": 1}, 1),
-        ({"recorded_cost_usd": 4.0}, 1),
-        ({"misses": ["missing request"]}, 1),
-        ({"result": {"grade": {"passed": False}}}, 1),
+        ({}, 0, 0),
+        ({}, 1, 1),
+        ({"unpriced_exchanges": 1}, 0, 1),
+        ({"recorded_cost_usd": 4.0}, 0, 1),
+        ({"misses": ["missing request"]}, 0, 1),
+        ({"result": {"grade": {"passed": False}}}, 0, 1),
     ],
 )
-def test_fill_requires_priced_complete_converged_result(tmp_path, monkeypatch, changes, expected):
+def test_fill_requires_priced_complete_converged_result(tmp_path, monkeypatch, changes, returncode, expected):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(helper, "configuration", lambda _: (None, ["fixture-id"]))
     monkeypatch.setattr(helper, "identity", lambda: {"git_sha": "exact"})
@@ -226,12 +227,15 @@ def test_fill_requires_priced_complete_converged_result(tmp_path, monkeypatch, c
 
     def run(command, **kwargs):
         Path("artifacts/evals/diagnostics/fill.json").write_text(json.dumps({"tasks": [entry]}))
-        return SimpleNamespace(returncode=0)
+        return SimpleNamespace(returncode=returncode)
 
     monkeypatch.setattr(helper.subprocess, "run", run)
     assert helper.main() == expected
     receipt = json.loads(Path("artifacts/evals/diagnostics/fill.receipt.json").read_text())
-    assert receipt["unresolved_budget_hold_usd"] == 3
+    if expected:
+        assert receipt["unresolved_budget_hold_usd"] == 3
+    else:
+        assert "unresolved_budget_hold_usd" not in receipt
 
 
 def test_identity_refuses_wrong_or_dirty_checkout(tmp_path, monkeypatch):

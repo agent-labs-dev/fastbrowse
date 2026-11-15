@@ -308,8 +308,11 @@ def main() -> int:
     converged = all(not entry["misses"] and entry["result"]["grade"]["passed"] for entry in entries)
     receipt["complete"] = complete
     receipt["converged"] = converged
+    accepted = code == 0 and complete and converged and not unknown and known <= dollars
+    if accepted:
+        receipt.pop("unresolved_budget_hold_usd", None)
     write(out / "fill.receipt.json", receipt)
-    return 0 if code == 0 and complete and converged and not unknown and known <= dollars else 1
+    return 0 if accepted else 1
 
 
 if __name__ == "__main__":
