@@ -370,6 +370,7 @@ pub fn capture(window: &Window, root: &Element) -> Capture {
         text: whole,
         blocks,
         inaccessible_frames: 0,
+        masked: Vec::new(),
     }
 }
 

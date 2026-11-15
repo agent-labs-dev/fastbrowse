@@ -375,6 +375,9 @@ pub struct Capture {
     pub blocks: Vec<Block>,
     #[serde(default, deserialize_with = "lax::int_ge0")]
     pub inaccessible_frames: i64,
+    /// Where code blanked a secret value in `text`, as code point ranges: a `•` there is a mask, not page text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub masked: Vec<(i64, i64)>,
 }
 
 impl Capture {

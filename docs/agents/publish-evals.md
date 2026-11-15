@@ -1,181 +1,126 @@
 # Publish benchmark results
 
-Full browser campaigns run through the harness, `evals/`. Its exporter validates clean builds, scheduled slots, source
-identity, physical ledgers and private Langfuse read-back before producing the campaign's `benchmark-candidate.json`.
-The file contains sanitized per-run grades, completion, time, cost, LLM and Jev call counts and model
-throughput. Official rubric scores retain their source meaning.
+Internal browser campaigns run through the Parallax plugin in `evals/`. The
+campaign writes a Parallax run directory. The publication adapter reads those
+directories and writes the existing `benchmark-candidate.json` contract.
+Merging the fastbrowse-site pull request remains the approval step.
 
-No attempt of any agent has a time, step or spend limit: it runs until the agent ends it or a provider does. The harness
-records the absence of limits in each run and manifest, and publication refuses a run that records any limit. A limit
-a provider imposes and no request can lift, such as Browser Use's 4 hour session maximum, is stated with the figures.
+## Run and collect
 
-## What may be published
-
-- Only a figure we measured, on the build the candidate names. A vendor's own figure appears only as a
-  reference, labelled vendor-published with its source, never beside ours as if measured the same way.
-- DeepSeek V4.1 Flash (`deepseek/deepseek-v4.1-flash-1017`) through OpenRouter is the one judge model behind published
-  figures: Parallax's LLM fallback (`PARALLAX_JUDGE_MODELS`) and the official suites' judges
-  (`PARALLAX_BU_BENCH_JUDGE`, `PARALLAX_MIND2WEB_JUDGE`) all name it, and a group judged by any other model is not
-  published.
-
-## The candidate contract
-
-Three programs share the candidate's schema: `fastbrowse-evals browser publish-candidate` writes it,
-`fastbrowse.evals.benchmarks` validates and installs it, and `agent-labs-dev/fastbrowse-site` parses it
-(`src/lib/benchmark-feed.ts`). A schema change lands in all three. Before any of them merges, run one candidate written by
-the changed writer through both readers.
-
-## Schemas
-
-Schema 1 requires all four original groups. Schema 2 accepts nonempty subsets of those four groups.
-Schema 3 also supports `internal-fastbrowse`: every supported internal task in the current catalog (53 since
-`stretch-wizard-correction` was retired; figures approved earlier ran 54), three repeats each, with
-fastbrowse alone. The fastbrowse-only group does not require comparator reruns. Official
-fastbrowse suites do not require new comparator runs. Previously published comparator figures can be linked
-as references with their task and build differences stated. Every group inside one candidate still comes
-from the same measured agent and runner build. Adding a suite must retain the published groups and their
-regression checks; results from different builds cannot be combined under one build receipt.
-Schema 4 adds `internal-backend`: fastbrowse on a Browser Use Cloud browser against fastbrowse on its own
-browser pool. From schema 7, `internal-ultrafast` pairs fastbrowse on its own pool with `browser-use-ultrafast`, the
-hosted Browser Use agent on `bu-ultrafast`, over the 52 tasks both run, and no group may measure `jev-ultrafast`.
-Figures approved under an older schema keep the pairing they were measured under: schema 5 and 6 paired the pool with
-`jev-ultrafast` over 6 navigation tasks, and earlier schemas paired fastbrowse on a Browser Use Cloud browser with it,
-and their `internal-hosted` groups may carry `jev-ultrafast` rows. `benchmarks.group_arms` holds the pairing per
-schema, and a change of pairing is a protocol change the owner approves.
-Schema 2 and later record each group's agent and runner commits and require them to match the candidate's build,
-unless the group lists its `sources`: the campaign runs its rows came from, newest first, one entry per run and arm,
-each with its commits, date and the tasks it supplied for that arm, and for an arm other than fastbrowse the pin it
-ran (`version`) and the models its rows reported (`models`). Its commits are then the newest source's. An
-earlier source stays valid on any build, including a branch commit a squash merge left outside `main`. A slot our own harness or
-judge failed is listed in `unjudged` with its reason, outside every figure; a run the site's bot check or an outage
-stopped is a failed row naming why, and a legacy `blocked` slot reads as one. Each task the catalog says an arm cannot run is listed in `excluded` with the catalog's
-reason and counts as `repeats` failed attempts in every pass rate. A row whose agent connects to its browser where the
-harness cannot see (hosted Browser Use, Browser Harness) states what of that setup stayed in its seconds in
-`timing_note`. The site's parser (`src/lib/benchmark-feed.ts`) must accept these fields before a candidate that has
-them is published. A validated never-started retry uses `physical-attempt-wall-time`: its seconds sum the
-recorded dispatch elapsed time and the executed attempts' session-ready-to-answer time, without adding
-executed session opening or closing. Its note describes this accounting and its phase totals stay absent.
-Groups retain outcomes and every elapsed time across explicit bases, but consumers must suppress aggregate
-speed comparisons across bases. Legacy rows without a basis cannot be mixed with explicit clocks.
-
-`internal-hosted` is the head-to-head over the 53 tasks fastbrowse runs; figures approved at 46, 47 or 52 tasks still
-read. A campaign runs `fastbrowse` live on a Browser Use Cloud browser. A competitor refresh adds `browser-use`, `browser-use-ultrafast` and `browser-harness`. Both hosted Browser Use models return answers. Each arm runs every repeat of every task it can attempt: `browser-use` and `browser-use-ultrafast` skip the task that
-passes only by stopping before an unauthorized step, and `browser-harness` also skips the login tasks, so it runs 47.
-The catalog states each reason and the site shows those tasks as not run. An arm that did not run has no rows and the site shows it as not measured. An arm
-whose complete cost is unavailable carries `"dollars": null` on every public row. Its grounded outcomes and seconds
-remain publishable, with no cost total, average, ratio or cost winner. An unresolved charge in any contributing
-slot's physical retries withholds that arm's costs across all contributing invocations. Other arms keep their
-complete costs. Fastbrowse still requires complete costs on every physical attempt.
-
-Hosted session usage remains provisional after its browser stops: the provider can report delayed charges and
-supplies no billing-finalized marker. The private `provisional_hosted_cost` receipt preserves the exact amount
-strings and query time; `dollars` remains null and `unknown_cost` true. A later read is a separate usage observation,
-never a replacement for the original receipt or proof of final billing. A later crash can also leave a numeric
-partial receipt with `unknown_cost` true. The unknown flag controls the total; the private partial amount survives.
-Publication replays every unknown attempt at its full original budget hold. Reduced holds, unpriced judges,
-missing grades and incomplete coverage still block publication. Original ledgers remain unchanged.
-
-`browser-use`, `browser-use-ultrafast` and `browser-harness` rows come from `docs/results/competitor-reference.json`, which only
-`publish-candidate` reads. It holds their public rows with the vendor, date, version, browser and campaign of the one
-run that measured them, and the site labels them as measured once on that date, not on this release. A dispatch with
-`refresh_competitors` runs all three live on a full head-to-head and leaves `competitor-reference.json` in the candidate
-artifact; commit that file to `docs/results/` for later campaigns. Publication refuses the head-to-head, naming each
-stale task, when the reference is missing, is graded under another policy, or no longer matches the catalog.
-
-The official suites publish fastbrowse alone, beside the vendor's own published figure, and accept any
-positive repeat count: every task and repeat is one row with its upstream score kept as the upstream defines it, the
-group records the repeat count, and a task's figure is the mean of its repeats' scores.
-
-## Validation and approval
-
-Candidate rows declare transport counts with `llm_calls_basis: physical_requests`. Historical rows without
-a basis retain their cost-line meaning. A declared basis without a count, or a null count, is unknown;
-the omitted-count zero default remains only for historical rows without a basis. Retry totals and summaries
-must retain unknown counts and keep different bases separate.
-
-CI validates the candidate's exact coverage and compares matched scores, completion, LLM and Jev calls, model
-throughput and cost with the previous approved candidate; wall time is recorded but not compared. A group whose
-catalog differs from the approved one only by tasks listed under the catalog's `retired` (a site that is gone)
-is compared on the tasks both ran; the earlier catalog is found in Git history by its digest. Any other catalog,
-task or limit difference is a protocol change, published only as described
-under [Changing the protocol](#changing-the-protocol). Unresolved Fastbrowse costs, unpriced judges, missing grades, incomplete coverage and
-a failed fixture workflow block publication. The fixture receipt is a successful maintainer dispatch of
-`evals.yml` whose head commit is the measured build. When `main` has moved past that build, push a branch at
-it and dispatch the workflow there; a branch run counts only when its commit is in `main`'s history, so the
-workflow and runner it used are ones `main` held. A candidate can carry a verified export receipt in its `export`
-field in place of the fixture receipt, never both. The export receipt names the measured build and campaign, the
-bundle's digest and the trace it was read back from, covers exactly the published groups and counts every
-published row. `uv run python -m fastbrowse.evals.benchmarks --status` prints what blocks the staged candidate
-and the next action. These checks detect recorded regressions; they do not prove that
-every website or grader is free of bugs. Review unexpected outcomes before approving.
-
-## From a campaign to the site
-
-A release runs `benchmark-campaign.yml` as `release-<x.y.z>` on its commit before it is tagged, and the release
-workflow's `gate` job will not publish without it (see [release.md](release.md)); anyone with write access can
-dispatch a campaign by hand. An integration holding a token with `contents: write` starts one with a `repository_dispatch`
-through `client_payload`, which takes the same values as the manual inputs and is refused before any spend when a
-value is outside them. Any campaign that is not a smoke is refused before any spend when its build has no passing or
-running Evals dispatch. When every group has run, the campaign builds the candidate from this run and the campaign's
-earlier finished runs, each task from the newest run that measured it in full, and calls `publish-evals.yml`,
-which opens a pull request on agent-labs-dev/fastbrowse-site. The pull request carries the candidate byte for
-byte as `data/benchmark-<campaign>.json` and the site's group files under `data/benchmarks/`, written by
+Install the plugin environment and the fastbrowse build it will measure:
 
 ```sh
-uv run python -m fastbrowse.evals.site_groups benchmark-candidate.json run-facts.json ../fastbrowse-site
+uv sync --project evals --locked --no-install-package fastbrowse
+uv pip install --python evals/.venv/bin/python -e .
 ```
 
-A group file holds no figure. It names the candidate group, campaign, build and candidate SHA256, and the site
-computes every figure from the candidate's per-attempt rows. Its `systems` maps each site system with rows to its
-arm, `cost_not_reported` lists those of them whose rows carry no cost, `not_measured` lists the site systems
-with no rows, and `setups` names each shown system's version and models where the candidate records them. The live suite has two cards: `live-suite` shows the head-to-head group (`internal-hosted`) and
-`live-suite-fastbrowse` shows `internal-fastbrowse`. A `reference` block in a group file is a vendor figure on another
-task set: the site labels it and never compares it, and a new campaign keeps it. A card the candidate has no group for
-keeps its file only while that file carries no measured figures: the site reads one candidate's rows, so a card still
-measured by an earlier campaign stops the write, and that campaign's group must be measured again. Merging the site pull request is the approval: no other dispatch or receipt is needed. To
-publish a campaign again, dispatch `publish-evals.yml` with the campaign run's id.
+The campaign workflow installs the harness checkout first, then installs the
+measured fastbrowse SHA. Keep that order, the `harness_sha`, and the pool GCP
+service account unchanged.
 
-Official results reach the same candidate through their public rows. A run directory holds decrypted BU Bench goals
-and upstream records, so it leaves `official-benchmarks.yml` only encrypted, and that job also writes the
-`official-rows-<suite>` artifact: opaque task ids, scores, seconds, dollars and protocol facts, after the harness
-has held the run to every publication rule. Dispatch it first, then dispatch `benchmark-campaign.yml` on the same
-`fastbrowse_ref` and `harness_sha` with `official_runs` set to its run id, or give it `campaign_id` and it
-dispatches the campaign itself once every job has passed, as a release does. The campaign's own stage adds each
-suite as a group; its run facts take each suite's date and judge from those rows.
+Each campaign group runs Parallax with an approved total and per-trial reserve:
 
-Both workflows send every result to Langfuse even when the run stopped. The campaign sends each group's ledger with
-`fastbrowse-evals browser track-ledger` in its own job, which "Re-run failed jobs" repeats from the ledger artifact
-without a paid run; the official workflow sends each suite with `track-official` as a step. The candidate is refused
-unless Langfuse holds them. An upload to Langfuse does not approve publication.
+```sh
+uv run --project evals --no-sync parallax run fastbrowse \
+  --harness fastbrowse --repeats 3 --budget 300 --reserve 3 \
+  --budget-journal runs/budget.jsonl --retry-invalid 2 --retry-wait 60 \
+  --out runs/internal-fastbrowse
+```
 
-## Retiring a task or changing the protocol
+Parallax writes `manifest.json`, `results.jsonl`, `budget.jsonl`, and private
+trial artifacts. `--budget` gates new trials and `--reserve` holds capacity
+before each trial. Neither option limits an active agent. Retry settings cover
+environment interruptions. The campaign keeps the complete run directory as
+the source for publication.
 
-Neither path exists to improve a score. A task is retired only for an external reason that stops it measuring
-any agent, such as a site that no longer exists, and its catalog entry records that reason, with evidence
-(for example, the DNS answers showing the name is gone) and a date. A task is never retired, swapped or
-regraded because of how an agent scored on it, and a protocol change never drops or replaces tasks for that
-reason. A protocol change states its cause in its note, such as #356's uncapped runs.
+A narrowed rerun can use the workflow's `only` input for affected task ids. `candidate_only`
+skips new trials and builds from the campaign's downloaded run artifacts. The
+stage selects, for each task and repeat, the newest run that measured it in full.
 
-## Figures in docs/results
+## Arms and task coverage
 
-`docs/results/benchmarks.json` and `docs/results/benchmark-approval.json` hold figures approved before the site
-pull request became the approval. `python -m fastbrowse.evals.benchmarks --check-diff` still refuses any change to
-them, their archives or their protocol-change records that lacks the owner receipt they were approved with. A new
-campaign is not published there.
+The plugin registers `fastbrowse`, `fastbrowse-pool`, and `fastbrowse-hosted`.
+Parallax supplies `browser-use-cloud`, `browser-use-oss`, `browser-harness`,
+and `cua-codex`. The publication mapping is:
 
-Legacy hosted dispatches that lost their receipt can supply `--execution-receipts PATH ...` to
-`publish-candidate`. Each closed, versioned `ExecutionReceipt` sidecar binds the original selected,
-physical and budget ledger hashes, its canonical physical row, the complete stdout log and a separate
-provider archive. The archive records the run, every cursor page of terminal events and the stopped
-browser. Collection provenance names the API version, SDK version, collector and query time. These
-are hash-pinned provider observations, not provider-signed attestations or final billing receipts.
+| Parallax result | Public arm |
+| --- | --- |
+| `fastbrowse` | `fastbrowse` |
+| `fastbrowse-pool` | `fastbrowse-pool` |
+| `browser-use-cloud` with model `bu-ultrafast` | `browser-use-ultrafast` |
+| other `browser-use-cloud` results | `browser-use` |
+| `browser-harness` | `browser-harness` |
+| `browser-use-oss` | `browser-use-oss` |
+| `fastbrowse-hosted` and `cua-codex` | diagnostic only |
 
-The loader requires an exact unique join between WATCH browser IDs and physical attempts, an explicit
-`worker.never_started` event after dispatch failed at worker admission, present zero token usage and
-no execution events. Missing, unfamiliar or contradictory events reject the receipt. Only an
-unselected attempt preceding a genuinely graded selected retry may use it. Every physical attempt
-has exactly one semantic judgment or validated non-execution receipt; an ordinary missing judge
-still blocks publication. The non-execution detail remains ungraded in private tracking, with its
-reason and provider archive included in the evidence zip and run identity. Selected outcomes still
-come from real judgments. Raw ledgers, elapsed time and the full unknown-cost hold stay unchanged;
-provider IDs and detailed receipts stay out of the public candidate.
+Every task record is world-less, uses `Area.BROWSER`, requires browser
+capability, and names `browser-evidence-v1`. Parallax owns evidence splitting,
+screenshots, the fallback judge, judge identity, interruption retries, typed
+timing, cost components, and harness details. The fastbrowse harness only
+provides the agent integration and final page observation.
+
+## Build the candidate
+
+The adapter reads one or more Parallax run directories:
+
+```sh
+uv run fastbrowse-evals browser publish-candidate \
+  runs/internal-fastbrowse runs/internal-hosted \
+  --campaign-id release-0.11.0 \
+  --out benchmark-candidate.json
+```
+
+`TrialResult` becomes one public `Row`. Physical attempts are retained in
+`physical_runs`, with their typed timing, usage, and costs summed on the row.
+The adapter then runs `fastbrowse.evals.benchmarks.check_catalog` before it
+writes the candidate. A candidate uses schema 7, the existing `GROUPS`, the
+existing site groups, and the existing task versions.
+
+The candidate carries an export receipt containing the run bundle digest,
+campaign id, measured build, group ids, row count, and Parallax run trace. It
+does not rewrite `docs/results`, publication baselines, evidence manifests, or
+past releases. Those files remain exactly as recorded.
+
+## Site publication
+
+The campaign stage uploads the candidate and run facts. The site publication
+workflow copies the candidate byte for byte into the site data and generates
+the site group files. The site computes figures from per-attempt rows. A run
+artifact is evidence for the candidate, not approval. The site pull request is
+the approval boundary.
+
+The existing gate still checks exact task coverage, task versions, arm sets,
+repeats, scores, completion, timing bases, costs, and regression limits. A
+protocol change must update the schema and gate together, and must preserve
+the old figures as recorded history.
+
+## Official suites
+
+The official workflow runs Parallax dev21's `bu-bench` and
+`online-mind2web` sources with policies `bu-bench-upstream-v1` and
+`online-mind2web-upstream-v1`. It clones each pinned upstream judge at the
+revision named by Parallax, installs its own dependencies in its own virtual
+environment, and maps the existing judge secrets to Parallax's official bridge.
+
+The workflow sends the encrypted private run to the benchmark artifact and
+uploads a sanitized run directory containing the manifest, provenance, results,
+and budget journal. Provenance records the measured fastbrowse and harness
+commits, so the release gate can verify the exact producer run. The campaign
+stage downloads those runs and passes them to the same
+`TrialResult` to `Row` mapping used by internal campaigns. The run selection
+identifies the official group, and the upstream score remains the row score.
+Published history, baselines, and evidence manifests remain unchanged.
+
+## Local verification
+
+Use synthetic values and a synthetic Parallax run directory for offline checks:
+
+```sh
+uv run --project evals --no-sync pytest \
+  evals/tests/test_parallax_publication.py -q
+uv run --project evals --no-sync parallax run fastbrowse \
+  --harness fastbrowse --repeats 1 --budget 1 --reserve 1 --dry-run
+```
+
+Do not run a paid browser campaign while iterating on code. Do not regenerate
+published files as part of a plugin change.

@@ -6,7 +6,9 @@ The release workflow runs this before it publishes anything. A release passes wh
 - for a minor release, or a patch whose tag message has the line `Benchmarks: run`, the runs of the benchmark
   campaign `release-<version>` together measured every task at least three times, and against the campaign named
   in `docs/results/release-baseline.json` no task's pass rate fell, and the median run time and the mean cost per
-  run are both lower.
+  run are both lower. A tag message with the line `Benchmarks: correctness` keeps every pass rate gated and reports
+  the median time and mean cost beside the baseline's without requiring them lower: for a release whose difference
+  there is the measuring environment's rather than its own, and the tag records that it was not held to them.
 - for a release whose tag message has the line `Benchmarks: official`, both official suites ran three times on its
   build, every cost known. Their judge reads every screenshot of every run, which costs far more than the internal
   campaign, so a release claims official scores only when it says so.
@@ -66,7 +68,9 @@ def _rate(rows: list[dict[str, Any]]) -> float:
     return sum(bool(row.get("passed")) for row in rows) / len(rows)
 
 
-def compare(candidate: list[dict[str, Any]], baseline: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
+def compare(
+    candidate: list[dict[str, Any]], baseline: list[dict[str, Any]], *, correctness_only: bool = False
+) -> tuple[list[str], list[str]]:
     """The reasons the candidate fails against the baseline, and notes on what could not be compared.
 
     A task whose version changed since the baseline measures something else, so it is noted rather than compared.
@@ -90,6 +94,8 @@ def compare(candidate: list[dict[str, Any]], baseline: list[dict[str, Any]]) -> 
                 f"{task.suite}/{task.task}: passed {sum(bool(r.get('passed')) for r in now)}/{len(now)}, "
                 f"the baseline {sum(bool(r.get('passed')) for r in before)}/{len(before)}"
             )
+    # Time and cost findings fail the release, or are only reported when it is gated on correctness alone.
+    measured = notes if correctness_only else failures
     mine = [row for rows in ours.values() for row in rows]
     base = [row for rows in theirs.values() for row in rows]
     for label, field, measure in (
@@ -97,7 +103,7 @@ def compare(candidate: list[dict[str, Any]], baseline: list[dict[str, Any]]) -> 
         ("mean $", "dollars", statistics.fmean),
     ):
         if field == "seconds" and len({row.get("timing_basis") for row in [*mine, *base]}) > 1:
-            failures.append("median seconds cannot compare different timing bases")
+            measured.append("median seconds cannot compare different timing bases")
             continue
         incomplete = False
         for side, rows in (("candidate", mine), ("baseline", base)):
@@ -110,14 +116,14 @@ def compare(candidate: list[dict[str, Any]], baseline: list[dict[str, Any]]) -> 
                 or (field == "dollars" and row.get("unknown_cost") is True)
                 for row in rows
             ):
-                failures.append(f"{side} {field}: missing, unknown or invalid measurements")
+                measured.append(f"{side} {field}: missing, unknown or invalid measurements")
                 incomplete = True
         if incomplete:
             continue
         now = measure([float(row[field]) for row in mine])
         before = measure([float(row[field]) for row in base])
         if not now < before:
-            failures.append(f"{label} {now:.4g} is not below the baseline's {before:.4g}")
+            measured.append(f"{label} {now:.4g} is not below the baseline's {before:.4g}")
         else:
             notes.append(f"{label} {now:.4g}, the baseline {before:.4g}")
     return failures, notes
@@ -144,20 +150,62 @@ def fixture_run(repo: str, tree: str) -> int:
     raise GateError("no successful dispatched Evals run on this tree: `gh workflow run evals.yml --ref <sha>`")
 
 
-def ledger_rows(repo: str, run_id: int) -> list[dict[str, Any]]:
-    """Every row of every `ledger-*` artifact of a campaign run."""
+def run_rows(repo: str, run_id: int) -> list[dict[str, Any]]:
+    """Internal fastbrowse rows of a campaign run: projected from its Parallax run directories, or, for a run made
+    before campaigns ran through Parallax, its `ledger-*` rows as recorded. The baseline campaign and a release's
+    earlier runs are of that kind, and a task is scored on the newest run that measured it, so both stay readable."""
+    from fastbrowse_evals.publication import public_arm, trial_result_to_row
+    from parallax.models import Verdict
+    from parallax.track.rows import load_run
+
+    from fastbrowse.evals.catalog import CATALOG
+
+    task_suites = {task.id: suite for suite, tasks in CATALOG.suites.items() for task in tasks}
     with tempfile.TemporaryDirectory() as scratch:
         try:
-            _gh("run", "download", str(run_id), "-R", repo, "-D", scratch, "-p", "ledger-*")
+            _gh("run", "download", str(run_id), "-R", repo, "-D", scratch, "-p", "run-*", "-p", "ledger-*")
         except subprocess.CalledProcessError:
             return []
-        return [
+        rows: list[dict[str, Any]] = [
             json.loads(line)
             for path in sorted(Path(scratch).glob("ledger-*/*.jsonl"))
             if not path.name.endswith((".attempts.jsonl", ".budget.jsonl"))
             for line in path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
+        run_dirs: list[Path] = []
+        for marker in Path(scratch).rglob("parallax-verify.json"):
+            directory = marker.parent
+            manifest = directory / "manifest.json"
+            results = directory / "results.jsonl"
+            if not manifest.is_file() or not results.is_file():
+                raise GateError(f"{directory}: a verified run directory is missing its manifest or results")
+            run_dirs.append(directory)
+        for directory in run_dirs:
+            loaded = load_run(directory)
+            provenance = json.loads((directory / "provenance.json").read_text(encoding="utf-8"))
+            agent_sha = provenance.get("extra", {}).get("fastbrowse.agent_sha")
+            if not isinstance(agent_sha, str):
+                raise GateError(f"{directory}: run provenance has no measured agent build")
+            for result in loaded.results:
+                if public_arm(result) != ARM or result.verdict not in {Verdict.PASS, Verdict.FAIL}:
+                    continue
+                suite = task_suites.get(result.task_id)
+                if suite is None:
+                    continue
+                projected = trial_result_to_row(result, attempts=loaded.physical_runs(result.key))
+                row = projected.model_dump(mode="json")
+                row.update(
+                    {
+                        "suite": suite,
+                        "task_version": result.task_version,
+                        "passed": result.verdict is Verdict.PASS,
+                        "run": {"git_sha": agent_sha},
+                        "unknown_cost": projected.dollars is None,
+                    }
+                )
+                rows.append(row)
+        return rows
 
 
 MIN_RUNS = 3
@@ -179,7 +227,7 @@ def official_candidate(raw: dict[str, Any], campaign: str, agent_sha: str) -> Ca
             group.repeats != MIN_RUNS
             or group.agent_sha != candidate.agent_sha
             or group.runner_sha != candidate.runner_sha
-            or group.sources
+            or not group.sources
             or group.references
             or group.excluded
         ):
@@ -191,9 +239,44 @@ def official_candidate(raw: dict[str, Any], campaign: str, agent_sha: str) -> Ca
     return candidate
 
 
+def _fixture_receipt(repo: str, run_id: int, agent_sha: str) -> dict[str, Any]:
+    """Read the fixture workflow and its rows before minting the release receipt."""
+    from fastbrowse.evals.benchmarks import fixture_slots
+
+    metadata = json.loads(_gh("api", f"repos/{repo}/actions/runs/{run_id}"))
+    if (
+        metadata.get("head_sha") != agent_sha
+        or metadata.get("path") != ".github/workflows/evals.yml"
+        or metadata.get("event") != "workflow_dispatch"
+        or metadata.get("conclusion") != "success"
+        or metadata.get("status") != "completed"
+    ):
+        raise GateError("the fixture workflow must pass on the measured build")
+    with tempfile.TemporaryDirectory(prefix="release-fixture-") as directory:
+        try:
+            _gh("run", "download", str(run_id), "-R", repo, "-D", directory, "-n", "eval-rows")
+        except subprocess.CalledProcessError as exc:
+            raise GateError("the fixture workflow did not leave its eval-rows artifact") from exc
+        paths = list(Path(directory).rglob("nightly.jsonl"))
+        if len(paths) != 1:
+            raise GateError("the fixture artifact must contain one complete ledger")
+        rows = [json.loads(line) for line in paths[0].read_text(encoding="utf-8").splitlines() if line.strip()]
+    slots = [(row.get("task"), row.get("repeat")) for row in rows]
+    if len(slots) != len(set(slots)) or set(slots) != fixture_slots():
+        raise GateError("fixture artifact coverage must be every fixture task across three repeats")
+    if any(
+        row.get("passed") is not True
+        or row.get("run", {}).get("git_sha") != agent_sha
+        or row.get("run", {}).get("git_dirty") is not False
+        for row in rows
+    ):
+        raise GateError("all fixture rows must pass on the clean measured build")
+    return {"head_sha": agent_sha, "run_id": run_id, "passed": len(rows), "total": len(rows)}
+
+
 def official_receipts(repo: str, candidate: Candidate) -> list[str]:
     """The producer's public artifacts bind the candidate to checked task sources and upstream grades."""
-    from fastbrowse_evals.publication import OfficialRows, official_collected
+    from fastbrowse_evals.publication import candidate_from_runs
 
     expected = {group.id: group for group in candidate.groups if group.id in {"bu-bench", "online-mind2web"}}
     found: dict[str, int] = {}
@@ -209,20 +292,30 @@ def official_receipts(repo: str, candidate: Candidate) -> list[str]:
             continue
         with tempfile.TemporaryDirectory(prefix="release-official-") as directory:
             try:
-                _gh("run", "download", str(run_id), "-R", repo, "-D", directory, "-p", "official-rows-*")
+                _gh("run", "download", str(run_id), "-R", repo, "-D", directory, "-p", "official-run-*")
             except subprocess.CalledProcessError:
                 continue
-            for path in sorted(Path(directory).rglob("*.rows.json")):
-                part = OfficialRows.model_validate_json(path.read_bytes())
-                if (
-                    part.agent_sha != candidate.agent_sha
-                    or part.runner_sha != candidate.runner_sha
-                    or part.repeats != MIN_RUNS
-                    or part.group not in expected
+            run_dirs = sorted({path.parent for path in Path(directory).rglob("parallax-verify.json")})
+            if not run_dirs or any(not (path / "provenance.json").is_file() for path in run_dirs):
+                continue
+            try:
+                provenance = [json.loads((path / "provenance.json").read_text(encoding="utf-8")) for path in run_dirs]
+                if any(
+                    data.get("extra", {}).get("fastbrowse.agent_sha") != candidate.agent_sha
+                    or data.get("extra", {}).get("fastbrowse.runner_sha") != candidate.runner_sha
+                    for data in provenance
                 ):
                     continue
-                if official_collected(part).group == expected[part.group]:
-                    found.setdefault(part.group, run_id)
+                produced = candidate_from_runs(
+                    run_dirs,
+                    campaign_id=candidate.campaign_id,
+                )
+            except (OSError, TypeError, ValueError):
+                continue
+            produced_groups = {group.id: group for group in produced.groups}
+            for group_id in expected:
+                if produced_groups.get(group_id) == expected[group_id]:
+                    found.setdefault(group_id, run_id)
         if found.keys() == expected.keys():
             return [f"{name}: verified official producer run {found[name]}" for name in sorted(found)]
     raise GateError("both official groups require matching public receipts from successful exact-runner workflows")
@@ -251,18 +344,11 @@ def campaign_candidate(repo: str, campaign: str, tree: str, fixture_id: int) -> 
             raw = json.loads(paths[0].read_text(encoding="utf-8"))
         if _tree(repo, raw["agent_sha"]) != tree:
             continue
+        fixture = _fixture_receipt(repo, fixture_id, raw["agent_sha"])
+        raw["fixture"] = fixture
+        raw["export"] = None
         candidate = official_candidate(raw, campaign, raw["agent_sha"])
         assert candidate.fixture is not None
-        if candidate.fixture.run_id != fixture_id:
-            fixture = json.loads(_gh("api", f"repos/{repo}/actions/runs/{candidate.fixture.run_id}"))
-            if (
-                fixture["head_sha"] != candidate.agent_sha
-                or fixture["path"] != ".github/workflows/evals.yml"
-                or fixture["event"] != "workflow_dispatch"
-                or fixture["conclusion"] != "success"
-                or fixture["status"] != "completed"
-            ):
-                raise GateError("the candidate's original fixture receipt must pass on its measured build")
         return candidate, [f"official candidate: campaign run {run_id}", *official_receipts(repo, candidate)]
     raise GateError("no complete official campaign candidate on the release tree")
 
@@ -278,7 +364,7 @@ def campaign_rows(repo: str, campaign: str) -> tuple[list[dict[str, Any]], list[
             continue
         fresh = {
             (task.suite, task.task): rows
-            for task, rows in rows_by_task(ledger_rows(repo, int(run["databaseId"]))).items()
+            for task, rows in rows_by_task(run_rows(repo, int(run["databaseId"]))).items()
             if (task.suite, task.task) not in chosen and len(rows) >= MIN_RUNS
         }
         if fresh:
@@ -310,9 +396,11 @@ def tag_lines(repo: str, tag: str) -> list[str]:
 
 
 def measures_itself(version: str, lines: list[str]) -> bool:
-    """A minor release does; a patch does when its annotated tag message has the line `Benchmarks: run`, or claims
-    official scores, which are compared beside the campaign."""
-    return version.split(".")[-1] == "0" or "Benchmarks: run" in lines or "Benchmarks: official" in lines
+    """A minor release does; a patch does when its annotated tag message has the line `Benchmarks: run`, claims
+    official scores, which are compared beside the campaign, or asks to be gated on correctness."""
+    return version.split(".")[-1] == "0" or any(
+        line in lines for line in ("Benchmarks: run", "Benchmarks: official", "Benchmarks: correctness")
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -321,6 +409,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ref", help="check a commit before it is tagged, as a minor release")
     parser.add_argument("--version", help="the version the campaign is named for (default: the tag's)")
     parser.add_argument("--official", action="store_true", help="with --ref, also require official coverage")
+    parser.add_argument(
+        "--correctness", action="store_true", help="with --ref, as a tag with 'Benchmarks: correctness' would be gated"
+    )
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", "agent-labs-dev/fastbrowse"))
     args = parser.parse_args(argv)
     if bool(args.tag) == bool(args.ref):
@@ -344,7 +435,8 @@ def main(argv: list[str] | None = None) -> int:
             official_notes = ["official benchmarks: not claimed (no 'Benchmarks: official' line)"]
         candidate, used = campaign_rows(args.repo, f"release-{version}")
         before = baseline_rows(args.repo, baseline)
-        failures, notes = compare(candidate, before)
+        correctness_only = args.correctness or "Benchmarks: correctness" in lines
+        failures, notes = compare(candidate, before, correctness_only=correctness_only)
     except (GateError, ValueError, subprocess.CalledProcessError) as error:
         print(f"::error::{error}", file=sys.stderr)
         return 1

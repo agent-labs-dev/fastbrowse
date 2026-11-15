@@ -162,15 +162,16 @@ def test_a_campaign_refuses_a_suite_outside_the_catalog(suites: str, passes: boo
 
 
 def test_a_failed_langfuse_send_leaves_the_campaign_job_and_reruns_from_its_artifact() -> None:
-    """A network fault at Langfuse fails only the send, which "Re-run failed jobs" repeats from the ledger artifact."""
+    """A network fault at Langfuse fails only the send, which "Re-run failed jobs" repeats from the run artifact."""
     jobs = yaml.safe_load(Path(".github/workflows/benchmark-campaign.yml").read_text())["jobs"]
     assert not any("track-ledger" in step.get("run", "") for step in jobs["campaign"]["steps"])
     track = jobs["track"]
     assert "campaign" in track["needs"]
     assert "always()" in track["if"]
     downloads = [step for step in track["steps"] if step.get("uses", "").startswith("actions/download-artifact@")]
-    assert [step["with"]["pattern"] for step in downloads] == ["ledger-${{ matrix.key }}"]
-    assert any('track-ledger "$OUT" --push' in step.get("run", "") for step in track["steps"])
+    assert [step["with"]["pattern"] for step in downloads] == ["run-${{ matrix.key }}"]
+    assert any("Check the Parallax run artifacts" in step.get("name", "") for step in track["steps"])
+    assert any("parallax-verify.json" in step.get("run", "") for step in track["steps"])
     assert "track" in jobs["stage"]["needs"]
     assert "needs.track.result" in jobs["stage"]["if"]
 
@@ -212,6 +213,7 @@ def test_campaign_admits_positive_concurrency_without_extra_arms(concurrency: st
         "PAYLOAD": "null",
         "REPEAT": "3",
         "BUDGET": "38",
+        "RESERVE": "3",
         "RUN_CONCURRENCY": concurrency,
         "CAMPAIGN_ID": "test",
     }

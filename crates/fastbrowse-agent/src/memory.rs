@@ -286,6 +286,8 @@ pub struct Notes {
     tables: HashMap<CaptureIdentity, Arc<[TableBlock]>>,
     /// A fragment keeps its captured block type, so a heading is not mistaken for the record it names.
     source_blocks: HashMap<CaptureIdentity, Arc<[SourceBlock]>>,
+    /// Where code blanked a secret value in each capture's text.
+    masked: HashMap<CaptureIdentity, Arc<[(i64, i64)]>>,
 }
 
 impl fmt::Debug for Notes {
@@ -327,8 +329,17 @@ impl Notes {
         }
         for (identity, blocks) in sources {
             self.tables.entry(identity.clone()).or_insert_with(|| table_blocks(capture).into());
+            self.masked.entry(identity.clone()).or_insert_with(|| capture.masked.clone().into());
             self.source_blocks.entry(identity).or_insert_with(|| blocks.into());
         }
+    }
+
+    /// Whether code blanked a secret value inside `evidence`'s quote, so a `•` in it is a mask, not page text.
+    pub fn masks_secret(&self, evidence: &Evidence) -> bool {
+        let key = (evidence.capture_sha256.clone(), evidence.url.clone(), evidence.captured_at);
+        self.masked
+            .get(&key)
+            .is_some_and(|spans| spans.iter().any(|&(start, end)| start < evidence.end && evidence.start < end))
     }
 
     /// Whether `evidence` quotes one whole record block of a remembered capture: every part of a card or comment the
@@ -344,6 +355,16 @@ impl Notes {
         let block = self.source_block(evidence)?;
         let link = block.links.iter().any(|&(start, end)| start <= evidence.start && evidence.end <= end);
         Some(if link { BlockKind::Link } else { block.kind })
+    }
+
+    /// Whether `evidence` quotes the entire text of the element `source_kind` names: all of one link's text when it
+    /// lies within a link, otherwise all of its block's. A heading that ends in "..." is then the page's own heading,
+    /// not a cut from a longer one.
+    pub fn whole_element(&self, evidence: &Evidence) -> bool {
+        let Some(block) = self.source_block(evidence) else { return false };
+        let link = block.links.iter().find(|&&(start, end)| start <= evidence.start && evidence.end <= end);
+        let (start, end) = link.copied().unwrap_or((block.start, block.end));
+        (start, end) == (evidence.start, evidence.end)
     }
 
     fn source_block(&self, evidence: &Evidence) -> Option<&SourceBlock> {

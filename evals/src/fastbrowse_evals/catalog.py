@@ -1,26 +1,37 @@
-"""Export the exact private task metadata used by Fastbrowse's public release gate."""
+"""Export the task metadata consumed by Fastbrowse's public benchmark gate."""
+
+from __future__ import annotations
 
 import hashlib
 import json
 from pathlib import Path
+from typing import NamedTuple
 
-from fastbrowse.evals.benchmarks import ExclusionReason
-from pydantic import TypeAdapter, ValidationError
+from fastbrowse_evals.task_specs import TaskSpec, specs
+from fastbrowse_evals.versions import load_lock
 
-from fastbrowse_evals.live import ARMS, HEAD_TO_HEAD_ARMS, SUITES, eligible, excluded_because
-from fastbrowse_evals.versions import fingerprint, load_lock
 
-DERIVED_ARMS = (
-    "fastbrowse-pool",
-    "fastbrowse-hosted",
-    "cua-codex",
-    "browser-harness",
-    "browser-use-ultrafast",
-    "browser-use-oss",
-)
-"""Arms whose tasks follow from `eligible` rather than a task's own `arms`, so adding one changes no task fingerprint."""
+class ArmSpec(NamedTuple):
+    pin: str
+    tier: str
+    default: bool = True
 
-RETIRED: tuple[dict[str, str], ...] = (
+
+ARMS = {
+    "fastbrowse": ArmSpec("run.fastbrowse_version + run.git_sha", "A"),
+    "fastbrowse-pool": ArmSpec("run.fastbrowse_version + run.git_sha; fastbrowse-hosted browser pool", "A", False),
+    "fastbrowse-hosted": ArmSpec(
+        "api.fastbrowse.ai at its deployed build; customer charge, not metered cost", "hosted", False
+    ),
+    "browser-use": ArmSpec("browser-use-sdk==3.12.1 API v4; default model, reported per row", "hosted"),
+    "browser-use-ultrafast": ArmSpec("browser-use-sdk==3.12.1 API v4; model bu-ultrafast, reported per row", "hosted"),
+    "browser-use-oss": ArmSpec(
+        "browser-use==1.0.3; default model bu-fast, default mode (ultrafast on bu-fast)", "A", False
+    ),
+    "cua-codex": ArmSpec("cua-driver==0.47.19; codex-cli==0.169.0", "local", False),
+    "browser-harness": ArmSpec("browser-harness==0.1.13; codex-cli==0.169.0; cli+skill", "A", False),
+}
+RETIRED = (
     {
         "id": "stretch-wizard-correction",
         "suite": "stretch-dev",
@@ -28,68 +39,39 @@ RETIRED: tuple[dict[str, str], ...] = (
         "reason": "site removed from DNS: lab.hakdogan.com answers NXDOMAIN (zone SOA serial 2026101610)",
     },
 )
-"""Tasks taken out of the catalog because they can no longer run, never because an agent did badly on them.
-Fastbrowse's publication gate lets an approved group drop exactly these tasks and nothing else."""
-
-
-REASON = TypeAdapter(ExclusionReason)
-
-
-def reason(arm: str, task_id: str, text: str) -> str:
-    """`text` as the site parses an exclusion reason, so a reason it would refuse stops the export, not the site."""
-    try:
-        return REASON.validate_python(text)
-    except ValidationError:
-        raise ValueError(f"{task_id}: {arm}'s exclusion reason cannot be published: {text!r}") from None
+SUITES: dict[str, tuple[TaskSpec, ...]] = {
+    name: tuple(spec for spec in specs() if spec.suite == name) for name in ("core", "dev", "stretch-dev")
+}
 
 
 def render() -> str:
-    """The catalog. It names no step cap: no arm has one (`fastbrowse_evals.live.AGENT_LIMITS`)."""
     lock = load_lock()
-    for tasks in SUITES.values():
-        for task in tasks:
-            if lock[task.id]["fingerprint"] != fingerprint(task):
-                raise ValueError(f"{task.id}: grading changed without a task version update")
     root = Path(__file__).parent
-    sources = {
-        name: hashlib.sha256((root / name).read_bytes()).hexdigest()
-        for name in ("live_tasks.py", "more_tasks.py", "versions.json")
-    }
-    catalog = {
-        "schema_version": 1,
-        "family": "browser-use",
-        "origin": "fastbrowse-internal",
-        "owner": "parallax",
-        "task_sources": sources,
-        "suites": {
-            name: [
-                {
-                    "id": t.id,
-                    "category": t.category.value,
-                    "arms": list(t.arms) + [arm for arm in DERIVED_ARMS if arm not in t.arms and eligible(arm, t)],
-                    "excluded": {
-                        arm: reason(arm, t.id, why)
-                        for arm in HEAD_TO_HEAD_ARMS
-                        if (why := excluded_because(arm, t)) is not None
-                    },
-                    "expect": t.expect.value,
-                    "source_fingerprint": lock[t.id]["fingerprint"],
-                    "task_version": lock[t.id]["version"],
-                }
-                for t in tasks
-            ]
-            for name, tasks in SUITES.items()
-        },
-        "arms": {name: {"pin": a.pin, "tier": a.tier, "default": a.default} for name, a in ARMS.items()},
-        "retired": list(RETIRED),
-    }
+    source_names = ("live_tasks.py", "more_tasks.py", "sweep_tasks.py", "task_specs.py", "versions.json")
+    catalog = json.loads(PATH.read_text()) if PATH.is_file() else {}
+    expected = {task.id: task for tasks in SUITES.values() for task in tasks}
+    entries = {task["id"]: task for suite in catalog.get("suites", {}).values() for task in suite}
+    if set(entries) != set(expected):
+        raise ValueError("the public catalog task set differs from the Parallax task source")
+    for task_id, spec in expected.items():
+        entry = entries[task_id]
+        entry["category"] = spec.category
+        entry["expect"] = spec.expected_status
+        entry["source_fingerprint"] = lock[task_id]["fingerprint"]
+        entry["task_version"] = lock[task_id]["version"]
+    catalog["task_sources"] = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in source_names}
+    catalog["arms"] = {name: value._asdict() for name, value in ARMS.items()}
+    catalog["retired"] = list(RETIRED)
     return json.dumps(catalog, indent=2) + "\n"
+
+
+PATH = Path(__file__).parents[3] / "src" / "fastbrowse" / "evals" / "benchmark-catalog.json"
 
 
 def export(path: Path, *, check: bool = False) -> None:
     content = render()
     if check:
         if path.read_text() != content:
-            raise ValueError("public benchmark metadata differs from the canonical fastbrowse_evals tasks")
+            raise ValueError("public benchmark metadata differs from the canonical Parallax task source")
     else:
         path.write_text(content)

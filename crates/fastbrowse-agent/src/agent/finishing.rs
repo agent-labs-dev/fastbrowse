@@ -375,6 +375,7 @@ impl Agent {
         let mut answer_text = None;
         let mut citations = Vec::new();
         let answer_problem = answered.as_ref().and_then(|answer| answer.problem.clone());
+        let answer_partial = answered.as_ref().and_then(|answer| answer.partial.clone());
         if answer_problem.is_some()
             && let Some(partial) = state.checked_composition(&state.notes_to_compose())
         {
@@ -406,6 +407,13 @@ impl Agent {
                 ),
             };
             error.get_or_insert_with(|| self.redact(&message));
+        }
+        // The composer said what its answer leaves out: a run that stopped there has not answered all of it, however
+        // well each claim holds. Asked how many quotes an author has across a site, an answer that a list continued
+        // past the two found ended complete.
+        if let Some(partial) = answer_partial {
+            status = Status::Unverified;
+            error.get_or_insert_with(|| self.redact(&format!("{PARTIAL_ANSWER}{partial}")));
         }
         if state.refused {
             status = Status::Unverified;
@@ -544,6 +552,9 @@ pub(super) fn undone_notice(step: &str) -> String {
 }
 
 /// The error of a run whose finish check found a step the site does not allow; the answer names the step.
+/// What leads the composer's own account of what a partial answer leaves out.
+pub(super) const PARTIAL_ANSWER: &str = "The answer is partial; it does not establish ";
+
 pub(super) const REFUSED: &str = "A step the task asks for was not carried out because the site does not allow it, as the page or the recent actions show. The answer reports what was and was not done.";
 
 /// What the navigator is told about a rejected draft, and what the run's error says if recovery runs out: which
@@ -623,7 +634,6 @@ fn rejected_parts(rejection: &str) -> Vec<String> {
                 }
             }
             "citations" => failed.push(format!("{claim} cites no note it can be checked against")),
-            "exact" => failed.push(format!("{claim} copies page information the task neither asks for nor names")),
             cell if cell.starts_with("cell") => {
                 let column = cell[4..].parse::<usize>().ok().and_then(|cell| feedback["columns"].get(cell)?.as_str());
                 match column {
@@ -679,7 +689,7 @@ mod tests {
                 {"text": "The total is 175.00 (A 120.00, B 55.00).", "evidence_ids": ["e4"]},
             ],
             "columns": ["Name", "Shape"],
-            "rejected_checks": ["claim1", "claim0/tally", "claim2/citations", "coverage", "claim2/cell1", "actions", "claim3/states", "claim1/exact"],
+            "rejected_checks": ["claim1", "claim0/tally", "claim2/citations", "coverage", "claim2/cell1", "actions", "claim3/states"],
             "tally_reasons": {"claim3/states": "it states something besides its total"},
             "untallied_claims": [{"claim": 0, "reason": "No note read is one 'quote by Albert Einstein'."}],
         });
@@ -692,7 +702,6 @@ mod tests {
             "'Y costs £12.': its 'Shape' cell does not follow from the notes it cites",
             "the answer says something was not done or already existed that a step this run took may have done",
             "'The total is 175.00 (A 120.00, B 55.00).': it states something besides its total",
-            "'The cheapest is X at £10.69.' copies page information the task neither asks for nor names",
         ] {
             assert!(reason.contains(part), "{reason}");
         }

@@ -62,20 +62,6 @@ wheels = [
 ]
 
 [[package]]
-name = "cdp-use"
-version = "1.4.5"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "httpx" },
-    { name = "typing-extensions" },
-    { name = "websockets" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/f7/7a/c549417e8c5e4dface6d5d828cd7dc72502dcea33a99f5324abf5a853ce9/cdp_use-1.4.5.tar.gz", hash = "sha256:0da3a32df46336a03ff5a22bc6bc442cd7d2f2d50a118fd4856f29d37f6d26a0", size = 193961, upload-time = "2026-02-22T04:32:50.574Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/56/12/386d8c6bf0448c43674e24d6194c3b57d62e5361e90bca3d58108819ad32/cdp_use-1.4.5-py3-none-any.whl", hash = "sha256:8f8e2435e3a20e4009d2974144192cf3c132f6c2971338e156198814d9b91ecb", size = 350504, upload-time = "2026-02-22T04:32:49.22Z" },
-]
-
-[[package]]
 name = "certifi"
 version = "2026.10.23"
 source = { registry = "https://pypi.org/simple" }
@@ -384,15 +370,17 @@ eval-data = [
 requires-dist = [
     { name = "httpx", extras = ["http2"], specifier = ">=0.28.1,<1" },
     { name = "packaging", specifier = ">=24,<27" },
+    { name = "parallax-evals", marker = "extra == 'evals'", specifier = "==2.0.0.dev22" },
     { name = "pydantic", specifier = ">=2.14.2,<3" },
     { name = "pyyaml", marker = "extra == 'eval-data'", specifier = ">=6.0.3,<7" },
 ]
-provides-extras = ["eval-data"]
+provides-extras = ["eval-data", "evals"]
 
 [package.metadata.requires-dev]
 bench = [{ name = "pytest-codspeed", specifier = ">=5.0.4,<6" }]
 dev = [
     { name = "actionlint-py", specifier = "==1.7.12.25" },
+    { name = "parallax-evals", specifier = "==2.0.0.dev22" },
     { name = "pre-commit", specifier = ">=4.7.0" },
     { name = "pytest", specifier = ">=9.2,<10" },
     { name = "pytest-asyncio", specifier = ">=1.4.1,<2" },
@@ -408,11 +396,10 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "browser-use-sdk" },
-    { name = "cdp-use" },
     { name = "fastbrowse", extra = ["eval-data"] },
     { name = "httpx" },
     { name = "langfuse" },
-    { name = "parallax-evals" },
+    { name = "parallax-evals", extra = ["browser"] },
     { name = "pydantic" },
 ]
 
@@ -427,11 +414,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "browser-use-sdk", specifier = "==3.12.1" },
-    { name = "cdp-use", specifier = "==1.4.5" },
     { name = "fastbrowse", extras = ["eval-data"], directory = "../" },
     { name = "httpx" },
     { name = "langfuse", specifier = ">=5.0.4,<6" },
-    { name = "parallax-evals", specifier = "==2.0.0.dev18" },
+    { name = "parallax-evals", extras = ["browser"], specifier = "==2.0.0.dev22" },
     { name = "pydantic", specifier = ">=2.12" },
 ]
 
@@ -626,7 +612,7 @@ wheels = [
 
 [[package]]
 name = "langfuse"
-version = "5.1.0"
+version = "5.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "backoff" },
@@ -639,9 +625,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "wrapt" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/45/83/47ed47d5404a15da9a4176dd40f53b173bfa3eebff155a13002b6a3da9d6/langfuse-5.1.0.tar.gz", hash = "sha256:364afbfdfb44b9ae40feba73d08938c8c823a0101c85f3d466dc49d09951b286", size = 371201, upload-time = "2026-10-30T16:05:28.665Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/37/b3/65dbc94d809676053b65e89fda729ef7d8a1d13bbb89f2ab407639f631f2/langfuse-5.2.0.tar.gz", hash = "sha256:8cde9e91b44b53444906af9b37efa9c29c647a9f45f9f8435a638026cb3d4693", size = 383092, upload-time = "2026-11-05T09:53:48.439Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0a/22/36962b043c6f2b8a1612e596670e64bb4b7137c52690aeb9f3b29dc4773d/langfuse-5.1.0-py3-none-any.whl", hash = "sha256:de947b911ead9d95c56d8592b172b7f84953789c430aa0117045f1f4b6e5a6d3", size = 641284, upload-time = "2026-10-30T16:05:26.931Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/48/715e2b612d5d20989e4a338c27d78bef43de327f2192c9b20421f5648868/langfuse-5.2.0-py3-none-any.whl", hash = "sha256:4763cbad358960f1036078a4c6e9f86f04690ea566541709c2c40aa1998e2b0f", size = 660151, upload-time = "2026-11-05T09:53:49.817Z" },
 ]
 
 [[package]]
@@ -805,7 +791,7 @@ wheels = [
 
 [[package]]
 name = "parallax-evals"
-version = "2.0.0.dev18"
+version = "2.0.0.dev22"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "croniter" },
@@ -821,9 +807,16 @@ dependencies = [
     { name = "tzdata" },
     { name = "uvicorn" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/dc/2d/7adf9d416c41faadd3926166327533f1b5a842dd749437b6db73c90cc420/parallax_evals-2.0.0.dev18.tar.gz", hash = "sha256:fa4b2da070e7145f4b6662e0abdf7fe128faef2a2700244a43add2339d6849be", size = 999267, upload-time = "2026-11-13T13:40:26.691Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f5/9a/563687821ac388cf10fb2ddc5561c32a5abd4fa4b56693145cf218d29ae9/parallax_evals-2.0.0.dev22.tar.gz", hash = "sha256:0cf5d134f6a19292ef4e06e6e329a5f9f1f9a00c0574533ea6a7ac5b19391646", size = 960726, upload-time = "2026-11-13T19:04:04.226Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7e/f8/2f8cfeba50baaf40565f5185d675bb7e1ccb64764b3559dd0cc1af347d55/parallax_evals-2.0.0.dev18-py3-none-any.whl", hash = "sha256:db667c6f5839b906815877be2d955528dfedf3e8b511d4c08bd833ee2eb6ccfc", size = 1038844, upload-time = "2026-11-13T13:40:24.66Z" },
+    { url = "https://files.pythonhosted.org/packages/57/cd/1744dedd55407bf229b0b7f18a48ded04036996bf9be55d7916d14bbdf6e/parallax_evals-2.0.0.dev22-py3-none-any.whl", hash = "sha256:7646494601e832b9263a88b74d983ab592a53215d3783631fbaad1a3615b4ccf", size = 1095717, upload-time = "2026-11-13T19:04:02.14Z" },
+]
+
+[package.optional-dependencies]
+browser = [
+    { name = "browser-use-sdk" },
+    { name = "cryptography" },
+    { name = "websockets" },
 ]
 
 [[package]]
