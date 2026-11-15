@@ -67,3 +67,5 @@ async def test_a_recorded_task_replays_without_a_miss(task: BenchTask, tmp_path:
     assert entry["misses"] == [], _misses(entry)
     if task.id in PASSING:
         assert entry["result"]["grade"]["passed"], entry["result"]
+    if task.id == "table-extract":
+        assert entry["result"]["data"] == {"city": "Lyon", "population": 522250}
