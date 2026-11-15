@@ -52,7 +52,7 @@ order intact.
 Before paid work, each workflow authenticates its OpenRouter credentials with
 `GET https://openrouter.ai/api/v1/key`. This validates the credentials but does
 not compare remaining provider credit with the approved budget. The request
-wallet still bounds committed work, and a provider cap can return HTTP 403
+wallet still bounds committed work, and a provider cap can stop later calls
 after a campaign has started.
 
 Parallax writes `manifest.json`, `results.jsonl`, `budget.jsonl`, and trial
