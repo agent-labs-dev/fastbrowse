@@ -127,6 +127,16 @@ def test_measured_identity_ignores_retained_competitor_provenance() -> None:
         _measured_identity(metadata, mismatched)
 
 
+def test_measured_identity_ignores_older_unselected_fastbrowse_run() -> None:
+    current = SimpleNamespace(path=Path("current"))
+    selected = {("internal-fastbrowse", "fastbrowse", "pypi-version", 0): (current, result("pypi-version", 0))}
+    metadata = {
+        Path("current"): (AGENT_SHA, RUNNER_SHA, {}),
+        Path("old"): ("c" * 40, "d" * 40, {}),
+    }
+    assert _measured_identity(metadata, selected) == (AGENT_SHA, RUNNER_SHA)
+
+
 def test_trial_result_to_row_keeps_typed_measurements_and_retries() -> None:
     first = result("pypi-version", 0)
     retry = result("pypi-version", 0, attempt=1)
