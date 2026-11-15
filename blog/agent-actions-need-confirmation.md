@@ -38,7 +38,7 @@ fastbrowse "Log in as standard_user with the saved password and add the backpack
   --start https://www.saucedemo.com/ --secret password=SAUCE_PASSWORD --authorize
 ```
 
-Without `--authorize` the same task stops after the login and the add, at the first step that changes the cart. Which flags the run accepts is in the [command-line reference](/docs/flags/).
+Without `--authorize` the same task stops before adding the item to the cart. Which flags the run accepts is in the [command-line reference](/docs/flags/).
 
 ## The same default behind an MCP server
 
