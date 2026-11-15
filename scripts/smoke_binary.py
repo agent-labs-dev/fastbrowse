@@ -144,11 +144,10 @@ def serving(executable: Path, *arguments: str) -> Iterator[Client]:
         client = Client(process)
         try:
             yield client
-            if process.poll() is None:
-                client.request("shutdown", None, HANDSHAKE_SECONDS)
-                status = process.wait(timeout=HANDSHAKE_SECONDS)
-                if status != 0:
-                    raise Failed(f"the server exited with status {status} after shutdown")
+            client.request("shutdown", None, HANDSHAKE_SECONDS)
+            status = process.wait(timeout=HANDSHAKE_SECONDS)
+            if status != 0:
+                raise Failed(f"the server exited with status {status} after shutdown")
         finally:
             if process.stdin is not None:
                 with suppress(BrokenPipeError):

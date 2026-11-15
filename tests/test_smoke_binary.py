@@ -69,7 +69,17 @@ def test_client_reports_a_server_that_exited_before_accepting_a_request() -> Non
 
 
 def test_serving_preserves_pipe_failure_during_context_cleanup() -> None:
-    with serving(Path(sys.executable)) as client:
+    with (
+        pytest.raises(Failed, match=r"initialize: server exited before accepting request, exit status 2"),
+        serving(Path(sys.executable)) as client,
+    ):
         client._process.wait()
-        with pytest.raises(Failed, match=r"initialize: server exited before accepting request, exit status 2"):
-            client.request("initialize", None, 1)
+        client.request("initialize", None, 1)
+
+
+def test_serving_rejects_an_unexpected_exit_during_shutdown() -> None:
+    with (
+        pytest.raises(Failed, match=r"shutdown: server exited before accepting request, exit status 2"),
+        serving(Path(sys.executable)) as client,
+    ):
+        client._process.wait()
