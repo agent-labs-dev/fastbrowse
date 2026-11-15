@@ -7,11 +7,13 @@ builds, and shows that a broken executable fails it.
 import shutil
 import subprocess
 import sys
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
 
 from fastbrowse.evals.harness import find_chrome
+from scripts.smoke_binary import Client, Failed
 
 REPO = Path(__file__).resolve().parent.parent
 SMOKE = REPO / "scripts" / "smoke_binary.py"
@@ -49,3 +51,18 @@ def test_an_executable_that_is_not_fastbrowse_fails_and_names_the_case() -> None
 
     assert done.returncode == 1
     assert done.stderr.splitlines()[-1].startswith("FAILED initialize: ")
+
+
+def test_client_reports_a_server_that_exited_before_accepting_a_request() -> None:
+    process = subprocess.Popen([sys.executable, "-c", "pass"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    try:
+        process.wait()
+        client = Client(process)
+        with pytest.raises(Failed, match=r"initialize: server exited before accepting request, exit status 0"):
+            client.request("initialize", None, 1)
+    finally:
+        if process.stdin is not None:
+            with suppress(BrokenPipeError):
+                process.stdin.close()
+        if process.poll() is None:
+            process.kill()

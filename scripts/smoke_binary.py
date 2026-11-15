@@ -100,8 +100,13 @@ class Client:
         if params is not None:
             message["params"] = params
         assert self._process.stdin is not None
-        self._process.stdin.write(json.dumps(message).encode() + b"\n")
-        self._process.stdin.flush()
+        try:
+            self._process.stdin.write(json.dumps(message).encode() + b"\n")
+            self._process.stdin.flush()
+        except BrokenPipeError:
+            raise Failed(
+                f"{method}: server exited before accepting request, exit status {self._process.wait()}"
+            ) from None
         ahead: list[dict[str, Any]] = []
         while True:
             try:
