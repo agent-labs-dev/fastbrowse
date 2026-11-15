@@ -75,7 +75,7 @@ shows the runs you can stop.
 You need Chrome, [uv](https://docs.astral.sh/uv/) and an [OpenRouter](https://openrouter.ai/) API key.
 Model calls are billed by your provider. You do not need a Browser Use Cloud key for this mode.
 
-This build requires extension **0.1.1 or later** with its supported-command list. Store version 0.1.0 cannot connect to this build. If the store does not offer the update yet, run `fastbrowse extension path`, open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked** and select the printed folder.
+The extension has to match the fastbrowse you install: the Store's **0.1.0** works with fastbrowse **0.10.x**, and fastbrowse **0.11.0 or later** requires extension **0.1.1 or later** with its supported-command list. A run that finds an older extension stops before it spends anything and names the version it needs. If the Store does not list the version you need yet, run `fastbrowse extension path`, open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked** and select the printed folder.
 
 1. Install fastbrowse and configure your model key:
 
