@@ -92,6 +92,27 @@ fn agent() -> Agent {
     Agent::new(Arc::new(NoPage), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM))
 }
 
+#[tokio::test]
+async fn policy_refusals_do_not_report_browser_faults() {
+    let agent = agent();
+    let mut state = run_state();
+    let page = observation(&[]);
+    for (operation, reason) in [
+        (Operation::Click, "The action needs confirmation."),
+        (Operation::Click, "The task does not ask for this action."),
+        (Operation::Done, "The caller's until condition failed on this page."),
+    ] {
+        agent
+            .record_failure(&mut state, &page, operation, reason, None, None, Some(false), Decider::Code)
+            .await
+            .expect("recorded refusal");
+        let step = state.steps.last().expect("refusal step");
+        assert_eq!(step.outcome, StepOutcome::Failed);
+        assert_eq!(step.failure, None);
+        assert_eq!(step.note.as_deref(), Some(reason));
+    }
+}
+
 fn free() -> CostLine {
     CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0))
 }

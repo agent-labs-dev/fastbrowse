@@ -1637,7 +1637,7 @@ impl Agent {
             operation,
             decided_by,
             outcome: StepOutcome::Failed,
-            failure: Some(StepFailure::BrowserError),
+            failure: None,
             url: observation.url.clone(),
             target,
             confidence,
