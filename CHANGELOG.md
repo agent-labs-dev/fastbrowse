@@ -13,6 +13,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.11.1] - 2026-11-14
 
+- **A ranked count need not spell out its rank to pass the extra-fact check.** A sentence stating a group count could be rejected because it did not also say first, second or third, even after code checked that place. That question now checks only for facts outside the calculation; answer coverage remains a separate check ([#1141](https://github.com/agent-labs-dev/fastbrowse/issues/1141)).
+
 - **Counts use a whole record as their membership example when one is captured.** A name cited before the counted records could become their example, leaving page labels confused with records and the count unresolved. The question now uses a cited whole record when the capture proves one ([#1141](https://github.com/agent-labs-dev/fastbrowse/issues/1141)).
 
 - **Selected values retain their source record when the answer is composed.** Reading one field could discard the record name from the composer input even though its citation retained it, leaving a country area described as unestablished. The composer now receives the source record alongside the selected field, using the existing source binding and context packing ([#1142](https://github.com/agent-labs-dev/fastbrowse/issues/1142)).
