@@ -1882,6 +1882,19 @@
       "title": "StepFact",
       "type": "object"
     },
+    "StepFailure": {
+      "description": "A closed reason for a failed browser step; ``note`` remains diagnostic text.",
+      "enum": [
+        "missing_target",
+        "target_gone",
+        "unauthorized_origin",
+        "navigation_failed",
+        "dialog_interrupted",
+        "browser_error"
+      ],
+      "title": "StepFailure",
+      "type": "string"
+    },
     "StepOutcome": {
       "enum": [
         "executed",
@@ -1908,6 +1921,17 @@
         },
         "outcome": {
           "$ref": "#/$defs/StepOutcome"
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StepFailure"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "url": {
           "title": "Url",
@@ -1994,6 +2018,7 @@
         "operation",
         "decided_by",
         "outcome",
+        "failure",
         "url",
         "target",
         "confidence",

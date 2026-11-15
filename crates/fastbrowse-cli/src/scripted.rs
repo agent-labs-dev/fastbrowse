@@ -43,6 +43,7 @@ fn step(index: i64) -> Event {
             operation: Operation::Click,
             decided_by: Decider::Jev,
             outcome: StepOutcome::Executed,
+            failure: None,
             url: "https://shop.example/".into(),
             target: None,
             confidence: None,

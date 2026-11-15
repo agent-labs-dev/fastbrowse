@@ -436,6 +436,10 @@ step's page facts, so Jev reloads it when the status can clear, goes back or pic
 
 `on_event` receives a `BrowserEvent` followed by `StepEvent` objects. Each step includes added facts,
 their reader and source links in `StepResult.facts`, and any available explanation in `StepResult.note`.
+`StepResult.failure` carries an optional typed cause: `missing_target`, `target_gone`, `unauthorized_origin`,
+`navigation_failed`, `dialog_interrupted` or `browser_error`. The browser records the cause where it detects
+it, including a disconnected target reported as `stale`. A changed or covered control without a known cause
+has no failure value. Older results without the field still parse; `note` remains diagnostic text.
 `Config(step_frames=True)` attaches a PNG to each step unless a fresh observation shows a resolved secret.
 This safety reading preserves the pending action's guards and leaves download notices for the next decision.
 

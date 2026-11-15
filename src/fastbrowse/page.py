@@ -9,7 +9,7 @@ from enum import StrEnum
 
 from pydantic import Field, field_serializer
 
-from fastbrowse.models import Attachment, Frozen, Link, Operation, SourceControl, StepOutcome, Unavailable
+from fastbrowse.models import Attachment, Frozen, Link, Operation, SourceControl, StepFailure, StepOutcome, Unavailable
 
 
 class Control(Frozen):
@@ -250,6 +250,7 @@ class _ScriptError(BrowserError):
 
 class ActResult(Frozen):
     outcome: StepOutcome
+    failure: StepFailure | None = None
     page_changed: bool
     detail: str | None = None
     moved: bool = False

@@ -764,6 +764,7 @@ mod tests {
             operation: Operation::SwitchTab,
             decided_by: Decider::Jev,
             outcome: StepOutcome::Executed,
+            failure: None,
             url: "https://example.test/".into(),
             target: Some("Docs".into()),
             confidence: None,

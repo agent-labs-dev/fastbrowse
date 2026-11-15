@@ -1115,6 +1115,7 @@ async fn test_a_secret_in_a_step_or_trace_event_is_redacted_on_the_way_out() {
         operation: Operation::Done,
         decided_by: Decider::Jev,
         outcome: StepOutcome::Failed,
+        failure: None,
         url: "https://acme.test/account?pw=hunter2".into(),
         target: Some("Signed in with hunter2".into()),
         confidence: None,

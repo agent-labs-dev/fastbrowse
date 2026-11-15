@@ -212,11 +212,18 @@ impl Agent {
         if let Some(error) = result.error {
             return Ok(ActResult {
                 outcome: StepOutcome::Failed,
+                failure: Some(fastbrowse_core::models::StepFailure::BrowserError),
                 page_changed: false,
                 detail: Some(error),
                 moved: false,
             });
         }
-        Ok(ActResult { outcome: StepOutcome::Executed, page_changed: result.page_changed, detail: None, moved: false })
+        Ok(ActResult {
+            outcome: StepOutcome::Executed,
+            failure: None,
+            page_changed: result.page_changed,
+            detail: None,
+            moved: false,
+        })
     }
 }

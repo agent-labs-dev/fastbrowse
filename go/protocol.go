@@ -507,6 +507,18 @@ type StepFact struct {
 	DeepLink *string    `json:"deep_link"`
 }
 
+// A closed reason for a failed browser step; “note“ remains diagnostic text.
+type StepFailure string
+
+const (
+	StepFailureMissingTarget      StepFailure = "missing_target"
+	StepFailureTargetGone         StepFailure = "target_gone"
+	StepFailureUnauthorizedOrigin StepFailure = "unauthorized_origin"
+	StepFailureNavigationFailed   StepFailure = "navigation_failed"
+	StepFailureDialogInterrupted  StepFailure = "dialog_interrupted"
+	StepFailureBrowserError       StepFailure = "browser_error"
+)
+
 type StepOutcome string
 
 const (
@@ -517,11 +529,12 @@ const (
 )
 
 type StepResult struct {
-	Index     int64       `json:"index"`
-	Operation Operation   `json:"operation"`
-	DecidedBy Decider     `json:"decided_by"`
-	Outcome   StepOutcome `json:"outcome"`
-	URL       string      `json:"url"`
+	Index     int64        `json:"index"`
+	Operation Operation    `json:"operation"`
+	DecidedBy Decider      `json:"decided_by"`
+	Outcome   StepOutcome  `json:"outcome"`
+	Failure   *StepFailure `json:"failure"`
+	URL       string       `json:"url"`
 	// Human-readable label of the chosen element; never contains a secret value.
 	Target     *string  `json:"target"`
 	Confidence *float64 `json:"confidence"`

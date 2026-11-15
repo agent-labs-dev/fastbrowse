@@ -872,6 +872,26 @@ public sealed record StepFact
     public string? DeepLink { get; init; }
 }
 
+/// <summary>
+/// A closed reason for a failed browser step; `<c>note</c>` remains diagnostic text.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter<StepFailure>))]
+public enum StepFailure
+{
+    [JsonStringEnumMemberName("missing_target")]
+    MissingTarget,
+    [JsonStringEnumMemberName("target_gone")]
+    TargetGone,
+    [JsonStringEnumMemberName("unauthorized_origin")]
+    UnauthorizedOrigin,
+    [JsonStringEnumMemberName("navigation_failed")]
+    NavigationFailed,
+    [JsonStringEnumMemberName("dialog_interrupted")]
+    DialogInterrupted,
+    [JsonStringEnumMemberName("browser_error")]
+    BrowserError,
+}
+
 [JsonConverter(typeof(JsonStringEnumConverter<StepOutcome>))]
 public enum StepOutcome
 {
@@ -898,6 +918,9 @@ public sealed record StepResult
 
     [JsonPropertyName("outcome")]
     public required StepOutcome Outcome { get; init; }
+
+    [JsonPropertyName("failure")]
+    public StepFailure? Failure { get; init; }
 
     [JsonPropertyName("url")]
     public required string Url { get; init; }

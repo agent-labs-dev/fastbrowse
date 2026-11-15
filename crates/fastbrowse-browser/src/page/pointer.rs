@@ -30,6 +30,7 @@ impl CdpPage {
         let opened = self.session.follow_popup(&popups, self.session.window_opens() != window_opens).await?.is_some();
         Ok(ActResult {
             outcome: StepOutcome::Executed,
+            failure: None,
             page_changed: changed || opened,
             detail: Some(
                 if opened { "opened a new tab, now active" } else { "clicked where the screenshot shows it" }.into(),

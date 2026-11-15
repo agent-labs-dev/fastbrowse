@@ -6,7 +6,7 @@ use std::time::Instant;
 use fastbrowse_core::decision::{EVEN_ODDS, jev_takes_png};
 use fastbrowse_core::effects::{Effect, SETTING_ROLES, Setting, effect, state_key};
 use fastbrowse_core::models::{
-    Decider, Event, Image, Operation, Status, StepChoice, StepEvent, StepOutcome, StepResult, WallKind,
+    Decider, Event, Image, Operation, Status, StepChoice, StepEvent, StepFailure, StepOutcome, StepResult, WallKind,
 };
 use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Control, Dialog, Observation, Tab};
 use fastbrowse_core::py::dump::Dump;
@@ -905,7 +905,13 @@ impl Agent {
             let text = state.read_note();
             let text = self.redact(text);
             effect_now = Some(text.clone());
-            act = ActResult { outcome: StepOutcome::Executed, page_changed: false, detail: Some(text), moved: false };
+            act = ActResult {
+                outcome: StepOutcome::Executed,
+                failure: None,
+                page_changed: false,
+                detail: Some(text),
+                moved: false,
+            };
         } else {
             let built = match state.built.take() {
                 Some(built) => built?,
@@ -1148,6 +1154,7 @@ impl Agent {
             operation: decision.operation,
             decided_by: decision.decider(),
             outcome: act.outcome,
+            failure: act.failure,
             url: observation.url.clone(),
             target: label,
             confidence: Some(decision.confidence()),
@@ -1232,6 +1239,7 @@ impl Agent {
             operation: decision.operation,
             decided_by: decision.decider(),
             outcome: StepOutcome::Failed,
+            failure: Some(StepFailure::BrowserError),
             page_changed: Some(url != observation.url),
             url: url.clone(),
             target: label,
@@ -1629,6 +1637,7 @@ impl Agent {
             operation,
             decided_by,
             outcome: StepOutcome::Failed,
+            failure: Some(StepFailure::BrowserError),
             url: observation.url.clone(),
             target,
             confidence,

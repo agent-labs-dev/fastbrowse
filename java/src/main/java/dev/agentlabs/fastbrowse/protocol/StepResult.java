@@ -16,6 +16,7 @@ public record StepResult(
     @JsonProperty("operation") Operation operation,
     @JsonProperty("decided_by") Decider decidedBy,
     @JsonProperty("outcome") StepOutcome outcome,
+    @JsonProperty("failure") StepFailure failure,
     @JsonProperty("url") String url,
     @JsonProperty("target") String target,
     @JsonProperty("confidence") Double confidence,
@@ -36,6 +37,7 @@ public record StepResult(
         private Operation operation;
         private Decider decidedBy;
         private StepOutcome outcome;
+        private StepFailure failure;
         private String url;
         private String target;
         private Double confidence;
@@ -64,6 +66,11 @@ public record StepResult(
 
         public Builder outcome(StepOutcome outcome) {
             this.outcome = outcome;
+            return this;
+        }
+
+        public Builder failure(StepFailure failure) {
+            this.failure = failure;
             return this;
         }
 
@@ -108,7 +115,7 @@ public record StepResult(
         }
 
         public StepResult build() {
-            return new StepResult(index, operation, decidedBy, outcome, url, target, confidence, note, facts, pageChanged, durationMs, choices);
+            return new StepResult(index, operation, decidedBy, outcome, failure, url, target, confidence, note, facts, pageChanged, durationMs, choices);
         }
     }
 }

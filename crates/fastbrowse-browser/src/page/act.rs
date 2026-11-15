@@ -5,7 +5,7 @@ use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use data_encoding::BASE64;
-use fastbrowse_core::models::{Attachment, Operation, StepOutcome};
+use fastbrowse_core::models::{Attachment, Operation, StepFailure, StepOutcome};
 use fastbrowse_core::page::{ActResult, Action, NATIVE_DATE_INPUT_TYPES, Observation};
 use futures_util::StreamExt;
 use futures_util::future::BoxFuture;
@@ -301,7 +301,7 @@ enum Cover {
 /// is hung and fails the action as `PageUnresponsive`.
 const INPUT_REPLY_SECONDS: f64 = 10.0;
 
-type Outcome = (StepOutcome, Option<String>);
+type Outcome = (StepOutcome, Option<String>, Option<StepFailure>);
 
 fn bad(shape: &str) -> BrowserError {
     BrowserError::Failed(format!("page script returned an unexpected {shape}"))
@@ -331,14 +331,14 @@ fn parse_cover(value: &Value) -> Result<Cover, BrowserError> {
     })
 }
 
-/// `[fingerprint, live guard, hit-test point, popup announced, opens a window, address]` from the pre-action check.
+/// `[fingerprint, live guard, hit-test point, popup announced, opens a window, address, connected]`.
 /// The address is the active page's own `location.href`, read in the same evaluation.
-type TargetState = (String, Option<String>, Point, bool, bool, String);
+type TargetState = (String, Option<String>, Point, bool, bool, String, bool);
 
 fn parse_target_state(value: &Value) -> Result<TargetState, BrowserError> {
     let shape = "tuple[str, str | None, _Point, bool, bool, str]";
-    // The viewport rides along as a seventh element, kept by `CdpPage::measure` and not part of the state.
-    let Some(items) = value.as_array().filter(|items| items.len() >= 6) else {
+    // The viewport stays at index six; connection is measured beside the guard so hidden controls are not called gone.
+    let Some(items) = value.as_array().filter(|items| items.len() >= 8) else {
         return Err(bad(shape));
     };
     let [fingerprint, guard, point, announced, opens, address] = &items[..6] else { return Err(bad(shape)) };
@@ -356,6 +356,7 @@ fn parse_target_state(value: &Value) -> Result<TargetState, BrowserError> {
         announced.as_bool().ok_or_else(|| bad(shape))?,
         opens.as_bool().ok_or_else(|| bad(shape))?,
         address.as_str().ok_or_else(|| bad(shape))?.to_owned(),
+        items[7].as_bool().ok_or_else(|| bad(shape))?,
     ))
 }
 
@@ -390,20 +391,28 @@ impl CdpPage {
         wait_seconds: f64,
     ) -> Result<ActResult, BrowserError> {
         self.session.assert_clear().await?;
-        let result = |outcome, page_changed, detail: &str| ActResult {
+        let result = |outcome, page_changed, detail: &str, failure| ActResult {
             outcome,
+            failure,
             page_changed,
             detail: Some(detail.to_owned()),
             moved: false,
         };
         let Some(last) = self.last().filter(|last| last.page_key == observation.page_key) else {
-            return Ok(result(StepOutcome::Stale, false, "observation is out of date"));
+            return Ok(result(StepOutcome::Stale, false, "observation is out of date", None));
         };
         let mut target: Option<Target> = None;
         if let Some(target_id) = &action.target_id {
             match last.controls.get(target_id) {
                 Some(found) => target = Some(found.clone()),
-                None => return Ok(result(StepOutcome::Stale, false, "unknown control id")),
+                None => {
+                    return Ok(result(
+                        StepOutcome::Stale,
+                        false,
+                        "unknown control id",
+                        Some(StepFailure::MissingTarget),
+                    ));
+                }
             }
         }
         // A pending dialog already blocks the renderer's main thread; evaluating now would hang.
@@ -458,12 +467,17 @@ impl CdpPage {
                 }
                 _ => measured,
             };
-            let live_guard;
-            (before_fingerprint, live_guard, point, announced, opens, address) = measured;
+            let (live_guard, connected);
+            (before_fingerprint, live_guard, point, announced, opens, address, connected) = measured;
             if let Some(target) = &target
                 && live_guard != target.3
             {
-                return Ok(result(StepOutcome::Stale, false, "control changed since observation"));
+                return Ok(result(
+                    StepOutcome::Stale,
+                    false,
+                    "control changed since observation",
+                    (!connected).then_some(StepFailure::TargetGone),
+                ));
             }
         }
 
@@ -478,9 +492,14 @@ impl CdpPage {
             let hit_test = action.operation.is_targeted() && action.operation != Operation::Blur;
             let fresh = self.before_action(Some(target), hit_test, false, false, true, false).await?;
             if fresh.1 != target.3 || !matches!(fresh.2, Point::At(fx, fy) if fx == x && fy == y) {
-                return Ok(result(StepOutcome::Stale, false, "control changed while the cursor moved"));
+                return Ok(result(
+                    StepOutcome::Stale,
+                    false,
+                    "control changed while the cursor moved",
+                    (!fresh.6).then_some(StepFailure::TargetGone),
+                ));
             }
-            (before_fingerprint, _, point, announced, opens, address) = fresh;
+            (before_fingerprint, _, point, announced, opens, address, _) = fresh;
             drawn = false;
         }
         if !action.secret
@@ -518,16 +537,17 @@ impl CdpPage {
         let requests = self.session.requests_mark();
         let downloads_before = self.session.downloads_settled();
         let mut waited = None;
-        let (outcome, mut detail) = if action.operation == Operation::Wait {
+        let (outcome, mut detail, failure) = if action.operation == Operation::Wait {
             let seen = self.await_change(wait_seconds, &before_fingerprint).await?;
             waited = Some(seen);
-            (StepOutcome::Executed, (!seen.semantic && !seen.clock).then(|| UNCHANGED.into()))
+            (StepOutcome::Executed, (!seen.semantic && !seen.clock).then(|| UNCHANGED.into()), None)
         } else {
             self.dispatch(action, target.as_ref(), point, drawn).await?
         };
         if outcome != StepOutcome::Executed {
             return Ok(ActResult {
                 outcome,
+                failure,
                 page_changed: self.session.pending_dialog().is_some(),
                 detail,
                 moved: false,
@@ -548,6 +568,7 @@ impl CdpPage {
         {
             return Ok(ActResult {
                 outcome: StepOutcome::Executed,
+                failure: None,
                 page_changed: true,
                 detail: Some("opened a new tab, now active".into()),
                 moved: true,
@@ -571,7 +592,7 @@ impl CdpPage {
                 })
             });
         }
-        Ok(ActResult { outcome: StepOutcome::Executed, page_changed: changed, detail, moved })
+        Ok(ActResult { outcome: StepOutcome::Executed, failure: None, page_changed: changed, detail, moved })
     }
 
     /// Whether a download landed since `since`, waiting the capture's own task out briefly.
@@ -679,21 +700,27 @@ impl CdpPage {
             Operation::Navigate => {
                 let url = action.url.as_deref().unwrap_or_default();
                 if action.url.is_none() || !matches!(urlsplit(url).0.as_str(), "http" | "https") {
-                    return Ok((StepOutcome::Failed, Some("navigate requires an HTTP(S) address".into())));
+                    return Ok((
+                        StepOutcome::Failed,
+                        Some("navigate requires an HTTP(S) address".into()),
+                        Some(StepFailure::NavigationFailed),
+                    ));
                 }
                 match self.navigate(url, None).await {
                     Err(error @ BrowserError::OriginNotAllowed) => Err(error),
                     Err(error) if error.is_unavailable() => Err(error),
                     Err(error @ BrowserError::PageUnresponsive(_)) => Err(error),
-                    Err(error) => Ok((StepOutcome::Failed, Some(error.to_string()))),
-                    Ok(()) => Ok((StepOutcome::Executed, None)),
+                    Err(error) => {
+                        Ok((StepOutcome::Failed, Some(error.to_string()), Some(StepFailure::NavigationFailed)))
+                    }
+                    Ok(()) => Ok((StepOutcome::Executed, None, None)),
                 }
             }
             Operation::Click => self.click(target, point, drawn).await,
             Operation::Hover => self.hover(target, point, drawn).await,
             Operation::Blur => {
                 // Leaving a field can open validation dialogs before its synchronous handlers return.
-                self.until_dialog(self.blur(target)).await.unwrap_or(Ok((StepOutcome::Executed, None)))
+                self.until_dialog(self.blur(target)).await.unwrap_or(Ok((StepOutcome::Executed, None, None)))
             }
             Operation::Fill => {
                 let secret_origin = action.secret_origin.as_deref();
@@ -701,9 +728,11 @@ impl CdpPage {
                     self.until_dialog(self.fill(target, text, point, action.secret, secret_origin, drawn)).await;
                 match filled {
                     Some(filled) => filled,
-                    None => {
-                        Ok((StepOutcome::Failed, Some("dialog interrupted fill before its value was verified".into())))
-                    }
+                    None => Ok((
+                        StepOutcome::Failed,
+                        Some("dialog interrupted fill before its value was verified".into()),
+                        Some(StepFailure::DialogInterrupted),
+                    )),
                 }
             }
             Operation::Select => self.select(target, text, point).await,
@@ -713,26 +742,34 @@ impl CdpPage {
             Operation::Escape => self.key(None, Key::Escape, Point::Gone).await,
             Operation::Scroll | Operation::ScrollUp => {
                 self.scroll(action.operation, target).await?;
-                Ok((StepOutcome::Executed, None))
+                Ok((StepOutcome::Executed, None, None))
             }
             Operation::Back => self.back().await,
             Operation::Wait => Err(BrowserError::Failed("wait is dispatched by act, with the run's time left".into())),
             Operation::SwitchTab => {
                 let Some(tab_id) = &action.tab_id else {
-                    return Ok((StepOutcome::Failed, Some("switch_tab requires tab_id".into())));
+                    return Ok((
+                        StepOutcome::Failed,
+                        Some("switch_tab requires tab_id".into()),
+                        Some(StepFailure::BrowserError),
+                    ));
                 };
                 self.session.switch_tab(tab_id).await?;
                 // A tab a click opened can still be loading, and read now it showed a blank page with nothing to use.
                 self.await_document().await?;
-                Ok((StepOutcome::Executed, None))
+                Ok((StepOutcome::Executed, None, None))
             }
             Operation::Upload => self.upload(target, &action.files, point).await,
             Operation::Dialog => {
                 let Some(accept) = action.accept_dialog else {
-                    return Ok((StepOutcome::Failed, Some("dialog requires accept_dialog".into())));
+                    return Ok((
+                        StepOutcome::Failed,
+                        Some("dialog requires accept_dialog".into()),
+                        Some(StepFailure::BrowserError),
+                    ));
                 };
                 self.session.handle_dialog(accept, action.text.as_deref()).await?;
-                Ok((StepOutcome::Executed, None))
+                Ok((StepOutcome::Executed, None, None))
             }
             Operation::Read | Operation::Done => Err(BrowserError::Failed(format!(
                 "{} does not dispatch through the browser layer",
@@ -827,9 +864,9 @@ impl CdpPage {
     /// could run. Each key or insertion checks again after focusing.
     async fn route_around(&self, target: &Target, scroll: bool) -> Result<Route, BrowserError> {
         let (session_id, local_id, guard) = (&target.0, target.2, &target.3);
-        let refused = |outcome, detail: Option<String>| Ok(Route::Refused((outcome, detail)));
+        let refused = |outcome, detail: Option<String>, failure| Ok(Route::Refused((outcome, detail, failure)));
         if self.cover(session_id, local_id).await? != Cover::Band {
-            return refused(StepOutcome::Covered, Some(self.covered_detail(target).await));
+            return refused(StepOutcome::Covered, Some(self.covered_detail(target).await), None);
         }
         if scroll {
             // A page in a background tab draws no frames, so its scroll handlers would run only once the keyboard route
@@ -843,22 +880,28 @@ impl CdpPage {
             // what they did.
             let _ = timeout(secs(0.5), self.evaluate(session_id, PRESENTED_JS)).await;
             match point {
-                Point::Gone => return refused(StepOutcome::Stale, Some("target disconnected".into())),
+                Point::Gone => {
+                    return refused(StepOutcome::Stale, Some("target disconnected".into()), None);
+                }
                 Point::Unsettled => {
-                    return refused(StepOutcome::Stale, Some("page did not finish scrolling the control clear".into()));
+                    return refused(
+                        StepOutcome::Stale,
+                        Some("page did not finish scrolling the control clear".into()),
+                        None,
+                    );
                 }
                 Point::At(x, y) => return Ok(Route::At(x, y)),
                 Point::Covered => {}
             }
             // The last alignment can have put the control under something else.
             if self.cover(session_id, local_id).await? != Cover::Band {
-                return refused(StepOutcome::Covered, Some(self.covered_detail(target).await));
+                return refused(StepOutcome::Covered, Some(self.covered_detail(target).await), None);
             }
         }
         // Scroll handlers, run by now, can have repurposed the control: an authorized "Save" turned "Delete account"
         // would have had the new action pressed unclassified.
         if !self.guard_holds(target).await? {
-            return refused(StepOutcome::Stale, Some(CHANGED.into()));
+            return refused(StepOutcome::Stale, Some(CHANGED.into()), None);
         }
         Ok(Route::Keyboard)
     }
@@ -878,10 +921,14 @@ impl CdpPage {
     }
 
     async fn click(&self, target: Option<&Target>, point: Point, drawn: bool) -> Result<Outcome, BrowserError> {
-        let Some(target) = target else { return Ok((StepOutcome::Failed, Some("click requires a target".into()))) };
+        let Some(target) = target else {
+            return Ok((StepOutcome::Failed, Some("click requires a target".into()), Some(StepFailure::MissingTarget)));
+        };
         self.session.note_click(&target.0, target.2);
         let (x, y) = match point {
-            Point::Gone | Point::Unsettled => return Ok((StepOutcome::Stale, Some("target disconnected".into()))),
+            Point::Gone | Point::Unsettled => {
+                return Ok((StepOutcome::Stale, Some("target disconnected".into()), None));
+            }
             Point::At(x, y) => (x, y),
             Point::Covered => match self.route_around(target, true).await? {
                 Route::Refused(refusal) => return Ok(refusal),
@@ -902,16 +949,20 @@ impl CdpPage {
             None if key.is_null() => None,
             _ => return Err(bad("Literal['Enter', ' '] | None")),
         };
-        let Some(key) = key else { return Ok((StepOutcome::Covered, Some(self.covered_detail(target).await))) };
+        let Some(key) = key else { return Ok((StepOutcome::Covered, Some(self.covered_detail(target).await), None)) };
         if !self.focus(session_id, local_id, false, false, false, true).await? {
-            return Ok((StepOutcome::Covered, Some(self.covered_detail(target).await)));
+            return Ok((StepOutcome::Covered, Some(self.covered_detail(target).await), None));
         }
         if let Some(refusal) = self.keys_reach(target, true, None).await? {
             return Ok(refusal);
         }
         self.press_key(session_id, key).await?;
         self.session.choosers_pinned().await;
-        Ok((StepOutcome::Executed, Some("Pressed from the keyboard: a band fixed to the window covers it.".into())))
+        Ok((
+            StepOutcome::Executed,
+            Some("Pressed from the keyboard: a band fixed to the window covers it.".into()),
+            None,
+        ))
     }
 
     /// Why a key or text, sent now, would not go to the control as it was authorized, or None if it would.
@@ -928,7 +979,7 @@ impl CdpPage {
         local_id: Option<i64>,
     ) -> Result<Option<Outcome>, BrowserError> {
         if guarded && !self.guard_holds(target).await? {
-            return Ok(Some((StepOutcome::Stale, Some(CHANGED.into()))));
+            return Ok(Some((StepOutcome::Stale, Some(CHANGED.into()), None)));
         }
         let node = local_id.unwrap_or(target.2);
         let cover = self.cover(&target.0, node).await?;
@@ -941,7 +992,7 @@ impl CdpPage {
             return None;
         }
         let handed = (target.0.clone(), target.1.clone(), node, target.3.clone());
-        Some((StepOutcome::Covered, Some(self.covered_detail(&handed).await)))
+        Some((StepOutcome::Covered, Some(self.covered_detail(&handed).await), None))
     }
 
     async fn guard_holds(&self, target: &Target) -> Result<bool, BrowserError> {
@@ -950,14 +1001,16 @@ impl CdpPage {
     }
 
     async fn hover(&self, target: Option<&Target>, point: Point, drawn: bool) -> Result<Outcome, BrowserError> {
-        let Some(target) = target else { return Ok((StepOutcome::Failed, Some("hover requires a target".into()))) };
+        let Some(target) = target else {
+            return Ok((StepOutcome::Failed, Some("hover requires a target".into()), Some(StepFailure::MissingTarget)));
+        };
         match point {
-            Point::Gone | Point::Unsettled => Ok((StepOutcome::Stale, Some("target disconnected".into()))),
-            Point::Covered => Ok((StepOutcome::Covered, Some(self.covered_detail(target).await))),
+            Point::Gone | Point::Unsettled => Ok((StepOutcome::Stale, Some("target disconnected".into()), None)),
+            Point::Covered => Ok((StepOutcome::Covered, Some(self.covered_detail(target).await), None)),
             Point::At(x, y) => {
                 // The pointer stays where it lands, so what the hover reveals is still shown when the page is next read.
                 self.move_to(&target.0, (x, y), drawn).await?;
-                Ok((StepOutcome::Executed, None))
+                Ok((StepOutcome::Executed, None, None))
             }
         }
     }
@@ -965,16 +1018,20 @@ impl CdpPage {
     /// Move focus out of the field the run chose, so the page does what it does when that field is left: a change
     /// handler that rewrites or rejects the value runs now rather than when something else is next pressed.
     async fn blur(&self, target: Option<&Target>) -> Result<Outcome, BrowserError> {
-        let Some(target) = target else { return Ok((StepOutcome::Failed, Some("blur requires a target".into()))) };
+        let Some(target) = target else {
+            return Ok((StepOutcome::Failed, Some("blur requires a target".into()), Some(StepFailure::MissingTarget)));
+        };
         let script = format!("({BLUR_JS})({}, {})", target.2, py_json(&json!(target.3)));
         // A change handler can move the page, and that move is the run's doing though no input event was sent.
         let result = self.session.input_window(&target.0, self.evaluate(&target.0, &script)).await?;
         Ok(match result {
-            Value::Bool(true) => (StepOutcome::Executed, None),
-            Value::Bool(false) => {
-                (StepOutcome::Failed, Some("the field no longer had keyboard focus, so nothing was done".into()))
-            }
-            _ => (StepOutcome::Stale, Some("control changed since observation".into())),
+            Value::Bool(true) => (StepOutcome::Executed, None, None),
+            Value::Bool(false) => (
+                StepOutcome::Failed,
+                Some("the field no longer had keyboard focus, so nothing was done".into()),
+                Some(StepFailure::BrowserError),
+            ),
+            _ => (StepOutcome::Stale, Some("control changed since observation".into()), None),
         })
     }
 
@@ -1011,14 +1068,20 @@ impl CdpPage {
         secret_origin: Option<&str>,
         drawn: bool,
     ) -> Result<Outcome, BrowserError> {
-        let Some(target) = target else { return Ok((StepOutcome::Failed, Some("fill requires a target".into()))) };
+        let Some(target) = target else {
+            return Ok((StepOutcome::Failed, Some("fill requires a target".into()), Some(StepFailure::MissingTarget)));
+        };
         let session_id = target.0.as_str();
         let mut local_id = target.2;
         if matches!(point, Point::Gone | Point::Unsettled) {
-            return Ok((StepOutcome::Stale, Some("target disconnected".into())));
+            return Ok((StepOutcome::Stale, Some("target disconnected".into()), None));
         }
         if secret && secret_origin.is_none_or(str::is_empty) {
-            return Ok((StepOutcome::Failed, Some("secret fill requires an authorized origin".into())));
+            return Ok((
+                StepOutcome::Failed,
+                Some("secret fill requires an authorized origin".into()),
+                Some(StepFailure::UnauthorizedOrigin),
+            ));
         }
         let route = match point {
             Point::At(x, y) => Route::At(x, y),
@@ -1034,9 +1097,9 @@ impl CdpPage {
                 Route::At(x, y) => {
                     // Ported from browser-use/jev-ultrafast (MIT), browser.py: fill clicks before typing. Focus alone
                     // bypasses pointer handlers that open autocomplete and calendar pickers.
-                    let (outcome, detail) = self.click_point(target, (x, y), true, drawn).await?;
+                    let (outcome, detail, failure) = self.click_point(target, (x, y), true, drawn).await?;
                     if outcome != StepOutcome::Executed {
-                        return Ok((outcome, detail));
+                        return Ok((outcome, detail, failure));
                     }
                     let script = format!(
                         "({handed})({local_id}, {secret}).then(async id => {{ \
@@ -1075,6 +1138,7 @@ impl CdpPage {
             return Ok((
                 StepOutcome::Failed,
                 Some("clicked field has no replacement in the same document and position".into()),
+                Some(StepFailure::TargetGone),
             ));
         };
         local_id = handed;
@@ -1091,7 +1155,11 @@ impl CdpPage {
                 covered = None;
             }
             if focused != Some(true) {
-                return Ok((StepOutcome::Failed, Some("target did not receive keyboard focus".into())));
+                return Ok((
+                    StepOutcome::Failed,
+                    Some("target did not receive keyboard focus".into()),
+                    Some(StepFailure::BrowserError),
+                ));
             }
             // No pointer press rechecked the field on the keyboard route, so the text goes only to the field that was
             // authorized, and on either route only to a field nothing has since been drawn over.
@@ -1107,14 +1175,27 @@ impl CdpPage {
                 // navigation/focus race between checking the origin and dispatching the secret to the page.
                 let script = format!(
                     "((id, text, origin) => {{ const e = window.__fastbrowse?.nodes.get(id); \
-                     if (!e?.isConnected || (origin !== null && e.ownerDocument.location.origin !== origin)) return false; \
-                     const doc = e.ownerDocument; if (e.getRootNode().activeElement !== e) return false; \
-                     {SELECT_TEXT_JS}return doc.execCommand('insertText', false, text); }})({local_id}, {}, {})",
+                     if (!e?.isConnected) return 'target_gone'; \
+                     if (origin !== null && e.ownerDocument.location.origin !== origin) return 'unauthorized_origin'; \
+                     const doc = e.ownerDocument; if (e.getRootNode().activeElement !== e) return 'browser_error'; \
+                     {SELECT_TEXT_JS}return doc.execCommand('insertText', false, text) ? null : 'browser_error'; }})({local_id}, {}, {})",
                     py_json(&json!(text)),
                     py_json(&json!(secret_origin))
                 );
-                if !truthy(&self.evaluate(session_id, &script).await?) {
-                    return Ok((StepOutcome::Failed, Some("secret origin or focus changed before insertion".into())));
+                let inserted = self.evaluate(session_id, &script).await?;
+                let failure = match inserted.as_str() {
+                    Some("target_gone") => Some(StepFailure::TargetGone),
+                    Some("unauthorized_origin") => Some(StepFailure::UnauthorizedOrigin),
+                    Some("browser_error") => Some(StepFailure::BrowserError),
+                    None if inserted.is_null() => None,
+                    _ => return Err(bad("secret insertion result")),
+                };
+                if let Some(failure) = failure {
+                    return Ok((
+                        StepOutcome::Failed,
+                        Some("secret origin or focus changed before insertion".into()),
+                        Some(failure),
+                    ));
                 }
             } else {
                 self.session.send("Input.insertText", json!({"text": text}), Some(session_id)).await?;
@@ -1145,13 +1226,19 @@ impl CdpPage {
             };
             match handed {
                 Some(handed) if attempt == 0 && handed != local_id => local_id = handed,
-                _ => return Ok((StepOutcome::Failed, Some("field did not retain the supplied text".into()))),
+                _ => {
+                    return Ok((
+                        StepOutcome::Failed,
+                        Some("field did not retain the supplied text".into()),
+                        Some(StepFailure::BrowserError),
+                    ));
+                }
             }
         }
         if suggests {
             self.await_suggestions(session_id, local_id).await;
         }
-        Ok((StepOutcome::Executed, None))
+        Ok((StepOutcome::Executed, None, None))
     }
 
     /// Commit an ISO value to a native date/time input the way its own picker would.
@@ -1172,9 +1259,13 @@ impl CdpPage {
         );
         let result = self.session.input_window(session_id, self.evaluate(session_id, &script)).await?;
         Ok(match result {
-            Value::Null => (StepOutcome::Stale, Some("target disconnected".into())),
-            Value::Bool(true) => (StepOutcome::Executed, None),
-            _ => (StepOutcome::Failed, Some("field did not retain the supplied ISO value".into())),
+            Value::Null => (StepOutcome::Stale, Some("target disconnected".into()), Some(StepFailure::TargetGone)),
+            Value::Bool(true) => (StepOutcome::Executed, None, None),
+            _ => (
+                StepOutcome::Failed,
+                Some("field did not retain the supplied ISO value".into()),
+                Some(StepFailure::BrowserError),
+            ),
         })
     }
 
@@ -1209,10 +1300,18 @@ impl CdpPage {
     }
 
     async fn select(&self, target: Option<&Target>, option: &str, point: Point) -> Result<Outcome, BrowserError> {
-        let Some(target) = target else { return Ok((StepOutcome::Failed, Some("select requires a target".into()))) };
+        let Some(target) = target else {
+            return Ok((
+                StepOutcome::Failed,
+                Some("select requires a target".into()),
+                Some(StepFailure::MissingTarget),
+            ));
+        };
         let (session_id, local_id) = (target.0.as_str(), target.2);
         match point {
-            Point::Gone | Point::Unsettled => return Ok((StepOutcome::Stale, Some("target disconnected".into()))),
+            Point::Gone | Point::Unsettled => {
+                return Ok((StepOutcome::Stale, Some("target disconnected".into()), None));
+            }
             // The choice is set without the pointer, so only a cover the page means to be dealt with first refuses it.
             Point::Covered => {
                 if let Route::Refused(refusal) = self.route_around(target, false).await? {
@@ -1238,11 +1337,13 @@ impl CdpPage {
         // The events are code's own, not trusted, so the window that counts a move as the run's is opened for them.
         let result = self.session.input_window(session_id, self.evaluate(session_id, &script)).await?;
         Ok(match result {
-            Value::Null => (StepOutcome::Stale, Some("select target disconnected".into())),
-            Value::Bool(false) => {
-                (StepOutcome::Failed, Some(format!("no option labelled {}", crate::session::py_repr(option))))
-            }
-            Value::Bool(true) => (StepOutcome::Executed, None),
+            Value::Null => (StepOutcome::Stale, Some("select target disconnected".into()), None),
+            Value::Bool(false) => (
+                StepOutcome::Failed,
+                Some(format!("no option labelled {}", crate::session::py_repr(option))),
+                Some(StepFailure::MissingTarget),
+            ),
+            Value::Bool(true) => (StepOutcome::Executed, None, None),
             kept => (
                 StepOutcome::Failed,
                 Some(format!(
@@ -1253,6 +1354,7 @@ impl CdpPage {
                     },
                     crate::session::py_repr(option)
                 )),
+                Some(StepFailure::BrowserError),
             ),
         })
     }
@@ -1265,7 +1367,9 @@ impl CdpPage {
         if let Some(target) = target {
             let local_id = target.2;
             match point {
-                Point::Gone | Point::Unsettled => return Ok((StepOutcome::Stale, Some("target disconnected".into()))),
+                Point::Gone | Point::Unsettled => {
+                    return Ok((StepOutcome::Stale, Some("target disconnected".into()), None));
+                }
                 // A key needs focus, not the pointer: Enter in a field under a band fixed to the window was refused.
                 Point::Covered => {
                     if let Route::Refused(refusal) = self.route_around(target, false).await? {
@@ -1275,14 +1379,18 @@ impl CdpPage {
                 Point::At(..) => {}
             }
             if !self.focus(&session_id, local_id, false, false, false, true).await? {
-                return Ok((StepOutcome::Failed, Some("target did not receive keyboard focus".into())));
+                return Ok((
+                    StepOutcome::Failed,
+                    Some("target did not receive keyboard focus".into()),
+                    Some(StepFailure::BrowserError),
+                ));
             }
             if let Some(refusal) = self.keys_reach(target, point == Point::Covered, None).await? {
                 return Ok(refusal);
             }
         }
         self.press_key(&session_id, key).await?;
-        Ok((StepOutcome::Executed, None))
+        Ok((StepOutcome::Executed, None, None))
     }
 
     async fn press_key(&self, session_id: &str, key: Key) -> Result<(), BrowserError> {
@@ -1546,16 +1654,20 @@ impl CdpPage {
         let session_id = self.session.active_session_id()?;
         let history = self.session.send("Page.getNavigationHistory", json!({}), Some(&session_id)).await?;
         match self.back_target(&history) {
-            None => Ok((StepOutcome::Failed, Some("no same-origin earlier history entry".into()))),
+            None => Ok((
+                StepOutcome::Failed,
+                Some("no same-origin earlier history entry".into()),
+                Some(StepFailure::NavigationFailed),
+            )),
             Some(BackTarget::Skipped(url)) => {
                 // Loaded once, it is an ordinary entry, and BACK from it returns to the page the run began on.
                 self.state.lock().unwrap().back_to.remove(&session_id);
                 self.navigate(&url, None).await?;
-                Ok((StepOutcome::Executed, None))
+                Ok((StepOutcome::Executed, None, None))
             }
             Some(BackTarget::Entry(entry)) => {
                 self.session.send("Page.navigateToHistoryEntry", json!({"entryId": entry}), Some(&session_id)).await?;
-                Ok((StepOutcome::Executed, None))
+                Ok((StepOutcome::Executed, None, None))
             }
         }
     }
@@ -1566,18 +1678,30 @@ impl CdpPage {
         files: &[Attachment],
         point: Point,
     ) -> Result<Outcome, BrowserError> {
-        let Some(target) = target else { return Ok((StepOutcome::Failed, Some("upload requires a target".into()))) };
+        let Some(target) = target else {
+            return Ok((
+                StepOutcome::Failed,
+                Some("upload requires a target".into()),
+                Some(StepFailure::MissingTarget),
+            ));
+        };
         if files.is_empty() {
-            return Ok((StepOutcome::Failed, Some("no files supplied".into())));
+            return Ok((StepOutcome::Failed, Some("no files supplied".into()), Some(StepFailure::BrowserError)));
         }
         let total: i64 = files.iter().map(|f| f.content.0.len() as i64).sum();
         let limit = self.config.max_upload_bytes;
         if total > limit {
-            return Ok((StepOutcome::Failed, Some(format!("{total} bytes exceeds max_upload_bytes ({limit})"))));
+            return Ok((
+                StepOutcome::Failed,
+                Some(format!("{total} bytes exceeds max_upload_bytes ({limit})")),
+                Some(StepFailure::BrowserError),
+            ));
         }
         match point {
-            Point::Gone | Point::Unsettled => return Ok((StepOutcome::Stale, Some("target disconnected".into()))),
-            Point::Covered => return Ok((StepOutcome::Covered, Some(self.covered_detail(target).await))),
+            Point::Gone | Point::Unsettled => {
+                return Ok((StepOutcome::Stale, Some("target disconnected".into()), None));
+            }
+            Point::Covered => return Ok((StepOutcome::Covered, Some(self.covered_detail(target).await), None)),
             Point::At(..) => {}
         }
         // Atomic with the write: the script checks the origin it runs in, so a document that replaced the observed one
@@ -1591,10 +1715,10 @@ impl CdpPage {
         // observation offered, including one a chooser opened that was never on the page.
         let script = format!(
             "((id, files, allowed) => {{ const registry = window.__fastbrowse; const node = registry?.nodes.get(id); \
-             if (!node?.isConnected || !registry.sourceOf) return null; \
+             if (!node?.isConnected) return 'target_gone'; if (!registry.sourceOf) return 'browser_error'; \
              const e = registry.sourceOf(node); \
-             if (e?.type !== 'file' || e.disabled || \
-             (allowed && !allowed.includes(location.origin))) return null; \
+             if (e?.type !== 'file' || e.disabled) return 'browser_error'; \
+             if (allowed && !allowed.includes(location.origin)) return 'unauthorized_origin'; \
              const dt = new DataTransfer(); \
              for (const f of files) {{ const bin = atob(f.data); \
              const bytes = Uint8Array.from(bin, c => c.charCodeAt(0)); \
@@ -1606,10 +1730,12 @@ impl CdpPage {
             py_json(&Value::Array(payload)),
             py_json(&json!(allowed))
         );
-        if self.evaluate(&target.0, &script).await?.is_null() {
-            return Ok((StepOutcome::Stale, Some("upload target disconnected".into())));
+        let uploaded = self.evaluate(&target.0, &script).await?;
+        if uploaded != Value::Bool(true) {
+            let failure: StepFailure = serde_json::from_value(uploaded).map_err(|_| bad("upload result"))?;
+            return Ok((StepOutcome::Stale, Some("upload target disconnected".into()), Some(failure)));
         }
-        Ok((StepOutcome::Executed, None))
+        Ok((StepOutcome::Executed, None, None))
     }
 
     /// Move the pointer to a point measured in the DOM, once the browser routes input by the same layout.
@@ -1632,9 +1758,9 @@ impl CdpPage {
         prepare_fill: bool,
         drawn: bool,
     ) -> Result<Outcome, BrowserError> {
-        let (outcome, detail, (x, y)) = self.stable_point(target, point, prepare_fill, true, drawn).await?;
+        let ((outcome, detail, failure), (x, y)) = self.stable_point(target, point, prepare_fill, true, drawn).await?;
         if outcome != StepOutcome::Executed {
-            return Ok((outcome, detail));
+            return Ok((outcome, detail, failure));
         }
         // Sent together and in order: Chrome runs them in turn, and a round trip between them buys nothing.
         let mouse = |kind| {
@@ -1643,7 +1769,7 @@ impl CdpPage {
         };
         tokio::try_join!(mouse("mousePressed"), mouse("mouseReleased"))?;
         self.session.choosers_pinned().await;
-        Ok((StepOutcome::Executed, None))
+        Ok((StepOutcome::Executed, None, None))
     }
 
     async fn stable_point(
@@ -1653,7 +1779,7 @@ impl CdpPage {
         prepare_fill: bool,
         scroll: bool,
         mut drawn: bool,
-    ) -> Result<(StepOutcome, Option<String>, (f64, f64)), BrowserError> {
+    ) -> Result<(Outcome, (f64, f64)), BrowserError> {
         // Pointer entry can move, cover or repurpose a widget. Press only after the same guarded target stays under the
         // pointer across rendered frames; a moving target never earns a speculative click.
         let deadline = Instant::now() + secs(TARGET_STABILITY_SECONDS);
@@ -1673,21 +1799,38 @@ impl CdpPage {
                 () = self.session.wait_for_dialog() => None,
             };
             let Some(checked) = checked else {
-                return Ok((StepOutcome::Failed, Some("pointer movement opened a dialog before press".into()), point));
+                return Ok((
+                    (
+                        StepOutcome::Failed,
+                        Some("pointer movement opened a dialog before press".into()),
+                        Some(StepFailure::DialogInterrupted),
+                    ),
+                    point,
+                ));
             };
-            let (_, guard, fresh, _, _, _) = checked?;
+            let (_, guard, fresh, _, _, _, connected) = checked?;
             if guard != target.3 || fresh == Point::Gone {
-                return Ok((StepOutcome::Stale, Some("control changed before pointer press".into()), point));
+                return Ok((
+                    (
+                        StepOutcome::Stale,
+                        Some("control changed before pointer press".into()),
+                        (!connected).then_some(StepFailure::TargetGone),
+                    ),
+                    point,
+                ));
             }
             // Covered at the press, as at the first look: the report names what covers it either way.
             let Point::At(x, y) = fresh else {
-                return Ok((StepOutcome::Covered, Some(self.covered_detail(target).await), point));
+                return Ok(((StepOutcome::Covered, Some(self.covered_detail(target).await), None), point));
             };
             if (x, y) == point {
-                return Ok((StepOutcome::Executed, None, point));
+                return Ok(((StepOutcome::Executed, None, None), point));
             }
             if Instant::now() >= deadline {
-                return Ok((StepOutcome::Stale, Some("target did not stop moving before pointer press".into()), point));
+                return Ok((
+                    (StepOutcome::Stale, Some("target did not stop moving before pointer press".into()), None),
+                    point,
+                ));
             }
             point = (x, y);
         }
@@ -1705,40 +1848,57 @@ impl CdpPage {
         point: Point,
         destination_id: Option<&str>,
     ) -> Result<Outcome, BrowserError> {
-        let Some(target) = target else { return Ok((StepOutcome::Failed, Some("drag requires a source".into()))) };
+        let Some(target) = target else {
+            return Ok((StepOutcome::Failed, Some("drag requires a source".into()), Some(StepFailure::MissingTarget)));
+        };
         let Some(destination_id) = destination_id else {
-            return Ok((StepOutcome::Failed, Some("drag requires a drop target".into())));
+            return Ok((
+                StepOutcome::Failed,
+                Some("drag requires a drop target".into()),
+                Some(StepFailure::MissingTarget),
+            ));
         };
         let point = match point {
-            Point::Gone | Point::Unsettled => return Ok((StepOutcome::Stale, Some("drag source disconnected".into()))),
-            Point::Covered => return Ok((StepOutcome::Covered, Some(self.covered_detail(target).await))),
+            Point::Gone | Point::Unsettled => {
+                return Ok((StepOutcome::Stale, Some("drag source disconnected".into()), None));
+            }
+            Point::Covered => return Ok((StepOutcome::Covered, Some(self.covered_detail(target).await), None)),
             Point::At(x, y) => (x, y),
         };
         let Some(drop) = self.last().and_then(|last| last.controls.get(destination_id).cloned()) else {
-            return Ok((StepOutcome::Stale, Some("unknown drop target id".into())));
+            return Ok((StepOutcome::Stale, Some("unknown drop target id".into()), Some(StepFailure::TargetGone)));
         };
         if drop.0 != target.0 {
-            return Ok((StepOutcome::Failed, Some("drag across browser frame sessions is not supported".into())));
+            return Ok((
+                StepOutcome::Failed,
+                Some("drag across browser frame sessions is not supported".into()),
+                Some(StepFailure::BrowserError),
+            ));
         }
         // Both ends at one point is a press and release with no travel, which Chrome delivers as a click.
         if drop == *target {
-            return Ok((StepOutcome::Failed, Some("drag source and drop target are the same control".into())));
+            return Ok((
+                StepOutcome::Failed,
+                Some("drag source and drop target are the same control".into()),
+                Some(StepFailure::BrowserError),
+            ));
         }
         // The drop target is hit-tested exactly as the source is: its point is only computed when the live guard still
         // matches the observed one, so a target that moved or was covered since the observation is stale.
-        let (_, _, drop_point, _, _, _) = self.before_action(Some(&drop), true, false, false, true, false).await?;
+        let (_, _, drop_point, _, _, _, _) = self.before_action(Some(&drop), true, false, false, true, false).await?;
         if !matches!(drop_point, Point::At(..)) {
-            return Ok((StepOutcome::Stale, Some("drop target disconnected".into())));
+            return Ok((StepOutcome::Stale, Some("drop target disconnected".into()), None));
         }
         // Finding the destination can scroll the source away. Scrolling back would invalidate the drop point.
-        let (outcome, detail, (start_x, start_y)) = self.stable_point(target, point, false, false, false).await?;
+        let ((outcome, detail, failure), (start_x, start_y)) =
+            self.stable_point(target, point, false, false, false).await?;
         if outcome != StepOutcome::Executed {
-            return Ok((outcome, detail));
+            return Ok((outcome, detail, failure));
         }
         // Pointer entry on the source can repurpose the destination after its first guard check.
-        let (_, _, drop_point, _, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
+        let (_, _, drop_point, _, _, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
         let Point::At(end_x, end_y) = drop_point else {
-            return Ok((StepOutcome::Stale, Some("drop target changed before pointer press".into())));
+            return Ok((StepOutcome::Stale, Some("drop target changed before pointer press".into()), None));
         };
         let session_id = target.0.as_str();
         let press = json!({"type": "mousePressed", "x": start_x, "y": start_y, "button": "left", "clickCount": 1, "buttons": 1});
@@ -1753,10 +1913,11 @@ impl CdpPage {
                 .await?;
             sleep(secs(DRAG_STEP_SECONDS)).await;
             if step == 1 {
-                let (_, _, landed, _, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
+                let (_, _, landed, _, _, _, _) =
+                    self.before_action(Some(&drop), true, false, false, false, false).await?;
                 if !matches!(landed, Point::At(..)) {
                     self.cancel_drag(session_id, (start_x, start_y)).await?;
-                    return Ok((StepOutcome::Stale, Some("drop target changed during the drag".into())));
+                    return Ok((StepOutcome::Stale, Some("drop target changed during the drag".into()), None));
                 }
             }
         }
@@ -1772,16 +1933,16 @@ impl CdpPage {
                 self.drag_move(session_id, at.0, at.1).await?;
                 sleep(secs(DRAG_STEP_SECONDS)).await;
             }
-            let (_, _, landed, _, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
+            let (_, _, landed, _, _, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
             let Point::At(x, y) = landed else { break };
             if (x, y) == at {
                 self.release(session_id, at.0, at.1).await?;
-                return Ok((StepOutcome::Executed, None));
+                return Ok((StepOutcome::Executed, None, None));
             }
             at = (x, y);
         }
         self.cancel_drag(session_id, (start_x, start_y)).await?;
-        Ok((StepOutcome::Stale, Some("drop target changed during the drag".into())))
+        Ok((StepOutcome::Stale, Some("drop target changed during the drag".into()), None))
     }
 
     /// Abandon a drag in progress without dropping it anywhere.
@@ -1893,7 +2054,7 @@ impl CdpPage {
     ) -> Result<TargetState, BrowserError> {
         let Some(target) = target else {
             let (fingerprint, address) = self.fingerprint_and_address().await?;
-            return Ok((fingerprint, None, Point::Gone, false, false, address));
+            return Ok((fingerprint, None, Point::Gone, false, false, address, false));
         };
         let (session_id, local_id, guard) = (&target.0, target.2, &target.3);
         let active = self.session.active_session_id()?;
@@ -1943,15 +2104,15 @@ impl CdpPage {
              (!!e.form && ['submit', 'image'].includes(e.type) && \
              fresh(e.getAttribute('formtarget') ?? e.form.getAttribute('target')))); \
              const viewport = [innerWidth, innerHeight]; \
-             return [fingerprint, guard, point, announced, opens, location.href, viewport]; }})()"
+             return [fingerprint, guard, point, announced, opens, location.href, viewport, !!e?.isConnected]; }})()"
         ));
         let state = async { self.measure(session_id, &script).await };
         if same_session || after_move {
             return state.await;
         }
-        let ((fingerprint, address), (_, live_guard, point, announced, opens, _)) =
+        let ((fingerprint, address), (_, live_guard, point, announced, opens, _, connected)) =
             tokio::try_join!(self.fingerprint_and_address(), state)?;
-        Ok((fingerprint, live_guard, point, announced, opens, address))
+        Ok((fingerprint, live_guard, point, announced, opens, address, connected))
     }
 
     /// The active page's fingerprint and `location.href`, in one evaluation, with the viewport beside them.

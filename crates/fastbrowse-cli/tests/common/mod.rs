@@ -231,6 +231,7 @@ pub fn step(index: i64) -> StepResult {
         operation: Operation::Click,
         decided_by: Decider::Jev,
         outcome: StepOutcome::Executed,
+        failure: None,
         url: START.into(),
         target: Some("Add to cart".into()),
         confidence: None,

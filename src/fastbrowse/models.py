@@ -112,6 +112,17 @@ class Decider(StrEnum):
     RECIPE = "recipe"
 
 
+class StepFailure(StrEnum):
+    """A closed reason for a failed browser step; ``note`` remains diagnostic text."""
+
+    MISSING_TARGET = "missing_target"
+    TARGET_GONE = "target_gone"
+    UNAUTHORIZED_ORIGIN = "unauthorized_origin"
+    NAVIGATION_FAILED = "navigation_failed"
+    DIALOG_INTERRUPTED = "dialog_interrupted"
+    BROWSER_ERROR = "browser_error"
+
+
 class StepOutcome(StrEnum):
     EXECUTED = "executed"
     COVERED = "covered"
@@ -312,6 +323,7 @@ class StepResult(Frozen):
     operation: Operation
     decided_by: Decider
     outcome: StepOutcome
+    failure: StepFailure | None = None
     url: str
     target: str | None = None
     """Human-readable label of the chosen element; never contains a secret value."""

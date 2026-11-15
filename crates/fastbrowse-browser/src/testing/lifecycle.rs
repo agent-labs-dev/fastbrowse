@@ -14,7 +14,7 @@ pub fn closing(session: &BrowserSession) -> bool {
 
 /// Run the page's back action.
 pub async fn back(page: &CdpPage) -> Result<(StepOutcome, Option<String>), BrowserError> {
-    page.back().await
+    page.back().await.map(|(outcome, detail, _)| (outcome, detail))
 }
 
 /// Send a bare Enter keyDown through the page's input path.

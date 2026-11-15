@@ -32,6 +32,16 @@ export type Operation =
  */
 export type Decider = 'jev' | 'code' | 'recipe';
 export type StepOutcome = 'executed' | 'covered' | 'stale' | 'failed';
+/**
+ * A closed reason for a failed browser step; ``note`` remains diagnostic text.
+ */
+export type StepFailure =
+  | 'missing_target'
+  | 'target_gone'
+  | 'unauthorized_origin'
+  | 'navigation_failed'
+  | 'dialog_interrupted'
+  | 'browser_error';
 export type FactReader = 'jev_choice' | 'llm_image';
 export type CostComponent = 'jev' | 'llm' | 'browser' | 'proxy' | 'search';
 export type CostBasis = 'metered' | 'estimated' | 'bounded' | 'unsettled' | 'unknown';
@@ -145,6 +155,7 @@ export interface StepResult {
   operation: Operation;
   decided_by: Decider;
   outcome: StepOutcome;
+  failure: StepFailure | null;
   url: string;
   /**
    * Human-readable label of the chosen element; never contains a secret value.

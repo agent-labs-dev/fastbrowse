@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::BoxFuture;
-use crate::models::{Artifact, Attachment, Link, MaybeUnavailable, Operation, SourceControl, StepOutcome};
+use crate::models::{Artifact, Attachment, Link, MaybeUnavailable, Operation, SourceControl, StepFailure, StepOutcome};
 use crate::py::datetime::DateTime;
 use crate::py::json::dumped_len;
 use crate::py::{lax, text};
@@ -501,6 +501,8 @@ impl MaybeUnavailable for BrowserError {
 #[serde(deny_unknown_fields)]
 pub struct ActResult {
     pub outcome: StepOutcome,
+    #[serde(default)]
+    pub failure: Option<StepFailure>,
     #[serde(deserialize_with = "lax::boolean")]
     pub page_changed: bool,
     #[serde(default)]

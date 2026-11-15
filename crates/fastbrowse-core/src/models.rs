@@ -138,6 +138,19 @@ str_enum! {
     }
 }
 
+str_enum! {
+    /// A closed reason for a failed browser step. The diagnostic note remains free text for debugging.
+    doc: "A closed reason for a failed browser step; ``note`` remains diagnostic text.";
+    pub enum StepFailure {
+        MissingTarget = "missing_target",
+        TargetGone = "target_gone",
+        UnauthorizedOrigin = "unauthorized_origin",
+        NavigationFailed = "navigation_failed",
+        DialogInterrupted = "dialog_interrupted",
+        BrowserError = "browser_error",
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceControl {
@@ -614,6 +627,8 @@ pub struct StepResult {
     pub operation: Operation,
     pub decided_by: Decider,
     pub outcome: StepOutcome,
+    #[serde(default)]
+    pub failure: Option<StepFailure>,
     pub url: String,
     /// Human-readable label of the chosen element; never contains a secret value.
     #[serde(default)]
@@ -645,6 +660,7 @@ impl Schema for StepResult {
                 Field::required("operation", Operation::ty()),
                 Field::required("decided_by", Decider::ty()),
                 Field::required("outcome", StepOutcome::ty()),
+                Field::default("failure", Ty::optional(StepFailure::ty()), Value::Null),
                 Field::required("url", Ty::Str),
                 Field::default("target", Ty::optional(Ty::Str), Value::Null)
                     .doc("Human-readable label of the chosen element; never contains a secret value."),

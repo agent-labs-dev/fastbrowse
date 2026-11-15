@@ -494,7 +494,13 @@ impl Page for FetchedPage {
                 ));
             };
             self.open(&url).await.map_err(|NotFetched(message)| self.needs_browser(message))?;
-            Ok(ActResult { outcome: StepOutcome::Executed, page_changed: true, detail: None, moved: true })
+            Ok(ActResult {
+                outcome: StepOutcome::Executed,
+                failure: None,
+                page_changed: true,
+                detail: None,
+                moved: true,
+            })
         })
     }
 
