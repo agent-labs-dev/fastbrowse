@@ -301,12 +301,9 @@ def _measured_identity(
     metadata: Mapping[Path, tuple[str, str, dict[str, str]]],
     selected: Mapping[tuple[GroupId, Arm, str, int], tuple[LoadedRun, TrialResult]],
 ) -> tuple[str, str]:
-    """Select the measured identity from fastbrowse arms, retaining competitor provenance separately."""
-    measured_paths = {
-        run.path for run, result in selected.values() if public_arm(result) in {"fastbrowse", "fastbrowse-pool"}
-    }
-    paths = measured_paths or set(metadata)
-    identities = {(metadata[path][0], metadata[path][1]) for path in paths}
+    """Require every selected source run to share the candidate's measured identity."""
+    selected_paths = {run.path for run, _result in selected.values()}
+    identities = {(metadata[path][0], metadata[path][1]) for path in selected_paths}
     if len(identities) != 1:
         raise ValueError("all runs in one candidate must name the same measured build and runner")
     return next(iter(identities))

@@ -103,7 +103,7 @@ def result(
     )
 
 
-def test_measured_identity_ignores_retained_competitor_provenance() -> None:
+def test_measured_identity_rejects_selected_competitor_provenance_mismatch() -> None:
     fastbrowse_run = SimpleNamespace(path=Path("fastbrowse"))
     competitor_run = SimpleNamespace(path=Path("competitor"))
     fastbrowse_result = result("pypi-version", 0)
@@ -116,7 +116,8 @@ def test_measured_identity_ignores_retained_competitor_provenance() -> None:
         Path("fastbrowse"): (AGENT_SHA, RUNNER_SHA, {}),
         Path("competitor"): ("c" * 40, "d" * 40, {}),
     }
-    assert _measured_identity(metadata, selected) == (AGENT_SHA, RUNNER_SHA)
+    with pytest.raises(ValueError, match="same measured build"):
+        _measured_identity(metadata, selected)
     mismatched = dict(selected)
     mismatched[("internal-fastbrowse", "fastbrowse", "other", 0)] = (
         SimpleNamespace(path=Path("other-fastbrowse")),
