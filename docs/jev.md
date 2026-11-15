@@ -252,7 +252,9 @@ numeric field together. A whole record with a missing field remains distinct fro
 and withholds the result after deduplication. Questions narrowing large numeric offers receive the same source
 context; code computes the total or ordering. A worked count or total is checked for facts outside its calculation.
 That check permits a subset of the calculated facts, such as a group count without its rank spelled out; answer
-coverage is judged separately.
+coverage is judged separately. Each requested calculation is checked independently, so a count and a maximum
+can both answer one task even when their record descriptions differ. Grouped counts are checked as counts per
+field, not against the name or place of the group code computed.
 
 ## Unused primitives
 

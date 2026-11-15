@@ -13,6 +13,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.11.1] - 2026-11-14
 
+- **A task can request multiple calculations over the same records.** An exclusive choice could reject a count in favor of a maximum when the claims described their records in different words. Each calculation is now checked independently; group counts are checked without requiring the task to name the computed winner ([#1141](https://github.com/agent-labs-dev/fastbrowse/issues/1141)).
+
 - **A ranked count need not spell out its rank to pass the extra-fact check.** A sentence stating a group count could be rejected because it did not also say first, second or third, even after code checked that place. That question now checks only for facts outside the calculation; answer coverage remains a separate check ([#1141](https://github.com/agent-labs-dev/fastbrowse/issues/1141)).
 
 - **Counts use a whole record as their membership example when one is captured.** A name cited before the counted records could become their example, leaving page labels confused with records and the count unresolved. The question now uses a cited whole record when the capture proves one ([#1141](https://github.com/agent-labs-dev/fastbrowse/issues/1141)).
