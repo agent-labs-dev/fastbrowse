@@ -49,6 +49,12 @@ measured fastbrowse SHA. It runs `parallax run` with the plugin installed,
 pool GCP service account and the `harness_sha` and `FASTBROWSE_SHA` install
 order intact.
 
+Before paid work, each workflow authenticates its OpenRouter credentials with
+`GET https://openrouter.ai/api/v1/key`. This validates the credentials but does
+not compare remaining provider credit with the approved budget. The request
+wallet still bounds committed work, and a provider cap can return HTTP 403
+after a campaign has started.
+
 Parallax writes `manifest.json`, `results.jsonl`, `budget.jsonl`, and trial
 artifacts. Resume a stopped run with `parallax run --resume RUN_DIR` and keep
 the same budget and reserve. Environment interruptions are retried with

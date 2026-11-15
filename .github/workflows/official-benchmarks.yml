@@ -161,6 +161,21 @@ jobs:
             echo "::error::missing repository configuration:$missing"
             exit 1
           fi
+          # Authenticate both OpenRouter credentials, but do not compare provider credit with the approved budget.
+          for key_name in FASTBROWSE_OPENROUTER_API_KEY PARALLAX_JUDGE_API_KEY; do
+            KEY_NAME="$key_name" KEY="${!key_name}" python3 - <<'PY'
+          import json, os, urllib.request
+
+          key_name = os.environ["KEY_NAME"]
+          request = urllib.request.Request("https://openrouter.ai/api/v1/key",
+                                           headers={"Authorization": "Bearer " + os.environ["KEY"]})
+          try:
+              with urllib.request.urlopen(request, timeout=30) as reply:
+                  json.load(reply)
+          except Exception as error:
+              raise SystemExit(f"::error::{key_name} failed OpenRouter authentication: {error}")
+          PY
+          done
       - name: Build the suite matrix
         id: matrix
         env:
