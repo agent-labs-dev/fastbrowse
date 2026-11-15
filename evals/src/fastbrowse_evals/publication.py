@@ -7,7 +7,7 @@ import hashlib
 import json
 import math
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, Literal, assert_never, cast
 
@@ -297,6 +297,21 @@ def _verify_upload(run: LoadedRun) -> bool:
     return True
 
 
+def _measured_identity(
+    metadata: Mapping[Path, tuple[str, str, dict[str, str]]],
+    selected: Mapping[tuple[GroupId, Arm, str, int], tuple[LoadedRun, TrialResult]],
+) -> tuple[str, str]:
+    """Select the measured identity from fastbrowse arms, retaining competitor provenance separately."""
+    measured_paths = {
+        run.path for run, result in selected.values() if public_arm(result) in {"fastbrowse", "fastbrowse-pool"}
+    }
+    paths = measured_paths or set(metadata)
+    identities = {(metadata[path][0], metadata[path][1]) for path in paths}
+    if len(identities) != 1:
+        raise ValueError("all runs in one candidate must name the same measured build and runner")
+    return next(iter(identities))
+
+
 def _validate_run(run: LoadedRun, source: GroupId | None) -> None:
     expected_policy = "browser-evidence-v2" if source is None else EXPECTED_POLICIES[source]
     policy_parts = set(run.manifest.grading_policy.split(":"))
@@ -363,18 +378,7 @@ def candidate_from_runs(run_dirs: Iterable[Path], *, campaign_id: str) -> Candid
                 selected[key] = (run, result)
     if not selected:
         raise ValueError("the Parallax runs contain no public arms")
-    # A campaign may retain competitor references recorded by a different build. Only the selected
-    # fastbrowse arms define the measured build identity; competitor provenance stays attached to its source.
-    measured_paths = {
-        run.path for run, result in selected.values() if public_arm(result) in {"fastbrowse", "fastbrowse-pool"}
-    }
-    measured_metadata = [metadata[path] for path in measured_paths]
-    if measured_metadata:
-        measured_agent, measured_runner = measured_metadata[0][:2]
-    else:
-        measured_agent, measured_runner = next(iter(metadata.values()))[:2]
-    if measured_metadata and any(item[0] != measured_agent or item[1] != measured_runner for item in measured_metadata):
-        raise ValueError("all runs in one candidate must name the same measured build and runner")
+    measured_agent, measured_runner = _measured_identity(metadata, selected)
     rows_by_group: dict[GroupId, dict[str, list[Row]]] = {}
     unjudged_by_group: dict[GroupId, dict[str, list[UnjudgedSlot]]] = {}
     excluded_by_group: dict[GroupId, list[ExcludedTask]] = {}

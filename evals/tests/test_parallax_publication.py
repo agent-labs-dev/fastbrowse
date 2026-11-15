@@ -1,6 +1,7 @@
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastbrowse.evals.benchmarks import check_catalog
@@ -26,6 +27,7 @@ from parallax.task import source_tasks
 from fastbrowse_evals.arms import binding, invocations
 from fastbrowse_evals.publication import (
     VERIFICATION_MARKER,
+    _measured_identity,
     candidate_from_run,
     candidate_from_runs,
     main,
@@ -99,6 +101,30 @@ def result(
         details=details or {"status": "complete"},
         judge_identity="browser-evidence-v2",
     )
+
+
+def test_measured_identity_ignores_retained_competitor_provenance() -> None:
+    fastbrowse_run = SimpleNamespace(path=Path("fastbrowse"))
+    competitor_run = SimpleNamespace(path=Path("competitor"))
+    fastbrowse_result = result("pypi-version", 0)
+    competitor_result = fastbrowse_result.model_copy(update={"harness": "browser-use-cloud"})
+    selected = {
+        ("internal-fastbrowse", "fastbrowse", "pypi-version", 0): (fastbrowse_run, fastbrowse_result),
+        ("bu-bench", "browser-use", "bu-bench-task-001", 0): (competitor_run, competitor_result),
+    }
+    metadata = {
+        Path("fastbrowse"): (AGENT_SHA, RUNNER_SHA, {}),
+        Path("competitor"): ("c" * 40, "d" * 40, {}),
+    }
+    assert _measured_identity(metadata, selected) == (AGENT_SHA, RUNNER_SHA)
+    mismatched = dict(selected)
+    mismatched[("internal-fastbrowse", "fastbrowse", "other", 0)] = (
+        SimpleNamespace(path=Path("other-fastbrowse")),
+        fastbrowse_result,
+    )
+    metadata[Path("other-fastbrowse")] = ("e" * 40, RUNNER_SHA, {})
+    with pytest.raises(ValueError, match="same measured build"):
+        _measured_identity(metadata, mismatched)
 
 
 def test_trial_result_to_row_keeps_typed_measurements_and_retries() -> None:
