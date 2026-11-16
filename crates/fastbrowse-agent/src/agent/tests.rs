@@ -1840,11 +1840,12 @@ struct DoneCheckJev(
     &'static str,
     std::sync::Mutex<Vec<serde_json::Value>>,
     std::sync::Mutex<Vec<Vec<String>>>,
+    std::sync::Mutex<Vec<String>>,
 );
 
 impl DoneCheckJev {
     fn new(requests: std::sync::Arc<std::sync::atomic::AtomicUsize>, probability: f64, pick: &'static str) -> Self {
-        Self(requests, probability, pick, Default::default(), Default::default())
+        Self(requests, probability, pick, Default::default(), Default::default(), Default::default())
     }
 }
 
@@ -1861,6 +1862,9 @@ impl DecisionClient for DoneCheckJev {
             .map(|(key, question)| {
                 if let Question::Choice(choice) = question {
                     self.4.lock().unwrap().push(choice.criteria.keys().cloned().collect());
+                }
+                if let Question::Noul(noul) = question {
+                    self.5.lock().unwrap().push(noul.instructions.clone());
                 }
                 let answer = match question {
                     Question::Choice(choice) => Answer::Choice(ChoiceAnswer {
@@ -2031,6 +2035,30 @@ async fn test_the_done_check_asks_no_choice() {
         } else {
             assert!(jev.4.lock().unwrap().is_empty());
         }
+    }
+}
+
+/// The caller's start address is where the run began, before any step, so the done check judges the task without it:
+/// asked about "Start at <url>." with no action that went there, Jev held a signed-in run that had read its answer
+/// short of done on every ask.
+#[tokio::test]
+async fn test_the_done_check_judges_the_task_without_the_callers_start() {
+    let page = observation(&[]);
+    let mut state = run_state();
+    state.task = "Sign in at /login, then tell me the order reference.".into();
+    state.caller_start = Some("https://shop.test/entry".into());
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+    let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev.clone(), Arc::new(ScriptedLLM));
+    assert!(agent.model_task(&state).starts_with("Start at https://shop.test/entry."));
+    assert!(matches!(agent.actions_done(&mut state, &page).await.unwrap(), Carried::Done));
+    let asked = jev.5.lock().unwrap();
+    assert_eq!(asked.len(), 2);
+    for instructions in asked.iter() {
+        assert!(
+            instructions.contains("# Task\nSign in at /login, then tell me the order reference.\n"),
+            "{instructions}"
+        );
+        assert!(!instructions.contains("shop.test/entry"), "{instructions}");
     }
 }
 

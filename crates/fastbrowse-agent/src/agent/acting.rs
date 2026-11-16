@@ -1922,19 +1922,20 @@ impl Agent {
     pub(super) async fn actions_done(&self, state: &mut RunState, observation: &Observation) -> Step<Carried> {
         // Two questions asked apart, each true or false on its own, so no option's place in a list can lean the run
         // toward ending short of a step (#808). Finding, reading and reporting are judged by the answer's own checks,
-        // from the notes these questions leave out.
+        // from the notes these questions leave out. They judge the caller's task without its start address: the run
+        // began there before any step, so no recent action shows it, and judged as one more step to carry out it held
+        // a signed-in run that had read its orders page below 0.5 on every ask, where the task alone scored 0.98.
+        let task = self.mask(&state.task);
         let carried = NoulQuestion::new(
             format!(
-                "{UNTRUSTED}\n\n# Task\n{}\n\nJudged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out?",
-                self.model_task(state)
+                "{UNTRUSTED}\n\n# Task\n{task}\n\nJudged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out?"
             ),
             Some("Every such step has been carried out, or the task asks only to find, read or report something."),
             Some("A step the task asks for, other than finding, reading or reporting, has not been carried out yet."),
         );
         let refused = NoulQuestion::new(
             format!(
-                "{UNTRUSTED}\n\n# Task\n{}\n\nDo the current page or the recent actions show that the site does not allow a step the task asks to be carried out, such as an option the page marks unavailable or a control it shows disabled?",
-                self.model_task(state)
+                "{UNTRUSTED}\n\n# Task\n{task}\n\nDo the current page or the recent actions show that the site does not allow a step the task asks to be carried out, such as an option the page marks unavailable or a control it shows disabled?"
             ),
             Some(
                 "The page or the recent actions show the site does not allow a step the task asks for, and nothing left to try on the site would carry it out.",
