@@ -128,7 +128,7 @@ fn operations(element: &Element) -> Vec<Operation> {
 fn aria_role(role: &str) -> &str {
     match role {
         "push button" | "toggle button" | "push button menu" => "button",
-        "text" | "entry" | "password text" => "textbox",
+        "text" | "text box" | "entry" | "password text" => "textbox",
         "check box" => "checkbox",
         "radio button" => "radio",
         "combo box" => "combobox",
@@ -193,8 +193,16 @@ fn control(element: &Element, context: Option<&str>) -> Option<Control> {
     if operations.is_empty() {
         return None;
     }
-    let label = if element.name.is_empty() { element.text.clone().unwrap_or_default() } else { element.name.clone() };
-    let mut control = Control::new(&element.id, aria_role(&element.role), &label, operations);
+    let role = aria_role(&element.role);
+    // A control with no name is offered under its words, or its role, as a page offers one. An editable's text is
+    // its value, not its label: GNOME Text Editor's unnamed text view, labelled by what it held, was offered as a
+    // field named "charger" holding "charger", and labelled '' when empty, Jev copied the task's answer into it.
+    let label = match element.text.as_deref() {
+        _ if !element.name.is_empty() => element.name.clone(),
+        Some(text) if !text.trim().is_empty() && !element.has("editable") => text.to_string(),
+        _ => role.to_string(),
+    };
+    let mut control = Control::new(&element.id, role, &label, operations);
     let sensitive = element.role == "password text";
     control.sensitive = sensitive;
     if sensitive {
@@ -515,6 +523,39 @@ mod tests {
             Window { address: "0xabc".into(), class: "org.gnome.TextEditor".into(), title: "Text Editor".into() };
         let ids: Vec<String> = observation(&window, &root).controls.into_iter().map(|c| c.id).collect();
         assert_eq!(ids, ["e2", "e3"]);
+    }
+
+    #[test]
+    fn an_unnamed_field_is_labelled_by_its_role_never_by_what_it_holds() {
+        // GNOME Text Editor's text view has no name: labelled by its text it read as a field named after what was
+        // typed, and as '' when empty.
+        let editable = shown(&["editable", "focusable", "multi line"]);
+        let root = node(
+            "e1",
+            "window",
+            "Text Editor",
+            &SHOWN,
+            None,
+            vec![
+                node("e2", "text box", "", &editable, Some(""), vec![]),
+                node("e3", "text box", "", &editable, Some("charger"), vec![]),
+                node("e4", "text", "Notes", &editable, Some("charger"), vec![]),
+                node("e5", "push button", "", &SHOWN, Some("Save"), vec![]),
+            ],
+        );
+        let window = Window { address: "0xabc".into(), class: "org.gnome.TextEditor".into(), title: "x".into() };
+        let controls: Vec<(String, String, Option<String>)> =
+            observation(&window, &root).controls.into_iter().map(|c| (c.role, c.label, c.value)).collect();
+        let row = |role: &str, label: &str, value: Option<&str>| (role.into(), label.into(), value.map(Into::into));
+        assert_eq!(
+            controls,
+            [
+                row("textbox", "textbox", Some("")),
+                row("textbox", "textbox", Some("charger")),
+                row("textbox", "Notes", Some("charger")),
+                row("button", "Save", None),
+            ]
+        );
     }
 
     #[test]
