@@ -279,7 +279,7 @@ The composer selects source wording by note id in private text parts, either the
 one field of a record, that code finds in the note's text exactly as written. Code copies the selection and adds
 quotation delimiters when requested; prose parts, objects like the others so the composer does not write connecting
 wording as a source part, keep explanatory wording separate. A tally has a computed numeric part or
-requested winner-field parts, which code fills without replacing matching text inside a source part. Packed compositions expose their original
+requested winner-field parts, which code fills without replacing matching text inside a source part. A numeric slot retains its exact position in its prose or table cell, so unit and sign checks see the surrounding text without confusing an identical source number with the slot. Packed compositions expose their original
 sources separately, and kept claims retain these parts through a rewrite. Split notes cannot be selected as whole
 sources. The delivered claims keep the same text, cells, tally and evidence id fields.
 For a comparison restricted to each group's minimum or maximum, the composer also names a private selection:

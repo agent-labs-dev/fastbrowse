@@ -309,6 +309,26 @@ impl Composition {
         }
     }
 
+    /// The typed slot supplies its byte range, so identical source digits cannot be mistaken for the value to replace.
+    fn numeric_context(&self, value: &str) -> Option<(String, std::ops::Range<usize>)> {
+        let parts = match &self.cells {
+            Some(cells) => cells
+                .iter()
+                .find(|parts| parts.iter().any(|part| matches!(part, BoundPart::Computed { field: None })))?,
+            None => &self.text,
+        };
+        let mut text = String::new();
+        let mut slot = None;
+        for part in parts {
+            let start = text.len();
+            text.push_str(&Self::render(std::slice::from_ref(part), value, &HashMap::new()));
+            if matches!(part, BoundPart::Computed { field: None }) {
+                slot = Some(start..text.len());
+            }
+        }
+        slot.map(|slot| (text, slot))
+    }
+
     fn render(parts: &[BoundPart], value: &str, fields: &HashMap<String, String>) -> String {
         parts
             .iter()
@@ -1165,15 +1185,28 @@ async fn review_composition(
         })
         .collect();
     // Each tally is worked out first, so its claim is judged on everything but the value code wrote, and shown with it.
+    let contexts: HashMap<usize, (String, std::ops::Range<usize>)> = claims
+        .iter()
+        .enumerate()
+        .filter_map(|(index, claim)| {
+            claim
+                .tally
+                .as_ref()
+                .zip(claim.composition.as_ref())
+                .and_then(|(tally, composition)| composition.numeric_context(&tally.written))
+                .map(|context| (index, context))
+        })
+        .collect();
+    let slots = contexts.iter().map(|(index, (_, slot))| (*index, slot.clone())).collect();
     let tallied: Vec<(usize, &Tally, &str, &[String])> = claims
         .iter()
         .enumerate()
         .filter(|(index, _)| !named_twice.contains_key(index))
         .filter_map(|(index, claim)| {
             claim.tally.as_ref().map(|tally| {
-                // The typed composition has exactly one computed slot. Source digits are immutable text, not
-                // another occurrence of the slot the tally replaces.
-                let text = if claim.composition.is_some() { tally.written.as_str() } else { claim.text.as_str() };
+                let text = contexts.get(&index).map(|(text, _)| text.as_str()).unwrap_or_else(|| {
+                    if claim.composition.is_some() { tally.written.as_str() } else { claim.text.as_str() }
+                });
                 (index, tally, text, claim.evidence_ids.as_slice())
             })
         })
@@ -1183,7 +1216,8 @@ async fn review_composition(
         .enumerate()
         .filter_map(|(index, claim)| claim.within.clone().map(|within| (index, within)))
         .collect();
-    let mut worked = tally::work_selected(jev, llm, task, &tallied, &selections, notes, &tokens, ledger).await?;
+    let mut worked =
+        tally::work_selected_with_slots(jev, llm, task, &tallied, &selections, &slots, notes, &tokens, ledger).await?;
     let mut projected = HashMap::new();
     for (index, claim) in claims.iter().enumerate() {
         let fields: Vec<String> = claim
@@ -2155,6 +2189,68 @@ mod tests {
             citations: Vec::new(),
             problem: None,
             partial: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_computed_slot_cannot_be_relabelled_by_adjacent_prose() {
+        let notes = Notes::new([fact(0, "record £210".into())]);
+        let items = initial_items(&notes, false);
+        let draft = json!({"evidence_ids":[],"tally":{"op":"max","of":"record","field":"price","written":"1"},"text":[{"prose":"$"},{"computed":true}]});
+        let claim = serde_json::from_value::<DraftClaim>(draft).unwrap().bind(&items).unwrap();
+        let checked = review_composition(
+            &Tallying::new("record", "£210"),
+            &READS,
+            "Report the highest price",
+            None,
+            vec![claim],
+            &notes,
+            None,
+            false,
+            false,
+            None,
+            &[],
+        )
+        .await
+        .unwrap();
+        assert!(checked.problem.is_some(), "wrong-unit claim escaped as {:?}", checked.claims);
+    }
+
+    #[tokio::test]
+    async fn numeric_slot_context_keeps_source_digits_and_checks_prose_and_cells() {
+        let notes = Notes::new([fact(0, "record £210".into())]);
+        let items = initial_items(&notes, false);
+        for table in [false, true] {
+            for prefix in ["$", "USD ", "-", "0", "1", "é £"] {
+                let parts =
+                    json!([{"note":"e0","quoted":true},{"prose":format!("; maximum: {prefix}")},{"computed":true}]);
+                let mut draft = json!({"evidence_ids":[],"tally":{"op":"max","of":"record","field":"price","written":"1"},"text":parts});
+                if table {
+                    draft["cells"] = json!([draft["text"].clone()]);
+                }
+                let claim = serde_json::from_value::<DraftClaim>(draft).unwrap().bind(&items).unwrap();
+                let checked = review_composition(
+                    &Tallying::new("record", "£210"),
+                    &READS,
+                    "Report the source and maximum price",
+                    None,
+                    vec![claim],
+                    &notes,
+                    None,
+                    false,
+                    false,
+                    None,
+                    &[],
+                )
+                .await
+                .unwrap();
+                if prefix == "é £" {
+                    assert!(checked.problem.is_none(), "{prefix} table={table}: {:?}", checked.problem);
+                    assert_eq!(checked.claims[0].text, "\"record £210\"; maximum: é £210");
+                } else {
+                    assert!(checked.problem.is_some(), "{prefix} table={table}: {:?}", checked.claims);
+                }
+            }
         }
     }
 

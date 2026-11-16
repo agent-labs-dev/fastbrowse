@@ -989,14 +989,27 @@ fn amount(written: &str) -> Option<Amount> {
 }
 
 /// A currency may sit outside the computed slot, so validate the whole amount containing it before replacement.
-fn claim_amount(claim: &str, written: &str) -> Option<Amount> {
-    let candidate = number_candidates(claim).into_iter().find(|candidate| candidate.contains(written))?;
-    let (before, after) = candidate.split_once(written)?;
-    // Leaving digits or an arithmetic sign outside the slot would preserve part of the obsolete number.
-    if before.chars().chain(after.chars()).any(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '+' | '-')) {
+fn claim_amount(claim: &str, written: &str, slot: Option<&std::ops::Range<usize>>) -> Option<Amount> {
+    let range = slot.cloned().or_else(|| claim.find(written).map(|start| start..start + written.len()))?;
+    if claim.get(range.clone()) != Some(written) {
         return None;
     }
-    amount(&candidate)
+    for candidate in number_candidates(claim) {
+        for (start, _) in claim.match_indices(&candidate) {
+            let end = start + candidate.len();
+            if start > range.start || end < range.end {
+                continue;
+            }
+            let before = &claim[start..range.start];
+            let after = &claim[range.end..end];
+            // Leaving digits or an arithmetic sign outside the slot would preserve part of the obsolete number.
+            if before.chars().chain(after.chars()).any(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '+' | '-')) {
+                return None;
+            }
+            return amount(&candidate);
+        }
+    }
+    None
 }
 
 /// The total after compatibility checks, retaining its currency unit and greatest decimal precision.
@@ -1177,6 +1190,7 @@ pub async fn work(
     work_selected(jev, llm, task, claims, &HashMap::new(), notes, tokens, ledger).await
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn work_selected(
     jev: &dyn DecisionClient,
@@ -1184,6 +1198,21 @@ pub(super) async fn work_selected(
     task: &str,
     claims: &[(usize, &Tally, &str, &[String])],
     selections: &HashMap<usize, Within>,
+    notes: &Notes,
+    tokens: &TokenBudget,
+    ledger: Option<&Ledger>,
+) -> Result<IndexMap<usize, std::result::Result<Worked, Unworked>>> {
+    work_selected_with_slots(jev, llm, task, claims, selections, &HashMap::new(), notes, tokens, ledger).await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn work_selected_with_slots(
+    jev: &dyn DecisionClient,
+    llm: &dyn LLMClient,
+    task: &str,
+    claims: &[(usize, &Tally, &str, &[String])],
+    selections: &HashMap<usize, Within>,
+    slots: &HashMap<usize, std::ops::Range<usize>>,
     notes: &Notes,
     tokens: &TokenBudget,
     ledger: Option<&Ledger>,
@@ -1204,7 +1233,13 @@ pub(super) async fn work_selected(
     // The groups of each count per group, by the claim leading it, or None when a record's group was left unread.
     let mut grouping: IndexMap<usize, Option<Groups>> = IndexMap::new();
     for (index, tally, text, cited) in claims {
-        let times = if tally.written.trim().is_empty() { 0 } else { text.matches(tally.written.as_str()).count() };
+        let times = if tally.written.trim().is_empty() {
+            0
+        } else if let Some(slot) = slots.get(index) {
+            usize::from(text.get(slot.clone()) == Some(tally.written.as_str()))
+        } else {
+            text.matches(tally.written.as_str()).count()
+        };
         if times != 1 {
             // Code writes its value over `written`, so the reason names the claim and the rewrite that places it.
             // The two drafts need different rewrites, and code knows which it has: a claim missing the value needs
@@ -1527,7 +1562,7 @@ pub(super) async fn work_selected(
         }
         if !tally.names_record()
             && let Some(result_amount) = amount(&result.value).filter(|amount| !amount.date)
-            && claim_amount(claim, &tally.written).is_none_or(|claim_amount| {
+            && claim_amount(claim, &tally.written, slots.get(&index)).is_none_or(|claim_amount| {
                 claim_amount.malformed_unit || claim_amount.unit.is_some() && result_amount.unit != claim_amount.unit
             })
         {

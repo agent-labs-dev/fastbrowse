@@ -15,6 +15,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Answers can fill a minimum or maximum with fields from the records code selects, alongside the numeric result. The composer no longer needs to guess a winning name before code compares values. Missing or ambiguous fields remain unverified ([#1158](https://github.com/agent-labs-dev/fastbrowse/issues/1158)).
 
+- Typed answer slots validate their adjacent currency and arithmetic signs, using the slot position rather than a matching number elsewhere in copied source text ([#1156](https://github.com/agent-labs-dev/fastbrowse/issues/1156)).
 - Calculations retain currency symbols and ISO currency codes. Sums and comparisons refuse mixed units or an answer that would relabel the result with another currency, rather than dropping the units and treating the numbers as comparable ([#1156](https://github.com/agent-labs-dev/fastbrowse/issues/1156)). No currency conversion is assumed.
 - Replacing a calculated value also replaces its old plus or minus sign, preventing outputs such as `GBP --1009` or a negative sign left on a positive result ([#1157](https://github.com/agent-labs-dev/fastbrowse/issues/1157)).
 - Copied field values are selected from candidate spans without describing every alternative as the complete value, which could cause surrounding task instructions to be typed into the field ([#1155](https://github.com/agent-labs-dev/fastbrowse/issues/1155)). Quoted literals and punctuation remain Jev's choice.
