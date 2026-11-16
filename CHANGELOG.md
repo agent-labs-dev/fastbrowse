@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Traces record read progress, authorization gate outcomes and the final run status, so failures can be diagnosed alongside the retained model requests.
+
 - Background extension tabs start their paint keeper during setup, so screenshots do not depend on a tab being brought forward ([#1165](https://github.com/agent-labs-dev/fastbrowse/issues/1165)).
 
 - Eval workflows retain fixture receipts before optional diagnostics and avoid starting paid probes or cassette fills after cancellation ([#1164](https://github.com/agent-labs-dev/fastbrowse/issues/1164)).

@@ -368,6 +368,18 @@ impl Agent {
                 None => changed,
             });
         }
+        // Spend checks and final screenshots can change an earlier result's status.
+        self.event("run_finished", || {
+            Map::from_iter([
+                ("status".into(), json!(result.status)),
+                ("error_present".into(), result.error.is_some().into()),
+                ("budget_resource".into(), json!(result.budget.as_ref().map(|budget| budget.resource))),
+                ("wall_kind".into(), json!(result.wall.as_ref().map(|wall| wall.kind))),
+                ("steps".into(), result.steps.len().into()),
+                ("artifacts".into(), result.artifacts.len().into()),
+                ("final_frame".into(), result.final_frame.is_some().into()),
+            ])
+        });
         result
     }
 

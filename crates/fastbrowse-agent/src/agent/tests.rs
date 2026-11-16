@@ -1267,7 +1267,8 @@ async fn test_a_commit_proceeds_when_jev_calls_it_reversible_or_the_authorized_t
             calls: Default::default(),
             edits_asked: Default::default(),
         });
-        let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+        let trace = Trace::collecting();
+        let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM)).with_trace(trace.clone());
         let mut state = run_state();
         state.task = "Check out and finish the order.".into();
         state.authorization = Authorization { irreversible_actions: authorized };
@@ -1280,6 +1281,14 @@ async fn test_a_commit_proceeds_when_jev_calls_it_reversible_or_the_authorized_t
         let case = format!("authorized {authorized}, credential {credential}, requested {requested}");
         assert_eq!(gated.is_ok(), acts, "{case}");
         assert_eq!(jev.calls.load(Ordering::SeqCst), calls, "{case}");
+        let events = trace.events();
+        let gates: Vec<_> = events.iter().filter(|event| event["event"] == "authorization_gate").collect();
+        assert_eq!(gates.len(), 1, "{case}");
+        assert_eq!(gates[0]["authorized"], authorized, "{case}");
+        assert_eq!(gates[0]["allowed"], acts, "{case}");
+        assert_eq!(gates[0]["step"], 0);
+        assert!(gates[0].get("target").is_none());
+        assert!(gates[0].get("task").is_none());
         // A refusal stops the run for confirmation rather than going round recovery.
         if let Err(flow) = gated {
             assert!(matches!(flow, Flow::Stop(stop) if stop.status == Status::NeedsConfirmation), "{case}");
@@ -3753,6 +3762,15 @@ async fn test_required_screenshot_withheld_for_a_fresh_secret_is_unverified() {
     assert_eq!(result.status, Status::Unverified);
     assert!(result.final_frame.is_none());
     assert_eq!(result.error.as_deref(), Some("The requested final screenshot could not be captured."));
+    let trace = Trace::collecting();
+    let agent = agent.with_trace(trace.clone());
+    let result = agent.with_changes(result, None);
+    let events = trace.events();
+    let finished: Vec<_> = events.iter().filter(|event| event["event"] == "run_finished").collect();
+    assert_eq!(finished.len(), 1);
+    assert_eq!(finished[0]["status"], json!(result.status));
+    assert_eq!(finished[0]["error_present"], true);
+    assert_eq!(finished[0]["final_frame"], false);
 }
 
 #[tokio::test]
@@ -7469,6 +7487,30 @@ fn test_a_list_that_gave_the_task_no_note_is_not_the_one_it_reads() {
     // Once the front page gave a note, its list is the one the task reads.
     read_one(&mut state, &home, Extent::EveryPage);
     assert_eq!(state.unread_pager_page().map(String::as_str), Some("https://shop.test/catalogue/page-2.html"));
+}
+
+#[test]
+fn test_trace_read_context_records_known_progress_without_page_content() {
+    let trace = Trace::collecting();
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM))
+        .with_trace(trace.clone());
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    let second = paged("https://list.test/page/2/", "/page/3/");
+    read_one(&mut state, &first, Extent::EveryPage);
+    state.note_pager_pages(&first);
+    read_one(&mut state, &second, Extent::EveryPage);
+    state.note_pager_pages(&second);
+    let decision = Decision { read_scope: crate::policy::ReadScope::List, ..code_decision(Operation::Read, None) };
+    agent.trace_read_context("decision_context", &state, &second, &decision);
+    let events = trace.events();
+    let event = events.iter().find(|event| event["event"] == "decision_context").unwrap();
+    assert_eq!(event["extent"], "every_page");
+    assert_eq!(event["read_scope"], "list");
+    assert_eq!(event["current_page"], 2);
+    assert_eq!(event["unread_pages"], 1);
+    assert_eq!(event["next_unread_available"], true);
+    assert!(!event.to_string().contains("list.test"));
 }
 
 #[test]

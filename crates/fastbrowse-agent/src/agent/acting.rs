@@ -39,6 +39,16 @@ const UNSHOWN_CONDITION: &str = "depends on a condition the task sets, and the p
 /// "NOTAPOSTCODE. If the site rejects anything, ... SW1A 1AA", it picked the second postcode's end 9 times in 10 before
 /// any rejection, and the first postcode 10 times in 10 with it.
 const FIRST_VALUE: &str = "the first comes first, unless the task says when to use another and that has happened.";
+
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum GateReason {
+    Reversible,
+    Requested,
+    UnrequestedChange,
+    ConditionUnmet,
+    ConfirmationRequired,
+}
 /// Which value a field in one of several alike records takes, said after where the field sits. CurseForge opens a reply
 /// box labelled "Comment text area" under the comment replied to, and given only that label, Jev copied all three
 /// replies a task gave into the first box, since nothing said which reply was its own (#879). With the comment in the
@@ -295,6 +305,20 @@ fn choice_picks(
 }
 
 impl Agent {
+    fn trace_authorization(&self, state: &RunState, decision: &Decision, reason: GateReason) {
+        self.event("authorization_gate", || {
+            Map::from_iter([
+                ("step".into(), state.steps.len().into()),
+                ("operation".into(), json!(decision.operation)),
+                ("authorized".into(), state.authorization.irreversible_actions.into()),
+                ("allowed".into(), matches!(reason, GateReason::Reversible | GateReason::Requested).into()),
+                ("reason".into(), json!(reason)),
+                ("irreversible_threshold".into(), self.config.thresholds.irreversible_above.into()),
+                ("requested_threshold".into(), self.config.thresholds.requested_above.into()),
+            ])
+        });
+    }
+
     /// The follow-ups each action on this page would need, to ask beside the decision. A password is never picked
     /// from words, and a task too long for one choice is narrowed first, so those stay follow-ups.
     pub(super) fn ahead(&self, state: &RunState, observation: &Observation) -> Vec<Ahead> {
@@ -837,6 +861,7 @@ impl Agent {
             // An unanswered question refuses once, as an unanswered irreversible one does.
             let keeps = questions.contains_key("lasting") && !lasting.is_some_and(|p| p <= EVEN_ODDS);
             if reversible && keeps && !wanted {
+                self.trace_authorization(state, decision, GateReason::UnrequestedChange);
                 let why = "would change what the site keeps, and the task does not ask for it";
                 return self.refuse_once(state, observation, decision, label, why).await;
             }
@@ -848,6 +873,7 @@ impl Agent {
                 && conditional
                 && let Some(why) = self.condition_refusal(state, observation, action).await?
             {
+                self.trace_authorization(state, decision, GateReason::ConditionUnmet);
                 return self.refuse_once(state, observation, decision, label, why).await;
             }
             if reversible || wanted {
@@ -857,9 +883,15 @@ impl Agent {
                     // and closing the tab would abort it (#748).
                     self.page.hand_over_tab();
                 }
+                self.trace_authorization(
+                    state,
+                    decision,
+                    if reversible { GateReason::Reversible } else { GateReason::Requested },
+                );
                 return Ok(());
             }
         }
+        self.trace_authorization(state, decision, GateReason::ConfirmationRequired);
         let reason = format!("{} {} needs confirmation", decision.operation, text::repr(label));
         let confidence = Some(decision.confidence());
         self.record_failure(
