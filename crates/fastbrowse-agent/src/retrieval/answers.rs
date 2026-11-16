@@ -1161,10 +1161,21 @@ async fn review_composition(
     steps: &[Value],
 ) -> Result<CheckedClaims> {
     if claims.is_empty() {
+        // A writer can name missing evidence without making any claim. That shortfall still belongs in recovery,
+        // as it does for a partial draft with supported claims, rather than disappearing at this early return.
+        let rejection = partial.filter(|_| require_coverage).map(|partial| {
+            dumps(&json!({
+                "columns": columns,
+                "draft_claims": [],
+                "drafted_claims": [],
+                "rejected_checks": ["coverage"],
+                "partial": partial,
+            }))
+        });
         return Ok(CheckedClaims {
             claims: Vec::new(),
             problem: Some("The composer returned no supported claims.".into()),
-            rejection: None,
+            rejection,
             denies_steps: false,
         });
     }
@@ -4016,6 +4027,41 @@ mod tests {
         assert_eq!(feedback["rejected_checks"], json!(["claim0/tally"]));
         assert_eq!(feedback["untallied_claims"][0]["claim"], 0);
         assert!(jev.asked().keys().all(|key| !key.starts_with("t0/")));
+    }
+
+    #[tokio::test]
+    async fn an_empty_partial_draft_keeps_its_missing_coverage_for_recovery() {
+        let notes = Notes::new([fact(0, "Inspection records continue on another page.".into())]);
+        for require_coverage in [true, false] {
+            let jev = Support::new(true);
+            let checked = review_composition(
+                &jev,
+                &READS,
+                "Report every inspection result",
+                None,
+                vec![],
+                &notes,
+                None,
+                require_coverage,
+                true,
+                Some("The remaining inspection results"),
+                &[],
+            )
+            .await
+            .unwrap();
+            assert!(checked.claims.is_empty());
+            assert!(checked.problem.is_some());
+            if require_coverage {
+                let feedback: Value =
+                    serde_json::from_str(checked.rejection.as_deref().expect("coverage recovery")).unwrap();
+                assert_eq!(feedback["rejected_checks"], json!(["coverage"]));
+                assert_eq!(feedback["partial"], "The remaining inspection results");
+                assert_eq!(feedback["draft_claims"], json!([]));
+            } else {
+                assert!(checked.rejection.is_none());
+            }
+            assert!(jev.asked.lock().unwrap().is_empty());
+        }
     }
 
     #[tokio::test]

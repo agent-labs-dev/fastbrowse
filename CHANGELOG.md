@@ -13,6 +13,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.11.1] - 2026-11-14
 
+- A partial answer with no claims keeps its missing-evidence explanation for recovery, so Jev can choose what to read next instead of the run stopping immediately ([#1160](https://github.com/agent-labs-dev/fastbrowse/issues/1160)).
+
 - Answers can fill a minimum or maximum with fields from the records code selects, alongside the numeric result. The composer no longer needs to guess a winning name before code compares values. A field can come from the selected record's captured heading as well as its quoted text. Missing or ambiguous fields remain unverified ([#1158](https://github.com/agent-labs-dev/fastbrowse/issues/1158)).
 
 - Typed answer slots validate their adjacent currency and arithmetic signs, using the slot position rather than a matching number elsewhere in copied source text ([#1156](https://github.com/agent-labs-dev/fastbrowse/issues/1156)).

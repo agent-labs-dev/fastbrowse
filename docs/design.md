@@ -345,7 +345,7 @@ answer worked out which was newer. When a string value occupies part of a source
 choice and the word-boundary questions retain the record's other field names and the selected source's
 context. A whole table row carries its header rather than an unknown column label. Recovery is not
 attempted when a claim lacks a retained source quote or packed composition cannot reduce to one request.
-The composer says when its answer is partial and names what it leaves unestablished, such as a total over a list that continues unread. Such an answer is never `complete`: a finished run ends `unverified` with that account as its error, and a stuck run keeps its status. Exhausted composition recovery retains supported claims and ends `unverified`, unless a missing field value or
+The composer says when its answer is partial and names what it leaves unestablished, such as a total over a list that continues unread. That account reaches recovery even when the draft has no claims, so Jev can choose what evidence to gather next. Such an answer is never `complete`: a finished run ends `unverified` with that account as its error, and a stuck run keeps its status. Exhausted composition recovery retains supported claims and ends `unverified`, unless a missing field value or
 site failure establishes another status. Those claims can be reused without another composition call only while
 their source evidence remains unchanged and the run has taken no further step. A later nonempty checked repair replaces the retained draft; an empty
 repair preserves the earlier draft. Other stops also retain checked partial claims alongside their status,
