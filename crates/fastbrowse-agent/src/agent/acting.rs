@@ -77,6 +77,10 @@ const LEAVE: &str = "leave";
 const NO_VALUE_SAID: &str = "The task asks for this field's value, and nothing given states it.";
 const LEAVE_SAID: &str = "The task asks nothing of this field, so it is left as it is.";
 
+/// Said to the question of whether the task's steps were carried out, when no step of the run has acted on a page.
+pub(super) const NOTHING_ACTED: &str =
+    "This run has taken no step on any page, only looked at and read them, so what they show was there before it.";
+
 /// The answer to a choice among copies of a value that says the value does not run from the end they share.
 const ELSEWHERE: &str = "elsewhere";
 
@@ -1833,24 +1837,24 @@ impl Agent {
             ("evidence", "Where can what `task` asks about be seen?".into(), evidence),
             ("extent", "How much of a list does `task` cover?".into(), extent),
         ];
-        // Over HTTP, also asked of the task alone: whether it asks for any step a served page cannot take. The output
-        // does not say so: a task to post a reply and report whether the page confirms it wants text, and its read
-        // found a success message the page's stylesheet hides until a reply is sent (#894).
-        if self.page.over_http() {
-            let steps = IndexMap::from([
-                (
-                    "acts".to_string(),
-                    JsonValue::from(
-                        "The task asks for a step besides opening pages and finding, reading or reporting something, such as typing, choosing, submitting or signing in, even if only under some condition.",
-                    ),
+        // Also asked of the task alone: whether it asks for any step besides reading. The output does not say so: a
+        // task to post a reply and report whether the page confirms it wants text, and its read found a success message
+        // the page's stylesheet hides until a reply is sent (#894). A task to write a list in a new document and then
+        // say its second line wants text too, and an editor that restored an old draft holding the list was read and
+        // reported with nothing written (#1186).
+        let steps = IndexMap::from([
+            (
+                "acts".to_string(),
+                JsonValue::from(
+                    "The task asks for a step besides opening pages and finding, reading or reporting something, such as typing, choosing, submitting or signing in, even if only under some condition.",
                 ),
-                (
-                    "reads".to_string(),
-                    JsonValue::from("The task asks only to open pages and find, read or report something."),
-                ),
-            ]);
-            asked.push(("steps", "What does `task` ask to be done on a page?".into(), steps));
-        }
+            ),
+            (
+                "reads".to_string(),
+                JsonValue::from("The task asks only to open pages and find, read or report something."),
+            ),
+        ]);
+        asked.push(("steps", "What does `task` ask to be done on a page?".into(), steps));
         asked
             .into_iter()
             .map(|(key, question, criteria)| {
@@ -1952,9 +1956,13 @@ impl Agent {
         let mut context = Map::from_iter([("recent_actions".to_string(), JsonValue::Array(history))]);
         // What code already knows was left undone, as the step decision is told it: values typed and never sent, and
         // fields left empty once the run stalled on a task to carry out (#812).
+        // A run that has only read can find a page already showing what the task asks to be made, such as an editor
+        // that restored a draft, and nothing in the recent actions says the run did not make it (#1186).
+        let untouched = (!state.history.iter().any(HistoryEntry::acted)).then(|| NOTHING_ACTED.to_string());
         let facts: Vec<String> = unsent_fact(&state.history, observation)
             .into_iter()
             .chain(state.to_carry_out.then(|| empty_fields_fact(&state.missing, observation)).flatten())
+            .chain(untouched)
             .collect();
         if !facts.is_empty() {
             context.insert("page_facts".into(), facts.into());
@@ -1999,11 +2007,14 @@ impl Agent {
                 .enumerate()
                 .map(|(index, (_, _, step))| (index.to_string(), JsonValue::from(step.clone())))
                 .collect();
+            // Asked which clause is undone without saying which kind, Jev named the one asking to be told the answer, 3
+            // times in 3, on a run that had not yet written what that answer was to be read from (#1186), and recovery
+            // then went after the answer instead of the step.
             let picked = self
                 .ask_choice(
                     state,
                     observation,
-                    "Which sentence or clause of the task has not been carried out? Choose the task's own wording.",
+                    "Which sentence or clause of the task asks for a step, other than finding, reading or reporting something, that has not been carried out? Choose the task's own wording.",
                     criteria,
                 )
                 .await?;

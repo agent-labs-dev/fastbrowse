@@ -1833,7 +1833,7 @@ impl Page for FinishPage {
 }
 
 /// Answers each yes/no question at the given probability and each choice with the given pick where it is offered, else
-/// the first option, recording every request's state and each choice's options.
+/// the first option, recording every request's state, each choice's options and every question's instructions.
 struct DoneCheckJev(
     std::sync::Arc<std::sync::atomic::AtomicUsize>,
     f64,
@@ -1862,6 +1862,7 @@ impl DecisionClient for DoneCheckJev {
             .map(|(key, question)| {
                 if let Question::Choice(choice) = question {
                     self.4.lock().unwrap().push(choice.criteria.keys().cloned().collect());
+                    self.5.lock().unwrap().push(choice.instructions.clone());
                 }
                 if let Question::Noul(noul) = question {
                     self.5.lock().unwrap().push(noul.instructions.clone());
@@ -1960,6 +1961,43 @@ async fn test_a_done_with_a_step_of_the_task_undone_is_not_complete() {
         answer.contains("Sign in, enter the code the Phone page shows, then tell me your account email.")
             && answer.contains("katherine@example.com"),
         "{answer}"
+    );
+}
+
+/// Asked to write a list in a new document and then say its second line, a run on an editor that restored an old draft
+/// holding the list read it and ended `complete` with nothing written (#1186): the done check was asked only once a
+/// step had been tried. A task that asks for a step is checked with no step taken, and told that none was. The step
+/// recovery names was the answer the task asked for, not the list it asked to be written.
+#[tokio::test]
+async fn test_a_done_with_no_step_taken_on_a_task_that_asks_for_one_checks_the_task_steps() {
+    let page = capture(&[(BlockKind::Paragraph, "passport\ncharger\ntoothbrush")]);
+    let fact = Fact::read("passport\ncharger\ntoothbrush", block_evidence(&page, "s0"), FactReader::JevChoice);
+    let mut state = run_state();
+    state.output_intent = super::state::OutputIntent::Text;
+    state.asks_steps = true;
+    state.task = "In a new document, write a three-line packing list: passport, charger, toothbrush. Then tell me the \
+                  second line."
+        .into();
+    state.notes = Notes::new([fact.answering()]);
+    state.history.push(crate::policy::HistoryEntry::new(Some(Operation::Read), None, StepOutcome::Executed, true));
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "undone"));
+    let agent = Agent::new(Arc::new(FinishPage(observation(&[]))), jev.clone(), Arc::new(ScriptedLLM));
+    state.recoveries = agent.config.stall.max_recoveries;
+
+    let result = agent.finish(&mut state, &observation(&[]), None, None).await;
+    assert!(
+        matches!(&result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("task step"))),
+        "{result:?}"
+    );
+    let facts = jev.3.lock().unwrap()[0]["page_facts"].to_string();
+    assert!(facts.contains(super::acting::NOTHING_ACTED), "{facts}");
+    // Which clause is undone is asked of the steps alone: asked of any clause, Jev named the one asking for the answer.
+    let asked = jev.5.lock().unwrap();
+    assert!(
+        asked
+            .iter()
+            .any(|q| q.contains("asks for a step, other than finding, reading or reporting something, that has not")),
+        "{asked:?}"
     );
 }
 
