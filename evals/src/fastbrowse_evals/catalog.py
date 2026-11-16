@@ -26,7 +26,7 @@ ARMS = {
     "browser-use": ArmSpec("browser-use-sdk==3.12.1 API v4; default model, reported per row", "hosted"),
     "browser-use-ultrafast": ArmSpec("browser-use-sdk==3.12.1 API v4; model bu-ultrafast, reported per row", "hosted"),
     "browser-use-oss": ArmSpec(
-        "browser-use==1.0.3; default model bu-fast, default mode (ultrafast on bu-fast)", "A", False
+        "browser-use==1.0.5; default model bu-fast, default mode (ultrafast on bu-fast)", "A", False
     ),
     "cua-codex": ArmSpec("cua-driver==0.47.19; codex-cli==0.169.0", "local", False),
     "browser-harness": ArmSpec("browser-harness==0.1.13; codex-cli==0.169.0; cli+skill", "A", False),
