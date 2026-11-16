@@ -103,35 +103,35 @@ def result(
     )
 
 
-def test_measured_identity_rejects_selected_competitor_provenance_mismatch() -> None:
-    fastbrowse_run = SimpleNamespace(path=Path("fastbrowse"))
-    competitor_run = SimpleNamespace(path=Path("competitor"))
+def test_measured_identity_is_the_newest_fastbrowse_run_and_keeps_earlier_builds() -> None:
+    """A competitor measured by another runner, and a task kept from an earlier fastbrowse build, stay valid; the
+    candidate names the build of the newest fastbrowse run."""
+    newer = SimpleNamespace(path=Path("newer"), manifest=SimpleNamespace(created_at=datetime(2026, 11, 15, tzinfo=UTC)))
+    older = SimpleNamespace(path=Path("older"), manifest=SimpleNamespace(created_at=datetime(2026, 11, 14, tzinfo=UTC)))
+    competitor = SimpleNamespace(
+        path=Path("competitor"), manifest=SimpleNamespace(created_at=datetime(2026, 11, 16, tzinfo=UTC))
+    )
     fastbrowse_result = result("pypi-version", 0)
-    competitor_result = fastbrowse_result.model_copy(update={"harness": "browser-use-cloud"})
     selected = {
-        ("internal-fastbrowse", "fastbrowse", "pypi-version", 0): (fastbrowse_run, fastbrowse_result),
-        ("bu-bench", "browser-use", "bu-bench-task-001", 0): (competitor_run, competitor_result),
+        ("internal-hosted", "fastbrowse", "pypi-version", 0): (newer, fastbrowse_result),
+        ("internal-hosted", "fastbrowse", "pypi-open", 0): (older, result("pypi-open", 0)),
+        ("internal-hosted", "browser-use-oss", "pypi-version", 0): (
+            competitor,
+            fastbrowse_result.model_copy(update={"harness": "browser-use-oss"}),
+        ),
     }
     metadata = {
-        Path("fastbrowse"): (AGENT_SHA, RUNNER_SHA, {}),
+        Path("newer"): (AGENT_SHA, RUNNER_SHA, {}),
+        Path("older"): ("e" * 40, RUNNER_SHA, {}),
         Path("competitor"): ("c" * 40, "d" * 40, {}),
     }
-    selected_fastbrowse = {key: value for key, value in selected.items() if key[1] == "fastbrowse"}
-    assert _measured_identity(metadata, selected_fastbrowse) == (AGENT_SHA, RUNNER_SHA)
-    with pytest.raises(ValueError, match="same measured build"):
-        _measured_identity(metadata, selected)
-    mismatched = dict(selected)
-    mismatched[("internal-fastbrowse", "fastbrowse", "other", 0)] = (
-        SimpleNamespace(path=Path("other-fastbrowse")),
-        fastbrowse_result,
-    )
-    metadata[Path("other-fastbrowse")] = ("e" * 40, RUNNER_SHA, {})
-    with pytest.raises(ValueError, match="same measured build"):
-        _measured_identity(metadata, mismatched)
+    assert _measured_identity(metadata, selected) == (AGENT_SHA, RUNNER_SHA)
 
 
 def test_measured_identity_ignores_older_unselected_fastbrowse_run() -> None:
-    current = SimpleNamespace(path=Path("current"))
+    current = SimpleNamespace(
+        path=Path("current"), manifest=SimpleNamespace(created_at=datetime(2026, 11, 14, tzinfo=UTC))
+    )
     selected = {("internal-fastbrowse", "fastbrowse", "pypi-version", 0): (current, result("pypi-version", 0))}
     metadata = {
         Path("current"): (AGENT_SHA, RUNNER_SHA, {}),

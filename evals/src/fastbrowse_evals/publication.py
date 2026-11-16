@@ -43,6 +43,10 @@ EXPECTED_POLICIES = {"bu-bench": "bu-bench-upstream-v1", "online-mind2web": "onl
 VERIFICATION_MARKER = "parallax-verify.json"
 
 
+PRODUCT_ARMS = frozenset({"fastbrowse", "fastbrowse-pool"})
+"""The arms measuring fastbrowse itself, whose build is the candidate's."""
+
+
 def _official_source(run: LoadedRun) -> GroupId | None:
     selected = {term.removeprefix("source=") for term in run.manifest.selection.split()}
     if source := next((OFFICIAL_SOURCES.get(term) for term in selected if term in OFFICIAL_SOURCES), None):
@@ -258,7 +262,7 @@ def _sources(
         run = next(run for run, _ in selected.values() if run.path == path)
         agent_sha, runner_sha, _ = metadata[path]
         versions = {result.harness_version for result in results if result.harness_version}
-        if arm not in {"fastbrowse", "fastbrowse-pool"} and len(versions) != 1:
+        if arm not in PRODUCT_ARMS and len(versions) != 1:
             raise ValueError(f"{path}: {arm} has no single recorded harness version")
         models = {model.replace("/", ":") for result in results for model in result.actual_models if model}
         sources.append(
@@ -269,7 +273,7 @@ def _sources(
                 runner_sha=runner_sha,
                 measured_on=run.manifest.created_at.date().isoformat(),
                 tasks=sorted({result.task_id for result in results}),
-                version=None if arm in {"fastbrowse", "fastbrowse-pool"} else next(iter(versions)),
+                version=None if arm in PRODUCT_ARMS else next(iter(versions)),
                 models=sorted(models),
             )
         )
@@ -301,12 +305,14 @@ def _measured_identity(
     metadata: Mapping[Path, tuple[str, str, dict[str, str]]],
     selected: Mapping[tuple[GroupId, Arm, str, int], tuple[LoadedRun, TrialResult]],
 ) -> tuple[str, str]:
-    """Require every selected source run to share the candidate's measured identity."""
-    selected_paths = {run.path for run, _result in selected.values()}
-    identities = {(metadata[path][0], metadata[path][1]) for path in selected_paths}
-    if len(identities) != 1:
-        raise ValueError("all runs in one candidate must name the same measured build and runner")
-    return next(iter(identities))
+    """The candidate's build: that of the newest selected run measuring fastbrowse. Rows from an earlier build stay
+    valid, so a competitor measured by an earlier runner, or a task kept from an earlier fastbrowse build, keeps its
+    rows, and each `Source` names the build that measured it."""
+    runs = {run.path: run for run, _result in selected.values()}
+    product = {run.path for (_group, arm, _task, _repeat), (run, _result) in selected.items() if arm in PRODUCT_ARMS}
+    newest = max((runs[path] for path in product or runs), key=lambda run: run.manifest.created_at)
+    agent_sha, runner_sha, _extra = metadata[newest.path]
+    return agent_sha, runner_sha
 
 
 def _validate_run(run: LoadedRun, source: GroupId | None) -> None:
