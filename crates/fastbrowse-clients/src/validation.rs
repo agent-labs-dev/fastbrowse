@@ -467,11 +467,10 @@ fn dumped_chars(body: &Value) -> usize {
     dumps(body).len()
 }
 
-/// Retains the input estimate or documented image bound when a dispatched request loses its response.
+/// Retains the dispatched input estimate when a request loses its response.
 struct CancelledJev<'a> {
     spend: Option<JevSpend>,
     cost: CostLine,
-    image_input: bool,
     price: Option<f64>,
     usage: &'a Usage,
     trace: &'a Trace,
@@ -493,11 +492,7 @@ impl Drop for CancelledJev<'_> {
                 let mut fields = jev_trace_fields();
                 fields.insert("call".into(), "jev".into());
                 fields.insert("requests".into(), unaccounted.into());
-                if !self.image_input {
-                    fields.insert("estimated_input_tokens".into(), self.cost.input_tokens.into());
-                } else {
-                    fields.insert("cost".into(), serde_json::to_value(&self.cost).unwrap());
-                }
+                fields.insert("estimated_input_tokens".into(), self.cost.input_tokens.into());
                 fields.insert("dollars_per_input_token".into(), self.price.into());
                 fields
             });
@@ -520,11 +515,12 @@ pub(crate) async fn post(
 ) -> Result<Response, AskError> {
     let spend = JevSpend::current();
     // Priced before sending, so a split single or a retry cannot carry the run past its dollar cap.
-    let cost = input_cost(body, price, image_context);
-    let estimate = if image_context.is_some() {
-        cost.dollars.unwrap_or(0.0)
-    } else {
-        dumped_chars(body) as f64 / TokenBudget::default().chars_per_token * price.unwrap_or(0.0)
+    let cost = input_cost(body, price);
+    // Admission holds the whole context window against the cap for a request carrying an image, because no smaller
+    // number is a bound on one; what a cancelled request records is the estimate above, not this ceiling.
+    let estimate = match image_context {
+        Some(context) => context_ceiling(price, context),
+        None => dumped_chars(body) as f64 / TokenBudget::default().chars_per_token * price.unwrap_or(0.0),
     };
     let check = || check_jev_spend(spend.as_ref(), estimate);
     check().map_err(DecisionError::Budget)?;
@@ -542,15 +538,7 @@ pub(crate) async fn post(
         start_attempt,
         split_batch,
     };
-    let mut cancelled = CancelledJev {
-        spend: spend.clone(),
-        cost,
-        image_input: image_context.is_some(),
-        price,
-        usage,
-        trace: &http.trace,
-        armed: true,
-    };
+    let mut cancelled = CancelledJev { spend: spend.clone(), cost, price, usage, trace: &http.trace, armed: true };
     let sent = post_with_retry(http, url, body, &auth, &attempts, usage).await;
     // A call that ends without an answer keeps its unanswered requests, as a cancelled one does: they may have been
     // billed, and a caller that carries on after the failure records nothing for them. An answer or a split carries
@@ -924,19 +912,36 @@ pub fn record_jev_spend(costs: impl IntoIterator<Item = CostLine>) {
     }
 }
 
-/// Image tokenization is unpublished, so only the route's documented context bounds an unanswered image call.
-fn input_cost(body: &Value, price: Option<f64>, image_context: Option<i64>) -> CostLine {
-    if let Some(context) = image_context {
-        let mut cost = CostLine::new(
-            CostComponent::Jev,
-            if price.is_some() { CostBasis::Bounded } else { CostBasis::Unknown },
-            price.map(|price| context as f64 * price),
-        );
-        cost.decision_purpose = current_jev_purpose();
-        return cost;
+/// The characters of a request's text, without the base64 images it carries beside them.
+///
+/// An image costs what its pixels tokenize to, not what its bytes weigh: one screenshot's base64 is hundreds of
+/// thousands of characters, which at the text rate would price it as a hundred thousand tokens. Each image is
+/// counted by its key alone, so the text is priced and the picture is left out rather than guessed.
+fn text_chars(body: &Value) -> usize {
+    let Some(assets) = body.get("assets").and_then(Value::as_object) else { return dumped_chars(body) };
+    let mut text = body.clone();
+    if let Some(object) = text.as_object_mut() {
+        object.remove("assets");
     }
-    let tokens = (dumped_chars(body) as f64 / TokenBudget::default().chars_per_token).ceil() as i64;
+    let keys: usize = assets.keys().map(|key| key.len() + 4).sum();
+    dumped_chars(&text) + keys
+}
+
+/// What the input a request dispatches costs at the route's list price, from the text it carries.
+///
+/// A dispatched request that loses its response keeps this estimate, as its own usage never arrives; it is an
+/// estimate of the input that was sent, never a bound on what the whole context could have cost.
+fn input_cost(body: &Value, price: Option<f64>) -> CostLine {
+    let tokens = (text_chars(body) as f64 / TokenBudget::default().chars_per_token).ceil() as i64;
     estimated_cost(price, tokens, 0)
+}
+
+/// The most one request could cost if every token of the route's documented context window were billed.
+///
+/// Admission alone uses this: an image's token count is unpublished, so nothing smaller can promise a dollar cap
+/// holds for a request that carries one.
+fn context_ceiling(price: Option<f64>, context: i64) -> f64 {
+    price.map(|price| context as f64 * price).unwrap_or(0.0)
 }
 
 /// Refuse a request whose estimate, beside every receipt held so far, would break the ledger's limits.
