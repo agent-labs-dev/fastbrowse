@@ -61,6 +61,15 @@ the same budget and reserve. Environment interruptions are retried with
 `--retry-invalid` and `--retry-wait`; an agent failure is not retried as an
 environment interruption.
 
+After the run artifacts pass validation, each group's job summary contains
+trial tallies, costs and failed check IDs from `parallax report RUN_ID`. Task evidence and judge commentary
+are excluded. When both `PARALLAX_REPORT_WEBHOOK_URL` and
+`PARALLAX_REPORT_WEBHOOK_SECRET` are configured, the same summary is sent as
+JSON with `X-Webhook-Signature` containing the hex HMAC-SHA256 of the exact
+request body. Reporting failures do not change campaign acceptance or
+publication. The report's status is the campaign matrix outcome, not a
+claim that every task passed.
+
 New task records belong in the combined task source. A record must use
 `Area.BROWSER`, require `Capability.BROWSER`, and name `browser-evidence-v2`.
 Task identity comes from `versions.json`. Do not put a password or token in a

@@ -47,6 +47,8 @@ run-name: Benchmark campaign ${{ inputs.campaign_id || github.event.client_paylo
 #            fail one attempt at a time, after the paid groups had started)
 #   secrets, optional: FASTBROWSE_SITE_TOKEN (publish-evals.yml checks it when it opens the site pull request;
 #            a campaign measured without it republishes with publish-evals.yml run_id)
+#   secrets, optional: PARALLAX_REPORT_WEBHOOK_URL, PARALLAX_REPORT_WEBHOOK_SECRET (aggregate group reports,
+#            signed with HMAC-SHA256 in X-Webhook-Signature)
 #   vars:    PARALLAX_JUDGE_BASE_URL, PARALLAX_JUDGE_MODELS
 #
 # `smoke` finds bugs before a release: one repeat of every task in the chosen group (`groups: all` means the head-to-head
@@ -641,6 +643,7 @@ jobs:
         # The artifact holds the mirrors at its root, so they land in this group's own directory.
         with: {path: "runs/${{ matrix.out }}", pattern: "run-${{ matrix.key }}", merge-multiple: true}
       - name: Check the Parallax run artifacts
+        id: verified
         run: |
           mapfile -t run_dirs < <(find "$OUT" -type f -name parallax-verify.json -exec dirname {} \; | sort -u)
           test "${#run_dirs[@]}" -gt 0
@@ -650,6 +653,37 @@ jobs:
             test -f "$run_dir/provenance.json"
             test -f "$run_dir/parallax-verify.json"
           done
+      - name: Fetch the group reporter
+        if: success()
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: ci
+          sparse-checkout: scripts/eval_report.py
+          persist-credentials: false
+      - name: Report the verified group
+        if: success() && steps.verified.outcome == 'success'
+        continue-on-error: true
+        env:
+          GROUP: ${{ matrix.label }}
+          STATUS: ${{ needs.campaign.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          WEBHOOK_URL: ${{ secrets.PARALLAX_REPORT_WEBHOOK_URL }}
+          WEBHOOK_SECRET: ${{ secrets.PARALLAX_REPORT_WEBHOOK_SECRET }}
+        run: |
+          mapfile -t run_dirs < <(find "$OUT" -type f -name parallax-verify.json -exec dirname {} \; | sort -u)
+          cd harness/evals
+          for run_dir in "${run_dirs[@]}"; do
+            run_id="$(jq -er 'select(.verified == true) | .run_id' "$run_dir/parallax-verify.json")"
+            # Without --reasons Parallax reports checks and statuses, never evidence text.
+            uv run --no-sync parallax report "$run_id" --link "Workflow run=$RUN_URL"
+          done > "$RUNNER_TEMP/group-report.md"
+          test -s "$RUNNER_TEMP/group-report.md"
+          cat "$RUNNER_TEMP/group-report.md" >> "$GITHUB_STEP_SUMMARY"
+          uv run --no-sync python "$GITHUB_WORKSPACE/ci/scripts/eval_report.py" "$RUNNER_TEMP/group-report.md"
 
   stage:
     name: Build the candidate
