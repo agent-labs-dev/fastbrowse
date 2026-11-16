@@ -459,7 +459,8 @@ def test_a_competitor_measured_later_by_another_runner_joins_the_candidate(tmp_p
                         "harness": harness,
                         "model": model,
                         "verdict": Verdict.NA,
-                        "na_reason": catalog[task_id].excluded.get(harness),
+                        # Parallax names only the capability the harness lacks; the catalog's reason is published.
+                        "na_reason": "requires credentials",
                     }
                 )
                 .model_dump_json()
@@ -483,6 +484,12 @@ def test_a_competitor_measured_later_by_another_runner_joins_the_candidate(tmp_p
     assert (group.agent_sha, group.runner_sha) == ("c" * 40, "d" * 40)
     assert {source.arm for source in group.sources} == {"fastbrowse", "browser-use-oss"}
     assert {row.status for row in group.rows if row.arm == "browser-use-oss"} == {"complete"}
+    assert {(e.arm, e.task): e.reason for e in group.excluded} == {
+        ("browser-use-oss", task_id): catalog[task_id].excluded["browser-use-oss"]
+        for task_id in task_ids
+        if not eligible("browser-use-oss", catalog[task_id])
+    }
+    check_catalog(candidate, CATALOG_PATH)
 
 
 def test_an_arm_on_a_model_pinning_harness_names_its_model() -> None:
