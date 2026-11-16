@@ -294,6 +294,11 @@ names it in `capture_artifact`; `start` and `end` index into that text. Its `lin
 quote: the link's `text`, where that text sits as `start` and `end`, and the `href` it leads to. Captures go where downloads go, so pass
 `downloads` or `artifact_sink` to keep them past the run. A page fetched over HTTP keeps none.
 
+Secret-safe screenshots used for image reads use the same storage as other browser artifacts: pass `downloads` or
+`artifact_sink` to retain them beyond the run. The default scratch storage is removed on exit, and a sink failure or
+deadline can leave an image unavailable; a result reference is not a durability guarantee. This applies to browser
+pages with screenshot storage, not HTTP-only or other pages whose artifact sink does not support screenshots.
+
 **Watching a run.**
 
 - `on_event=` gets a `BrowserEvent` with a cloud browser's live-view URL, then a `StepEvent` per step, carrying the

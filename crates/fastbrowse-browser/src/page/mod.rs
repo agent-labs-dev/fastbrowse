@@ -1863,6 +1863,16 @@ impl Page for CdpPage {
         })
     }
 
+    fn keep_screenshot<'a>(&'a self, name: &'a str, png: &'a [u8]) -> BoxFuture<'a, PageResult<Option<Artifact>>> {
+        Box::pin(async move {
+            let sink = &self.session.0.artifact_sink;
+            match sink.put(ArtifactKind::Screenshot, name, "image/png", png).await {
+                Ok(artifact) => Ok(Some(artifact)),
+                Err(error) => Err(fastbrowse_core::page::BrowserError::Failed(format!("keeping {name}: {error}"))),
+            }
+        })
+    }
+
     fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
         Box::pin(async move { seam(CdpPage::observe(self).await) })
     }

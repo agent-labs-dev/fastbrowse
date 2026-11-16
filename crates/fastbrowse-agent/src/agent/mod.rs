@@ -20,7 +20,7 @@ pub(crate) mod state;
 #[cfg(test)]
 mod tests;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -106,6 +106,8 @@ struct Seen {
     artifact_start: usize,
     /// The masked text of each capture a read took facts from, by digest, for the captures a result cites.
     read_captures: HashMap<String, String>,
+    screenshot_artifacts: Vec<Artifact>,
+    screenshot_attempts: HashSet<String>,
     /// The ended run, kept for a browser to carry on from.
     resume: Option<Resume>,
 }
@@ -246,7 +248,12 @@ impl Agent {
         };
         let began = Instant::now();
         ledger.set_started(Some(began));
-        self.seen().artifact_start = self.page.artifacts().len();
+        {
+            let mut seen = self.seen();
+            seen.artifact_start = self.page.artifacts().len();
+            seen.screenshot_artifacts.clear();
+            seen.screenshot_attempts.clear();
+        }
         // The ledger checks `max_seconds` between operations; only a deadline around the awaits bounds a browser or
         // provider call that never returns.
         let deadline = ledger.limits.max_seconds.map(|seconds| began + Duration::from_secs_f64(seconds));
@@ -309,9 +316,11 @@ impl Agent {
         // A question the run already asked beside the same state is answered from what Jev said then.
         let scoped = crate::batches::knowing(Default::default(), spending);
         let (mut result, mut loop_returned, needs_browser) = self.trace.phase("run", scoped).await;
+        let screenshot_artifacts = std::mem::take(&mut self.seen().screenshot_artifacts);
         let result = if needs_browser {
             // A run that needs a browser reports what the ledger spent and nothing else: no budget check and no ending
             // frame.
+            result.artifacts.extend(screenshot_artifacts);
             result.cost = ledger.breakdown();
             result
         } else {
@@ -767,6 +776,8 @@ impl Agent {
         };
         let start = self.seen().artifact_start;
         let artifacts = self.page.artifacts();
+        let mut artifacts = artifacts.get(start..).map(<[_]>::to_vec).unwrap_or_default();
+        artifacts.extend(self.seen().screenshot_artifacts.iter().cloned());
         RunResult {
             browser: None,
             status,
@@ -776,7 +787,7 @@ impl Agent {
             evidence: outcome.evidence,
             steps: state.map(|state| state.steps.clone()).unwrap_or_default(),
             cost: ledger.breakdown(),
-            artifacts: artifacts.get(start..).map(<[_]>::to_vec).unwrap_or_default(),
+            artifacts,
             citations: outcome.citations,
             error: outcome.error,
             final_url: match (state, observed) {

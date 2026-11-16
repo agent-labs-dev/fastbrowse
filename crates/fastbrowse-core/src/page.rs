@@ -561,6 +561,11 @@ pub trait Page: Send + Sync {
         Box::pin(async { Ok(None) })
     }
 
+    /// Keeps a secret-safe screenshot artifact where this page keeps its downloads.
+    fn keep_screenshot<'a>(&'a self, _name: &'a str, _png: &'a [u8]) -> BoxFuture<'a, PageResult<Option<Artifact>>> {
+        Box::pin(async { Ok(None) })
+    }
+
     fn observe(&self) -> BoxFuture<'_, PageResult<Observation>>;
 
     /// A fresh reading for screenshot safety, without replacing action guards or consuming pending notices.

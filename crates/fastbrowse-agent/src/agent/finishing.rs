@@ -7,7 +7,7 @@ use fastbrowse_core::py::text;
 use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::acting::Carried;
 use super::helpers::unsent_fact;
@@ -238,6 +238,17 @@ impl Agent {
         let read = state.notes.facts().iter().any(|fact| fact.evidence.as_ref().is_some_and(|e| e.source_id == image));
         if read || state.unanswered_images.contains(&image) {
             return Ok(());
+        }
+        let name = format!("{image}.png");
+        let first_attempt = self.seen().screenshot_attempts.insert(name.clone());
+        if first_attempt {
+            // The run deadline covers this write too; a failed sink must not stop the image reader.
+            match self.page.keep_screenshot(&name, &png).await {
+                Ok(Some(artifact)) => self.seen().screenshot_artifacts.push(artifact),
+                Ok(None) => {}
+                Err(_) => self
+                    .event("screenshot_not_kept", || Map::from_iter([("error".into(), "artifact sink failed".into())])),
+            }
         }
         let reading = crate::retrieval::read_image(&*self.llm, &state.task, png.clone(), Some(&state.ledger)).await?;
         state.ledger.record([reading.cost.clone()])?;

@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Opt-in artifact sinks retain secret-safe screenshot inputs used for image reads as content-addressed PNG artifacts; text evidence keeps its existing capture-artifact contract ([#1150](https://github.com/agent-labs-dev/fastbrowse/issues/1150)).
+
 ## [0.11.1] - 2026-11-14
 
 - The answer schema requires a comparison field for sums, minima and maxima, so those drafts cannot omit the value code must compute with ([#1161](https://github.com/agent-labs-dev/fastbrowse/issues/1161)).

@@ -119,6 +119,9 @@ impl Page for SearchPage {
     fn keep_capture<'a>(&'a self, name: &'a str, text: &'a str) -> BoxFuture<'a, PageResult<Option<Artifact>>> {
         self.inner.keep_capture(name, text)
     }
+    fn keep_screenshot<'a>(&'a self, name: &'a str, png: &'a [u8]) -> BoxFuture<'a, PageResult<Option<Artifact>>> {
+        self.inner.keep_screenshot(name, png)
+    }
     fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
         self.view().observe()
     }
