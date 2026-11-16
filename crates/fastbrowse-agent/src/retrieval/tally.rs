@@ -115,6 +115,7 @@ pub struct Worked {
     pub value: String,
     pub evidence_ids: Vec<String>,
     pub winner_ids: Option<Vec<String>>,
+    pub winner_records: Vec<Vec<String>>,
 }
 
 /// Why a tally has no value.
@@ -133,6 +134,7 @@ pub enum Unworked {
 }
 
 /// One note a tally may count: the first note read with its text, so a record read twice is one record.
+#[derive(Clone)]
 struct Candidate {
     id: String,
     quote: String,
@@ -691,7 +693,7 @@ fn per_group(
             )));
         }
     }
-    Ok(Worked { winner_ids: None, value: count.to_string(), evidence_ids })
+    Ok(Worked { winner_records: Vec::new(), winner_ids: None, value: count.to_string(), evidence_ids })
 }
 
 /// What narrowing a note's numbers to a choice Jev can hold found.
@@ -1379,7 +1381,15 @@ pub(super) async fn work_selected(
         }
         if tally.op == Op::Count {
             let evidence_ids = records.iter().map(|note| found[*note].id.clone()).collect();
-            worked.insert(*index, Ok(Worked { winner_ids: None, value: records.len().to_string(), evidence_ids }));
+            worked.insert(
+                *index,
+                Ok(Worked {
+                    winner_records: Vec::new(),
+                    winner_ids: None,
+                    value: records.len().to_string(),
+                    evidence_ids,
+                }),
+            );
             continue;
         }
         if records.is_empty() {
@@ -1469,7 +1479,7 @@ pub(super) async fn work_selected(
             Op::Sum => {
                 let all: Vec<&Amount> = amounts.iter().map(|(_, amount)| amount).collect();
                 let evidence_ids = kept.cited(amounts.iter().map(|(note, _)| *note), &found);
-                Worked { winner_ids: None, value: total(&all), evidence_ids }
+                Worked { winner_records: Vec::new(), winner_ids: None, value: total(&all), evidence_ids }
             }
             Op::Min | Op::Max => {
                 // Places count distinct values, so two records tied at the lowest are both first, and the next value
@@ -1502,7 +1512,12 @@ pub(super) async fn work_selected(
                 } else {
                     winner.written.clone()
                 };
-                Worked { winner_ids: None, value, evidence_ids }
+                Worked {
+                    winner_records: winners.iter().map(|(note, _)| kept.cited([*note], &found)).collect(),
+                    winner_ids: None,
+                    value,
+                    evidence_ids,
+                }
             }
             Op::Count => unreachable!("a count is worked out above"),
         };
@@ -1533,6 +1548,92 @@ pub(super) async fn work_selected(
         worked.insert(index, Ok(Worked { value, ..result }));
     }
     Ok(worked)
+}
+
+/// Winner fields are read only after numeric selection, so copying a name never asks a model to rank records.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn winner_fields(
+    jev: &dyn DecisionClient,
+    llm: &dyn LLMClient,
+    tally: &Tally,
+    worked: &Worked,
+    fields: &[String],
+    notes: &Notes,
+    tokens: &TokenBudget,
+    ledger: Option<&Ledger>,
+) -> Result<std::result::Result<HashMap<String, String>, Unworked>> {
+    let candidates = candidates_from(notes, false);
+    let ids = worked.winner_ids.as_ref().unwrap_or(&worked.evidence_ids);
+    let mut found = Vec::new();
+    for record in &worked.winner_records {
+        let parts: Option<Vec<_>> =
+            record.iter().map(|id| candidates.iter().find(|candidate| &candidate.id == id)).collect();
+        let Some(parts) = parts else {
+            return Ok(Err(Unworked::Unjudged));
+        };
+        let Some(first) = parts.first() else {
+            return Ok(Err(Unworked::Unjudged));
+        };
+        let quote = parts.iter().map(|part| part.quote.as_str()).collect::<Vec<_>>().join("\n");
+        found.push(Candidate {
+            quote,
+            note: json!({"quotes":parts.iter().map(|part| &part.note).collect::<Vec<_>>()}),
+            ..(**first).clone()
+        });
+    }
+    if found.is_empty() {
+        return Ok(Err(Unworked::Unjudged));
+    }
+    let records: Vec<usize> = (0..found.len()).collect();
+    let mut result = HashMap::new();
+    for field in fields {
+        let Some(groups) = read_groups(llm, field, &tally.of, &records, &found, ledger).await? else {
+            return Ok(Err(Unworked::Notes {
+                reason: format!("The selected records do not state an unambiguous {}.", text::repr(field)),
+                notes: ids.clone(),
+            }));
+        };
+        let mut questions = IndexMap::new();
+        for (group, (written, members)) in groups.values().enumerate() {
+            for record in members {
+                questions.insert(format!("field{group}/r{record}"), Question::Noul(NoulQuestion::new(
+                    format!("{UNTRUSTED} Does this copied text give the complete, unambiguous {} of exactly this record, without another record's value or an unrelated field? Copied text: {}. Record: {}", text::repr(field), text::repr(written), dumps(&found[*record].note)),
+                    Some("The copied text is exactly this record's requested field."),
+                    Some("It is missing, ambiguous, incomplete, another field, or another record's value."),
+                )));
+            }
+        }
+        let Some(answers) = ask(jev, &json!({"field":field}), &questions, tokens, ledger).await? else {
+            return Ok(Err(Unworked::Unjudged));
+        };
+        for key in questions.keys() {
+            match answers.get(key) {
+                Some(Answer::Noul(value)) if (0.0..=1.0).contains(&value.probability) && value.probability > 0.5 => {}
+                Some(Answer::Noul(value)) if (0.0..=1.0).contains(&value.probability) => {
+                    return Ok(Err(Unworked::Notes {
+                        reason: format!(
+                            "The copied {} is not an unambiguous field of the selected record.",
+                            text::repr(field)
+                        ),
+                        notes: ids.clone(),
+                    }));
+                }
+                _ => return Ok(Err(Unworked::Unjudged)),
+            }
+        }
+        // Every field follows the same winner order, including repeated values, so tied names and other fields stay aligned.
+        let values: Option<Vec<&str>> = records
+            .iter()
+            .map(|record| {
+                groups.values().find(|(_, members)| members.contains(record)).map(|(written, _)| written.as_str())
+            })
+            .collect();
+        let Some(values) = values else {
+            return Ok(Err(Unworked::Unjudged));
+        };
+        result.insert(field.clone(), values.join(", "));
+    }
+    Ok(Ok(result))
 }
 
 /// A worked amount in the form the claim writes its value: code puts its number where the claim's number is and keeps
@@ -2025,6 +2126,120 @@ mod tests {
     }
 
     /// Reads every listed record's group as `reads` gives it by the record's id.
+    struct FieldSupport(bool);
+    impl DecisionClient for FieldSupport {
+        fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+            FirstField.profile()
+        }
+        fn evaluate<'a>(
+            &'a self,
+            _: &'a serde_json::Value,
+            questions: &'a IndexMap<String, Question>,
+        ) -> fastbrowse_core::BoxFuture<
+            'a,
+            std::result::Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>,
+        > {
+            use fastbrowse_core::decision::{Evaluation, NoulAnswer};
+            let answers = questions
+                .iter()
+                .map(|(key, question)| {
+                    let Question::Noul(question) = question else { panic!("field support only") };
+                    assert!(question.instructions.contains("exactly this record"));
+                    (
+                        key.clone(),
+                        Answer::Noul(NoulAnswer {
+                            kind: Default::default(),
+                            probability: if self.0 { 1.0 } else { 0.0 },
+                        }),
+                    )
+                })
+                .collect();
+            Box::pin(async move {
+                Ok(Evaluation {
+                    model: "test".into(),
+                    answers,
+                    input_tokens: 1,
+                    cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                    requests: 1,
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn winner_fields_use_only_computed_winners_and_preserve_ties() {
+        let facts: Vec<_> = ["Wrong record £20", "Winner A £210", "Winner B £210"].iter().enumerate().map(|(index, quote)| {
+            let evidence = serde_json::from_value(json!({"source_id":format!("s{index}"),"url":"https://example.test/records","frame_id":null,"captured_at":"2026-01-01T00:00:00Z","capture_sha256":format!("sha{index}"),"start":0,"end":quote.len(),"quote":quote})).unwrap();
+            crate::memory::Fact::read(quote, evidence, fastbrowse_core::models::FactReader::JevChoice)
+        }).collect();
+        let ids: Vec<_> = facts.iter().map(fact_id).collect();
+        let notes = Notes::new(facts);
+        let tally = Tally {
+            op: Op::Max,
+            of: "record".into(),
+            field: Some("price".into()),
+            rank: None,
+            by: None,
+            group: None,
+            written: "£20".into(),
+        };
+        let tokens = FirstField.profile().fit(None).tokens;
+        let worked = work(
+            &FirstField,
+            &ReadsGroups(&[]),
+            "Find the highest-priced records",
+            &[(0, &tally, "£20", &[])],
+            &notes,
+            &tokens,
+            None,
+        )
+        .await
+        .unwrap();
+        let done = worked[&0].as_ref().unwrap();
+        assert_eq!(done.value, "£210");
+        assert_eq!(done.winner_records, vec![vec![ids[1].clone()], vec![ids[2].clone()]]);
+        let fields = ["name".into()];
+        let result = winner_fields(
+            &FieldSupport(true),
+            &ReadsGroups(&[("r0", Some("Winner A")), ("r1", Some("Winner B"))]),
+            &tally,
+            done,
+            &fields,
+            &notes,
+            &tokens,
+            None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(result["name"], "Winner A, Winner B");
+        for reads in
+            [vec![("r0", Some("Wrong record")), ("r1", Some("Winner B"))], vec![("r0", None), ("r1", Some("Winner B"))]]
+        {
+            assert!(
+                winner_fields(&FieldSupport(true), &ReadsGroups(&reads), &tally, done, &fields, &notes, &tokens, None)
+                    .await
+                    .unwrap()
+                    .is_err()
+            );
+        }
+        assert!(
+            winner_fields(
+                &FieldSupport(false),
+                &ReadsGroups(&[("r0", Some("£210")), ("r1", Some("£210"))]),
+                &tally,
+                done,
+                &fields,
+                &notes,
+                &tokens,
+                None
+            )
+            .await
+            .unwrap()
+            .is_err()
+        );
+    }
+
     struct ReadsGroups<'a>(&'a [(&'a str, Option<&'a str>)]);
 
     impl LLMClient for ReadsGroups<'_> {

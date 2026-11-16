@@ -278,8 +278,8 @@ each final claim against its original cited quotes, including record identity an
 The composer selects source wording by note id in private text parts, either the whole note or a part of it, such as
 one field of a record, that code finds in the note's text exactly as written. Code copies the selection and adds
 quotation delimiters when requested; prose parts, objects like the others so the composer does not write connecting
-wording as a source part, keep explanatory wording separate. A tally has one computed part,
-which code fills without replacing matching text inside a source part. Packed compositions expose their original
+wording as a source part, keep explanatory wording separate. A tally has a computed numeric part or
+requested winner-field parts, which code fills without replacing matching text inside a source part. Packed compositions expose their original
 sources separately, and kept claims retain these parts through a rewrite. Split notes cannot be selected as whole
 sources. The delivered claims keep the same text, cells, tally and evidence id fields.
 For a comparison restricted to each group's minimum or maximum, the composer also names a private selection:
@@ -287,6 +287,7 @@ the grouping field, the inner field and its extreme. Group names must copy an ex
 or, for captured page text, its own captured heading path. Code selects each group's tied extremes before applying
 the outer comparison. The claim cites every qualifying record used in the selection; record association checks see
 only the outer winners. This selection survives packing and rewrites without adding fields to delivered claims.
+An extreme can supply both its numeric result and requested fields from its winning records. Typed computed slots name those fields. Code selects the rank and every tied winner first, then copies each requested field only from those records and their associated source notes. Literal-copy and field-support checks reject a missing, ambiguous or unrelated value. A name and price can therefore share a prose claim or occupy separate table cells without the composer choosing the winning record.
 A count, total, minimum or maximum, or a place after one such as the second cheapest, is never written or judged as a number. The composer marks it as a tally with
 the kind of record and the field, and Jev answers one question per note read: for a count, whether it holds exactly one
 such record, and for a total or extreme, whether it holds one with its field, then which number in it is the field. A date, ISO or a day, month name and year, is offered whole with its year beside it, and its day and month are not offered alone, since neither orders anything; code orders dates for an extreme and never adds them. A
