@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-11-16
+
 - Extension navigation denied by Chrome reports a browser access-policy error instead of a lost document, without exposing the native error text ([#1143](https://github.com/agent-labs-dev/fastbrowse/issues/1143)).
 
 - Traces record read progress, authorization gate outcomes and the final run status, so failures can be diagnosed alongside the retained model requests.
@@ -28,8 +30,6 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Runs retain the caller's starting address in model-facing task context after navigation, so site-relative requests keep their starting reference. Explicit cross-site tasks remain allowed ([#1129](https://github.com/agent-labs-dev/fastbrowse/issues/1129)).
 
 - Opt-in artifact sinks retain secret-safe screenshot inputs used for image reads as content-addressed PNG artifacts; text evidence keeps its existing capture-artifact contract ([#1150](https://github.com/agent-labs-dev/fastbrowse/issues/1150)).
-
-## [0.11.1] - 2026-11-14
 
 - The answer schema requires a comparison field for sums, minima and maxima, so those drafts cannot omit the value code must compute with ([#1161](https://github.com/agent-labs-dev/fastbrowse/issues/1161)).
 
