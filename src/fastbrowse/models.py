@@ -534,38 +534,42 @@ class BrowserEvent(Frozen):
     start a browser of its own (local Chrome, or one handed over through `cdp_url`)."""
 
 
+class BrowserWarningOperation(StrEnum):
+    SCREENCAST_START = "screencast_start"
+    SCREENCAST_STOP = "screencast_stop"
+    SCREENCAST_FRAME_ACK = "screencast_frame_ack"
+    PAINT_KEEPER_ATTACH = "paint_keeper_attach"
+    POPUP_SETUP_CLOSE = "popup_setup_close"
+    POPUP_SETUP_RELEASE = "popup_setup_release"
+    FRAME_CALLBACK_SHUTDOWN = "frame_callback_shutdown"
+    LIVE_FRAME_DELIVERY = "live_frame_delivery"
+    DOWNLOAD_CAPTURE = "download_capture"
+
+
+class BrowserWarningFailure(StrEnum):
+    BROWSER_ERROR = "browser_error"
+    CONTEXT_LOST = "context_lost"
+    BROWSER_UNAVAILABLE = "browser_unavailable"
+    SCREENSHOTS_UNAVAILABLE = "screenshots_unavailable"
+    NAVIGATION_TIMEOUT = "navigation_timeout"
+    SITE_UNREACHABLE = "site_unreachable"
+    BROWSER_UNRESPONSIVE = "browser_unresponsive"
+    PAGE_UNRESPONSIVE = "page_unresponsive"
+    ORIGIN_NOT_ALLOWED = "origin_not_allowed"
+    SCRIPT_ERROR = "script_error"
+    TIMEOUT = "timeout"
+    CALLBACK_EXCEPTION = "callback_exception"
+    PAYLOAD_DECODE = "payload_decode"
+    CAPTURE_FAILED = "capture_failed"
+    CANCELLED = "cancelled"
+
+
 class BrowserWarningEvent(Frozen):
-    """A browser warning with only a closed operation and failure kind."""
+    """A browser warning with only a closed operation and failure kind; it contains no page or transport text."""
 
     type: Literal["browser_warning"] = "browser_warning"
-    operation: Literal[
-        "screencast_start",
-        "screencast_stop",
-        "screencast_frame_ack",
-        "paint_keeper_attach",
-        "popup_setup_close",
-        "popup_setup_release",
-        "frame_callback_shutdown",
-        "live_frame_delivery",
-        "download_capture",
-    ]
-    failure: Literal[
-        "browser_error",
-        "context_lost",
-        "browser_unavailable",
-        "screenshots_unavailable",
-        "navigation_timeout",
-        "site_unreachable",
-        "browser_unresponsive",
-        "page_unresponsive",
-        "origin_not_allowed",
-        "script_error",
-        "timeout",
-        "callback_exception",
-        "payload_decode",
-        "capture_failed",
-        "cancelled",
-    ]
+    operation: BrowserWarningOperation
+    failure: BrowserWarningFailure
 
 
 type EventHandler = Callable[[StepEvent | BrowserEvent | BrowserWarningEvent], Awaitable[None]]
