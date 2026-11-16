@@ -34,6 +34,13 @@ pub fn expire_frame_rechecks(page: &CdpPage) {
     }
 }
 
+/// Snapshot slots currently retained by the page, for frame lifetime assertions.
+pub fn kept_keys(page: &CdpPage) -> Vec<String> {
+    let mut keys: Vec<_> = page.state.lock().unwrap().kept.keys().cloned().collect();
+    keys.sort();
+    keys
+}
+
 /// Upload `files` to the last observation's `control_id`.
 ///
 /// With `grant`, the upload runs as if the session held that origin grant: through a page on
@@ -65,6 +72,7 @@ pub async fn upload(
         artifact_sink: shared.artifact_sink.clone(),
         max_download_bytes: shared.max_download_bytes,
         new_document_scripts: vec![],
+        require_chooser_interception: false,
         on_frame: None,
         on_stop: None,
         trace: fastbrowse_core::telemetry::Trace::disabled(),
@@ -72,6 +80,7 @@ pub async fn upload(
         client: Mutex::new(shared.client.lock().unwrap().clone()),
         state: Mutex::new(state),
         dialog_opened: watch::channel(0).0,
+        chooser_pins: watch::channel(0).0,
         lifecycle: watch::channel(0).0,
         snapshot,
         popup_signal: watch::channel(0).0,

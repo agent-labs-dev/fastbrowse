@@ -23,13 +23,16 @@ credentials, irreversible actions and spending under the control of code.
 
 - **It picks, it does not invent.** Each page is indexed into the controls it has, and
   [Jev](https://typesafe.ai), a choice model, picks one. It cannot click something that is not on the page, and
-  there are no selectors to maintain.
+  there are no selectors to maintain. Widget keyboard actions are chosen from the keys their ARIA roles define.
 - **Answers you can check.** Every claim in a complete answer cites a verbatim quote from the page, with a link
   that scrolls to it. Pass a schema and get validated data back.
+  Tasks over a whole list can follow its next-page links, checking each page and preserving its citations.
 - **Code holds the keys.** Submit, pay, delete and send stop until you allow them. A secret is typed only on the
   origin it was declared for, and models only see its name. Step, time and dollar limits are enforced in code.
-- **Any browser.** A Browser Use Cloud browser by default, local Chrome, or any Chromium browser or Electron app
-  that is already running.
+- **Your own Chrome.** The CLI runs in the Chrome you are signed in to, through the
+  [fastbrowse extension](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop),
+  or in a Browser Use Cloud browser with `--cloud`. The SDKs also drive local Chrome and any Chromium browser or
+  Electron app that is already running.
 - **Desktop apps too.** On Linux with Hyprland, `--desktop` starts a native app and drives it through its
   accessibility tree, in the background, with [deskpilot](https://github.com/cjber/deskpilot).
 - **One agent, every interface.** A CLI, a Python library, Node and Go SDKs that need no Python, an MCP
@@ -53,20 +56,26 @@ excludes.
 ## Try it
 
 You need [uv](https://docs.astral.sh/uv/), which fetches Python 3.13 or newer itself, an
-[OpenRouter](https://openrouter.ai/) key and a [Browser Use](https://browser-use.com/) key:
+[OpenRouter](https://openrouter.ai/) key and the
+[fastbrowse extension](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop) in
+Chrome. Run `uvx fastbrowse extension install` once to register it:
 
 ```sh
 export OPENROUTER_API_KEY=...   # Jev, the model that picks each action, and the LLM for start pages, written field values and composed answers
-export BROWSER_USE_API_KEY=...  # the cloud browser; or pass --local to use Chrome
 uvx fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/
 ```
 
-With a Browser Use key the cloud browser is the default, because it passes bot checks a fresh local Chrome fails;
-it also prints a URL to watch the run live. Without the key or `--local`, the command stops and asks for one.
+A browser task runs in your own Chrome, signed in as you are, through the extension; with no extension connected the
+command stops before it spends anything. Pass `--cloud` with a `BROWSER_USE_API_KEY` for a Browser Use Cloud browser,
+which passes bot checks and prints a URL to watch the run live.
 `AI_GATEWAY_API_KEY` (Vercel AI Gateway) serves the LLM when `OPENROUTER_API_KEY` is unset. With both keys,
 the automatically selected OpenRouter LLM moves to the gateway for the rest of the run if OpenRouter refuses its key.
 Jev can also run through the gateway as a last resort, or another decision host with `FASTBROWSE_DECISION_SOURCE`.
 [Jev routing](docs/jev.md#provider-failover) covers the order and [other hosts](docs/jev.md#other-decision-hosts).
+
+Set `EXA_API_KEY` to let Jev choose web search without opening a browser. The LLM proposes queries,
+and Exa returns result links and metadata that the run can cite or open. Each request has a `search` cost receipt;
+the run checks its dollar budget before sending it. A browser already in use stays open behind the results.
 
 Keys can live in a `.env` file in the working directory ([`.env.example`](.env.example) lists every setting), but
 values named by `--secret` must be in the process environment. `uv tool install fastbrowse` keeps the command on
@@ -78,7 +87,7 @@ To work on fastbrowse itself:
 ```sh
 git clone https://github.com/agent-labs-dev/fastbrowse.git && cd fastbrowse
 uv sync --all-extras   # builds the Rust core, so it needs cargo (rustup installs the pinned toolchain)
-cp .env.example .env   # then fill in the keys, or pass --local
+cp .env.example .env   # then fill in the keys
 uv run fastbrowse "What is the title of the top story right now?" --start https://news.ycombinator.com/
 ```
 
@@ -89,43 +98,70 @@ exit code is the status, and only `complete` exits 0.
 ```sh
 export SAUCE_PASSWORD=secret_sauce
 uvx fastbrowse "Log in as standard_user with the saved password and add the backpack to the cart." \
-  --start https://www.saucedemo.com/ --secret password=SAUCE_PASSWORD --authorize --local
+  --start https://www.saucedemo.com/ --secret password=SAUCE_PASSWORD --authorize
 ```
 
-The [command-line reference](docs/cli.md#flags) has every flag, signed-in profiles and Bitwarden logins, driving open
-windows, Electron and [desktop apps](docs/cli.md#desktop-apps), model and provider settings, and every status with its exit code.
+The [command-line reference](docs/cli.md#flags) has every flag, your own signed-in Chrome and Bitwarden logins, driving open
+windows and [desktop apps](docs/cli.md#desktop-apps), model and provider settings, and every status with its exit code.
+
+## Use your own Chrome
+
+Run fastbrowse in the Chrome you already use, where you are already signed in. You need
+[uv](https://docs.astral.sh/uv/), Chrome and an [OpenRouter](https://openrouter.ai/) API key. Model calls are
+billed by your provider; this mode needs no Browser Use Cloud key.
+
+The extension has to match the fastbrowse you install: the Store's **0.1.0** works with fastbrowse **0.10.x**, and fastbrowse **0.11.0 or later** requires extension **0.1.1 or later** with its supported-command list. A run that finds an older extension stops before it spends anything and names the version it needs. If the Store does not list the version you need yet, run `fastbrowse extension path`, open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked** and select the printed folder.
+
+1. Install the CLI and register it with your browser:
+
+   ```sh
+   uv tool install fastbrowse
+   export OPENROUTER_API_KEY=...  # replace with your key
+   fastbrowse extension install
+   ```
+
+2. [Add fastbrowse to Chrome](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop).
+   Open it from Chrome's Extensions menu to see runs and their **Stop** buttons.
+3. Start a task from your terminal:
+
+   ```sh
+   fastbrowse "What is the title of the top story?" --start https://news.ycombinator.com/ --extension --browser
+   ```
+
+A run that reaches the page confirms the connection. If it ends `unavailable` with no browser connected,
+[follow the setup checks](docs/troubleshooting.md#the-extension-is-not-connected). Chrome shows a debugging bar
+while fastbrowse works.
+The [setup and usage guide](docs/cli.md#your-own-chrome) covers signed-in tasks, browser selection,
+permissions and stopping a run.
 
 ## How it compares
 
-| | Browser Use agent (hosted) | [Browser Use Ultrafast](https://github.com/browser-use/jev-ultrafast) (`jev-ultrafast`) | fastbrowse |
-|:--|:--|:--|:--|
-| Choosing an action | hosted model and tools | Jev picks from indexed controls | Jev picks from indexed controls |
-| Returns | an answer | `DONE` or `BLOCKED` | an answer with quotes, or why it stopped |
-| Cited answers | not graded for citations here | no cited-answer result API | answers backed by captured quotes |
-| Signing in | yes | password fields excluded | `--secret` or a Bitwarden vault item; models see names only |
-| Irreversible actions | explicit task instructions in our fixture tests | no authorization parameter in Agent | classifier plus a code-enforced authorization gate |
-| Browser | cloud | Chrome through Browser Harness; cloud in these evals | cloud by default, or local Chrome with `--local` |
+| | Browser Use agent (hosted) and BU Ultrafast | fastbrowse |
+|:--|:--|:--|
+| Choosing an action | hosted model and tools | Jev picks from indexed controls |
+| Returns | an answer | an answer with quotes, or why it stopped |
+| Cited answers | not graded for citations here | answers backed by captured quotes |
+| Signing in | yes | `--secret` or a Bitwarden vault item; models see names only |
+| Irreversible actions | explicit task instructions in our fixture tests | classifier plus a code-enforced authorization gate |
+| Browser | cloud | your own Chrome through the extension (CLI default) or cloud with `--cloud`; the SDKs add local Chrome |
 
-The Ultrafast column describes
-[commit 1231850a](https://github.com/browser-use/jev-ultrafast/tree/1231850a0bf1a0c0341fe408ef1668dbbfdfac46),
-the version the eval runner pins.
+BU Ultrafast (`browser-use-ultrafast`) is the same hosted agent on Browser Use Cloud API V4 with the `bu-ultrafast`
+model; `browser-use` runs it on the API's default model.
 
 Benchmarking makes three comparisons:
 
-- **C1, agent against agent:** fastbrowse against the hosted Browser Use agent, Browser Harness and Jev
-  Ultrafast, the figures above, on the same tasks on Browser Use cloud browsers under identical limits with each
-  agent at its own defaults. On the same 53-task catalog, fastbrowse alone passed 90.5% of its 159 attempts at
-  $0.0149 a run. Jev Ultrafast, the fourth arm of that live suite, passed 4.6% of 129 attempts at $0.0017 a run
-  and was fastest on 2 of the 50 tasks two or more agents passed. It cannot return an answer, so every task that
-  asks a question fails, and 6 of the 53 tasks are counted as failures: five need login credentials it has no way
-  to be given, and saucedemo-pause needs a pause before an irreversible step, which it cannot make.
+- **C1, agent against agent:** fastbrowse against the hosted Browser Use agent on its default model and on
+  `bu-ultrafast`, and Browser Harness, on the same tasks under identical limits with each agent at its own
+  defaults. On the same 53-task catalog, fastbrowse alone passed 90.5% of its 159 attempts at $0.0149 a run. The
+  published release-0.10.0 campaign also ran Jev Ultrafast, an open source agent the suite no longer measures: it
+  passed 4.6% of 129 attempts at $0.0017 a run, since it returns no answer and cannot be given login credentials.
 - **C2, browser against browser:** the same fastbrowse build on its own browser pool and on a Browser Use Cloud
   browser. In an earlier record (release-0.5.25), not on the published page, the pool passed fewer tasks.
-- **C3, fastbrowse on its own browser pool against `jev-ultrafast`:** not yet measured. The pairing over the 6
-  navigation tasks both run has not been run; the Ultrafast figures above are C1's, on a Browser Use cloud browser
-  like every arm of that campaign. Browser Use's vendor-reported 22 seconds and $0.0064 a task for Ultrafast cover
-  the model and the search only, with the browser and proxy billed separately, so they are not comparable with our
-  figures.
+- **C3, fastbrowse on its own browser pool against BU Ultrafast (`browser-use-ultrafast`):** not yet measured. It
+  pairs `fastbrowse-pool` with the hosted agent on `bu-ultrafast`, each product on its own backend, over the 52
+  tasks both run, three repeats each. Browser Use's vendor-reported 22 seconds and $0.0064 a task for Ultrafast
+  cover the model and the search only, with the browser and proxy billed separately, so they are not comparable
+  with our figures.
 
 The [benchmark page](https://fastbrowse.ai/benchmarks) publishes campaign release-0.10.0 (fastbrowse-evals at
 commit `2e94d24`, run 2026-11-09, judged by anthropic/claude-opus-5.5 through OpenRouter). 0.10.0, tagged
@@ -184,7 +220,8 @@ asyncio.run(main())
 ```
 
 **Choosing the browser.** With no browser argument, `run_task` starts a Browser Use Cloud browser with
-`BROWSER_USE_API_KEY`, or the key in `browser_api_key=`. `chrome=LocalChrome()` runs local Chrome instead, and
+`BROWSER_USE_API_KEY`, or the key in `browser_api_key=`. The CLI defaults to your own Chrome through the extension.
+`chrome=LocalChrome()` runs local Chrome instead, and
 `cloud_extensions=[...]` loads up to three of your account's Browser Use Cloud extensions into a cloud browser. `cdp_url=` or `cdp_port=` drives a browser already running: the run opens and closes its own tab and leaves
 the rest, though cookies the task sets can persist. `attach=True`, `target_match=` and `foreground=True` work as
 the matching flags do. Passing a cloud key and a CDP address together is an error.
@@ -435,9 +472,10 @@ The server's flags set what a calling model may do; a call can ask for less, nev
 
 | Flag | Effect |
 |:--|:--|
-| `--local`, `--headed`, `--profile DIR`, `--foreground`, `--downloads DIR`, `--cursor`, `--no-cursor` | as for the CLI, fixed for every call |
+| `--launch`, `--headed`, `--profile DIR` | start separate Chrome; a headed window or kept profile implies launch |
+| `--foreground`, `--downloads DIR`, `--cursor`, `--no-cursor` | fixed for every call |
 | `--cloud-profile ID` | every call runs as that cloud profile |
-| `--extension`, `--extension-browser LABEL` | every call runs in your own Chrome through the fastbrowse extension; see [Your own Chrome](docs/cli.md#your-own-chrome) |
+| `--local`, `--extension`, `--extension-browser LABEL` | every call runs in your own Chrome through the fastbrowse extension; see [Your own Chrome](docs/cli.md#your-own-chrome) |
 | `--allow-authorize` | let a call pass `authorize`; without it irreversible actions always stop at `needs_confirmation` |
 | `--secret NAME=ENV_VAR@ORIGIN` | typed when a call's start page is on `ORIGIN`; the model sees `NAME` only |
 | `--bitwarden ITEM` | a vault login a call may name in `bitwarden` |

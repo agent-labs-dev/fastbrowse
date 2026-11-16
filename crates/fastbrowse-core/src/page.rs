@@ -13,6 +13,8 @@ use crate::py::datetime::DateTime;
 use crate::py::json::dumped_len;
 use crate::py::{lax, text};
 
+pub mod json;
+
 pub fn cut_marker(omitted_chars: usize) -> String {
     format!("\n[Viewport text cut: {omitted_chars} characters omitted; read the page for the rest]")
 }
@@ -122,6 +124,10 @@ pub struct Control {
     /// A link the page marks with a `download` attribute: activating it saves a file instead of opening a page.
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub download: Option<bool>,
+    /// An image, canvas or video the page takes input on: what it shows is pixels, with no page elements inside it
+    /// to read or act on, such as a streamed remote browser or a canvas app.
+    #[serde(default, deserialize_with = "lax::opt_boolean", skip_serializing_if = "Option::is_none")]
+    pub drawn: Option<bool>,
     /// A link to a page the run has already read, as a browser styles a visited link: the agent marks it, the page
     /// never does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -165,6 +171,7 @@ impl Control {
             validation_message: None,
             next_page: None,
             download: None,
+            drawn: None,
             already_read: None,
             shown_by: None,
         }
@@ -349,6 +356,11 @@ pub struct Block {
     /// where it leads, nor where a value the page set apart as its own element ends.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<Link>,
+    /// This block is all the text the page renders for one item it repeats, such as a comment, card or list row, with
+    /// each part of it that shows no text named in square brackets: what the block does not show, that item does not
+    /// show. A record can be a `list_item` as well as a `record`, so its kind does not say this.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub whole_record: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -363,6 +375,9 @@ pub struct Capture {
     pub blocks: Vec<Block>,
     #[serde(default, deserialize_with = "lax::int_ge0")]
     pub inaccessible_frames: i64,
+    /// Where code blanked a secret value in `text`, as code point ranges: a `•` there is a mask, not page text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub masked: Vec<(i64, i64)>,
 }
 
 impl Capture {
@@ -499,6 +514,25 @@ pub struct ActResult {
 pub type PageResult<T> = Result<T, BrowserError>;
 
 pub trait Page: Send + Sync {
+    /// The documented maximum price of one configured web-search request. None leaves search unavailable.
+    fn search_price(&self) -> Option<f64> {
+        None
+    }
+
+    /// Replace the view with the provider's real result links, retaining any browser session behind it.
+    fn search<'a>(&'a self, _query: &'a str, _timeout_seconds: f64) -> BoxFuture<'a, SearchOutcome> {
+        Box::pin(async {
+            SearchOutcome {
+                cost: crate::models::CostLine::new(
+                    crate::models::CostComponent::Search,
+                    crate::models::CostBasis::Metered,
+                    Some(0.0),
+                ),
+                error: Some("web search is not configured".into()),
+                page_changed: false,
+            }
+        })
+    }
     /// Whether this page was fetched over HTTP: its scripts never ran, and it can only follow links.
     fn over_http(&self) -> bool {
         false
@@ -543,7 +577,20 @@ pub trait Page: Send + Sync {
     fn capture(&self) -> BoxFuture<'_, PageResult<Capture>>;
 
     /// Dispatch at most once. Returns STALE or COVERED without dispatching when guards fail.
+    /// A Wait passed directly here has no deadline; use `wait` for a bounded wait or cancel the action.
     fn act<'a>(&'a self, action: &'a Action, observation: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>>;
+
+    /// Dispatch a WAIT that lasts until the page changes by itself, for at most `seconds` (`f64::INFINITY` for a
+    /// run with no time limit), and report what changed as `act` does. A page that cannot watch itself change acts on
+    /// the WAIT as on any other action.
+    fn wait<'a>(
+        &'a self,
+        action: &'a Action,
+        observation: &'a Observation,
+        _seconds: f64,
+    ) -> BoxFuture<'a, PageResult<ActResult>> {
+        self.act(action, observation)
+    }
 
     /// Whether `target_id`, or with none any control `observation` offered, changed within `timeout_seconds`.
     ///
@@ -596,11 +643,19 @@ pub trait Page: Send + Sync {
         None
     }
 
-    /// Whether a top-level navigation or a frame's document load is in flight in the active tab: the page is still on
-    /// its way, and the end of that load is a lifecycle event.
-    fn loading(&self) -> bool {
-        false
+    /// The seconds a top-level navigation or a frame's document load in flight in the active tab is still waited on:
+    /// the page is on its way, and the end of that load is a lifecycle event. `None` when no load is, including one
+    /// that has had as long as a navigation is given and so may never end.
+    fn loading(&self) -> Option<f64> {
+        None
     }
+}
+
+/// A search attempt keeps its receipt even when the provider refused it or returned an invalid response.
+pub struct SearchOutcome {
+    pub page_changed: bool,
+    pub cost: crate::models::CostLine,
+    pub error: Option<String>,
 }
 
 #[cfg(test)]

@@ -146,7 +146,7 @@ impl Ledger {
                     ));
                 }
             }
-            CostComponent::Browser | CostComponent::Proxy => {}
+            CostComponent::Browser | CostComponent::Proxy | CostComponent::Search => {}
         }
         self.check_state(&state, estimate_dollars)?;
         if let Some(max) = self.limits.max_dollars
@@ -158,7 +158,7 @@ impl Ledger {
         match component {
             CostComponent::Jev => state.jev_calls += calls,
             CostComponent::Llm => state.llm_calls += calls,
-            CostComponent::Browser | CostComponent::Proxy => {}
+            CostComponent::Browser | CostComponent::Proxy | CostComponent::Search => {}
         }
         Ok(())
     }

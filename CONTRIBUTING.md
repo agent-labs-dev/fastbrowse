@@ -84,8 +84,8 @@ under `java/src/main/java/dev/agentlabs/fastbrowse/protocol`, and `python3 scrip
 a committed file differs from what the types produce, and `tests/test_protocol_schema.py` fails when the Python
 models in `src/fastbrowse/protocol.py` no longer describe the same schema.
 
-The npm packages and the crates on crates.io are published at the Python package's version, and the Rust binary
-reports it too, as do the Java client on Maven Central and the .NET client on NuGet. `scripts/npm_versions.py` fails
+The npm packages are published at the Python package's version, and the Rust crates and binary carry it too, as do
+the Java client's jar and the .NET client. `scripts/npm_versions.py` fails
 when `packages/sdk/package.json`, the `[workspace.package]` version in `Cargo.toml`, a crate's pin in
 `[workspace.dependencies]`, the version in `java/pom.xml` or the one in `dotnet/src/Fastbrowse/Fastbrowse.csproj` holds
 another number, and with `--write` sets them all from

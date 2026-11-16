@@ -93,7 +93,7 @@ test('runTask refuses what serve refuses, with its code and message', async () =
   const reply = JSON.parse(await core.runTask(params({ tsak: 1 })));
   assert.equal(reply.error.code, -32602);
   assert.match(reply.error.message, /^run: tsak: unknown field `tsak`/);
-  assert.equal(core.protocolVersion(), 2);
+  assert.equal(core.protocolVersion(), 3);
 });
 
 test('a run hands each event to onEvent, in order, before it resolves', async () => {

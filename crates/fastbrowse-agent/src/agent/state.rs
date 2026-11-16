@@ -3,8 +3,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use fastbrowse_core::decision::DecisionError;
-use fastbrowse_core::llm::LLMError;
+use fastbrowse_core::decision::{Answer, DecisionError};
+use fastbrowse_core::llm::{Generation, LLMError};
 use fastbrowse_core::models::{Attachment, Authorization, Evidence, Status, StepChoice, StepResult, WallKind};
 use fastbrowse_core::page::{BrowserError, Capture, Control, Observation};
 use fastbrowse_core::py::dump::Dump;
@@ -14,9 +14,10 @@ use indexmap::IndexMap;
 use super::recovery::{Idle, Withheld};
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes, address, fact_id};
-use crate::policy::{Decision, HistoryEntry, RelevanceCache};
+use crate::policy::{Decision, HistoryEntry};
 use crate::retrieval::ComposedAnswer;
 use crate::retrieval::whole_page_facts;
+use crate::start::KnownPages;
 
 /// Reads a page gets between finished reads: one that did not finish is tried once more, then the page counts as read.
 const READ_TRIES: u8 = 2;
@@ -242,6 +243,27 @@ impl SiteFailure {
     }
 }
 
+/// The known pages request a run sent while its first page opened, answered with its cost unrecorded: the run that
+/// takes the answer records it, which after an escalation to a browser is the browser run's ledger. Dropped, the request
+/// is aborted, so a cancelled run's request stops with it and records what it was billed.
+pub(crate) struct KnownAsked(tokio::task::JoinHandle<crate::error::Result<Generation<KnownPages>>>);
+
+impl KnownAsked {
+    pub fn new(asked: tokio::task::JoinHandle<crate::error::Result<Generation<KnownPages>>>) -> KnownAsked {
+        KnownAsked(asked)
+    }
+
+    pub async fn answer(mut self) -> crate::error::Result<Generation<KnownPages>> {
+        (&mut self.0).await.unwrap_or_else(|error| Err(AgentError::Invalid(format!("not answered: {error}"))))
+    }
+}
+
+impl Drop for KnownAsked {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 pub(crate) struct RunState {
     pub task: String,
     /// The recipe this run replays, while it has steps left to offer.
@@ -264,7 +286,14 @@ pub(crate) struct RunState {
     /// Addresses where a bot check did not clear, and the routes proposed around them, each opened once.
     pub walled: Vec<String>,
     pub routes: HashSet<String>,
-    pub relevance_cache: RelevanceCache,
+    /// Pages the site is known to serve for the items the task names, offered as places to navigate until each has
+    /// been open (#983).
+    pub known_pages: Vec<String>,
+    /// The request for `known_pages` while it is out. A run decides its first step while it is, and waits for it only
+    /// before acting on a decision or proposing another route, so the request is not on every run's first step.
+    pub known_asked: Option<KnownAsked>,
+    /// The known pages the run has been on: each stays one the run may navigate to, and is not offered again.
+    pub reached_known_pages: Vec<String>,
     pub steps: Vec<StepResult>,
     /// What Jev was offered for the latest decision, for the next step recorded, which is the one that decision led to.
     pub choices: Vec<StepChoice>,
@@ -293,6 +322,8 @@ pub(crate) struct RunState {
     /// The one renderer hang this run may recover without risking a replay of the action.
     pub hung_page_reopened: bool,
     pub last_page: Option<(String, String)>,
+    /// The document in which Jev was last asked whether the task needs an action inside a drawn surface.
+    pub surface_judged: Option<(String, String)>,
     /// The source of the latest navigation, scoped to the destination that followed it.
     pub navigation_from: Option<((String, String), Observation)>,
     /// Jev's sign-in readings stay with the document they described, not with every later route.
@@ -300,10 +331,17 @@ pub(crate) struct RunState {
     /// Each page state reached, with `evidence_reads` when it was last on screen: going back to one with nothing read
     /// since is going round, not forward.
     pub reached: HashMap<String, usize>,
+    /// Addresses actually observed, including pages reached through ordinary links. Recovery proposes unseen routes.
+    pub visited_addresses: HashSet<String>,
     /// Reads that added evidence, counted over the run.
     pub evidence_reads: usize,
-    /// The action whose page change the next observation judges: a new page state, or one revisited after new
-    /// evidence, is progress.
+    /// `evidence_reads` when a return to a page state already reached last counted as progress. One read buys one
+    /// return: a run going round a cycle of several states otherwise had each of them judged a return after new
+    /// evidence in turn, so one read on Google Flights renewed progress four times while it cleared and reapplied a
+    /// filter the site failed on (#976).
+    pub returned_at: usize,
+    /// The action whose page change the next observation judges: a new page state, or the first return after new
+    /// evidence to one seen before it, is progress.
     pub landing: Option<Withheld>,
     /// The actions that moved nothing since the last one that did. Done again they do the same, so asks leave them out;
     /// one the browser refused as covered is left out only until a performed action changes the page.
@@ -312,9 +350,8 @@ pub(crate) struct RunState {
     pub acted_from: Option<Observation>,
     /// Jev's word that the task rules out downloading, asked once a control the page says downloads is in play.
     pub downloads_forbidden: Option<bool>,
-    /// Jev's word that the task rules out changing what the page's fields and settings hold, asked once an edit is in
-    /// play.
-    pub edits_forbidden: Option<bool>,
+    /// Jev's word on which changes to the page's fields and settings the task allows, asked once an edit is in play.
+    pub edits: Option<Edits>,
     /// Pages read, by `read_key`, each with whether an action changed it since it was last read.
     pub read_documents: HashMap<(String, String), bool>,
     /// Reads begun on each page, by `read_key`, since its last finished read, so a read that did not finish is retried
@@ -340,11 +377,16 @@ pub(crate) struct RunState {
     pub read_whole: Vec<Capture>,
     /// A DONE was refused because the task is something to carry out, not to be told.
     pub to_carry_out: bool,
+    /// Over HTTP, the task asks for a step besides opening and reading pages, whatever it wants reported.
+    pub asks_steps: bool,
     /// The latest finish check found a step the task asks for that the site does not allow.
     pub refused: bool,
     /// The latest finish check found this step the task asks to be carried out not yet done.
     pub undone: Option<String>,
     pub output_intent: OutputIntent,
+    /// Startup judgments are applied when first needed. Kept behind a pointer because growing the run state
+    /// overflowed a debug worker stack during a fill.
+    pub output_answers: Option<Box<IndexMap<String, Answer>>>,
     /// What the task says about signing in, asked of the task alone at the first sign-in wall. None until then, and
     /// when Jev gave no answer.
     pub sign_in: Option<SignInNeeds>,
@@ -668,6 +710,17 @@ impl RunState {
         }
     }
 
+    /// Records what the known pages request cost, for a run that ends without taking its answer. An ending run does not
+    /// wait for it, so a time limit still ends the run on time: one still out is aborted.
+    pub async fn known_pages_unused(&mut self) {
+        if let Some(asked) = self.known_asked.take()
+            && asked.0.is_finished()
+            && let Ok(answer) = asked.answer().await
+        {
+            let _ = self.ledger.for_answer().record([answer.cost]);
+        }
+    }
+
     pub fn carried_on(self, ledger: Arc<Ledger>) -> RunState {
         RunState {
             ledger,
@@ -684,6 +737,7 @@ impl RunState {
             commits: 0,
             redecided: false,
             last_page: None,
+            surface_judged: None,
             navigation_from: None,
             ..self
         }
@@ -711,7 +765,9 @@ impl RunState {
             challenge_reloads: HashSet::new(),
             walled: Vec::new(),
             routes: HashSet::new(),
-            relevance_cache: RelevanceCache::default(),
+            known_pages: Vec::new(),
+            known_asked: None,
+            reached_known_pages: Vec::new(),
             steps: Vec::new(),
             choices: Vec::new(),
             history: Vec::new(),
@@ -728,15 +784,18 @@ impl RunState {
             blank_waited: HashSet::new(),
             hung_page_reopened: false,
             last_page: None,
+            surface_judged: None,
             navigation_from: None,
             login_readings: HashMap::new(),
             reached: HashMap::new(),
+            visited_addresses: HashSet::new(),
             evidence_reads: 0,
+            returned_at: 0,
             landing: None,
             idle: Vec::new(),
             acted_from: None,
             downloads_forbidden: None,
-            edits_forbidden: None,
+            edits: None,
             read_documents: HashMap::new(),
             read_tries: HashMap::new(),
             unanswered_images: HashSet::new(),
@@ -749,9 +808,11 @@ impl RunState {
             schema_partial: None,
             read_whole: Vec::new(),
             to_carry_out: false,
+            asks_steps: false,
             refused: false,
             undone: None,
             output_intent: OutputIntent::Unknown,
+            output_answers: None,
             sign_in: None,
             dates: Vec::new(),
             appearance: false,
@@ -842,12 +903,23 @@ mod tests {
     }
 }
 
+/// Which changes to what the page's fields and settings hold a task allows, as Jev reads the task alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edits {
+    Allowed,
+    /// The task asks for some changes and rules out the rest, so each edit goes ahead only if the task asks for it.
+    RequestedOnly,
+    /// The task rules out every change, authorized or not (#838).
+    Forbidden,
+}
+
 /// Jev's reading of the task at a sign-in wall, each a question of its own, so code decides what the wall means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SignInNeeds {
     /// The task needs a signed-in account: its own orders, messages, settings or other private pages.
     pub account: bool,
-    /// The task itself gives the credentials to sign in with.
+    /// The task gives the credentials to sign in with, or says to sign in with saved or configured ones: asked only
+    /// whether it gives them, a task to sign in with the saved password and report a 2FA prompt read the wall instead.
     pub credentials: bool,
     /// The task asks about the access restriction itself, which the wall shows.
     pub inspects: bool,

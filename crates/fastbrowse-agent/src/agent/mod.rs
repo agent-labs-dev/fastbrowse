@@ -6,12 +6,14 @@
 //! keyed on a hash of the request body.
 
 mod acting;
+mod batching;
 mod driving;
 mod finishing;
 pub mod helpers;
 mod reading;
 mod recovery;
 mod replay;
+mod search;
 mod seeing;
 pub(crate) mod state;
 
@@ -41,6 +43,7 @@ use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
 use acting::Carried;
+use finishing::outcome_notes;
 use state::{Flow, RunState, Stop};
 
 use crate::error::AgentError;
@@ -87,8 +90,9 @@ pub type RecipeSink = Arc<Mutex<Option<RecipeOutcome>>>;
 
 /// A run that ended on a page without a browser: what it knew, and where it stood.
 pub struct Resume {
-    state: RunState,
-    url: String,
+    // A browser handoff moves this state across nested futures; keep its fields off their poll stacks.
+    state: Box<RunState>,
+    url: Option<String>,
 }
 
 /// What the agent learns about the page as it goes, kept apart from the run so the page and the models can be asked
@@ -250,7 +254,7 @@ impl Agent {
         let mut requested_frame = false;
         let mut changed: Option<String> = None;
         let resume = options.resume.take();
-        let scoped = jev_spend(Lines::Ledger(ledger.clone()), Some(ledger.clone()), async {
+        let spending = jev_spend(Lines::Ledger(ledger.clone()), Some(ledger.clone()), async {
             let running = Box::pin(async {
                 let body = Box::pin(self.body(task, &options, resume, &ledger, &mut slot));
                 match body.await {
@@ -282,6 +286,13 @@ impl Agent {
                     (result, false, false)
                 }
             };
+            // A run that ends before it acts still records what its known pages request cost. One handed on to a
+            // browser takes the request with it, and the browser run records it.
+            if !ended.2
+                && let Some(state) = slot.as_mut()
+            {
+                state.known_pages_unused().await;
+            }
             requested_frame = slot.as_ref().is_some_and(|state| {
                 matches!(state.output_intent, state::OutputIntent::Image | state::OutputIntent::TextAndImage)
             });
@@ -289,12 +300,14 @@ impl Agent {
                 self.store_recipe(state, sink);
             }
             changed = slot.as_ref().and_then(|state| finishing::changed_fields(&state.history));
-            if let (Some(state), Some(page)) = (slot.take(), self.raw()) {
-                let url = self.page.browser_address().unwrap_or(page.url);
-                self.seen().resume = Some(Resume { state, url });
+            if let Some(state) = slot.take() {
+                let url = self.page.browser_address().or_else(|| self.raw().map(|page| page.url));
+                self.seen().resume = Some(Resume { state: Box::new(state), url });
             }
             ended
         });
+        // A question the run already asked beside the same state is answered from what Jev said then.
+        let scoped = crate::batches::knowing(Default::default(), spending);
         let (mut result, mut loop_returned, needs_browser) = self.trace.phase("run", scoped).await;
         let result = if needs_browser {
             // A run that needs a browser reports what the ledger spent and nothing else: no budget check and no ending
@@ -381,22 +394,29 @@ impl Agent {
         ledger: &Arc<Ledger>,
         slot: &mut Option<RunState>,
     ) -> Result<RunResult, Flow> {
-        if let Some(Resume { state, url }) = resume {
-            self.trace.phase("open", self.page.navigate(&url, None)).await?;
-            self.tell_page_ready().await;
-            let state = slot.insert(state.carried_on(ledger.clone()));
-            return Box::pin(self.run_loop(state, options.output_schema.as_deref(), options.until.as_ref())).await;
-        }
+        let prepared = match resume {
+            Some(Resume { state, url: Some(url) }) => {
+                self.trace.phase("open", self.page.navigate(&url, None)).await?;
+                self.tell_page_ready().await;
+                let state = slot.insert((*state).carried_on(ledger.clone()));
+                return Box::pin(self.run_loop(state, options.output_schema.as_deref(), options.until.as_ref())).await;
+            }
+            Some(Resume { state, url: None }) => Some(Box::new((*state).carried_on(ledger.clone()))),
+            None => None,
+        };
         let start = options.start.as_deref();
+        let mut opening = prepared.as_ref().and_then(|state| state.started_url.clone());
         // `start=None` leaves the browser where it is, which is what a caller stepping a run on from a page it opened
         // itself wants. `choose_start` is the other case: a caller with a goal and no page at all, who wants the first
         // address worked out from the task.
         let open = async {
-            let opening = match start {
-                Some(start) => Some(start.to_string()),
-                None if options.choose_start => Some(self.first_page(task, ledger).await?),
-                None => None,
-            };
+            if opening.is_none() {
+                opening = match start {
+                    Some(start) => Some(start.to_string()),
+                    None if options.choose_start => self.first_page(task, ledger).await?,
+                    None => None,
+                };
+            }
             if let Some(opening) = &opening {
                 self.trace.phase("open", self.page.navigate(opening, None)).await?;
             }
@@ -404,7 +424,7 @@ impl Agent {
                 // The caller gave a goal and no page, so this address was worked out from the task.
                 self.front_page_if_blank(opening, browsing_deadline(ledger, false)).await?;
             }
-            Ok::<_, Flow>(opening)
+            Ok::<_, Flow>(())
         };
         // The composer's context window is looked up from the provider's listing and kept by the client. Asked only
         // when the answer is written, the lookup held every run's last step for 0.5 to 2.7 s; asked now, it is known
@@ -413,26 +433,71 @@ impl Agent {
             let llm = self.llm.clone();
             runtime.spawn(async move { llm.context_tokens(fastbrowse_core::models::LLMPurpose::Compose).await });
         }
-        let given = state::with_inputs(task, &options.inputs);
-        let (opening, dates) = tokio::join!(open, self.task_dates(&given, ledger));
-        let (opening, dates) = (opening?, dates?);
+        let prepare = async {
+            if let Some(state) = prepared {
+                return Ok::<_, Flow>(state);
+            }
+            let given = state::with_inputs(task, &options.inputs);
+            // The known pages are asked beside the first page's open, observation and decision, and taken before the
+            // run first reads for, builds or acts on a decision, or proposes a route (`known_pages_arrived`). Awaited
+            // here, the text LLM's answer held every run's first step, for about a second and up to 3.4 s. A capped run
+            // still waits: a call checks the cap against the receipts already recorded, and this one's comes later.
+            let asked =
+                (!ledger.capped()).then(|| tokio::runtime::Handle::try_current().ok()).flatten().map(|runtime| {
+                    let (llm, given, start, ledger) =
+                        (self.llm.clone(), given.clone(), start.map(String::from), ledger.clone());
+                    state::KnownAsked::new(runtime.spawn(async move {
+                        crate::start::known_pages(&*llm, &given, start.as_deref(), Some(&ledger)).await
+                    }))
+                });
+            let (judgments, known) = if asked.is_some() {
+                // Polled once, the request reserves its call and leaves now, as it did when it was awaited here: a
+                // current-thread runtime would otherwise first poll it when the run waits on I/O.
+                tokio::task::yield_now().await;
+                (self.task_judgments(&given, ledger).await, Ok(Vec::new()))
+            } else {
+                tokio::join!(self.task_judgments(&given, ledger), self.known_pages(&given, start, ledger))
+            };
+            // Dropped on an error, the request is aborted and records what it was billed so far.
+            let (judgments, known) = (judgments?, known?);
+            let mut state = RunState::new(
+                task.to_string(),
+                options.inputs.clone(),
+                options.attachments.clone(),
+                options.authorization.clone().unwrap_or_default(),
+                ledger.clone(),
+            );
+            state.dates = judgments.dates;
+            state.output_answers = judgments.output;
+            state.known_pages = known;
+            state.known_asked = asked;
+            state.replay = options.recipe.clone().map(replay::Replay::new);
+            state.context = options.context.clone();
+            state.caller_start = start.map(String::from);
+            Ok(Box::new(state))
+        };
+        let (opened, prepared) = tokio::join!(open, prepare);
+        let prepared = prepared.map(|mut state| {
+            state.started_url = opening;
+            state
+        });
+        // HTTP can need a browser before any capture exists. Keep task judgments for that handoff, without
+        // treating other opening failures as a run that reached its first page.
+        if let Err(flow) = opened {
+            match prepared {
+                Ok(state) if matches!(&flow, Flow::Browser(BrowserError::NeedsBrowser(_))) => {
+                    self.seen().resume = Some(Resume { state, url: None });
+                }
+                Ok(mut state) => state.known_pages_unused().await,
+                Err(_) => {}
+            }
+            return Err(flow);
+        }
+        let state = slot.insert(*prepared?);
         self.tell_page_ready().await;
-        let mut state = RunState::new(
-            task.to_string(),
-            options.inputs.clone(),
-            options.attachments.clone(),
-            options.authorization.clone().unwrap_or_default(),
-            ledger.clone(),
-        );
-        state.dates = dates;
-        state.replay = options.recipe.clone().map(replay::Replay::new);
-        state.context = options.context.clone();
-        state.started_url = opening.clone();
-        state.caller_start = start.map(String::from);
         if start.is_some() {
             state.start_landing_url = Some(self.page.address().await?);
         }
-        let state = slot.insert(state);
         Box::pin(self.run_loop(state, options.output_schema.as_deref(), options.until.as_ref())).await
     }
 
@@ -493,7 +558,8 @@ impl Agent {
                     && !composed.claims.is_empty()
                 {
                     // Only a rejected composition stops a run unverified, so one that passes every claim and coverage
-                    // check answers what that stop was about, as it would have at done. A run stuck going back and
+                    // check, and that its composer did not call partial, answers what that stop was about, as it would
+                    // have at done. A run stuck going back and
                     // forth over pages it had read held such an answer too, and came back stuck under "Partial
                     // evidence only": when the task asks only to be told, the stop was over navigation, not the
                     // answer. A task asking for something done is not done because what was read holds.
@@ -507,6 +573,7 @@ impl Agent {
                         Status::Stuck => told,
                         _ => false,
                     } && composed.problem.is_none()
+                        && composed.partial.is_none()
                         && !state.refused
                         && state.undone.is_none();
                     // A task asking to be told can also ask for steps, such as setting a field and then reporting it,
@@ -524,9 +591,22 @@ impl Agent {
                         let requested = state.output_intent == state::OutputIntent::TextAndImage;
                         return self.ending_frame(result, requested).await;
                     }
+                    // A partial draft keeps the stop's own status: the composer said what the answer leaves out.
+                    let missing =
+                        composed.partial.as_ref().map(|partial| format!("{}{partial}", finishing::PARTIAL_ANSWER));
                     let partial = marked_partial(composed);
-                    let error = error.or_else(|| state.refused.then(|| self.redact(finishing::REFUSED)));
+                    let error = error
+                        .or_else(|| state.refused.then(|| self.redact(finishing::REFUSED)))
+                        .or_else(|| missing.map(|missing| self.redact(&missing)));
                     return self.answered(&partial, &notes, Some(state), ledger, stop.status, error, budget);
+                }
+                // A task that only carries something out reports what it read after its last step, as at done, and
+                // whether it is one is asked only when that would leave out an answer read before such a step. Asking
+                // can fail on a spent budget, and the notes then answer as they stand.
+                if state.output_intent == state::OutputIntent::Unknown
+                    && outcome_notes(state).supporting().len() < state.notes.supporting().len()
+                {
+                    let _ = self.output_intent(state).await;
                 }
                 return self.partial_result(&notes, Some(state), ledger, stop.status, error, budget);
             }
@@ -635,14 +715,13 @@ impl Agent {
                 return self.answered(partial, &notes, Some(state), ledger, status, error, budget);
             }
         }
-        if state.is_some_and(|state| state.compose) {
-            // A failed compose call cannot promote context into an answer: only facts Jev marked as answering are safe
-            // to return, and an empty set must stay an answerless failure rather than become a raw evidence dump.
-            if let Some(answer) = draft_answer(notes) {
-                return self.answered(&answer, notes, state, ledger, status, error, budget);
-            }
-            return self.result(state, ledger, status, Outcome { error, budget, ..Outcome::default() });
-        }
+        // A run stuck on a desktop form after choosing Germany cited "United Kingdom", the combo box's value as its
+        // first read saw it, before the choice: a task that only carries something out answers, stopped or not, with
+        // what it read after its last step that changes the site (#989).
+        let outcome = state.filter(|state| state.output_intent == state::OutputIntent::CarriedOut).map(outcome_notes);
+        let notes = outcome.as_ref().unwrap_or(notes);
+        // A composing run that lost its browser came back with its answering facts unmarked, read as the whole answer to
+        // a task it never finished; every stopped run's draft says it is partial (#962).
         match partial_answer(notes) {
             Some(answer) => self.answered(&answer, notes, state, ledger, status, error, budget),
             None => self.result(state, ledger, status, Outcome { error, budget, ..Outcome::default() }),
@@ -741,7 +820,14 @@ impl Agent {
                 }
             }
         }
-        Some(Wall { kind: kind.unwrap_or_else(|| wall_kind(&credentials)), origin, fields, seen_at_ms: now_ms() })
+        // A page offering nothing to act on cannot be signed into (#635): a refusal that leaves no way in is a bot or
+        // access check, and naming it `sign_in` sends a caller to a password that cannot pass it.
+        let kind = match kind {
+            Some(kind) => kind,
+            None if raw.as_ref().is_some_and(|raw| raw.controls.is_empty()) => WallKind::BotCheck,
+            None => wall_kind(&credentials),
+        };
+        Some(Wall { kind, origin, fields, seen_at_ms: now_ms() })
     }
 
     fn public_fact(&self, fact: &Fact, notes: &Notes) -> StepFact {
@@ -840,6 +926,7 @@ impl Agent {
         }
         Ok(StepContext {
             task: state.task.clone(),
+            web_search: self.page.search_price().is_some(),
             subgoal: state.hint.clone(),
             dates: state.dates.clone(),
             notes: self.decision_notes(state),
@@ -848,10 +935,18 @@ impl Agent {
             check_login,
             check_answer: check_bot && !state.read_pages.contains(&observation.page_key),
             check_bot,
+            // Set by the step loop, which knows the document it last asked in.
+            check_surface: false,
             has_attachments: !state.attachments.is_empty(),
             secrets,
             start_url: state.caller_start.clone(),
             start_landing_url: state.start_landing_url.clone(),
+            known_pages: state
+                .known_pages
+                .iter()
+                .filter(|url| !state.reached_known_pages.contains(url))
+                .cloned()
+                .collect(),
             background: state.context.clone(),
             omitted_actions: 0,
             problem: None,
@@ -874,6 +969,7 @@ impl Agent {
             screenshot: None,
             ahead: self.ahead(state, observation),
             plan_ahead: self.config.plan_ahead,
+            list_read: crate::policy::ListRead::None,
         })
     }
 
@@ -930,6 +1026,15 @@ impl Agent {
         !observation.document_key.is_empty() && state.read_documents.get(&state::read_key(observation)) == Some(&false)
     }
 
+    /// Whether this step already judged that the page holds evidence for the task: Jev said it shows a fact the task
+    /// needs, or the run is composing from records and this page is unread. A read of such a page is not asked again
+    /// whether it holds any: the run that read ten pages of quotes for a count was told page 10 held none by its read,
+    /// at 0.58 against the step's 0.89, and its answer said page 10 was never read.
+    pub(super) fn page_shows(state: &RunState, observation: &Observation, decision: &crate::policy::Decision) -> bool {
+        decision.shows_answer.is_some_and(|probability| probability > fastbrowse_core::decision::EVEN_ODDS)
+            || (state.compose && !Self::page_read(state, observation))
+    }
+
     /// Whether the page is read before the action Jev chose takes the run off it, and if so whether the read may take
     /// it that the page holds evidence for the task.
     ///
@@ -948,8 +1053,7 @@ impl Agent {
     ) -> Option<bool> {
         let unread = !Self::page_read(state, observation);
         let first = state.first_url.as_deref() == Some(observation.url.as_str());
-        let shows = decision.shows_answer.is_some_and(|probability| probability > fastbrowse_core::decision::EVEN_ODDS)
-            || (state.compose && unread);
+        let shows = Self::page_shows(state, observation, decision);
         (decision.operation != fastbrowse_core::models::Operation::Read && (shows || (first && unread)))
             .then_some(shows)
     }
@@ -966,6 +1070,9 @@ impl Agent {
         }
         if observation.controls.is_empty() {
             facts.push("This page offers no links or controls: nothing on it leads anywhere else.".into());
+        }
+        if !crate::policy::drawn_surfaces(&observation.controls).is_empty() {
+            facts.push("An element marked `drawn` is a drawn surface, such as a streamed remote browser or a canvas: what it shows is pixels, with no elements inside it for this run to fill or press. A click on it lands on the surface as one element, not on a field or button drawn inside it.".into());
         }
         let document = &observation.document_key;
         let read = state.read_documents.get(&state::read_key(observation)).copied();

@@ -589,7 +589,7 @@ fn cursor_ass(marks: &[PointerMark], origin: Instant, until: Instant, width: u32
     let mut out = format!(
         "[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,1,0,7,0,0,0,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     );
-    // The arrow is drawn at a size that reads on a full-width frame, whatever the page's own scale.
+    // The marker is centered on the action point and stays upright as it travels.
     let size = (f64::from(width) / 1280.0 * 140.0).round().max(100.0);
     let seconds = |mark: &PointerMark| mark.at.saturating_duration_since(origin).as_secs_f64();
     let point = |mark: &PointerMark| {
@@ -614,13 +614,13 @@ fn cursor_ass(marks: &[PointerMark], origin: Instant, until: Instant, width: u32
         // The result card is no longer the page that supplied these coordinates.
         let end = marks.get(i + 1).map_or(until, |next| (seconds(next) - 0.4).max(at)).min(until);
         out.push_str(&format!(
-            "Dialogue: 2,{},{},Default,,0,0,0,,{{{placed}\\fscx{size}\\fscy{size}\\p1\\bord2\\shad1\\1c&HFFFFFF&\\3c&H000000&}}m 0 0 l 0 20 5 15 9 24 12 23 8 14 15 14{{\\p0}}\n",
+            "Dialogue: 2,{},{},Default,,0,0,0,,{{{placed}\\an5\\fscx{size}\\fscy{size}\\p1\\bord1\\shad0\\1c&H3052C5&\\3c&HFFFFFF&}}m -11 -5 l -11 -11 -5 -11 -5 -9 -9 -9 -9 -5 m 5 -11 l 11 -11 11 -5 9 -5 9 -9 5 -9 m 11 5 l 11 11 5 11 5 9 9 9 9 5 m -5 11 l -11 11 -11 5 -9 5 -9 9 -5 9 m -1 -1 l 1 -1 1 1 -1 1{{\\p0}}\n",
             ass_time(start),
             ass_time(end)
         ));
         if mark.operation == Operation::Click {
             out.push_str(&format!(
-                "Dialogue: 1,{},{},Default,,0,0,0,,{{\\pos({x},{y})\\p1\\bord3\\1a&HFF&\\3c&H3366FF&\\fscx100\\fscy100\\t(0,400,\\fscx400\\fscy400\\3a&HFF&)}}m -6 0 b -6 -3 -3 -6 0 -6 b 3 -6 6 -3 6 0 b 6 3 3 6 0 6 b -3 6 -6 3 -6 0{{\\p0}}\n",
+                "Dialogue: 1,{},{},Default,,0,0,0,,{{\\pos({x},{y})\\an5\\p1\\bord3\\1a&HFF&\\3c&H3052C5&\\fscx100\\fscy100\\t(0,400,\\fscx400\\fscy400\\3a&HFF&)}}m -6 0 b -6 -3 -3 -6 0 -6 b 3 -6 6 -3 6 0 b 6 3 3 6 0 6 b -3 6 -6 3 -6 0{{\\p0}}\n",
                 ass_time(at),
                 ass_time((at + 0.4).min(until))
             ));

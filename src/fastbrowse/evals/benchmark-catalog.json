@@ -4,9 +4,11 @@
   "origin": "fastbrowse-internal",
   "owner": "parallax",
   "task_sources": {
-    "live_tasks.py": "4863b9de7b17a163473e7b19207e9e190eb0d15efa87dafcf10292b1b73fa309",
-    "more_tasks.py": "7bced0cb86327c1414492dae46635ffb70da3d2b34f1c0f25e74aa9e0b56349b",
-    "versions.json": "5c7778400081a388e0f707068678a5ca47221a16540828da9408e1dc687c8e6f"
+    "live_tasks.py": "f38f85fb15765c6740f59875c7ccbc3a252a76b3e66e698877830ee6bfa24892",
+    "more_tasks.py": "f4fd910a5a939052aa88e7450d0e65f0b6c34c44048805b61010d856fec502fe",
+    "sweep_tasks.py": "794208a46b1ed4603869cc94a0a5d98264858b3c5b51f04901cc9f637867f643",
+    "task_specs.py": "b1b332f607883d9997931944b5062bc7a0a407c42f7b2d24b32c9fe0f44c58e8",
+    "versions.json": "8e8e6818f661052b08915105769ab08242918f0abd757f334c20a919e2b38ce9"
   },
   "suites": {
     "core": [
@@ -23,12 +25,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "c228539ea1846f5a",
-        "task_version": 9
+        "task_version": 10
       },
       {
         "id": "pypi-structured",
@@ -43,12 +43,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "3ca8c54655938a9e",
-        "task_version": 9
+        "task_version": 10
       },
       {
         "id": "hn-top",
@@ -63,12 +61,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "ba733c9b3d12954f",
-        "task_version": 8
+        "task_version": 9
       },
       {
         "id": "github-license",
@@ -83,12 +79,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "78ba8992040f45c1",
-        "task_version": 8
+        "task_version": 9
       },
       {
         "id": "pypi-newer",
@@ -103,12 +97,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "f7077c5a5f126a03",
-        "task_version": 8
+        "task_version": 9
       },
       {
         "id": "wiki-godel",
@@ -123,12 +115,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "e0d610a509cafa29",
-        "task_version": 8
+        "task_version": 9
       },
       {
         "id": "arxiv-title",
@@ -143,12 +133,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "00c3c34245a15f0f",
-        "task_version": 8
+        "task_version": 9
       },
       {
         "id": "saucedemo-cart",
@@ -160,13 +148,12 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "the task needs login credentials, and it has no way to be given any",
           "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
           "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
         },
         "expect": "complete",
         "source_fingerprint": "0a0531776e71ff0d",
-        "task_version": 8
+        "task_version": 9
       },
       {
         "id": "expandtesting-login",
@@ -178,13 +165,12 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "the task needs login credentials, and it has no way to be given any",
           "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
           "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
         },
         "expect": "complete",
         "source_fingerprint": "ba3143609d241af7",
-        "task_version": 8
+        "task_version": 9
       },
       {
         "id": "practice-login",
@@ -196,13 +182,12 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "the task needs login credentials, and it has no way to be given any",
           "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
           "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
         },
         "expect": "complete",
         "source_fingerprint": "19747c0563957322",
-        "task_version": 8
+        "task_version": 9
       },
       {
         "id": "saucedemo-locked-out",
@@ -214,13 +199,12 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "the task needs login credentials, and it has no way to be given any",
           "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
           "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
         },
         "expect": "complete",
         "source_fingerprint": "c6b239c9b5bc38a6",
-        "task_version": 8
+        "task_version": 9
       },
       {
         "id": "saucedemo-checkout",
@@ -232,13 +216,12 @@
           "browser-use-ultrafast"
         ],
         "excluded": {
-          "jev-ultrafast": "the task needs login credentials, and it has no way to be given any",
           "browser-harness": "the task needs login credentials, and we give it none, because it would hold them in its own shell",
           "browser-use-oss": "the task needs login credentials, and we give it none, because the code its model writes can read any it is given"
         },
         "expect": "complete",
         "source_fingerprint": "35b155cc42f41ada",
-        "task_version": 8
+        "task_version": 9
       },
       {
         "id": "saucedemo-pause",
@@ -250,13 +233,12 @@
         "excluded": {
           "browser-use": "the task passes only by stopping before an irreversible step it does not authorize, and the hosted Browser Use API takes no authorization setting and no pause, so it cannot be told the step is unauthorized",
           "browser-use-ultrafast": "the task passes only by stopping before an irreversible step it does not authorize, and the hosted Browser Use API takes no authorization setting and no pause, so it cannot be told the step is unauthorized",
-          "jev-ultrafast": "the task passes only by stopping before an irreversible step it does not authorize, and it takes no authorization setting and has no way to ask: it only ends done or blocked",
           "browser-harness": "the task passes only by stopping before an irreversible step it does not authorize, and it takes no authorization setting and has no way to pause",
           "browser-use-oss": "the task passes only by stopping before an irreversible step it does not authorize, and it takes no authorization setting and has no way to pause"
         },
         "expect": "needs_confirmation",
         "source_fingerprint": "7c5594cddef5cdc7",
-        "task_version": 7
+        "task_version": 8
       },
       {
         "id": "google-flights",
@@ -271,12 +253,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "9448b40bccff7458",
-        "task_version": 8
+        "task_version": 9
       },
       {
         "id": "wiki-open",
@@ -284,7 +264,6 @@
         "arms": [
           "fastbrowse",
           "browser-use",
-          "jev-ultrafast",
           "fastbrowse-pool",
           "cua-codex",
           "browser-harness",
@@ -293,8 +272,8 @@
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "c49dfb335a964acd",
-        "task_version": 11
+        "source_fingerprint": "6c22ee9eaf7828f1",
+        "task_version": 13
       },
       {
         "id": "pypi-open",
@@ -302,7 +281,6 @@
         "arms": [
           "fastbrowse",
           "browser-use",
-          "jev-ultrafast",
           "fastbrowse-pool",
           "cua-codex",
           "browser-harness",
@@ -311,8 +289,8 @@
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "2911a912fedfe9d3",
-        "task_version": 11
+        "source_fingerprint": "990dc21e627c169c",
+        "task_version": 13
       },
       {
         "id": "github-open",
@@ -320,7 +298,6 @@
         "arms": [
           "fastbrowse",
           "browser-use",
-          "jev-ultrafast",
           "fastbrowse-pool",
           "cua-codex",
           "browser-harness",
@@ -329,8 +306,8 @@
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "1a7f63477397d5e7",
-        "task_version": 11
+        "source_fingerprint": "adddbd9db3c78c3e",
+        "task_version": 13
       },
       {
         "id": "arxiv-open",
@@ -338,7 +315,6 @@
         "arms": [
           "fastbrowse",
           "browser-use",
-          "jev-ultrafast",
           "fastbrowse-pool",
           "cua-codex",
           "browser-harness",
@@ -347,8 +323,8 @@
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "6516b0eaf67737d5",
-        "task_version": 11
+        "source_fingerprint": "c3942c4794ea13ce",
+        "task_version": 13
       },
       {
         "id": "hn-comments",
@@ -356,7 +332,6 @@
         "arms": [
           "fastbrowse",
           "browser-use",
-          "jev-ultrafast",
           "fastbrowse-pool",
           "cua-codex",
           "browser-harness",
@@ -365,8 +340,8 @@
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "7064b3846456084e",
-        "task_version": 11
+        "source_fingerprint": "297c00e1c43b97f5",
+        "task_version": 13
       },
       {
         "id": "flights-search",
@@ -374,7 +349,6 @@
         "arms": [
           "fastbrowse",
           "browser-use",
-          "jev-ultrafast",
           "fastbrowse-pool",
           "cua-codex",
           "browser-harness",
@@ -383,8 +357,8 @@
         ],
         "excluded": {},
         "expect": "complete",
-        "source_fingerprint": "80d5242b25e8945f",
-        "task_version": 11
+        "source_fingerprint": "609beb3d81843e94",
+        "task_version": 13
       }
     ],
     "dev": [
@@ -401,12 +375,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "f6df0641c23cf0e4",
-        "task_version": 8
+        "task_version": 9
       },
       {
         "id": "hockey-bruins-1990",
@@ -421,12 +393,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "93430407786017ea",
-        "task_version": 9
+        "task_version": 10
       },
       {
         "id": "oscars-2012",
@@ -441,12 +411,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "fa90ef4aac6aed2c",
-        "task_version": 8
+        "task_version": 9
       },
       {
         "id": "dynamic-loading",
@@ -461,12 +429,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "cf0dec3320b53241",
-        "task_version": 9
+        "task_version": 10
       },
       {
         "id": "frame-heading",
@@ -481,12 +447,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "43ac9ffd9200b7cc",
-        "task_version": 5
+        "task_version": 6
       },
       {
         "id": "hover-profile",
@@ -501,12 +465,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "7f547c40a23d2648",
-        "task_version": 9
+        "task_version": 10
       },
       {
         "id": "ruff-release",
@@ -521,12 +483,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "f2311ac70681a4f0",
-        "task_version": 8
+        "task_version": 9
       },
       {
         "id": "pizza-order",
@@ -541,12 +501,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "78b029ec79f0e91e",
-        "task_version": 8
+        "task_version": 9
       },
       {
         "id": "new-window",
@@ -561,12 +519,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "307bae3f37f5d9a0",
-        "task_version": 9
+        "task_version": 10
       },
       {
         "id": "countries-mongolia",
@@ -581,12 +537,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "95aa50adab956959",
-        "task_version": 8
+        "task_version": 9
       },
       {
         "id": "table-largest-due",
@@ -601,12 +555,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "6d4fcc01bb02e352",
-        "task_version": 9
+        "task_version": 10
       },
       {
         "id": "quotes-search",
@@ -621,12 +573,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "5b1f0deb3b319c3a",
-        "task_version": 8
+        "task_version": 9
       },
       {
         "id": "quotes-rowling-count",
@@ -641,12 +591,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "4c6d35972d65cf08",
-        "task_version": 5
+        "task_version": 6
       },
       {
         "id": "books-mystery-cheapest",
@@ -661,12 +609,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "494b73d06f559209",
-        "task_version": 8
+        "task_version": 9
       },
       {
         "id": "quotes-einstein-count",
@@ -681,12 +627,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "8b417bcaaabf9b2d",
-        "task_version": 9
+        "task_version": 10
       },
       {
         "id": "quotes-js-page2",
@@ -701,12 +645,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "0eda113d8f02c565",
-        "task_version": 8
+        "task_version": 9
       },
       {
         "id": "crates-serde",
@@ -721,12 +663,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "64a75cbb4c69eec4",
-        "task_version": 8
+        "task_version": 9
       },
       {
         "id": "httpx-requires-python",
@@ -741,12 +681,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "158d0c7ea896d796",
-        "task_version": 9
+        "task_version": 10
       },
       {
         "id": "new-tab-page",
@@ -761,12 +699,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "6a3d5ac1b4bd8b64",
-        "task_version": 4
+        "task_version": 5
       },
       {
         "id": "countries-namibia-area",
@@ -781,12 +717,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "0bed8db7c2821240",
-        "task_version": 4
+        "task_version": 5
       },
       {
         "id": "table-total-due",
@@ -801,12 +735,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "3defccca7fb992d6",
-        "task_version": 4
+        "task_version": 5
       },
       {
         "id": "quotes-search-lewis",
@@ -821,12 +753,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "6d6610dc5fdb1b14",
-        "task_version": 4
+        "task_version": 5
       }
     ],
     "stretch-dev": [
@@ -843,12 +773,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "79e0670225c37569",
-        "task_version": 8
+        "task_version": 9
       },
       {
         "id": "stretch-date-range-monday",
@@ -863,12 +791,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "b1b6b640489752bb",
-        "task_version": 9
+        "task_version": 10
       },
       {
         "id": "stretch-books-nonfiction-five-star",
@@ -883,12 +809,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "8f668e60c5812bad",
-        "task_version": 10
+        "task_version": 11
       },
       {
         "id": "stretch-bstack-apple-google",
@@ -903,12 +827,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "10d1f5a26309b161",
-        "task_version": 9
+        "task_version": 10
       },
       {
         "id": "stretch-calendar-first-friday",
@@ -923,12 +845,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "8ecaeac1c214868d",
-        "task_version": 11
+        "task_version": 12
       },
       {
         "id": "stretch-quotes-top-authors",
@@ -943,12 +863,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "4fd442319d3af9ae",
-        "task_version": 9
+        "task_version": 10
       },
       {
         "id": "stretch-books-young-adult-one-star",
@@ -963,12 +881,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "c5edd1868cc69f3d",
-        "task_version": 4
+        "task_version": 5
       },
       {
         "id": "stretch-datepicker-last-saturday",
@@ -983,12 +899,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "a3f1dd765071a290",
-        "task_version": 4
+        "task_version": 5
       },
       {
         "id": "stretch-bstack-apple-samsung",
@@ -1003,12 +917,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "c52f8cdf769c5061",
-        "task_version": 9
+        "task_version": 10
       },
       {
         "id": "stretch-datepicker-last-sunday",
@@ -1023,12 +935,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "fabd7bfa24ad7e63",
-        "task_version": 4
+        "task_version": 5
       },
       {
         "id": "stretch-books-sequential-art-one-star",
@@ -1043,12 +953,10 @@
           "browser-use-ultrafast",
           "browser-use-oss"
         ],
-        "excluded": {
-          "jev-ultrafast": "the task asks for an answer, and it returns none: it only ends done or blocked"
-        },
+        "excluded": {},
         "expect": "complete",
         "source_fingerprint": "2a79739cf6c92e82",
-        "task_version": 4
+        "task_version": 5
       }
     ]
   },
@@ -1068,11 +976,6 @@
       "tier": "hosted",
       "default": false
     },
-    "jev-ultrafast": {
-      "pin": "jev-ultrafast commit cf3c406f0fc4becff8986ed4d4d37b7b9f102e45",
-      "tier": "A",
-      "default": true
-    },
     "browser-use": {
       "pin": "browser-use-sdk==3.12.1 API v4; default model, reported per row",
       "tier": "hosted",
@@ -1084,22 +987,21 @@
       "default": true
     },
     "browser-use-oss": {
-      "pin": "browser-use==1.0.2; default model bu-fast, default mode (ultrafast on bu-fast)",
+      "pin": "browser-use==1.0.3; default model bu-fast, default mode (ultrafast on bu-fast)",
       "tier": "A",
       "default": false
     },
     "cua-codex": {
-      "pin": "cua-driver==0.46.1; codex-cli==0.167.1",
+      "pin": "cua-driver==0.47.19; codex-cli==0.169.0",
       "tier": "local",
       "default": false
     },
     "browser-harness": {
-      "pin": "browser-harness==0.1.13; codex-cli==0.167.1; cli+skill",
+      "pin": "browser-harness==0.1.13; codex-cli==0.169.0; cli+skill",
       "tier": "A",
       "default": false
     }
   },
-  "ultrafast_text_model": "google/gemini-3.1-flash-lite",
   "retired": [
     {
       "id": "stretch-wizard-correction",

@@ -73,15 +73,6 @@ test('an explicit binary path also selects the in-process PDF reader', () =>
     assert.deepEqual(createRequire(import.meta.url)(path).named, [binary]);
   }));
 
-test('an addon from before PDF helpers still starts', () =>
-  withDir(async dir => {
-    const path = stubAddon(dir, PROTOCOL_VERSION, true);
-    const env = { FASTBROWSE_BINARY: join(dir, 'fastbrowse') };
-    const fb = await Fastbrowse.start({ inProcess: true, addonPath: path, env });
-    assert.equal(fb.fastbrowseVersion, packageVersion);
-    await fb.close();
-  }));
-
 test('an addon of another protocol is refused for its protocol, not for lacking a PDF helper', () =>
   withDir(async dir => {
     const path = stubAddon(dir, PROTOCOL_VERSION - 1, true);

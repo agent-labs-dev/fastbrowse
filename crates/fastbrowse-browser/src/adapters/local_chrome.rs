@@ -948,28 +948,62 @@ mod tests {
 
     /// A process forked after a launch, as an embedder's worker is, launches its own Chrome rather than waiting on the
     /// spawner thread it inherited the channel of but not the thread.
+    ///
+    /// The launch and the fork run in a copy of the test binary that runs only this test: a fork from the shared
+    /// harness inherits, locked for good, any lock another test's thread held at that moment.
     #[cfg(target_os = "linux")]
     #[test]
     fn a_process_forked_after_a_launch_can_launch() {
-        let launch = || {
+        const NAME: &str = "adapters::local_chrome::tests::a_process_forked_after_a_launch_can_launch";
+        const ALONE: &str = "FASTBROWSE_TEST_FORKED_LAUNCH";
+        if std::env::var_os(ALONE).is_none() {
+            let alone = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", NAME, "--test-threads=1", "--nocapture"])
+                .env(ALONE, "1")
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            let output = String::from_utf8_lossy(&alone.stdout) + String::from_utf8_lossy(&alone.stderr);
+            assert!(alone.status.success() && output.contains("1 passed"), "the test run alone failed: {output}");
+            return;
+        }
+        // Each step that fails exits with its own code, so the parent can name it.
+        const FAILURES: [&str; 4] =
+            ["", "the launch timed out", "the launch could not spawn", "the launched process did not succeed"];
+        let launch = || -> i32 {
             let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             runtime.block_on(async {
                 let spawned = tokio::time::timeout(Duration::from_secs(5), spawn_bound_to_owner(Command::new("true")));
                 match spawned.await {
-                    Ok(Ok(mut child)) => child.wait().await.is_ok_and(|status| status.success()),
-                    _ => false,
+                    Err(_) => 1,
+                    Ok(Err(_)) => 2,
+                    Ok(Ok(mut child)) => {
+                        if child.wait().await.is_ok_and(|status| status.success()) {
+                            0
+                        } else {
+                            3
+                        }
+                    }
                 }
             })
         };
-        assert!(launch(), "the first launch failed");
+        let first = launch();
+        assert_eq!(first, 0, "the first launch failed: {}", FAILURES[first as usize]);
         // SAFETY: the child only builds a runtime, launches and exits; it never returns into the test harness.
         let child = unsafe { libc::fork() };
         if child == 0 {
-            unsafe { libc::_exit(if launch() { 0 } else { 1 }) };
+            unsafe { libc::_exit(launch()) };
         }
         let mut status = 0;
         assert_eq!(unsafe { libc::waitpid(child, &mut status, 0) }, child);
-        assert!(libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0, "the forked process could not launch");
+        assert!(libc::WIFEXITED(status), "the forked process ended without exiting: wait status {status}");
+        let code = libc::WEXITSTATUS(status) as usize;
+        assert_eq!(
+            code,
+            0,
+            "the forked process could not launch: {}",
+            FAILURES.get(code).unwrap_or(&"an unknown failure")
+        );
     }
 
     /// Chrome belongs to the process, not to the thread that launched it: a runtime worker that ends, as one handed to

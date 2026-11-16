@@ -218,10 +218,7 @@ fn the_questions_jev_is_asked_are_the_bytes_python_sends() {
     link.href = Some("/page/2".into());
     assert_eq!(irreversible_question(Operation::Click, &link, None, &[]).dump_json(), text_of(questions, "link"));
     assert_eq!(irreversible_question(Operation::Enter, &link, None, &[]).dump_json(), text_of(questions, "link_enter"));
-    assert_eq!(
-        downloads_question("Read the report, do not save anything").dump_json(),
-        text_of(questions, "downloads")
-    );
+    assert_eq!(downloads_question().dump_json(), text_of(questions, "downloads"));
 }
 
 #[test]

@@ -17,6 +17,12 @@ public enum LLMPurpose {
     PAGES,
     @JsonProperty("dates")
     DATES,
+    @JsonProperty("known_pages")
+    KNOWN_PAGES,
+    @JsonProperty("recovery_pages")
+    RECOVERY_PAGES,
+    @JsonProperty("search")
+    SEARCH,
     @JsonProperty("unobtainable")
     UNOBTAINABLE,
     @JsonProperty("groups")

@@ -79,11 +79,13 @@ impl Replay {
             shows_answer: None,
             site_failure: None,
             unobtainable: None,
+            inside_drawn: None,
             destination: None,
             replayed: true,
             by_code: false,
             offered: Vec::new(),
             plan: Vec::new(),
+            read_scope: crate::policy::ReadScope::Page,
             ahead: Default::default(),
         })
     }

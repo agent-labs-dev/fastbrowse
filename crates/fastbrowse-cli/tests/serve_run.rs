@@ -13,6 +13,7 @@ use common::{
 };
 use fastbrowse_cli::runner::RunError;
 use fastbrowse_core::models::{Authorization, Limits, LocalChrome, Status};
+use fastbrowse_core::protocol::PROTOCOL_VERSION;
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 
@@ -399,7 +400,7 @@ async fn test_a_configuration_error_is_refused_before_run_task_is_called() {
         (no_model_keys, json!({}), "OPENROUTER_API_KEY"),
         (no_model_keys, json!({"local": true}), "OPENROUTER_API_KEY"),
         (|s| s.browser_use_api_key = None, json!({}), "BROWSER_USE_API_KEY"),
-        (|s| s.chrome = Some("not-installed-anywhere".into()), json!({"local": true}), "Chrome was not found"),
+        (|s| s.chrome = Some("not-installed-anywhere".into()), json!({"launch": true}), "Chrome was not found"),
     ];
     for (change, fields, named) in cases {
         let recorder = Recorder::default();
@@ -467,10 +468,10 @@ async fn test_the_server_answers_other_requests_while_a_run_is_active() {
     let hold = Arc::new(Notify::new());
     let mut client = serving(Recorder { hold: Some(hold.clone()), ..Recorder::default() }.runner(), settings());
     let run = client.call("run", Some(run_params("run-1", json!({}))));
-    let handshake = client.result("initialize", Some(json!({"protocol_version": 2}))).await;
+    let handshake = client.result("initialize", Some(json!({"protocol_version": PROTOCOL_VERSION}))).await;
     hold.notify_one();
     let reply = client.reply(run).await;
-    assert_eq!(handshake["protocol_version"], 2);
+    assert_eq!(handshake["protocol_version"], PROTOCOL_VERSION);
     assert_eq!(reply["result"]["status"], "complete");
 }
 

@@ -207,6 +207,20 @@ def test_replay_ignores_the_bearer_token_and_serves_duplicates_in_order() -> Non
     assert served == [1, 2, 2, 2]
 
 
+def test_replay_keeps_each_sent_request_with_its_response_as_a_trace_line() -> None:
+    cassette = Cassette(task="t")
+    cassette.exchanges.append(_exchange(JEV, {"q": 1}, '{"n": 1}'))
+    proxy = Proxy(cassette)
+    with proxy as base:
+        _post(base, JEV, {"q": 1})
+        _post(base, JEV, {"q": 2})
+    assert [(line["event"], line["request"], line["status"]) for line in proxy.sent] == [
+        ("http", {"q": 1}, 200),
+        ("http", {"q": 2}, MISS_STATUS),
+    ]
+    assert proxy.sent[0]["response"] == {"n": 1}
+
+
 def test_replay_translates_only_the_recorded_fixture_origin() -> None:
     cassette = Cassette(task="t", meta={"port": 47334})
     cassette.exchanges.append(
@@ -420,6 +434,7 @@ def test_record_forwards_the_routing_a_run_sends_for_its_model(monkeypatch: pyte
 
 
 def test_agent_gets_no_real_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EXA_API_KEY", "real")
     monkeypatch.setenv("OPENROUTER_API_KEY", "real")
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "real")
     monkeypatch.setenv("FASTBROWSE_HEADED", "1")

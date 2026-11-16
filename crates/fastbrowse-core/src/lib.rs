@@ -15,6 +15,7 @@ pub mod citations;
 pub mod config;
 pub mod decision;
 pub mod effects;
+pub mod keys;
 pub mod llm;
 pub mod models;
 pub mod navigation;

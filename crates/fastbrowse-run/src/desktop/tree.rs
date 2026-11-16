@@ -358,6 +358,7 @@ pub fn capture(window: &Window, root: &Element) -> Capture {
             control_context: None,
             href: None,
             links: Vec::new(),
+            whole_record: false,
         });
         offset += 2;
     }
@@ -369,6 +370,7 @@ pub fn capture(window: &Window, root: &Element) -> Capture {
         text: whole,
         blocks,
         inaccessible_frames: 0,
+        masked: Vec::new(),
     }
 }
 

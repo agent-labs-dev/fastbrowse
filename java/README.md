@@ -4,8 +4,11 @@ A browser agent that picks instead of generating. Every page is indexed into the
 choice model picks one of them. An LLM plans, reads and writes prose. Code owns authorization gates, secret
 resolution and cost limits, and reports an answer it cannot verify as unverified.
 
-Add the client and the binary for each platform you run on (`natives-darwin-arm64`, `natives-darwin-x64`,
-`natives-linux-arm64`, `natives-linux-x64`, `natives-win32-x64`). Java 17 or newer.
+The client is not on Maven Central yet, so the coordinates below do not resolve from a public repository. Until
+it is, install it from a checkout with `mvn -f java/pom.xml install` and run a fastbrowse binary of your own through
+`StartOptions.binaryPath` or `FASTBROWSE_BINARY`. Once published, add the client and the binary for each platform
+you run on (`natives-darwin-arm64`, `natives-darwin-x64`, `natives-linux-arm64`, `natives-linux-x64`,
+`natives-win32-x64`). Java 17 or newer.
 
 ```xml
 <dependency>
@@ -51,7 +54,8 @@ Fastbrowse.start().use { fastbrowse ->
 for the platform, unpacked once into the user cache directory; `StartOptions.binaryPath` or `FASTBROWSE_BINARY` runs
 a binary of your own instead. Model keys come from the environment, as the fastbrowse command reads them:
 `TYPESAFE_API_KEY` for Jev and `OPENROUTER_API_KEY` for the LLM. A run uses a Browser Use Cloud browser with
-`BROWSER_USE_API_KEY`, or local Chrome with `BrowserOptions.builder().local(true)`.
+`BROWSER_USE_API_KEY`, or your own Chrome through the fastbrowse extension with `BrowserOptions.builder().local(true)`;
+`.launch(true)` starts a separate Chrome instead.
 
 `run` returns a `CompletableFuture<RunResult>`. A run ends in a `Status`; a run that needs a login or got stuck is
 read from the result, not thrown. Cancelling the future stops the run, and the next run on the client waits until its

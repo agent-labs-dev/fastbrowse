@@ -316,6 +316,7 @@ public sealed class FastbrowseClient : IAsyncDisposable
         Fetch = options.Fetch ? true : null,
         Browser = options.BrowserFirst ? true : null,
         Local = browser.Local ? true : null,
+        Launch = browser.Launch ? true : null,
         Chrome = browser.Chrome,
         CloudProfile = browser.CloudProfile,
         CdpUrl = browser.CdpUrl,

@@ -40,7 +40,7 @@ BOXED = {"long": "Long", "double": "Double", "boolean": "Boolean"}
 # Each constructor shape a release published, as the protocol keys added since: a new field joins every set here, and
 # the shape before it is added as a set of its own, so no published constructor goes away.
 PUBLISHED_SHAPES = {
-    "RunParams": [{"recipe", "save_recipe", "desktop"}, {"desktop"}],
+    "RunParams": [{"recipe", "save_recipe", "desktop", "launch"}, {"desktop", "launch"}, {"launch"}],
 }
 
 

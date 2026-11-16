@@ -13,6 +13,7 @@ pub mod http;
 pub mod openai_compatible;
 pub mod openai_decisions;
 pub mod providers;
+pub mod search;
 pub mod system_one;
 pub mod validation;
 pub mod vercel;

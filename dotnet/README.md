@@ -25,7 +25,8 @@ Console.WriteLine($"{result.Status} {result.Answer}");
 (arm64, x64), Linux with glibc (arm64, x64) and Windows (x64) under `runtimes/<rid>/native`; `StartOptions.BinaryPath`
 or `FASTBROWSE_BINARY` runs a binary of your own instead. Model keys come from the environment, as the fastbrowse
 command reads them: `TYPESAFE_API_KEY` for Jev and `OPENROUTER_API_KEY` for the LLM. A run uses a Browser Use Cloud
-browser with `BROWSER_USE_API_KEY`, or local Chrome with `new BrowserOptions { Local = true }`. .NET 10 or newer.
+browser with `BROWSER_USE_API_KEY`, or your own Chrome through the fastbrowse extension with
+`new BrowserOptions { Local = true }`; `Launch = true` starts a separate Chrome instead. .NET 10 or newer.
 
 A run ends in a `Status`; a run that needs a login or got stuck is read from the result, not thrown. Cancelling the
 `CancellationToken` stops a run, and `RunAsync` throws `OperationCanceledException` once its browser has closed. One

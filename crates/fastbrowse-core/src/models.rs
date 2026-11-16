@@ -91,6 +91,7 @@ str_enum! {
         Read = "read",
         Done = "done",
         Navigate = "navigate",
+        Search = "search",
     }
 }
 
@@ -450,6 +451,7 @@ str_enum! {
         Llm = "llm",
         Browser = "browser",
         Proxy = "proxy",
+        Search = "search",
     }
 }
 
@@ -476,6 +478,9 @@ str_enum! {
         Fill = "fill",
         Pages = "pages",
         Dates = "dates",
+        KnownPages = "known_pages",
+        RecoveryPages = "recovery_pages",
+        Search = "search",
         Unobtainable = "unobtainable",
         Groups = "groups",
     }

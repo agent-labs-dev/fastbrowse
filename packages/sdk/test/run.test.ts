@@ -77,6 +77,7 @@ test('each option reaches the server under its wire name with its value intact',
       saveRecipe: '/tmp/healed-recipe.json',
       cursor: true,
       local: true,
+      launch: true,
       chrome: { binary: process.execPath, headed: true, profile: '/tmp/fastbrowse-profile' },
       viewport: [1280, 720],
     });
@@ -92,6 +93,7 @@ test('each option reaches the server under its wire name with its value intact',
       save_recipe: '/tmp/healed-recipe.json',
       cursor: true,
       local: true,
+      launch: true,
       chrome: { binary: process.execPath, headed: true, profile: '/tmp/fastbrowse-profile' },
       viewport: [1280, 720],
     });
@@ -166,18 +168,18 @@ test('cloud browser defaults given to start reach every run, and a per-run null 
 });
 
 test('browser defaults given to start are part of every run, and a per-run option wins', async () => {
-  const defaults = { local: true, chrome: { binary: process.execPath }, viewport: [800, 600] as [number, number] };
+  const defaults = { launch: true, chrome: { binary: process.execPath }, viewport: [800, 600] as [number, number] };
   await withServer({ ...scriptedRun('echo'), ...defaults }, async fb => {
     assert.deepEqual(await sent(fb, {}), {
       task: 'Add the kettle to the cart',
-      local: true,
+      launch: true,
       chrome: { binary: process.execPath },
       viewport: [800, 600],
     });
     assert.deepEqual(await sent(fb, { viewport: [1024, 768], start: 'https://shop.example/' }), {
       task: 'Add the kettle to the cart',
       start: 'https://shop.example/',
-      local: true,
+      launch: true,
       chrome: { binary: process.execPath },
       viewport: [1024, 768],
     });

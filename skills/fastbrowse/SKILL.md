@@ -7,13 +7,16 @@ description: Use fastbrowse to complete browser tasks described in natural langu
 
 Delegate a complete browser task to fastbrowse. It chooses page controls, runs the task, and returns an answer
 with evidence and a status. Give it the user's goal and necessary values rather than instructions for each click.
+For a list, state whether the task covers the shown records, every page or a numbered page range. fastbrowse
+can follow the list's next-page links while checking each page; an unfinished range remains partial.
 
 ## Choose an entry point
 
-Honor an explicit user browser choice first. Otherwise use the default Browser Use Cloud browser, which holds a
-residential proxy and passes bot checks. Use CLI `--local`, a separate headless Chrome with no window, when the task
-needs the caller's localhost or `BROWSER_USE_API_KEY` is not set, and explain why. Drive another browser only
-through a DevTools endpoint the user names; read [references/browser-access.md](references/browser-access.md) first.
+Honor an explicit user browser choice first. Otherwise the CLI runs in the user's own Chrome through the fastbrowse
+extension, signed in as they are and able to reach their localhost. Pass `--cloud` for a Browser Use Cloud browser,
+which holds a residential proxy and passes bot checks, when the task needs a clean browser or the user has no
+extension connected, and explain why. The CLI refuses `--headed`, `--profile`, `--cdp-url` and `--cdp-port`; those
+workflows go through the SDKs. Read [references/browser-access.md](references/browser-access.md) first.
 
 Use a connected fastbrowse MCP `browse` tool when its browser configuration matches that choice. Inspect its
 schema and pass `task` and `start` when known. Pass resource limits when the user supplies them or an
@@ -36,19 +39,22 @@ Allow time for the browser run and wait for the process to finish. Progress goes
 goes to stdout. Preserve stdout even on a nonzero exit, since it can contain an unfinished run's evidence.
 
 fastbrowse recommends one `OPENROUTER_API_KEY` for Jev and the LLM. `AI_GATEWAY_API_KEY` serves the LLM when
-OpenRouter is absent, and Jev as a last resort; `TYPESAFE_API_KEY` is the direct Jev route. Cloud browsing needs
-`BROWSER_USE_API_KEY`; local browsing needs Chrome. A cloud browser cannot reach the caller's localhost. Check for
-configured keys without printing their values; if missing, ask the user to configure them outside the conversation.
+OpenRouter is absent, and Jev as a last resort; `TYPESAFE_API_KEY` is the direct Jev route. `--cloud` needs
+`BROWSER_USE_API_KEY`; the default needs Chrome with the extension. Optional `EXA_API_KEY` offers web search without
+a browser; its result links can be read or opened, and search charges count against the run's dollar budget.
+A cloud browser cannot reach the caller's localhost. Check for configured keys without printing their values; if
+missing, ask the user to configure them outside the conversation.
 
-`max_dollars` limits model spend only. Cloud browser and proxy charges are added after the browser stops and
-can exceed that limit. For a strict total-spend ceiling, use `--local` or an existing browser when permitted;
+`max_dollars` limits model and web-search spend. Cloud browser and proxy charges are added after the browser stops and
+can exceed that limit. For a strict total-spend ceiling, use the default browser when permitted;
 otherwise explain that fastbrowse cannot enforce that ceiling for cloud runs and establish an
 acceptable budget before starting one. Count earlier run costs against the user's total budget across retries.
 
 ## Set the task boundary
 
 Include the goal, starting address when known, required output, relevant constraints, and supplied field values.
-One call can navigate, search, read multiple pages, and fill a form. Split calls when the next task depends on
+One call can navigate, search, read multiple pages, and fill a form. Widget keyboard actions follow the target's
+ARIA role; name a key chord in the task when a site needs a specific shortcut. Split calls when the next task depends on
 the first result or requires a new user decision. Each CLI call is a new run, not a resumable session.
 
 For read-only work, leave authorization off. For a write, only pass CLI `--authorize` or MCP `authorize: true`
@@ -76,7 +82,7 @@ verified facts from your own inference. A plausible answer with `unverified` is 
 | `needs_confirmation` | Report the pending action and obtain any missing authorization. |
 | `needs_login` | Read `wall.kind`. For `one_time_code`, fetch the code the site sent (email or text) if you can and pass it as a secret scoped to `wall.origin`; otherwise, and for `password` or `sign_in`, ask the user to sign in or configure an origin-scoped secret. |
 | `needs_input` | Ask for the missing value or file described in the result. |
-| `blocked` | Report the bot check (`wall.kind` is `bot_check`); let the user resolve it in a browser they control. Headless `--local` Chrome meets bot checks more often than the user's own browser. |
+| `blocked` | Report the bot check (`wall.kind` is `bot_check`); let the user resolve it in a browser they control. For a run in the user's Chrome, try `--cloud`; for a cloud run, try the extension. |
 | `unverified` | Report what could not be verified and preserve partial evidence. |
 | `budget_exceeded` | Report the exhausted resource; respect the user's total budget across retries. |
 | `observation_limit` | Narrow the task or required evidence to fit the observation limit. |

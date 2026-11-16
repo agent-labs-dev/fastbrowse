@@ -55,7 +55,6 @@ HOSTED = {"mode": "browser-use-hosted"}
         ("fastbrowse", CLOUD),
         ("fastbrowse", {"mode": "local-chrome", "headed": True}),
         ("fastbrowse-pool", POOL),
-        ("jev-ultrafast", CLOUD),
         ("browser-use", HOSTED),
         ("browser-use-oss", CLOUD),
     ],
@@ -70,7 +69,6 @@ def test_each_arm_may_publish_from_the_browser_it_is_measured_in(arm: str, brows
         ("fastbrowse-pool", CLOUD),  # a swapped record would publish the cloud browser as the pool
         ("fastbrowse", POOL),
         ("browser-use", CLOUD),
-        ("jev-ultrafast", HOSTED),
         ("fastbrowse", {"mode": "local-chrome"}),  # still headless with a throwaway profile
         ("cua-codex", CLOUD),  # an arm this build does not know
         ("browser-use-oss", HOSTED),

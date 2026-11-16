@@ -315,14 +315,16 @@ fn scripted_jev(script: &Value, state: &Value, questions: &Value, log: &[Value])
     for (key, question) in questions.as_object().unwrap() {
         if question["type"] == "noul" {
             // A case's answer is the one it expects to stand, so the checks of that answer pass unless it scripts them.
-            let default =
-                if matches!(key.as_str(), "login_required" | "bot_check" | "site_failure" | "unobtainable" | "dates") {
-                    0.0
-                } else if matches!(key.as_str(), "coverage" | "exact" | "carried") || key.starts_with("claim") {
-                    1.0
-                } else {
-                    script["noul"].as_f64().unwrap_or(0.0)
-                };
+            let default = if matches!(
+                key.as_str(),
+                "login_required" | "bot_check" | "site_failure" | "unobtainable" | "inside_drawn" | "dates"
+            ) {
+                0.0
+            } else if matches!(key.as_str(), "coverage" | "exact" | "carried") || key.starts_with("claim") {
+                1.0
+            } else {
+                script["noul"].as_f64().unwrap_or(0.0)
+            };
             let probability = nth(&script["nouls"][key], answered(key)).and_then(Value::as_f64).unwrap_or(default);
             answers.insert(key.clone(), serde_json::json!({"type": "noul", "probability": probability}));
             continue;
@@ -360,6 +362,10 @@ fn scripted_llm(case: &Value, purpose: &str, schema_name: &str, log: &[Value]) -
             return data.clone();
         }
         return serde_json::json!({"data": data, "cost": cost});
+    }
+    // A case recorded before the run asked for known pages (#983) knows of none.
+    if matches!(schema_name, "KnownPages" | "RecoveryPages") && case["llm"].get(schema_name).is_none() {
+        return serde_json::json!({"data": {"urls": []}, "cost": cost});
     }
     let calls = case["calls"].as_array().unwrap();
     let recorded = calls.iter().rev().find(|call| call["llm"]["schema_name"] == schema_name);
@@ -623,6 +629,81 @@ fn sold_out_case(quote: &str) -> Value {
     case
 }
 
+/// A live view of a remote browser: its page is one picture that takes clicks, beside a Reload button (#1084).
+fn live_view_case(inside: f64) -> Value {
+    let mut case = cases().into_iter().find(|case| case["name"] == "a step limit ends budget_exceeded").unwrap();
+    case["name"] = "a task inside a streamed remote browser".into();
+    case["task"] = "Inside the remote view, type tomsmith into the Username field, then click Login.".into();
+    case["calls"] = serde_json::json!([]);
+    case["limits"]["max_steps"] = 3.into();
+    case["jev"]["pick"] = serde_json::json!({"operation": "click"});
+    // Jev, seeing none of the task's fields among the page's elements, also read the page as a placeholder.
+    case["jev"]["nouls"]["site_failure"] = 0.9.into();
+    case["jev"]["nouls"]["inside_drawn"] = inside.into();
+    let home = &mut case["site"]["screens"]["home"];
+    home["observation"]["url"] = "https://live.test/view".into();
+    home["observation"]["controls"] = serde_json::json!([
+        {"id": "view", "frame_id": null, "role": "button", "label": "Remote browser view", "operations": ["click"],
+         "drawn": true},
+        {"id": "reload", "frame_id": null, "role": "button", "label": "Reload", "operations": ["click"]}
+    ]);
+    home["capture"]["url"] = "https://live.test/view".into();
+    case["site"]["urls"] = serde_json::json!({"https://live.test/view": "home"});
+    case["start"] = "https://live.test/view".into();
+    case
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_task_inside_a_streamed_view_ends_the_run_naming_the_limitation() {
+    // #1084: the run pressed the view, reloaded it for 12 steps and ended `unavailable`, "the site failed to deliver".
+    let log: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let (outcome, _) = play(&live_view_case(0.95), Some(log.clone())).await;
+    assert_eq!(outcome["status"], "stuck", "{outcome}");
+    assert!(outcome["steps"].as_array().unwrap().is_empty(), "{outcome}");
+    let error = outcome["error"].as_str().unwrap();
+    assert!(error.contains("'Remote browser view'"), "{error}");
+    assert!(error.contains("cannot act inside a streamed or canvas view"), "{error}");
+    assert!(!error.contains("failed to deliver"), "{error}");
+    // Jev was told what the surface is, and asked about the element the snapshot marked.
+    {
+        let log = log.lock().unwrap();
+        let asked = |call: &&Value| call["jev"]["questions"].as_str().is_some_and(|q| q.contains("\"inside_drawn\":"));
+        let call = log.iter().find(asked).expect("Jev was asked about the surface");
+        assert!(
+            call["jev"]["questions"].as_str().unwrap().contains("An element marked `drawn` is a drawn surface"),
+            "{call}"
+        );
+        let state = call["jev"]["state"].as_str().unwrap();
+        assert!(
+            state.contains("An element marked `drawn` is a drawn surface") && state.contains("\"drawn\":true"),
+            "{state}"
+        );
+    }
+    // A task that needs only the page's own elements runs on.
+    let (outcome, _) = play(&live_view_case(0.05), Some(Arc::default())).await;
+    assert_ne!(outcome["status"], "stuck", "{outcome}");
+    assert!(!outcome["error"].as_str().unwrap_or_default().contains("drawn surface"), "{outcome}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_surface_that_appears_in_a_document_already_seen_is_still_asked_about() {
+    // A live view shows a Retry button while its screencast starts, then its picture, in the same document.
+    let mut case = live_view_case(0.95);
+    // A page read as failed is judged afresh anyway, so this one is read as working.
+    case["jev"]["nouls"]["site_failure"] = 0.0.into();
+    let live = case["site"]["screens"]["home"].clone();
+    case["site"]["screens"]["live"] = live;
+    case["site"]["screens"]["home"]["observation"]["controls"] = serde_json::json!([
+        {"id": "retry", "frame_id": null, "role": "button", "label": "Retry", "operations": ["click"]}
+    ]);
+    case["site"]["actions"] =
+        serde_json::json!([{"screen": "home", "operation": "click", "target": "retry", "next": "live"}]);
+    let (outcome, _) = play(&case, Some(Arc::default())).await;
+    assert_eq!(outcome["status"], "stuck", "{outcome}");
+    assert_eq!(outcome["steps"].as_array().unwrap().len(), 1, "{outcome}");
+    assert!(outcome["error"].as_str().unwrap().contains("'Remote browser view'"), "{outcome}");
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_page_saying_the_tasks_item_is_sold_out_ends_the_run_unavailable_naming_it() {
     // #960: a run that read "Sold out" on its first step spent 74 more steps because nothing asked whether the task
@@ -847,8 +928,8 @@ fn status_case() -> Value {
     // Jev holds each claim supported by its quote, and the two together to cover the task.
     case["jev"]["nouls"] = serde_json::json!({"claim0": 0.9, "claim1": 0.9, "coverage": 0.9});
     case["llm"]["AnswerDraft"] = serde_json::json!([{"claims": [
-        {"text": "First: live, updated 16:59:21", "evidence_ids": ["e0"]},
-        {"text": "After waiting: live, updated 16:59:27", "evidence_ids": ["e1"]}
+        {"text": [{"prose": "First: live, updated 16:59:21"}], "evidence_ids": ["e0"]},
+        {"text": [{"prose": "After waiting: live, updated 16:59:27"}], "evidence_ids": ["e1"]}
     ]}]);
     let screen = |key: &str, text: &str| {
         let mut screen = case["site"]["screens"]["missing"].clone();
@@ -880,6 +961,56 @@ fn status_case() -> Value {
         "actions": [{"screen": "early", "operation": "wait", "next": "later"}]
     });
     case
+}
+
+/// A task asking whether a page is signed in, on an SSO wall whose pick is its "Log in with Google" button: `credentials`
+/// is the task's answer to whether it gives anything to sign in with.
+async fn play_sign_in_check(credentials: f64) -> Value {
+    let mut case = status_case();
+    case["name"] = "sign-in check".into();
+    case["task"] = "Read only: open https://status.test/ and report whether the editor loads and is logged in.".into();
+    case["limits"] = serde_json::json!({"max_steps": 3});
+    case["jev"]["pick"] = serde_json::json!({"operation": "click", "click_target": "google"});
+    case["jev"]["nouls"] = serde_json::json!({
+        "login_required": 1.0, "account": 1.0, "inspects": 1.0, "credentials": credentials,
+        "claim0": 0.9, "coverage": 0.9
+    });
+    case["llm"]["AnswerDraft"] = serde_json::json!([{"claims": [{"text": [{"prose": "The editor shows a sign-in page."}], "evidence_ids": ["e0"]}]}]);
+    let text = "Welcome back. Log in with Google";
+    let wall = &mut case["site"]["screens"]["early"];
+    wall["observation"]["viewport_text"] = text.into();
+    wall["observation"]["controls"] = serde_json::json!([
+        {"id": "google", "frame_id": null, "role": "button", "label": "Log in with Google", "operations": ["click"]}
+    ]);
+    wall["capture"]["text"] = text.into();
+    wall["capture"]["sha256"] = fastbrowse_core::py::sha256_hex(text.as_bytes()).into();
+    wall["capture"]["blocks"] =
+        serde_json::json!([{"source_id": "s0", "kind": "paragraph", "frame_id": null, "start": 0, "end": text.len()}]);
+    case["site"]["actions"] =
+        serde_json::json!([{"screen": "early", "operation": "click", "target": "google", "next": "later"}]);
+    play(&case, Some(Arc::default())).await.0
+}
+
+/// A sign-in check that gives no credentials is answered by the wall: the run reads it and finishes, and never clicks
+/// through to an SSO account or its consent (#1020).
+#[tokio::test(start_paused = true)]
+async fn a_sign_in_check_without_credentials_reads_the_wall_and_never_signs_in() {
+    let outcome = play_sign_in_check(0.0).await;
+    assert!(outcome["steps"].as_array().unwrap().iter().all(|step| step["operation"] != "click"), "{outcome}");
+    assert_eq!(outcome["status"], "complete", "{outcome}");
+    assert_eq!(outcome["evidence"][0]["quote"], "Welcome back. Log in with Google", "{outcome}");
+}
+
+/// The same check with credentials to sign in with still acts on the wall's sign-in controls.
+#[tokio::test(start_paused = true)]
+async fn a_sign_in_check_with_credentials_still_signs_in() {
+    let outcome = play_sign_in_check(1.0).await;
+    assert!(
+        outcome["steps"].as_array().unwrap().iter().any(|step| step["operation"] == "click"
+            && step["target"] == "Log in with Google"
+            && step["outcome"] == "executed"),
+        "{outcome}"
+    );
 }
 
 /// A task that reads a value, waits and reads it again finishes: Jev can pick a wait, the page moves on under it, and
@@ -915,5 +1046,233 @@ async fn each_cited_capture_is_kept_as_an_artifact_the_evidence_names() {
         // The kept bytes are the page text the quote was cut from: its digest is the evidence's capture digest.
         assert_eq!(artifact["sha256"], quoted["capture_sha256"]);
         assert_eq!(artifact["size_bytes"], quoted["quote"].as_str().unwrap().len());
+    }
+}
+
+fn list_case() -> Value {
+    let mut case = status_case();
+    case["name"] = "read a paginated list".into();
+    case["task"] = "Report the status from every page of the list at https://list.test/.".into();
+    case["start"] = "https://list.test/".into();
+    case["config"] = serde_json::json!({"plan_ahead":true});
+    case["jev"]["pick"] = serde_json::json!({
+        "operation": ["read_list", "read_list", "read_list", "done"],
+        "extent": "every_page", "pick": "text", "steps": "reads"
+    });
+    case["jev"]["nouls"] = serde_json::json!({
+        "claim0": 0.9, "claim1": 0.9, "claim2": 0.9, "coverage": 0.9, "actions": 0.9
+    });
+    let template = case["site"]["screens"]["early"].clone();
+    let mut screens = serde_json::Map::new();
+    screens.insert("blank".into(), case["site"]["screens"]["blank"].clone());
+    let mut urls = serde_json::Map::new();
+    let mut claims = Vec::new();
+    for (index, name) in ["Alpha", "Beta", "Gamma"].into_iter().enumerate() {
+        let url =
+            if index == 0 { "https://list.test/".into() } else { format!("https://list.test/page/{}/", index + 1) };
+        let key = format!("page{index}");
+        let text = format!("Status {name}.");
+        let mut screen = template.clone();
+        screen["observation"]["url"] = url.clone().into();
+        screen["observation"]["page_key"] = key.clone().into();
+        screen["observation"]["document_key"] = key.clone().into();
+        screen["observation"]["viewport_text"] = text.clone().into();
+        let controls = if index < 2 {
+            vec![
+                fastbrowse_core::page::Control {
+                    next_page: Some(true),
+                    href: Some(format!("https://list.test/page/{}/", index + 2)),
+                    ..fastbrowse_core::page::Control::new("next", "link", "Next", [Operation::Click])
+                }
+                .dump(),
+            ]
+        } else {
+            Vec::new()
+        };
+        screen["observation"]["controls"] = controls.into();
+        screen["capture"]["url"] = url.clone().into();
+        screen["capture"]["text"] = text.clone().into();
+        screen["capture"]["sha256"] = fastbrowse_core::py::sha256_hex(text.as_bytes()).into();
+        screen["capture"]["blocks"][0]["end"] = text.chars().count().into();
+        claims.push(serde_json::json!({"text": [{"prose": text}], "evidence_ids": [format!("e{index}")]}));
+        screens.insert(key.clone(), screen);
+        urls.insert(url, key.into());
+    }
+    case["site"] = serde_json::json!({"start":"blank", "urls": urls, "screens":screens, "actions": []});
+    case["llm"]["AnswerDraft"] = serde_json::json!([{"claims":claims}]);
+    case
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_list_read_keeps_each_pages_citations_and_checks_without_target_decisions() {
+    let log = Arc::default();
+    let (outcome, _) = play(&list_case(), Some(Arc::clone(&log))).await;
+    assert_eq!(outcome["status"], "complete", "{outcome}");
+    let evidence = outcome["evidence"].as_array().unwrap();
+    assert_eq!(evidence.len(), 3, "{outcome}");
+    for url in ["https://list.test/", "https://list.test/page/2/", "https://list.test/page/3/"] {
+        assert!(evidence.iter().any(|quote| quote["url"] == url), "{outcome}");
+    }
+    let log = log.lock().unwrap();
+    let continuation: Vec<Value> = log
+        .iter()
+        .filter_map(|call| {
+            let questions: Value = serde_json::from_str(call["jev"]["questions"].as_str()?).ok()?;
+            questions["operation"]["criteria"].get("stop_list").map(|_| questions.clone())
+        })
+        .collect();
+    assert_eq!(continuation.len(), 2, "{log:?}");
+    for questions in continuation {
+        for key in ["login_required", "bot_check", "site_failure", "unobtainable", "shows_answer"] {
+            assert!(questions.get(key).is_some(), "{questions}");
+        }
+        assert!(questions.get("click_target").is_none(), "{questions}");
+    }
+    let navigations: Vec<_> =
+        outcome["steps"].as_array().unwrap().iter().filter(|step| step["operation"] == "navigate").collect();
+    assert_eq!(navigations.len(), 2);
+    assert!(navigations.iter().all(|step| step["decided_by"] == "code"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_list_read_checks_its_step_budget_before_the_next_navigation() {
+    let mut case = list_case();
+    case["limits"] = serde_json::json!({"max_steps":3});
+    let (outcome, _) = play(&case, Some(Arc::default())).await;
+    assert_eq!(outcome["status"], "budget_exceeded", "{outcome}");
+    assert_eq!(outcome["steps"].as_array().unwrap().len(), 3, "{outcome}");
+    assert_eq!(outcome["final_url"], "https://list.test/page/2/", "{outcome}");
+    assert!(outcome["evidence"].as_array().unwrap().iter().all(|quote| quote["url"] != "https://list.test/page/3/"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_list_read_checks_login_on_the_next_page_before_reading_it() {
+    let mut case = list_case();
+    case["jev"]["nouls"]["login_required"] = serde_json::json!([0.0, 1.0]);
+    case["jev"]["nouls"]["account"] = 1.0.into();
+    let log = Arc::default();
+    let (outcome, _) = play(&case, Some(Arc::clone(&log))).await;
+    assert_eq!(outcome["status"], "needs_login", "{outcome}");
+    assert_eq!(outcome["steps"].as_array().unwrap().len(), 2, "{outcome}");
+    assert!(outcome["evidence"].as_array().unwrap().iter().all(|quote| quote["url"] == "https://list.test/"));
+    assert_eq!(outcome["final_url"], "https://list.test/page/2/");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_page_cannot_spin_a_list_read_outside_the_step_budget() {
+    let mut case = list_case();
+    case["limits"] = serde_json::json!({"max_steps": 2});
+    case["jev"]["nouls"]["site_failure"] = 1.0.into();
+    let (outcome, _) = play(&case, Some(Arc::default())).await;
+    assert_eq!(outcome["status"], "budget_exceeded", "{outcome}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_list_handoff_restores_target_choices_without_recording_a_step() {
+    let mut case = list_case();
+    case["limits"] = serde_json::json!({"max_steps": 3});
+    case["jev"]["pick"]["operation"] = serde_json::json!(["read_list", "stop_list", "wait"]);
+    let log = Arc::default();
+    let (outcome, _) = play(&case, Some(Arc::clone(&log))).await;
+    assert_eq!(outcome["status"], "budget_exceeded", "{outcome}");
+    assert_eq!(outcome["steps"].as_array().unwrap().len(), 3);
+    let decisions: Vec<Value> = log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|call| {
+            let q: Value = serde_json::from_str(call["jev"]["questions"].as_str()?).ok()?;
+            q.get("operation").map(|_| q.clone())
+        })
+        .collect();
+    assert!(decisions[1]["operation"]["criteria"].get("stop_list").is_some());
+    assert!(decisions[2]["operation"]["criteria"].get("stop_list").is_none());
+    assert!(decisions[2].get("click_target").is_some());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_credentialed_list_wall_returns_to_actions_before_reading_it() {
+    let mut case = list_case();
+    case["limits"] = serde_json::json!({"max_steps": 3});
+    case["secrets"] = serde_json::json!({"password": ["test-password", ["https://list.test"]]});
+    case["jev"]["nouls"]["login_required"] = 1.0.into();
+    case["jev"]["nouls"]["credentials"] = 1.0.into();
+    case["jev"]["nouls"]["account"] = 1.0.into();
+    case["jev"]["pick"]["operation"] = serde_json::json!(["read_list", "read_list", "wait"]);
+    let (outcome, _) = play(&case, Some(Arc::default())).await;
+    assert_eq!(outcome["status"], "budget_exceeded", "{outcome}");
+    assert!(
+        outcome["evidence"].as_array().unwrap().iter().all(|quote| quote["url"] == "https://list.test/"),
+        "{outcome}"
+    );
+    assert_eq!(outcome["final_url"], "https://list.test/page/2/");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stalled_run_offers_a_fresh_route_to_jev_before_stopping() {
+    let mut case = cases()
+        .into_iter()
+        .find(|case| {
+            case["name"] == "clicks on different buttons that change nothing trip the stall rule and Jev is asked again"
+        })
+        .unwrap();
+    case["calls"] = serde_json::json!([]);
+    case["config"] = serde_json::json!({"stall": {"unchanged_actions": 1, "max_recoveries": 0}});
+    case["limits"]["max_steps"] = 4.into();
+    case["llm"]["RecoveryPages"] = serde_json::json!([{ "urls": ["https://app.test/alternate"] }]);
+    case["jev"]["recover"] = serde_json::json!({"operation": "navigate"});
+    let mut alternate = case["site"]["screens"]["panel"].clone();
+    alternate["observation"]["url"] = "https://app.test/alternate".into();
+    alternate["observation"]["page_key"] = "alternate".into();
+    alternate["observation"]["document_key"] = "alternate".into();
+    alternate["capture"]["url"] = "https://app.test/alternate".into();
+    case["site"]["screens"]["alternate"] = alternate;
+    case["site"]["urls"]["https://app.test/alternate"] = "alternate".into();
+    let log: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let (outcome, _) = play(&case, Some(log.clone())).await;
+    assert!(
+        outcome["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|step| step["operation"] == "navigate" && step["target"] == "https://app.test/alternate"),
+        "{outcome}"
+    );
+    let log = log.lock().unwrap();
+    let proposals: Vec<_> = log
+        .iter()
+        .filter(|call| {
+            call["llm"]["messages"].as_str().is_some_and(|text| text.contains("Another route before stopping"))
+        })
+        .collect();
+    assert_eq!(proposals.len(), 2, "one proposal per stall, including after navigation makes progress");
+    assert_eq!(outcome["status"], "stuck", "a repeated route must not renew recovery: {outcome}");
+    let prompt = proposals[0]["llm"]["messages"].as_str().unwrap();
+    assert!(prompt.contains("untrusted data") && prompt.contains("Three switches") && prompt.contains("history"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_or_repeated_recovery_proposal_preserves_the_stall_stop() {
+    for proposal in
+        [serde_json::json!({"raise": "provider unavailable"}), serde_json::json!({"urls": ["https://app.test/"]})]
+    {
+        let mut case = cases()
+            .into_iter()
+            .find(|case| {
+                case["name"]
+                    == "clicks on different buttons that change nothing trip the stall rule and Jev is asked again"
+            })
+            .unwrap();
+        case["calls"] = serde_json::json!([]);
+        case["config"] = serde_json::json!({"stall": {"unchanged_actions": 1, "max_recoveries": 0}});
+        let current = case["site"]["screens"]["panel"]["observation"]["url"].clone();
+        let proposal = if proposal.get("urls").is_some() { serde_json::json!({"urls": [current]}) } else { proposal };
+        case["llm"]["RecoveryPages"] = serde_json::json!([proposal]);
+        let log: Arc<Mutex<Vec<Value>>> = Arc::default();
+        let (outcome, _) = play(&case, Some(log.clone())).await;
+        assert_eq!(outcome["status"], "stuck", "{outcome}");
+        assert!(!outcome["steps"].as_array().unwrap().iter().any(|step| step["operation"] == "navigate"));
+        let log = log.lock().unwrap();
+        assert_eq!(log.iter().filter(|call| call["llm"]["schema_name"] == "RecoveryPages").count(), 1);
     }
 }

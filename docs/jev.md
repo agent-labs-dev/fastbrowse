@@ -87,6 +87,13 @@ runs on that click as on any other.
 
 ## One request a step
 
+At startup, one request asks whether the task names dates, what output it asks for, where its evidence can be
+seen and how much of a list it covers. Over HTTP it also asks whether the task needs a browser action. Each
+question reads the task alone. Output judgments are kept until needed; date extraction still runs only when
+Jev judges that the task names a date. The questions use the task with its supplied inputs. If a provider rejects
+the batch for its input size, dates are asked separately and output stays a later request. A browser handoff keeps
+the startup judgments even when the first HTTP navigation produced no capture.
+
 All questions in a request see the same state, so what the agent would otherwise ask after a decision goes with it:
 for each offered control, which words a text field takes or which task text supplies a key chord. Only the chosen target's answers are used. Whether a press
 commits anything, and whether the task asked for that on an authorized run, stay follow-ups that see only the task, the
@@ -99,8 +106,8 @@ using the same span choices as a fill value. The page cannot provide the chord. 
 submit or save is sent through the action and authorization checks before the browser receives it.
 
 With `Config(plan_ahead=True)` the request also asks, for each offered field, whether the task needs it filled on
-this page besides the next action. When the chosen action is a fill, code fills the other fields Jev judges more likely
-than not, in page order, each with its value answered ahead and without a decision of its own. Before each it observes
+this page besides the next action. When the chosen action is a fill, code fills the other fields of the chosen field's
+form that Jev judges more likely than not, in page order, each with its value answered ahead and without a decision of its own. Before each it observes
 the page again and returns to deciding when the address, the document or the field is gone, a dialog opened, or the
 value before it was unsure. Presses are never planned: a press changes the page in ways seen only after it, and two
 controls that do the same job would both be judged needed. A request with a screenshot then carries every question
@@ -143,6 +150,18 @@ An unpriced route still reports unknown cost. Answered image requests use the pr
 This is estimated spend, not provider-reported billing; output is free. Cancellation before dispatch adds
 no charge. All three routes reach Typesafe, so an outage there can affect all three.
 
+The check for completed or refused actions encodes controls as a table with `columns` and ordered `rows` when its complete HTTP wire encoding
+is shorter than the list of objects. Each control keeps its label,
+context, role, value, checked state and selection when present; a null cell means that property is absent.
+Text extraction and other lists keep their object representation. Page text, notes and action history keep their existing representation.
+
+`python scripts/jev_state_size.py TRACE.jsonl` measures, by question set, the characters of the state by top-level
+field and of the questions by key. It counts recorded HTTP exchanges, including retries. Its `input_tokens` are
+provider-reported totals for the state and questions together. Providers do not expose per-part token counts, so the
+report does not estimate them. To measure what the current build sends on the fixture tasks, run `just bench replay`
+and profile the `logs/*.requests.jsonl` files beside its results. A cassette (`.jsonl.gz`) is accepted too, but it
+keeps every exchange ever recorded for its task, including requests the agent has since stopped sending.
+
 ## Confidence is not correctness
 
 Typesafe says Jev's probabilities are calibrated: across many answers, frequencies match the stated
@@ -169,6 +188,23 @@ and where fastbrowse follows it:
 - **Question ids are invisible to the model.** Everything the model needs is in the instruction text.
 - **Batch independent questions that share one state; answers cannot see each other.** The policy batches
   operation and target choices and applicable sign-in and bot checks. Grouped targets need a second choice.
+- **A question about the page states the task itself, and an option describes its own word.** TypeSafe's
+  [State](https://docs.typesafe.ai/concepts/state) guidance puts content in the state once, and two cuts to
+  repeated question text followed it (#903). Two probes each sent 120 recorded requests in the old and the new
+  wording, 10 samples of each: the first with both cuts, the second with the task cut alone. Each cut changed
+  Jev's choices for the worse, so neither is in the code:
+  - *The task's words offered by id, described once in the state* (5.6% of request characters). In
+    mock-book-table, where the Date value ends, Jev chose the word `2027-03-04` in 10 of 10 samples with each
+    option describing its word, and the word `confirmed` in 8 of 10 with ids. In mock-iframe-note, where the
+    note begins moved from `coffee-restock` in 10 of 10 to `Save` in 6 of 10.
+  - *Page questions reading `task` from the state in place of an inline `# Task`* (1.59% of request
+    characters). Where the contact-form Message begins moved from word 6 `that` in 7 of 10 samples to word 0
+    `Tell` in 10 of 10, which is wrong, and contact-needs-confirmation moved the same way, from 8 of 10 to
+    none. The Message source in contact-form moved from `task` in 10 of 10 to `write` in 7 of 10, and a
+    mock-shadow-dom field's source from `read` in 7 of 10 to `none` in 10 of 10.
+
+  Jev ties a judgment to the text beside it: a word or a task it has to look up elsewhere in the request is
+  linked less reliably. A further cut to this text needs the same probe before it ships.
 - **Filter before choosing on a dense page.** The Jev 1.13 jaggedness notes say accuracy falls with a large
   state full of irrelevant detail, and suggest a Noul to filter for relevance. When a page has more controls than
   one group step can offer (`group_size` times the model's options per Choice) or its request does not fit Jev's
@@ -197,12 +233,22 @@ row is a place fastbrowse keeps Jev out:
 
 | Jev's limit | What fastbrowse does instead |
 |:--|:--|
-| It does not count, and errs more as the list grows | A composed count is one Noul per note read, "does this note hold exactly one record of the kind?", summed in code (`retrieval/tally.rs`). No question asks Jev whether a stated count holds |
+| It does not count, and errs more as the list grows | A composed count is one Noul per note read, "does this note hold exactly one record of the kind?", summed in code (`retrieval/tally.rs`). A counted note read from a screenshot or markup is also asked, as a choice, which record on its page it repeats. No question asks Jev whether a stated count holds |
 | It is not a calculator, and numeric representations underperform | A composed total or extreme takes the number Jev picks in each record, and code adds or compares them. The claim is then asked only whether it states nothing besides the tally and, for an extreme, which record it names, as a choice code compares with the records it found at the extreme |
 | It does not generate | Prose, answers and table rows are the LLM's |
 
 Asked whether a claim of 10 quotes followed from its 10 cited quotes, Jev answered 0.43 to 0.53, about what it gave
 a claim of 9: a count is not a question for Jev.
+
+Tally membership questions about a page's notes are asked beside that page's current notes, so a record's date or
+price can be read alongside separate page labels. A note proven to be a whole record is left out of that context,
+since it is all its item shows and is judged in a question of its own. The provider's input limits still apply: a
+question whose page context does not fit is not sent with missing notes, and the claim's tally reports that its page
+needs more context than the decision model accepts. A heading or link, or a quote that lies within one link's text such as a
+list item that is only a link, is never offered as a whole record that lacks the field, since it only names its record. For a total or extreme, one choice qualifies the record and selects its quoted
+numeric field together. A whole record with a missing field remains distinct from a note that is not a record,
+and withholds the result after deduplication. Questions narrowing large numeric offers receive the same source
+context; code computes the total or ordering.
 
 ## Unused primitives
 

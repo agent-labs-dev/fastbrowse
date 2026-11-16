@@ -17,7 +17,7 @@ use crate::schema::{Field, Mode, ModelTy, Schema, Ty, definitions};
 
 /// Changes only when the wire format does, so it is not the package version: a release that leaves the messages alone
 /// leaves this alone, and an SDK can tell a binary it cannot talk to from one that is merely newer.
-pub const PROTOCOL_VERSION: i64 = 2;
+pub const PROTOCOL_VERSION: i64 = 3;
 
 /// `StrictInt | StrictStr`. Strict, because JSON-RPC echoes the id back and a `true` read as 1 would answer a request
 /// nobody sent.
@@ -298,10 +298,14 @@ pub struct RunTask {
     /// it can be placed, true also brings the window to the front for it, false turns it off.
     #[serde(default, deserialize_with = "lax::opt_boolean")]
     pub cursor: Option<bool>,
-    /// Local Chrome instead of a Browser Use Cloud browser.
+    /// A browser on this machine instead of a Browser Use Cloud browser: the user's own Chrome through the fastbrowse
+    /// extension, or a Chrome the run starts when `launch`, a headed window or a kept profile asks for one.
     #[serde(default)]
     pub local: bool,
-    /// Which local Chrome, and how. A headed window or a kept profile implies `local`.
+    /// Start a separate local Chrome instead of driving the user's own through the extension. Implies `local`.
+    #[serde(default)]
+    pub launch: bool,
+    /// Which local Chrome, and how. A headed window or a kept profile implies `launch`.
     #[serde(default)]
     pub chrome: Option<LocalChrome>,
     #[serde(default)]
@@ -351,9 +355,27 @@ pub struct RunTask {
 }
 
 impl RunTask {
-    /// Whether the run drives the user's browser through the fastbrowse extension.
+    /// Whether the run drives the user's browser through the fastbrowse extension: named with `extension`, or a
+    /// `local` run that asked for no Chrome of its own (#1005).
     pub fn wants_extension(&self) -> bool {
-        self.extension || self.extension_browser.is_some()
+        self.extension || self.extension_browser.is_some() || self.local_means_extension()
+    }
+
+    /// Whether `local` alone reaches the user's own browser. A signed-out Chrome cannot do a signed-in task, so a
+    /// separate one starts only when `launch`, a binary, a headed window or a kept profile asks for it, and a browserless,
+    /// desktop or attached run keeps its own meaning.
+    pub fn local_means_extension(&self) -> bool {
+        let launched = self.launch
+            || self
+                .chrome
+                .as_ref()
+                .is_some_and(|chrome| chrome.headed || chrome.profile.is_some() || chrome.binary.is_some());
+        self.local
+            && !launched
+            && !self.fetch
+            && self.desktop.is_none()
+            && self.cdp_url.is_none()
+            && self.cdp_port.is_none()
     }
 }
 
@@ -657,6 +679,7 @@ fn run_task_fields() -> Vec<Field> {
         Field::default("save_recipe", path(), none()),
         Field::default("cursor", Ty::optional(Ty::Bool), none()),
         Field::default("local", Ty::Bool, false),
+        Field::default("launch", Ty::Bool, false),
         Field::default("chrome", Ty::optional(LocalChrome::ty()), none()),
         Field::default("cloud_profile", text(), none()),
         Field::default("cdp_url", text(), none()),

@@ -26,7 +26,7 @@ impl CdpPage {
             self.input(self.session.send("Input.dispatchMouseEvent", params, Some(&session_id)))
         };
         tokio::try_join!(mouse("mousePressed"), mouse("mouseReleased"))?;
-        let changed = self.changed_since(&before, requests).await?;
+        let changed = self.changed_since(&before, Some(requests)).await?;
         let opened = self.session.follow_popup(&popups, self.session.window_opens() != window_opens).await?.is_some();
         Ok(ActResult {
             outcome: StepOutcome::Executed,

@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use fastbrowse_core::citations::{TableBlock, table_blocks};
 use fastbrowse_core::models::{Evidence, FactReader};
-use fastbrowse_core::page::Capture;
+use fastbrowse_core::page::{BlockKind, Capture};
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{dumped_len, dumps, write_string};
@@ -238,6 +238,11 @@ pub fn evidence_id(evidence: &Evidence) -> String {
     identity
 }
 
+/// Whether `now` was captured after `before`; false when either capture time has no fixed offset.
+fn read_later(now: &Evidence, before: &Evidence) -> bool {
+    now.captured_at.timestamp().zip(before.captured_at.timestamp()).is_some_and(|(now, before)| now > before)
+}
+
 /// A read fact is keyed by its span; a derived one by what it concludes from which facts.
 pub fn fact_id(fact: &Fact) -> String {
     if let Some(evidence) = &fact.evidence {
@@ -255,17 +260,34 @@ pub struct CapturedPage {
     pub title: String,
 }
 
+type CaptureIdentity = (String, String, DateTime);
+
+#[derive(Clone)]
+struct SourceBlock {
+    source_id: String,
+    start: i64,
+    end: i64,
+    kind: BlockKind,
+    whole_record: bool,
+    /// The span of each link's text inside the block.
+    links: Vec<(i64, i64)>,
+}
+
 #[derive(Clone, Default)]
 pub struct Notes {
     facts: IndexMap<String, Fact>,
     /// The facts standing as the task's answer: a later read or a reopened count takes one out, and it stays as history.
     answering: IndexSet<String>,
     retired: HashSet<String>,
-    pages: IndexMap<(String, String, DateTime), CapturedPage>,
+    pages: IndexMap<CaptureIdentity, CapturedPage>,
     /// How many of the run's steps that could change the site had been taken when each capture was read.
-    steps_taken: HashMap<(String, String, DateTime), usize>,
-    /// Each remembered capture's table blocks by its hash, so a citation can show a quote as the page shows it.
-    tables: HashMap<String, Arc<[TableBlock]>>,
+    steps_taken: HashMap<CaptureIdentity, usize>,
+    /// A table's structure belongs to its capture, even when another page renders identical text.
+    tables: HashMap<CaptureIdentity, Arc<[TableBlock]>>,
+    /// A fragment keeps its captured block type, so a heading is not mistaken for the record it names.
+    source_blocks: HashMap<CaptureIdentity, Arc<[SourceBlock]>>,
+    /// Where code blanked a secret value in each capture's text.
+    masked: HashMap<CaptureIdentity, Arc<[(i64, i64)]>>,
 }
 
 impl fmt::Debug for Notes {
@@ -290,14 +312,75 @@ impl Notes {
         self.steps_taken.entry(key.clone()).or_insert(steps_taken);
         // A title can change while the quoted body does not; recapturing must not rename older evidence.
         self.pages
-            .entry(key)
+            .entry(key.clone())
             .or_insert_with(|| CapturedPage { url: capture.url.clone(), title: capture.title.clone() });
-        self.tables.entry(capture.sha256.clone()).or_insert_with(|| table_blocks(capture).into());
+        let mut sources: HashMap<CaptureIdentity, Vec<SourceBlock>> = HashMap::new();
+        for block in &capture.blocks {
+            let url = block.source_url.as_ref().unwrap_or(&capture.url);
+            let identity = (capture.sha256.clone(), url.clone(), capture.captured_at);
+            sources.entry(identity).or_default().push(SourceBlock {
+                source_id: block.source_id.clone(),
+                start: block.start,
+                end: block.end,
+                kind: block.kind,
+                whole_record: block.whole_record,
+                links: block.links.iter().map(|link| (link.start, link.end)).collect(),
+            });
+        }
+        for (identity, blocks) in sources {
+            self.tables.entry(identity.clone()).or_insert_with(|| table_blocks(capture).into());
+            self.masked.entry(identity.clone()).or_insert_with(|| capture.masked.clone().into());
+            self.source_blocks.entry(identity).or_insert_with(|| blocks.into());
+        }
+    }
+
+    /// Whether code blanked a secret value inside `evidence`'s quote, so a `•` in it is a mask, not page text.
+    pub fn masks_secret(&self, evidence: &Evidence) -> bool {
+        let key = (evidence.capture_sha256.clone(), evidence.url.clone(), evidence.captured_at);
+        self.masked
+            .get(&key)
+            .is_some_and(|spans| spans.iter().any(|&(start, end)| start < evidence.end && evidence.start < end))
+    }
+
+    /// Whether `evidence` quotes one whole record block of a remembered capture: every part of a card or comment the
+    /// page rendered, so what it does not show, that record does not show on the page.
+    pub fn whole_record(&self, evidence: &Evidence) -> bool {
+        self.source_block(evidence)
+            .is_some_and(|block| block.whole_record && block.start == evidence.start && block.end == evidence.end)
+    }
+
+    /// The type of the element the quote is: a link when it lies within one link's text, such as a list item that is
+    /// only a link, otherwise its uniquely containing block's. Unknown provenance must not invent a page structure.
+    pub fn source_kind(&self, evidence: &Evidence) -> Option<BlockKind> {
+        let block = self.source_block(evidence)?;
+        let link = block.links.iter().any(|&(start, end)| start <= evidence.start && evidence.end <= end);
+        Some(if link { BlockKind::Link } else { block.kind })
+    }
+
+    /// Whether `evidence` quotes the entire text of the element `source_kind` names: all of one link's text when it
+    /// lies within a link, otherwise all of its block's. A heading that ends in "..." is then the page's own heading,
+    /// not a cut from a longer one.
+    pub fn whole_element(&self, evidence: &Evidence) -> bool {
+        let Some(block) = self.source_block(evidence) else { return false };
+        let link = block.links.iter().find(|&&(start, end)| start <= evidence.start && evidence.end <= end);
+        let (start, end) = link.copied().unwrap_or((block.start, block.end));
+        (start, end) == (evidence.start, evidence.end)
+    }
+
+    fn source_block(&self, evidence: &Evidence) -> Option<&SourceBlock> {
+        let key = (evidence.capture_sha256.clone(), evidence.url.clone(), evidence.captured_at);
+        let blocks = self.source_blocks.get(&key)?;
+        let mut matching = blocks.iter().filter(|block| {
+            block.source_id == evidence.source_id && block.start <= evidence.start && evidence.end <= block.end
+        });
+        let block = matching.next()?;
+        matching.next().is_none().then_some(block)
     }
 
     /// The table blocks of the capture `evidence` was cut from; none when that capture was never remembered.
     pub fn table_blocks(&self, evidence: &Evidence) -> &[TableBlock] {
-        self.tables.get(&evidence.capture_sha256).map_or(&[], |tables| tables)
+        let key = (evidence.capture_sha256.clone(), evidence.url.clone(), evidence.captured_at);
+        self.tables.get(&key).map_or(&[], |tables| tables)
     }
 
     /// How many of the run's steps that could change the site had been taken when `evidence` was read; None for a
@@ -401,7 +484,14 @@ impl Notes {
             if new_kept && Some(previous.text.as_str()) != quote && !text.contains(&previous.text) {
                 text = format!("{}\n{text}", previous.text);
             }
-            let merged = Fact { basis, text, ..kept.clone() };
+            // The same span of the same page text read again stands as of its latest read. Kept as of its first, a
+            // sorted list read again after the run had left it and come back held its top record only as the page
+            // stood before those steps, and the composer named the next record as the list's first (#1082).
+            let evidence = match (&previous.evidence, &fact.evidence) {
+                (Some(before), Some(now)) if read_later(now, before) => Some(now.clone()),
+                _ => kept.evidence.clone(),
+            };
+            let merged = Fact { basis, text, evidence, ..kept.clone() };
             self.facts.insert(key, merged);
             return false;
         }
@@ -905,6 +995,35 @@ mod tests {
             notes.add(old.clone());
             assert!(notes.current_evidence(None).contains_key(&fact_id(&old)));
         }
+    }
+
+    /// #1082: a price-sorted list was read, left for its next page and read again unchanged on coming back. Its top
+    /// record kept the first read's step, so the notes showed the list after the return without it.
+    #[test]
+    fn a_span_read_again_stands_as_of_its_latest_read() {
+        use crate::retrieval::testing::capture;
+
+        let first = capture(&[(BlockKind::ListItem, "Drum Roaster - GBP 210.00")]);
+        let again = Capture { captured_at: DateTime::new(2026, 1, 1, 0, 5, 0).utc(), ..first.clone() };
+        let read = |captured: &Capture| {
+            let quote = Evidence {
+                capture_sha256: captured.sha256.clone(),
+                captured_at: captured.captured_at,
+                ..span("", 0, 12)
+            };
+            Fact::read("Drum Roaster", quote, FactReader::JevChoice)
+        };
+        let mut notes = Notes::default();
+        notes.remember_capture(&first, 1);
+        assert!(notes.add(read(&first).answering()));
+        notes.remember_capture(&again, 3);
+        assert!(!notes.add(read(&again)));
+        let kept = notes.facts()[0];
+        assert_eq!(notes.steps_taken(kept.evidence.as_ref().unwrap()), Some(3));
+        assert!(notes.answered(), "the read again keeps the answer the first read gave");
+        // An earlier capture added after a later one does not move the span back.
+        assert!(!notes.add(read(&first)));
+        assert_eq!(notes.steps_taken(notes.facts()[0].evidence.as_ref().unwrap()), Some(3));
     }
 
     #[test]

@@ -6,8 +6,8 @@ and candidate digest, and the site computes every figure from the candidate's pe
 beside it as `data/benchmark-<campaign>.json`, byte for byte. A group the candidate does not hold keeps its file.
 
 Every site system has one of three states in a measured group file: `systems` maps it to the arm whose rows it shows,
-`cost_not_reported` lists the shown systems whose rows carry no cost (`"dollars": null`), so the site shows their pass
-rate and seconds with "cost not reported", and `not_measured` lists the systems with no rows, shown as "Not measured".
+`cost_not_reported` lists the shown systems whose complete cost is unavailable (`"dollars": null`), so the site shows
+their pass rate and seconds without a cost figure. `not_measured` lists systems with no rows, shown as "Not measured".
 `setups` names what each shown system ran, its version and the models its rows reported, where the candidate records
 them.
 A vendor figure the site already shows for the group is kept only as per-task rows over exactly the campaign's tasks.
@@ -31,11 +31,13 @@ SYSTEMS = {
     "fastbrowse": "fastbrowse",
     "browser-use": "browser-use",
     "browser-use-ultrafast": "browser-use-ultrafast",
-    "jev-ultrafast": "jev-ultrafast",
+    "jev-ultrafast": "jev-ultrafast",  # figures approved before schema 7 carry it
     "browser-harness": "browser-harness",
     "browser-use-oss": "browser-use-oss",
 }
 """The site system each candidate arm is shown as (`SYSTEM_ARMS` in the site's benchmark-groups.ts)."""
+RETIRED = frozenset({"jev-ultrafast"})
+"""Systems no current group measures: shown where approved figures carry them, never listed as not measured."""
 
 SOURCES: dict[SiteGroup, tuple[GroupId, ...]] = {
     "live-suite": ("internal-hosted",),
@@ -142,7 +144,7 @@ def group_files(content: bytes, facts: RunFacts, current: dict[str, dict]) -> di
                 **facts.shown(site_group),
                 "systems": {SYSTEMS[arm]: arm for arm in arms},
                 "cost_not_reported": [SYSTEMS[arm] for arm in arms if arm in unpriced],
-                "not_measured": [system for arm, system in SYSTEMS.items() if arm not in arms],
+                "not_measured": [system for arm, system in SYSTEMS.items() if arm not in arms and arm not in RETIRED],
                 **({"setups": ran} if (ran := setups(source, arms)) else {}),
             },
             "published": published,

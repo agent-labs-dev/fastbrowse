@@ -18,8 +18,9 @@ With it npm installs the binary for your platform as an optional dependency: `@f
 `darwin-x64`, `linux-arm64`, `linux-x64` or `win32-x64`. No install script runs and nothing is downloaded on
 first use. It needs Node.js 20 or newer, and on Linux it needs glibc.
 
-The binary brings no browser. `local: true` drives the Chrome on your machine. Without it a run starts a
-Browser Use Cloud browser, which needs `BROWSER_USE_API_KEY`.
+The binary brings no browser. `local: true` drives your own Chrome through the
+[fastbrowse extension](../../docs/cli.md#your-own-chrome), signed in as you are; add `launch: true` to start a separate
+Chrome instead. Without either a run starts a Browser Use Cloud browser, which needs `BROWSER_USE_API_KEY`.
 
 ## First run
 
@@ -95,6 +96,8 @@ starts one from the first step; the server refuses the two together. `allowedOri
 may open, read and control to those exact origins: navigations, redirects, frames and popups elsewhere are refused
 before they are sent, so a sign-in that redirects through another origin needs it listed too. It scopes documents,
 not the network, and a scoped run sends no frames and cannot `record`.
+Set `EXA_API_KEY` in the server environment to offer browserless web search. Jev picks among LLM-proposed queries;
+result fields become citable records and links use the same origin checks. Search charges appear under `search`.
 `env` in `Fastbrowse.start` adds to the environment the process inherits.
 Recipe paths name files on the server running fastbrowse. `saveRecipe` writes after a completed run; a write failure is logged without changing the task status, so check the file before replay;
 `recipe` reuses saved values for matching live actions with the same task.

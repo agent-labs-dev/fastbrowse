@@ -96,12 +96,13 @@ async fn test_openrouter_uses_systemone_and_records_cost() {
 }
 
 /// A route that takes images is sent the image in TypeSafe's documented format with the images header, and a route
-/// that does not never receives a page's pixels, nor the reference to them.
+/// that does not never receives a page's pixels, nor the reference to them. A model other than Jev is given the reference
+/// as a top-level item of the state, the only place OpenRouter hands such a model an image.
 #[tokio::test]
 async fn test_only_a_route_that_takes_images_is_sent_them() {
     let images = Images::from([("shot-1".to_string(), b"png bytes".to_vec())]);
     let state = json!({"page": "text", "viewport_screenshot": "shot-1"});
-    for route in ["text", "openrouter", "typesafe"] {
+    for route in ["text", "openrouter", "typesafe", "decider"] {
         let sent = route != "text";
         let http = answering(move |request| {
             let flagged = request
@@ -115,7 +116,12 @@ async fn test_only_a_route_that_takes_images_is_sent_them() {
                     body["assets"],
                     json!({"shot-1": {"type": "image", "format": "png", "data_base64": "cG5nIGJ5dGVz"}})
                 );
-                assert_eq!(body["state"], json!({"page": "text", "viewport_screenshot": "shot-1"}));
+                let expected = if route == "decider" {
+                    json!([{"page": "text", "viewport_screenshot": "image item 1 after this object"}, "shot-1"])
+                } else {
+                    json!({"page": "text", "viewport_screenshot": "shot-1"})
+                };
+                assert_eq!(body["state"], expected);
             } else {
                 assert!(!flagged);
                 assert!(body.get("assets").is_none());
@@ -130,6 +136,9 @@ async fn test_only_a_route_that_takes_images_is_sent_them() {
         let client = match route {
             "typesafe" => SystemOneClient::new("key", http, "https://direct.test", JEV_MODEL).typesafe(),
             "openrouter" => SystemOneClient::new("openrouter-key", http, OPENROUTER_URL, OPENROUTER_MODEL).images(),
+            "decider" => {
+                SystemOneClient::new("openrouter-key", http, OPENROUTER_URL, "perplexity/pplx-decider-v1.2").images()
+            }
             _ => SystemOneClient::new("openrouter-key", http, OPENROUTER_URL, OPENROUTER_MODEL).long_context(),
         };
         let result = client.evaluate_images(&state, &questions([("q", noul("Is it?"))]), &images).await.unwrap();

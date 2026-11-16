@@ -197,6 +197,8 @@ public enum CostComponent
     Browser,
     [JsonStringEnumMemberName("proxy")]
     Proxy,
+    [JsonStringEnumMemberName("search")]
+    Search,
 }
 
 public sealed record CostLine
@@ -371,6 +373,12 @@ public enum LLMPurpose
     Pages,
     [JsonStringEnumMemberName("dates")]
     Dates,
+    [JsonStringEnumMemberName("known_pages")]
+    KnownPages,
+    [JsonStringEnumMemberName("recovery_pages")]
+    RecoveryPages,
+    [JsonStringEnumMemberName("search")]
+    Search,
     [JsonStringEnumMemberName("unobtainable")]
     Unobtainable,
     [JsonStringEnumMemberName("groups")]
@@ -487,6 +495,8 @@ public enum Operation
     Done,
     [JsonStringEnumMemberName("navigate")]
     Navigate,
+    [JsonStringEnumMemberName("search")]
+    Search,
 }
 
 /// <summary>
@@ -601,6 +611,9 @@ public sealed record RunParams
 
     [JsonPropertyName("local")]
     public bool? Local { get; init; }
+
+    [JsonPropertyName("launch")]
+    public bool? Launch { get; init; }
 
     [JsonPropertyName("chrome")]
     public LocalChrome? Chrome { get; init; }
@@ -972,7 +985,7 @@ public enum WallKind
 public static class ProtocolConstants
 {
     /// <summary>The version of the wire format this client speaks.</summary>
-    public const int Version = 2;
+    public const int Version = 3;
 
     public const string MethodInitialize = "initialize";
     public const string MethodRun = "run";

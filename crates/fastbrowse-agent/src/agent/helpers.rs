@@ -96,6 +96,7 @@ pub(crate) fn doing(operation: Operation, target: Option<&str>) -> String {
         Operation::Read => "reading",
         Operation::Done => "finishing",
         Operation::Navigate => "opening",
+        Operation::Search => "searching",
     };
     match target {
         Some(target) => format!("{doing} {target}"),

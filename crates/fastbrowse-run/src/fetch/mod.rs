@@ -12,6 +12,7 @@
 //! exactly that: [`NotFetched`], with the browser left as the only reader.
 
 pub mod html;
+pub mod search;
 
 use std::borrow::Cow;
 use std::io::Read;
@@ -86,6 +87,7 @@ fn capture(url: &str, title: String, found: Vec<Found>, unread_frames: usize) ->
             control_context: None,
             href: block.href,
             links: Link::locate(&block.text, start as i64, &block.links),
+            whole_record: block.whole_record,
         });
         offset += 2;
     }
@@ -99,6 +101,7 @@ fn capture(url: &str, title: String, found: Vec<Found>, unread_frames: usize) ->
         // A frame whose document was not read is missing from this read like a frame a browser could not reach: a
         // reader told nothing is missing would take the page without it as the whole page.
         inaccessible_frames: unread_frames as i64,
+        masked: Vec::new(),
     }
 }
 
@@ -240,7 +243,10 @@ async fn serve(http: &Http, url: &str, allowed_origins: Option<&[String]>, secon
     // A server refuses a client that does not name itself: Wikipedia answers 403 to a request with no User-Agent and
     // 200 to one that names it. The version is the crate's own.
     let headers = [
-        ("accept".to_string(), "text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8".to_string()),
+        (
+            "accept".to_string(),
+            "text/html,application/xhtml+xml;q=0.9,application/json;q=0.8,text/*;q=0.8,*/*;q=0.1".to_string(),
+        ),
         ("accept-encoding".to_string(), "gzip, deflate".to_string()),
         ("user-agent".to_string(), format!("fastbrowse/{}", env!("CARGO_PKG_VERSION"))),
     ];
@@ -282,25 +288,31 @@ async fn serve(http: &Http, url: &str, allowed_origins: Option<&[String]>, secon
     let final_url = url::Url::parse(&target).map_or(target.clone(), String::from);
     outside(&final_url, allowed_origins, "a redirect left for ")?;
     let body = decode(content_type, &body, HTML_TYPES.contains(&mime.as_str()));
-    if mime == "text/plain" {
+    let json = fastbrowse_core::page::json::is_json(&mime);
+    if (mime.starts_with("text/") && !HTML_TYPES.contains(&mime.as_str())) || json {
         if text::strip(&body).is_empty() {
             return Err(refused("the document is empty"));
         }
-        let found = Found {
-            kind: BlockKind::Paragraph,
-            text: clean(&body),
-            heading_path: Vec::new(),
-            href: None,
-            links: Vec::new(),
-            frame_id: None,
-        };
-        return Ok(Served {
-            url: final_url,
-            title: String::new(),
-            found: vec![found],
-            controls: Vec::new(),
-            frames: Vec::new(),
-        });
+        // A JSON document is read by its structure, so each value can be quoted alone; text that is not entirely JSON
+        // is read whole.
+        let found = json
+            .then(|| fastbrowse_core::page::json::blocks(&body))
+            .flatten()
+            .filter(|found| !found.is_empty())
+            .map(|found| found.into_iter().map(Found::from).collect())
+            .unwrap_or_else(|| {
+                vec![Found {
+                    kind: BlockKind::Paragraph,
+                    // Delimited fields carry significant whitespace, which HTML's cleanup would change.
+                    text: if json || mime != "text/plain" { body } else { clean(&body) },
+                    heading_path: Vec::new(),
+                    href: None,
+                    links: Vec::new(),
+                    frame_id: None,
+                    whole_record: false,
+                }]
+            });
+        return Ok(Served { url: final_url, title: String::new(), found, controls: Vec::new(), frames: Vec::new() });
     }
     if !HTML_TYPES.contains(&mime.as_str()) {
         let named = if mime.is_empty() { "the response" } else { &mime };

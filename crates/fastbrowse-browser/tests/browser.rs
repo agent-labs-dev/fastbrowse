@@ -351,7 +351,7 @@ async fn test_a_navigation_that_starts_during_the_settle_wait_is_a_change() {
     eval_active(&h, "fetch('/slow?ms=8000'); setTimeout(() => fetch('/slow?ms=100'), 1000); 0").await;
     wait_until(|| async { h.session.requests_open_since(requests) }).await;
     armed.store(true, Ordering::SeqCst);
-    let changed = h.page.changed_since(&before, requests).await.expect("settled");
+    let changed = h.page.changed_since(&before, Some(requests)).await.expect("settled");
     assert!(reads.load(Ordering::SeqCst) >= 2, "the settle never read the page again");
     assert!(changed);
     h.close().await;
@@ -882,8 +882,8 @@ async fn test_a_record_keeps_a_value_it_only_draws() {
     let html = [card("One", "First"), card("Five", "Second"), card("One", "Third")].concat();
     eval_active(&h, &format!("document.body.innerHTML = {}", json!(html))).await;
     let capture = h.page.capture().await.expect("capture");
-    assert!(capture.text.contains("First") && capture.text.contains("[rating One]"), "{}", capture.text);
-    assert!(capture.text.contains("[rating Five]"), "{}", capture.text);
+    assert!(capture.text.contains("First") && capture.text.contains("[rating One: no text]"), "{}", capture.text);
+    assert!(capture.text.contains("[rating Five: no text]"), "{}", capture.text);
     h.close().await;
 }
 
@@ -956,7 +956,7 @@ async fn test_an_observation_keeps_every_control_and_the_whole_viewport_text() {
     )
     .await;
     let observation = h.observe().await;
-    assert!(observation.controls.len() == 400);
+    assert_eq!(observation.controls.iter().filter(|c| c.role == "button").count(), 400);
     assert_eq!(observation.viewport_text, "x".repeat(8000));
     h.close().await;
 }
@@ -1400,6 +1400,29 @@ async fn test_controls_a_script_adds_under_the_pointer_are_reached_by_hovering_t
     h.close().await;
 }
 
+/// GitHub's repository list draws each card's license as a law icon beside "BSD-3-Clause" in a row of twin spans.
+/// The icon is aria-hidden decoration, yet the badge was offered as a hover target on every card, and a run asked
+/// for httpx's license hovered one instead of opening the repository.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_label_beside_a_decorative_icon_is_not_a_hover_target() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        r##"const icon = '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16"><path d="M2 2h12v12H2z"/></svg>';
+        document.body.innerHTML = '<ul>' + ['httpx', 'httpcore'].map(name => `<li><h3><a href="#${name}">${name}</a></h3>
+          <div><span class="mr-3">Python</span><a class="mr-3 Link" href="#${name}-stars">${icon}15</a>
+          <span class="mr-3">${icon}BSD-3-Clause</span></div></li>`).join('') + '</ul>';"##,
+    )
+    .await;
+    let obs = h.observe().await;
+    let hovers: Vec<&Control> = obs.controls.iter().filter(|c| c.operations.contains(&Operation::Hover)).collect();
+    assert!(hovers.is_empty(), "decorative icons offered hover targets: {hovers:?}");
+    find(&obs, "httpx");
+    h.close().await;
+}
+
 /// A gallery's buttons faded in on hover from opacity 0, so the observation taken right after the hover saw only the
 /// transition's starting value and offered none of them.
 #[tokio::test(flavor = "multi_thread")]
@@ -1791,6 +1814,34 @@ async fn test_twins_keep_their_card_names_past_shared_hidden_and_control_labels(
     .await;
     let obs = observe_until(&h.page, "Add to cart").await;
     assert_eq!(contexts(&obs, "Add to cart"), twins);
+    h.close().await;
+}
+
+/// Two comments by one author posted at the same time began with the same lines, so their Reply buttons read alike and
+/// a reply went under the wrong comment (#881).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reply_buttons_under_one_authors_comments_are_told_apart_by_their_text() {
+    let _turn = turn().await;
+    let comment = |text: &str| {
+        format!(
+            "<div class=\"comment\"><div><span>cjber</span> <span>2 days ago</span></div><p>{text}</p>\
+             <button>Reply</button></div>"
+        )
+    };
+    let Some(h) = harness().await else { return };
+    h.goto("/icons.html").await;
+    eval_active(
+        &h,
+        &format!("document.body.innerHTML = '<div>{}{}</div>'", comment("Is 75 enough?"), comment("Works on 100%")),
+    )
+    .await;
+    let obs = observe_until(&h.page, "Reply").await;
+    let contexts: Vec<Option<String>> =
+        obs.controls.iter().filter(|c| c.label == "Reply").map(|c| c.context.clone()).collect();
+    assert_eq!(
+        contexts,
+        vec![Some("cjber 2 days ago / Is 75 enough?".into()), Some("cjber 2 days ago / Works on 100%".into())]
+    );
     h.close().await;
 }
 
@@ -2353,6 +2404,12 @@ async fn test_an_unchanged_document_is_not_read_for_its_status_again() {
     let Some(h) = proxied(connection, recording(sent.clone())).await else { return };
     h.goto("").await;
     assert_eq!(h.observe().await.response_status, Some(200));
+    // A request finishing moves the lifecycle generation, as a late networkIdle or a frame's load does, on the same
+    // document: what the page does after it is read is not a new document.
+    let mark = h.page.lifecycle_mark();
+    eval_active(&h, "fetch(location.href).then(r => r.text()); true").await;
+    let hr = &h;
+    wait_until(move || async move { hr.page.lifecycle_mark() != mark }).await;
     sent.lock().unwrap().clear();
     // The document is the one just read, so its status is the read already made: no command asks again.
     assert_eq!(h.observe().await.response_status, Some(200));

@@ -5,10 +5,11 @@
 //! jev_ultrafast/browser.py and jev_ultrafast/snapshot.js. `act` dispatches at most once per call.
 
 pub(crate) mod act;
+mod delta;
 mod pointer;
 pub mod scripts;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -20,6 +21,7 @@ use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::JEV_IMAGE_SIDE;
 use fastbrowse_core::models::{Artifact, ArtifactKind, Link, Operation, SourceControl};
 use fastbrowse_core::origins::origin_of;
+use fastbrowse_core::page::json as json_document;
 use fastbrowse_core::page::{
     ActResult, Action, Block, BlockKind, CaptchaSolve, Capture, Control, Dialog, Media, Observation, Page, PageResult,
 };
@@ -78,6 +80,12 @@ pub(crate) const HISTORY_REREADS: u32 = 2;
 pub(crate) const NAVIGATE_ATTEMPTS: u32 = 4;
 /// Doubled after each failed try.
 pub(crate) const NAVIGATE_RETRY_SECONDS: f64 = 1.0;
+/// The readiness wait of a navigation's first try.
+pub(crate) const LOAD_TIMEOUT_SECONDS: f64 = 15.0;
+/// How long a load is waited on before it is no longer on its way: every try `navigate` gives one, added up. A
+/// server that never answers leaves Chrome loading with no further event, so nothing else ends it; a page that keeps
+/// navigating, such as a challenge, starts a new load each time and with it a new wait.
+pub(crate) const LOAD_AWAITED_SECONDS: f64 = LOAD_TIMEOUT_SECONDS * ((1u32 << NAVIGATE_ATTEMPTS) - 1) as f64;
 /// Whether Chrome's error names the site or the connection to it giving nothing, rather than the address being wrong.
 ///
 /// A certificate or TLS failure belongs here because the agent cannot repair the site's connection. A mistyped
@@ -151,12 +159,22 @@ struct SnapshotControl {
     validation_message: Option<String>,
     next_page: Option<bool>,
     download: Option<bool>,
+    #[serde(default)]
+    drawn: Option<bool>,
 }
 
 pub(crate) trait FrameText: DeserializeOwned {
     const SHAPE: &'static str;
     fn url(&self) -> &str;
     fn title(&self) -> &str;
+    /// A shape that keeps reads serves the validated parse of its named baseline.
+    fn from_kept(_kept: &KeptRead) -> Option<Arc<Self>> {
+        None
+    }
+    /// None removes the slot: this shape or this read has no numbered baseline to serve.
+    fn keep(_raw: Value, _parsed: &Arc<Self>) -> Option<KeptRead> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -167,7 +185,7 @@ pub(crate) struct DocumentResponse {
     document_key: String,
 }
 
-/// A document's response read, kept with the tab and lifecycle generation it was read at.
+/// A document's response read, kept with the tab and the document mark it was read at.
 ///
 /// The status of a document is fixed once it is served, and the read costs an isolated-world evaluate on every
 /// observation. An observation whose document is the one already read keeps that read; a document the read does not
@@ -175,7 +193,7 @@ pub(crate) struct DocumentResponse {
 #[derive(Debug, Clone)]
 pub(crate) struct KeptDocument {
     pub(crate) session_id: String,
-    pub(crate) generation: u64,
+    pub(crate) mark: u64,
     pub(crate) document: DocumentResponse,
 }
 
@@ -206,11 +224,20 @@ struct Snapshot {
     guards: HashMap<String, Option<String>>,
     /// Digest of the guard without the node ids at its ends, which a redraw changes.
     retarget_keys: HashMap<String, Option<String>>,
+    /// The page's number for this read when it kept it; null for a read it did not keep.
+    #[serde(default)]
+    read: Option<u64>,
 }
 
 impl FrameText for Snapshot {
     fn title(&self) -> &str {
         &self.title
+    }
+    fn from_kept(kept: &KeptRead) -> Option<Arc<Self>> {
+        Some(Arc::clone(&kept.parsed))
+    }
+    fn keep(raw: Value, parsed: &Arc<Self>) -> Option<KeptRead> {
+        parsed.read.map(|_| KeptRead { raw, parsed: Arc::clone(parsed) })
     }
     const SHAPE: &'static str = "_Snapshot";
     fn url(&self) -> &str {
@@ -233,6 +260,9 @@ struct SnapshotBlock {
     /// Each link's text and address, in the order the block shows them.
     #[serde(default)]
     links: Vec<SnapshotLink>,
+    /// The block is a record's whole text, its textless parts named.
+    #[serde(default)]
+    whole_record: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -251,6 +281,23 @@ struct CaptureSnapshot {
     #[serde(default)]
     inaccessible_frames: usize,
     blocks: Vec<SnapshotBlock>,
+    /// The frame document's MIME type, as `document.contentType` gives it.
+    #[serde(default)]
+    content_type: String,
+    /// The served text of a JSON document, as Chrome renders it into the body's first `pre`.
+    #[serde(default)]
+    json_text: Option<String>,
+}
+
+impl CaptureSnapshot {
+    /// A JSON document's blocks by its structure, as a browserless fetch reads it, when the document's type is JSON
+    /// and all of its served text parses. Any other document is read by its rendered blocks.
+    fn json_blocks(&self) -> Option<Vec<json_document::Found>> {
+        if !json_document::is_json(&self.content_type) {
+            return None;
+        }
+        json_document::blocks(self.json_text.as_deref()?).filter(|found| !found.is_empty())
+    }
 }
 
 impl FrameText for CaptureSnapshot {
@@ -263,11 +310,17 @@ impl FrameText for CaptureSnapshot {
     }
 }
 
+/// Raw delta rows and their validated snapshot stay together so an unchanged read needs no second parse.
+pub(crate) struct KeptRead {
+    raw: Value,
+    parsed: Arc<Snapshot>,
+}
+
 /// One frame's page-script output, tagged with how to reach that frame again.
 struct FrameObservation<T> {
     frame_id: Option<String>,
     session_id: String,
-    raw: T,
+    raw: Arc<T>,
 }
 
 /// The page's own text, then each cross-origin frame's in `frames` order under a `[Frame: origin]` line. Only the
@@ -315,6 +368,9 @@ pub(crate) struct PageState {
     /// Frame session, when it was read, and the viewport size that pre-action measurement already returned. The wheel
     /// and the pointer marks both need it, and asking again was a command of its own on every action.
     pub(crate) viewport: Option<(String, Instant, (f64, f64))>,
+    /// `<shape>|<slot>|<frame>` -> the read last kept for that frame. A frame answers "unchanged" only about the
+    /// read it kept, so this is what such an answer is served from.
+    pub(crate) kept: HashMap<String, Arc<KeptRead>>,
 }
 
 pub struct CdpPage {
@@ -323,8 +379,6 @@ pub struct CdpPage {
     pub(crate) page_js: String,
     capture_js: String,
     pub(crate) fingerprint_js: String,
-    /// The players' clocks, which `fingerprint_js` leaves out.
-    pub(crate) media_js: String,
     pub(crate) state: Mutex<PageState>,
     pub(crate) pointer_marks: Option<Arc<Mutex<Vec<crate::pointer::PointerMark>>>>,
     #[cfg(feature = "cursor")]
@@ -438,6 +492,7 @@ fn control_from_raw(
         focused: c.focused,
         next_page: c.next_page,
         download: c.download,
+        drawn: c.drawn,
         already_read: None,
         shown_by: None,
     }
@@ -489,14 +544,12 @@ impl CdpPage {
         let page_js = session.snapshot().function.clone();
         let capture_js = format!("({CAPTURE_JS})({origins})");
         let fingerprint_js = format!("{page_js}('fingerprint').fingerprint");
-        let media_js = format!("{page_js}('fingerprint').media");
         Self {
             session,
             config,
             page_js,
             capture_js,
             fingerprint_js,
-            media_js,
             state: Mutex::default(),
             pointer_marks: None,
             #[cfg(feature = "cursor")]
@@ -514,6 +567,13 @@ impl CdpPage {
     #[cfg(feature = "cursor")]
     pub fn with_cursor(mut self, cursor: Option<Arc<crate::cursor::CursorFeedback>>) -> Self {
         self.cursor = cursor;
+        self
+    }
+
+    /// Native messaging cannot call browser-level SystemInfo, so the host supplies Chrome's process id.
+    #[cfg(feature = "cursor")]
+    pub fn with_cursor_browser_pid(self, pid: Option<u32>) -> Self {
+        *self.cursor_pid.lock().unwrap() = pid.map(i64::from);
         self
     }
 
@@ -541,7 +601,7 @@ impl CdpPage {
     // -- observe / capture ----------------------------------------------------------------------------------
 
     pub async fn observe(&self) -> Result<Observation, BrowserError> {
-        self.adopt_choosers().await;
+        self.session.choosers_pinned().await;
         self.reread(|| self.observe_once(0, true)).await
     }
 
@@ -577,11 +637,10 @@ impl CdpPage {
     /// Wait for the document that replaced the one a read lost to be interactive and quiet, as `navigate` does.
     async fn await_document(&self) -> Result<(), BrowserError> {
         let session_id = self.session.active_session_id()?;
-        let requests = self.session.requests_mark();
         let settle = async {
             if self.ready(&session_id, SETTLE_SECONDS).await? {
                 // Unsettled by the deadline is still a readable page, as after `navigate`.
-                self.changed_since("", requests).await?;
+                self.changed_since("", None).await?;
             }
             Ok::<(), BrowserError>(())
         };
@@ -605,17 +664,17 @@ impl CdpPage {
             }
             // The status read is a command of its own, and it answers the same for as long as the document is: an
             // observation of a document already read keeps that read instead of asking the browser again. The
-            // generation is taken before the read, so a navigation during it leaves the kept copy naming an older
-            // generation and the next observation reads the new document.
+            // document mark is taken before the read, so a navigation during it leaves the kept copy naming an older
+            // mark and the next observation reads the new document.
             let session_id = self.session.active_session_id()?;
-            let generation = self.session.lifecycle_mark();
+            let mark = self.session.document_mark(&session_id);
             let kept = self
                 .state
                 .lock()
                 .unwrap()
                 .document
                 .clone()
-                .filter(|kept| kept.session_id == session_id && kept.generation == generation);
+                .filter(|kept| kept.session_id == session_id && kept.mark == mark);
             // A timer can open a dialog while the snapshot evaluates, and the dialog blocks that
             // evaluate until the 120s command deadline.
             let read = async {
@@ -651,7 +710,7 @@ impl CdpPage {
             let document = match read_document {
                 Some(document) => document,
                 // A kept read names the document it was made in. One that names another document was replaced
-                // without the generation moving, so its status is read now rather than carried over.
+                // without the mark moving, so its status is read now rather than carried over.
                 None => match kept
                     .filter(|kept| main.is_some_and(|main| main.raw.document_key == kept.document.document_key))
                 {
@@ -661,7 +720,7 @@ impl CdpPage {
             };
             if main.is_some_and(|main| main.raw.document_key == document.document_key) {
                 self.state.lock().unwrap().document =
-                    Some(KeptDocument { session_id, generation, document: document.clone() });
+                    Some(KeptDocument { session_id, mark, document: document.clone() });
             }
             let mut kept: Vec<Control> = vec![];
             let mut control_state: HashMap<String, Target> = HashMap::new();
@@ -715,12 +774,13 @@ impl CdpPage {
                 }
                 for unread in self.session.pending_download_unread() {
                     let why = match unread.reason {
-                        PdfUnread::NoReader => "this program has no PDF reader set up".to_owned(),
+                        PdfUnread::NoReader => "this program has no document reader set up".to_owned(),
+                        PdfUnread::TooLarge => "its decompressed contents or complete text exceed max_download_bytes".to_owned(),
                         PdfUnread::TimedOut => format!("reading it took longer than {PARSE_SECONDS} seconds"),
-                        PdfUnread::Unparsable => "it could not be parsed as a PDF".to_owned(),
+                        PdfUnread::Unparsable => "it could not be parsed as its declared document format".to_owned(),
                         // Not the file's fault, so not said to be: the run should not judge the document by it.
                         PdfUnread::ReaderFailed => {
-                            "the PDF reader did not start or ended without an answer, which says nothing about the file"
+                            "the document reader did not start or ended without an answer, which says nothing about the file"
                                 .to_owned()
                         }
                     };
@@ -845,8 +905,10 @@ impl CdpPage {
         bind: bool,
     ) -> Result<(Vec<(String, FrameObservation<Snapshot>)>, usize), BrowserError> {
         let mode = if bind { "snapshot" } else { "glance" };
-        let script = format!("{}('{mode}')", self.page_js);
-        let result = self.read_frames::<Snapshot>(&script).await?;
+        // Each frame supplies its own baseline. A producer with a different baseline sends a full result directly.
+        let script = format!("(base => {}('{mode}-delta', base))", self.page_js);
+        let full = format!("{}('{mode}')", self.page_js);
+        let result = self.read_frames::<Snapshot>(&script, Some((mode, full.as_str()))).await?;
         let coverage: Vec<(String, usize)> =
             result.iter().map(|(_, f)| (f.session_id.clone(), f.raw.inaccessible_frames)).collect();
         let inaccessible = self.inaccessible_frames(&coverage)?;
@@ -854,9 +916,13 @@ impl CdpPage {
     }
 
     /// Read every frame of the active tab with `expression`.
+    ///
+    /// `retry`, when a read is one this side keeps, names the slot it is kept under and the expression that reads the
+    /// frame again in full, for the frame that answers "unchanged" when no read is kept for it.
     async fn read_frames<T: FrameText>(
         &self,
         expression: &str,
+        retry: Option<(&str, &str)>,
     ) -> Result<Vec<(String, FrameObservation<T>)>, BrowserError> {
         let main_session = self.session.active_session_id()?;
         let target_id = self.session.active_target_id();
@@ -865,8 +931,18 @@ impl CdpPage {
         sources.extend(self.session.frame_sessions().into_iter().filter(|(frame, _)| !self.session.ad_frame(frame)));
         let mut result: Vec<(String, FrameObservation<T>)> = vec![];
         // Preserve source order regardless of completion order so capture offsets and hashes stay stable.
-        let reads = sources.iter().map(|(key, sid)| self.read_frame::<T>(key, sid, expression));
-        let frames = futures_util::future::try_join_all(reads).await?;
+        let reads = sources.iter().map(|(key, sid)| self.read_frame::<T>(key, sid, expression, retry));
+        let frames = futures_util::future::try_join_all(reads).await;
+        let (live_frames, live_sessions) = self.session.frame_read_liveness();
+        {
+            let mut state = self.state.lock().unwrap();
+            state.unanswered.retain(|session_id, _| live_sessions.contains(session_id));
+            // A detached frame is never read again, so its last full snapshot cannot expire through read_frame.
+            state.kept.retain(|key, _| {
+                key.rsplit_once('|').is_some_and(|(_, frame)| frame == MAIN || live_frames.contains(frame))
+            });
+        }
+        let frames = frames?;
         for ((key, _), frame) in sources.into_iter().zip(frames) {
             if let Some(frame) = frame {
                 // A dict in Python: a key read twice keeps its first place.
@@ -879,8 +955,6 @@ impl CdpPage {
         if let Some((_, main)) = result.iter().find(|(k, _)| k == MAIN) {
             self.session.set_tab_info(&target_id, main.raw.url(), main.raw.title());
         }
-        let live: HashSet<String> = self.session.frame_sessions().into_iter().map(|(_, s)| s).collect();
-        self.state.lock().unwrap().unanswered.retain(|session_id, _| live.contains(session_id));
         Ok(result)
     }
 
@@ -889,14 +963,21 @@ impl CdpPage {
         frame_key: &str,
         session_id: &str,
         expression: &str,
+        retry: Option<(&str, &str)>,
     ) -> Result<Option<FrameObservation<T>>, BrowserError> {
         let is_main = frame_key == MAIN;
-        let read = if is_main {
-            self.evaluate(session_id, expression).await
+        let expression = if let Some((slot, _)) = retry {
+            let key = format!("{}|{slot}|{frame_key}", T::SHAPE);
+            let state = self.state.lock().unwrap();
+            let base = state.kept.get(&key).map_or(
+                Value::Null,
+                |kept| json!({"document_key": kept.raw.get("document_key"), "read": kept.raw.get("read")}),
+            );
+            format!("{expression}({base})")
         } else {
-            self.frame_evaluate(session_id, expression).await
+            expression.to_string()
         };
-        let raw = match read {
+        let mut raw = match self.read_frame_value(is_main, session_id, &expression).await {
             Ok(raw) => raw,
             Err(_) if !is_main => return Ok(None),
             Err(error) => return Err(error),
@@ -904,7 +985,79 @@ impl CdpPage {
         if raw.is_null() {
             return Ok(None);
         }
-        let parsed: T = parse(raw, T::SHAPE)?;
+        // The page answers "unchanged" only about the read it kept, so that answer is the kept read, sent back as the
+        // reference it is rather than derived and transferred again. A frame whose kept read this side does not have
+        // is read again in full: the page's copy and this side's are kept together, but a reused page must never be
+        // assumed to agree with a read it does not name.
+        let mut served = None;
+        if let Some((slot, full)) = retry
+            && truthy(&raw)
+            && raw.get("unchanged").is_some_and(truthy)
+        {
+            let key = format!("{}|{slot}|{frame_key}", T::SHAPE);
+            // Another page on the same session can have replaced the page's kept read since this side took its own,
+            // so the answer is served only when it names the very read held here, by its document and its number.
+            fn names(value: &Value) -> (Option<&str>, Option<u64>) {
+                (value.get("document_key").and_then(Value::as_str), value.get("read").and_then(Value::as_u64))
+            }
+            let kept = self.state.lock().unwrap().kept.get(&key).cloned();
+            let parsed = kept
+                .filter(|kept| matches!(names(&raw), (Some(_), Some(_))) && names(&kept.raw) == names(&raw))
+                .and_then(|kept| T::from_kept(&kept));
+            match parsed {
+                Some(parsed) => served = Some(parsed),
+                // The page has a read this side did not keep: read the frame again rather than answer from nothing.
+                _ => {
+                    raw = match self.read_frame_value(is_main, session_id, full).await {
+                        Ok(raw) => raw,
+                        Err(_) if !is_main => return Ok(None),
+                        Err(error) => return Err(error),
+                    };
+                    if raw.is_null() {
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+        if let Some((slot, full)) = retry
+            && served.is_none()
+            && raw.get("control_delta").is_some()
+        {
+            let key = format!("{}|{slot}|{frame_key}", T::SHAPE);
+            let kept = self.state.lock().unwrap().kept.get(&key).cloned();
+            raw = match kept.as_ref().and_then(|kept| delta::apply(&kept.raw, &raw)) {
+                Some(reconstructed) => reconstructed,
+                None => match self.read_frame_value(is_main, session_id, full).await {
+                    Ok(raw) => raw,
+                    Err(_) if !is_main => return Ok(None),
+                    Err(error) => return Err(error),
+                },
+            };
+            if raw.is_null() {
+                return Ok(None);
+            }
+        }
+        let was_served = served.is_some();
+        let parsed: Arc<T> = match served {
+            Some(parsed) => parsed,
+            None => Arc::new(parse(raw.clone(), T::SHAPE)?),
+        };
+        // Numbered reads are transport baselines. A read whose page has not moved answers unchanged, and a changed
+        // one sends a delta against it; both name this exact baseline.
+        if let Some((slot, _)) = retry
+            && !was_served
+        {
+            let key = format!("{}|{slot}|{frame_key}", T::SHAPE);
+            let mut state = self.state.lock().unwrap();
+            match T::keep(raw, &parsed) {
+                Some(kept) => {
+                    state.kept.insert(key, Arc::new(kept));
+                }
+                None => {
+                    state.kept.remove(&key);
+                }
+            }
+        }
         // The text and the address it came from were read in one evaluation, so this cannot be raced.
         if let Some(grant) = self.session.grant()
             && !grant.allows(parsed.url())
@@ -919,6 +1072,15 @@ impl CdpPage {
             session_id: session_id.to_owned(),
             raw: parsed,
         }))
+    }
+
+    /// Read one frame, in the main frame or a child's own session.
+    async fn read_frame_value(&self, is_main: bool, session_id: &str, expression: &str) -> Result<Value, BrowserError> {
+        if is_main {
+            self.evaluate(session_id, expression).await
+        } else {
+            self.frame_evaluate(session_id, expression).await
+        }
     }
 
     /// Evaluate in a child frame within its deadline; past it, the frame reads as unreadable (`Null`).
@@ -963,7 +1125,7 @@ impl CdpPage {
     async fn capture_once(&self) -> Result<Capture, BrowserError> {
         self.session.assert_clear().await?;
         // A JavaScript dialog blocks the renderer, so the page reads as nothing until it is answered, as it observes.
-        let Some(frames) = self.until_dialog(self.read_frames::<CaptureSnapshot>(&self.capture_js)).await else {
+        let Some(frames) = self.until_dialog(self.read_frames::<CaptureSnapshot>(&self.capture_js, None)).await else {
             let (url, title) = self.active_tab_page();
             return Ok(Capture {
                 url,
@@ -973,6 +1135,7 @@ impl CdpPage {
                 text: String::new(),
                 blocks: vec![],
                 inaccessible_frames: 0,
+                masked: Vec::new(),
             });
         };
         let frames = frames?;
@@ -991,6 +1154,31 @@ impl CdpPage {
             match coverage.iter_mut().find(|(s, _)| *s == frame.session_id) {
                 Some(entry) => entry.1 = frame.raw.inaccessible_frames,
                 None => coverage.push((frame.session_id.clone(), frame.raw.inaccessible_frames)),
+            }
+            if let Some(found) = frame.raw.json_blocks() {
+                for block in found {
+                    let start = offset;
+                    text.push_str(&block.text);
+                    offset += text::len(&block.text);
+                    let end = offset;
+                    text.push_str("\n\n");
+                    offset += 2;
+                    blocks.push(Block {
+                        source_id: format!("{frame_key}/json:{}", blocks.len()),
+                        source_url: None,
+                        complete_source: false,
+                        kind: block.kind,
+                        frame_id: frame.frame_id.clone(),
+                        start: int(start),
+                        end: int(end),
+                        heading_path: block.heading_path,
+                        control_context: None,
+                        href: None,
+                        links: Vec::new(),
+                        whole_record: block.whole_record,
+                    });
+                }
+                continue;
             }
             for block in &frame.raw.blocks {
                 let start = offset;
@@ -1017,6 +1205,7 @@ impl CdpPage {
                     control_context: block.control_context.clone(),
                     href: block.href.clone(),
                     links,
+                    whole_record: block.whole_record,
                 });
             }
         }
@@ -1056,6 +1245,7 @@ impl CdpPage {
                     control_context: None,
                     href: None,
                     links: Vec::new(),
+                    whole_record: false,
                 });
                 text.push_str("\n\n");
                 offset += 2;
@@ -1069,6 +1259,7 @@ impl CdpPage {
             text,
             blocks,
             inaccessible_frames: int(self.inaccessible_frames(&coverage)?),
+            masked: Vec::new(),
         })
     }
 
@@ -1105,7 +1296,7 @@ impl CdpPage {
         // changed or vanished control, or a new document, is a redraw.
         let check = format!(
             "(ids => {{ const r = window.__fastbrowse; if (!r?.observed) return true; \
-             return ids.some(id => r.observed.has(id) && r.guardKey(r.nodes.get(id)) !== r.observed.get(id)); }})({})",
+             return ids.some(id => r.observed.has(id) && r.guardKey(r.nodes.get(id), id) !== r.observed.get(id)); }})({})",
             py_json(&json!(ids))
         );
         // One renderer call hears every change: the page's own mutations say when to look again, and the time given
@@ -1126,7 +1317,7 @@ impl CdpPage {
             return Ok(false);
         };
         if truthy(&changed) {
-            let _ = self.changed_since("", self.session.requests_mark()).await;
+            let _ = self.changed_since("", None).await;
             return Ok(true);
         }
         Ok(false)
@@ -1274,7 +1465,7 @@ impl CdpPage {
     /// `back_to` is the page BACK opens when this tab has no earlier entry on its site: a run that went straight to a
     /// deep address keeps the start page it skipped one BACK away without spending a load on it.
     pub async fn navigate(&self, url: &str, back_to: Option<&str>) -> Result<(), BrowserError> {
-        self.navigate_within(url, 15.0, back_to).await
+        self.navigate_within(url, LOAD_TIMEOUT_SECONDS, back_to).await
     }
 
     pub async fn navigate_within(
@@ -1316,7 +1507,6 @@ impl CdpPage {
         // they are shown.
         let mut failure = "NavigationError".to_owned();
         let mut timed_out = false;
-        let requests = self.session.requests_mark();
         for attempt in 0..NAVIGATE_ATTEMPTS {
             if attempt > 0 {
                 sleep(secs(NAVIGATE_RETRY_SECONDS * f64::from(1u32 << (attempt - 1)))).await;
@@ -1345,7 +1535,7 @@ impl CdpPage {
             }
             if self.ready(&session_id, load_timeout_seconds * f64::from(1u32 << attempt)).await? {
                 // Unsettled by the deadline is still a usable page, and a redirect destroys the promise mid-wait.
-                let _ = self.changed_since("", requests).await;
+                let _ = self.changed_since("", None).await;
                 return Ok(());
             }
             failure = "TimeoutError".to_owned();
@@ -1419,9 +1609,12 @@ impl CdpPage {
     /// after its DOM went quiet, and the run took the add for a click that did nothing and added the item again: its
     /// open request is what holds the settle now. A blocking JavaScript dialog freezes the renderer, and a read that fails
     /// mid-navigation is itself evidence of change. `SETTLE_SECONDS` bounds a page that never does any of this.
+    ///
+    /// `requests` is `None` after a load, whose own end is `ready`, so a request that never answers holds nothing. An
+    /// action passes its mark even when it read no `before`: accepting a confirm is one, and the fetch it starts
+    /// holds the settle, or the next observation reads the page before the handler that answers it has run.
     #[doc(hidden)]
-    pub async fn changed_since(&self, before: &str, requests: u64) -> Result<bool, BrowserError> {
-        let acted = !before.is_empty();
+    pub async fn changed_since(&self, before: &str, requests: Option<u64>) -> Result<bool, BrowserError> {
         let deadline = Instant::now() + secs(SETTLE_SECONDS);
         let dialog = self.session.wait_for_dialog();
         tokio::pin!(dialog);
@@ -1457,7 +1650,7 @@ impl CdpPage {
                         let differs = current.as_deref() != Some(before);
                         // A load has its own end in `ready`; a request only holds an action. One that never
                         // answers, as on a page's first load, would otherwise hold every run to the deadline.
-                        if !(acted && self.session.requests_open_since(requests))
+                        if !requests.is_some_and(|mark| self.session.requests_open_since(mark))
                             && !self.session.navigating()
                             && !self.session.frames_loading()
                             && self.lifecycle_mark() == mark
@@ -1508,29 +1701,38 @@ impl CdpPage {
         let script = self.settle_script(seconds);
         let result = self.evaluate(&self.session.active_session_id()?, &script).await?;
         match result.as_array().map(Vec::as_slice) {
-            Some([Value::Bool(stable), fingerprint]) if fingerprint.is_string() || fingerprint.is_null() => {
+            Some([Value::Bool(stable), fingerprint, Value::String(_end)])
+                if fingerprint.is_string() || fingerprint.is_null() =>
+            {
                 Ok((*stable, fingerprint.as_str().map(str::to_owned)))
             }
-            _ => Err(BrowserError::Failed("page script returned an unexpected tuple[bool, str | None]".into())),
+            _ => Err(BrowserError::Failed("page script returned an unexpected tuple[bool, str | None, str]".into())),
         }
     }
 
     /// The page script for one settle: a promise the page resolves on its own frame and mutation events once the
-    /// document is interactive, has not mutated for `SETTLE_QUIET_SECONDS`, and shows no progress indicator (or has
-    /// shown one for `SETTLE_LOADING_SECONDS`), then samples the fingerprint in the same call. `seconds` bounds it.
+    /// document is interactive, has not mutated for `SETTLE_QUIET_SECONDS`, shows no progress indicator (or has
+    /// shown one for `SETTLE_LOADING_SECONDS`) and has run the timers and frame callbacks the action's input scheduled
+    /// that are due before the deadline, then samples the fingerprint in the same call. `seconds` bounds it.
+    ///
+    /// The promise answers `[stable, fingerprint, end]`. `end` is the page's record of why it answered: `idle` when
+    /// nothing moved after the input, so no quiet window was due, `quiet` once a mutation after the input had a quiet
+    /// window behind it, `loading` for a progress indicator held past its bound, `deadline`, or `unwatched` for a page
+    /// with no registry or a hidden tab. Nothing here acts on it; the integration tests read it from the CDP reply
+    /// so they assert what the settle decided rather than how long the machine took.
     ///
     /// The `fastbrowse:settle` marker is what the integration test matches to count settle reads.
     fn settle_script(&self, seconds: f64) -> String {
         format!(
             "/* fastbrowse:settle */ new Promise(resolve => {{ const r = window.__fastbrowse; \
              const sample = {page_js}; \
-             const finish = () => {{ const s = sample('fingerprint'); \
-             resolve([Boolean(s && s.ready), s && s.ready ? s.fingerprint : null]); }}; \
-             if (!r || document.hidden) {{ finish(); return; }} \
+             const finish = end => {{ const s = sample('fingerprint'); \
+             resolve([Boolean(s && s.ready), s && s.ready ? s.fingerprint : null, end]); }}; \
+             if (!r || document.hidden) {{ finish('unwatched'); return; }} \
              const started = performance.now(); const deadline = started + {deadline}; \
              const quiet = {quiet}; const loading = {loading}; \
              let settled = false, frameAt = 0; \
-             const done = () => {{ if (settled) return; settled = true; r.nativeClearTimeout(timer); finish(); }}; \
+             const done = end => {{ if (settled) return; settled = true; r.nativeClearTimeout(timer); finish(end); }}; \
              const busy = () => {{ \
                for (const e of document.querySelectorAll('[aria-busy=\"true\"],[role=\"progressbar\"],progress')) {{ \
                  try {{ if (e.checkVisibility({{checkOpacity: true, checkVisibilityCSS: true}})) return true; }} catch {{}} \
@@ -1540,10 +1742,14 @@ impl CdpPage {
                const ready = document.readyState !== 'loading'; const held = busy(); \
                const last = r.lastMutation || 0; \
                const moved = last >= (r.lastInput || 0); \
-               if (ready && !held && (!moved || now - last >= quiet) && frameAt >= last) return done(); \
-               if (now >= deadline || (held && now - started >= loading)) return done(); \
+               const drawing = now - Math.max(last, r.lastInput || 0) < quiet; \
+               const pending = Boolean(r.pendingBefore && r.pendingBefore(deadline, drawing)); \
+               if (ready && !held && !pending && (!moved || now - last >= quiet) && frameAt >= last) \
+                 return done(moved ? 'quiet' : 'idle'); \
+               if (now >= deadline) return done('deadline'); \
+               if (held && now - started >= loading) return done('loading'); \
                r.nativeRequestAnimationFrame(t => {{ frameAt = t; check(); }}); }}; \
-             const timer = r.nativeSetTimeout(done, {deadline}); \
+             const timer = r.nativeSetTimeout(() => done('deadline'), {deadline}); \
              r.nativeRequestAnimationFrame(t => {{ frameAt = t; check(); }}); }})",
             page_js = self.page_js,
             deadline = py_float(seconds.max(0.0) * 1000.0),
@@ -1681,6 +1887,15 @@ impl Page for CdpPage {
         Box::pin(async move { seam(CdpPage::act(self, action, observation).await) })
     }
 
+    fn wait<'a>(
+        &'a self,
+        action: &'a Action,
+        observation: &'a Observation,
+        seconds: f64,
+    ) -> BoxFuture<'a, PageResult<ActResult>> {
+        Box::pin(async move { seam(CdpPage::wait(self, action, observation, seconds).await) })
+    }
+
     fn redrawn<'a>(
         &'a self,
         observation: &'a Observation,
@@ -1732,8 +1947,8 @@ impl Page for CdpPage {
         self.session.captcha_solve()
     }
 
-    fn loading(&self) -> bool {
-        self.session.navigating() || self.session.frames_loading()
+    fn loading(&self) -> Option<f64> {
+        self.session.loading_left()
     }
 }
 
@@ -1845,7 +2060,7 @@ mod tests {
             "document_key": "", "controls": [], "page_key": "", "guards": {}, "retarget_keys": {},
         }))
         .expect("snapshot");
-        (key.to_owned(), FrameObservation { frame_id: None, session_id: String::new(), raw })
+        (key.to_owned(), FrameObservation { frame_id: None, session_id: String::new(), raw: Arc::new(raw) })
     }
 
     #[test]

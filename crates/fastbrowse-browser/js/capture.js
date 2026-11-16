@@ -12,7 +12,7 @@
   const blocks = [];
   let path = [];
   // The headings a frame stands under: its own headings rank among themselves, so its h1 cannot end them.
-  let floor = 0;
+  let headingLevels = [];
   let framePath = null;
   let sourcePath = '';
   let inaccessible = 0;
@@ -323,7 +323,9 @@
   }
 
   // A record can state a value only by drawing it: a row of identical icons a class colours has no text, and a capture
-  // of the text reads every record as alike. The page's own label or class names it, verbatim, for the reader to judge.
+  // of the text reads every record as alike. The page's own label or class names it, verbatim, for the reader to judge,
+  // with what code knows of it: it shows no text. Named alone, an open replies region with nothing in it read as a
+  // label, and "the author has not replied" citing that comment was judged unsupported (#992).
   const LEAVES_OF_THEIR_OWN = 'a,button,img,input,select,textarea,svg';
   function drawnFacts(descendants) {
     const facts = [];
@@ -332,7 +334,7 @@
       if (e.matches(LEAVES_OF_THEIR_OWN) || e.querySelector(LEAVES_OF_THEIR_OWN)) continue;
       if (descendants.includes(e.parentElement) && !textOf(e.parentElement)) continue;
       const name = e.getAttribute('aria-label') || e.getAttribute('title') || [...e.classList].join(' ');
-      if (clean(name)) facts.push(`[${clean(name)}]`);
+      if (clean(name)) facts.push(`[${clean(name)}: no text]`);
     }
     return facts;
   }
@@ -377,21 +379,31 @@
     flush(run);
   }
 
+  function endHeading(level) {
+    while (headingLevels.length && headingLevels.at(-1) >= level) {
+      headingLevels.pop();
+      path.pop();
+    }
+  }
+
   function block(el) {
     if (el.matches('nav,[role="navigation"]')) {
       // Navigation help headings describe their menu, not product facts in the following main content.
-      const surrounding = [...path];
+      const surrounding = [path, headingLevels];
+      path = [...path];
+      headingLevels = [...headingLevels];
       walk(el);
-      path = surrounding;
+      [path, headingLevels] = surrounding;
       return;
     }
     const level = HEADINGS[el.tagName];
     if (level) {
       const text = textOf(el);
-      while (path.length > floor && path.length - floor >= level) path.pop();
+      endHeading(level);
       if (text) {
         push('heading', text, { links: linksIn([el]) }, [el]);
         path.push(text);
+        headingLevels.push(level);
       }
       return;
     }
@@ -404,11 +416,20 @@
     if (el.tagName === 'PRE') return push('code', textOf(el), {}, [el]);
     const record = recordText(el);
     if ((el.tagName === 'LI' && leaf(el)) || record !== null) {
+      // A card's heading still ends an earlier sibling's heading, even when the card is read without walking it.
+      const heading = [...el.querySelectorAll('h1,h2,h3,h4,h5,h6')].find(visible);
+      if (heading) endHeading(HEADINGS[heading.tagName]);
       const links = el.matches('a[href]') ? [el] : el.querySelectorAll('a[href]');
       push(
         el.tagName === 'LI' ? 'list_item' : 'record',
         record ?? textOf(el),
-        { ...(links.length === 1 ? { href: hrefOf(links[0]) } : {}), links: linksIn([el]) },
+        {
+          ...(links.length === 1 ? { href: hrefOf(links[0]) } : {}),
+          links: linksIn([el]),
+          // All an item the page repeats renders, its textless parts named: what it does not show, it does not show.
+          // A comment is often an `li`, so its kind does not say this (#992).
+          ...(record !== null ? { whole_record: true } : {}),
+        },
         [el],
       );
       for (const field of fields(el)) push('paragraph', field);
@@ -443,13 +464,14 @@
   }
 
   function scope(root, frame, source, headings = []) {
-    const previous = [path, floor, framePath, sourcePath];
+    const previous = [path, headingLevels, framePath, sourcePath];
     path = [...headings];
-    floor = headings.length;
+    headingLevels = [];
     framePath = frame;
     sourcePath = source;
     walk(root);
     path = [...headings];
+    headingLevels = [];
     for (const e of [...root.querySelectorAll('input,select,textarea,button,[role="button"]')].filter(visible)) {
       // Placeholders suggest input; they do not label a value or prove an empty named field.
       if (CONTROLS.has(e.tagName) && !e.labels?.length && !e.hasAttribute('aria-label') && !e.hasAttribute('aria-labelledby')) continue;
@@ -458,13 +480,48 @@
       if (CONTROLS.has(e.tagName) && !UNFILLED.has(e.type) && !fieldValue(e)) push('observation', `${name}: [empty]`);
       if (e.matches(':disabled,[aria-disabled="true"]')) push('observation', `${name}: disabled`);
     }
+    // Which option is chosen is element state no text node carries, and a page often shows what follows from it in
+    // place: a checkout re-rendered one order total per shipping method, and the read could not say which method the
+    // total it quoted was for. A choice a kit hides is shown by its label, so either being visible counts.
+    const CHOICES = 'input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"],[role="switch"]';
+    for (const e of root.querySelectorAll(CHOICES)) {
+      const native = e.tagName === 'INPUT';
+      if (!(native ? e.checked : e.getAttribute('aria-checked') === 'true')) continue;
+      if (!visible(e) && ![...(e.labels || [])].some(visible)) continue;
+      const name = nameOf(e);
+      if (name) push('observation', `${name}: checked`);
+    }
+    // The text of the nearest enclosing element that has any, naming the row a textless link sits in, since its
+    // observation is not read where the link stands. An empty image paragraph must not borrow another paragraph's text
+    // from its enclosing article.
+    const near = element => {
+      let row = element.parentElement;
+      while (row && row !== root && row.tagName !== 'P' && !clean(row.innerText ?? '')) row = row.parentElement;
+      return row && row !== root ? textOf(row).replace(/\s+/g, ' ') || null : null;
+    };
     // Images carry no innerText, so a text-only capture cannot distinguish their presence from absence. What it can
     // say is kept as data in the one line: a sentence that pixels are not described was cut as a span and quoted as a
     // fact, so a Street View run answered "Pixels are not described" 33 times over a task about what the view shows.
+    // The line quotes the item the image sits in too: a gallery's captions were read as text and its image sources as
+    // these lines with nothing joining them, so a caption paired with a source by position failed its support check
+    // and the row was left out of the answer (#929). The item is what this capture reads as one: a list item, a
+    // record, or a figure, whose caption HTML defines as its content's. Any nearer ancestor with text would do for a
+    // gallery, but an image placed in an article or beside a menu then quoted the whole article or the menu, once
+    // per image, for an item it is not part of. A list item counts only when block() reads it as one, a leaf: one
+    // holding blocks is read as those blocks, and quoting it tied each of its images to every caption inside. An image
+    // in no item quotes nothing.
+    const isItem = e => (e.tagName === 'LI' && leaf(e)) || e.tagName === 'FIGURE' || recordText(e) !== null;
+    const item = element => {
+      let e = element.parentElement;
+      while (e && e !== root && !isItem(e)) e = e.parentElement;
+      if (!e || e === root) return null;
+      return (recordText(e) ?? textOf(e)).replace(/\s+/g, ' ') || null;
+    };
     for (const image of [...root.querySelectorAll('img')].filter(visible)) {
       // Loading changes without a page edit, so captures report presence rather than transient decode state.
       const metadata = { alt: image.getAttribute('alt') ?? null,
-        src: imageSource(image.getAttribute('src') ?? image.getAttribute('srcset')), pixels_described: false };
+        src: imageSource(image.getAttribute('src') ?? image.getAttribute('srcset')), pixels_described: false,
+        near: item(image) };
       push('observation', `Image element DOM metadata: ${JSON.stringify(metadata)}`);
     }
     // A player's clock and whether it plays are element state, drawn by native controls the text never holds. Each
@@ -508,16 +565,8 @@
       const page = location.href.split('#')[0];
       const fragment = link.getAttribute('href').trim().startsWith('#') || (target.hash && target.href.split('#')[0] === page);
       if (target.protocol === 'javascript:' || fragment) continue;
-      let row = link.parentElement;
-      // An empty image paragraph must not borrow another paragraph's text from its enclosing article.
-      while (row && row !== root && row.tagName !== 'P' && !clean(row.innerText ?? '')) row = row.parentElement;
-      if (row === root) row = null;
-      const metadata = {
-        label: nameOf(link) || drawn(link) || null,
-        href: imageSource(link.href),
-        near: row ? textOf(row).replace(/\s+/g, ' ') || null : null,
-      };
-      // choices.rs (LINK_METADATA) keeps this out of a read's answer candidates by its opening words.
+      const metadata = { label: nameOf(link) || drawn(link) || null, href: imageSource(link.href), near: near(link) };
+      // choices.rs (LINK_METADATA) keeps `near` out of a read's answer candidates by the line's opening words.
       push('observation', `Link element DOM metadata: ${JSON.stringify(metadata)}. The link has no text.`);
     }
     if (root === document.body) {
@@ -529,9 +578,22 @@
       // A frame the walk never reached (hidden, or inside a record or table read as one block) is still read.
       if (FRAMES.has(e.tagName) && !entered.has(e)) enter(e, []);
     }
-    [path, floor, framePath, sourcePath] = previous;
+    [path, headingLevels, framePath, sourcePath] = previous;
   }
 
   scope(document.body, null, '');
-  return { url: location.href, title: document.title, blocks, inaccessible_frames: inaccessible };
+  // A JSON document is read by its structure, which its rendered blocks do not keep: Chrome shows the served text in
+  // the body's first `pre`, so that text is sent with the document's type, and Rust reads it when both are JSON
+  // (`fastbrowse_core::page::json`, whose `is_json` this check mirrors only to leave other pages' text unsent).
+  const type = document.contentType.toLowerCase();
+  const served = document.querySelector('body > pre');
+  const json = type === 'application/json' || (type.startsWith('application/') && type.endsWith('+json'));
+  return {
+    url: location.href,
+    title: document.title,
+    blocks,
+    inaccessible_frames: inaccessible,
+    content_type: document.contentType,
+    ...(json && served ? { json_text: served.textContent } : {}),
+  };
 })

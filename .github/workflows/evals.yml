@@ -19,6 +19,21 @@ on:
         description: Approved total model dollars, with no per-task step, time or call ceilings
         required: false
         default: ""
+      probe:
+        description: Optional public run_task request JSON, see docs/agents/evals.md
+        default: ""
+      probe_budget:
+        description: Separate explicit positive dollar budget for the probe
+        default: ""
+      fill_tasks:
+        description: Optional JSON array of fixture task IDs whose bench cassettes need filling
+        default: ""
+      fill_budget:
+        description: Separate explicit positive bench fill budget, checked between tasks
+        default: ""
+      diagnostic_certificate:
+        description: Public PEM encryption certificate, required for probe or fill artifacts
+        default: ""
   schedule:
     - cron: "0 3 * * *"
 
@@ -35,6 +50,11 @@ jobs:
     env:
       EVAL_REPEAT: ${{ inputs.repeat || '3' }}
       EVAL_BUDGET: ${{ inputs.budget }}
+      EVAL_PROBE: ${{ inputs.probe }}
+      EVAL_PROBE_BUDGET: ${{ inputs.probe_budget }}
+      EVAL_FILL_TASKS: ${{ inputs.fill_tasks }}
+      EVAL_FILL_BUDGET: ${{ inputs.fill_budget }}
+      EVAL_DIAGNOSTIC_CERTIFICATE: ${{ inputs.diagnostic_certificate }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {persist-credentials: false}
@@ -49,6 +69,8 @@ jobs:
             ''|*[!0-9]*) echo "repeat must be an integer, got '$EVAL_REPEAT'"; exit 1 ;;
           esac
           test "$EVAL_REPEAT" -ge 3 || { echo "repeat must be at least 3, got $EVAL_REPEAT"; exit 1; }
+      - name: Validate manual diagnostics before any spending
+        run: uv run --no-sync python scripts/eval_diagnostics.py validate
       - name: Check the model credentials
         # A missing provider fails before the first task, with its setting named and no empty score report.
         env:
@@ -90,6 +112,17 @@ jobs:
           uv run python -m fastbrowse.evals.publication \
             --rows artifacts/evals/nightly.jsonl \
             --baseline docs/results
+      - name: Run the optional public API probe
+        if: always() && steps.fixtures.outcome != 'skipped' && inputs.probe != ''
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
+        run: uv run --no-sync python scripts/eval_diagnostics.py probe
+      - name: Fill the optional bench cassettes
+        if: always() && steps.fixtures.outcome != 'skipped' && inputs.fill_tasks != ''
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: uv run --no-sync python scripts/eval_diagnostics.py fill
       - name: Check the eval tracking credentials
         id: langfuse
         # The upload is how a run stays reviewable after this job's artifact expires. The two secrets are the whole
@@ -119,9 +152,14 @@ jobs:
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
           LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
         run: uv run python -m fastbrowse.evals.tracking --rows artifacts/evals/nightly.jsonl
+      - name: Encrypt private diagnostic artifacts
+        if: always()
+        run: uv run --no-sync python scripts/eval_diagnostics.py encrypt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: eval-rows
-          path: artifacts/evals/nightly*
+          path: |
+            artifacts/evals/nightly*
+            artifacts/evals/diagnostics.cms
           if-no-files-found: warn

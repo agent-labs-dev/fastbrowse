@@ -54,14 +54,17 @@ impl Agent {
         // as a scroll shows what is below: a run that hovered an image whose delete button it never reached had deleted
         // nothing.
         let acted = state.history.iter().any(crate::policy::HistoryEntry::acted);
+        let reason = "The task asks for something to be carried out, and no step has done it.";
+        // Served markup is not the page a browser shows: it holds what a stylesheet hides and lacks what scripts build,
+        // such as a success message kept hidden until a form is sent (#894). A task with a step to take, whatever it
+        // wants reported, is finished in a browser, as it is in a run that never fetched.
+        if !acted && self.page.over_http() && (state.asks_steps || intent == OutputIntent::CarriedOut) {
+            return Err(self.page.needs_browser(reason.into()).into());
+        }
         if !acted && output_schema.is_none() && matches!(intent, OutputIntent::CarriedOut) {
             // What was read did not do it, so it answers nothing yet.
             state.notes = Notes::default();
             state.to_carry_out = true;
-            let reason = "The task asks for something to be carried out, and no step has done it.";
-            if self.page.over_http() {
-                return Err(self.page.needs_browser(reason.into()).into());
-            }
             self.recover(state, observation, reason, Status::Stuck, Some((Operation::Done, None))).await?;
             return Ok(None);
         }
@@ -142,17 +145,25 @@ impl Agent {
         Ok(None)
     }
 
-    /// The caller's schema, filled from a capture taken inside this branch so it overlaps the answer.
-    async fn extraction(
+    /// The caller's schema, filled from a capture taken inside this branch so it overlaps the answer, each field chosen
+    /// to agree with `answer`'s claims.
+    async fn schema_fields(
         &self,
-        task: &str,
-        notes: &Notes,
-        schema: &RecordSchema,
-        ledger: &fastbrowse_core::telemetry::Ledger,
-    ) -> Step<Extraction> {
+        state: &RunState,
+        output_schema: Option<&RecordSchema>,
+        answer: Option<&ComposedAnswer>,
+    ) -> Step<Option<Extraction>> {
+        let Some(schema) = output_schema else { return Ok(None) };
         let capture = self.capture().await?;
-        let options = ExtractOptions { notes: Some(notes), tokens: self.config.tokens.clone(), ledger: Some(ledger) };
-        Ok(extract(&*self.jev, task, &capture, schema, &options).await?)
+        let claims: Option<Vec<String>> =
+            answer.map(|answer| answer.claims.iter().map(|claim| claim.text.clone()).collect());
+        let options = ExtractOptions {
+            notes: Some(&state.notes),
+            tokens: self.config.tokens.clone(),
+            ledger: Some(&state.ledger),
+            answer: claims.as_deref().filter(|claims| !claims.is_empty()),
+        };
+        Ok(Some(extract(&*self.jev, &state.task, &capture, schema, &options).await?))
     }
 
     /// Open a next page of the list that a task over the whole list, or over pages of it it names, left unread, as a
@@ -187,11 +198,13 @@ impl Agent {
             shows_answer: None,
             site_failure: None,
             unobtainable: None,
+            inside_drawn: None,
             destination: None,
             replayed: false,
             by_code: true,
             offered: Vec::new(),
             plan: Vec::new(),
+            read_scope: crate::policy::ReadScope::Page,
             ahead: IndexMap::new(),
         };
         match Box::pin(self.step(state, observation, &decision)).await {
@@ -264,13 +277,6 @@ impl Agent {
             self.read_drawn_page(state, observation).await?;
         }
         let mut evidence: Vec<Evidence> = state.notes.facts().iter().filter_map(|fact| fact.evidence.clone()).collect();
-        let extraction = match output_schema {
-            Some(schema) => {
-                let (notes, task, ledger) = (state.notes.clone(), state.task.clone(), state.ledger.clone());
-                Some(self.extraction(&task, &notes, schema, &ledger).await?)
-            }
-            None => None,
-        };
         let mut rejection = None;
         let mut answered = if intent == OutputIntent::Image {
             None
@@ -356,7 +362,9 @@ impl Agent {
                 ));
             }
             state.composition_feedback = Some(rejection);
-            state.schema_partial = extraction;
+            // Filled from the claims that passed, so a stop before the rewrite keeps no value the answer did not give.
+            let passed = answered.as_ref().filter(|answer| !answer.claims.is_empty());
+            state.schema_partial = self.schema_fields(state, output_schema, passed).await?;
             self.recover(state, observation, &reason, Status::Unverified, None).await?;
             return Ok(None);
         }
@@ -367,11 +375,14 @@ impl Agent {
         let mut answer_text = None;
         let mut citations = Vec::new();
         let answer_problem = answered.as_ref().and_then(|answer| answer.problem.clone());
+        let answer_partial = answered.as_ref().and_then(|answer| answer.partial.clone());
         if answer_problem.is_some()
             && let Some(partial) = state.checked_composition(&state.notes_to_compose())
         {
             answered = Some(partial.clone());
         }
+        // Each field is chosen from what the answer gives, so data cannot name what the answer does not.
+        let extraction = self.schema_fields(state, output_schema, answered.as_ref()).await?;
         if let Some(composed) = answered {
             let (text, cited) = self.public_answer(&composed);
             answer_text = (!text.is_empty()).then_some(text);
@@ -396,6 +407,13 @@ impl Agent {
                 ),
             };
             error.get_or_insert_with(|| self.redact(&message));
+        }
+        // The composer said what its answer leaves out: a run that stopped there has not answered all of it, however
+        // well each claim holds. Asked how many quotes an author has across a site, an answer that a list continued
+        // past the two found ended complete.
+        if let Some(partial) = answer_partial {
+            status = Status::Unverified;
+            error.get_or_insert_with(|| self.redact(&format!("{PARTIAL_ANSWER}{partial}")));
         }
         if state.refused {
             status = Status::Unverified;
@@ -534,6 +552,9 @@ pub(super) fn undone_notice(step: &str) -> String {
 }
 
 /// The error of a run whose finish check found a step the site does not allow; the answer names the step.
+/// What leads the composer's own account of what a partial answer leaves out.
+pub(super) const PARTIAL_ANSWER: &str = "The answer is partial; it does not establish ";
+
 pub(super) const REFUSED: &str = "A step the task asks for was not carried out because the site does not allow it, as the page or the recent actions show. The answer reports what was and was not done.";
 
 /// What the navigator is told about a rejected draft, and what the run's error says if recovery runs out: which
@@ -543,10 +564,26 @@ fn rejection_reason(rejection: &str) -> String {
     if failed.is_empty() {
         return "The composed answer was rejected against its source quotes or requested coverage. Correct the answer or gather the evidence it needs.".into();
     }
-    format!(
+    let mut reason = format!(
         "The composed answer was rejected: {}. Correct the answer or gather the evidence it needs.",
         failed.join("; ")
-    )
+    );
+    // A coverage check rejects the answer whole, so only the draft says what it lacks. Told only that a value was left
+    // out, the navigator chose done again over a checkout whose draft gave one shipping method's total and "not shown"
+    // for four others; shown that draft, it chose the next method (#897).
+    let feedback: Value = serde_json::from_str(rejection).unwrap_or_default();
+    let coverage = feedback["rejected_checks"].as_array().is_some_and(|checks| checks.iter().any(|c| c == "coverage"));
+    if coverage && let Some(claims) = drafted(rejection).filter(|claims| !claims.is_empty()) {
+        reason += "\nThe rejected answer:";
+        if let Some(columns) = feedback["columns"].as_array().filter(|columns| !columns.is_empty()) {
+            let names: Vec<&str> = columns.iter().filter_map(Value::as_str).collect();
+            reason += &format!("\n{}", names.join(" | "));
+        }
+        for claim in claims {
+            reason += &format!("\n- {claim}");
+        }
+    }
+    reason
 }
 
 /// The claims of a rejected draft that held, under a notice naming what was withheld and why. A run that finished its
@@ -628,7 +665,7 @@ fn drafted(feedback: &str) -> Option<Vec<String>> {
 /// read before it was kept for those steps, such as a value read on one page and entered on another, and answering with
 /// it reported a write task's start page, "Save: disabled", the disabled Save button beside the field it was about to
 /// change (#939).
-fn outcome_notes(state: &RunState) -> Notes {
+pub(super) fn outcome_notes(state: &RunState) -> Notes {
     let taken = state.history.iter().filter(|entry| entry.changed_site()).count();
     let mut outcome = state.notes.clone();
     outcome
@@ -668,5 +705,30 @@ mod tests {
         ] {
             assert!(reason.contains(part), "{reason}");
         }
+    }
+
+    #[test]
+    fn a_draft_rejected_for_coverage_shows_the_navigator_what_it_lacks() {
+        // #897: one shipping method's total was read, and the draft said "not shown" for the others.
+        let draft = |checks: serde_json::Value| {
+            json!({
+                "draft_claims": [
+                    {"text": "UPS Saver | $32.61 | $174.69", "evidence_ids": ["e1"]},
+                    {"text": "DHL Express | $28.40 | not shown for this method", "evidence_ids": ["e2"]},
+                ],
+                "columns": ["Shipping method", "Price", "Grand Total"],
+                "rejected_checks": checks,
+            })
+            .to_string()
+        };
+        let reason = rejection_reason(&draft(json!(["coverage"])));
+        assert!(
+            reason.ends_with(
+                "\nThe rejected answer:\nShipping method | Price | Grand Total\n- UPS Saver | $32.61 | $174.69\n- DHL Express | $28.40 | not shown for this method"
+            ),
+            "{reason}"
+        );
+        // A claim its own check rejected is named already; the draft is shown only for what no one claim is to blame.
+        assert!(!rejection_reason(&draft(json!(["claim1"]))).contains("The rejected answer"));
     }
 }

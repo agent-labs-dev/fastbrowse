@@ -4,17 +4,27 @@ fastbrowse splits a browser agent into three owners:
 
 - **Jev decides, reads and finishes.** A batched request chooses an operation and its possible targets from indexed controls. On a page denser than the step's control budget, a batched relevance check keeps the controls the task can use rather than the first ones in document order. A page too dense even on screen offers the controls that fit and scrolls for the rest rather than ending the run. Large target sets use a second choice within the selected group. Jev also checks sign-in and bot walls on fresh pages, picks what a page says from its quoted spans, and ends the run by choosing DONE.
 - **An LLM helps where nothing can be copied.** With no start page given, it proposes the first address from the task. When Jev says a field takes a value the task asks for without stating it word for word, such as a search query, it writes that value from the task and the field's label, never from the page. When Jev says an answer has to be put together from more than one fact, it writes that answer from the notes. A run given a start page whose values and answers Jev can quote calls no LLM.
-- **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, and budgets. Code does not second-guess a DONE: the run ends `complete` with what Jev read, and a requested record that cannot be filled, a composed claim still unsupported after recovery, or a requested step the page shows the site does not allow ends `unverified`. Once the run has acted, Jev's finish check answers whether every step the task asks for was carried out: `done`, `undone` (the run recovers), or `refused` (the run reads, answers and ends `unverified`).
+- **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, and budgets. Code does not second-guess a DONE: the run ends `complete` with what Jev read, and a requested record that cannot be filled, a composed claim still unsupported after recovery, an answer its composer says leaves a requested value unestablished, or a requested step the page shows the site does not allow ends `unverified`. Once the run has acted, Jev's finish check answers whether every step the task asks for was carried out: `done`, `undone` (the run recovers), or `refused` (the run reads, answers and ends `unverified`).
 
 When a field value or key chord is copied, Jev selects its source and first word. If its end needs a separate choice,
-each choice shows the complete text that would be typed from that first word to the candidate end.
-Code copies the selected span unchanged. A key chord is copied only from the task, never from page text.
+each choice shows the complete text that would be typed from that first word to the candidate end, with one more
+answer: the value does not begin at that word. Jev then picks the first word again without it. The beginning is checked
+the same way against copies that end where the value ends, and an end Jev rejects there is picked again.
+Code copies the selected span unchanged. A task-provided key chord is copied only from the task, never from page text. Controls with standard ARIA keyboard interactions also offer their role's keys for Jev to choose.
 Earlier typing is shown as history, without assuming
 rejection or requiring a different value when the page changed the field.
 
 That loop runs in Rust, in [crates/](../crates): `fastbrowse-agent` holds the run loop, `fastbrowse-browser`
 the page and its indexing, `fastbrowse-clients` the Jev and LLM clients, and `fastbrowse-py` builds them as
 `fastbrowse._native` into the wheel ([ADR 0004](adr/0004-rust-core-by-default.md)).
+
+With `plan_ahead` enabled, Jev can choose to read a list across its observed same-origin next-page links when
+the task covers every page or a resolved page range. Each new page still asks Jev whether to read it as part
+of that list or return to ordinary actions, alongside the usual sign-in, bot-check and site-failure questions.
+These requests omit unrelated action and target choices. Every read and navigation remains a separate step
+with its own citations and budget admission. The list read stops on a changed list, dialog, modal, tabs or
+origin, a failed page, a read adding no evidence, or the task's last page. Only the ordinary finish path can
+declare the task complete. `plan_ahead=false` disables list reads and planned field fills.
 
 ## Authorization
 
@@ -34,7 +44,7 @@ cannot argue an action through. An authorized run also asks, in the same request
 the action only in some state of the page or site ("reply if nobody has answered yet"). When it does, or the run
 has already carried out a commit, and the action commits or leaves something the site keeps, a second Jev request
 asks, as a choice, whether in the state the page shows the task says to do it with these values, says not to, has
-been done already by the run's earlier steps and is not asked for again, or cannot be told. It does not
+already produced the requested result according to the page or recorded effects and is not asked for again, or cannot be told. A prior executed input is reported as an attempt, not proof that its result happened. It does not
 say the action is conditional, so a step the task asks for outright before a condition on a later one is
 judged as asked. The same request asks which of the task's values the action uses: those to use at first, or
 those the task gives only once something happens ("if the site rejects anything, use SW1A 1AA"). For the later
@@ -106,6 +116,42 @@ element follows the rules a pointer cursor does: one inside a control, or holdin
 a container whose listener hears its children's clicks while one of them is pressable. Listeners on the window, the
 document, the root element and the body hear the whole page, so they mark nothing.
 
+The browser visits each changed frame, then transfers unchanged control rows by their existing node
+ids and sends only changed rows and guards. The receiver reconstructs the ordered controls against the exact
+document and previous read named by the delta. Each request names the receiver's baseline; a missing or mismatched
+baseline returns a full read directly. Each frame read releases saved snapshots of detached child frames, preserving live child snapshots across tab switches. Rust retains the raw rows with their validated snapshot, so an unchanged response reuses that parse. A delta that cannot be reconstructed requests a full read. Page text,
+modal state and other frame metadata travel in full. A read that enters open shadow roots or same-origin child
+documents is kept like any other: each root it walks gets its own mutation observer and event listeners, and the
+saved read records every frame's document and address, so a frame that shows another document, or becomes readable,
+renews it.
+Captures and citation spans keep their own read path. Context construction indexes peer labels once per read,
+preserving shared labels when excluding a control.
+
+Within a changed frame, structural queries and control names reuse their previous results while their inputs
+match. A mutation invalidates the affected subtree and its ancestors. A name records the nodes, ARIA references,
+label associations, visibility and native values it used, and checks those dependencies before reuse. Queries
+are also tied to their document or shadow root. Layout and event listeners are read afresh, and action guards
+query current state. Each saved snapshot or glance keeps its own pending custom-element definitions, since an
+upgrade can change label ownership without a DOM mutation. Before reusing a read, the browser checks the
+elements of every tree it visited for newly attached shadow roots, which also produce no mutation, and compares
+each tree's live values, stylesheets, address, scroll, size and running animations. It also
+compares the native pointer-listener checks used by the saved read. Each atomic read asks for a node's listeners
+once; later action guards ask again. A saved read also compares the rendering facts it consumed: computed
+style properties, visibility, element and text-node boxes, rendered text, live selector matches, focus and
+live control or media values. Scroll controls also record extents and positions, overflow propagated from the
+body, and the writing-mode, direction and flex styles that determine their axes. Generated CSS content can
+change those extents without a DOM mutation. Those facts stay in the installed script's private closure and
+name the exact document and read they validate. A CSS state can then renew a read without writing a DOM node or attribute.
+The frame keeps each document or shadow root's element order and static control membership. A child-list
+change renews order through saved element-child edges; unchanged siblings keep those edges. Attribute changes
+renew membership, while geometry, listeners and render facts are read fresh. Full reads rebuild the index.
+Text spans still come from the text walker and capture path. Each control's fields and context decisions
+are derived from the current page. Reusing the rows of untouched controls was measured and does not pay: a changed
+read is dominated by the native style, visibility, box and text reads that would prove a row unchanged, and the
+hover, scroll and guard passes read the same facts again when the walk no longer has them. Saved reads compare fresh boxes and selector results directly with their
+snapshots, without allocating new comparison arrays. Repeated heading and scope text reuses its normalized
+lines only when a fresh native read returns the exact same text.
+
 A browser observation reports each control's `focused` state. A custom page may leave it unknown.
 The optional `invalid` flag reports `aria-invalid` or a failed native constraint on a field that participates
 in form validation. It describes the current field, without claiming that a submission occurred. A field
@@ -125,15 +171,39 @@ because an order total is gone once the order is placed. The step state's `page_
 and has not changed since, and when it changed after it was last read. Every READ Jev picks goes to the reader. A read
 that adds no new source quote counts toward the stall rule like any other step that moved nothing.
 
+With `EXA_API_KEY`, Jev can choose a web search at the start or during a run. The LLM proposes queries from the
+task, current page and evidence; Jev picks a query. Exa auto search returns up to ten results. Every returned result
+field is kept in a citable record, and result addresses become links that use the existing navigation and origin
+checks. The results view retains the current browser session. Repeating identical results counts as no progress.
+A quote from result metadata cites the API response address; open the result to obtain a citation from its page.
+The ledger reserves the documented search price before dispatch and records the provider receipt, or its bounded
+price when the receipt is unavailable. No key leaves search unavailable.
+
 Fetch reads the same way: by default a run reads pages over HTTP and follows links there, with the page's form controls
 offered as what it has. A disabled control (`disabled`, `aria-disabled="true"` or `inert` on the element) is not
 offered, as a browser capture leaves it out, so a disabled next link is no next page. A step only a browser can
 take starts one on the same page, and the run carries on with
-what it knows. `fetch` forbids the browser, and `browser` starts one from the first step.
+what it knows. A served page is not the page a browser shows: it holds text a stylesheet hides and lacks what scripts
+build. So a run over HTTP that took no step cannot finish a task that asks for one, whatever it asks to be told: a
+browser does it.
+`fetch` forbids the browser, and `browser` starts one from the first step.
 Fetched documents have no pixels, so optional screenshots and step frames are skipped.
+A JSON response, including `application/*+json`, is read by its structure: each object key is a heading, and each
+string, number, `true`, `false` and `null` is its own block under the path of keys and array indices that leads to it.
+A string reads as its decoded text, a number as written, and repeated keys keep every value. A response that is not
+entirely valid JSON, and other `text/*` responses, are read as one quoted text block. Neither is parsed as HTML, and
+delimited data keeps its whitespace. Browser captures of a JSON document are still read as one code block.
+
+Browser and HTTP heading paths follow heading ranks. A heading inside a repeated record ends earlier headings
+of the same or deeper rank, without naming later records. Headings hidden by the capture do not change that
+context; HTTP sees hidden attributes and inline styles, but does not apply stylesheets.
 
 Browser captures record an icon-only link's destination with nearby container text, passing through empty layout
 wrappers. The search stops at a paragraph even when it is empty, and never uses the page root as nearby text.
+
+Browser captures write each checked checkbox, radio or switch as `Label: checked`, a native one hidden behind a
+visible label included, so text a page re-renders for the option chosen, such as an order total per shipping method,
+is read with the option it belongs to.
 
 Browser and fetch captures write a `time` or custom element's `datetime` in brackets after the text it shows, so a
 relative date such as "3 weeks ago" keeps the exact date the page holds. `ins` and `del` are excluded, and nothing is
@@ -164,9 +234,20 @@ others as they were. Jev is asked which option to toggle and told which are sele
 selection back fails the step, as on a single select, and the action guard and page fingerprint read every selected
 option, so choosing or removing any one of them is a change.
 
-Press on an editable field sends the key or key chord Jev copied from the task. Its modifiers and DOM key are sent
-as one browser input, and a chord that can submit or save goes through the same irreversibility and authorization gates
-as Enter.
+Press sends a key Jev selects from the target control's ARIA role, or a key chord copied from the task.
+Sliders, spin buttons, tabs, lists, trees, menus and grids offer their standard WAI-ARIA keyboard interactions
+when focus can reach them. An explicit `aria-orientation` on a widget or its owning composite is included in its context, so the key chooser knows its direction. Widget value changes count as progress. A composite container is indexed for keyboard use when it has a `tabindex`.
+An active descendant keeps DOM focus on its owner while receiving the chosen key. Native selects keep their
+Select operation. The selected chord is stated to the irreversible-action classifier before dispatch.
+When the task forbids edits, Jev also judges whether that chord changes a value or only moves through the page.
+Its modifiers and DOM key are sent as one browser input, and a chord that can submit or save goes through the
+same irreversibility and authorization gates as Enter.
+
+Scrollable containers are indexed separately for each overflowing axis, including open shadow roots and accessible
+frames. Jev chooses a scroll area and an available direction. Code moves that container by its visible width or
+height; horizontal right-to-left areas retain physical left and right directions. Container offsets contribute to
+the page fingerprint, so a scroll that exposes content counts as progress even when its text is unchanged. A scroll
+without a target retains viewport scrolling.
 
 A read offers Jev one bounded choice over the page's quoted spans, with two more answers: the page does not hold the
 answer, or the answer must be composed from more than one fact. On a page with more spans than one choice can offer, a
@@ -174,7 +255,9 @@ relevance pass narrows them first. If no value choice fits, a page that fits Jev
 facts for synthesis. Jev's pick stands. Code cut the spans from the capture, so neither Jev nor the LLM
 writes page text. A span Jev picks becomes a fact, and identical values from the same page and frame share one choice
 with all their source contexts. When Jev says the answer must be composed, every nonempty source block is kept as a fact and the
-answer is composed when the run tries to finish, with recovery for a rejected draft.
+answer is composed when the run tries to finish, with recovery for a rejected draft. The recovery decision is told
+which claim failed which check, and a draft rejected for leaving out something the task asks for is shown to it whole,
+since no one claim is to blame and only the draft says what it lacks.
 
 A fresh read, including source quotes kept for synthesis, retires earlier facts from the same address when their
 quotes are no longer shown. The facts stay as history. Quotes still shown and evidence from other addresses remain.
@@ -192,18 +275,39 @@ sources cover the request; the generated result is checked before delivery.
 Answer claims use numbered Markdown links built from those notes. `RunResult.citations` exposes the cited facts and
 text-fragment deep links; unused facts have no citation. The LLM writes a composed answer from the notes. Jev judges
 each final claim against its original cited quotes, including record identity and values, after any packing rounds.
+The composer selects source wording by note id in private text parts, either the whole note or a part of it, such as
+one field of a record, that code finds in the note's text exactly as written. Code copies the selection and adds
+quotation delimiters when requested; prose parts, objects like the others so the composer does not write connecting
+wording as a source part, keep explanatory wording separate. A tally has one computed part,
+which code fills without replacing matching text inside a source part. Packed compositions expose their original
+sources separately, and kept claims retain these parts through a rewrite. Split notes cannot be selected as whole
+sources. The delivered claims keep the same text, cells, tally and evidence id fields.
+For a comparison restricted to each group's minimum or maximum, the composer also names a private selection:
+the grouping field, the inner field and its extreme. Group names must copy an exact span from the record's quote
+or, for captured page text, its own captured heading path. Code selects each group's tied extremes before applying
+the outer comparison. The claim cites every qualifying record used in the selection; record association checks see
+only the outer winners. This selection survives packing and rewrites without adding fields to delivered claims.
 A count, total, minimum or maximum, or a place after one such as the second cheapest, is never written or judged as a number. The composer marks it as a tally with
 the kind of record and the field, and Jev answers one question per note read: for a count, whether it holds exactly one
-such record, and for a total or extreme, whether it holds one with its field, then which number in it is the field. A
+such record, and for a total or extreme, whether it holds one with its field, then which number in it is the field. A date, ISO or a day, month name and year, is offered whole with its year beside it, and its day and month are not offered alone, since neither orders anything; code orders dates for an extreme and never adds them. A
 record's name, heading or a link to it holds no value, so it is not counted as a record without one. Code counts, adds
 or compares, writes the value into the claim and cites every record it rests on. For a count per group, such as quotes
 per author, the composer names only the group its claim counts: the run's LLM copies each record's group from its
 quote, a read that is not text of that quote leaves the count unstated, and code groups the records, counts each group
 and checks the claim's place among all of them. A minimum or maximum the claim
+record's name, heading or a link to it holds no value, so it is not counted as a record without one. A record read
+from a screenshot or an element's markup is in the reader's words, so Jev is also asked which record on the same page
+it repeats, if any, and a repeat is not counted again. Code counts, adds
+or compares, writes the value into the claim and cites every record it rests on. A minimum or maximum the claim
 answers with its record's name instead keeps that name, and only the record check judges it. Such a claim gets no support question
 over the value: Jev is asked only whether the claim, with `[computed]` in the value's place, states nothing besides the
 tally. For a minimum or maximum both questions are choices: whether the claim states the value, the record holding it,
 both, or something else as well, and which record it names, none, one of those code found at the extreme, or another.
+Jev is also asked what the task asks to be told about the tally's records, offered every operation a tally does with
+the tally's own among them, and the claim holds only when Jev chooses that one: the composer chooses the operation, and
+code then works out exactly a count where the task asked for a total. An operation another tally of the same records
+gives is not offered, so a task asking for the number of orders and their total is answered by a count and a sum, and
+a table row's tally is asked the same.
 A failed check tells the composer which it was, such as a claim that also lists each record's value, which then goes in
 a claim of its own.
 Packing continues only when fewer requests are needed or the rewritten claim text shrinks. Removing source-state
@@ -223,14 +327,18 @@ coverage or step check failed, which fault the claims together; a claim it
 writes again with the same text is kept once. A rewrite that retyped a passed claim could change a copied name and
 fail where the first draft had passed. A corrected draft
 must pass citation checks and cover every requested fact or value. If the combined answer exceeds Jev's input limit for the coverage check, individually supported claims remain available as an unverified partial answer; the result identifies the coverage limit. The coverage check judges the written
-facts and values; citation support and browser actions have separate checks. A whole-answer check beside coverage
+facts and values, not the form the task asks for, such as JSON, since code writes every answer as claims; citation
+support and browser actions have separate checks. A whole-answer check beside coverage
 judges the claims against the steps the run carried out on the page: an answer that says something was not done, or
 already existed, when one of those steps may have done it has every claim withheld, and a run still finishing spends a
 recovery to write it again. Only that rewrite gives the composer the steps, as the run's own record and never as
 citations; on every other draft a long run's clicks would crowd out the notes it writes from. Runs with a caller-supplied output schema
-spend the same recovery, and when it ends without a checked answer they retain their extracted data and end `unverified`. Recovery is not
+spend the same recovery, and when it ends without a checked answer they retain their extracted data and end `unverified`.
+Each schema field is chosen after the answer is checked, with its claims beside the candidates, or with the claims that
+passed when a rewrite is pending: a field choice alone cannot compare records, and chose the other package where the
+answer worked out which was newer. Recovery is not
 attempted when a claim lacks a retained source quote or packed composition cannot reduce to one request.
-Exhausted composition recovery retains supported claims and ends `unverified`, unless a missing field value or
+The composer says when its answer is partial and names what it leaves unestablished, such as a total over a list that continues unread. Such an answer is never `complete`: a finished run ends `unverified` with that account as its error, and a stuck run keeps its status. Exhausted composition recovery retains supported claims and ends `unverified`, unless a missing field value or
 site failure establishes another status. Those claims can be reused without another composition call only while
 their source evidence remains unchanged and the run has taken no further step. A later nonempty checked repair replaces the retained draft; an empty
 repair preserves the earlier draft. Other stops also retain checked partial claims alongside their status,
@@ -241,6 +349,10 @@ the task also asks whether each picked text is only what the task asks, in the f
 cut from the page, such as a table cell or a sentence, and can hold the value beside other text, or be a whole date
 where the task asks for its year. When it holds more, the composer writes the answer from the picks and their context,
 told that they held more than the task asks, and its claims pass the same checks as any composed answer.
+A composed answer is judged for exactness on the text it copies through its source parts, since its own wording holds no
+page text: a source part can insert its note's whole text, so a composed answer can copy more than the task asks too.
+The check rejects copied page information the task neither asks for nor names, such as another field's value, an
+identifier or another record, not the task's own words or a sentence that states only an asked value.
 
 ## Prompt limits and progress
 
@@ -287,15 +399,30 @@ A navigation retains its observed source page for decisions on the destination, 
 A navigation or a step settles once no frame of the tab, embedded frames included, is still loading its document
 up to DOMContentLoaded, within the same settle deadline. A frame that loads after its page is ready is part of what
 the navigation opened, so its controls are in the first observation and the next step's effect does not claim them.
+The step also tracks function timers and animation frames scheduled during its input task, including their
+nested callbacks. Timers due before the settle deadline hold the wait; frame chains use the existing quiet
+window so an endless animation can settle. Cancelled callbacks, callbacks from earlier actions, timers due
+after the deadline, unrelated page timers and the cookie-banner helper's background timers do not hold it open.
+
+A `wait` step lasts until the page changes by itself: a change to what the settle fingerprint compares, a player
+starting, pausing, ending or muting (in the page, a granted child frame or a frame in a process of its own that an observation reads), a same-document navigation, a navigation to another document, or a dialog. It
+has no fixed bound. A run with `max_seconds` waits at most until it must stop browsing, and a run without one waits
+for the change. The wait samples the fingerprint twice a second beside the events it hears, since a script writing
+`checked` as a property raises none. A wait that ends with nothing changed is a step that changed nothing, under the one stall rule, unless
+a player's clock moved meanwhile. A cancelled wait removes what it installed in the page. A direct `Page::act` Wait has no deadline; an embedder bounds it through `Page::wait` or cancellation. Desktop waits use the
+same run deadline while polling the window's accessibility tree for a change.
 
 An empty observation waits on loading events before action history and progress are recorded.
 The same blank state is waited out once until a readable page appears, so a later navigation gets its own wait.
 Reloading remains restricted to an untouched opening page, since retrying a later page could repeat a submission.
 `StallRules` has one stall rule: a step that
-changes nothing, a read that adds nothing, or a return to a page state already seen with nothing read since is no
-progress, and `unchanged_actions` such steps in a row ask Jev again. A page state not seen before or a read that adds
+changes nothing, a read that adds nothing, a return to a page state already seen with nothing read since, or a
+further return after one return has already counted for the same evidence is no progress, since one read buys one return. `unchanged_actions` such steps in a row ask Jev again. A page state not seen before or a read that adds
 evidence resets the count and renews the `max_recoveries` budget. The new ask names what failed and leaves the stalled
-action out of its options, and Jev's pick is the next decision on that page. Past `max_recoveries` the run ends
+action out of its options, and Jev's pick is the next decision on that page. Before a run would end
+`stuck` past `max_recoveries`, the LLM proposes fresh known addresses using the current observation, evidence
+and history. Code excludes the current page and addresses already observed, offered, opened or walled. Jev chooses whether
+to take a proposed route; authorization and spending limits still apply. Without a fresh route the run ends
 `stuck`, or `unverified` for a rejected composition, unless an unfilled field requires `needs_input` or a site
 failure establishes another status. An HTTP error page goes to Jev like any other, with its status among the
 step's page facts, so Jev reloads it when the status can clear, goes back or picks another link; code only waits out a
@@ -454,6 +581,16 @@ selected by `binaryPath`, `FASTBROWSE_BINARY` or its platform package, and a Rus
 first in `main`. A program that registers no helper still keeps the PDF, and the observation says its text was not
 read (`[Downloaded file: ...] The file was kept, but its text was not read: ...`), naming why: no reader, a read
 past 10 seconds, a file that is no PDF, or a reader that did not start or ended without an answer.
+
+Downloaded XLSX workbooks, DOCX documents and ZIP archives use the same killable helper. Workbooks retain each
+worksheet's name and each stored cell's row, column and value. Empty coordinates are omitted, so sparse sheets
+are read without allocating the rectangle between their cells. Formulas are not evaluated. Word
+text retains paragraph, table-cell, tab and line-break boundaries, with its package part named. Archive members
+are read in memory, never extracted onto the host. Text, CSV, TSV, JSON, XML, Markdown and HTML members are read
+as UTF-8 text; XLSX, DOCX and PDF members use their document readers. Other or invalid members remain named with
+an explicit notice that their contents were not read. Nested archives are not expanded. Generic or missing MIME types use the download filename to select these readers.
+The configured `max_download_bytes` also bounds aggregate decompressed container bytes and extracted output; a
+document exceeding it is reported unread, rather than returning truncated text.
 
 The cloud browser ignores `Browser.setDownloadBehavior(deny)`, so bytes come from response interception, never from the remote filesystem. Host-path `DOM.setFileInputFiles` is only valid for a browser on the same machine.
 

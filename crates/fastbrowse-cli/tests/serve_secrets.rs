@@ -12,6 +12,7 @@ use common::{
 };
 use fastbrowse_cli::runner::{RunError, Runner};
 use fastbrowse_core::models::{RunResult, SecretRef, Status};
+use fastbrowse_core::protocol::PROTOCOL_VERSION;
 use serde_json::{Value, json};
 
 const SHOP: &str = "https://shop.example.com";
@@ -212,7 +213,7 @@ async fn test_the_value_is_in_no_message_the_server_wrote() {
     let done = exchange(&mut client, params, vec![json!(VALUE), json!(VALUE)]).await;
     // An answer nobody is waiting for any more, as after a run that was stopped with its question out.
     client.send(json!({"jsonrpc": "2.0", "id": 99, "result": VALUE}));
-    client.request("initialize", Some(json!({"protocol_version": 2}))).await;
+    client.request("initialize", Some(json!({"protocol_version": PROTOCOL_VERSION}))).await;
     assert_eq!(typist.resolved(), [Some(VALUE.to_string()), Some(VALUE.to_string())]);
     assert_eq!(done.reply["result"]["answer"], "typed 2 of 2");
     let written = String::from_utf8_lossy(&client.written).to_string();
@@ -227,8 +228,8 @@ async fn test_an_answer_to_no_request_gets_no_reply() {
     let mut client = serving(Typist::new(&[]).runner(), settings());
     client.send(json!({"jsonrpc": "2.0", "id": 99, "result": VALUE}));
     client.send(json!({"jsonrpc": "2.0", "id": 98, "error": {"code": -32000, "message": "no vault"}}));
-    let handshake = client.request("initialize", Some(json!({"protocol_version": 2}))).await;
-    assert_eq!(handshake["result"]["protocol_version"], 2);
+    let handshake = client.request("initialize", Some(json!({"protocol_version": PROTOCOL_VERSION}))).await;
+    assert_eq!(handshake["result"]["protocol_version"], PROTOCOL_VERSION);
     assert!(client.inbox.is_empty());
 }
 
@@ -256,10 +257,10 @@ async fn test_the_server_answers_other_requests_while_a_value_is_awaited() {
     let mut client = serving(typist.runner(), settings());
     let run = client.call("run", Some(run_params("run-1", json!({"secrets": [password()]}))));
     let asked = client.asked("secrets/resolve").await;
-    let handshake = client.result("initialize", Some(json!({"protocol_version": 2}))).await;
+    let handshake = client.result("initialize", Some(json!({"protocol_version": PROTOCOL_VERSION}))).await;
     client.respond(&asked, json!(VALUE));
     let reply = client.reply(run).await;
-    assert_eq!(handshake["protocol_version"], 2);
+    assert_eq!(handshake["protocol_version"], PROTOCOL_VERSION);
     assert_eq!(reply["result"]["status"], "complete");
     assert_eq!(typist.resolved(), [Some(VALUE.to_string())]);
 }

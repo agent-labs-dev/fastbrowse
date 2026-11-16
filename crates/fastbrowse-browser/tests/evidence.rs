@@ -85,6 +85,33 @@ async fn test_a_drawing_in_the_viewport_is_visual_content() {
     h.close().await;
 }
 
+/// A streamed remote browser draws its page as an image that takes clicks, and a canvas app draws on a canvas
+/// (#1084): each is marked drawn, so the run knows there are no elements inside it to act on. A button showing an icon
+/// is an element like any other.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_image_or_canvas_that_takes_input_is_a_drawn_control() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = '<img alt="Remote browser view" width="320" height="240" ' +
+          'src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">' +
+          '<canvas aria-label="Board" width="320" height="240"></canvas>' +
+          '<button><img alt="" width="16" height="16" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">Cart</button>';
+        document.querySelector('img').onclick = () => {};
+        document.querySelector('canvas').addEventListener('mousedown', () => {});
+        "#,
+    )
+    .await;
+    let obs = h.observe().await;
+    let drawn = |label: &str| obs.controls.iter().find(|c| c.label == label).map(|c| c.drawn);
+    assert_eq!(drawn("Remote browser view"), Some(Some(true)), "{:?}", obs.controls);
+    assert_eq!(drawn("Board"), Some(Some(true)), "{:?}", obs.controls);
+    assert_eq!(drawn("Cart"), Some(None), "{:?}", obs.controls);
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_an_open_modal_is_named_and_the_page_behind_it_leaves() {
     let Some(h) = harness().await else { return };
@@ -256,6 +283,53 @@ async fn test_an_image_line_names_the_image_and_not_what_it_cannot_show() {
     assert!(line.contains("\"alt\":\"Chart of exports\""), "{line}");
     assert!(line.contains("\"pixels_described\":false"), "{line}");
     assert!(!line.contains("Pixels are not described"), "{line}");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_image_line_quotes_the_item_it_sits_in() {
+    // A gallery's captions were read as text and its sources as image lines with nothing joining them, so a caption
+    // paired with a source by position failed its support check and the row was left out of the answer (#929).
+    let Some(h) = harness().await else { return };
+    eval_active(
+        &h.session,
+        r#"document.body.innerHTML = '<ul>' +
+          '<li><a class="tile"><span><img alt="thumbnail" src="https://example.test/01.gif"></span><p>Dungeon entrances</p></a></li>' +
+          '<li><a class="tile"><span><img alt="thumbnail" src="https://example.test/map.webp"></span><p>The Eastern Kingdoms</p></a></li>' +
+          '</ul><p><img alt="divider" src="https://example.test/rule.png"></p><img alt="lone" src="https://example.test/lone.png">' +
+          '<div class="card"><img src="https://example.test/a.png"><p>Card A</p></div>' +
+          '<div class="card"><img src="https://example.test/b.png"><p>Card B</p></div>' +
+          '<div class="card"><img src="https://example.test/c.png"><p>Card C</p></div>' +
+          '<figure><img src="https://example.test/fig.png"><figcaption>A captioned figure</figcaption></figure>' +
+          '<header><img alt="logo" src="https://example.test/logo.png"><nav>Home About Contact</nav></header>' +
+          '<article><h1>Title</h1><p>First paragraph.</p><img src="https://example.test/inline.png"><p>Second.</p></article>' +
+          '<section><div><div><img src="https://example.test/wrapped.png"></div></div><p>One.</p><p>Two.</p></section>' +
+          '<ul><li><h2>Gallery</h2><div><img src="https://example.test/ga.png"><p>Caption A</p></div>' +
+          '<div><img src="https://example.test/gb.png"><p>Caption B</p></div>' +
+          '<div><img src="https://example.test/gc.png"><p>Caption C</p></div></li><li>Other</li></ul>';"#,
+    )
+    .await;
+    let capture = h.page.capture().await.expect("capture");
+    let images: Vec<&str> =
+        capture.text.lines().filter(|line| line.starts_with("Image element DOM metadata")).collect();
+    assert_eq!(images.len(), 14, "{images:?}");
+    let near = |source: &str| {
+        let line = images.iter().find(|line| line.contains(source)).expect(source);
+        let metadata: serde_json::Value =
+            serde_json::from_str(line.trim_start_matches("Image element DOM metadata: ")).expect("metadata");
+        metadata["near"].as_str().map(str::to_string)
+    };
+    // A list item, a repeated record and a figure are each one item, and quote their own text.
+    assert_eq!(near("01.gif").as_deref(), Some("Dungeon entrances"));
+    assert_eq!(near("map.webp").as_deref(), Some("The Eastern Kingdoms"));
+    assert_eq!(near("b.png").as_deref(), Some("Card B"));
+    assert_eq!(near("fig.png").as_deref(), Some("A captioned figure"));
+    // An image in no item quotes nothing: not an empty paragraph's neighbours, a menu beside a logo, an article it is
+    // placed in, nor the section around empty wrappers. A list item holding blocks is read as those blocks, not as one
+    // item, so it does not tie each of its images to every caption in it.
+    for source in ["rule.png", "lone.png", "logo.png", "inline.png", "wrapped.png", "ga.png", "gb.png", "gc.png"] {
+        assert_eq!(near(source), None, "{source}");
+    }
     h.close().await;
 }
 

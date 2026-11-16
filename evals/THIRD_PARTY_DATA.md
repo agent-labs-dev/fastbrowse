@@ -1,14 +1,14 @@
 # Third-party benchmark data
 
 `fastbrowse_evals` vendors no third-party dataset. The internal live tasks (`live_tasks.py`, `more_tasks.py`) are
-authored for fastbrowse and are covered by the repository's [LICENSE](../LICENSE). Each upstream suite is fetched at
-run time, pinned in `fastbrowse.evals.sources` and checked against its recorded digest before use. A digest
-mismatch stops loading, including when the bad bytes came from the cache (`fastbrowse_evals.datasets`).
+authored for fastbrowse and are covered by the repository's [LICENSE](../LICENSE). Parallax dev20 fetches the official
+suite data at run time, verifies its pinned digest, and keeps the bytes in its cache. See Parallax's
+`docs/official-suites.md` for the source revisions, digests, access requirements, and upstream judge environments.
 
 ## Online-Mind2Web
 
 - Name: Online-Mind2Web, OSU NLP Group.
-- Upstream: <https://huggingface.co/datasets/osunlp/Online-Mind2Web>.
+- Upstream dataset: <https://huggingface.co/datasets/osunlp/Online-Mind2Web>.
 - Pinned revision: `eacad896a84dc5b65e29b0b06e4699ab0544d701`, file `Online_Mind2Web.json`.
 - SHA-256: `7dedf381531d423dc0fc48d21dc1d425655dd75f38b10211a880fa09102f257f` (88,382 bytes, 300 tasks). The file is
   not stored in LFS, so Hugging Face publishes no SHA-256 for it. The digest was taken from bytes that first matched
@@ -44,4 +44,5 @@ mismatch stops loading, including when the bad bytes came from the cache (`fastb
 - Upstream: <https://github.com/browser-use/benchmark>, whose repository declares no licence.
 - The tasks ship encrypted (`BU_Bench_V2.enc`) and are decrypted only inside a run. A run directory holds the
   decrypted goals and upstream records, so it is age-encrypted and never leaves its job in plaintext. Only task ids,
-  scores, seconds, dollars and protocol facts are published (`fastbrowse_evals.official_rows`).
+  scores, seconds, dollars and protocol facts are published through the Parallax
+  run-directory projection in `fastbrowse_evals.publication`.

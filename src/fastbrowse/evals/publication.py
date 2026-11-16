@@ -469,12 +469,9 @@ def _protocol(row: Mapping[str, Any]) -> list[Finding]:
             defect = "missing or invalid final-page evidence"
         if defect:
             problems.append(_finding(REFUSE, "protocol", f"{where}: {defect}"))
-    # The pool arm is fastbrowse on its own browsers and meets jev-ultrafast head to head, so it is held to the
-    # same viewport: a pass at another size would not be the same navigation task.
-    if (
-        row.get("arm") in {"fastbrowse", "fastbrowse-pool", "jev-ultrafast"}
-        and row.get("normalized_status") != Ending.UNAVAILABLE
-    ):
+    # Both fastbrowse arms set the comparison viewport on the tab they drive: a pass at another size would not be the
+    # same navigation task.
+    if row.get("arm") in {"fastbrowse", "fastbrowse-pool"} and row.get("normalized_status") != Ending.UNAVAILABLE:
         try:
             page = PageEvidence.model_validate(row.get("final_page"))
             dimensions = (page.inner_width, page.inner_height, page.device_pixel_ratio)
@@ -679,7 +676,6 @@ _MATCHED_CONFIG = (
     "max_steps",
     "step_cap",
     "step_cap_unit",
-    "decision_cap",
     "timing_basis",
 )
 

@@ -201,5 +201,5 @@ def test_an_application_that_embeds_python_is_never_run_as_its_helper(
     host.chmod(0o755)
     prelude = f"sys.orig_argv = list(sys.argv); sys.executable = sys._base_executable = {str(host)!r}"
     text = read_elsewhere(cdp_url, f"{main_site}/map.pdf", prelude)
-    assert "its text was not read: this program has no PDF reader set up" in text, text
+    assert "its text was not read: this program has no document reader set up" in text, text
     assert not ran.exists()

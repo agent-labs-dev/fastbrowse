@@ -1441,18 +1441,356 @@ async fn test_a_wait_while_a_player_plays_is_a_change() {
         before = h.observe().await;
     }
     assert!(before.media.first().is_some_and(|m| !m.paused), "{:?}", before.media);
-    let result = h.page.act(&Action::new(Operation::Wait), &before).await.expect("wait");
+    // A clock ticking is time passing, not the change a wait is for, so the wait lasts its whole budget.
+    let result = h.page.wait(&Action::new(Operation::Wait), &before, 1.0).await.expect("wait");
     assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{result:?}");
     // The clock is no content: it marks no read out of date and counts as no progress.
     assert!(!result.page_changed, "{result:?}");
     assert_eq!(eval_active(&h.page, "document.querySelector('audio').pause(); true").await, json!(true));
     let paused = h.observe().await;
-    let result = h.page.act(&Action::new(Operation::Wait), &paused).await.expect("wait");
+    let result = h.page.wait(&Action::new(Operation::Wait), &paused, 1.0).await.expect("wait");
     assert_eq!(
         (result.outcome, result.detail.as_deref()),
         (StepOutcome::Executed, Some("the page did not change")),
         "{result:?}"
     );
+    h.close().await;
+}
+
+/// How many WAIT watches the active page still holds.
+async fn wait_watches(h: &common::Harness) -> Value {
+    eval_active(&h.page, "(window.__fastbrowse ?? window).__fastbrowseWaits?.size ?? 0").await
+}
+
+// The wait installs its watch after the fingerprint taken before the dispatch. A page that changes in between used to
+// make the changed page the watch's baseline, so an unlimited wait on a page that never changed again blocked forever.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_ends_when_the_page_changes_between_the_pre_dispatch_read_and_the_watch() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    // The first read of the body's text after `window.armed` is set returns the old text and queues the rewrite as a
+    // microtask, which runs when that evaluation ends: after the pre-dispatch fingerprint, before the watch installs.
+    let script = "{ const line = document.createElement('p'); line.textContent = 'Status: pending'; \
+                  document.body.append(line); const read = Object.getOwnPropertyDescriptor(HTMLElement.prototype, \
+                  'innerText').get; let fired = false; Object.defineProperty(document.body, 'innerText', { get() { \
+                  const text = read.call(this); if (window.armed && !fired) { fired = true; \
+                  queueMicrotask(() => { line.textContent = 'Status: done'; }); } return text; } }); } true";
+    assert_eq!(eval_active(&h.page, script).await, json!(true));
+    let before = h.observe().await;
+    assert_eq!(eval_active(&h.page, "window.armed = true").await, json!(true));
+    let action = Action::new(Operation::Wait);
+    let wait = h.page.wait(&action, &before, f64::INFINITY);
+    let result = tokio::time::timeout(std::time::Duration::from_secs(20), wait)
+        .await
+        .expect("an unlimited wait never saw the change made before its watch was installed")
+        .expect("wait");
+    assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{result:?}");
+    assert!(result.page_changed, "{result:?}");
+    assert_eq!(wait_watches(&h).await, json!(0));
+    h.close().await;
+}
+
+// A status line rewritten every few seconds was waited on for five, and the run was told the page did not change.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_outlasts_a_change_later_than_the_settle_bound() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    let script = "{ const line = document.createElement('p'); line.textContent = 'Queue position 4'; \
+                  document.body.append(line); setTimeout(() => { line.textContent = 'Queue position 3'; }, 6500); } true";
+    assert_eq!(eval_active(&h.page, script).await, json!(true));
+    let before = h.observe().await;
+    let started = std::time::Instant::now();
+    let result = h.page.wait(&Action::new(Operation::Wait), &before, 60.0).await.expect("wait");
+    let waited = started.elapsed();
+    assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{result:?}");
+    assert!(result.page_changed, "{result:?}");
+    assert!(waited >= Duration::from_millis(6500) && waited < Duration::from_secs(30), "{waited:?}");
+    assert!(h.page.capture().await.expect("capture").text.contains("Queue position 3"));
+    assert_eq!(wait_watches(&h).await, json!(0));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_ends_when_the_page_navigates_itself() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    let script = "setTimeout(() => location.assign('/dispatch.html'), 5500); true";
+    assert_eq!(eval_active(&h.page, script).await, json!(true));
+    let before = h.observe().await;
+    let started = std::time::Instant::now();
+    let result = h.page.wait(&Action::new(Operation::Wait), &before, 60.0).await.expect("wait");
+    let waited = started.elapsed();
+    assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{result:?}");
+    assert!(result.page_changed, "{result:?}");
+    assert!(waited >= Duration::from_millis(5500) && waited < Duration::from_secs(30), "{waited:?}");
+    assert!(h.observe().await.url.ends_with("/dispatch.html"));
+    h.close().await;
+}
+
+// A script writing `checked` or `selected` as a property raises no mutation or event, so only sampling the fingerprint
+// sees it. The options are in a rendered listbox: a closed dropdown's options draw nothing and are not in the fingerprint. With no budget there is no deadline to compare at, so the wait itself must end.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_unlimited_wait_ends_on_a_property_only_change() {
+    let Some(h) = harness().await else { return };
+    for write in ["box.checked = true", "option.selected = true"] {
+        h.goto("").await;
+        let script = format!(
+            "{{ const box = document.createElement('input'); box.type = 'checkbox'; box.setAttribute('aria-label', 'Agree'); \
+             const select = document.createElement('select'); select.setAttribute('aria-label', 'Size'); \
+             select.multiple = true; select.size = 3; \
+             select.innerHTML = '<option>Small</option><option>Large</option>'; const option = select.options[1]; \
+             document.body.append(box, select); setTimeout(() => {{ {write}; }}, 900); }} true"
+        );
+        assert_eq!(eval_active(&h.page, &script).await, json!(true));
+        let before = h.observe().await;
+        let wait = Action::new(Operation::Wait);
+        let result = tokio::time::timeout(Duration::from_secs(20), h.page.wait(&wait, &before, f64::INFINITY))
+            .await
+            .unwrap_or_else(|_| panic!("{write}: an unlimited wait never saw the property change"))
+            .expect("wait");
+        assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{write}: {result:?}");
+        assert_eq!(wait_watches(&h).await, json!(0), "{write}");
+    }
+    h.close().await;
+}
+
+// The fingerprint walks a granted child frame, so a change made only inside one ends the wait, whether it is DOM text
+// or a player there.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_unlimited_wait_sees_a_child_frame_change_and_its_player() {
+    let Some(h) = harness().await else { return };
+    for change in [
+        "frame.contentDocument.body.firstChild.textContent = 'Seat 2'",
+        "frame.contentDocument.querySelector('audio').muted = false",
+    ] {
+        h.goto("").await;
+        let script = format!(
+            "{{ const frame = document.createElement('iframe'); frame.srcdoc = '<p>Seat 1</p><audio controls muted></audio>'; \
+             document.body.append(frame); frame.onload = () => setTimeout(() => {{ {change}; }}, 900); }} true"
+        );
+        assert_eq!(eval_active(&h.page, &script).await, json!(true));
+        let mut before = h.observe().await;
+        for _ in 0..50 {
+            if before.media.len() == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            before = h.observe().await;
+        }
+        assert_eq!(before.media.len(), 1, "{change}: the frame's player is not observed: {:?}", before.media);
+        let wait = Action::new(Operation::Wait);
+        let result = tokio::time::timeout(Duration::from_secs(20), h.page.wait(&wait, &before, f64::INFINITY))
+            .await
+            .unwrap_or_else(|_| panic!("{change}: an unlimited wait never saw the frame change"))
+            .expect("wait");
+        assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{change}: {result:?}");
+        assert!(result.page_changed, "{change}: {result:?}");
+        assert_eq!(wait_watches(&h).await, json!(0), "{change}");
+    }
+    h.close().await;
+}
+
+/// How many WAIT watches each of the tab's sessions holds: the tab itself, then every frame in a process of its own.
+async fn watches_everywhere(h: &common::Harness) -> Vec<i64> {
+    let frames = h.session.frame_sessions().into_iter().map(|(_, session)| session);
+    let mut counts = Vec::new();
+    for session in std::iter::once(h.session.active_session_id().unwrap()).chain(frames) {
+        let held = eval_value(&h.session, &session, "(window.__fastbrowse ?? window).__fastbrowseWaits?.size ?? 0");
+        counts.push(held.await.as_i64().unwrap_or(-1));
+    }
+    counts
+}
+
+/// The session of the cross-origin frame the fixture page draws, which Chrome gives a renderer of its own.
+async fn frame_session(h: &common::Harness) -> String {
+    // Chrome throttles animation frames in offscreen children; the frame must be on screen to run its timers.
+    let main = h.session.active_session_id().expect("active session");
+    eval_value(&h.session, &main, "document.querySelector('iframe').scrollIntoView()").await;
+    let obs = observe_until(&h.page, "Frame button").await;
+    let frame_id = find(&obs, "Frame button").frame_id.clone().expect("a frame id");
+    h.session
+        .frame_sessions()
+        .into_iter()
+        .find(|(frame, _)| *frame == frame_id)
+        .map(|(_, session)| session)
+        .expect("the frame's session")
+}
+
+// A frame in another process is a session of its own, so the page's mutation observer never hears it and the top
+// document's fingerprint holds none of its text. The wait must watch every frame the observation reads.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_unlimited_wait_sees_a_cross_origin_frame_change_and_navigation() {
+    let Some(h) = harness().await else { return };
+    let navigate = format!("location.assign('{}/interstitial.html')", sites().iframe);
+    for change in [
+        "document.body.append(Object.assign(document.createElement('p'), {textContent: 'Seat 2'}))".to_owned(),
+        navigate,
+    ] {
+        h.goto("").await;
+        let session = frame_session(&h).await;
+        let before = h.observe().await;
+        eval_value(&h.session, &session, &format!("setTimeout(() => {{ {change}; }}, 900); true")).await;
+        let wait = Action::new(Operation::Wait);
+        let result = tokio::time::timeout(Duration::from_secs(20), h.page.wait(&wait, &before, f64::INFINITY))
+            .await
+            .unwrap_or_else(|_| panic!("{change}: an unlimited wait never saw the frame change"))
+            .expect("wait");
+        assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{change}: {result:?}");
+        // The tab's own fingerprint holds none of the frame, but the change is progress all the same.
+        assert!(result.page_changed, "{change}: {result:?}");
+        assert_eq!(watches_everywhere(&h).await, vec![0, 0], "{change}");
+    }
+    h.close().await;
+}
+
+// The run's deadline drops the step's future: the watch in the frame's process must go with the tab's, and a wait on
+// a still page with such a frame still ends with the time it was given.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_over_a_cross_origin_frame_ends_with_its_budget_and_a_cancel_clears_every_session() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    frame_session(&h).await;
+    let before = h.observe().await;
+    let wait = Action::new(Operation::Wait);
+    let started = std::time::Instant::now();
+    let result = h.page.wait(&wait, &before, 1.5).await.expect("wait");
+    let waited = started.elapsed();
+    assert_eq!(result.detail.as_deref(), Some("the page did not change"), "{result:?}");
+    assert!(waited >= Duration::from_millis(1500) && waited < Duration::from_secs(8), "{waited:?}");
+    assert_eq!(watches_everywhere(&h).await, vec![0, 0]);
+
+    let mut unbounded = Box::pin(h.page.wait(&wait, &before, f64::INFINITY));
+    assert!(tokio::time::timeout(Duration::from_millis(2000), &mut unbounded).await.is_err(), "a still page ended it");
+    assert_eq!(watches_everywhere(&h).await, vec![1, 1], "the wait watches the tab and its frame");
+    drop(unbounded);
+    let mut left = watches_everywhere(&h).await;
+    for _ in 0..50 {
+        if left == vec![0, 0] {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        left = watches_everywhere(&h).await;
+    }
+    assert_eq!(left, vec![0, 0]);
+    h.close().await;
+}
+
+// A player's paused, ended or muted state is in the observation but not in the fingerprint the settle compares, so a
+// wait it ends is progress that only the wait itself knows. Only a moving clock is not.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_ended_by_a_player_state_change_is_progress() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    let script = "{ const player = document.createElement('audio'); player.controls = true; player.muted = true; \
+                  player.setAttribute('aria-label', 'Lesson audio'); document.body.append(player); \
+                  setTimeout(() => { player.muted = false; }, 900); } true";
+    assert_eq!(eval_active(&h.page, script).await, json!(true));
+    let before = h.observe().await;
+    let wait = Action::new(Operation::Wait);
+    let result = tokio::time::timeout(Duration::from_secs(20), h.page.wait(&wait, &before, f64::INFINITY))
+        .await
+        .expect("an unlimited wait never saw the player change")
+        .expect("wait");
+    assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{result:?}");
+    assert!(result.page_changed, "{result:?}");
+    assert_eq!(wait_watches(&h).await, json!(0));
+    h.close().await;
+}
+
+// A page that replaces its frames for as long as a wait lasts must not make the wait keep every document it saw.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_long_wait_over_replaced_frames_keeps_only_the_documents_in_the_page() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    let script = "{ const make = () => { const f = document.createElement('iframe'); f.srcdoc = '<body></body>'; \
+                  return f; }; document.body.append(make()); \
+                  window.replacing = setInterval(() => { document.querySelector('iframe').replaceWith(make()); }, 250); } \
+                  true";
+    assert_eq!(eval_active(&h.page, script).await, json!(true));
+    let before = h.observe().await;
+    let wait = Action::new(Operation::Wait);
+    let mut unbounded = Box::pin(h.page.wait(&wait, &before, f64::INFINITY));
+    assert!(tokio::time::timeout(Duration::from_millis(4000), &mut unbounded).await.is_err(), "empty frames woke it");
+    let held =
+        eval_active(&h.page, "[...(window.__fastbrowse ?? window).__fastbrowseWaits.values()].map(w => w.docs.size)")
+            .await;
+    // The page and the one frame it has now, plus at most a frame that is between its first document and its second.
+    assert!(held[0].as_i64().is_some_and(|n| (1..=3).contains(&n)), "{held}");
+    eval_active(&h.page, "clearInterval(window.replacing); true").await;
+    drop(unbounded);
+    let mut left = wait_watches(&h).await;
+    for _ in 0..50 {
+        if left == json!(0) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        left = wait_watches(&h).await;
+    }
+    assert_eq!(left, json!(0));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_ends_with_a_same_document_navigation() {
+    // The address is in the fingerprint, and pushState changes it without a mutation or a lifecycle event.
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    assert_eq!(
+        eval_active(&h.page, "setTimeout(() => history.pushState(null, '', '#later'), 700); true").await,
+        json!(true)
+    );
+    let before = h.observe().await;
+    let result = h.page.wait(&Action::new(Operation::Wait), &before, 30.0).await.expect("wait");
+    assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{result:?}");
+    assert!(h.observe().await.url.ends_with("#later"));
+    assert_eq!(wait_watches(&h).await, json!(0));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_on_a_still_page_ends_with_the_run_budget_and_leaves_no_watch() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    let before = h.observe().await;
+    let started = std::time::Instant::now();
+    let result = h.page.wait(&Action::new(Operation::Wait), &before, 1.5).await.expect("wait");
+    let waited = started.elapsed();
+    assert_eq!(
+        (result.outcome, result.detail.as_deref()),
+        (StepOutcome::Executed, Some("the page did not change")),
+        "{result:?}"
+    );
+    assert!(!result.page_changed, "{result:?}");
+    assert!(waited >= Duration::from_millis(1500) && waited < Duration::from_secs(5), "{waited:?}");
+    assert_eq!(wait_watches(&h).await, json!(0));
+    // A budget already spent still reads the page once.
+    let result = h.page.wait(&Action::new(Operation::Wait), &before, 0.0).await.expect("wait");
+    assert_eq!(result.detail.as_deref(), Some("the page did not change"), "{result:?}");
+    assert_eq!(wait_watches(&h).await, json!(0));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_cancelled_wait_removes_its_watch() {
+    // The run's deadline drops the step's future; the watch it installed must not sample the page on every mutation.
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    let before = h.observe().await;
+    let wait = Action::new(Operation::Wait);
+    let unbounded = h.page.wait(&wait, &before, f64::INFINITY);
+    assert!(tokio::time::timeout(Duration::from_millis(1500), unbounded).await.is_err(), "a still page ended the wait");
+    let mut left = wait_watches(&h).await;
+    for _ in 0..50 {
+        if left == json!(0) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        left = wait_watches(&h).await;
+    }
+    assert_eq!(left, json!(0));
+    // The next wait is not answered by the one cancelled before it.
+    let result = h.page.wait(&wait, &before, 1.0).await.expect("wait");
+    assert_eq!(result.detail.as_deref(), Some("the page did not change"), "{result:?}");
     h.close().await;
 }
 
@@ -1588,5 +1926,177 @@ async fn test_select_naming_no_option_of_a_multiple_select_fails_and_changes_not
     assert_eq!(result.outcome, StepOutcome::Failed);
     assert_eq!(result.detail.as_deref(), Some("no option labelled 'Delta'"));
     assert_eq!(eval_active(&h.page, SELECTED).await, json!(["Alpha"]));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn scroll_targets_the_selected_container_and_axis() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    eval_active(
+        &h.page,
+        r#"document.body.innerHTML = `
+      <section aria-label="Side panel" style="width:160px;height:120px;overflow:auto">
+        <div style="width:800px;height:900px">Scrollable records</div>
+      </section>
+      <div style="height:1800px">Main document</div>`"#,
+    )
+    .await;
+    for (label, coordinate) in
+        [("Vertical scroll area: Side panel", "scrollTop"), ("Horizontal scroll area: Side panel", "scrollLeft")]
+    {
+        let before = h.observe().await;
+        let target = find(&before, label);
+        assert!(target.operations.contains(&Operation::Scroll));
+        eval_active(&h.page, "document.querySelector('section > div').textContent += ' New record'").await;
+        let result = h.page.act(&action(Operation::Scroll, target), &before).await.unwrap();
+        assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+        assert!(result.page_changed, "container scrolling must count as observed progress: {result:?}");
+        let moved = eval_active(&h.page, &format!("document.querySelector('section').{coordinate}")).await;
+        assert!(moved.as_f64().unwrap() > 0.0, "{coordinate}: {moved}");
+        assert_eq!(eval_active(&h.page, "window.scrollY").await.as_f64(), Some(0.0));
+        let before = h.observe().await;
+        let result = h.page.act(&action(Operation::ScrollUp, find(&before, label)), &before).await.unwrap();
+        assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+        assert_eq!(
+            eval_active(&h.page, &format!("document.querySelector('section').{coordinate}")).await.as_f64(),
+            Some(0.0)
+        );
+    }
+    eval_active(&h.page, "document.body.style.overflow = 'hidden'").await;
+    let locked = h.observe().await;
+    assert!(!locked.controls.iter().any(|c| c.label == "Vertical scroll area: Page"));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_shadow_roots_right_to_left_scroll_area_keeps_its_physical_direction() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    eval_active(
+        &h.page,
+        r#"document.body.innerHTML = '<div id="host"></div>';
+      document.querySelector('#host').attachShadow({mode:'open'}).innerHTML = `
+        <section aria-label="History" style="direction:rtl;width:160px;height:120px;overflow:auto">
+          <div style="width:800px;height:80px">Records</div>
+        </section>`"#,
+    )
+    .await;
+    let before = h.observe().await;
+    let target = find(&before, "Horizontal scroll area: History");
+    assert!(target.operations.contains(&Operation::ScrollUp));
+    assert!(!target.operations.contains(&Operation::Scroll));
+    let result = h.page.act(&action(Operation::ScrollUp, target), &before).await.unwrap();
+    assert!(result.page_changed, "{result:?}");
+    let left =
+        eval_active(&h.page, "document.querySelector('#host').shadowRoot.querySelector('section').scrollLeft").await;
+    assert!(left.as_f64().unwrap() < 0.0, "left is negative in a right-to-left area: {left}");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reversed_vertical_scroll_exposes_the_direction_that_moves() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    eval_active(&h.page, r#"document.body.innerHTML = `<section aria-label="Chat" style="display:flex;flex-direction:column-reverse;height:120px;overflow:auto"><div style="height:900px;flex-shrink:0">Older messages</div></section>`"#).await;
+    let before = h.observe().await;
+    let target = find(&before, "Vertical scroll area: Chat");
+    assert!(target.operations.contains(&Operation::ScrollUp));
+    assert!(!target.operations.contains(&Operation::Scroll));
+    let result = h.page.act(&action(Operation::ScrollUp, target), &before).await.unwrap();
+    assert!(result.page_changed, "{result:?}");
+    assert!(eval_active(&h.page, "document.querySelector('section').scrollTop").await.as_f64().unwrap() < 0.0);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn scroll_area_names_exclude_contents_and_identify_their_frame() {
+    let Some(h) = harness().await else { return };
+    h.goto("/dispatch.html").await;
+    eval_active(&h.page, r#"document.body.innerHTML = `<div style="height:100px;overflow:auto"><p style="height:900px">Feed body must not become the name</p></div><iframe title="Activity log" srcdoc="<div style='height:2000px'>History</div>"></iframe><div style="height:2000px">Main page</div>`"#).await;
+    let observed = h.observe().await;
+    let areas: Vec<_> = observed.controls.iter().filter(|c| c.label.starts_with("Vertical scroll area:")).collect();
+    assert!(areas.iter().all(|c| !c.label.contains("Feed body")), "{areas:?}");
+    assert!(areas.iter().any(|c| c.context.as_deref().is_some_and(|c| c.contains("Activity log"))), "{areas:?}");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_role_keys_step_a_native_slider_and_focus_a_composite_widget() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(
+        &h.page,
+        r#"
+        document.body.innerHTML = '<input aria-label="Volume" type="range" min="0" max="100" value="42">'
+          + '<div role="grid" tabindex="0" aria-label="Sheet" aria-activedescendant="first">'
+          + '<span role="gridcell" id="first">First</span><span role="gridcell" id="second">Second</span></div>';
+        document.querySelector('[role=grid]').addEventListener('keydown', e => {
+          if (e.key === 'ArrowRight') e.currentTarget.setAttribute('aria-activedescendant', 'second');
+          if (e.key === 'ArrowLeft') e.currentTarget.setAttribute('aria-activedescendant', 'first');
+        });
+        true
+    "#,
+    )
+    .await;
+    let before = h.observe().await;
+    let slider = find(&before, "Volume");
+    assert_eq!(slider.role, "slider");
+    assert_eq!(slider.value.as_deref(), Some("42"));
+    let press =
+        Action { target_id: Some(slider.id.clone()), text: Some("ArrowRight".into()), ..Action::new(Operation::Press) };
+    let result = h.page.act(&press, &before).await.expect("slider press");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+    assert!(result.page_changed, "a range value change must count as progress: {result:?}");
+    let after = h.observe().await;
+    assert_eq!(find(&after, "Volume").value.as_deref(), Some("43"));
+    let grid = find(&after, "Sheet");
+    let press =
+        Action { target_id: Some(grid.id.clone()), text: Some("ArrowRight".into()), ..Action::new(Operation::Press) };
+    let result = h.page.act(&press, &after).await.expect("grid press");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+    assert_eq!(
+        eval_active(&h.page, "document.querySelector('[role=grid]').getAttribute('aria-activedescendant')").await,
+        json!("second")
+    );
+    let moved = h.observe().await;
+    assert_eq!(find(&moved, "Second").focused, Some(true));
+    assert_eq!(find(&moved, "First").focused, Some(false));
+    assert_ne!(after.page_key, moved.page_key);
+    let item = find(&moved, "Second");
+    assert!(item.operations.contains(&Operation::Press));
+    let press =
+        Action { target_id: Some(item.id.clone()), text: Some("ArrowLeft".into()), ..Action::new(Operation::Press) };
+    let result = h.page.act(&press, &moved).await.expect("virtual item press");
+    assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
+    assert_eq!(eval_active(&h.page, "[document.activeElement.getAttribute('role'), document.activeElement.getAttribute('aria-activedescendant')]").await, json!(["grid", "first"]));
+    let returned = h.observe().await;
+    assert_eq!(find(&returned, "First").focused, Some(true));
+    assert_ne!(moved.page_key, returned.page_key);
+    h.close().await;
+}
+
+#[tokio::test]
+async fn test_role_keys_capture_orientation_and_count_custom_slider_progress() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    eval_active(&h.page, r#"
+      document.body.innerHTML = '<div role="slider" style="width:100px;height:20px" tabindex="0" aria-label="Level" aria-valuenow="2" aria-orientation="vertical"></div>'
+        + '<div role="tablist" aria-label="Sections" tabindex="0" aria-orientation="vertical"><button role="tab" tabindex="0">Summary</button></div>';
+      document.querySelector('[role=slider]').addEventListener('keydown', e => {
+        if (e.key === 'ArrowUp') e.currentTarget.setAttribute('aria-valuenow', '3');
+      }); true
+    "#).await;
+    let before = h.observe().await;
+    let slider = find(&before, "Level");
+    assert!(slider.context.as_deref().is_some_and(|context| context.contains("orientation: vertical")));
+    let tab = find(&before, "Summary");
+    assert!(tab.context.as_deref().is_some_and(|context| context.contains("orientation: vertical")));
+    let press =
+        Action { target_id: Some(slider.id.clone()), text: Some("ArrowUp".into()), ..Action::new(Operation::Press) };
+    let result = h.page.act(&press, &before).await.expect("custom slider press");
+    assert_eq!(result.outcome, StepOutcome::Executed);
+    assert!(result.page_changed, "an announced value change must count as progress: {result:?}");
+    assert_eq!(find(&h.observe().await, "Level").value.as_deref(), Some("3"));
     h.close().await;
 }

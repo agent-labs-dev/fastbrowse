@@ -1,2 +1,4 @@
 # A fixture value typed into a fixture form by tests/browser/test_serve.py, not a credential.
 e8851c4ea908286fb5425747aeb18f9710a1a6c0:tests/browser/test_serve.py:generic-api-key:28
+# The extension's public key in the Store package's manifest as this PR first added it, under extension/published before it moved to extension-store/published; .gitleaks.toml allows it at its current path.
+9090e6d7e97d27bedb7b4c0a48f714c49f2b048e:crates/fastbrowse-browser/extension/published/0.1.0/manifest.json:generic-api-key:6

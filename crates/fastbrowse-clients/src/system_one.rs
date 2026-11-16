@@ -115,6 +115,11 @@ impl SystemOneClient {
     ) -> Result<Evaluation, AskError> {
         let started = Instant::now();
         let sent = Usage::default();
+        let state = if images.is_empty() || reads_references_in_place(&self.model) {
+            state.clone()
+        } else {
+            media_as_items(state, images)
+        };
         let mut body = json!({"model": self.model, "state": state, "questions": wire_questions(questions, false)});
         let mut headers = self.headers.clone();
         if !images.is_empty() {
@@ -213,4 +218,30 @@ impl DecisionClient for SystemOneClient {
     fn profile(&self) -> DecisionProfile {
         self.profile.clone()
     }
+}
+
+/// Jev reads an image reference wherever it sits in the state. Every other model behind a System One endpoint is given an
+/// image only as a top-level item of the state, and OpenRouter refuses a reference nested in an object with a 400.
+fn reads_references_in_place(model: &str) -> bool {
+    model.rsplit('/').next().unwrap_or(model).starts_with("jev")
+}
+
+/// The state with each top-level image reference moved out into an item of its own after it, its key left naming that
+/// image by position, so a model given images only as items still knows what each one shows.
+fn media_as_items(state: &Value, images: &Images) -> Value {
+    let Value::Object(object) = state else { return state.clone() };
+    let mut object = object.clone();
+    let mut items = Vec::new();
+    for value in object.values_mut() {
+        if let Value::String(reference) = value
+            && images.contains_key(reference.as_str())
+        {
+            let pointer = format!("image item {} after this object", items.len() + 1);
+            items.push(Value::String(std::mem::replace(reference, pointer)));
+        }
+    }
+    if items.is_empty() {
+        return state.clone();
+    }
+    std::iter::once(Value::Object(object)).chain(items).collect()
 }

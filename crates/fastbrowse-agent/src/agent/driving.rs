@@ -22,10 +22,15 @@ use super::state::{FailureCause, Flow, OutputIntent, RunState, SiteFailure, Step
 
 use super::{Agent, REDRAW_WATCH_SECONDS, browsing_deadline};
 use crate::memory::address;
-use crate::policy::{Decision, HistoryEntry, Planned, decide};
+use crate::policy::{Decision, HistoryEntry, ListRead, Planned, ReadScope, decide};
 use crate::retrieval::page_quotes;
 use crate::start::{accept_start, propose_start};
 use crate::verification::RecordSchema;
+
+pub(super) struct TaskJudgments {
+    pub dates: Vec<crate::dates::DateReference>,
+    pub output: Option<Box<indexmap::IndexMap<String, fastbrowse_core::decision::Answer>>>,
+}
 
 fn recipe_step(
     decision: &Decision,
@@ -58,6 +63,7 @@ impl Agent {
         until: Option<&fastbrowse_core::models::UntilCheck>,
     ) -> Step<fastbrowse_core::models::RunResult> {
         state.extraction_pending = output_schema.is_some();
+        let mut list_walk: Option<super::batching::ListWalk> = None;
         loop {
             state.ledger.check(0.0)?;
             if let Some(stop) = super::out_of_browsing_time(state) {
@@ -106,7 +112,24 @@ impl Agent {
             // is asked on every page a secret covers too.
             // A page reported failed is judged afresh, since a "Loading..." page can fill in under the same document.
             let fresh = state.last_page.as_ref() != Some(&page) || state.page_failed;
-            let check_login = fresh && secrets.is_empty();
+            // A list continuation needs to know a wall is not another list page even when it can sign in.
+            let check_login = fresh && (secrets.is_empty() || list_walk.is_some());
+            state.note_pager_pages(&observation);
+            if self.config.plan_ahead
+                && output_schema.is_none()
+                && state.output_answers.is_some()
+                && super::batching::has_pager(&observation)
+            {
+                self.output_intent(state).await?;
+            }
+            if list_walk.as_ref().is_some_and(|walk| !walk.continues(state, &observation))
+                || state.picked.is_some()
+                || state.redecided
+                || state.replay.is_some()
+                || state.page_failed
+            {
+                list_walk = None;
+            }
             // Jev's pick when it was asked again on this page is the decision here: asking once more would only ask
             // the same question without what went wrong.
             let picked = state
@@ -122,10 +145,33 @@ impl Agent {
             {
                 replay.replaced();
             }
-            let decision = match picked {
+            // A known page the run is on has been reached, and is not offered again once it is left.
+            let here = |url: &&String| fastbrowse_core::navigation::same_address(url, &observation.url);
+            if let Some(url) =
+                state.known_pages.iter().find(here).filter(|url| !state.reached_known_pages.contains(url))
+            {
+                state.reached_known_pages.push(url.clone());
+            }
+            let mut decision = match picked {
                 Some(picked) => picked,
                 None => {
                     let mut context = self.context(state, &observation, secrets, check_login, fresh)?;
+                    context.check_surface = state.surface_judged.as_ref() != Some(&page) || state.page_failed;
+                    context.list_read = if list_walk.is_some() {
+                        ListRead::Continue
+                    } else if output_schema.is_none()
+                        && self.config.plan_ahead
+                        && state.replay.is_none()
+                        && super::batching::offered(state, &observation)
+                    {
+                        ListRead::Offer
+                    } else {
+                        ListRead::None
+                    };
+                    if context.list_read == ListRead::Continue {
+                        context.plan_ahead = false;
+                        context.ahead.clear();
+                    }
                     let mut offered = observation.clone();
                     leave_out_idle(state, &mut offered, &mut context);
                     state.mark_read_links(&mut offered);
@@ -153,13 +199,14 @@ impl Agent {
                                 ])
                             });
                         }
-                        None => context.screenshot = self.drawn_viewport(&observation).await?,
+                        None => {
+                            context.screenshot = self.drawn_viewport(&observation).await?;
+                        }
                     }
                     let redecided = state.redecided;
                     let deciding = self.trace.phase("decide", async {
-                        let (ledger, cache) = (Some(&*state.ledger), Some(&state.relevance_cache));
-                        let config = &self.config;
-                        Ok(decide(&*self.jev, &offered, &context, config, ledger, cache, &self.trace).await?)
+                        let (ledger, config) = (Some(&*state.ledger), &self.config);
+                        Ok(decide(&*self.jev, &offered, &context, config, ledger, &self.trace).await?)
                     });
                     let decided = self.unless_redrawn(redecided, deciding, &observation, None).await?;
                     let Watched::Done(mut decision) = decided else {
@@ -190,12 +237,14 @@ impl Agent {
                         });
                         replay.confirm(&offered.url, &offered.controls, &mut decision, missing);
                     }
+                    if decision.inside_drawn.is_some() {
+                        state.surface_judged = Some(page.clone());
+                    }
                     state.last_page = Some(page);
                     decision
                 }
             };
             self.record_page(state, &observation);
-            state.note_pager_pages(&observation);
             state.choices = self.choices(&decision);
             judge_site(state, &observation, &decision);
             if let Some(probability) = decision.login_required {
@@ -248,7 +297,7 @@ impl Agent {
                     // The address is the raw observation's, and an error is written out of the process, so a secret
                     // typed earlier and echoed in another host is redacted here as in any other report.
                     let error = format!(
-                        "bot check at {}; it is not a sign-in and no credential passes it, and no other route to the task was found. Retry using an attached local browser or choose another source for this research.",
+                        "bot check at {}; it is not a sign-in and no credential passes it, and no other route to the task was found. Retry after the check clears or choose another source for the task.",
                         self.redact(&origin)
                     );
                     let evidence = self.wall_quotes(&raw).await;
@@ -263,7 +312,29 @@ impl Agent {
                 // What the wall means is the task's to say, asked of the task alone and combined here: credentials it
                 // gives are a sign-in to carry out, and a question about the restriction is answered by the wall.
                 match self.sign_in_needs(state).await? {
-                    Some(needs) if needs.credentials || needs.inspects => {}
+                    Some(needs) if needs.inspects && needs.credentials => {}
+                    // A question about the restriction with no credentials to sign in with is answered by the wall
+                    // itself: passing it could only use a session or saved account the task did not give, as a
+                    // read-only login check once clicked through Google SSO and its consent (#1020). The wall is read
+                    // and the run finishes on it, never acting on its sign-in controls.
+                    Some(needs) if needs.inspects => {
+                        let capture = self.capture().await?;
+                        self.trace.phase("read", self.read(state, capture, &observation, true)).await?;
+                        if let Some(result) = self
+                            .trace
+                            .phase("finish", Box::pin(self.finish(state, &observation, output_schema, until)))
+                            .await?
+                        {
+                            return Ok(result);
+                        }
+                        continue;
+                    }
+                    Some(needs) if needs.credentials => {
+                        if list_walk.is_some() && decision.read_scope == ReadScope::List {
+                            list_walk = None;
+                            continue;
+                        }
+                    }
                     // A route the task does not need an account for is walled, not the task: the run goes another way,
                     // and ends needing a sign-in only once its recoveries are spent.
                     Some(needs) if !needs.account => {
@@ -286,6 +357,32 @@ impl Agent {
             // could still be done (#960). Jev judges it from the page and the task; this ends the run on that answer.
             if decision.unobtainable.is_some_and(|probability| probability >= EVEN_ODDS) {
                 return Err(self.unobtainable(state, &observation).await?.into());
+            }
+            // A streamed remote browser draws its page as a picture: a run asked to type into it pressed the picture,
+            // reloaded it and ended blaming the site (#1084). The snapshot marks the surface and Jev judges that the
+            // task needs an action inside it; the run cannot make one, so it ends saying so.
+            if decision.inside_drawn.is_some_and(|probability| probability >= EVEN_ODDS) {
+                let surfaces = crate::policy::drawn_surfaces(&observation.controls);
+                return Err(drawn_surface_stop(&observation.url, &surfaces).into());
+            }
+            if decision.read_scope == ReadScope::Return {
+                list_walk = None;
+                continue;
+            }
+            // A wall can be the answer to the task, but cannot authorize walking the list behind it.
+            if decision.read_scope == ReadScope::List
+                && (state.page_failed || decision.login_required.unwrap_or(0.0) > thresholds.login_required_above)
+            {
+                list_walk = None;
+                decision.read_scope = ReadScope::Page;
+            }
+            // The known pages were asked beside the run's first decision. A decision made before their answer, which
+            // offers a page it was not offered, is made again with that page before the run reads
+            // for it or builds its action, since a build asks the step's gates and can stop for a confirmation.
+            if self.known_pages_arrived(state, &observation.url).await? {
+                state.built = None;
+                state.committing = false;
+                continue;
             }
             if let Some(shows) = Self::reads_before_leaving(state, &observation, &decision)
                 // The page the run began on is read for an answer only for a task that asks to be told something: a
@@ -328,6 +425,28 @@ impl Agent {
                     self.trace.phase("plan", Box::pin(self.run_plan(state, &observation, &decision.plan))).await?;
                 }
                 other => other?,
+            }
+            if decision.read_scope == ReadScope::List
+                && state.history.last().is_some_and(|entry| entry.read_progress)
+                && state.picked.is_none()
+                && let Some(next) = state.unread_pager_page().cloned()
+            {
+                state.ledger.check(0.0)?;
+                if let Some(stop) = super::out_of_browsing_time(state) {
+                    return Err(Flow::Stop(stop));
+                }
+                let walk = super::batching::ListWalk::new(state, &observation, next.clone());
+                state.pager_followed.insert(next.clone());
+                self.event("list_read_next_page", || Map::from_iter([("url".into(), next.clone().into())]));
+                self.open_by_code(state, &observation, next).await?;
+                list_walk = walk.filter(|_| {
+                    state.picked.is_none()
+                        && state.history.last().is_some_and(|entry| {
+                            entry.operation == Some(Operation::Navigate) && entry.outcome == StepOutcome::Executed
+                        })
+                });
+            } else {
+                list_walk = None;
             }
         }
     }
@@ -380,12 +499,14 @@ impl Agent {
                 shows_answer: None,
                 site_failure: None,
                 unobtainable: None,
+                inside_drawn: None,
                 destination: None,
                 replayed: false,
                 by_code: false,
                 offered: Vec::new(),
                 ahead: planned.ahead.clone(),
                 plan: Vec::new(),
+                read_scope: crate::policy::ReadScope::Page,
             };
             self.event("plan_step", || Map::from_iter([("target".into(), self.redact(&planned.target.label).into())]));
             match Box::pin(self.step(state, &observation, &decision)).await {
@@ -479,7 +600,14 @@ impl Agent {
     }
 
     /// The page to begin on when the caller named none, proposed from the task.
-    pub(super) async fn first_page(&self, task: &str, ledger: &fastbrowse_core::telemetry::Ledger) -> Step<String> {
+    pub(super) async fn first_page(
+        &self,
+        task: &str,
+        ledger: &std::sync::Arc<fastbrowse_core::telemetry::Ledger>,
+    ) -> Step<Option<String>> {
+        if self.page.search_price().is_some() {
+            return self.search_entry(task, ledger).await;
+        }
         let proposal = propose_start(&*self.llm, task, Some(ledger)).await?;
         ledger.record([proposal.cost])?;
         let Some(opening) = accept_start(proposal.data.url.as_deref()) else {
@@ -488,48 +616,127 @@ impl Agent {
             );
         };
         self.event("start_page", || Map::from_iter([("url".into(), opening.clone().into())]));
-        Ok(opening)
+        Ok(Some(opening))
     }
 
-    /// The dates the task names, as the parts it states. Jev first judges from the task alone whether it names any, so
-    /// a task without one costs no extraction; the run asks this while its first page opens.
-    pub(super) async fn task_dates(
+    /// The pages the site is known to serve for the items the task names, asked while the first page opens (#983).
+    /// Only a run with no runtime to send the request beside its first step waits for them here.
+    pub(super) async fn known_pages(
         &self,
         task: &str,
+        start: Option<&str>,
         ledger: &fastbrowse_core::telemetry::Ledger,
-    ) -> Step<Vec<crate::dates::DateReference>> {
+    ) -> Step<Vec<String>> {
+        self.known_pages_from(crate::start::known_pages(&*self.llm, task, start, Some(ledger)).await, ledger)
+    }
+
+    /// Takes the answer to the known pages request the run sent beside its first step, once it is out: whether it
+    /// offers a page the decision just made was not offered, which that decision is then made again with.
+    pub(super) async fn known_pages_arrived(&self, state: &mut RunState, here: &str) -> Step<bool> {
+        let Some(asked) = state.known_asked.take() else { return Ok(false) };
+        let mut offered = false;
+        for url in self.known_pages_from(asked.answer().await, &state.ledger)? {
+            if !state.known_pages.contains(&url) {
+                offered |=
+                    !state.reached_known_pages.contains(&url) && !fastbrowse_core::navigation::same_address(&url, here);
+                state.known_pages.push(url);
+            }
+        }
+        Ok(offered)
+    }
+
+    fn known_pages_from(
+        &self,
+        answer: crate::error::Result<fastbrowse_core::llm::Generation<crate::start::KnownPages>>,
+        ledger: &fastbrowse_core::telemetry::Ledger,
+    ) -> Step<Vec<String>> {
+        // As with the task's dates, a run whose known pages could not be asked for runs on without them: a provider
+        // error on this hint ended a run before its first page was read. Only the budget stops the run here.
+        let proposal = match answer {
+            Ok(proposal) => proposal,
+            Err(crate::error::AgentError::Budget(budget)) => return Err(budget.into()),
+            Err(error) => {
+                self.event("known_pages_failed", || Map::from_iter([("error".into(), error.to_string().into())]));
+                return Ok(Vec::new());
+            }
+        };
+        // Its cost was settled by a request sent before the first step, so it is checked against the spend and not the
+        // steps: taken after a step that reached the step limit, it is not another step.
+        ledger.for_answer().record([proposal.cost])?;
+        let mut known: Vec<String> = Vec::new();
+        for url in proposal.data.urls.iter().filter_map(|url| crate::start::accept_start(Some(url))) {
+            if !known.contains(&url) {
+                known.push(url);
+            }
+        }
+        if !known.is_empty() {
+            self.event("known_pages", || Map::from_iter([("urls".into(), known.clone().into())]));
+        }
+        Ok(known)
+    }
+
+    /// Independent task judgments share startup's request. Date extraction runs only when Jev finds a date;
+    /// output judgments are kept for their existing point of use, so list walking does not start sooner.
+    pub(super) async fn task_judgments(
+        &self,
+        given: &str,
+        ledger: &fastbrowse_core::telemetry::Ledger,
+    ) -> Step<TaskJudgments> {
         use fastbrowse_core::decision::{Answer, DecisionError, Question};
         ledger.reserve(fastbrowse_core::models::CostComponent::Jev, 0.0, 1)?;
-        let questions =
-            indexmap::IndexMap::from([("dates".to_string(), Question::Noul(crate::dates::dates_question(task)))]);
-        let state = json!({"task": task});
+        // These judgments all read the task alone. Sending them separately reread the same task on every run.
+        let mut questions = self.output_questions();
+        questions.insert("dates".to_string(), Question::Noul(crate::dates::dates_question()));
+        let state = json!({"task": given});
         let asked = self.jev.evaluate(&state, &questions);
         // As with the consent question, a task whose dates could not be asked about runs on with today's date alone:
         // the step that needs Jev next meets the same failure and handles it. Only the budget stops the run here.
-        let failed = |error: String| {
+        let failed = |error: String, output| {
             self.event("task_dates_failed", || Map::from_iter([("error".into(), error.into())]));
-            Ok(Vec::new())
+            Ok(TaskJudgments { dates: Vec::new(), output })
         };
+        let mut batched = true;
         let evaluation =
             match fastbrowse_clients::validation::jev_purpose(fastbrowse_core::models::JevPurpose::Action, asked).await
             {
                 Ok(evaluation) => evaluation,
                 Err(DecisionError::Budget(budget)) => return Err(budget.into()),
-                Err(error) => return failed(error.to_string()),
+                Err(DecisionError::InputTooLarge(_)) => {
+                    // A provider's input limit can admit the date question on its own while refusing the batch.
+                    // Keep its old request available; the output questions are asked at their point of use.
+                    batched = false;
+                    questions.retain(|key, _| key == "dates");
+                    ledger.reserve(fastbrowse_core::models::CostComponent::Jev, 0.0, 1)?;
+                    let asked = self.jev.evaluate(&state, &questions);
+                    match fastbrowse_clients::validation::jev_purpose(
+                        fastbrowse_core::models::JevPurpose::Action,
+                        asked,
+                    )
+                    .await
+                    {
+                        Ok(evaluation) => evaluation,
+                        Err(DecisionError::Budget(budget)) => return Err(budget.into()),
+                        Err(error) => return failed(error.to_string(), None),
+                    }
+                }
+                Err(error) => return failed(error.to_string(), None),
             };
         ledger.record([evaluation.cost.clone()])?;
-        if !matches!(evaluation.answers.get("dates"), Some(Answer::Noul(answer)) if answer.probability > EVEN_ODDS) {
-            return Ok(Vec::new());
+        let names_dates =
+            matches!(evaluation.answers.get("dates"), Some(Answer::Noul(answer)) if answer.probability > EVEN_ODDS);
+        let output = batched.then(|| Box::new(evaluation.answers));
+        if !names_dates {
+            return Ok(TaskJudgments { dates: Vec::new(), output });
         }
-        let extracted = match crate::dates::task_dates(&*self.llm, task, Some(ledger)).await {
+        let extracted = match crate::dates::task_dates(&*self.llm, given, Some(ledger)).await {
             Ok(extracted) => extracted,
             Err(crate::error::AgentError::Budget(budget)) => return Err(budget.into()),
-            Err(error) => return failed(error.to_string()),
+            Err(error) => return failed(error.to_string(), output),
         };
         ledger.record([extracted.cost])?;
         let references = extracted.data.dates;
         self.event("task_dates", || Map::from_iter([("dates".into(), json!(references))]));
-        Ok(references)
+        Ok(TaskJudgments { dates: references, output })
     }
 
     /// Go to the site's front page when the address this run chose for itself opened nothing.
@@ -582,9 +789,10 @@ impl Agent {
     ///
     /// The page is waited on only while something says it is still on its way: the browser's CAPTCHA solver is working
     /// on it, or its document or a frame in it is still loading. Each wait is for the page's next lifecycle event, and
-    /// the run's browsing deadline `until` bounds them all; a run with no time limit waits for the event. With neither
-    /// signal the page is re-read once and the wait ends, and a CAPTCHA the solver gave up on ends it too: nothing
-    /// else will clear it.
+    /// the run's browsing deadline `until` bounds them all. A run with no time limit waits for the event, though for a
+    /// load no longer than a navigation is given: a server that never answers sends none. With neither signal the
+    /// page is re-read once and the wait ends, and a CAPTCHA the solver gave up on ends it too: nothing else will
+    /// clear it.
     pub(super) async fn outwait(&self, stuck: &Observation, until: Option<tokio::time::Instant>) -> Step<bool> {
         let mut mark = self.page.lifecycle_mark();
         let mut solving = false;
@@ -592,7 +800,7 @@ impl Agent {
             if self.observe().await?.page_key != stuck.page_key {
                 return Ok(true);
             }
-            match self.page.captcha_solve().filter(|solve| solve.url == stuck.url) {
+            let bound = match self.page.captcha_solve().filter(|solve| solve.url == stuck.url) {
                 Some(solve) if solve.working => {
                     if !solving {
                         self.event("captcha_solving", || {
@@ -600,6 +808,7 @@ impl Agent {
                         });
                     }
                     solving = true;
+                    f64::INFINITY
                 }
                 Some(solve) => {
                     self.event("captcha_unsolved", || {
@@ -607,13 +816,16 @@ impl Agent {
                     });
                     return Ok(false);
                 }
-                None if self.page.loading() => {}
-                None => return Ok(false),
-            }
+                None => match self.page.loading() {
+                    Some(left) => left,
+                    None => return Ok(false),
+                },
+            };
             let seconds = match until {
                 Some(until) => until.saturating_duration_since(tokio::time::Instant::now()).as_secs_f64(),
                 None => f64::INFINITY,
-            };
+            }
+            .min(bound);
             if seconds <= 0.0 {
                 return Ok(false);
             }
@@ -662,7 +874,8 @@ impl Agent {
     ) -> Step<Watched<Action>> {
         let redecided = state.redecided;
         let target = decision.target.as_ref().map(|target| target.id.as_str());
-        let building = self.trace.phase("build_action", self.action(state, observation, decision));
+        // Nesting action construction inline with browser dispatch overflowed the native worker stack.
+        let building = self.trace.phase("build_action", Box::pin(self.action(state, observation, decision)));
         self.unless_redrawn(redecided, building, observation, target).await
     }
 
@@ -683,9 +896,10 @@ impl Agent {
         let frame: Option<Vec<u8>>;
         if decision.operation == Operation::Read {
             frame = if frames { self.frame().await? } else { None };
+            let shows = Self::page_shows(state, observation, decision);
             let capture = self.capture().await?;
             let read_progress =
-                self.trace.phase("read", Box::pin(self.read(state, capture, observation, false))).await?;
+                self.trace.phase("read", Box::pin(self.read(state, capture, observation, shows))).await?;
             progressed = Some(read_progress);
             changed = false;
             let text = state.read_note();
@@ -720,12 +934,26 @@ impl Agent {
                 self.page.withhold_frames(true);
             }
             let raw = self.raw().unwrap_or_else(|| observation.clone());
-            let mut result = match self.trace.phase("act", self.page.act(&action, &raw)).await {
+            let dispatched = async {
+                if action.operation == Operation::Search {
+                    self.search_web(state.ledger.clone(), action.text.as_deref().unwrap_or_default()).await
+                } else if action.operation == Operation::Wait {
+                    // A WAIT lasts until the page changes, which may be later than any fixed bound: a status line
+                    // rewritten every ten seconds was never seen to move. The run's own deadline is the only bound.
+                    let seconds = browsing_deadline(&state.ledger, state.compose).map_or(f64::INFINITY, |until| {
+                        until.saturating_duration_since(tokio::time::Instant::now()).as_secs_f64()
+                    });
+                    self.page.wait(&action, &raw, seconds).await.map_err(Flow::from)
+                } else {
+                    self.page.act(&action, &raw).await.map_err(Flow::from)
+                }
+            };
+            let mut result = match self.trace.phase("act", dispatched).await {
                 Ok(result) => result,
-                Err(BrowserError::PageUnresponsive(_)) if Self::may_reopen(state, decision, &action) => {
+                Err(Flow::Browser(BrowserError::PageUnresponsive(_))) if Self::may_reopen(state, decision, &action) => {
                     return self.reopen_hung_page(state, observation, decision, started, frame).await;
                 }
-                Err(error) => return Err(error.into()),
+                Err(error) => return Err(error),
             };
             if result.outcome == StepOutcome::Stale
                 && let Some(target) = &decision.target
@@ -741,6 +969,16 @@ impl Agent {
                 result = clicked;
             }
             let executed = result.outcome == StepOutcome::Executed;
+            // A known page can redirect to another address, so the landing page does not identify it: the
+            // navigation's own address does. Marking it reached here keeps it from being offered again, which would
+            // spend the no-progress budget on the same redirect.
+            if executed
+                && action.operation == Operation::Navigate
+                && let Some(url) = action.url.as_ref().filter(|url| state.known_pages.contains(url))
+                && !state.reached_known_pages.contains(url)
+            {
+                state.reached_known_pages.push(url.clone());
+            }
             if let Some(replay) = state.replay.as_mut() {
                 if decision.replayed {
                     replay.settled(executed);
@@ -933,8 +1171,8 @@ impl Agent {
     }
 
     /// The one stall rule: `stall.unchanged_actions` steps in a row that moved nothing ask Jev again with the stalled
-    /// action left out. A step moves the run on when it gathers evidence, writes a new value, or reaches a page state
-    /// not seen since the last evidence.
+    /// action left out. A step moves the run on when it gathers evidence, writes a new value, reaches a page state never
+    /// seen, or makes the first return since the last evidence to a page state seen before it.
     pub(super) async fn count_progress(
         &self,
         state: &mut RunState,
@@ -1070,9 +1308,10 @@ impl Agent {
         Ok(Some(self.page.act(&retargeted, &raw).await?))
     }
 
-    /// Note the page state reached and judge the last page change by it: a state never seen, or one seen before the
-    /// last evidence was gathered, is progress. A state never seen renews the recovery budget.
+    /// Note the page state reached and judge the last page change by it: a state never seen, or the first return to
+    /// one seen before the last evidence was gathered, is progress. A state never seen renews the recovery budget.
     pub(super) async fn settle(&self, state: &mut RunState, observation: &Observation) -> Step {
+        state.visited_addresses.insert(observation.url.clone());
         let last = state.reached.insert(state_key(observation), state.evidence_reads);
         if last.is_none() {
             if let Some(failure) = &state.site_failure
@@ -1086,7 +1325,12 @@ impl Agent {
             state.recoveries = 0;
         }
         if let Some(stalled) = state.landing.take() {
-            let progressed = last.is_none_or(|seen_at| seen_at < state.evidence_reads);
+            let returned =
+                last.is_some_and(|seen_at| seen_at < state.evidence_reads) && state.returned_at < state.evidence_reads;
+            if returned {
+                state.returned_at = state.evidence_reads;
+            }
+            let progressed = last.is_none() || returned;
             Box::pin(self.count_progress(state, progressed, observation, Idle::performed(stalled), Status::Stuck))
                 .await?;
         }
@@ -1129,6 +1373,12 @@ impl Agent {
         if let Some(href) = state.followed.take()
             && landed != read_key(&before)
         {
+            // Landing on a page already read shows that the address followed leads to it, so the link is marked read
+            // from now on. Only a read records the address otherwise, and a read page is not read again: a link whose
+            // address the site redirects to an author page the run had read and left was taken back to it repeatedly.
+            if state.read_documents.contains_key(&landed) {
+                state.read_urls.insert(href.clone());
+            }
             state.arrived_by = Some((landed, href));
         }
         let Some(last) = state.history.last_mut() else { return };
@@ -1143,6 +1393,11 @@ impl Agent {
                 changed: false,
                 shown: Vec::new(),
             }
+        } else if state.committing && last.outcome == StepOutcome::Executed && observation.dialog.is_none() {
+            // Still set from the gate that let this step go: the next decision is what takes it. Only a commit that
+            // was sent has a reply: one the page redrew or covered before it went, or one waiting on a dialog, did
+            // not put there the text a page added meanwhile.
+            fastbrowse_core::effects::effect_of_commit(&before, observation, None, waited)
         } else {
             effect(&before, observation, None, waited)
         };
@@ -1277,6 +1532,7 @@ impl Agent {
             })
             .collect();
         Ok(Capture {
+            masked: redactor.masked_spans(&capture.text),
             text,
             url: mask(&capture.url),
             title: mask(&capture.title),
@@ -1441,6 +1697,21 @@ pub(super) fn edit_progress(decision: &Decision, action: &Action, written: &Writ
 fn held_value(action: &Action) -> Option<String> {
     let text = action.text.as_ref()?;
     Some(if action.secret { "\u{2022}".repeat(text.chars().count()) } else { text.clone() })
+}
+
+/// The stop of a run whose task needs an action inside a drawn surface: the run's own limit, which no retry changes.
+/// One surface in view is named; of several, Jev's answer does not say which.
+pub(super) fn drawn_surface_stop(url: &str, surfaces: &[&Control]) -> Stop {
+    let inside = match surfaces {
+        [surface] => format!("{} at {url}, a drawn surface", text::repr(&surface.label)),
+        _ => format!("a drawn surface at {url}"),
+    };
+    Stop::new(
+        Status::Stuck,
+        format!(
+            "Could not complete the task: it needs an action inside {inside}: fastbrowse acts on page elements and cannot act inside a streamed or canvas view."
+        ),
+    )
 }
 
 pub(super) fn require(target: Option<&Control>) -> Step<&Control> {

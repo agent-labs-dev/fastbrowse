@@ -182,8 +182,7 @@
       "expected_status": "complete",
       "arms": [
         "fastbrowse",
-        "browser-use",
-        "jev-ultrafast"
+        "browser-use"
       ]
     },
     {
@@ -195,8 +194,7 @@
       "expected_status": "complete",
       "arms": [
         "fastbrowse",
-        "browser-use",
-        "jev-ultrafast"
+        "browser-use"
       ]
     },
     {
@@ -208,8 +206,7 @@
       "expected_status": "complete",
       "arms": [
         "fastbrowse",
-        "browser-use",
-        "jev-ultrafast"
+        "browser-use"
       ]
     },
     {
@@ -221,8 +218,7 @@
       "expected_status": "complete",
       "arms": [
         "fastbrowse",
-        "browser-use",
-        "jev-ultrafast"
+        "browser-use"
       ]
     },
     {
@@ -234,8 +230,7 @@
       "expected_status": "complete",
       "arms": [
         "fastbrowse",
-        "browser-use",
-        "jev-ultrafast"
+        "browser-use"
       ]
     },
     {
@@ -247,8 +242,7 @@
       "expected_status": "complete",
       "arms": [
         "fastbrowse",
-        "browser-use",
-        "jev-ultrafast"
+        "browser-use"
       ]
     },
     {

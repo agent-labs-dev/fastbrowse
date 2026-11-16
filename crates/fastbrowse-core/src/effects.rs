@@ -124,10 +124,53 @@ fn shows(control: &Control, choice: &str) -> bool {
     shown.iter().filter(|t| !t.is_empty()).any(|t| t.contains(choice) || t == first)
 }
 
+/// The text the page shows after a step and did not before, each piece once per time it was added, in the order the
+/// page lists them. Of a piece the page already showed and shows once more, the last one listed is the one named.
+///
+/// The viewport's text and the text outside it are read together, so scrolling a piece into view adds nothing.
+fn added_text(before: &Observation, after: &Observation) -> Vec<String> {
+    fn pieces(observation: &Observation) -> impl Iterator<Item = &str> {
+        [&observation.viewport_text, &observation.offscreen_text]
+            .into_iter()
+            .flat_map(|text| text.lines())
+            .map(text::strip)
+            .filter(|piece| !piece.is_empty())
+    }
+    let mut told: IndexMap<&str, usize> = IndexMap::new();
+    for piece in pieces(before) {
+        *told.entry(piece).or_default() += 1;
+    }
+    pieces(after)
+        .filter(|piece| match told.get_mut(piece) {
+            Some(left) if *left > 0 => {
+                *left -= 1;
+                false
+            }
+            _ => true,
+        })
+        .map(str::to_string)
+        .collect()
+}
+
 /// What changed from `before` to `after`. With `chosen`, the option clicked in between, a field showing it counts as
 /// a value set: an autocomplete choice can leave the text that was typed exactly as it was. `waited` is a step that only
 /// let time pass, a Wait.
 pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control>, waited: bool) -> Effect {
+    told(before, after, chosen, waited, false)
+}
+
+/// [`effect`] for a step that committed something, which also names the text the page added in reply.
+///
+/// A commit cannot be tried again to see what it does, so its record is the only thing that says the step is what
+/// put that text there: a comment form that posted showed the new comment, the effect said only that the box
+/// emptied, and the run posted the same comment twice more. Told only how many pieces of text were added, Jev still
+/// filled the box again; told the text, it did not. Other steps leave their text to the page: a step that loads more
+/// of a list or downloads a file adds text every later request would carry.
+pub fn effect_of_commit(before: &Observation, after: &Observation, chosen: Option<&Control>, waited: bool) -> Effect {
+    told(before, after, chosen, waited, true)
+}
+
+fn told(before: &Observation, after: &Observation, chosen: Option<&Control>, waited: bool, text_too: bool) -> Effect {
     let replaced = before.document_key != after.document_key;
     // Each document starts its control ids again. Matching those ids after navigation invents edits to controls
     // that belonged to the page left behind, even when a reload kept the same address and field labels.
@@ -269,6 +312,15 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
     // A form that refuses a submit can say why in its text alone, as Sauce Demo's checkout shows "Error: First Name is
     // required" and changes no control.
     let changed = !parts.is_empty() || before.viewport_text != after.viewport_text;
+    // Named after `changed` is settled, so text that moved outside the viewport still counts as no visible change.
+    // Another document or address is all new, and the page text shows it.
+    if text_too && !navigated && !replaced {
+        let added = added_text(before, after);
+        if !added.is_empty() {
+            let quoted: Vec<String> = added.iter().map(|piece| format!("{piece:?}")).collect();
+            parts.push(format!("added the text: {}", quoted.join(", ")));
+        }
+    }
     let summary = if !parts.is_empty() {
         parts.join("; ")
     } else if changed {
@@ -524,6 +576,48 @@ mod tests {
         assert!(done.changed);
         assert!(done.added);
         assert_eq!(done.summary, "only the page text changed");
+    }
+
+    #[test]
+    fn test_a_commit_that_stays_on_its_page_names_the_text_it_added() {
+        let reply = Control::new("r1", "button", "Reply", [Operation::Click]);
+        let before = Observation {
+            viewport_text: "Comments\nPost".into(),
+            offscreen_text: "Serzath\nWorks great.\nReply".into(),
+            ..observation(vec![with(&reply, |c| c.id = "r0".into())])
+        };
+        // The older comment only moved out of view. The new Reply button's text is named with the rest: a control's
+        // label need not be text the page shows, so it cannot stand in for a piece of it.
+        let after = Observation {
+            viewport_text: "Comments\nPost\ncjber\njust now\nVersion 2.4.1 is out.\nReply".into(),
+            offscreen_text: "Serzath\nWorks great.\nReply".into(),
+            controls: vec![reply.clone(), with(&reply, |c| c.id = "r0".into())],
+            ..before.clone()
+        };
+        assert_eq!(
+            effect_of_commit(&before, &after, None, false).summary,
+            "showed 1 control: Reply; added the text: \"cjber\", \"just now\", \"Version 2.4.1 is out.\", \"Reply\""
+        );
+        // Any other step leaves the text to the page: a list that loads more would put it in every later request.
+        assert_eq!(effect(&before, &after, None, false).summary, "showed 1 control: Reply");
+        // Text scrolled into view was on the page already.
+        let scrolled = Observation {
+            viewport_text: "Serzath\nWorks great.\nReply".into(),
+            offscreen_text: "Comments\nPost".into(),
+            ..before.clone()
+        };
+        assert_eq!(effect_of_commit(&before, &scrolled, None, false).summary, "only the page text changed");
+        // A second copy of a line already there is still added, and text added outside the viewport is no visible change.
+        let again =
+            Observation { offscreen_text: "Serzath\nWorks great.\nReply\nWorks great.".into(), ..before.clone() };
+        let unseen = effect_of_commit(&before, &again, None, false);
+        assert_eq!(unseen.summary, "added the text: \"Works great.\"");
+        assert!(!unseen.changed);
+        // Another document is all new: the page text shows it, and the step's effect is the address.
+        let moved = Observation { url: "https://example.test/next".into(), ..after.clone() };
+        assert!(!effect_of_commit(&before, &moved, None, false).summary.contains("added the text"));
+        let replaced = Observation { document_key: "next".into(), ..after };
+        assert!(!effect_of_commit(&before, &replaced, None, false).summary.contains("added the text"));
     }
 
     fn field(focused: Option<bool>) -> Control {

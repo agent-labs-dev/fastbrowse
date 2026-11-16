@@ -1,0 +1,18 @@
+{
+  "store": {
+    "id": "ghodfgfhbfaghhfdabopagbfopdjgpop",
+    "version": "0.1.0",
+    "snapshot": "published/0.1.0",
+    "needs": "0.1.1",
+    "missing": [
+      "DOM.resolveNode",
+      "Runtime.callFunctionOn",
+      "Page.setInterceptFileChooserDialog"
+    ],
+    "blocking": [
+      "DOM.resolveNode",
+      "Runtime.callFunctionOn"
+    ],
+    "issue": "https://github.com/agent-labs-dev/fastbrowse/issues/1063"
+  }
+}

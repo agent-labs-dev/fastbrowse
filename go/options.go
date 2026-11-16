@@ -25,9 +25,12 @@ type Options struct {
 
 // BrowserOptions say which browser a run drives.
 type BrowserOptions struct {
-	// Local is local Chrome instead of a Browser Use Cloud browser.
+	// Local is a browser on this machine instead of a Browser Use Cloud browser: your own Chrome through the
+	// fastbrowse extension, unless Launch asks for a separate one.
 	Local bool
-	// Chrome says which local Chrome, and how. A headed window or a kept profile implies Local.
+	// Launch starts a separate local Chrome instead of driving your own through the extension. It implies Local.
+	Launch bool
+	// Chrome says which local Chrome, and how. A headed window or a kept profile implies Launch.
 	Chrome *LocalChrome
 	// CloudProfile is the Browser Use Cloud profile a cloud browser starts with.
 	CloudProfile string
@@ -151,6 +154,7 @@ func runParams(runID, task string, browser BrowserOptions, options RunOptions) (
 		Fetch:            options.Fetch,
 		Browser:          options.BrowserFirst,
 		Local:            browser.Local,
+		Launch:           browser.Launch,
 		Chrome:           browser.Chrome,
 		CloudProfile:     optional(browser.CloudProfile),
 		CDPURL:           optional(browser.CDPURL),

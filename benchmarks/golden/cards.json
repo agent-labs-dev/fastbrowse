@@ -317,6 +317,17 @@
    "value": null
   },
   {
+   "frame_origin": "http://fixture",
+   "frame_path": null,
+   "id": 33,
+   "label": "Vertical scroll area: Page",
+   "offscreen": false,
+   "operations": [
+    "scroll"
+   ],
+   "role": "region"
+  },
+  {
    "autocomplete": null,
    "context": "Product 4",
    "focused": false,
@@ -1206,6 +1217,28 @@
    null,
    null,
    32
+  ],
+  "33": [
+   34,
+   null,
+   "Product 0 $0.99 Add to cart Details Options Product 1 $7.99 Add to cart Details Options Product 2 $14.99 Add to cart Details Options Product 3 $21.99 Add to cart Details Options Product 4 $28.99 Add to cart Details Options Product 5 $35.99 Add to cart Details Options Product 6 $42.99 Add to cart Details Options Product 7 $49.99 Add to cart Details Options",
+   null,
+   null,
+   null,
+   null,
+   false,
+   false,
+   null,
+   null,
+   null,
+   null,
+   "",
+   "http://fixture",
+   null,
+   null,
+   null,
+   null,
+   34
   ],
   "4": [
    4,

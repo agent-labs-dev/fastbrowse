@@ -3,7 +3,7 @@
 //! `install` registers this fastbrowse as the extension's native-messaging host for every Chromium browser it finds:
 //! a host manifest per browser, at user level, pointing at a small launcher that runs `<this fastbrowse>
 //! native-host`. Chrome starts that launcher when the extension connects. `path` writes the extension's own files
-//! out, for loading it unpacked until it is installed from the Chrome Web Store.
+//! out for extension development; ordinary installs use the Chrome Web Store.
 
 use std::path::{Path, PathBuf};
 
@@ -226,6 +226,11 @@ pub fn command(program: &str, args: &[String]) -> (String, i32) {
                 return (out, 1);
             }
             out.push_str(&format!("Registered the fastbrowse host with {}.\n", registered.join(", ")));
+            out.push_str(
+                "Requires extension 0.1.1 or newer with the required commands. If the Store update is not available, \
+                 run `fastbrowse extension path`, then enable Developer mode at chrome://extensions and choose \
+                 Load unpacked with the printed folder.\n",
+            );
             if args.len() == 2 {
                 out.push_str(&format!(
                     "\nTo install the extension by policy, with no prompt and no debugging bar, write this to {POLICY} \
@@ -234,8 +239,9 @@ pub fn command(program: &str, args: &[String]) -> (String, i32) {
                 ));
             } else {
                 out.push_str(&format!(
-                    "Now add the extension: {STORE_URL}\nOr load it unpacked from `fastbrowse extension path` with \
-                     Developer mode on. Then pass --extension to a run.\n"
+                    "Add fastbrowse to Chrome: {STORE_URL}\nOpen it from Chrome's Extensions menu to see runs and stop them.\n\n\
+                     Then run a task: fastbrowse \"What is the title of the top story?\" \
+                     --start https://news.ycombinator.com/ --extension --browser\n"
                 ));
             }
             (out, 0)

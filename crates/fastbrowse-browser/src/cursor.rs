@@ -34,6 +34,9 @@ use tokio::sync::{Mutex, MutexGuard};
 use tokio::task::{AbortHandle, JoinHandle};
 use tokio::time::{sleep, timeout};
 
+const THEME_ID: &str = "fastbrowse.focus.v1";
+const THEME: &[u8] = include_bytes!("../assets/cursor/fastbrowse.focus.cua-theme");
+
 const TOOLS: [&str; 5] = ["start_session", "end_session", "list_windows", "move_cursor", "set_agent_cursor_enabled"];
 const CALL_SECONDS: Duration = Duration::from_secs(2);
 // `move_cursor` replies only once its glide has landed, and the driver's own pace takes up to about three seconds
@@ -571,7 +574,7 @@ impl Inner {
             return Ok(());
         };
         if *lock(&self.last_call) + KEEPALIVE_SECONDS < Instant::now() {
-            self.driver.tool("start_session", json!({"session": self.session})).await?;
+            self.driver.tool("start_session", session_options(&self.session)).await?;
         }
         let window = self.browser_window(&reading).await?;
         self.show(window.is_some()).await?;
@@ -864,7 +867,10 @@ async fn handshake(driver: &Driver, session: &str) -> Result<bool, Failure> {
     if !scope.is_some_and(|scopes| scopes.iter().any(|scope| scope == "window")) {
         return Err(Failure::NoWindowScope);
     }
-    driver.tool("start_session", json!({"session": session})).await?;
+    if tools["start_session"].pointer("/inputSchema/properties/cursor_theme").is_none() {
+        return Err(Failure::MissingTools);
+    }
+    driver.tool("start_session", session_options(session)).await?;
     // The overlay fades out on its own after a short idle by default, and a run spends most of its time between
     // steps: ask for a cursor that stays where it was left, and glides short enough to keep up with the clicks.
     // A driver without this tool keeps its own defaults.
@@ -889,7 +895,53 @@ pub(crate) async fn open_cua(binary: &Path) -> Option<CursorFeedback> {
     open(&Backend::Cua(binary.to_path_buf())).await
 }
 
+fn session_options(session: &str) -> Value {
+    json!({"session": session, "cursor_theme": {"theme_id": THEME_ID},
+        "cursor_motion": {"idle_hide_ms": 0, "timing": "fixed", "glide_duration_ms": GLIDE_MS}})
+}
+
+// The installed id is versioned so upgrading fastbrowse never overwrites a theme another live run is using.
+async fn install_theme(binary: &Path) -> Result<(), Failure> {
+    let listed = Command::new(binary)
+        .args(["cursor-theme", "list", "--json"])
+        .kill_on_drop(true)
+        .output()
+        .await
+        .map_err(|_| Failure::Io)?;
+    let ids: Vec<String> = serde_json::from_slice(&listed.stdout).map_err(|_| Failure::BadReply)?;
+    if listed.status.success() && ids.iter().any(|id| id == THEME_ID) {
+        return Ok(());
+    }
+    let cache = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
+        .ok_or(Failure::Io)?
+        .join("fastbrowse/cursor");
+    tokio::fs::create_dir_all(&cache).await.map_err(|_| Failure::Io)?;
+    struct Source(PathBuf);
+    impl Drop for Source {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    // Also remove the source if opening the cursor is cancelled while the installer is running.
+    let path = Source(cache.join(format!("{}-{}.cua-theme", THEME_ID, session_name()?)));
+    tokio::fs::write(&path.0, THEME).await.map_err(|_| Failure::Io)?;
+    let installed =
+        Command::new(binary).args(["cursor-theme", "install"]).arg(&path.0).kill_on_drop(true).output().await;
+    installed.map_err(|_| Failure::Io)?.status.success().then_some(()).ok_or(Failure::ToolFailed)
+}
+
 async fn open(backend: &Backend) -> Option<CursorFeedback> {
+    if matches!(backend, Backend::Cua(_)) {
+        match timeout(START_SECONDS, install_theme(backend.binary())).await {
+            Ok(Ok(())) => {}
+            _ => {
+                log_warning("the fastbrowse cursor theme could not be installed");
+                return None;
+            }
+        }
+    }
     let agent = matches!(backend, Backend::Deskpilot(_)).then(deskpilot_agent);
     let driver = match Driver::spawn(backend.binary(), agent.as_deref()) {
         Ok(driver) => driver,
@@ -946,6 +998,9 @@ mod tests {
 
     const FAKE_DRIVER: &str = r#"
 import json, os, sys, time
+if len(sys.argv) > 1 and sys.argv[1] == "cursor-theme":
+    print(json.dumps(["fastbrowse.focus.v1"]))
+    sys.exit(0)
 log = open(LOG, "a")
 open(LOG + ".agent", "w").write(json.dumps(os.environ.get("DESKPILOT_AGENT")))
 windows = json.loads(WINDOWS)
@@ -968,7 +1023,9 @@ for line in sys.stdin:
         result = {"capabilities": {}}
     elif method == "tools/list":
         scope = {"enum": ["window", "desktop"] if mode != "unsafe_scope" else ["desktop"]}
-        schema = {"properties": {"scope": scope}}
+        schema = {"properties": {"scope": scope, "cursor_theme": {"type": "object"}}}
+        if mode == "unthemed":
+            del schema["properties"]["cursor_theme"]
         result = {"tools": [{"name": name, "inputSchema": schema} for name in tools]}
     else:
         name, arguments = message["params"]["name"], message["params"]["arguments"]
@@ -1471,8 +1528,11 @@ log.flush()
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_old_driver_without_the_tools_is_skipped() {
-        let fake = Fake::new("old", None);
-        assert!(fake.open().await.is_none());
+        for mode in ["old", "unthemed"] {
+            let fake = Fake::new(mode, None);
+            assert!(fake.open().await.is_none());
+            assert!(!fake.calls().contains(&"start_session".to_owned()));
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1686,6 +1746,10 @@ log.flush()
         // out is not a driver failure: it turned the cursor off for the rest of a run after its first long move.
         let fake = Fake::new("long_glide", None);
         let feedback = fake.open().await.unwrap();
+        let options = fake.entries().into_iter().find(|(name, _)| name == "start_session").unwrap().1;
+        assert_eq!(options["cursor_theme"]["theme_id"], THEME_ID);
+        assert_eq!(options["cursor_motion"]["idle_hide_ms"], 0);
+
         feedback.follow(reading(), (10.0, 20.0));
         feedback.settled().await;
         assert!(!feedback.inner.disabled.load(Ordering::SeqCst));

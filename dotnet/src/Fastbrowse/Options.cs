@@ -41,10 +41,13 @@ public sealed record StartOptions
 /// </summary>
 public sealed record BrowserOptions
 {
-    /// <summary>Local Chrome instead of a Browser Use Cloud browser.</summary>
+    /// <summary>A browser on this machine instead of a Browser Use Cloud browser: your own Chrome through the fastbrowse extension, unless <see cref="Launch"/> asks for a separate one.</summary>
     public bool Local { get; init; }
 
-    /// <summary>Which local Chrome, and how. A headed window or a kept profile implies <see cref="Local"/>.</summary>
+    /// <summary>Start a separate local Chrome instead of driving your own through the extension. Implies <see cref="Local"/>.</summary>
+    public bool Launch { get; init; }
+
+    /// <summary>Which local Chrome, and how. A headed window or a kept profile implies <see cref="Launch"/>.</summary>
     public LocalChrome? Chrome { get; init; }
 
     /// <summary>The Browser Use Cloud profile a cloud browser starts with.</summary>

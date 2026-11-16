@@ -55,6 +55,7 @@ ARM_LABELS = {
     "fastbrowse": "fastbrowse",
     "browser-use": "Browser Use agent",
     "browser-use-ultrafast": "Browser Use Ultrafast",
+    # No comparison runs it any more, but the releases that published its rows still summarize them.
     "jev-ultrafast": "Jev Ultrafast",
 }
 
@@ -227,10 +228,9 @@ _KEPT = ("arm", "task", "repeat", "category", "suite", "suite_version", "task_ve
          "seconds", "dollars", "retries", "failure", "model", "text_model", "transient_seconds", "at",
          "answered", "session_seconds", "timing_basis", "session_open_seconds", "session_close_seconds",
          "replaces_run_id", "final_url", "final_page", "failure_class", "site_probe",
-         "actions", "decisions", "llm_calls", "llm_calls_basis", "tokens_per_second",
-         "step_cap", "step_cap_unit", "decision_cap", "provenance")  # fmt: skip
+         "llm_calls", "llm_calls_basis", "tokens_per_second", "step_cap", "step_cap_unit", "provenance")  # fmt: skip
 _RUN_KEPT = ("run_id", "run_started", "fastbrowse_version", "git_sha", "git_dirty", "providers", "max_steps",
-             "concurrency", "jev_ultrafast", "arms", "python", "argv", "benchmark_family", "benchmark_origin",
+             "concurrency", "arms", "python", "argv", "benchmark_family", "benchmark_origin",
              "benchmark_suite", "benchmark_runner_sha", "benchmark_runner_dirty",
              "benchmark_catalog_sha256", "agent_limits", "budget_policy", "budget_usd", "max_seconds", "max_dollars",
              "hosted_max_cost_usd", "browsers", "provider_limits", "timing_basis",

@@ -3,6 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
+use fastbrowse_core::models::{Operation, StepOutcome};
+use fastbrowse_core::page::Action;
 use fastbrowse_core::page::Page;
 use fastbrowse_run::desktop::{DeskpilotPage, OpenError};
 use serde_json::{Value, json};
@@ -101,4 +103,65 @@ async fn a_desktop_app_on_xwayland_is_invalid() {
     let program = fake("xwayland", &[launch_tool()], &[ok(3, &window(true))]);
     let error = DeskpilotPage::open(program.to_str().unwrap(), &command()).await.err().unwrap();
     assert!(matches!(error, OpenError::Invalid(_)), "{error:?}");
+}
+
+fn waiting_window(name: &str, after: u64, continuous: bool) -> PathBuf {
+    let root = json!({"id":"e1", "role":"frame", "snapshot":"s1", "states":["showing"]});
+    let mut replies = vec![ok(3, &window(false)), ok(4, &window(false)), ok(5, &root)];
+    for read in 0..70 {
+        let mut current = window(false);
+        if read >= after {
+            current["title"] = json!("Ready");
+        }
+        let mut root = root.clone();
+        if continuous && read >= after {
+            root["name"] = json!(format!("Progress {read}"));
+        }
+        replies.push(ok(6 + read * 2, &current));
+        replies.push(ok(7 + read * 2, &root));
+    }
+    fake(name, &[launch_tool()], &replies)
+}
+
+#[tokio::test]
+async fn a_desktop_wait_uses_the_supplied_remaining_time() {
+    let program = waiting_window("wait-budget", 60, false);
+    let page = DeskpilotPage::open(program.to_str().unwrap(), &command()).await.unwrap();
+    let before = page.observe().await.unwrap();
+    let wait = Action::new(Operation::Wait);
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), page.wait(&wait, &before, 0.15))
+        .await
+        .expect("the supplied deadline must end the wait")
+        .unwrap();
+    assert_eq!(result.outcome, StepOutcome::Executed);
+    assert!(!result.page_changed);
+    assert_eq!(result.detail.as_deref(), Some("the window did not change"));
+}
+
+#[tokio::test]
+async fn an_unlimited_desktop_wait_sees_a_change_after_five_seconds() {
+    // Sixty unchanged polls take six seconds, beyond the old five-second WAIT bound.
+    let program = waiting_window("wait-unlimited", 60, false);
+    let page = DeskpilotPage::open(program.to_str().unwrap(), &command()).await.unwrap();
+    let before = page.observe().await.unwrap();
+    let wait = Action::new(Operation::Wait);
+    let result = tokio::time::timeout(std::time::Duration::from_secs(15), page.wait(&wait, &before, f64::INFINITY))
+        .await
+        .expect("an unlimited wait must end on the later change")
+        .unwrap();
+    assert_eq!(result.outcome, StepOutcome::Executed);
+    assert!(result.page_changed, "{result:?}");
+}
+
+#[tokio::test]
+async fn a_desktop_wait_ends_after_a_change_even_when_the_window_keeps_updating() {
+    let program = waiting_window("wait-busy", 2, true);
+    let page = DeskpilotPage::open(program.to_str().unwrap(), &command()).await.unwrap();
+    let before = page.observe().await.unwrap();
+    let wait = Action::new(Operation::Wait);
+    let result = tokio::time::timeout(std::time::Duration::from_millis(1500), page.wait(&wait, &before, 4.0))
+        .await
+        .expect("settling a changed window must not consume the remaining run")
+        .unwrap();
+    assert!(result.page_changed, "{result:?}");
 }

@@ -12,8 +12,8 @@ Each platform package has to be pinned to the exact version. A range would let a
 later release than its own.
 
 The Rust workspace is the other: `Cargo.toml`'s `[workspace.package]` version is what the Rust binary prints for
-`--version` and reports to a `serve` client, and the platform packages carry that binary. The crates published to
-crates.io pin each other to that version exactly in `[workspace.dependencies]`. `--write` moves all of them and the
+`--version` and reports to a `serve` client, and the platform packages carry that binary. The workspace's
+crates pin each other to that version exactly in `[workspace.dependencies]`. `--write` moves all of them and the
 workspace's own packages in `Cargo.lock` with it, so `cargo build --locked` still passes.
 
 Standard library only, so the release can run it before anything is installed.

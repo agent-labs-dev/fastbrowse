@@ -54,6 +54,9 @@ class Control(Frozen):
     """A link the page marks `rel="next"`: the next page of the list it belongs to."""
     download: bool | None = None
     """A link the page marks with a `download` attribute: activating it saves a file instead of opening a page."""
+    drawn: bool | None = Field(default=None, exclude_if=lambda drawn: drawn is None)
+    """An image, canvas or video the page takes input on: what it shows is pixels, with no page elements inside it
+    to read or act on, such as a streamed remote browser or a canvas app."""
 
     @field_serializer("operations", when_used="json")
     def _sorted_operations(self, operations: frozenset[Operation]) -> list[Operation]:
@@ -158,6 +161,10 @@ class Block(Frozen):
     links: tuple[Link, ...] = Field(default=(), exclude_if=lambda links: not links)
     """The links inside this block, with their text's place in `Capture.text`: a link's text alone does not say where
     it leads, nor where a value the page set apart as its own element ends."""
+    whole_record: bool = Field(default=False, exclude_if=lambda whole: not whole)
+    """This block is all the text the page renders for one item it repeats, such as a comment, card or list row, with
+    each part of it that shows no text named in square brackets. A record can be a `list_item` as well as a `record`,
+    so its kind does not say this."""
 
 
 class Capture(Frozen):

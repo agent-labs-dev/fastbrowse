@@ -51,7 +51,6 @@ class Catalog(Closed):
     task_sources: dict[str, Digest]
     suites: dict[str, tuple[CatalogTask, ...]]
     arms: dict[str, ArmMetadata]
-    ultrafast_text_model: str
     retired: tuple[RetiredTask, ...] = ()
 
     @model_validator(mode="after")

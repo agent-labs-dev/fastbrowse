@@ -20,12 +20,64 @@ async fn test_a_pdf_with_no_helper_to_read_it_is_kept_and_said_unread() {
     assert!(!glance.viewport_text.contains("The file was kept, but its text was not read"));
     let text = h.observe().await.viewport_text;
     let notice = format!(
-        "[Downloaded file: map.pdf from {url}] The file was kept, but its text was not read: this program has no PDF \
+        "[Downloaded file: map.pdf from {url}] The file was kept, but its text was not read: this program has no document \
          reader set up."
     );
     assert!(text.contains(&notice), "{text}");
     assert!(!text.contains("Fairbanks Wind"), "{text}");
     assert!(h.sink.artifacts.lock().unwrap().iter().any(|artifact| artifact.name == "map.pdf"));
+    h.close().await;
+}
+
+const PACKAGE_JSON: &str =
+    r#"{"info":{"name":"httpx","version":"0.28.1"},"urls":[{"filename":"httpx-0.28.1.tar.gz"}]}"#;
+
+/// A JSON document is read by its structure, as a browserless fetch reads it, so a single value is its own block (#1070).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_json_document_reads_each_value_under_its_keys() {
+    let Some(h) = harness().await else { return };
+    h.goto("/package.json").await;
+    let capture = content_capture(&h.page).await;
+    let read: Vec<_> = capture.blocks.iter().map(|b| (b.kind, text_of(&capture, b), path(b).join("/"))).collect();
+    let (heading, paragraph) = (BlockKind::Heading, BlockKind::Paragraph);
+    assert_eq!(
+        read,
+        [
+            (heading, "info".into(), String::new()),
+            (heading, "name".into(), "info".into()),
+            (paragraph, "httpx".into(), "info/name".into()),
+            (heading, "version".into(), "info".into()),
+            (paragraph, "0.28.1".into(), "info/version".into()),
+            (heading, "urls".into(), String::new()),
+            (BlockKind::Record, "filename: httpx-0.28.1.tar.gz".into(), "urls/0".into()),
+        ]
+    );
+    assert!(capture.blocks.iter().all(|b| b.source_id.starts_with("main/json:") && b.frame_id.is_none()));
+    assert!(capture.blocks.last().unwrap().whole_record);
+    h.close().await;
+}
+
+/// Text served as JSON that does not all parse is read as Chrome renders it, so none of it is lost.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_json_typed_document_that_does_not_parse_is_read_as_rendered() {
+    let Some(h) = harness().await else { return };
+    h.goto("/package.json?broken").await;
+    let capture = content_capture(&h.page).await;
+    let code: Vec<_> = capture.blocks.iter().filter(|b| b.kind == BlockKind::Code).collect();
+    assert_eq!(code.iter().map(|b| text_of(&capture, b)).collect::<Vec<_>>(), [r#"{"info":{"name":"httpx"}"#]);
+    assert!(capture.blocks.iter().all(|b| !b.source_id.contains("/json:")));
+    h.close().await;
+}
+
+/// A JSON example inside an HTML page is the page's code, not a JSON document.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_json_in_an_html_pre_stays_one_code_block() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    set_body(&h.session, &format!("<pre>{PACKAGE_JSON}</pre>")).await;
+    let capture = content_capture(&h.page).await;
+    assert_eq!(texts(&capture), [PACKAGE_JSON]);
+    assert_eq!(capture.blocks[0].kind, BlockKind::Code);
     h.close().await;
 }
 
@@ -213,6 +265,29 @@ async fn test_records_keep_single_links_whatever_their_length() {
     }
 }
 
+/// #992: CurseForge renders each comment as an `li` holding its text, its actions and an open replies region with nothing
+/// in it. The comment is a `list_item` read whole, and the capture marks it so; a plain list item is not marked.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_list_item_record_is_marked_whole() {
+    let comment = |name: &str, body: &str| {
+        format!(
+            "<li class='comment'><div class='meta'><a href='/m/{name}'>{name}</a><span>2 minutes ago</span></div>\
+             <div class='body'><p>{body}</p></div><div class='actions'><button>Reply</button></div>\
+             <div class='replies-collapse expanded'><ul class='comments-list'></ul></div></li>"
+        )
+    };
+    let comments = [comment("ada", "it broke"), comment("bob", "thanks"), comment("cy", "nice")].concat();
+    let markup = format!("<ul class='comments-list'>{comments}</ul><ul><li>Plain</li><li>Items</li></ul>");
+    let Some(h) = icons_with(&markup).await else { return };
+    let capture = content_capture(&h.page).await;
+    let marked: Vec<_> =
+        capture.blocks.iter().filter(|b| b.whole_record).map(|b| (b.kind, text_of(&capture, b))).collect();
+    assert_eq!(marked.len(), 3, "{:?}", capture.blocks);
+    assert!(marked.iter().all(|(kind, _)| *kind == BlockKind::ListItem), "{marked:?}");
+    assert!(marked[0].1.ends_with("[replies-collapse expanded: no text]"), "{marked:?}");
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_non_records_fall_back_to_the_walk() {
     let cases = [
@@ -291,6 +366,55 @@ async fn test_two_linked_cards_inside_unlabelled_wrappers_remain_separate_record
         ["First item\n\nType", "Second item\n\nType"]
     );
     h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_sibling_records_do_not_inherit_an_earlier_records_heading() {
+    for level in [3, 5] {
+        let markup = include_str!("fixtures/sibling-record-headings.html")
+            .replace("<h3>", &format!("<h{level}>"))
+            .replace("</h3>", &format!("</h{level}>"));
+        let Some(h) = icons_with(&markup).await else {
+            return;
+        };
+        let capture = content_capture(&h.page).await;
+        let records: Vec<_> = capture.blocks.iter().filter(|block| block.whole_record).collect();
+        assert_eq!(records.len(), 3);
+        for (record, version) in records.iter().zip(["3.0", "2.0", "1.0"]) {
+            assert!(text_of(&capture, record).contains(&format!("Version {version}")));
+            assert_eq!(path(record), ["Package", "Release history"]);
+        }
+        let after = capture.blocks.iter().find(|block| text_of(&capture, block) == "After the releases.").unwrap();
+        assert_eq!(path(after), ["Package", "Release history"]);
+        h.close().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_record_heading_boundaries_follow_visible_heading_ranks() {
+    let cases = [
+        ("<h2>Group</h2><h3>Earlier</h3><h3></h3><p>After</p>".to_string(), vec!["Group"]),
+        (format!("<h2>Group</h2>{}<p>After</p>", "<div class='card'><h2></h2><p>Value</p></div>".repeat(3)), vec![]),
+        ("<h2>Group</h2><h4>Earlier</h4><h3>Later</h3><p>After</p>".to_string(), vec!["Group", "Later"]),
+        (
+            format!("<h2>Group</h2>{}<p>After</p>", "<div class='card'><h2>Item</h2><p>Value</p></div>".repeat(3)),
+            vec![],
+        ),
+        (
+            format!(
+                "<h2>Group</h2>{}<p>After</p>",
+                "<div class='card'><span hidden><h2>Hidden</h2></span><p>Value</p></div>".repeat(3)
+            ),
+            vec!["Group"],
+        ),
+    ];
+    for (markup, expected) in cases {
+        let Some(h) = icons_with(&markup).await else { return };
+        let capture = content_capture(&h.page).await;
+        let after = capture.blocks.iter().find(|block| text_of(&capture, block) == "After").unwrap();
+        assert_eq!(path(after), expected, "{markup}");
+        h.close().await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -625,7 +749,7 @@ mod benchmark {
 
     pub fn golden_view(result: Value, guards: Value, fingerprint: Value, origin: &str) -> Value {
         let Value::Object(mut view) = result else { panic!("snapshot is not an object: {result}") };
-        for digest in ["document_key", "page_key", "retarget_keys"] {
+        for digest in ["document_key", "page_key", "retarget_keys", "read"] {
             view.remove(digest);
         }
         // A guard holds its document's `performance.timeOrigin` at index 15.

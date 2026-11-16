@@ -15,13 +15,12 @@ use crate::support::generate;
 
 const WEEKDAYS: [&str; 7] = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
 
-/// Whether the task names a date at all, asked of the task alone before any date is extracted.
-pub fn dates_question(task: &str) -> NoulQuestion {
+/// Whether the task names a date at all, asked of the task alone before any date is extracted. It names the state's
+/// `task`, which the request sends once, rather than restating it.
+pub fn dates_question() -> NoulQuestion {
     NoulQuestion::new(
-        format!(
-            "The agent is doing this task: {task}\nDoes the task name a calendar date or a day, such as 4 December, \
-             a weekday, tomorrow, next month or the last Saturday of a month?"
-        ),
+        "Does `task` name a calendar date or a day, such as 4 December, a weekday, tomorrow, next month or the last \
+         Saturday of a month?",
         Some("The task names a date or a day."),
         Some("The task names no date or day."),
     )

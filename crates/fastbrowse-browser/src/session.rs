@@ -24,6 +24,7 @@ use tokio::time::{Instant, timeout};
 
 use crate::cdp::{CDP_PAGE_SECONDS, Cdp, Event, secs};
 use crate::error::BrowserError;
+use crate::page::LOAD_AWAITED_SECONDS;
 use crate::urlsplit::urlsplit;
 use crate::warn;
 
@@ -65,7 +66,7 @@ impl SnapshotScript {
         Self {
             install: format!(
                 "((globalThis.__fastbrowseScripts ||= {{}})[{key}] ||= \
-                 (snapshot => {{ const own = {{ unread: {unread} }}; return mode => snapshot(mode, {origins}, own); }})({SNAPSHOT_JS}))"
+                 (snapshot => {{ const own = {{ unread: {unread} }}; return (mode, base) => snapshot(mode, {origins}, own, base); }})({SNAPSHOT_JS}))"
             ),
             function: format!(
                 "(globalThis.__fastbrowseScripts?.[{key}] ?? (() => {{ throw new Error({}); }})())",
@@ -82,7 +83,25 @@ static REFUSE_COOKIES_JS: LazyLock<String> = LazyLock::new(|| {
     const BUNDLE: &str = include_str!("../js/autoconsent/autoconsent.standalone.js");
     const TIER2: &str = "heuristicMode: \"tier2\"";
     assert_eq!(BUNDLE.matches(TIER2).count(), 1, "the autoconsent bundle sets its heuristic mode once");
-    BUNDLE.replacen(TIER2, "heuristicMode: \"reject\"", 1)
+    // Its mutation observers schedule background waits during a click's task. They are the browser helper's work,
+    // not the page's response to input, so they must not hold the page's settle open. It runs in the page's world,
+    // where its rules read the page's globals, so the bundle's own timer calls are bound to the native timers in its
+    // scope: bare names resolve to the bindings below, and the calls it makes through `window` are rewritten to them.
+    // The counts are asserted so that a vendored update that adds another way to reach a timer is read before it ships.
+    const WINDOW_TIMERS: [(&str, &str); 2] =
+        [("window.setTimeout(", "setTimeout("), ("window.clearTimeout(", "clearTimeout(")];
+    let mut bundle = BUNDLE.replacen(TIER2, "heuristicMode: \"reject\"", 1);
+    for (through_window, bare) in WINDOW_TIMERS {
+        assert_eq!(bundle.matches(through_window).count(), 1, "the autoconsent bundle calls {through_window} once");
+        bundle = bundle.replace(through_window, bare);
+    }
+    for reach in [".setTimeout", ".clearTimeout", "setInterval", "clearInterval", "requestAnimationFrame"] {
+        assert!(!bundle.contains(reach), "the autoconsent bundle reaches a timer through {reach}");
+    }
+    format!(
+        "(() => {{ const setTimeout = window.__fastbrowse.nativeSetTimeout; \
+         const clearTimeout = window.__fastbrowse.nativeClearTimeout; {bundle} }})()"
+    )
 });
 
 /// The isolated world the input watch runs in: the page's own scripts cannot see a global, a listener or a binding
@@ -179,6 +198,7 @@ pub type OnStop = Arc<dyn Fn(&str) + Send + Sync>;
 pub struct SessionOptions {
     pub max_download_bytes: usize,
     pub refuse_cookie_banners: bool,
+    pub has_attachments: bool,
     pub on_frame: Option<FrameHandler>,
     pub check_access: Option<CheckAccess>,
     pub viewport: Option<(u32, u32)>,
@@ -193,6 +213,7 @@ impl Default for SessionOptions {
         Self {
             max_download_bytes: MAX_DOWNLOAD_BYTES,
             refuse_cookie_banners: true,
+            has_attachments: false,
             on_frame: None,
             check_access: None,
             viewport: None,
@@ -320,19 +341,16 @@ pub(crate) struct State {
     pub(crate) dialogs: HashMap<String, Dialog>,
     /// The address of the document each pending dialog came from, which `Dialog` does not carry.
     pub(crate) dialog_urls: HashMap<String, String>,
-    /// The file input whose chooser opened, per session, as its backend node id, until an observation ties it to the
-    /// control that opened it.
-    pub(crate) choosers: HashMap<String, i64>,
     /// The control each session was last clicked on, by its snapshot id. A page opens a file chooser only on user
     /// activation, and the run's own clicks are the only activation a page gets, so this is the chooser's opener.
     pub(crate) clicked: HashMap<String, i64>,
     pub(crate) input_navigations: u32,
     /// Top frames of each session with a navigation requested or a document loading that has not reached
     /// DOMContentLoaded.
-    pub(crate) navigating: HashSet<(String, String)>,
+    pub(crate) navigating: HashMap<(String, String), Instant>,
     /// The same for frames with a parent. A frame in a process of its own counts from its attach, under its own
     /// session.
-    pub(crate) frames_loading: HashSet<(String, String)>,
+    pub(crate) frames_loading: HashMap<(String, String), Instant>,
     /// Frames with a parent.
     pub(crate) subframes: HashSet<String>,
     /// The CAPTCHA each target's solver has taken on in its current document and not solved, by target id.
@@ -340,6 +358,8 @@ pub(crate) struct State {
     /// Frames Chrome's own ad tagging marks as ads or inside one, which a look does not read: once cross-origin frames
     /// were read, a page's ad slots reached every step as its content, and a run answered with an ad's text.
     pub(crate) ad_frames: HashSet<String>,
+    /// session -> how many documents its top frame has committed, for `document_mark`.
+    pub(crate) documents: HashMap<String, u64>,
     /// Document requests the grant refused, so a navigation that was cut short is told from one that failed.
     pub(crate) denials: u32,
     /// Requests paused and not yet released, so closing can release what a stopped task left paused.
@@ -357,6 +377,7 @@ pub(crate) struct Shared {
     pub(crate) artifact_sink: Arc<dyn ArtifactSink>,
     pub(crate) max_download_bytes: usize,
     pub(crate) new_document_scripts: Vec<String>,
+    pub(crate) require_chooser_interception: bool,
     pub(crate) on_frame: Option<FrameHandler>,
     pub(crate) on_stop: Option<OnStop>,
     pub(crate) trace: Trace,
@@ -364,6 +385,8 @@ pub(crate) struct Shared {
     pub(crate) client: Mutex<Option<Cdp>>,
     pub(crate) state: Mutex<State>,
     pub(crate) dialog_opened: watch::Sender<u64>,
+    /// File choosers opened whose input is not yet held by the page's registry.
+    pub(crate) chooser_pins: watch::Sender<u32>,
     /// Bumped on every `Page.lifecycleEvent`: the page's own signal that it is still loading or has settled, so a
     /// settle waits on the page rather than a fixed interval.
     pub(crate) lifecycle: watch::Sender<u64>,
@@ -411,6 +434,8 @@ impl BrowserSession {
         // it is can trail the screen, so no ordering of events makes a delivered frame provably in the grant.
         let on_frame = if grant.is_some() { None } else { options.on_frame };
         Self(Arc::new(Shared {
+            require_chooser_interception: options.has_attachments
+                && connection.cdp_url.starts_with(crate::extension::SCHEME),
             connection,
             check_access: options.check_access,
             grant,
@@ -425,6 +450,7 @@ impl BrowserSession {
             client: Mutex::new(None),
             state: Mutex::default(),
             dialog_opened: watch::channel(0).0,
+            chooser_pins: watch::channel(0).0,
             lifecycle: watch::channel(0).0,
             snapshot,
             popup_signal: watch::channel(0).0,
@@ -698,6 +724,15 @@ impl BrowserSession {
         self.0.state.lock().unwrap().frame_sessions_of_active()
     }
 
+    /// Retained reads belong to attached frames across tabs; missed-read deadlines belong to the active tab.
+    pub(crate) fn frame_read_liveness(&self) -> (HashSet<String>, HashSet<String>) {
+        let state = self.0.state.lock().unwrap();
+        (
+            state.frame_sessions.iter().map(|(frame, _)| frame.clone()).collect(),
+            state.frame_sessions_of_active().into_iter().map(|(_, session)| session).collect(),
+        )
+    }
+
     /// `frame_id` and every frame drawn inside it, whose sessions descend from that frame's session.
     pub fn frame_family(&self, frame_id: &str) -> HashSet<String> {
         let state = self.0.state.lock().unwrap();
@@ -759,7 +794,7 @@ impl BrowserSession {
     /// Whether the active tab's page has a navigation on its way.
     pub fn navigating(&self) -> bool {
         let Ok(active) = self.active_session_id() else { return false };
-        self.0.state.lock().unwrap().navigating.iter().any(|(session, _)| *session == active)
+        self.0.state.lock().unwrap().navigating.keys().any(|(session, _)| *session == active)
     }
 
     /// Whether a frame in the active tab's page is still loading its document.
@@ -773,8 +808,26 @@ impl BrowserSession {
         let frames = state.frame_sessions_of_active();
         state
             .frames_loading
-            .iter()
+            .keys()
             .any(|(session, _)| *session == active || frames.iter().any(|(_, frame_session)| frame_session == session))
+    }
+
+    /// The seconds the active tab's page is still waited on to load: the most any of its navigations or frame loads
+    /// has left of [`LOAD_AWAITED_SECONDS`] from its start. `None` when nothing is loading or every load has had it.
+    pub fn loading_left(&self) -> Option<f64> {
+        let Ok(active) = self.active_session_id() else { return None };
+        let state = self.0.state.lock().unwrap();
+        let frames = state.frame_sessions_of_active();
+        let ours =
+            |session: &String| *session == active || frames.iter().any(|(_, frame_session)| frame_session == session);
+        state
+            .navigating
+            .iter()
+            .chain(&state.frames_loading)
+            .filter(|((session, _), _)| ours(session))
+            .map(|(_, started)| LOAD_AWAITED_SECONDS - started.elapsed().as_secs_f64())
+            .reduce(f64::max)
+            .filter(|left| *left > 0.0)
     }
 
     /// The CAPTCHA the browser's solver has taken on in the active tab's document and not solved.
@@ -868,15 +921,17 @@ impl BrowserSession {
         self.0.state.lock().unwrap().clicked.insert(session_id.to_owned(), local_id);
     }
 
-    /// Each file chooser opened since this was last asked: its session, its file input's backend node id and the
-    /// control whose click opened it.
-    pub fn take_choosers(&self) -> Vec<(String, i64, i64)> {
-        let mut state = self.0.state.lock().unwrap();
-        let opened: Vec<_> = state.choosers.drain().collect();
-        opened
-            .into_iter()
-            .filter_map(|(session, input)| Some((session.clone(), input, *state.clicked.get(&session)?)))
-            .collect()
+    /// Wait until each file chooser opened so far has its input held by the page, or a dialog blocks the page from
+    /// answering until it is handled.
+    pub async fn choosers_pinned(&self) {
+        let mut pins = self.0.chooser_pins.subscribe();
+        let mut dialogs = self.0.dialog_opened.subscribe();
+        while *pins.borrow_and_update() != 0 && self.pending_dialog().is_none() {
+            tokio::select! {
+                _ = pins.changed() => {}
+                _ = dialogs.changed() => {}
+            }
+        }
     }
 
     pub fn pending_dialog(&self) -> Option<Dialog> {
@@ -908,6 +963,15 @@ impl BrowserSession {
     /// How many navigations to another document the run's own input has begun, on any page, so far.
     pub fn input_navigations(&self) -> u32 {
         self.0.state.lock().unwrap().input_navigations
+    }
+
+    /// Which document `session_id`'s top frame holds, as a count of the documents it has committed.
+    ///
+    /// The mark moves when, and only when, a navigation commits a new document there (a back-forward cache restore
+    /// included), so a read kept with it holds for as long as its document does. The lifecycle generation is no
+    /// such mark: every request that finishes and every frame's lifecycle event moves it, on an unchanged document.
+    pub fn document_mark(&self, session_id: &str) -> u64 {
+        self.0.state.lock().unwrap().documents.get(session_id).copied().unwrap_or_default()
     }
 
     /// The unique id of the status world `context_id` names on `session_id`, once, if Chrome reported it.
@@ -1229,12 +1293,17 @@ impl BrowserSession {
         for (method, params) in sends {
             commands.push(Box::pin(async move { self.send(method, params, s).await.map(drop) }));
         }
-        // A file input opened from a script then draws no native chooser and is named in `Page.fileChooserOpened`
-        // instead, so a page whose only way to a hidden, unlabelled input is a button can still be given a file. A
-        // browser that refuses it still opens its own chooser and still takes files through inputs and their labels,
-        // so the run goes on without it.
+        // An old extension can refuse interception even when the CLI supports it. A run with files must stop
+        // before it can open a native picker in the person's browser.
         commands.push(Box::pin(async move {
-            let _ = self.send("Page.setInterceptFileChooserDialog", json!({"enabled": true}), s).await;
+            if let Err(error) = self.send("Page.setInterceptFileChooserDialog", json!({"enabled": true}), s).await
+                && self.0.require_chooser_interception
+            {
+                return Err(BrowserError::Unavailable(format!(
+                    "The fastbrowse extension could not intercept the file chooser: {error}. Update the extension, \
+                     or run `fastbrowse extension path` and reload the unpacked extension in your browser."
+                )));
+            }
             Ok(())
         }));
         // A page behind another tab is hidden and unfocused, so it paints nothing, takes no typing and leaves input
@@ -1444,8 +1513,8 @@ impl Shared {
         let Some(session) = session else { return };
         let key = (session.to_owned(), str_of(&params["frameId"]));
         let mut state = self.state.lock().unwrap();
-        let top = state.navigating.remove(&key);
-        if state.frames_loading.remove(&key) || top {
+        let top = state.navigating.remove(&key).is_some();
+        if state.frames_loading.remove(&key).is_some() || top {
             drop(state);
             self.lifecycle.send_modify(|generation| *generation += 1);
         }
@@ -1483,17 +1552,26 @@ impl Shared {
                     }
                 }
                 self.tag_ad_frame(&params["frame"]);
+                // Only a top frame's commit replaces the document a tab's observation reads; a frame inside it does not.
+                if let Some(session) = session
+                    && params["frame"]["parentId"].is_null()
+                {
+                    *self.state.lock().unwrap().documents.entry(session.to_owned()).or_default() += 1;
+                }
             }
             "Page.frameRequestedNavigation" | "Page.frameStartedLoading" => {
                 if let Some(session) = session {
                     let frame = str_of(&params["frameId"]);
                     let mut state = self.state.lock().unwrap();
                     let key = (session.to_owned(), frame);
-                    if state.subframes.contains(&key.1) {
-                        state.frames_loading.insert(key);
+                    // A load keeps the start it was first seen at until it lands: a navigation's request and its start,
+                    // or a later navigation that replaces it unfinished, are not new time to wait.
+                    let loads = if state.subframes.contains(&key.1) {
+                        &mut state.frames_loading
                     } else {
-                        state.navigating.insert(key);
-                    }
+                        &mut state.navigating
+                    };
+                    loads.entry(key).or_insert_with(Instant::now);
                 }
             }
             // A frame removed before it loaded, or handed to a process of its own, whose session then reports it.
@@ -1585,9 +1663,9 @@ impl Shared {
                 // A target that went away answers nothing more.
                 state.requests_open.retain(|(sid, _), _| *sid != child);
                 state.request_bytes_due.retain(|(sid, _), _| *sid != child);
-                state.navigating.retain(|(sid, _)| *sid != child);
-                state.frames_loading.retain(|(sid, _)| *sid != child);
-                state.choosers.remove(&child);
+                state.documents.remove(&child);
+                state.navigating.retain(|(sid, _), _| *sid != child);
+                state.frames_loading.retain(|(sid, _), _| *sid != child);
                 state.clicked.remove(&child);
             }
             "Target.targetInfoChanged" => {
@@ -1633,10 +1711,20 @@ impl Shared {
                 }
                 self.dialog_opened.send_modify(|n| *n += 1);
             }
+            // With the chooser intercepted, Chrome no longer holds its input: one a button made in script and never put
+            // on the page is held only by its own handlers and is collected at the page's next collection. The page's
+            // registry takes it now, tied to the control whose click opened it, so an observation can offer that control
+            // as the upload, as a label is offered for its input.
             "Page.fileChooserOpened" => {
-                if let (Some(session), Some(node)) = (session, params["backendNodeId"].as_i64()) {
-                    self.state.lock().unwrap().choosers.insert(session.to_owned(), node);
-                }
+                let (Some(session), Some(input)) = (session, params["backendNodeId"].as_i64()) else { return };
+                let mut state = self.state.lock().unwrap();
+                let Some(&opener) = state.clicked.get(session) else { return };
+                let (shared, session) = (self.clone(), session.to_owned());
+                let pin = ChooserPin::new(self);
+                self.spawn(&mut state, async move {
+                    let _pin = pin;
+                    pin_chooser(&shared, &session, input, opener).await;
+                });
             }
             "Runtime.bindingCalled" if params["name"] == INPUT_NAVIGATION_BINDING => {
                 self.state.lock().unwrap().input_navigations += 1;
@@ -1687,7 +1775,7 @@ impl Shared {
                 state.frame_parents.insert(child.clone(), parent.to_owned());
                 // The frame's document may load before its session reports lifecycle events, so once it does, the
                 // document's own state says whether one is still to come.
-                state.frames_loading.insert((child.clone(), target.clone()));
+                state.frames_loading.entry((child.clone(), target.clone())).or_insert_with(Instant::now);
                 let session = self.session();
                 self.spawn(&mut state, async move {
                     let prepared = session.prepare_session(&child, false).await.is_ok();
@@ -1867,6 +1955,47 @@ impl Shared {
         let session = session.to_owned();
         self.spawn(&mut state, async move { handle_paused(&shared, params, session).await });
     }
+}
+
+/// A chooser whose input the page's registry does not yet hold, counted while it lives.
+struct ChooserPin(Arc<Shared>);
+
+impl ChooserPin {
+    fn new(shared: &Arc<Shared>) -> Self {
+        shared.chooser_pins.send_modify(|n| *n += 1);
+        Self(shared.clone())
+    }
+}
+
+impl Drop for ChooserPin {
+    fn drop(&mut self) {
+        self.0.chooser_pins.send_modify(|n| *n -= 1);
+    }
+}
+
+/// Hold the chooser's file input in the page's registry as the upload target of `opener`, the control clicked. An
+/// input or page gone already is skipped: nothing to offer.
+async fn pin_chooser(shared: &Arc<Shared>, session: &str, input: i64, opener: i64) {
+    let session_id = Some(session);
+    let browser = shared.session();
+    let Ok(resolved) = browser.send("DOM.resolveNode", json!({"backendNodeId": input}), session_id).await else {
+        return;
+    };
+    let Some(object) = resolved["object"]["objectId"].as_str() else { return };
+    let _ = browser
+        .send(
+            "Runtime.callFunctionOn",
+            json!({
+                "objectId": object,
+                "functionDeclaration": "function (opener) { const registry = window.__fastbrowse; \
+                    const node = registry?.nodes.get(opener); \
+                    if (node) registry.chooser = {input: this, opener: node, connected: this.isConnected}; }",
+                "arguments": [{"value": opener}],
+            }),
+            session_id,
+        )
+        .await;
+    let _ = browser.send("Runtime.releaseObject", json!({"objectId": object}), session_id).await;
 }
 
 pub(crate) async fn adopt_popup(shared: &Arc<Shared>, target_id: &str, opener_id: &str, session: Option<String>) {
@@ -2137,7 +2266,7 @@ async fn capture_download(
     }
     let kind = response_mime(mime);
     let stored_mime = if kind.is_empty() { "application/octet-stream".to_owned() } else { kind.clone() };
-    let readable = readable_text(mime, &raw).await;
+    let readable = readable_text(mime, &name, &raw, shared.max_download_bytes).await;
     let artifact = shared.artifact_sink.put(ArtifactKind::Download, &name, &stored_mime, &raw).await?;
     let mut state = shared.state.lock().unwrap();
     state.artifacts.push(artifact);
@@ -2301,7 +2430,7 @@ fn safe_filename(name: &str) -> String {
 /// one is a download and aborts. A `content-disposition: attachment` (or a save-as filename) is the site saying so
 /// explicitly; a bare `text/csv` says it by type. This is a property of the response, not of any one site, so a link
 /// whose target is a file is captured the same way everywhere.
-const DOWNLOAD_MIME_TYPES: [&str; 10] = [
+const DOWNLOAD_MIME_TYPES: [&str; 11] = [
     "text/csv",
     "application/csv",
     "application/octet-stream",
@@ -2312,6 +2441,7 @@ const DOWNLOAD_MIME_TYPES: [&str; 10] = [
     "application/x-7z-compressed",
     "application/vnd.ms-excel",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ];
 
 fn response_mime(mime: &str) -> String {
@@ -2329,9 +2459,35 @@ fn is_download(mime: &str, disposition: &str) -> bool {
 
 /// The response's text when it is a text file or a PDF the run should be able to read, None for any other file, and
 /// why a PDF went unread.
-async fn readable_text(mime: &str, raw: &[u8]) -> Result<Option<String>, crate::PdfUnread> {
+async fn readable_text(
+    mime: &str,
+    name: &str,
+    raw: &[u8],
+    max_bytes: usize,
+) -> Result<Option<String>, crate::PdfUnread> {
     let kind = response_mime(mime);
-    if kind == "application/pdf" {
+    let declared = match kind.as_str() {
+        "" | "application/octet-stream" | "binary/octet-stream" => {
+            match name.rsplit('.').next().unwrap_or_default().to_ascii_lowercase().as_str() {
+                "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "zip" => "application/zip",
+                "pdf" => "application/pdf",
+                _ => &kind,
+            }
+        }
+        _ => &kind,
+    };
+    let request = match declared {
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => Some(crate::helper::XLSX_TEXT),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => Some(crate::helper::DOCX_TEXT),
+        "application/zip" => Some(crate::helper::ZIP_TEXT),
+        _ => None,
+    };
+    if let Some(request) = request {
+        return crate::pdf::document_text(&format!("{request}:{max_bytes}"), raw.to_vec()).await;
+    }
+    if declared == "application/pdf" {
         return crate::pdf::text(raw.to_vec()).await;
     }
     if !(kind.starts_with("text/") || kind == "application/csv" || kind == "application/json") {
@@ -2449,6 +2605,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_cookie_refusal_bundle_reaches_only_native_timers() {
+        // A call through `window` skips the lexical binding to the native timers and reaches the wrapped one that
+        // attributes work to the run's action.
+        for through_window in ["window.setTimeout(", "window.clearTimeout("] {
+            assert!(!REFUSE_COOKIES_JS.contains(through_window), "{through_window}");
+        }
+    }
+
+    #[test]
     fn test_a_percent_before_a_multibyte_character_is_kept() {
         assert_eq!(percent_decode("100%\u{e9}t\u{e9}.pdf", "utf-8"), "100%\u{e9}t\u{e9}.pdf");
         assert_eq!(percent_decode("a%20b%", "utf-8"), "a b%");
@@ -2532,12 +2697,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn generic_mime_downloads_use_their_declared_filename() {
+        for mime in ["", "application/octet-stream"] {
+            for name in ["report.xlsx", "report.DOCX", "report.zip"] {
+                assert!(readable_text(mime, name, b"invalid document", 1024).await.is_err(), "{mime}: {name}");
+            }
+        }
+        assert!(readable_text("application/octet-stream", "data.bin", b"binary", 1024).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
     async fn text_and_pdf_downloads_are_read_whole() {
         crate::helper::register(crate::testing::test_binary_helper("pdf::tests::helper_child"));
         let raw = vec![b'a'; 100_000];
-        assert_eq!(readable_text("text/csv", &raw).await.unwrap().unwrap().len(), raw.len());
-        assert_eq!(readable_text("application/zip", b"PK").await, Ok(None));
-        let pdf = readable_text("application/pdf", include_bytes!("../tests/fixtures/wind.pdf")).await;
+        assert_eq!(readable_text("text/csv", "data.csv", &raw, usize::MAX).await.unwrap().unwrap().len(), raw.len());
+        assert!(readable_text("application/zip", "data.zip", b"PK", usize::MAX).await.is_err());
+        let pdf =
+            readable_text("application/pdf", "wind.pdf", include_bytes!("../tests/fixtures/wind.pdf"), usize::MAX)
+                .await;
         assert_eq!(pdf, Ok(Some("Fairbanks Wind".to_owned())));
     }
 

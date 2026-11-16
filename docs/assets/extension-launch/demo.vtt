@@ -1,0 +1,20 @@
+WEBVTT
+
+00:00.000 --> 00:04.500
+Start the task through the fastbrowse Chrome extension.
+Sign in to the public demo account with a masked password.
+
+00:04.500 --> 00:09.500
+Add the backpack to the cart and open checkout.
+The custom Cua cursor follows the real run.
+
+00:09.500 --> 00:16.500
+Fill the test checkout with fictional details.
+This demo run uses --authorize.
+
+00:16.500 --> 00:18.500
+Review the $32.39 total and finish the test order.
+
+00:18.500 --> 00:23.000
+The shop confirms the order. fastbrowse returns a cited answer.
+Preview extension 0.1.1. Idle edges trimmed; actions play at captured speed.

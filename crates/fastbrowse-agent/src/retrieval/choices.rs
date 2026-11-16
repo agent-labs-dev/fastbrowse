@@ -16,7 +16,7 @@ use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
 use super::chunks::evidence;
-use super::fields::{Candidate, SOURCES_EXPLAINED, ScalarValue, Sources, context};
+use super::fields::{Candidate, SOURCES_EXPLAINED, ScalarValue, Sources, context, tuple_repr};
 use super::text::{Page, SpanKind, cells, slice, spans};
 use crate::batches::evaluate_batches;
 use crate::error::Result;
@@ -36,8 +36,10 @@ fn focus_rules() -> String {
     )
 }
 
-/// How capture.js begins the observation it writes for a link with no text.
-const LINK_METADATA: &str = "Link element DOM metadata:";
+/// How capture.js begins the observation it writes for a link with no text, and the fields that are the link's own.
+const LINK_METADATA: (&str, [&str; 2]) = ("Link element DOM metadata:", ["label", "href"]);
+/// How capture.js begins the observation it writes for an image, and the fields that are the image's own.
+const IMAGE_METADATA: (&str, [&str; 2]) = ("Image element DOM metadata:", ["alt", "src"]);
 
 fn iter_read_candidates(page: &Page<'_>, blocks: &[&Block], limit: Option<usize>) -> Vec<Candidate> {
     let mut candidates = Vec::new();
@@ -45,20 +47,18 @@ fn iter_read_candidates(page: &Page<'_>, blocks: &[&Block], limit: Option<usize>
         let value = page.slice(block.start, block.end);
         // A downloaded CSV's row is a table block with no cells to split.
         let found = match cells(value) {
-            // A textless link's metadata quotes the row it sits in, to say which link it is. That quote is the row's
-            // own text again, and offered as a value it won over the row: a top story was answered with a JSON scrap
-            // of the upvote link's `near` (#823). Its label and destination are the link's own, and stay candidates.
-            _ if block.kind == BlockKind::Observation && value.starts_with(LINK_METADATA) => link_fields(value),
-            cells if block.kind == BlockKind::Table && !cells.is_empty() => cells,
-            _ => {
-                let mut found = spans(value, SpanKind::Str);
-                // A sentence of a longer passage reads as the whole of it: a two sentence quote was answered with its
-                // first. The passage stands beside its sentences.
-                if found.len() > 1 && block.kind != BlockKind::Record {
-                    found.insert(0, (0, text::len(value), value.to_string()));
+            // A textless link's or an image's metadata quotes the item it sits in, to say which one it is. That quote
+            // is the item's own text again, and offered as a value it won over the item: a top story was answered with
+            // a JSON scrap of the upvote link's `near` (#823). The element's own fields stay candidates, and the whole
+            // line stays their context.
+            _ if block.kind == BlockKind::Observation => {
+                match [LINK_METADATA, IMAGE_METADATA].into_iter().find(|(opening, _)| value.starts_with(opening)) {
+                    Some((_, keys)) => metadata_fields(value, keys),
+                    None => sentences(value, block),
                 }
-                found
             }
+            cells if block.kind == BlockKind::Table && !cells.is_empty() => cells,
+            _ => sentences(value, block),
         };
         for (start, end, raw) in found {
             if text::strip(&raw).is_empty() {
@@ -84,12 +84,24 @@ fn iter_read_candidates(page: &Page<'_>, blocks: &[&Block], limit: Option<usize>
     candidates
 }
 
-/// The `label` and `href` string values of a textless link's metadata, by code point, as `spans` gives them.
-fn link_fields(value: &str) -> Vec<(usize, usize, String)> {
-    ["\"label\":\"", "\"href\":\""]
-        .into_iter()
+/// A block's string spans, as `spans` gives them, with the whole passage beside its sentences.
+fn sentences(value: &str, block: &Block) -> Vec<(usize, usize, String)> {
+    let mut found = spans(value, SpanKind::Str);
+    // A sentence of a longer passage reads as the whole of it: a two sentence quote was answered with its first. The
+    // passage stands beside its sentences.
+    if found.len() > 1 && block.kind != BlockKind::Record {
+        found.insert(0, (0, text::len(value), value.to_string()));
+    }
+    found
+}
+
+/// The string values of `keys` in an element's metadata line, by code point, as `spans` gives them. A key whose value is
+/// null gives none.
+fn metadata_fields(value: &str, keys: [&str; 2]) -> Vec<(usize, usize, String)> {
+    keys.into_iter()
         .filter_map(|key| {
-            let start = value.find(key)? + key.len();
+            let key = format!("\"{key}\":\"");
+            let start = value.find(&key)? + key.len();
             let mut escaped = false;
             let length = value[start..].find(|c: char| {
                 let close = c == '"' && !escaped;
@@ -177,7 +189,7 @@ fn read_request(
     // Unoffered passages can disqualify a plausible candidate, for example an older version.
     let body = match blocks {
         None => capture.text.clone(),
-        Some(blocks) => blocks.iter().map(|b| page.slice(b.start, b.end)).collect::<Vec<_>>().join("\n...\n"),
+        Some(blocks) => passage(page, blocks, "\n...\n"),
     };
     shown.insert("text".into(), body.into());
     if blocks.is_some() {
@@ -185,6 +197,28 @@ fn read_request(
     }
     shown.insert("inaccessible_frames".into(), capture.inaccessible_frames.into());
     (json!({"date": date, "page": Value::Object(shown)}), questions)
+}
+
+/// The text of `blocks` joined by `separator`, each block led by the headings it sits under where the text before it
+/// does not already say them. A passage cut from a page loses the headings above it, and a JSON document's key path
+/// is its only label: a release's upload time reads the same as every other release's (#1069). After a heading the
+/// text implies that heading's path with its own text, after any other block that block's path.
+fn passage(page: &Page<'_>, blocks: &[&Block], separator: &str) -> String {
+    let mut implied: Vec<String> = Vec::new();
+    let mut parts = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        let text = page.slice(block.start, block.end);
+        parts.push(if block.heading_path.is_empty() || block.heading_path == implied {
+            text.to_string()
+        } else {
+            format!("(headings {})\n{text}", tuple_repr(&block.heading_path))
+        });
+        implied = block.heading_path.clone();
+        if block.kind == BlockKind::Heading {
+            implied.push(text.to_string());
+        }
+    }
+    parts.join(separator)
 }
 
 /// Whether the state and the questions fit in one request to Jev.
@@ -219,7 +253,7 @@ async fn focus<'a>(
     }
     let mut questions: IndexMap<String, Question> = IndexMap::new();
     for (i, blocks) in windows.iter().enumerate() {
-        let joined = blocks.iter().map(|b| page.slice(b.start, b.end)).collect::<Vec<_>>().join("\n");
+        let joined = passage(page, blocks, "\n");
         let length = text::len(&joined);
         // A block longer than a window is asked about in pieces: a passage scored on its opening alone could hide the
         // current version below an outdated one.
@@ -242,7 +276,7 @@ async fn focus<'a>(
         "date": date,
         "page": {"url": capture.url, "title": capture.title},
     });
-    let answered = evaluate_batches(JevPurpose::Read, jev, &state, &questions, tokens, ledger, None, true).await?;
+    let answered = evaluate_batches(JevPurpose::Read, jev, &state, &questions, tokens, ledger, true).await?;
     let lost = answered.as_ref().is_none_or(|answered| answered.answers.len() < questions.len());
     let (answers, cost) = match answered {
         Some(answered) => (answered.answers, answered.cost),
@@ -792,8 +826,79 @@ mod tests {
 
         // The link's own label and destination answer a question about the link; its row's text is already offered.
         assert_eq!(values, ["A story title", "upvote", "https://example.test/vote"]);
-        // What an image or a field shows is still an answer.
-        let captured = capture(&[(BlockKind::Observation, r#"Image element DOM metadata: {"alt":"A red bicycle"}"#)]);
+        // What a field shows is still an answer.
+        let captured = capture(&[(BlockKind::Observation, "Email: [empty]")]);
         assert_eq!(read_candidates(&captured, None).len(), 1);
+    }
+
+    #[test]
+    fn image_metadata_offers_the_image_but_not_its_item_text() {
+        let line = r#"Image element DOM metadata: {"alt":"A red bicycle","src":"https://example.test/bike.png","pixels_described":false,"near":"Bikes. A red bicycle on sale."}"#;
+        let captured =
+            capture(&[(BlockKind::Paragraph, "Bikes. A red bicycle on sale."), (BlockKind::Observation, line)]);
+
+        let candidates = read_candidates(&captured, None);
+        let values: Vec<String> = candidates.iter().map(|candidate| candidate.value.to_str()).collect();
+
+        // The item's text is offered once, as the page reads it; the image line offers what the image says, with the
+        // whole line as its context.
+        assert_eq!(
+            values,
+            [
+                "Bikes. A red bicycle on sale.",
+                "Bikes.",
+                "A red bicycle on sale.",
+                "A red bicycle",
+                "https://example.test/bike.png"
+            ]
+        );
+        assert!(
+            candidates[3].context.contains(r#""near":"Bikes. A red bicycle on sale.""#),
+            "{}",
+            candidates[3].context
+        );
+        // An image with no alt offers its source alone.
+        let captured = capture(&[(
+            BlockKind::Observation,
+            r#"Image element DOM metadata: {"alt":null,"src":"https://example.test/x.png","near":null}"#,
+        )]);
+        let values: Vec<String> =
+            read_candidates(&captured, None).into_iter().map(|candidate| candidate.value.to_str()).collect();
+        assert_eq!(values, ["https://example.test/x.png"]);
+    }
+
+    #[test]
+    fn a_passage_names_the_headings_its_own_text_does_not() {
+        let path = |parts: &[&str]| parts.iter().map(|part| part.to_string()).collect::<Vec<_>>();
+        let mut page = capture(&[
+            (BlockKind::Heading, "releases"),
+            (BlockKind::Heading, "2.34.2"),
+            (BlockKind::Heading, "upload_time"),
+            (BlockKind::Paragraph, "2026-08-31"),
+            (BlockKind::Heading, "size"),
+            (BlockKind::Paragraph, "64000"),
+        ]);
+        let paths = [
+            &[][..],
+            &["releases"],
+            &["releases", "2.34.2", "0"],
+            &["releases", "2.34.2", "0", "upload_time"],
+            &["releases", "2.34.2", "0"],
+            &["releases", "2.34.2", "0", "size"],
+        ];
+        for (block, parts) in page.blocks.iter_mut().zip(paths) {
+            block.heading_path = path(parts);
+        }
+        let read = Page::new(&page);
+        let blocks: Vec<&Block> = page.blocks.iter().collect();
+        assert_eq!(
+            super::passage(&read, &blocks, "\n"),
+            "releases\n2.34.2\n(headings ('releases', '2.34.2', '0'))\nupload_time\n2026-08-31\n(headings ('releases', '2.34.2', '0'))\nsize\n64000"
+        );
+        // A passage cut from below its headings is led by them.
+        assert_eq!(
+            super::passage(&read, &blocks[3..4], "\n"),
+            "(headings ('releases', '2.34.2', '0', 'upload_time'))\n2026-08-31"
+        );
     }
 }

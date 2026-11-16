@@ -162,6 +162,18 @@ fn serve_one(mut stream: TcpStream, directory: &Path, iframe_origin: Option<&str
         respond(&mut stream, if path == "/report.csv?partial" { 206 } else { 200 }, &headers, &body);
         return;
     }
+    if let Some(name) = path.strip_prefix("/package.json") {
+        // A package index's JSON, served as JSON: Chrome shows it in its JSON viewer. `?broken` serves text that is
+        // not all JSON under the same type.
+        let body: &[u8] = if name == "?broken" {
+            br#"{"info":{"name":"httpx"}"#
+        } else {
+            br#"{"info":{"name":"httpx","version":"0.28.1"},"urls":[{"filename":"httpx-0.28.1.tar.gz"}]}"#
+        };
+        let headers = [("Content-Type", "application/json".to_owned()), ("Content-Length", body.len().to_string())];
+        respond(&mut stream, 200, &headers, body);
+        return;
+    }
     if path == "/map.pdf" {
         // Served inline, as a site links a PDF: Chrome shows it in its viewer instead of downloading it.
         let body = include_bytes!("../fixtures/wind.pdf");

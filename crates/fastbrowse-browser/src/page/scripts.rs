@@ -97,7 +97,7 @@ pub const HIT_TEST_JS: &str = concat!(
 /// The pointer path rechecks a control's guard before every press (`stable_point`); the keyboard path asks this.
 pub const GUARD_HOLDS_JS: &str = concat!(
     "((id, guard) => { const r = window.__fastbrowse, e = r?.nodes.get(id); ",
-    "return !!e?.isConnected && !!r.guardKey && r.guardKey(e) === guard; })",
+    "return !!e?.isConnected && !!r.guardKey && r.guardKey(e, id) === guard; })",
 );
 
 /// Leave a field without pressing anything, and only the field that was chosen: it must still be the node the guard
@@ -105,7 +105,7 @@ pub const GUARD_HOLDS_JS: &str = concat!(
 /// is left alone, since moving focus elsewhere could activate whatever took it.
 pub const BLUR_JS: &str = concat!(
     "((id, guard) => { const r = window.__fastbrowse, e = r?.nodes.get(id); ",
-    "if (!e?.isConnected || !r.guardKey || r.guardKey(e) !== guard) return null; ",
+    "if (!e?.isConnected || !r.guardKey || r.guardKey(e, id) !== guard) return null; ",
     "if (e.getRootNode().activeElement !== e) return false; e.blur(); return true; })",
 );
 
@@ -155,7 +155,7 @@ pub const PRESENTED_JS: &str = concat!(
 pub static UNCOVER_JS: LazyLock<String> = LazyLock::new(|| {
     [
     "(async (id, guard) => { const r = window.__fastbrowse, e = r?.nodes.get(id); ",
-    "if (!e?.isConnected || r.guardKey(e) !== guard) return null; ",
+    "if (!e?.isConnected || r.guardKey(e, id) !== guard) return null; ",
     "const docs = [], scrollers = [], roots = []; ",
     // The scrolling element reports the window's scroll, whose events and scrollend go to the document instead.
     "for (let n = e; n; ) { if (n !== n.ownerDocument.scrollingElement) scrollers.push(n); ",

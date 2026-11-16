@@ -14,6 +14,7 @@ use common::{CHROME, Call, Recorder, browser_event, isolated_binary, result, run
 use fastbrowse_cli::runner::{RunError, Runner};
 use fastbrowse_core::models::{CostBasis, CostBreakdown, CostComponent, CostLine, RunResult, Status};
 use fastbrowse_core::protocol::CancellationReceipt;
+use fastbrowse_core::protocol::PROTOCOL_VERSION;
 use serde_json::{Value, json};
 use tokio::sync::{Notify, watch};
 
@@ -170,7 +171,7 @@ async fn test_the_browser_is_closed_before_the_cancelled_reply_is_written() {
     client.result("run/cancel", Some(json!({"run_id": "run-1"}))).await;
     closing(&browsing).await;
     // Still closing, and a handshake goes through, so the server is not merely slow to write.
-    client.result("initialize", Some(json!({"protocol_version": 2}))).await;
+    client.result("initialize", Some(json!({"protocol_version": PROTOCOL_VERSION}))).await;
     assert!(client.inbox.is_empty() && client.silent().await);
     browsing.let_close.send_replace(true);
     let reply = client.reply(run).await;
@@ -389,9 +390,9 @@ async fn test_cancelling_a_run_that_is_waiting_on_a_secret_ends_it_and_the_late_
     client.result("run/cancel", Some(json!({"run_id": "run-1"}))).await;
     let reply = client.reply(run).await;
     client.send(json!({"jsonrpc": "2.0", "id": question["id"], "result": "hunter2-correct-horse"}));
-    let handshake = client.result("initialize", Some(json!({"protocol_version": 2}))).await;
+    let handshake = client.result("initialize", Some(json!({"protocol_version": PROTOCOL_VERSION}))).await;
     assert_eq!(reply["error"]["code"], CANCELLED);
     assert!(resolved.lock().unwrap().is_empty());
-    assert_eq!(handshake["protocol_version"], 2);
+    assert_eq!(handshake["protocol_version"], PROTOCOL_VERSION);
     assert!(client.inbox.is_empty());
 }

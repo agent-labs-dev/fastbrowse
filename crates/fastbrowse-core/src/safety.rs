@@ -18,6 +18,9 @@ use crate::page::Control;
 use crate::py::json::write_string;
 use crate::py::text;
 
+/// The character `Redactor::mask` writes in place of each character of a secret value.
+pub const MASK: char = '\u{2022}';
+
 /// Whether Jev is asked before this dispatches: every click, drag, Enter and key chord.
 ///
 /// Whether a click commits is a judgment about the page, so Jev makes it rather than a word list. A list of committing
@@ -33,6 +36,7 @@ pub fn may_be_irreversible(operation: Operation) -> bool {
         // off the page. A blur is classified as the fill it follows is: both run only the page's own field handlers,
         // and the page text cannot say which of those handlers sends something.
         Operation::Navigate
+        | Operation::Search
         | Operation::Hover
         | Operation::Fill
         | Operation::Blur
@@ -245,7 +249,9 @@ pub fn met_question(action: &str) -> ChoiceQuestion {
             (
                 DONE.to_string(),
                 Value::from(
-                    "No: the steps taken so far already did this, and the task does not ask for it to be done again.",
+                    "No: the page or recorded effects show that the result the task asks this action to produce already \
+                     happened, and the task does not ask for it again. An executed action with no effect does not \
+                     show this.",
                 ),
             ),
             ("unclear".to_string(), Value::from("The page does not show enough to tell.")),
@@ -339,32 +345,62 @@ pub fn starts_download(control: &Control) -> bool {
     name.rsplit_once('.').is_some_and(|(_, suffix)| DOWNLOADED_SUFFIXES.contains(&suffix.to_lowercase().as_str()))
 }
 
-/// Whether the task rules out downloading: asked of the task alone, once a control would download a file.
-pub fn downloads_question(task: &str) -> NoulQuestion {
+/// Whether the task rules out downloading: asked of the task alone, once a control would download a file. Like every
+/// question asked of the task alone, it names the state's `task` rather than restating it: the request already sends
+/// the task as its state, and Jev bills every copy.
+pub fn downloads_question() -> NoulQuestion {
     NoulQuestion::new(
-        format!(
-            "The agent is doing this task: {task}\nDoes the task rule out downloading files, either by telling the \
-             agent not to download anything or by saying the work is read-only?"
-        ),
+        "Does `task` rule out downloading files, either by telling the agent not to download anything or by saying the \
+         work is read-only?",
         Some("The task says not to download files, or calls the work read-only."),
         Some("The task says nothing against downloading, even if it only asks for information."),
     )
 }
 
-/// Whether the task rules out changing what the page's fields and settings hold: asked of the task alone, once an
-/// action would change one.
-pub fn edits_question(task: &str) -> NoulQuestion {
-    NoulQuestion::new(
-        format!(
-            "The agent is doing this task: {task}\nDoes the task rule out changing what the page's fields and settings \
-             hold, by telling the agent to change nothing, to leave the form or settings as they are, or not to tick, \
-             select or type anything?"
-        ),
-        Some("The task says to change nothing on the page, or to leave its fields and settings as they are."),
-        Some(
-            "The task allows changing fields, or rules out only committing something such as saving, buying or \
-             sending. A task that has to search or filter to find its answer does not rule out typing that search.",
-        ),
+/// The [`edits_question`] option for a task that allows changing the page's fields and settings.
+pub const EDITS_ALLOWED: &str = "allowed";
+
+/// The [`edits_question`] option for a task that asks for some changes and rules out the rest ("post this reply.
+/// Change nothing else."), so only an edit the task asks for goes ahead (#879).
+pub const EDITS_REQUESTED_ONLY: &str = "requested_only";
+
+/// The [`edits_question`] option for a task that rules out every change, such as a read-only one (#838).
+pub const EDITS_NONE: &str = "none";
+
+/// Which changes to what the page's fields and settings hold the task allows: asked of the task alone, once an action
+/// would change one. Asked only whether the task rules out changing them, Jev read "fill in this reply. Change nothing
+/// else." as ruling out the reply itself (#879), so a task that asks for a change and forbids the others has an answer
+/// of its own. "No change" needs the task's own words: worded as asking for no change, it took "Confirm the reference
+/// in the form" as asking for none.
+pub fn edits_question() -> ChoiceQuestion {
+    ChoiceQuestion::new(
+        "Which changes to what the page's fields and settings hold does `task` allow, such as typing into a field, \
+         ticking a box or choosing an option?",
+        IndexMap::from([
+            (
+                EDITS_ALLOWED.to_string(),
+                Value::from(
+                    "The task allows changing fields, or rules out only committing something such as saving, buying \
+                     or sending. A task that has to search or filter to find its answer does not rule out typing that \
+                     search. A task that says nothing against changing the page allows it.",
+                ),
+            ),
+            (
+                EDITS_REQUESTED_ONLY.to_string(),
+                Value::from(
+                    "The task asks for some changes, such as typing a reply or setting an option, and says to change \
+                     nothing else or to leave everything else as it is.",
+                ),
+            ),
+            (
+                EDITS_NONE.to_string(),
+                Value::from(
+                    "The task says in words not to change anything on the page: to change nothing, to leave its \
+                     fields and settings as they are, not to tick, select or type anything, or that the work is \
+                     read-only.",
+                ),
+            ),
+        ]),
     )
 }
 
@@ -385,12 +421,10 @@ pub fn changes_a_value(operation: Operation, control: &Control) -> bool {
 
 /// Whether the task has the agent answer a cookie or consent banner itself: asked of the task alone, before the
 /// browser opens, since the browser otherwise refuses such banners before the agent sees them.
-pub fn consent_question(task: &str) -> NoulQuestion {
+pub fn consent_question() -> NoulQuestion {
     NoulQuestion::new(
-        format!(
-            "The agent is doing this task: {task}\nDoes the task ask the agent itself to answer a cookie or consent \
-             banner, such as accepting or rejecting cookies or choosing consent settings?"
-        ),
+        "Does `task` ask the agent itself to answer a cookie or consent banner, such as accepting or rejecting cookies \
+         or choosing consent settings?",
         Some("The task asks the agent to accept, reject or set cookie or consent choices."),
         Some("The task says nothing about answering a cookie or consent banner."),
     )
@@ -681,11 +715,17 @@ impl Redactor {
         let mut at = 0;
         for (start, end, _) in self.spans(text) {
             out.push_str(&text[at..start]);
-            out.extend(std::iter::repeat_n('\u{2022}', text[start..end].chars().count()));
+            out.extend(std::iter::repeat_n(MASK, text[start..end].chars().count()));
             at = end;
         }
         out.push_str(&text[at..]);
         out
+    }
+
+    /// Where `mask` blanks secret values in `text`, as code point ranges, which stay valid in the masked text.
+    pub fn masked_spans(&self, text: &str) -> Vec<(i64, i64)> {
+        let at = |byte: usize| text[..byte].chars().count() as i64;
+        self.spans(text).into_iter().map(|(start, end, _)| (at(start), at(end))).collect()
     }
 
     pub fn reveals(&self, text: &str) -> bool {
@@ -868,6 +908,17 @@ mod tests {
     }
 
     #[test]
+    fn test_masked_spans_are_code_points_into_the_masked_text() {
+        let mut redactor = Redactor::new();
+        redactor.register("username", "student", None);
+        let text = "Café, student!";
+        let spans = redactor.masked_spans(text);
+        assert_eq!(spans, [(6, 13)]);
+        let masked: Vec<char> = redactor.mask(text).chars().collect();
+        assert!(masked[6..13].iter().all(|c| *c == MASK));
+    }
+
+    #[test]
     fn test_masking_keeps_the_host_a_secret_was_typed_on_and_blanks_every_other_appearance() {
         let mut redactor = Redactor::new();
         redactor.register("username", "practice", Some("https://practice.expandtesting.com/login"));
@@ -1042,12 +1093,17 @@ mod tests {
     }
 
     #[test]
-    fn test_the_edits_question_is_about_the_task_and_states_both_sides() {
-        let question = edits_question("Change nothing; list the options.");
-        assert!(question.instructions.contains("Change nothing; list the options."));
-        assert!(question.instructions.contains("rule out changing what the page's fields and settings hold"));
-        assert!(question.r#true.as_deref().is_some_and(|yes| yes.contains("change nothing")));
-        assert!(question.r#false.as_deref().is_some_and(|no| no.contains("search or filter")));
+    fn test_the_edits_question_is_about_the_task_and_tells_a_requested_change_from_none() {
+        let question = edits_question();
+        assert!(question.instructions.contains("does `task` allow"), "the state carries the task once");
+        assert_eq!(
+            question.criteria.keys().map(String::as_str).collect::<Vec<_>>(),
+            [EDITS_ALLOWED, EDITS_REQUESTED_ONLY, EDITS_NONE]
+        );
+        let says = |key: &str, text: &str| question.criteria[key].as_str().is_some_and(|c| c.contains(text));
+        assert!(says(EDITS_ALLOWED, "search or filter"));
+        assert!(says(EDITS_REQUESTED_ONLY, "change nothing else"));
+        assert!(says(EDITS_NONE, "read-only"));
     }
 
     #[test]
@@ -1066,6 +1122,14 @@ mod tests {
         assert!(question.instructions.starts_with(&format!(
             "{UNTRUSTED}\nThe agent is about to click the element labelled \"Yes, I'm sure\" while doing `task`.\nIt sits under 'Delete \"all\"' on the page.\n"
         )));
+    }
+
+    #[test]
+    fn a_repeat_requires_evidence_of_the_requested_result() {
+        let question = met_question("Click Post");
+        let done = question.criteria.get(DONE).expect("completed result option").as_str().unwrap();
+        assert!(done.contains("page or recorded effects"));
+        assert!(done.contains("An executed action with no effect does not show this"));
     }
 
     #[test]
