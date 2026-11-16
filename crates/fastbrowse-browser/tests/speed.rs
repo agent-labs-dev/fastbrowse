@@ -639,7 +639,25 @@ async fn test_a_settle_does_not_wait_for_a_timer_due_after_its_deadline() {
     // A timer due after the settle's deadline cannot change what the settle reads, so it holds nothing.
     // Asserted on what the settle recorded, not on wall time, which a loaded runner stretches (#1085).
     let Some((h, proxy)) = proxied().await else { return };
+    let navigation = proxy.len();
     h.page.navigate(&sites().main, None).await.expect("navigate");
+    // Initial navigation can emit lifecycle events after observation; those legitimately cause another read and
+    // must finish before this measures only the action's timer (#1159).
+    wait_until(
+        || async {
+            let frames = proxy.events_since(navigation, "Page.frameNavigated");
+            let Some(frame) = frames.iter().rev().find(|event| event["params"]["frame"]["parentId"].is_null()) else {
+                return false;
+            };
+            let loader = &frame["params"]["frame"]["loaderId"];
+            proxy
+                .events_since(navigation, "Page.lifecycleEvent")
+                .iter()
+                .any(|event| event["params"]["loaderId"] == *loader && event["params"]["name"] == "networkIdle")
+        },
+        5.0,
+    )
+    .await;
     eval_active(
         &h.session,
         "document.body.innerHTML = '<button>Later</button>'; \
