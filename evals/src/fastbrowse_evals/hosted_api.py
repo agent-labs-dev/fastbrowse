@@ -99,7 +99,7 @@ async def submit_and_wait(http: httpx.AsyncClient, task: Task, prompt: str) -> t
                 "start": _start_url(task),
                 "output_schema": task.answer_schema,
                 "secrets": _run_secrets(task),
-                "authorize": Capability.AUTHORIZATION in task.meta.requires,
+                "authorize": task.meta.authorizes,
                 "webhook_events": False,
                 "metadata": {"source": "parallax"},
             },
