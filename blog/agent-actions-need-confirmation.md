@@ -1,7 +1,7 @@
 ---
 title: When a browser agent should stop, not act
 description: fastbrowse stops before actions classified as irreversible, ending needs_confirmation with exit 3. What that default protects, and when to use --authorize.
-topic: Safety
+topic: How the agent acts
 published: 2026-11-14
 updated: 2026-11-16
 verifiedAgainst: v0.10.0
