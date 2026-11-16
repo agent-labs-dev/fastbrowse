@@ -44,6 +44,12 @@ impl Element {
     fn showing(&self) -> bool {
         self.has("showing")
     }
+
+    /// Whether the app accepts input on this element. GTK 3 and Qt set both `enabled` and `sensitive` on a usable
+    /// control, while GTK 4's AT-SPI bridge sets only `sensitive`; a disabled control carries neither.
+    fn operable(&self) -> bool {
+        self.has("enabled") || self.has("sensitive")
+    }
 }
 
 /// The tree with each element's children in reading order: top to bottom, then left to right, by where the app says
@@ -158,7 +164,7 @@ fn items(element: &Element) -> Vec<&Element> {
 
 /// The items a combo box offers to choose: those of its list the app has enabled, since the keys pass over the rest.
 pub fn options(element: &Element) -> Vec<&Element> {
-    items(element).into_iter().filter(|item| item.has("enabled")).collect()
+    items(element).into_iter().filter(|item| item.operable()).collect()
 }
 
 /// The name of the item a combo box has chosen: the one of its options deskpilot marks selected.
@@ -180,7 +186,7 @@ pub fn find<'a>(element: &'a Element, id: &str) -> Option<&'a Element> {
 }
 
 fn control(element: &Element, context: Option<&str>) -> Option<Control> {
-    if !element.showing() || !element.has("enabled") {
+    if !element.showing() || !element.operable() {
         return None;
     }
     let operations = operations(element);
@@ -484,6 +490,31 @@ mod tests {
         assert_eq!(password.input_type.as_deref(), Some("password"));
         assert_eq!(observation.viewport_text, "Not submitted");
         assert_eq!(observation.offscreen_text, "Scrolled away");
+    }
+
+    #[test]
+    fn a_gtk4_control_is_operable_by_its_sensitive_state_alone() {
+        // GTK 4's AT-SPI bridge reports a usable control as `sensitive` and never sets `enabled`, as GNOME Text
+        // Editor's buttons and text view do; a disabled one carries neither.
+        fn gtk4(extra: &[&'static str]) -> Vec<&'static str> {
+            ["sensitive", "showing", "visible"].iter().chain(extra).copied().collect()
+        }
+        let root = node(
+            "e1",
+            "window",
+            "New Document - Text Editor",
+            &gtk4(&[]),
+            None,
+            vec![
+                node("e2", "button", "New Tab", &gtk4(&["focusable"]), None, vec![]),
+                node("e3", "text box", "", &gtk4(&["editable", "focusable", "multi line"]), Some(""), vec![]),
+                node("e4", "button", "Save", &["showing", "visible"], None, vec![]),
+            ],
+        );
+        let window =
+            Window { address: "0xabc".into(), class: "org.gnome.TextEditor".into(), title: "Text Editor".into() };
+        let ids: Vec<String> = observation(&window, &root).controls.into_iter().map(|c| c.id).collect();
+        assert_eq!(ids, ["e2", "e3"]);
     }
 
     #[test]
