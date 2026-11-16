@@ -1140,6 +1140,41 @@ impl<'de> Deserialize<'de> for Image {
 
 literal_tag!(StepTag = "step");
 literal_tag!(BrowserTag = "browser");
+literal_tag!(BrowserWarningTag = "browser_warning");
+
+str_enum! {
+    pub enum BrowserWarningOperation {
+        ScreencastStart = "screencast_start",
+        ScreencastStop = "screencast_stop",
+        ScreencastFrameAck = "screencast_frame_ack",
+        PaintKeeperAttach = "paint_keeper_attach",
+        PopupSetupClose = "popup_setup_close",
+        PopupSetupRelease = "popup_setup_release",
+        FrameCallbackShutdown = "frame_callback_shutdown",
+        LiveFrameDelivery = "live_frame_delivery",
+        DownloadCapture = "download_capture",
+    }
+}
+
+str_enum! {
+    pub enum BrowserWarningFailure {
+        BrowserError = "browser_error",
+        ContextLost = "context_lost",
+        BrowserUnavailable = "browser_unavailable",
+        ScreenshotsUnavailable = "screenshots_unavailable",
+        NavigationTimeout = "navigation_timeout",
+        SiteUnreachable = "site_unreachable",
+        BrowserUnresponsive = "browser_unresponsive",
+        PageUnresponsive = "page_unresponsive",
+        OriginNotAllowed = "origin_not_allowed",
+        ScriptError = "script_error",
+        Timeout = "timeout",
+        CallbackException = "callback_exception",
+        PayloadDecode = "payload_decode",
+        CaptureFailed = "capture_failed",
+        Cancelled = "cancelled",
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1183,6 +1218,31 @@ pub struct BrowserEvent {
     pub browser_id: Option<String>,
 }
 
+/// A browser warning that is safe to expose without page text or transport details.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserWarningEvent {
+    #[serde(default, rename = "type")]
+    pub kind: BrowserWarningTag,
+    pub operation: BrowserWarningOperation,
+    pub failure: BrowserWarningFailure,
+}
+
+impl Schema for BrowserWarningEvent {
+    fn ty() -> Ty {
+        ModelTy::frozen(
+            "BrowserWarningEvent",
+            vec![
+                Field::default("type", BrowserWarningTag::ty(), "browser_warning"),
+                Field::required("operation", BrowserWarningOperation::ty()),
+                Field::required("failure", BrowserWarningFailure::ty()),
+            ],
+        )
+        .doc("A browser warning with only a closed operation and failure kind; it contains no page or transport text.")
+        .ty()
+    }
+}
+
 impl Schema for BrowserEvent {
     fn ty() -> Ty {
         ModelTy::frozen(
@@ -1207,11 +1267,12 @@ impl Schema for BrowserEvent {
 pub enum Event {
     Step(StepEvent),
     Browser(BrowserEvent),
+    BrowserWarning(BrowserWarningEvent),
 }
 
 impl Schema for Event {
     fn ty() -> Ty {
-        Ty::Union(vec![StepEvent::ty(), BrowserEvent::ty()])
+        Ty::Union(vec![StepEvent::ty(), BrowserEvent::ty(), BrowserWarningEvent::ty()])
     }
 }
 

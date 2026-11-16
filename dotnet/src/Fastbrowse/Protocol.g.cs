@@ -112,6 +112,79 @@ public enum BrowserVia
     Extension,
 }
 
+/// <summary>
+/// A browser warning with only a closed operation and failure kind; it contains no page or transport text.
+/// </summary>
+public sealed record BrowserWarningEvent
+{
+    [JsonPropertyName("type")]
+    public string? Type { get; init; }
+
+    [JsonPropertyName("operation")]
+    public required BrowserWarningOperation Operation { get; init; }
+
+    [JsonPropertyName("failure")]
+    public required BrowserWarningFailure Failure { get; init; }
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter<BrowserWarningFailure>))]
+public enum BrowserWarningFailure
+{
+    [JsonStringEnumMemberName("browser_error")]
+    BrowserError,
+    [JsonStringEnumMemberName("context_lost")]
+    ContextLost,
+    [JsonStringEnumMemberName("browser_unavailable")]
+    BrowserUnavailable,
+    [JsonStringEnumMemberName("screenshots_unavailable")]
+    ScreenshotsUnavailable,
+    [JsonStringEnumMemberName("navigation_timeout")]
+    NavigationTimeout,
+    [JsonStringEnumMemberName("site_unreachable")]
+    SiteUnreachable,
+    [JsonStringEnumMemberName("browser_unresponsive")]
+    BrowserUnresponsive,
+    [JsonStringEnumMemberName("page_unresponsive")]
+    PageUnresponsive,
+    [JsonStringEnumMemberName("origin_not_allowed")]
+    OriginNotAllowed,
+    [JsonStringEnumMemberName("script_error")]
+    ScriptError,
+    [JsonStringEnumMemberName("timeout")]
+    Timeout,
+    [JsonStringEnumMemberName("callback_exception")]
+    CallbackException,
+    [JsonStringEnumMemberName("payload_decode")]
+    PayloadDecode,
+    [JsonStringEnumMemberName("capture_failed")]
+    CaptureFailed,
+    [JsonStringEnumMemberName("cancelled")]
+    Cancelled,
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter<BrowserWarningOperation>))]
+public enum BrowserWarningOperation
+{
+    [JsonStringEnumMemberName("screencast_start")]
+    ScreencastStart,
+    [JsonStringEnumMemberName("screencast_stop")]
+    ScreencastStop,
+    [JsonStringEnumMemberName("screencast_frame_ack")]
+    ScreencastFrameAck,
+    [JsonStringEnumMemberName("paint_keeper_attach")]
+    PaintKeeperAttach,
+    [JsonStringEnumMemberName("popup_setup_close")]
+    PopupSetupClose,
+    [JsonStringEnumMemberName("popup_setup_release")]
+    PopupSetupRelease,
+    [JsonStringEnumMemberName("frame_callback_shutdown")]
+    FrameCallbackShutdown,
+    [JsonStringEnumMemberName("live_frame_delivery")]
+    LiveFrameDelivery,
+    [JsonStringEnumMemberName("download_capture")]
+    DownloadCapture,
+}
+
 public sealed record BudgetStop
 {
     [JsonPropertyName("resource")]

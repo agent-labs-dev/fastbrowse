@@ -11,7 +11,7 @@ use std::time::Duration;
 use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::session::{BrowserSession, SessionOptions};
 use fastbrowse_browser::testing;
-use fastbrowse_core::models::FrameHandler;
+use fastbrowse_core::models::{BrowserWarningEvent, BrowserWarningFailure, BrowserWarningOperation, FrameHandler};
 use lifecycle_support::{FakeChrome, Reply};
 use serde_json::json;
 use tokio::sync::watch;
@@ -235,7 +235,15 @@ async fn test_live_view_failures_are_warnings_and_leave_the_session_usable() {
             }
         });
         fake.fail(failure, Reply::Error(-32603));
-        let options = SessionOptions { on_frame: Some(on_frame), ..Default::default() };
+        let warnings = Arc::new(Mutex::new(Vec::<BrowserWarningEvent>::new()));
+        let options = SessionOptions {
+            on_frame: Some(on_frame),
+            on_warning: Some({
+                let warnings = warnings.clone();
+                Arc::new(move |warning| warnings.lock().unwrap().push(warning))
+            }),
+            ..Default::default()
+        };
         let session = fake.session_with(fake.connection(), options).await;
         settle(&session).await;
         emit_frame(&session, 1, b"jpeg", "session");
@@ -248,6 +256,18 @@ async fn test_live_view_failures_are_warnings_and_leave_the_session_usable() {
         let calls = fake.calls();
         assert!(calls.iter().any(|m| m == "Page.screencastFrameAck"), "{failure}");
         assert!(calls.iter().any(|m| m == "Target.activateTarget"), "{failure}");
+        let warnings = warnings.lock().unwrap();
+        let operation = match failure {
+            "Page.startScreencast" => BrowserWarningOperation::ScreencastStart,
+            "Page.stopScreencast" => BrowserWarningOperation::ScreencastStop,
+            _ => BrowserWarningOperation::ScreencastFrameAck,
+        };
+        let expected =
+            usize::from(failure == "Page.screencastFrameAck") * 2 + usize::from(failure != "Page.screencastFrameAck");
+        assert_eq!(warnings.iter().filter(|warning| warning.operation == operation).count(), expected, "{failure}");
+        assert!(warnings.iter().all(|warning| warning.failure == BrowserWarningFailure::BrowserError));
+        let serialized = serde_json::to_string(&*warnings).unwrap();
+        assert!(!serialized.contains("secret"), "typed warning leaked transport text: {serialized}");
     }
 }
 

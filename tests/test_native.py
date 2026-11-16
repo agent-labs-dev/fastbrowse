@@ -28,6 +28,7 @@ from fastbrowse.jev import Evaluation, NoulAnswer, Question
 from fastbrowse.models import (
     Attachment,
     BrowserEvent,
+    BrowserWarningEvent,
     BudgetStop,
     ConfigurationError,
     CostBasis,
@@ -170,9 +171,9 @@ async def test_cancelling_the_awaiting_task_stops_the_rust_run_and_closes_its_co
     silent = Silent()
     server = await asyncio.start_server(silent.handle, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
-    events: list[StepEvent | BrowserEvent] = []
+    events: list[StepEvent | BrowserEvent | BrowserWarningEvent] = []
 
-    async def on_event(event: StepEvent | BrowserEvent) -> None:
+    async def on_event(event: StepEvent | BrowserEvent | BrowserWarningEvent) -> None:
         events.append(event)
 
     async with server:
@@ -192,7 +193,7 @@ async def test_an_exception_a_callback_raises_comes_out_of_run_task(monkeypatch:
     class Refused(Exception):
         pass
 
-    async def on_event(_: StepEvent | BrowserEvent) -> None:
+    async def on_event(_: StepEvent | BrowserEvent | BrowserWarningEvent) -> None:
         raise Refused("not this browser")
 
     with pytest.raises(Refused, match="not this browser"):

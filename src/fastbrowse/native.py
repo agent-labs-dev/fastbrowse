@@ -39,6 +39,7 @@ from fastbrowse.models import (
     ArtifactKind,
     ArtifactSink,
     BrowserEvent,
+    BrowserWarningEvent,
     BudgetStop,
     CloudBrowser,
     CloudBrowserError,
@@ -77,7 +78,8 @@ from fastbrowse.page import (
 from fastbrowse.protocol import CancellationReceipt
 from fastbrowse.telemetry import BudgetExceeded, collecting
 
-_EVENT: TypeAdapter[StepEvent | BrowserEvent] = TypeAdapter(StepEvent | BrowserEvent)
+Event = StepEvent | BrowserEvent | BrowserWarningEvent
+_EVENT: TypeAdapter[Event] = TypeAdapter(StepEvent | BrowserEvent | BrowserWarningEvent)
 _QUESTIONS: TypeAdapter[dict[str, Question]] = TypeAdapter(dict[str, Question])
 _JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
@@ -152,7 +154,7 @@ class _Raised:
         return called
 
 
-def _event(payload: str) -> StepEvent | BrowserEvent:
+def _event(payload: str) -> StepEvent | BrowserEvent | BrowserWarningEvent:
     event = json.loads(payload)
     # JSON carries the step's PNG as base64, which the model's bytes field would read as text.
     if isinstance(event.get("frame"), str):

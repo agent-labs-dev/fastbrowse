@@ -14,6 +14,7 @@ from fastbrowse.models import (
     Authorization,
     BrowserEvent,
     BrowserUsed,
+    BrowserWarningEvent,
     CostBreakdown,
     Image,
     Limits,
@@ -233,7 +234,7 @@ class RunEvent(BaseModel):
     """The params of `run/event`: one thing a run did, written before that run's reply."""
 
     run_id: str
-    event: StepEvent | BrowserEvent
+    event: StepEvent | BrowserEvent | BrowserWarningEvent
 
 
 class RunFrame(BaseModel):

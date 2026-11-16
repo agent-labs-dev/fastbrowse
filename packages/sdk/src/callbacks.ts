@@ -3,6 +3,7 @@
 import { FastbrowseError, messageOf, RpcError } from './errors.ts';
 import {
   type BrowserEvent,
+  type BrowserWarningEvent,
   type CancellationReceipt,
   ErrorCode,
   type RunEvent,
@@ -48,7 +49,7 @@ export class Callbacks {
     });
   }
 
-  event(runId: string, event: StepEvent | BrowserEvent): void {
+  event(runId: string, event: StepEvent | BrowserEvent | BrowserWarningEvent): void {
     this.#tell(runId, ServerMethod.RUN_EVENT, options => options.onEvent?.(event));
   }
 

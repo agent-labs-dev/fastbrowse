@@ -534,7 +534,41 @@ class BrowserEvent(Frozen):
     start a browser of its own (local Chrome, or one handed over through `cdp_url`)."""
 
 
-type EventHandler = Callable[[StepEvent | BrowserEvent], Awaitable[None]]
+class BrowserWarningEvent(Frozen):
+    """A browser warning with only a closed operation and failure kind."""
+
+    type: Literal["browser_warning"] = "browser_warning"
+    operation: Literal[
+        "screencast_start",
+        "screencast_stop",
+        "screencast_frame_ack",
+        "paint_keeper_attach",
+        "popup_setup_close",
+        "popup_setup_release",
+        "frame_callback_shutdown",
+        "live_frame_delivery",
+        "download_capture",
+    ]
+    failure: Literal[
+        "browser_error",
+        "context_lost",
+        "browser_unavailable",
+        "screenshots_unavailable",
+        "navigation_timeout",
+        "site_unreachable",
+        "browser_unresponsive",
+        "page_unresponsive",
+        "origin_not_allowed",
+        "script_error",
+        "timeout",
+        "callback_exception",
+        "payload_decode",
+        "capture_failed",
+        "cancelled",
+    ]
+
+
+type EventHandler = Callable[[StepEvent | BrowserEvent | BrowserWarningEvent], Awaitable[None]]
 type FrameHandler = Callable[[bytes], Awaitable[None]]
 """Receives the active tab's JPEG bytes on the caller's event loop. A handler must honour cancellation: one that
 swallows `CancelledError` keeps that loop alive, so `asyncio.run` waits for it at shutdown."""

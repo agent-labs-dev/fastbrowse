@@ -235,7 +235,7 @@ fn parsed<T: serde::de::DeserializeOwned>(value: Value) -> T {
 fn mcp_result() -> RunResult {
     let steps = (0..2).map(|index| match mcp_step(index) {
         Event::Step(event) => event.step,
-        Event::Browser(_) => unreachable!("mcp_step() makes a step event"),
+        Event::Browser(_) | Event::BrowserWarning(_) => unreachable!("mcp_step() makes a step event"),
     });
     RunResult {
         answer: Some("The backpack costs $29.99.".into()),

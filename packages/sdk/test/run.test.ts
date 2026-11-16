@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   type BrowserEvent,
+  type BrowserWarningEvent,
   Fastbrowse,
   FastbrowseError,
   ProcessExitedError,
@@ -237,10 +238,10 @@ test('an attachment passed as bytes arrives intact', async () => {
 
 test('onEvent receives the browser event and every step event, in order and before run resolves', async () => {
   await withServer(scriptedRun('three_events'), async fb => {
-    const events: (StepEvent | BrowserEvent)[] = [];
+    const events: (StepEvent | BrowserEvent | BrowserWarningEvent)[] = [];
     await fb.run('Add the kettle to the cart', { ...ownBrowser, onEvent: event => events.push(event) });
     assert.deepEqual(
-      events.map(event => (event.type === 'browser' ? event.live_url : event.step.index)),
+      events.map(event => (event.type === 'browser' ? event.live_url : event.type === 'step' ? event.step.index : undefined)),
       ['https://live.example/1', 0, 1],
     );
   });

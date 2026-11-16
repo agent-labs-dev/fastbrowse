@@ -75,6 +75,7 @@ pub async fn upload(
         require_chooser_interception: false,
         on_frame: None,
         on_stop: None,
+        on_warning: None,
         trace: fastbrowse_core::telemetry::Trace::disabled(),
         viewport: None,
         client: Mutex::new(shared.client.lock().unwrap().clone()),

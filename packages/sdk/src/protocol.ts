@@ -6,6 +6,32 @@ export type ArtifactKind = 'download' | 'screenshot' | 'capture';
  * How a run reached the browser it drove.
  */
 export type BrowserVia = 'cloud' | 'launched' | 'attached' | 'extension';
+export type BrowserWarningOperation =
+  | 'screencast_start'
+  | 'screencast_stop'
+  | 'screencast_frame_ack'
+  | 'paint_keeper_attach'
+  | 'popup_setup_close'
+  | 'popup_setup_release'
+  | 'frame_callback_shutdown'
+  | 'live_frame_delivery'
+  | 'download_capture';
+export type BrowserWarningFailure =
+  | 'browser_error'
+  | 'context_lost'
+  | 'browser_unavailable'
+  | 'screenshots_unavailable'
+  | 'navigation_timeout'
+  | 'site_unreachable'
+  | 'browser_unresponsive'
+  | 'page_unresponsive'
+  | 'origin_not_allowed'
+  | 'script_error'
+  | 'timeout'
+  | 'callback_exception'
+  | 'payload_decode'
+  | 'capture_failed'
+  | 'cancelled';
 export type Operation =
   | 'click'
   | 'hover'
@@ -131,6 +157,14 @@ export interface BrowserUsed {
    * The browser's product and version, when known, such as `Chrome 150.0.7400.2`.
    */
   browser: string | null;
+}
+/**
+ * A browser warning with only a closed operation and failure kind; it contains no page or transport text.
+ */
+export interface BrowserWarningEvent {
+  type: 'browser_warning';
+  operation: BrowserWarningOperation;
+  failure: BrowserWarningFailure;
 }
 export interface BudgetStop {
   resource: 'steps' | 'dollars' | 'seconds' | 'jev_calls' | 'llm_calls';
@@ -389,7 +423,7 @@ export interface RunCancelParams {
  */
 export interface RunEvent {
   run_id: string;
-  event: StepEvent | BrowserEvent;
+  event: StepEvent | BrowserEvent | BrowserWarningEvent;
 }
 export interface StepEvent {
   type: 'step';

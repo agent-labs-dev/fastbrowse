@@ -2,7 +2,16 @@
 // protocol's snake_case names.
 
 import { type OutputSchema, wireSchema } from './output.ts';
-import type { Authorization, BrowserEvent, Limits, LocalChrome, RunParams, SecretRef, StepEvent } from './protocol.ts';
+import type {
+  Authorization,
+  BrowserEvent,
+  BrowserWarningEvent,
+  Limits,
+  LocalChrome,
+  RunParams,
+  SecretRef,
+  StepEvent,
+} from './protocol.ts';
 
 type Camel<Name extends string> = Name extends `${infer Head}_${infer Tail}`
   ? `${Head}${Capitalize<Camel<Tail>>}`
@@ -114,7 +123,7 @@ export interface RunOptions extends PerRun<BrowserOptions> {
    * Called with the browser event and then each step event, in the order the run produced them. Like any
    * callback here, one that throws or rejects ends the run with status `error`.
    */
-  onEvent?: (event: StepEvent | BrowserEvent) => void;
+  onEvent?: (event: StepEvent | BrowserEvent | BrowserWarningEvent) => void;
   /** Called with JPEG frames of the active tab while the run goes on. Without it the page is never filmed. */
   onFrame?: (frame: Uint8Array) => void;
   /**
