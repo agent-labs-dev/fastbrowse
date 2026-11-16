@@ -329,6 +329,25 @@ str_enum! {
     }
 }
 
+/// One structured value's exact place in the rendered capture, in Unicode code points.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceField {
+    pub path: Vec<String>,
+    #[serde(deserialize_with = "lax::int_ge0")]
+    pub start: i64,
+    #[serde(deserialize_with = "lax::int_ge0")]
+    pub end: i64,
+}
+
+impl SourceField {
+    pub fn shifted(mut self, offset: i64) -> Self {
+        self.start += offset;
+        self.end += offset;
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Block {
@@ -361,6 +380,9 @@ pub struct Block {
     /// show. A record can be a `list_item` as well as a `record`, so its kind does not say this.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub whole_record: bool,
+    /// Structured values retain their boundaries, so copying one never requires retyping its whitespace.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<SourceField>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -404,6 +426,7 @@ impl Capture {
             href: None,
             links: Vec::new(),
             whole_record: false,
+            fields: Vec::new(),
         });
         self.sha256 = crate::py::sha256_hex(self.text.as_bytes());
         self

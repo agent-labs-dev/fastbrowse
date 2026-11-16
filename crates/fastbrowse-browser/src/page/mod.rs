@@ -1176,6 +1176,7 @@ impl CdpPage {
                         href: None,
                         links: Vec::new(),
                         whole_record: block.whole_record,
+                        fields: block.fields.into_iter().map(|field| field.shifted(int(start))).collect(),
                     });
                 }
                 continue;
@@ -1206,6 +1207,7 @@ impl CdpPage {
                     href: block.href.clone(),
                     links,
                     whole_record: block.whole_record,
+                    fields: Vec::new(),
                 });
             }
         }
@@ -1246,6 +1248,7 @@ impl CdpPage {
                     href: None,
                     links: Vec::new(),
                     whole_record: false,
+                    fields: Vec::new(),
                 });
                 text.push_str("\n\n");
                 offset += 2;

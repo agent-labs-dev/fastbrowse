@@ -837,3 +837,34 @@ def test_an_observation_with_an_open_modal_validates() -> None:
     }
     assert Observation.model_validate(page).modal is None
     assert Observation.model_validate({**page, "modal": "Stops"}).modal == "Stops"
+
+
+def test_capture_field_spans_cross_the_python_model_boundary() -> None:
+    from fastbrowse.page import Capture
+
+    text = "id: \u03b1\ntext: first\r\n\u00a0\r\nlast"
+    start = len("id: \u03b1\ntext: ")
+    written = {
+        "url": "https://example.test/records",
+        "title": "",
+        "captured_at": 0,
+        "sha256": "capture-hash",
+        "text": text,
+        "blocks": [
+            {
+                "source_id": "s0",
+                "kind": "record",
+                "frame_id": None,
+                "start": 0,
+                "end": len(text),
+                "fields": [{"path": ["text"], "start": start, "end": len(text)}],
+            }
+        ],
+    }
+    capture = Capture.model_validate(written)
+    field = capture.blocks[0].fields[0]
+    assert capture.text[field.start : field.end] == "first\r\n\u00a0\r\nlast"
+    assert Capture.model_validate_json(capture.model_dump_json()).blocks[0].fields == (field,)
+    legacy = capture.model_dump()
+    legacy["blocks"][0].pop("fields")
+    assert Capture.model_validate(legacy).blocks[0].fields == ()

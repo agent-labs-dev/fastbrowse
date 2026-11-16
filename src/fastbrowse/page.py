@@ -145,6 +145,14 @@ class BlockKind(StrEnum):
     OBSERVATION = "observation"
 
 
+class SourceField(Frozen):
+    """One structured value's exact place in the rendered capture, in Unicode code points."""
+
+    path: tuple[str, ...]
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+
+
 class Block(Frozen):
     source_id: str
     source_url: str | None = None
@@ -165,6 +173,8 @@ class Block(Frozen):
     """This block is all the text the page renders for one item it repeats, such as a comment, card or list row, with
     each part of it that shows no text named in square brackets. A record can be a `list_item` as well as a `record`,
     so its kind does not say this."""
+    fields: tuple[SourceField, ...] = Field(default=(), exclude_if=lambda fields: not fields)
+    """Structured values retain their boundaries, so copying one never requires retyping its whitespace."""
 
 
 class Capture(Frozen):

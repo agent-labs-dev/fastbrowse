@@ -75,6 +75,12 @@ async fn test_a_json_document_reads_each_value_under_its_keys() {
     );
     assert!(capture.blocks.iter().all(|b| b.source_id.starts_with("main/json:") && b.frame_id.is_none()));
     assert!(capture.blocks.last().unwrap().whole_record);
+    let field = &capture.blocks.last().unwrap().fields[0];
+    assert_eq!(field.path, ["filename"]);
+    assert_eq!(
+        capture.text.chars().skip(field.start as usize).take((field.end - field.start) as usize).collect::<String>(),
+        "httpx-0.28.1.tar.gz"
+    );
     h.close().await;
 }
 

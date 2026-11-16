@@ -52,6 +52,7 @@ pub(crate) mod testing {
                 href: None,
                 links: Vec::new(),
                 whole_record: false,
+                fields: Vec::new(),
             });
             start += length + 2;
         }

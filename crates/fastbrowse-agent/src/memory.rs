@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use fastbrowse_core::citations::{TableBlock, table_blocks};
 use fastbrowse_core::models::{Evidence, FactReader};
-use fastbrowse_core::page::{BlockKind, Capture};
+use fastbrowse_core::page::{BlockKind, Capture, SourceField};
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{dumped_len, dumps, write_string};
@@ -271,6 +271,7 @@ struct SourceBlock {
     whole_record: bool,
     /// The span of each link's text inside the block.
     links: Vec<(i64, i64)>,
+    fields: Vec<SourceField>,
 }
 
 #[derive(Clone, Default)]
@@ -325,6 +326,7 @@ impl Notes {
                 kind: block.kind,
                 whole_record: block.whole_record,
                 links: block.links.iter().map(|link| (link.start, link.end)).collect(),
+                fields: block.fields.clone(),
             });
         }
         for (identity, blocks) in sources {
@@ -375,6 +377,25 @@ impl Notes {
         });
         let block = matching.next()?;
         matching.next().is_none().then_some(block)
+    }
+
+    /// Only complete, unmasked fields of this exact capture can be selected without transcribing their text.
+    pub(crate) fn source_fields(&self, evidence: &Evidence) -> Vec<(usize, &SourceField)> {
+        let Some(block) = self.source_block(evidence) else { return Vec::new() };
+        let key = (evidence.capture_sha256.clone(), evidence.url.clone(), evidence.captured_at);
+        let masked = self.masked.get(&key);
+        block
+            .fields
+            .iter()
+            .enumerate()
+            .filter(|(_, field)| {
+                evidence.start <= field.start
+                    && field.start < field.end
+                    && field.end <= evidence.end
+                    && !masked
+                        .is_some_and(|spans| spans.iter().any(|&(start, end)| start < field.end && field.start < end))
+            })
+            .collect()
     }
 
     /// The table blocks of the capture `evidence` was cut from; none when that capture was never remembered.

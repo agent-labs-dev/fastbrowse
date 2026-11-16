@@ -1519,6 +1519,14 @@ impl Agent {
             .iter()
             .map(|block| fastbrowse_core::page::Block {
                 heading_path: block.heading_path.iter().map(|heading| mask(heading)).collect(),
+                fields: block
+                    .fields
+                    .iter()
+                    .map(|field| fastbrowse_core::page::SourceField {
+                        path: field.path.iter().map(|part| mask(part)).collect(),
+                        ..field.clone()
+                    })
+                    .collect(),
                 control_context: block.control_context.as_ref().map(|context| fastbrowse_core::models::SourceControl {
                     role: mask(&context.role),
                     label: mask(&context.label),

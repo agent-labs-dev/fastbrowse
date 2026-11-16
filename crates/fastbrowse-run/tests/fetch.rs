@@ -251,6 +251,32 @@ fn quoted(capture: &fastbrowse_core::page::Capture, start: i64, end: i64) -> Str
 }
 
 #[tokio::test]
+async fn json_record_fields_keep_exact_selectable_spans() {
+    let raw = r#"[{"id":"α","text":"first\r\n\u00a0\r\nlast","author":{"name":"Ada"},"id":"β"}]"#;
+    let capture = fetched(&client(raw, 200, "application/json"), "https://example.test/records")
+        .await
+        .expect("readable response");
+    let record = capture.blocks.iter().find(|block| block.kind == BlockKind::Record).unwrap();
+    let value = serde_json::to_value(record).unwrap();
+    let fields = value["fields"].as_array().expect("record fields retain their producer spans");
+    let selected: Vec<_> = fields
+        .iter()
+        .map(|field| {
+            (field["path"].clone(), quoted(&capture, field["start"].as_i64().unwrap(), field["end"].as_i64().unwrap()))
+        })
+        .collect();
+    assert_eq!(
+        selected,
+        vec![
+            (serde_json::json!(["id"]), "α".to_string()),
+            (serde_json::json!(["text"]), "first\r\n\u{a0}\r\nlast".to_string()),
+            (serde_json::json!(["author", "name"]), "Ada".to_string()),
+            (serde_json::json!(["id"]), "β".to_string()),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn test_json_responses_keep_their_exact_values_in_citable_spans() {
     let raw =
         "{\"name\":\"A  & B\",\"release\":{\"version\":\"2.1\",\"date\":\"2026-11-12\"},\"count\":9007199254740993}";
