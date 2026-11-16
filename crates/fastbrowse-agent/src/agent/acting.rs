@@ -487,7 +487,7 @@ impl Agent {
                 let accept = self.accept_dialog(state, observation).await?;
                 if accept
                     && let Some(dialog) = &observation.dialog
-                    && let Some(irreversible) = dialog_question(&self.model_task(state), Some(dialog))
+                    && let Some(irreversible) = dialog_question(&self.caller_task(state), Some(dialog))
                 {
                     let action = format!("accept this {} dialog: {}.\n", dialog.kind, text::repr(&dialog.message));
                     self.gate_question(
@@ -658,7 +658,7 @@ impl Agent {
     ) -> Step {
         if !questions.is_empty() {
             state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
-            let context = json!({"task": self.model_task(state), "page": {"origin": origin_of(&observation.url)}});
+            let context = json!({"task": self.caller_task(state), "page": {"origin": origin_of(&observation.url)}});
             let evaluation = jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&context, &questions)).await?;
             state.ledger.record([evaluation.cost])?;
             let noul = |key: &str| match evaluation.answers.get(key) {
@@ -702,7 +702,7 @@ impl Agent {
         let questions = IndexMap::from([("edits".to_string(), Question::Choice(edits_question()))]);
         let evaluation = jev_purpose(
             JevPurpose::Authorization,
-            self.jev.evaluate(&json!({"task": self.model_task(state)}), &questions),
+            self.jev.evaluate(&json!({"task": self.caller_task(state)}), &questions),
         )
         .await?;
         state.ledger.record([evaluation.cost.clone()])?;
@@ -727,7 +727,7 @@ impl Agent {
         let questions = IndexMap::from([(key.to_string(), Question::Noul(question))]);
         let evaluation = jev_purpose(
             JevPurpose::Authorization,
-            self.jev.evaluate(&json!({"task": self.model_task(state)}), &questions),
+            self.jev.evaluate(&json!({"task": self.caller_task(state)}), &questions),
         )
         .await?;
         state.ledger.record([evaluation.cost.clone()])?;
@@ -773,7 +773,7 @@ impl Agent {
         ]);
         let evaluation = jev_purpose(
             JevPurpose::Authorization,
-            self.jev.evaluate(&json!({"task": self.model_task(state)}), &questions),
+            self.jev.evaluate(&json!({"task": self.caller_task(state)}), &questions),
         )
         .await?;
         state.ledger.record([evaluation.cost.clone()])?;
@@ -836,7 +836,7 @@ impl Agent {
             // Never asked beside the decision: the page's own text is what would argue a harmful action is harmless,
             // and the control's label and form are already in the questions. The title, path and query are the page's
             // to write too, so only the origin goes with them.
-            let page = json!({"task": self.model_task(state), "page": {"origin": origin_of(&observation.url)}});
+            let page = json!({"task": self.caller_task(state), "page": {"origin": origin_of(&observation.url)}});
             let evaluation = jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&page, &questions)).await?;
             state.ledger.record([evaluation.cost.clone()])?;
             let answers = evaluation.answers;
@@ -942,7 +942,7 @@ impl Agent {
             "recent_actions": state.history.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
         });
         self.mask_strings(&mut page);
-        page["task"] = self.model_task(state).into();
+        page["task"] = self.caller_task(state).into();
         page["date"] = crate::dates::dated(observation.captured_at, &state.dates).into();
         let questions = IndexMap::from([
             ("met".to_string(), Question::Choice(met_question(action))),
@@ -1922,10 +1922,10 @@ impl Agent {
     pub(super) async fn actions_done(&self, state: &mut RunState, observation: &Observation) -> Step<Carried> {
         // Two questions asked apart, each true or false on its own, so no option's place in a list can lean the run
         // toward ending short of a step (#808). Finding, reading and reporting are judged by the answer's own checks,
-        // from the notes these questions leave out. They judge the caller's task without its start address: the run
-        // began there before any step, so no recent action shows it, and judged as one more step to carry out it held
-        // a signed-in run that had read its orders page below 0.5 on every ask, where the task alone scored 0.98.
-        let task = self.mask(&state.task);
+        // from the notes these questions leave out. They judge the caller's task: judged as one more step to carry
+        // out, the start address held a signed-in run that had read its orders page below 0.5 on every ask, where the
+        // task alone scored 0.98.
+        let task = self.caller_task(state);
         let carried = NoulQuestion::new(
             format!(
                 "{UNTRUSTED}\n\n# Task\n{task}\n\nJudged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out?"

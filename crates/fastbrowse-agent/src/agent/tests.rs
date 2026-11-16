@@ -2086,6 +2086,25 @@ async fn test_the_done_check_is_told_what_was_typed_and_never_sent() {
     assert!(asked[4]["page_facts"].to_string().contains("'Note'"), "{}", asked[4]);
 }
 
+/// Shown the run's start beside "Tidy it up for me.", Jev judged a form posting to /list/delete reversible on an
+/// unauthorized run: the gate asks about the caller's task, never where the run opened.
+#[tokio::test]
+async fn test_the_authorization_gate_judges_the_task_without_the_callers_start() {
+    let jev = Arc::new(Unsure(ScriptedJev::new(Vec::new()), 1.0, Default::default()));
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "My saved list looks messy. Tidy it up for me.".into();
+    state.caller_start = Some("https://shop.test/list".into());
+    let tidy = button("Tidy up list");
+    let page = observation(std::slice::from_ref(&tidy));
+    let _ = agent.gate_irreversible(&mut state, &page, &code_decision(Operation::Click, Some(tidy))).await;
+    let seen = jev.2.lock().unwrap();
+    assert!(!seen.is_empty());
+    for context in seen.iter() {
+        assert_eq!(context["task"], "My saved list looks messy. Tidy it up for me.", "{context}");
+    }
+}
+
 /// `DoneCheckJev`, judging that no answer gives every requested fact.
 struct RefusesCoverage(DoneCheckJev);
 

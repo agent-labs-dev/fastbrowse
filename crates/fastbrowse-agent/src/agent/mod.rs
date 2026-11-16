@@ -236,6 +236,13 @@ impl Agent {
         }
     }
 
+    // What the caller asked, without where the run opened. The authorization gate and the done check judge this: the
+    // start is not a step the caller authorized or one any action shows, and beside it a form posting to /list/delete
+    // under "Tidy it up" scored 0.49 to 0.59 as irreversible, where the task alone scored 0.56 to 0.65.
+    fn caller_task(&self, state: &RunState) -> String {
+        self.mask(&state.task)
+    }
+
     fn reveals_text(&self, value: &str) -> bool {
         self.redactor().reveals(value)
     }
