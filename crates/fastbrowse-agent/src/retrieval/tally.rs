@@ -1610,10 +1610,15 @@ pub(super) async fn work_selected_with_slots(
 }
 
 /// Winner fields are read only after numeric selection, so copying a name never asks a model to rank records.
+///
+/// The check sees the task, which says what the field means on these pages: asked "which shop sells the Burr Grinder
+/// cheaper, and tell me its name", a shop's page headed "Clerkenwell Coffee" scored 0.37 to 0.57 as that record's
+/// `shop` without it and 0.69 to 0.80 with it, while another shop's name and the price stayed at 0.03 or below.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn winner_fields(
     jev: &dyn DecisionClient,
     llm: &dyn LLMClient,
+    task: &str,
     tally: &Tally,
     worked: &Worked,
     fields: &[String],
@@ -1656,13 +1661,13 @@ pub(super) async fn winner_fields(
         for (group, (written, members)) in groups.values().enumerate() {
             for record in members {
                 questions.insert(format!("field{group}/r{record}"), Question::Noul(NoulQuestion::new(
-                    format!("{UNTRUSTED} Does this copied text give the complete, unambiguous {} of exactly this record, without another record's value or an unrelated field? Copied text: {}. Record: {}", text::repr(field), text::repr(written), dumps(&found[*record].note)),
+                    format!("{UNTRUSTED} Doing `task`, does this copied text give the complete, unambiguous {} of exactly this record, without another record's value or an unrelated field? Copied text: {}. Record: {}", text::repr(field), text::repr(written), dumps(&found[*record].note)),
                     Some("The copied text is exactly this record's requested field."),
                     Some("It is missing, ambiguous, incomplete, another field, or another record's value."),
                 )));
             }
         }
-        let Some(answers) = ask(jev, &json!({"field":field}), &questions, tokens, ledger).await? else {
+        let Some(answers) = ask(jev, &json!({"task":task,"field":field}), &questions, tokens, ledger).await? else {
             return Ok(Err(Unworked::Unjudged));
         };
         for key in questions.keys() {
@@ -2205,17 +2210,20 @@ mod tests {
         }
         fn evaluate<'a>(
             &'a self,
-            _: &'a serde_json::Value,
+            state: &'a serde_json::Value,
             questions: &'a IndexMap<String, Question>,
         ) -> fastbrowse_core::BoxFuture<
             'a,
             std::result::Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>,
         > {
             use fastbrowse_core::decision::{Evaluation, NoulAnswer};
+            // The task says what the field means on these pages; without it a shop's page heading was a coin flip.
+            assert_eq!(state["task"], "Which shop is cheaper? Tell me its name.", "{state}");
             let answers = questions
                 .iter()
                 .map(|(key, question)| {
                     let Question::Noul(question) = question else { panic!("field support only") };
+                    assert!(question.instructions.contains("Doing `task`, does this copied text"));
                     assert!(question.instructions.contains("exactly this record"));
                     (
                         key.clone(),
@@ -2274,6 +2282,7 @@ mod tests {
         let result = winner_fields(
             &FieldSupport(true),
             &ReadsGroups(&[("r0", Some("Winner A")), ("r1", Some("Winner B"))]),
+            "Which shop is cheaper? Tell me its name.",
             &tally,
             done,
             &fields,
@@ -2289,16 +2298,27 @@ mod tests {
             [vec![("r0", Some("Wrong record")), ("r1", Some("Winner B"))], vec![("r0", None), ("r1", Some("Winner B"))]]
         {
             assert!(
-                winner_fields(&FieldSupport(true), &ReadsGroups(&reads), &tally, done, &fields, &notes, &tokens, None)
-                    .await
-                    .unwrap()
-                    .is_err()
+                winner_fields(
+                    &FieldSupport(true),
+                    &ReadsGroups(&reads),
+                    "Which shop is cheaper? Tell me its name.",
+                    &tally,
+                    done,
+                    &fields,
+                    &notes,
+                    &tokens,
+                    None
+                )
+                .await
+                .unwrap()
+                .is_err()
             );
         }
         assert!(
             winner_fields(
                 &FieldSupport(false),
                 &ReadsGroups(&[("r0", Some("£210")), ("r1", Some("£210"))]),
+                "Which shop is cheaper? Tell me its name.",
                 &tally,
                 done,
                 &fields,
@@ -2352,6 +2372,7 @@ mod tests {
             let result = winner_fields(
                 &FieldSupport(true),
                 &ReadsGroups(&[("r0", Some(copied))]),
+                "Which shop is cheaper? Tell me its name.",
                 &tally,
                 &worked,
                 &["supplier name".into()],

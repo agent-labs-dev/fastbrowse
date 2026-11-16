@@ -1272,7 +1272,7 @@ async fn review_composition(
             continue;
         }
         if let (Some(tally), Some(Ok(done))) = (&claim.tally, worked.get(&index)) {
-            match tally::winner_fields(jev, llm, tally, done, &fields, notes, &tokens, ledger).await? {
+            match tally::winner_fields(jev, llm, task, tally, done, &fields, notes, &tokens, ledger).await? {
                 Ok(fields) => {
                     projected.insert(index, fields);
                 }
