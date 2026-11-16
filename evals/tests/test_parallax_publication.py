@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastbrowse.evals.benchmarks import check_catalog
-from fastbrowse.evals.catalog import CATALOG
+from fastbrowse.evals.catalog import CATALOG, eligible
 from fastbrowse.evals.catalog import PATH as CATALOG_PATH
 from parallax.models import (
     Area,
@@ -28,6 +28,7 @@ from fastbrowse_evals.arms import binding, invocations
 from fastbrowse_evals.publication import (
     VERIFICATION_MARKER,
     _measured_identity,
+    _required_task_ids,
     candidate_from_run,
     candidate_from_runs,
     main,
@@ -230,7 +231,14 @@ def test_missing_task_version_is_not_defaulted() -> None:
         task_version("missing-task", {})
 
 
-def _support(run: Path, manifest: RunManifest) -> None:
+def _support(
+    run: Path,
+    manifest: RunManifest,
+    *,
+    agent_sha: str = AGENT_SHA,
+    runner_sha: str = RUNNER_SHA,
+    group: str = "internal-fastbrowse",
+) -> None:
     write(
         run,
         Provenance(
@@ -238,9 +246,9 @@ def _support(run: Path, manifest: RunManifest) -> None:
             task_hashes=dict(manifest.tasks),
             judge_policy=manifest.grading_policy,
             extra={
-                "fastbrowse.agent_sha": AGENT_SHA,
-                "fastbrowse.runner_sha": RUNNER_SHA,
-                "fastbrowse.group": "internal-fastbrowse",
+                "fastbrowse.agent_sha": agent_sha,
+                "fastbrowse.runner_sha": runner_sha,
+                "fastbrowse.group": group,
             },
         ),
     )
@@ -407,3 +415,71 @@ def test_official_groups_use_their_own_selected_task_ids(tmp_path: Path) -> None
     assert len(groups["bu-bench"].task_ids) == 200
     assert len(groups["online-mind2web"].task_ids) == 300
     assert set(groups["bu-bench"].task_ids).isdisjoint(groups["online-mind2web"].task_ids)
+
+
+def test_a_competitor_measured_later_by_another_runner_joins_the_candidate(tmp_path: Path) -> None:
+    """The group names its newest source's build, the candidate its newest fastbrowse run's, and the competitor's own
+    status words ("done") never reach fastbrowse's status vocabulary."""
+    source_task_map = {task.id: task for task in source_tasks(source_names=("fastbrowse",))}
+    task_ids = sorted(_required_task_ids("internal-hosted"))
+
+    catalog = {task.id: task for suite in CATALOG.suites.values() for task in suite}
+
+    def parallax_run(name: str, day: int, harness: str, model: str, status: str, **support: str) -> Path:
+        own = {task_id for task_id in task_ids if eligible(harness, catalog[task_id])}
+        run = tmp_path / name
+        run.mkdir()
+        manifest = RunManifest(
+            run_id=name,
+            created_at=datetime(2026, 11, day, tzinfo=UTC),
+            parallax_version="2.0.0.dev29",
+            harnesses=(),
+            models=(model,),
+            tasks=tuple((task_id, source_task_map[task_id].hash) for task_id in task_ids),
+            repeats=3,
+            judge=("test/judge",),
+            isolation=Isolation.HOST,
+            selection="fastbrowse",
+            grading_policy="browser-evidence-v2",
+        )
+        (run / "manifest.json").write_text(manifest.model_dump_json() + "\n")
+        (run / "results.jsonl").write_text(
+            "".join(
+                result(
+                    task_id,
+                    repeat,
+                    task_hash=source_task_map[task_id].hash,
+                    task_version=source_task_map[task_id].meta.version,
+                    details={"status": status},
+                )
+                .model_copy(
+                    update={"harness": harness, "model": model}
+                    if task_id in own
+                    else {
+                        "harness": harness,
+                        "model": model,
+                        "verdict": Verdict.NA,
+                        "na_reason": catalog[task_id].excluded.get(harness),
+                    }
+                )
+                .model_dump_json()
+                + "\n"
+                for task_id in task_ids
+                for repeat in range(3)
+            )
+        )
+        _support(run, manifest, group="internal-hosted", **support)
+        return run
+
+    fastbrowse = parallax_run("fastbrowse-run", 15, "fastbrowse", "test/model", "complete")
+    competitor = parallax_run(
+        "oss-run", 16, "browser-use-oss", "bu-fast", "done", agent_sha="c" * 40, runner_sha="d" * 40
+    )
+
+    candidate = candidate_from_runs([fastbrowse, competitor], campaign_id="mixed-builds")
+
+    (group,) = candidate.groups
+    assert (candidate.agent_sha, candidate.runner_sha) == (AGENT_SHA, RUNNER_SHA)
+    assert (group.agent_sha, group.runner_sha) == ("c" * 40, "d" * 40)
+    assert {source.arm for source in group.sources} == {"fastbrowse", "browser-use-oss"}
+    assert {row.status for row in group.rows if row.arm == "browser-use-oss"} == {"complete"}

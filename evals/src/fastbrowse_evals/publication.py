@@ -110,8 +110,10 @@ def _failure(result: TrialResult) -> str | None:
 
 
 def _status(result: TrialResult) -> Status:
+    # Only fastbrowse reports its own statuses; a competitor's harness writes its own words ("done"), so its row's
+    # status comes from how the trial ended.
     raw = result.details.get("status")
-    if isinstance(raw, str):
+    if isinstance(raw, str) and public_arm(result) in PRODUCT_ARMS:
         return Status(raw)
     match result.status:
         case TrajectoryStatus.COMPLETED:
@@ -234,7 +236,10 @@ def _group(
         limits=["Parallax campaign budget and reserve"],
         rows=sorted(rows, key=lambda row: (row.arm, row.task, row.repeat)),
         unjudged=sorted(unjudged, key=lambda item: (item.arm, item.task, item.repeat)),
-        excluded=sorted(excluded, key=lambda item: (item.arm, item.task)),
+        # Parallax marks each repeat of a task an arm cannot attempt; the task is excluded once.
+        excluded=sorted(
+            {(item.arm, item.task): item for item in excluded}.values(), key=lambda item: (item.arm, item.task)
+        ),
         sources=sources,
     )
 
@@ -425,15 +430,18 @@ def candidate_from_runs(run_dirs: Iterable[Path], *, campaign_id: str) -> Candid
             )
     groups: list[Group] = []
     for group_id, rows_by_arm in sorted(rows_by_group.items()):
+        sources = _sources(group_id, selected, metadata)
+        # A group names its newest source's build, which may differ from the candidate's (a competitor measured later).
+        newest = sources[0] if sources else None
         group = _group(
             group_id,
             rows_by_arm,
             unjudged_by_group.get(group_id, {}),
             excluded_by_group.get(group_id, []),
-            agent_sha=measured_agent,
-            runner_sha=measured_runner,
+            agent_sha=newest.agent_sha if newest else measured_agent,
+            runner_sha=newest.runner_sha if newest else measured_runner,
             task_ids=task_ids_by_group[group_id],
-            sources=_sources(group_id, selected, metadata),
+            sources=sources,
         )
         groups.append(group)
     if not groups:
