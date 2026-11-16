@@ -544,7 +544,7 @@ fn field_answer(answer: Option<&Answer>, offers: &[String]) -> FieldAnswer {
 }
 
 const RECORD: &str = "The record's id, such as r0.";
-const GROUP_TEXT: &str = "The record's value for the field named, copied character for character from its quote. Null when its quote does not state one.";
+const GROUP_TEXT: &str = "The record's value for the field named, copied character for character from its quote or a captured heading. Null when neither states one.";
 
 /// One record's group as its note writes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -577,7 +577,20 @@ impl Schema for RecordGroups {
     }
 }
 
-const GROUPS_INSTRUCTIONS: &str = "# Groups\nEach record below is one note a browser agent read, listed by its id. For every record, copy the value of the field named from the record's quote, exactly as the quote writes it, or give null when its quote does not state one. Code groups and counts the records by these values, so give each record's own value as written, never one taken from another record, corrected or shortened.\n\n# Trust\n";
+const GROUPS_INSTRUCTIONS: &str = "# Groups\nEach record below is one note a browser agent read, listed by its id. For every record, copy the value of the field named from the record's quote or a captured heading, exactly as the source writes it, or give null when neither states one. Code groups and counts the records by these values, so give each record's own value as written, never one taken from another record, corrected or shortened.\n\n# Trust\n";
+
+/// A record's captured heading can name the owner whose value its quote holds. A page address and generated
+/// metadata are not source wording, and joining separate source spans would invent a value neither states.
+fn record_contains(note: &serde_json::Value, copied: &str) -> bool {
+    let holds =
+        |source: &serde_json::Value| source.as_str().is_some_and(|source| text::squash(source).contains(copied));
+    note.get("quote").is_some_and(holds)
+        || note.get("headings").and_then(serde_json::Value::as_array).is_some_and(|headings| headings.iter().any(holds))
+        || note
+            .get("quotes")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|quotes| quotes.iter().any(|quote| record_contains(quote, copied)))
+}
 
 /// The groups of a count per group: each group's text as first read, and its records in reading order, keyed by the
 /// text with its whitespace squashed.
@@ -590,7 +603,7 @@ fn groups_messages(by: &str, of: &str, lines: &[String]) -> [Message; 2] {
 }
 
 /// Each record's `by` read by the text model, which can copy a name Jev could only choose from a list. A read is kept
-/// only when it is text of the record's own quote, as a claim's value must be, so a group is never one the model
+/// only when it is text of the record's own quote or captured heading, so a group is never one the model
 /// supplied. None when a record was left unread, read twice, read as text its quote does not hold or read as stating
 /// no group, so no count rests on a record whose group is unknown.
 async fn read_groups(
@@ -630,8 +643,7 @@ async fn read_groups(
             let note = answer.record.strip_prefix('r').and_then(|n| n.parse::<usize>().ok());
             let Some(note) = note.filter(|note| records.contains(note)) else { return Ok(None) };
             let quoted = answer.text.as_deref().map(text::squash);
-            if quoted.as_deref().is_some_and(|text| text.is_empty() || !text::squash(&found[note].quote).contains(text))
-            {
+            if quoted.as_deref().is_some_and(|text| text.is_empty() || !record_contains(&found[note].note, text)) {
                 return Ok(None);
             }
             if read.insert(note, answer.text).is_some() {
@@ -2277,6 +2289,57 @@ mod tests {
 
     struct ReadsGroups<'a>(&'a [(&'a str, Option<&'a str>)]);
 
+    #[tokio::test]
+    async fn winner_fields_can_copy_the_selected_records_captured_heading() {
+        let facts: Vec<_> = [("First supplier", "Valve - GBP 18"), ("Second supplier", "Valve - GBP 25")]
+            .iter()
+            .enumerate()
+            .map(|(index, (heading, quote))| {
+                let evidence = serde_json::from_value(json!({"source_id":format!("s{index}"),"url":format!("https://example.test/supplier/{index}"),"frame_id":null,"captured_at":"2026-01-01T00:00:00Z","capture_sha256":format!("sha{index}"),"start":0,"end":quote.len(),"quote":quote,"heading_path":[heading]})).unwrap();
+                crate::memory::Fact::read(quote, evidence, fastbrowse_core::models::FactReader::JevChoice)
+            })
+            .collect();
+        let ids: Vec<_> = facts.iter().map(fact_id).collect();
+        let notes = Notes::new(facts);
+        let tally = Tally {
+            op: Op::Min,
+            of: "supplier of the valve".into(),
+            field: Some("price".into()),
+            rank: None,
+            by: None,
+            group: None,
+            written: "GBP 18".into(),
+        };
+        let worked = Worked {
+            value: "GBP 18".into(),
+            evidence_ids: ids.clone(),
+            winner_ids: Some(vec![ids[0].clone()]),
+            winner_records: vec![vec![ids[0].clone()]],
+        };
+        let tokens = FirstField.profile().fit(None).tokens;
+        for (copied, accepted) in [
+            ("First supplier", true),
+            ("Second supplier", false),
+            ("Invented supplier", false),
+            ("example.test", false),
+            ("First supplier Valve", false),
+        ] {
+            let result = winner_fields(
+                &FieldSupport(true),
+                &ReadsGroups(&[("r0", Some(copied))]),
+                &tally,
+                &worked,
+                &["supplier name".into()],
+                &notes,
+                &tokens,
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(result.is_ok(), accepted, "{copied}: {result:?}");
+        }
+    }
+
     impl LLMClient for ReadsGroups<'_> {
         fn generate_value<'a>(
             &'a self,
@@ -2291,7 +2354,11 @@ mod tests {
                 .iter()
                 .map(|(record, text)| {
                     let mut value = json!({"record": record, "text": text});
-                    if schema.json_schema().to_string().contains("heading") {
+                    if schema.json_schema().get("$defs").and_then(serde_json::Value::as_object).is_some_and(|defs| {
+                        defs.values().any(|definition| {
+                            definition.get("properties").and_then(|properties| properties.get("heading")).is_some()
+                        })
+                    }) {
                         value["heading"] = serde_json::Value::Null;
                     }
                     value
