@@ -165,6 +165,10 @@ state, but does not by itself prove a value was set or accepted.
 
 ## Reading and citations
 
+Browser and HTTP captures keep the document title as a citable observation labeled `Document title`. It has its
+own source span and participates in the capture hash and secret masking. It does not represent a heading in the
+page body. A title alone does not establish that a script-rendered body was read.
+
 READ is one of Jev's operations. On a page that has changed, Jev is also asked whether it shows something the task
 asks to be told that the notes do not hold yet; when it does, and Jev picked another operation, the run reads first,
 because an order total is gone once the order is placed. The step state's `page_facts` tell Jev when a page was read

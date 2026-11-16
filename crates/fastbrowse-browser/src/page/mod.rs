@@ -1260,7 +1260,8 @@ impl CdpPage {
             blocks,
             inaccessible_frames: int(self.inaccessible_frames(&coverage)?),
             masked: Vec::new(),
-        })
+        }
+        .with_document_title())
     }
 
     // -- reads of the live page -------------------------------------------------------------------------------

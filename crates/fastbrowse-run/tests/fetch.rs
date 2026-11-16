@@ -672,3 +672,20 @@ async fn test_a_frame_of_the_page_origin_is_read_where_it_stands() {
     // The other origin's frame was not fetched, so the read says one document is missing.
     assert_eq!(capture.inaccessible_frames, 1);
 }
+
+#[tokio::test]
+async fn a_fetched_document_title_is_citable_separately_from_its_heading() {
+    let capture =
+        fetched(&html("<title>東京 reference</title><h1>Account settings</h1><p>Body.</p>"), "https://docs.test/")
+            .await
+            .expect("fetched");
+    let title = capture.blocks.iter().find(|block| block.source_id == "document/title").expect("title evidence");
+    assert_eq!(capture.block_text(title), "東京 reference");
+    assert_eq!(title.kind, fastbrowse_core::page::BlockKind::Observation);
+    assert_eq!(title.heading_path, ["Document title"]);
+    assert!(capture.blocks.iter().any(|block| block.kind == fastbrowse_core::page::BlockKind::Heading
+        && capture.block_text(block) == "Account settings"));
+    assert_eq!(capture.sha256, sha256_hex(capture.text.as_bytes()));
+    let shell = fetched(&html("<title>Script shell</title><script>render()</script>"), "https://docs.test/").await;
+    assert!(shell.is_err(), "metadata does not establish that a script-rendered body was read");
+}

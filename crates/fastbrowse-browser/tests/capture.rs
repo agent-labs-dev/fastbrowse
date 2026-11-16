@@ -7,6 +7,27 @@ use common::{Harness, eval_active, harness, sites, wait_until};
 use fastbrowse_core::page::BlockKind;
 use misc_support::{content_capture, path, set_body, text_of, texts};
 
+#[tokio::test(flavor = "multi_thread")]
+async fn document_title_is_citable_without_a_body_heading() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    for body in ["<p>Body content.</p>", ""] {
+        set_body(&h.session, body).await;
+        eval_active(&h.session, "document.title = '東京 reference'").await;
+        let capture = h.page.capture().await.expect("capture");
+        let title = capture.blocks.iter().find(|block| block.source_id == "document/title").expect("title evidence");
+        assert_eq!(capture.block_text(title), "東京 reference");
+        assert_eq!(title.kind, BlockKind::Observation);
+        assert_eq!(title.heading_path, ["Document title"]);
+        assert!(!capture.blocks.iter().any(|block| block.kind == BlockKind::Heading));
+        assert_eq!(capture.sha256, fastbrowse_core::py::sha256_hex(capture.text.as_bytes()));
+    }
+    eval_active(&h.session, "document.title = ''").await;
+    let capture = h.page.capture().await.expect("capture");
+    assert!(!capture.blocks.iter().any(|block| block.source_id == "document/title"));
+    h.close().await;
+}
+
 // -- test_capture.py: capture blocks preserve the records a reader needs to cite together -----------------------
 
 /// This binary registers no PDF helper, as a Rust program that never calls `run_if_requested` does not. The PDF is

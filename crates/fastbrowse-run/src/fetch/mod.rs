@@ -103,6 +103,7 @@ fn capture(url: &str, title: String, found: Vec<Found>, unread_frames: usize) ->
         inaccessible_frames: unread_frames as i64,
         masked: Vec::new(),
     }
+    .with_document_title()
 }
 
 /// Refuse an address that is not a document this may read, naming the reason.
