@@ -241,7 +241,9 @@ test('onEvent receives the browser event and every step event, in order and befo
     const events: (StepEvent | BrowserEvent | BrowserWarningEvent)[] = [];
     await fb.run('Add the kettle to the cart', { ...ownBrowser, onEvent: event => events.push(event) });
     assert.deepEqual(
-      events.map(event => (event.type === 'browser' ? event.live_url : event.type === 'step' ? event.step.index : undefined)),
+      events.map(event =>
+        event.type === 'browser' ? event.live_url : event.type === 'step' ? event.step.index : undefined,
+      ),
       ['https://live.example/1', 0, 1],
     );
   });
