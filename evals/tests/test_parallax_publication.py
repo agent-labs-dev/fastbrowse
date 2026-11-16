@@ -483,3 +483,12 @@ def test_a_competitor_measured_later_by_another_runner_joins_the_candidate(tmp_p
     assert (group.agent_sha, group.runner_sha) == ("c" * 40, "d" * 40)
     assert {source.arm for source in group.sources} == {"fastbrowse", "browser-use-oss"}
     assert {row.status for row in group.rows if row.arm == "browser-use-oss"} == {"complete"}
+
+
+def test_an_arm_on_a_model_pinning_harness_names_its_model() -> None:
+    """Parallax refuses to plan a harness that pins a model without one, so an arm run alone must carry it."""
+    from parallax.harnesses.base import load_harness
+
+    (oss,) = invocations(["browser-use-oss"])
+    assert load_harness(oss.harness).info.pins_model
+    assert (oss.harness, oss.model) == ("browser-use-oss", "bu-fast")
