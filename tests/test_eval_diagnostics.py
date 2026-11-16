@@ -106,6 +106,14 @@ def test_workflow_diagnostics_cannot_replace_full_fixture_gate():
         step = next(s for s in steps if s.get("name") == name)
         assert step["if"] == "always() && steps.fixtures.outcome != 'skipped'"
         assert "nightly.jsonl" in step["run"]
+    checkpoint = next(i for i, step in enumerate(steps) if step.get("name") == "Upload fixture receipts")
+    assert steps[checkpoint - 1]["name"] == "Encrypt fixture diagnostics"
+    assert steps[checkpoint]["with"]["name"] == "eval-fixtures"
+    for name in ("Run the optional public API probe", "Fill the optional bench cassettes"):
+        index = next(i for i, step in enumerate(steps) if step.get("name") == name)
+        assert checkpoint < index
+        assert "!cancelled()" in steps[index]["if"]
+        assert "always()" not in steps[index]["if"]
     upload = steps[-1]["with"]["path"].splitlines()
     assert upload == ["artifacts/evals/nightly*", "artifacts/evals/diagnostics.cms"]
     for step in steps:

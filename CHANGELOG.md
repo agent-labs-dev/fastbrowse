@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Eval workflows retain fixture receipts before optional diagnostics and avoid starting paid probes or cassette fills after cancellation ([#1164](https://github.com/agent-labs-dev/fastbrowse/issues/1164)).
+
 - Answers can select complete fields from captured JSON records without retyping their contents, preserving line breaks and other source whitespace. Invalid source text remains rejected ([#1163](https://github.com/agent-labs-dev/fastbrowse/issues/1163)).
 
 - Browser and HTTP captures expose the document title as citable metadata, separate from body headings, so a title absent from the body can still supply a quoted answer ([#1114](https://github.com/agent-labs-dev/fastbrowse/issues/1114)).

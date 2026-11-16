@@ -94,6 +94,19 @@ jobs:
             --repeat "$EVAL_REPEAT" \
             --out artifacts/evals/nightly.jsonl \
             --traces artifacts/evals/nightly.traces.jsonl
+      # Retain fixture receipts before optional paid work can occupy the cancellation cleanup window.
+      - name: Encrypt fixture diagnostics
+        if: always()
+        run: uv run --no-sync python scripts/eval_diagnostics.py encrypt
+      - name: Upload fixture receipts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: eval-fixtures
+          path: |
+            artifacts/evals/nightly*
+            artifacts/evals/diagnostics.cms
+          if-no-files-found: warn
       - name: Check the stability budget
         # A credential check that failed leaves no rows, and a stability error would then read as a task failure;
         # this step stays out of a run that never started.
@@ -113,13 +126,13 @@ jobs:
             --rows artifacts/evals/nightly.jsonl \
             --baseline docs/results
       - name: Run the optional public API probe
-        if: always() && steps.fixtures.outcome != 'skipped' && inputs.probe != ''
+        if: ${{ !cancelled() && steps.fixtures.outcome != 'skipped' && inputs.probe != '' }}
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
         run: uv run --no-sync python scripts/eval_diagnostics.py probe
       - name: Fill the optional bench cassettes
-        if: always() && steps.fixtures.outcome != 'skipped' && inputs.fill_tasks != ''
+        if: ${{ !cancelled() && steps.fixtures.outcome != 'skipped' && inputs.fill_tasks != '' }}
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: uv run --no-sync python scripts/eval_diagnostics.py fill
