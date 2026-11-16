@@ -424,7 +424,15 @@ def candidate_from_runs(run_dirs: Iterable[Path], *, campaign_id: str) -> Candid
             )
             rows_by_group.setdefault(group_id, {}).setdefault(arm, []).append(row)
         elif result.verdict is Verdict.NA:
-            reason = _failure(result) or "Parallax marked this task not applicable"
+            # The catalog states why an arm skips a task, in public words; Parallax only names what the harness
+            # lacks. A task the catalog lists the arm for must be measured, so its not-applicable result is an error.
+            catalog_task = next(task for task in _catalog_tasks() if task.id == result.task_id)
+            reason = catalog_task.excluded.get(arm)
+            if reason is None:
+                raise ValueError(
+                    f"{run.path}: {arm} was not applicable on {result.task_id}, which the catalog lists it for:"
+                    f" {_failure(result)}"
+                )
             excluded_by_group.setdefault(group_id, []).append(ExcludedTask(arm=arm, task=result.task_id, reason=reason))
         else:
             why = (
