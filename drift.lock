@@ -3,7 +3,7 @@ version = 1
 [[bindings]]
 doc = "blog/agent-actions-need-confirmation.md"
 target = "crates/fastbrowse-agent/src/agent/acting.rs"
-sig = "be0e2a728da76777"
+sig = "5f0ccebd43670f47"
 
 [[bindings]]
 doc = "blog/agent-actions-need-confirmation.md"
