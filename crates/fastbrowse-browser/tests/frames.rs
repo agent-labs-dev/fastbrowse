@@ -219,9 +219,37 @@ async fn test_live_frames_follow_tabs_ack_after_delivery_and_keep_only_the_lates
     assert!(!scheduled, "the first session left a frame delivery scheduled after close");
 }
 
-/// Python also checks every failure is logged as a warning that quotes nothing private; the Rust warnings go to
-/// stderr, and a test cannot read its own stderr. Python's handler that raises has
-/// no case here: core's `FrameHandler` returns nothing, so it cannot fail.
+#[tokio::test]
+async fn warning_callback_replaces_the_stderr_fallback() {
+    const MODE: &str = "FASTBROWSE_TEST_WARNING_STDERR";
+    if let Ok(mode) = std::env::var(MODE) {
+        let fake = FakeChrome::start().await;
+        fake.fail("Page.startScreencast", Reply::Error(-32603));
+        let options = SessionOptions {
+            on_frame: Some(Arc::new(|_| Box::pin(async {}))),
+            on_warning: (mode == "callback")
+                .then(|| Arc::new(|_: BrowserWarningEvent| {}) as Arc<dyn Fn(BrowserWarningEvent) + Send + Sync>),
+            ..Default::default()
+        };
+        let session = fake.session_with(fake.connection(), options).await;
+        settle(&session).await;
+        session.close().await.unwrap();
+        return;
+    }
+    for mode in ["fallback", "callback"] {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["warning_callback_replaces_the_stderr_fallback", "--exact", "--nocapture"])
+            .env(MODE, mode)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "child failed: {}", String::from_utf8_lossy(&output.stderr));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(stderr.contains("Page.startScreencast failed"), mode == "fallback", "{mode}: {stderr}");
+        assert!(!stderr.contains("secret"), "warning leaked transport text: {stderr}");
+    }
+}
+
+/// Frame delivery remains usable after a transport failure, and warning payloads contain only closed codes.
 #[tokio::test]
 async fn test_live_view_failures_are_warnings_and_leave_the_session_usable() {
     for failure in ["Page.startScreencast", "Page.stopScreencast", "Page.screencastFrameAck"] {

@@ -305,7 +305,8 @@ pages with screenshot storage, not HTTP-only or other pages whose artifact sink 
 **Watching a run.**
 
 - `on_event=` gets a `BrowserEvent` with a cloud browser's live-view URL, then a `StepEvent` per step, carrying the
-  facts that step added. `Config(step_frames=True)` adds a PNG of each step's page.
+  facts that step added. It also receives `BrowserWarningEvent` objects with closed `operation` and `failure` codes,
+  without page content or transport error text. `Config(step_frames=True)` adds a PNG of each step's page.
 - A task requesting a final screenshot receives a safe PNG in `result.final_frame` without enabling step frames.
   JSON clients receive a `screenshot` artifact with a base64 data URI. A missing requested image leaves a
   completed task `unverified`.

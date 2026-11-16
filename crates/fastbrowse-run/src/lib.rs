@@ -1656,34 +1656,62 @@ mod tests {
         assert!((left.max_dollars.unwrap() - 0.038).abs() < 1e-9);
     }
 
-    #[tokio::test]
-    async fn warning_task_drop_aborts_callback_worker() {
+    fn pending_warning_task() -> (WarningTask, tokio::sync::oneshot::Receiver<()>, tokio::sync::oneshot::Receiver<()>) {
+        struct NotifyDrop(Option<tokio::sync::oneshot::Sender<()>>);
+        impl Drop for NotifyDrop {
+            fn drop(&mut self) {
+                let _ = self.0.take().unwrap().send(());
+            }
+        }
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel();
         let handle = tokio::spawn(async move {
+            let _guard = NotifyDrop(Some(dropped_tx));
             let _ = started_tx.send(());
             std::future::pending::<()>().await;
         });
-        let task = WarningTask(Some(handle));
-        started_rx.await.unwrap();
+        (WarningTask(Some(handle)), started_rx, dropped_rx)
+    }
+
+    #[tokio::test]
+    async fn warning_task_drop_aborts_callback_worker() {
+        let (task, started, dropped) = pending_warning_task();
+        started.await.unwrap();
         drop(task);
-        tokio::task::yield_now().await;
+        tokio::time::timeout(std::time::Duration::from_secs(1), dropped).await.unwrap().unwrap();
     }
 
     #[tokio::test]
     async fn warning_task_finish_drop_aborts_waiting_callback() {
-        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
-        let stopped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let stopped_for_task = stopped.clone();
-        let handle = tokio::spawn(async move {
-            let _ = started_tx.send(());
-            std::future::pending::<()>().await;
-            stopped_for_task.store(true, std::sync::atomic::Ordering::SeqCst);
-        });
-        let task = WarningTask(Some(handle));
-        started_rx.await.unwrap();
-        let finish = task.finish();
+        let (task, started, dropped) = pending_warning_task();
+        started.await.unwrap();
+        let mut finish = Box::pin(task.finish());
+        assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(finish.as_mut().poll(cx))).await.is_pending());
         drop(finish);
-        tokio::task::yield_now().await;
-        assert!(!stopped.load(std::sync::atomic::Ordering::SeqCst));
+        tokio::time::timeout(std::time::Duration::from_secs(1), dropped).await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn warning_task_shutdown_drains_queued_events_with_sender_still_alive() {
+        let delivered = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let received = delivered.clone();
+        let handler: EventHandler = Arc::new(move |event| {
+            let received = received.clone();
+            Box::pin(async move {
+                received.lock().unwrap().push(event);
+            })
+        });
+        let (task, sender, stop) = WarningTask::start(handler);
+        let warning = BrowserWarningEvent {
+            kind: Default::default(),
+            operation: fastbrowse_core::models::BrowserWarningOperation::ScreencastStart,
+            failure: fastbrowse_core::models::BrowserWarningFailure::ContextLost,
+        };
+        sender.send(warning.clone()).unwrap();
+        sender.send(warning).unwrap();
+        stop.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), task.finish()).await.unwrap();
+        assert_eq!(delivered.lock().unwrap().len(), 2);
+        assert!(sender.is_closed());
     }
 }

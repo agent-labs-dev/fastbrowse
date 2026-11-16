@@ -13,7 +13,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Browser and HTTP captures expose the document title as citable metadata, separate from body headings, so a title absent from the body can still supply a quoted answer ([#1114](https://github.com/agent-labs-dev/fastbrowse/issues/1114)).
 
-- Browser warnings can be delivered as structured, redacted events with closed operation and failure codes, so clients do not need to parse stderr or transport messages.
+- Browser warning events expose closed operation and failure codes without page content or transport error text, so clients do not need to parse stderr ([#1162](https://github.com/agent-labs-dev/fastbrowse/issues/1162)).
 
 - Runs retain the caller's starting address in model-facing task context after navigation, so site-relative requests keep their starting reference. Explicit cross-site tasks remain allowed ([#1129](https://github.com/agent-labs-dev/fastbrowse/issues/1129)).
 

@@ -443,7 +443,10 @@ step's page facts, so Jev reloads it when the status can clear, goes back or pic
 
 ## Run events and images
 
-`on_event` receives a `BrowserEvent` followed by `StepEvent` objects. Each step includes added facts,
+`on_event` receives a `BrowserEvent` followed by step and browser-warning events. `BrowserWarningEvent` carries
+closed `operation` and `failure` codes without page content, addresses or transport error text. Browser sessions
+without a warning consumer keep the stderr fallback. The run drains remaining warning events after closing the browser and
+before returning. Each step includes added facts,
 their reader and source links in `StepResult.facts`, and any available explanation in `StepResult.note`.
 `StepResult.failure` carries an optional typed cause: `missing_target`, `target_gone`, `unauthorized_origin`,
 `navigation_failed`, `dialog_interrupted` or `browser_error`. The browser records the cause where it detects
