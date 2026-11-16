@@ -437,6 +437,7 @@ fn progress(streams: Streams) -> fastbrowse_core::models::EventHandler {
                     let label = options::step_label(step);
                     streams.eprint(&format!("  {:>2} {label} -> {}", step.index, step.outcome.as_str()));
                 }
+                Event::BrowserWarning(_) => {}
             }
         })
     })

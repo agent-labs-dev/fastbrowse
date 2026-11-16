@@ -159,6 +159,67 @@
       "title": "BrowserVia",
       "type": "string"
     },
+    "BrowserWarningEvent": {
+      "additionalProperties": false,
+      "description": "A browser warning with only a closed operation and failure kind; it contains no page or transport text.",
+      "properties": {
+        "type": {
+          "const": "browser_warning",
+          "default": "browser_warning",
+          "title": "Type",
+          "type": "string"
+        },
+        "operation": {
+          "$ref": "#/$defs/BrowserWarningOperation"
+        },
+        "failure": {
+          "$ref": "#/$defs/BrowserWarningFailure"
+        }
+      },
+      "required": [
+        "type",
+        "operation",
+        "failure"
+      ],
+      "title": "BrowserWarningEvent",
+      "type": "object"
+    },
+    "BrowserWarningFailure": {
+      "enum": [
+        "browser_error",
+        "context_lost",
+        "browser_unavailable",
+        "screenshots_unavailable",
+        "navigation_timeout",
+        "site_unreachable",
+        "browser_unresponsive",
+        "page_unresponsive",
+        "origin_not_allowed",
+        "script_error",
+        "timeout",
+        "callback_exception",
+        "payload_decode",
+        "capture_failed",
+        "cancelled"
+      ],
+      "title": "BrowserWarningFailure",
+      "type": "string"
+    },
+    "BrowserWarningOperation": {
+      "enum": [
+        "screencast_start",
+        "screencast_stop",
+        "screencast_frame_ack",
+        "paint_keeper_attach",
+        "popup_setup_close",
+        "popup_setup_release",
+        "frame_callback_shutdown",
+        "live_frame_delivery",
+        "download_capture"
+      ],
+      "title": "BrowserWarningOperation",
+      "type": "string"
+    },
     "BudgetStop": {
       "additionalProperties": false,
       "properties": {
@@ -1020,6 +1081,9 @@
             },
             {
               "$ref": "#/$defs/BrowserEvent"
+            },
+            {
+              "$ref": "#/$defs/BrowserWarningEvent"
             }
           ],
           "title": "Event"
@@ -1882,6 +1946,19 @@
       "title": "StepFact",
       "type": "object"
     },
+    "StepFailure": {
+      "description": "A closed reason for a failed browser step; ``note`` remains diagnostic text.",
+      "enum": [
+        "missing_target",
+        "target_gone",
+        "unauthorized_origin",
+        "navigation_failed",
+        "dialog_interrupted",
+        "browser_error"
+      ],
+      "title": "StepFailure",
+      "type": "string"
+    },
     "StepOutcome": {
       "enum": [
         "executed",
@@ -1908,6 +1985,17 @@
         },
         "outcome": {
           "$ref": "#/$defs/StepOutcome"
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StepFailure"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "url": {
           "title": "Url",
@@ -1994,6 +2082,7 @@
         "operation",
         "decided_by",
         "outcome",
+        "failure",
         "url",
         "target",
         "confidence",

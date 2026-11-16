@@ -270,6 +270,13 @@ Extension 0.1.1 or later must advertise every required command. Store 0.1.0 cann
 extension, or run `fastbrowse extension path` and load its folder unpacked through **Developer mode** at
 `chrome://extensions`. A newer version number alone does not establish compatibility.
 
+### The browser denies navigation
+
+With the extension, Chrome can refuse a destination under its browser access policy. When its native
+navigation reply identifies that denial, the run ends `error` with `Page.navigate was denied by the
+browser access policy`. This is a refusal by Chrome, so retrying document reads cannot clear it. Check
+the browser's access restrictions. The error does not establish that the destination is down.
+
 ### Another extension's frame takes the tab away
 
 Chrome lets no extension debug a tab while the page holds a frame from another extension, and takes the tab

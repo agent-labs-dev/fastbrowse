@@ -25,7 +25,7 @@ import sys
 import tempfile
 import threading
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import IO, Any
@@ -100,8 +100,13 @@ class Client:
         if params is not None:
             message["params"] = params
         assert self._process.stdin is not None
-        self._process.stdin.write(json.dumps(message).encode() + b"\n")
-        self._process.stdin.flush()
+        try:
+            self._process.stdin.write(json.dumps(message).encode() + b"\n")
+            self._process.stdin.flush()
+        except BrokenPipeError:
+            raise Failed(
+                f"{method}: server exited before accepting request, exit status {self._process.wait()}"
+            ) from None
         ahead: list[dict[str, Any]] = []
         while True:
             try:
@@ -144,6 +149,9 @@ def serving(executable: Path, *arguments: str) -> Iterator[Client]:
             if status != 0:
                 raise Failed(f"the server exited with status {status} after shutdown")
         finally:
+            if process.stdin is not None:
+                with suppress(BrokenPipeError):
+                    process.stdin.close()
             if process.poll() is None:
                 process.kill()
 

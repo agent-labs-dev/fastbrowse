@@ -126,8 +126,13 @@ impl Page for FakeSite {
 
     fn act<'a>(&'a self, action: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
         let mut at = self.at.lock().unwrap();
-        let result =
-            |outcome: StepOutcome, page_changed: bool| ActResult { outcome, page_changed, detail: None, moved: false };
+        let result = |outcome: StepOutcome, page_changed: bool| ActResult {
+            outcome,
+            failure: None,
+            page_changed,
+            detail: None,
+            moved: false,
+        };
         if action.operation == Operation::Navigate
             && let Some(screen) = action.url.as_deref().and_then(|url| self.site["urls"][url].as_str())
         {

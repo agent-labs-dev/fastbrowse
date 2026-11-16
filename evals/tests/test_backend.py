@@ -4,11 +4,61 @@ from pathlib import Path
 
 import pytest
 from fastbrowse.evals import harness
-from fastbrowse.models import Citation, Status
+from fastbrowse.models import Citation, CostBreakdown, Decider, Operation, RunResult, Status, StepOutcome, StepResult
 from parallax.browser_evidence import BrowserEvidence
 from parallax.harnesses.base import credential_env_problems
+from parallax.harnesses.browser.cloud import Browser
+from pydantic import JsonValue
 
 from fastbrowse_evals import backend, hosted_api
+
+
+def test_browser_evidence_distinguishes_a_blocked_attempt_from_an_executed_action() -> None:
+    step = StepResult(
+        index=0,
+        operation=Operation.CLICK,
+        decided_by=Decider.CODE,
+        outcome=StepOutcome.FAILED,
+        url="https://shop.example/review",
+        target="Place order",
+        note="This action needs confirmation",
+        duration_ms=0,
+    )
+    output = RunResult(
+        status=Status.NEEDS_CONFIRMATION,
+        answer=None,
+        data=None,
+        evidence=(),
+        steps=(step,),
+        cost=CostBreakdown(),
+        artifacts=(),
+    )
+    result = backend._run_result(output, None, Browser(cdp_url="ws://browser"), [], latency_ms=0)
+    evidence = BrowserEvidence.model_validate({"answer": None, "steps": result["step_log"]})
+    assert evidence.steps[0].action == "click (failed): This action needs confirmation"
+
+    executed = output.model_copy(
+        update={"steps": (step.model_copy(update={"outcome": StepOutcome.EXECUTED, "note": None}),)}
+    )
+    result = backend._run_result(executed, None, Browser(cdp_url="ws://browser"), [], latency_ms=0)
+    evidence = BrowserEvidence.model_validate({"answer": None, "steps": result["step_log"]})
+    assert evidence.steps[0].action == "click (executed)"
+
+
+@pytest.mark.parametrize("data", [{"name": "widget", "revision": 3}, [], False, 0])
+def test_structured_result_reaches_the_judge_instead_of_its_prose(data: JsonValue) -> None:
+    output = RunResult(
+        status=Status.COMPLETE,
+        answer="A prose explanation of the structured result.",
+        data=data,
+        evidence=(),
+        steps=(),
+        cost=CostBreakdown(),
+        artifacts=(),
+    )
+    result = backend._run_result(output, None, Browser(cdp_url="ws://browser"), [], latency_ms=0)
+    assert isinstance(result["answer"], str)
+    assert json.loads(result["answer"]) == data
 
 
 def test_configured_search_key_reaches_the_product_but_not_an_isolated_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -96,3 +146,21 @@ def test_a_page_read_over_http_is_the_evidence_its_read_step_points_at() -> None
     )
     assert [(page.url, page.text) for page in evidence.pages] == [(url, text)]
     assert evidence.steps[0].page == 0 and seen_at[1] == 0
+
+
+def test_campaign_metadata_preserves_model_requests_outside_judge_evidence() -> None:
+    harness = backend.FastbrowseHarness(observer="plain-cdp")
+    event = {"event": "llm_request", "messages": [{"role": "user", "content": "Captured notes"}]}
+    harness._events.append(event)
+    metadata = json.loads(json.dumps(harness.trial_metadata))
+    assert metadata["events"] == [event]
+    assert "events" not in metadata["browser"]
+
+
+def test_campaign_traces_scrub_bound_task_secrets() -> None:
+    harness = backend.FastbrowseHarness(observer="plain-cdp")
+    harness._secret_values = {"PASSWORD": "fixture-private-value"}
+    harness._events.append({"event": "llm_request", "text": "Use fixture-private-value"})
+    metadata = harness.trial_metadata
+    assert "fixture-private-value" not in json.dumps(metadata)
+    assert metadata["events"] == [{"event": "llm_request", "text": "Use <secret>PASSWORD</secret>"}]

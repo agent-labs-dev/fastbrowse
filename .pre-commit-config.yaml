@@ -15,4 +15,5 @@ repos:
       # `--no-sync`: pre-commit runs hooks over the stashed tree, so a sync would rebuild the native library from it
       # and leave `src/fastbrowse/_native.abi3.so` stale for every later run on this checkout (#766).
       - id: ty
-        args: [--no-sync]
+        entry: python scripts/pre_commit_ty.py
+        pass_filenames: true

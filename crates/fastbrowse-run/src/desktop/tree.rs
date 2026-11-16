@@ -359,6 +359,7 @@ pub fn capture(window: &Window, root: &Element) -> Capture {
             href: None,
             links: Vec::new(),
             whole_record: false,
+            fields: Vec::new(),
         });
         offset += 2;
     }

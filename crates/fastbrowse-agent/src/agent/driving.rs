@@ -6,7 +6,7 @@ use std::time::Instant;
 use fastbrowse_core::decision::{EVEN_ODDS, jev_takes_png};
 use fastbrowse_core::effects::{Effect, SETTING_ROLES, Setting, effect, state_key};
 use fastbrowse_core::models::{
-    Decider, Event, Image, Operation, Status, StepChoice, StepEvent, StepOutcome, StepResult, WallKind,
+    Decider, Event, Image, Operation, Status, StepChoice, StepEvent, StepFailure, StepOutcome, StepResult, WallKind,
 };
 use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Control, Dialog, Observation, Tab};
 use fastbrowse_core::py::dump::Dump;
@@ -245,6 +245,7 @@ impl Agent {
                 }
             };
             self.record_page(state, &observation);
+            self.trace_read_context("decision_context", state, &observation, &decision);
             state.choices = self.choices(&decision);
             judge_site(state, &observation, &decision);
             if let Some(probability) = decision.login_required {
@@ -370,6 +371,7 @@ impl Agent {
                 continue;
             }
             // A wall can be the answer to the task, but cannot authorize walking the list behind it.
+            self.trace_read_context("list_continuation", state, &observation, &decision);
             if decision.read_scope == ReadScope::List
                 && (state.page_failed || decision.login_required.unwrap_or(0.0) > thresholds.login_required_above)
             {
@@ -449,6 +451,43 @@ impl Agent {
                 list_walk = None;
             }
         }
+    }
+
+    pub(super) fn trace_read_context(
+        &self,
+        event: &str,
+        state: &RunState,
+        observation: &Observation,
+        decision: &Decision,
+    ) {
+        self.event(event, || {
+            let (extent, bounds) = match state.extent {
+                super::state::Extent::Shown => ("shown", None),
+                super::state::Extent::EveryPage => ("every_page", None),
+                super::state::Extent::Pages(bounds) => ("pages", bounds),
+            };
+            let scope = match decision.read_scope {
+                ReadScope::Page => "page",
+                ReadScope::List => "list",
+                ReadScope::Return => "return",
+            };
+            Map::from_iter([
+                ("step".into(), state.steps.len().into()),
+                ("operation".into(), json!(decision.operation)),
+                ("target_id".into(), json!(decision.target.as_ref().map(|target| &target.id))),
+                ("read_scope".into(), scope.into()),
+                ("extent".into(), extent.into()),
+                ("page_bounds".into(), json!(bounds)),
+                ("current_page".into(), json!(state.pager_ordinals.get(&address(&observation.url)))),
+                ("known_pages".into(), state.pager_ordinals.len().into()),
+                ("unread_pages".into(), state.unread_list_pages().count().into()),
+                ("next_unread_available".into(), state.unread_pager_page().is_some().into()),
+                ("read_progress".into(), state.history.last().is_some_and(|entry| entry.read_progress).into()),
+                ("decision_pending".into(), state.picked.is_some().into()),
+                ("composition_pending".into(), state.compose.into()),
+                ("structured_output_pending".into(), state.extraction_pending.into()),
+            ])
+        });
     }
 
     /// Fills the rest of a step's planned fields, each as its own step, while the page stays the document it was made
@@ -905,7 +944,13 @@ impl Agent {
             let text = state.read_note();
             let text = self.redact(text);
             effect_now = Some(text.clone());
-            act = ActResult { outcome: StepOutcome::Executed, page_changed: false, detail: Some(text), moved: false };
+            act = ActResult {
+                outcome: StepOutcome::Executed,
+                failure: None,
+                page_changed: false,
+                detail: Some(text),
+                moved: false,
+            };
         } else {
             let built = match state.built.take() {
                 Some(built) => built?,
@@ -1148,6 +1193,7 @@ impl Agent {
             operation: decision.operation,
             decided_by: decision.decider(),
             outcome: act.outcome,
+            failure: act.failure,
             url: observation.url.clone(),
             target: label,
             confidence: Some(decision.confidence()),
@@ -1232,6 +1278,7 @@ impl Agent {
             operation: decision.operation,
             decided_by: decision.decider(),
             outcome: StepOutcome::Failed,
+            failure: Some(StepFailure::BrowserError),
             page_changed: Some(url != observation.url),
             url: url.clone(),
             target: label,
@@ -1511,6 +1558,14 @@ impl Agent {
             .iter()
             .map(|block| fastbrowse_core::page::Block {
                 heading_path: block.heading_path.iter().map(|heading| mask(heading)).collect(),
+                fields: block
+                    .fields
+                    .iter()
+                    .map(|field| fastbrowse_core::page::SourceField {
+                        path: field.path.iter().map(|part| mask(part)).collect(),
+                        ..field.clone()
+                    })
+                    .collect(),
                 control_context: block.control_context.as_ref().map(|context| fastbrowse_core::models::SourceControl {
                     role: mask(&context.role),
                     label: mask(&context.label),
@@ -1629,6 +1684,7 @@ impl Agent {
             operation,
             decided_by,
             outcome: StepOutcome::Failed,
+            failure: None,
             url: observation.url.clone(),
             target,
             confidence,

@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use fastbrowse_clients::search::{Exa, SEARCH_DOLLARS};
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::models::{Artifact, Operation, StepOutcome};
+use fastbrowse_core::models::{Artifact, Operation, StepFailure, StepOutcome};
 use fastbrowse_core::page::{
     ActResult, Action, BrowserError, CaptchaSolve, Capture, Control, Observation, Page, PageResult, SearchOutcome,
 };
@@ -79,6 +79,7 @@ impl Page for SearchPage {
                                 href: href.map(str::to_owned),
                                 links: Vec::new(),
                                 whole_record: true,
+                                fields: Vec::new(),
                             }
                         })
                         .collect();
@@ -119,6 +120,9 @@ impl Page for SearchPage {
     fn keep_capture<'a>(&'a self, name: &'a str, text: &'a str) -> BoxFuture<'a, PageResult<Option<Artifact>>> {
         self.inner.keep_capture(name, text)
     }
+    fn keep_screenshot<'a>(&'a self, name: &'a str, png: &'a [u8]) -> BoxFuture<'a, PageResult<Option<Artifact>>> {
+        self.inner.keep_screenshot(name, png)
+    }
     fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
         self.view().observe()
     }
@@ -148,6 +152,7 @@ impl Page for SearchPage {
             if self.results.document_changed(observation).await? {
                 return Ok(ActResult {
                     outcome: StepOutcome::Stale,
+                    failure: None,
                     page_changed: false,
                     detail: Some("search results changed since observation".into()),
                     moved: false,
@@ -161,6 +166,7 @@ impl Page for SearchPage {
             let Some(url) = url.filter(|url| eligible(url, None).is_ok()) else {
                 return Ok(ActResult {
                     outcome: StepOutcome::Failed,
+                    failure: Some(StepFailure::BrowserError),
                     page_changed: false,
                     detail: Some("Search results are fixed data. Open a result link or choose another search.".into()),
                     moved: false,
@@ -275,6 +281,7 @@ mod tests {
             Box::pin(async {
                 Ok(ActResult {
                     outcome: StepOutcome::Failed,
+                    failure: Some(StepFailure::BrowserError),
                     page_changed: false,
                     detail: Some("retained navigation check".into()),
                     moved: false,

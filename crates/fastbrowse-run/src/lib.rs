@@ -32,9 +32,9 @@ use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::DecisionClient;
 use fastbrowse_core::llm::LLMClient;
 use fastbrowse_core::models::{
-    ArtifactSink, Attachment, BrowserConnection, BrowserEvent, BrowserUsed, BrowserVia, BudgetResource, BudgetStop,
-    Bytes, CostBasis, CostBreakdown, CostComponent, CostLine, Event, EventHandler, FrameHandler, Limits, LocalChrome,
-    RunResult, SecretResolver, Status, StepResult, UntilCheck, WallKind,
+    ArtifactSink, Attachment, BrowserConnection, BrowserEvent, BrowserUsed, BrowserVia, BrowserWarningEvent,
+    BudgetResource, BudgetStop, Bytes, CostBasis, CostBreakdown, CostComponent, CostLine, Event, EventHandler,
+    FrameHandler, Limits, LocalChrome, RunResult, SecretResolver, Status, StepResult, UntilCheck, WallKind,
 };
 use fastbrowse_core::origins::parse_origins;
 use fastbrowse_core::output_schema::output_model;
@@ -585,6 +585,46 @@ type Filming = Arc<tokio::sync::Mutex<Option<Recording>>>;
 /// The steps a run has told, held outside the run so a cancelled one can still report them.
 type Told = Arc<std::sync::Mutex<Vec<StepResult>>>;
 
+struct WarningTask(Option<tokio::task::JoinHandle<()>>);
+
+impl Drop for WarningTask {
+    fn drop(&mut self) {
+        if let Some(task) = self.0.take() {
+            task.abort();
+        }
+    }
+}
+
+impl WarningTask {
+    fn start(
+        on_event: EventHandler,
+    ) -> (Self, tokio::sync::mpsc::UnboundedSender<BrowserWarningEvent>, tokio::sync::oneshot::Sender<()>) {
+        let (warning_tx, mut warning_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    Some(warning) = warning_rx.recv() => on_event(Event::BrowserWarning(warning)).await,
+                    _ = &mut stop_rx => {
+                        while let Ok(warning) = warning_rx.try_recv() {
+                            on_event(Event::BrowserWarning(warning)).await;
+                        }
+                        break;
+                    }
+                }
+            }
+        });
+        (Self(Some(task)), warning_tx, stop_tx)
+    }
+
+    async fn finish(mut self) {
+        if let Some(task) = self.0.as_mut() {
+            let _ = (&mut *task).await;
+        }
+        let _ = self.0.take();
+    }
+}
+
 /// Keep each step as it is told, before the caller's handler is awaited: a run stopped while that handler runs, or
 /// by it, still reports the step it was telling. The agent redacted the step before telling it.
 fn noting(on_event: Option<EventHandler>, told: &Told) -> EventHandler {
@@ -888,6 +928,14 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
     // The agent learns each secret, and its clients write the requests that may carry one, so they share a redactor.
     let trace = http.trace.clone().redacting(Arc::default());
     let http = http.with_trace(trace);
+    let (warning_task, warning_tx, warning_stop_tx) = host
+        .on_event
+        .clone()
+        .map(|on_event| {
+            let (task, warning_tx, stop_tx) = WarningTask::start(on_event);
+            (task, warning_tx, stop_tx)
+        })
+        .map_or((None, None, None), |(task, tx, stop)| (Some(task), Some(tx), Some(stop)));
     // The providers this run calls, for an eval to keep beside its result. A caller's own clients are not described.
     if host.jev.is_none() && host.llm.is_none() {
         http.trace.event("route", || Map::from_iter([("providers".into(), Value::from(settings.providers()))]));
@@ -1013,6 +1061,12 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
                 refuse_cookie_banners: config.refuse_cookie_banners && !answers_consent,
                 has_attachments: !task.attachments.is_empty(),
                 on_frame: host.on_frame.clone(),
+                on_warning: host.on_event.as_ref().map(|_| {
+                    let warning_tx = warning_tx.as_ref().expect("warning task has sender").clone();
+                    Arc::new(move |warning| {
+                        let _ = warning_tx.send(warning);
+                    }) as Arc<dyn Fn(BrowserWarningEvent) + Send + Sync>
+                }),
                 check_access: host.check_access.clone(),
                 viewport: matches!(owned.as_ref(), Some(Owned::Local(_))).then_some(task.viewport).flatten(),
                 // The user stopping the run in their browser cancels it, as the caller cancelling it would.
@@ -1112,6 +1166,12 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
     }
     if let Some(session) = &session {
         let _ = session.close().await;
+    }
+    if let Some(stop) = warning_stop_tx {
+        let _ = stop.send(());
+    }
+    if let Some(task) = warning_task {
+        task.finish().await;
     }
     let browser_used = owned.as_ref().map(|owned| browser_used(owned, &task, &chrome));
     if let Some(owned) = owned.take() {
@@ -1594,5 +1654,64 @@ mod tests {
         }
         let left = remaining(Some(&limits(|l| l.max_dollars = Some(0.05))), &priced, 0.0).unwrap().unwrap();
         assert!((left.max_dollars.unwrap() - 0.038).abs() < 1e-9);
+    }
+
+    fn pending_warning_task() -> (WarningTask, tokio::sync::oneshot::Receiver<()>, tokio::sync::oneshot::Receiver<()>) {
+        struct NotifyDrop(Option<tokio::sync::oneshot::Sender<()>>);
+        impl Drop for NotifyDrop {
+            fn drop(&mut self) {
+                let _ = self.0.take().unwrap().send(());
+            }
+        }
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel();
+        let handle = tokio::spawn(async move {
+            let _guard = NotifyDrop(Some(dropped_tx));
+            let _ = started_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        (WarningTask(Some(handle)), started_rx, dropped_rx)
+    }
+
+    #[tokio::test]
+    async fn warning_task_drop_aborts_callback_worker() {
+        let (task, started, dropped) = pending_warning_task();
+        started.await.unwrap();
+        drop(task);
+        tokio::time::timeout(std::time::Duration::from_secs(1), dropped).await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn warning_task_finish_drop_aborts_waiting_callback() {
+        let (task, started, dropped) = pending_warning_task();
+        started.await.unwrap();
+        let mut finish = Box::pin(task.finish());
+        assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(finish.as_mut().poll(cx))).await.is_pending());
+        drop(finish);
+        tokio::time::timeout(std::time::Duration::from_secs(1), dropped).await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn warning_task_shutdown_drains_queued_events_with_sender_still_alive() {
+        let delivered = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let received = delivered.clone();
+        let handler: EventHandler = Arc::new(move |event| {
+            let received = received.clone();
+            Box::pin(async move {
+                received.lock().unwrap().push(event);
+            })
+        });
+        let (task, sender, stop) = WarningTask::start(handler);
+        let warning = BrowserWarningEvent {
+            kind: Default::default(),
+            operation: fastbrowse_core::models::BrowserWarningOperation::ScreencastStart,
+            failure: fastbrowse_core::models::BrowserWarningFailure::ContextLost,
+        };
+        sender.send(warning.clone()).unwrap();
+        sender.send(warning).unwrap();
+        stop.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), task.finish()).await.unwrap();
+        assert_eq!(delivered.lock().unwrap().len(), 2);
+        assert!(sender.is_closed());
     }
 }

@@ -1176,6 +1176,7 @@ impl CdpPage {
                         href: None,
                         links: Vec::new(),
                         whole_record: block.whole_record,
+                        fields: block.fields.into_iter().map(|field| field.shifted(int(start))).collect(),
                     });
                 }
                 continue;
@@ -1206,6 +1207,7 @@ impl CdpPage {
                     href: block.href.clone(),
                     links,
                     whole_record: block.whole_record,
+                    fields: Vec::new(),
                 });
             }
         }
@@ -1246,6 +1248,7 @@ impl CdpPage {
                     href: None,
                     links: Vec::new(),
                     whole_record: false,
+                    fields: Vec::new(),
                 });
                 text.push_str("\n\n");
                 offset += 2;
@@ -1260,7 +1263,8 @@ impl CdpPage {
             blocks,
             inaccessible_frames: int(self.inaccessible_frames(&coverage)?),
             masked: Vec::new(),
-        })
+        }
+        .with_document_title())
     }
 
     // -- reads of the live page -------------------------------------------------------------------------------
@@ -1857,6 +1861,16 @@ impl Page for CdpPage {
         Box::pin(async move {
             let sink = &self.session.0.artifact_sink;
             match sink.put(ArtifactKind::Capture, name, "text/plain; charset=utf-8", text.as_bytes()).await {
+                Ok(artifact) => Ok(Some(artifact)),
+                Err(error) => Err(fastbrowse_core::page::BrowserError::Failed(format!("keeping {name}: {error}"))),
+            }
+        })
+    }
+
+    fn keep_screenshot<'a>(&'a self, name: &'a str, png: &'a [u8]) -> BoxFuture<'a, PageResult<Option<Artifact>>> {
+        Box::pin(async move {
+            let sink = &self.session.0.artifact_sink;
+            match sink.put(ArtifactKind::Screenshot, name, "image/png", png).await {
                 Ok(artifact) => Ok(Some(artifact)),
                 Err(error) => Err(fastbrowse_core::page::BrowserError::Failed(format!("keeping {name}: {error}"))),
             }

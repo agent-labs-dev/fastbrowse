@@ -7,7 +7,7 @@ use fastbrowse_core::py::text;
 use fastbrowse_core::schema::{Field, ModelTy, Schema, Ty};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::acting::Carried;
 use super::helpers::unsent_fact;
@@ -110,8 +110,7 @@ impl Agent {
         // unread: Jev judged the extent from the task, and finishing from the pages reached called part of the list the
         // whole (#750), or ended on one record's own page after leaving the list (#798). A page past the ones the task
         // names is not opened (#824). Each such page is opened once at most.
-        if output_schema.is_none()
-            && state.extent.walks()
+        if state.extent.walks()
             && let Some(next) = state.unread_pager_page().cloned()
         {
             return self.open_unread_page(state, observation, next).await;
@@ -163,7 +162,7 @@ impl Agent {
             ledger: Some(&state.ledger),
             answer: claims.as_deref().filter(|claims| !claims.is_empty()),
         };
-        Ok(Some(extract(&*self.jev, &state.task, &capture, schema, &options).await?))
+        Ok(Some(extract(&*self.jev, &self.model_task(state), &capture, schema, &options).await?))
     }
 
     /// Open a next page of the list that a task over the whole list, or over pages of it it names, left unread, as a
@@ -240,7 +239,19 @@ impl Agent {
         if read || state.unanswered_images.contains(&image) {
             return Ok(());
         }
-        let reading = crate::retrieval::read_image(&*self.llm, &state.task, png.clone(), Some(&state.ledger)).await?;
+        let name = format!("{image}.png");
+        let first_attempt = self.seen().screenshot_attempts.insert(name.clone());
+        if first_attempt {
+            // The run deadline covers this write too; a failed sink must not stop the image reader.
+            match self.page.keep_screenshot(&name, &png).await {
+                Ok(Some(artifact)) => self.seen().screenshot_artifacts.push(artifact),
+                Ok(None) => {}
+                Err(_) => self
+                    .event("screenshot_not_kept", || Map::from_iter([("error".into(), "artifact sink failed".into())])),
+            }
+        }
+        let reading =
+            crate::retrieval::read_image(&*self.llm, &self.model_task(state), png.clone(), Some(&state.ledger)).await?;
         state.ledger.record([reading.cost.clone()])?;
         // A look is never in the text layer, so only a reading of text can merely repeat it.
         let reading_text = reading.data.text.filter(|text| {
@@ -285,7 +296,7 @@ impl Agent {
             // page 1 to 4.5 seconds of composing (#910). A step the site refused is reported, as REFUSED says.
             draft_answer(&outcome_notes(state))
         } else if state.compose {
-            let (notes, task, ledger) = (state.notes_to_compose(), state.task.clone(), state.ledger.clone());
+            let (notes, task, ledger) = (state.notes_to_compose(), self.model_task(state), state.ledger.clone());
             let steps = state.executed_steps();
             let reviewed = self
                 .trace
@@ -306,7 +317,7 @@ impl Agent {
             rejection = reviewed.rejection;
             Some(reviewed.answer)
         } else if matches!(intent, OutputIntent::Text | OutputIntent::TextAndImage) {
-            let (notes, task, ledger) = (state.notes.clone(), state.task.clone(), state.ledger.clone());
+            let (notes, task, ledger) = (state.notes.clone(), self.model_task(state), state.ledger.clone());
             let reviewed =
                 match self.trace.phase("coverage", draft_reviewed(&*self.jev, &task, &notes, Some(&ledger))).await? {
                     Some(Draft::Reviewed(reviewed)) => Some(reviewed),
@@ -457,7 +468,7 @@ impl Agent {
         let capture = self.capture().await?;
         let messages = [
             Message::system(UNOBTAINABLE_INSTRUCTIONS),
-            Message::user(format!("# Task\n{}\n\n# Page\n{}", state.task, capture.text)),
+            Message::user(format!("# Task\n{}\n\n# Page\n{}", self.model_task(state), capture.text)),
         ];
         let named = generate::<UnobtainableItem>(&*self.llm, LLMPurpose::Unobtainable, &messages, Some(&state.ledger));
         let named = match named.await {
@@ -573,6 +584,9 @@ fn rejection_reason(rejection: &str) -> String {
     // for four others; shown that draft, it chose the next method (#897).
     let feedback: Value = serde_json::from_str(rejection).unwrap_or_default();
     let coverage = feedback["rejected_checks"].as_array().is_some_and(|checks| checks.iter().any(|c| c == "coverage"));
+    if coverage && let Some(partial) = feedback["partial"].as_str() {
+        reason += &format!("\nThe composer says the answer leaves unestablished: {partial}");
+    }
     if coverage && let Some(claims) = drafted(rejection).filter(|claims| !claims.is_empty()) {
         reason += "\nThe rejected answer:";
         if let Some(columns) = feedback["columns"].as_array().filter(|columns| !columns.is_empty()) {
@@ -678,6 +692,18 @@ mod tests {
     use serde_json::json;
 
     use super::rejection_reason;
+
+    #[test]
+    fn partial_coverage_feedback_names_what_the_navigator_still_needs() {
+        let feedback = json!({
+            "draft_claims": [{"text": "Two matching records were found.", "evidence_ids": ["e0"]}],
+            "rejected_checks": ["coverage"],
+            "partial": "the records beyond this page",
+        });
+        let reason = rejection_reason(&feedback.to_string());
+        assert!(reason.contains("the records beyond this page"), "{reason}");
+        assert!(reason.contains("Two matching records were found."), "{reason}");
+    }
 
     #[test]
     fn a_rejected_draft_tells_the_navigator_which_claim_failed_which_check() {

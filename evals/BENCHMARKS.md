@@ -14,7 +14,7 @@ The package registers these entry points:
 - `fastbrowse`: one `parallax.task_sources` source containing the core, dev, stretch-dev, and sweep task records.
 
 Every task is world-less, uses `Area.BROWSER`, and names Parallax's
-`browser-evidence-v1` policy. The task record carries the start URL, task
+`browser-evidence-v2` policy. The task record carries the start URL, task
 metadata, authorization setting, and secret names. Secret values stay in the
 fastbrowse harness.
 
@@ -86,7 +86,7 @@ existing publication gate.
 
 ## Official suites
 
-Parallax dev20 supplies the official sources `bu-bench` and `online-mind2web`,
+Parallax 2.0.0.dev26 supplies the official sources `bu-bench` and `online-mind2web`,
 with policies `bu-bench-upstream-v1` and `online-mind2web-upstream-v1`. The
 official workflow checks out the pinned upstream judge for each source, installs
 its dependencies in that checkout's own environment, and runs:

@@ -3,9 +3,9 @@ title: How to verify browser agent results
 description: What each fastbrowse run status and exit code means, how citations back an answer, and what to do when a run ends unverified.
 topic: Results and cost
 published: 2026-10-31
-updated: 2026-11-12
+updated: 2026-11-16
 verifiedAgainst: v0.11.0
-verifiedOn: 2026-11-12
+verifiedOn: 2026-11-16
 ---
 
 fastbrowse marks an answer it could not back with a quote as `unverified` and exits 10. A caller that checks the exit code never mistakes a guess for a result.
@@ -25,6 +25,8 @@ Only `complete` exits 0, so a script can test for zero instead of parsing the st
 At each step the agent reads the page's buttons, links and fields and picks one of them. It never clicks a screen coordinate, so it cannot click something the page does not have. The quote an answer is checked against comes from the same reading of the page. [The design](/docs/design/) covers the loop.
 
 When a site changes its layout, the run sees a different set of controls instead of clicking the wrong one.
+
+`StepResult.failure` optionally identifies a browser action failure, such as a missing target or an interrupted dialog. The field may be absent in older results; `note` remains diagnostic text. It does not replace the run status.
 
 ## What to check in your own integration
 

@@ -93,19 +93,31 @@ impl Tally {
 
 impl Schema for Tally {
     fn ty() -> Ty {
-        ModelTy::frozen(
-            "Tally",
-            vec![
-                Field::required("op", Ty::literals(&["count", "sum", "min", "max"])),
-                Field::required("of", Ty::Str),
+        // A count needs no numeric field. Other operations cannot run without one, so the response contract must
+        // not admit the null field that otherwise spends recovery rejecting an unusable comparison.
+        let operation = |name, ops: &[&str], field| {
+            ModelTy::frozen(
+                name,
+                vec![
+                    Field::required("op", Ty::literals(ops)),
+                    Field::required("of", Ty::Str),
+                    field,
+                    Field::default("rank", Ty::optional(Ty::Int), serde_json::Value::Null),
+                    Field::default("by", Ty::optional(Ty::Str), serde_json::Value::Null),
+                    Field::default("group", Ty::optional(Ty::Str), serde_json::Value::Null),
+                    Field::required("written", Ty::Str),
+                ],
+            )
+            .ty()
+        };
+        Ty::Union(vec![
+            operation(
+                "CountTally",
+                &["count"],
                 Field::default("field", Ty::optional(Ty::Str), serde_json::Value::Null),
-                Field::default("rank", Ty::optional(Ty::Int), serde_json::Value::Null),
-                Field::default("by", Ty::optional(Ty::Str), serde_json::Value::Null),
-                Field::default("group", Ty::optional(Ty::Str), serde_json::Value::Null),
-                Field::required("written", Ty::Str),
-            ],
-        )
-        .ty()
+            ),
+            operation("ValueTally", &["sum", "min", "max"], Field::required("field", Ty::Str)),
+        ])
     }
 }
 
@@ -115,6 +127,7 @@ pub struct Worked {
     pub value: String,
     pub evidence_ids: Vec<String>,
     pub winner_ids: Option<Vec<String>>,
+    pub winner_records: Vec<Vec<String>>,
 }
 
 /// Why a tally has no value.
@@ -133,6 +146,7 @@ pub enum Unworked {
 }
 
 /// One note a tally may count: the first note read with its text, so a record read twice is one record.
+#[derive(Clone)]
 struct Candidate {
     id: String,
     quote: String,
@@ -424,21 +438,20 @@ async fn by_page(
     Ok((answered, oversized))
 }
 
-/// The first note a claim cites, as a membership question shows it: the composer's own example of the record it
-/// counts, marked `whole_record` when its capture shows it is all the text of one item the page repeats.
+/// A cited whole record is the membership example when the capture proves one; a name cited before its record
+/// otherwise teaches Jev that labels are records and leaves membership unresolved. Unmarked captures keep the
+/// first cited evidence as their example.
 fn example(notes: &Notes, cited: &[String]) -> Option<serde_json::Value> {
     let facts = notes.facts_by_id();
-    notes
-        .expand_evidence_ids(cited.iter().map(String::as_str))
-        .iter()
-        .find_map(|id| facts.get(id).and_then(|fact| fact.evidence.as_ref()))
-        .map(|evidence| {
-            let mut note = shown(notes, evidence);
-            if notes.whole_record(evidence) {
-                note["whole_record"] = true.into();
-            }
-            note
-        })
+    let ids = notes.expand_evidence_ids(cited.iter().map(String::as_str));
+    let mut evidence = ids.iter().filter_map(|id| facts.get(id).and_then(|fact| fact.evidence.as_ref()));
+    evidence.clone().find(|evidence| notes.whole_record(evidence)).or_else(|| evidence.next()).map(|evidence| {
+        let mut note = shown(notes, evidence);
+        if notes.whole_record(evidence) {
+            note["whole_record"] = true.into();
+        }
+        note
+    })
 }
 
 /// Whether a count includes this whole record, rather than a mention or part of it.
@@ -543,7 +556,7 @@ fn field_answer(answer: Option<&Answer>, offers: &[String]) -> FieldAnswer {
 }
 
 const RECORD: &str = "The record's id, such as r0.";
-const GROUP_TEXT: &str = "The record's value for the field named, copied character for character from its quote. Null when its quote does not state one.";
+const GROUP_TEXT: &str = "The record's value for the field named, copied character for character from its quote or a captured heading. Null when neither states one.";
 
 /// One record's group as its note writes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -576,7 +589,20 @@ impl Schema for RecordGroups {
     }
 }
 
-const GROUPS_INSTRUCTIONS: &str = "# Groups\nEach record below is one note a browser agent read, listed by its id. For every record, copy the value of the field named from the record's quote, exactly as the quote writes it, or give null when its quote does not state one. Code groups and counts the records by these values, so give each record's own value as written, never one taken from another record, corrected or shortened.\n\n# Trust\n";
+const GROUPS_INSTRUCTIONS: &str = "# Groups\nEach record below is one note a browser agent read, listed by its id. For every record, copy the value of the field named from the record's quote or a captured heading, exactly as the source writes it, or give null when neither states one. Code groups and counts the records by these values, so give each record's own value as written, never one taken from another record, corrected or shortened.\n\n# Trust\n";
+
+/// A record's captured heading can name the owner whose value its quote holds. A page address and generated
+/// metadata are not source wording, and joining separate source spans would invent a value neither states.
+fn record_contains(note: &serde_json::Value, copied: &str) -> bool {
+    let holds =
+        |source: &serde_json::Value| source.as_str().is_some_and(|source| text::squash(source).contains(copied));
+    note.get("quote").is_some_and(holds)
+        || note.get("headings").and_then(serde_json::Value::as_array).is_some_and(|headings| headings.iter().any(holds))
+        || note
+            .get("quotes")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|quotes| quotes.iter().any(|quote| record_contains(quote, copied)))
+}
 
 /// The groups of a count per group: each group's text as first read, and its records in reading order, keyed by the
 /// text with its whitespace squashed.
@@ -589,7 +615,7 @@ fn groups_messages(by: &str, of: &str, lines: &[String]) -> [Message; 2] {
 }
 
 /// Each record's `by` read by the text model, which can copy a name Jev could only choose from a list. A read is kept
-/// only when it is text of the record's own quote, as a claim's value must be, so a group is never one the model
+/// only when it is text of the record's own quote or captured heading, so a group is never one the model
 /// supplied. None when a record was left unread, read twice, read as text its quote does not hold or read as stating
 /// no group, so no count rests on a record whose group is unknown.
 async fn read_groups(
@@ -629,8 +655,7 @@ async fn read_groups(
             let note = answer.record.strip_prefix('r').and_then(|n| n.parse::<usize>().ok());
             let Some(note) = note.filter(|note| records.contains(note)) else { return Ok(None) };
             let quoted = answer.text.as_deref().map(text::squash);
-            if quoted.as_deref().is_some_and(|text| text.is_empty() || !text::squash(&found[note].quote).contains(text))
-            {
+            if quoted.as_deref().is_some_and(|text| text.is_empty() || !record_contains(&found[note].note, text)) {
                 return Ok(None);
             }
             if read.insert(note, answer.text).is_some() {
@@ -692,7 +717,7 @@ fn per_group(
             )));
         }
     }
-    Ok(Worked { winner_ids: None, value: count.to_string(), evidence_ids })
+    Ok(Worked { winner_records: Vec::new(), winner_ids: None, value: count.to_string(), evidence_ids })
 }
 
 /// What narrowing a note's numbers to a choice Jev can hold found.
@@ -781,14 +806,63 @@ fn numbers(quote: &str) -> Vec<String> {
         .enumerate()
         .map(|(at, c)| if dated.iter().any(|(start, end, _)| (*start..*end).contains(&at)) { ' ' } else { *c })
         .collect();
-    found.extend(spans(&rest, SpanKind::Number).into_iter().map(|span| span.2));
+    found.extend(number_candidates(&rest));
     let cells = rest.lines().flat_map(|line| line.split(','));
-    for number in cells.flat_map(|cell| spans(cell, SpanKind::Number)).map(|span| span.2) {
+    for number in cells.flat_map(number_candidates) {
         if !found.contains(&number) {
             found.push(number);
         }
     }
     found
+}
+
+fn number_candidates(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    spans(text, SpanKind::Number)
+        .into_iter()
+        .map(|(mut start, mut end, _)| {
+            loop {
+                let mut prefix = start;
+                while prefix > 0 && chars[prefix - 1].is_ascii_whitespace() {
+                    prefix -= 1;
+                }
+                if prefix > 0 && currency(chars[prefix - 1]) && (prefix == 1 || !chars[prefix - 2].is_ascii_digit()) {
+                    start = prefix - 1;
+                    continue;
+                }
+                if let Some(code_start) = prefix.checked_sub(3)
+                    && super::iso4217::is_code(&chars[code_start..prefix].iter().collect::<String>())
+                    && (code_start == 0 || !is_word(chars[code_start - 1]))
+                {
+                    start = code_start;
+                } else {
+                    break;
+                }
+            }
+            loop {
+                let mut suffix = end;
+                while suffix < chars.len() && chars[suffix].is_ascii_whitespace() {
+                    suffix += 1;
+                }
+                if chars.get(suffix).is_some_and(|c| currency(*c))
+                    && chars.get(suffix + 1).is_none_or(|c| !c.is_ascii_digit())
+                {
+                    end = suffix + 1;
+                    continue;
+                }
+                let word_end =
+                    chars[suffix..].iter().position(|c| !c.is_ascii_uppercase()).map_or(chars.len(), |i| suffix + i);
+                if super::iso4217::is_code(&chars[suffix..word_end].iter().collect::<String>())
+                    && chars.get(word_end).is_none_or(|c| !is_word(*c))
+                {
+                    end = word_end;
+                } else {
+                    break;
+                }
+            }
+            chars[start..end].iter().collect()
+        })
+        .collect()
 }
 
 /// The months as a date writes them, in calendar order: the full name, its first three letters, or "Sept". These are
@@ -882,9 +956,10 @@ fn prose_date() -> Pat {
 struct Amount {
     value: f64,
     places: usize,
-    sign: Option<char>,
+    unit: Option<String>,
     written: String,
     date: bool,
+    malformed_unit: bool,
 }
 
 /// `written` read as a number: one word of digits, beside at most currency signs and ISO 4217 codes such as "GBP".
@@ -895,7 +970,14 @@ fn amount(written: &str) -> Option<Amount> {
     if let [(0, end, value)] = dates(trimmed)[..]
         && end == trimmed.chars().count()
     {
-        return Some(Amount { value, places: 0, sign: None, written: trimmed.to_string(), date: true });
+        return Some(Amount {
+            value,
+            places: 0,
+            unit: None,
+            written: trimmed.to_string(),
+            date: true,
+            malformed_unit: false,
+        });
     }
     let mut number = None;
     for word in written.split_whitespace() {
@@ -905,24 +987,67 @@ fn amount(written: &str) -> Option<Amount> {
                 return None;
             }
             number = Some(word);
-        } else if !(word.chars().all(currency) || word.len() == 3 && word.chars().all(|c| c.is_ascii_uppercase())) {
+        } else if !(word.chars().all(currency) || super::iso4217::is_code(word)) {
             return None;
         }
     }
-    let sign = written.chars().find(|c| currency(*c));
+    let units: Vec<String> = written
+        .split_whitespace()
+        .filter_map(|word| {
+            if word.chars().all(currency) || super::iso4217::is_code(word) {
+                Some(word.to_string())
+            } else if word.chars().any(currency) {
+                Some(word.chars().filter(|c| currency(*c)).collect())
+            } else {
+                None
+            }
+        })
+        .collect();
+    let malformed_unit =
+        units.len() > 1 || units.iter().any(|unit| !super::iso4217::is_code(unit) && unit.chars().count() != 1);
+    let unit = units.into_iter().next();
     let digits: String = number?.chars().filter(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+')).collect();
     let value = digits.parse::<f64>().ok()?;
     let places = digits.split_once('.').map_or(0, |(_, places)| places.len());
-    Some(Amount { value, places, sign, written: trimmed.to_string(), date: false })
+    Some(Amount { value, places, unit, written: trimmed.to_string(), date: false, malformed_unit })
 }
 
-/// The total of `amounts` written as they are: their currency sign when they share one, and their most places.
+/// A currency may sit outside the computed slot, so validate the whole amount containing it before replacement.
+fn claim_amount(claim: &str, written: &str, slot: Option<&std::ops::Range<usize>>) -> Option<Amount> {
+    let range = slot.cloned().or_else(|| claim.find(written).map(|start| start..start + written.len()))?;
+    if claim.get(range.clone()) != Some(written) {
+        return None;
+    }
+    for candidate in number_candidates(claim) {
+        for (start, _) in claim.match_indices(&candidate) {
+            let end = start + candidate.len();
+            if start > range.start || end < range.end {
+                continue;
+            }
+            let before = &claim[start..range.start];
+            let after = &claim[range.end..end];
+            // Leaving digits or an arithmetic sign outside the slot would preserve part of the obsolete number.
+            if before.chars().chain(after.chars()).any(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '+' | '-')) {
+                return None;
+            }
+            return amount(&candidate);
+        }
+    }
+    None
+}
+
+/// The total after compatibility checks, retaining its currency unit and greatest decimal precision.
 fn total(amounts: &[&Amount]) -> String {
     let places = amounts.iter().map(|amount| amount.places).max().unwrap_or(0);
     let sum: f64 = amounts.iter().map(|amount| amount.value).sum();
-    let sign =
-        amounts.first().and_then(|first| first.sign).filter(|sign| amounts.iter().all(|a| a.sign == Some(*sign)));
-    format!("{}{sum:.places$}", sign.map(String::from).unwrap_or_default())
+    let unit = amounts
+        .first()
+        .and_then(|first| first.unit.as_deref())
+        .filter(|unit| amounts.iter().all(|amount| amount.unit.as_deref() == Some(*unit)));
+    let prefix = unit.map_or_else(String::new, |unit| {
+        if unit.chars().all(|c| c.is_ascii_uppercase()) { format!("{unit} ") } else { unit.to_string() }
+    });
+    format!("{prefix}{sum:.places$}")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1041,6 +1166,7 @@ async fn select_records(
     let (answered, oversized) = by_page(jev, states, questions, tokens, ledger).await?;
     let mut dated = None;
     let mut values = Vec::new();
+    let mut units: HashMap<String, Option<String>> = HashMap::new();
     for note in records {
         let answer = answered.as_ref().and_then(|answers| answers.get(&format!("inner/n{note}")));
         let value = match known.remove(&note) {
@@ -1053,6 +1179,13 @@ async fn select_records(
             },
         };
         let Some(value) = amount(&value) else { return Ok(Err(missing(note))) };
+        if value.malformed_unit || units.get(&groups[&note]).is_some_and(|unit| *unit != value.unit) {
+            return Ok(Err(Unworked::Draft(format!(
+                "The inner {} mixes incompatible units, which code cannot compare.",
+                text::repr(&within.field)
+            ))));
+        }
+        units.insert(groups[&note].clone(), value.unit.clone());
         if dated.is_some_and(|date| date != value.date) {
             return Ok(Err(Unworked::Draft(format!(
                 "The inner {} mixes dates and numbers, which code cannot compare.",
@@ -1081,6 +1214,7 @@ pub async fn work(
     work_selected(jev, llm, task, claims, &HashMap::new(), notes, tokens, ledger).await
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn work_selected(
     jev: &dyn DecisionClient,
@@ -1088,6 +1222,21 @@ pub(super) async fn work_selected(
     task: &str,
     claims: &[(usize, &Tally, &str, &[String])],
     selections: &HashMap<usize, Within>,
+    notes: &Notes,
+    tokens: &TokenBudget,
+    ledger: Option<&Ledger>,
+) -> Result<IndexMap<usize, std::result::Result<Worked, Unworked>>> {
+    work_selected_with_slots(jev, llm, task, claims, selections, &HashMap::new(), notes, tokens, ledger).await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn work_selected_with_slots(
+    jev: &dyn DecisionClient,
+    llm: &dyn LLMClient,
+    task: &str,
+    claims: &[(usize, &Tally, &str, &[String])],
+    selections: &HashMap<usize, Within>,
+    slots: &HashMap<usize, std::ops::Range<usize>>,
     notes: &Notes,
     tokens: &TokenBudget,
     ledger: Option<&Ledger>,
@@ -1108,7 +1257,13 @@ pub(super) async fn work_selected(
     // The groups of each count per group, by the claim leading it, or None when a record's group was left unread.
     let mut grouping: IndexMap<usize, Option<Groups>> = IndexMap::new();
     for (index, tally, text, cited) in claims {
-        let times = if tally.written.trim().is_empty() { 0 } else { text.matches(tally.written.as_str()).count() };
+        let times = if tally.written.trim().is_empty() {
+            0
+        } else if let Some(slot) = slots.get(index) {
+            usize::from(text.get(slot.clone()) == Some(tally.written.as_str()))
+        } else {
+            text.matches(tally.written.as_str()).count()
+        };
         if times != 1 {
             // Code writes its value over `written`, so the reason names the claim and the rewrite that places it.
             // The two drafts need different rewrites, and code knows which it has: a claim missing the value needs
@@ -1262,7 +1417,7 @@ pub(super) async fn work_selected(
     }
     let repeated = ask(jev, &state, &repeats, tokens, ledger).await?;
     let mut pending = Vec::new();
-    for (index, tally, _, _) in claims {
+    for (index, tally, claim, _) in claims {
         if worked.contains_key(index) {
             continue;
         }
@@ -1285,7 +1440,15 @@ pub(super) async fn work_selected(
         }
         if tally.op == Op::Count {
             let evidence_ids = records.iter().map(|note| found[*note].id.clone()).collect();
-            worked.insert(*index, Ok(Worked { winner_ids: None, value: records.len().to_string(), evidence_ids }));
+            worked.insert(
+                *index,
+                Ok(Worked {
+                    winner_records: Vec::new(),
+                    winner_ids: None,
+                    value: records.len().to_string(),
+                    evidence_ids,
+                }),
+            );
             continue;
         }
         if records.is_empty() {
@@ -1293,7 +1456,7 @@ pub(super) async fn work_selected(
             worked.insert(*index, Err(Unworked::Draft(reason)));
             continue;
         }
-        pending.push((*index, *tally, kept));
+        pending.push((*index, *tally, *claim, kept));
     }
     for (index, tally, _, _) in claims {
         let Some((by, group)) = tally.grouped() else { continue };
@@ -1309,7 +1472,7 @@ pub(super) async fn work_selected(
         };
         worked.insert(*index, result);
     }
-    for (index, tally, kept) in pending {
+    for (index, tally, claim, kept) in pending {
         let basis = kept.cited(kept.records.iter().copied(), &found);
         let mut records = kept.records.clone();
         if let Some(within) = selections.get(&index) {
@@ -1361,11 +1524,21 @@ pub(super) async fn work_selected(
             worked.insert(index, Err(Unworked::Draft(reason)));
             continue;
         }
+        let unit = amounts.first().and_then(|(_, amount)| amount.unit.as_deref());
+        if amounts.iter().any(|(_, amount)| amount.malformed_unit)
+            || !amounts.iter().all(|(_, amount)| amount.unit.as_deref() == unit)
+        {
+            let field = text::repr(tally.field.as_deref().unwrap_or("value"));
+            worked.insert(index, Err(Unworked::Draft(format!(
+                "The notes give incompatible units for {field}; code cannot compare or add them without an explicit conversion."
+            ))));
+            continue;
+        }
         let mut result = match tally.op {
             Op::Sum => {
                 let all: Vec<&Amount> = amounts.iter().map(|(_, amount)| amount).collect();
                 let evidence_ids = kept.cited(amounts.iter().map(|(note, _)| *note), &found);
-                Worked { winner_ids: None, value: total(&all), evidence_ids }
+                Worked { winner_records: Vec::new(), winner_ids: None, value: total(&all), evidence_ids }
             }
             Op::Min | Op::Max => {
                 // Places count distinct values, so two records tied at the lowest are both first, and the next value
@@ -1398,13 +1571,33 @@ pub(super) async fn work_selected(
                 } else {
                     winner.written.clone()
                 };
-                Worked { winner_ids: None, value, evidence_ids }
+                Worked {
+                    winner_records: winners.iter().map(|(note, _)| kept.cited([*note], &found)).collect(),
+                    winner_ids: None,
+                    value,
+                    evidence_ids,
+                }
             }
             Op::Count => unreachable!("a count is worked out above"),
         };
         if selections.contains_key(&index) {
             result.winner_ids = Some(result.evidence_ids.clone());
             result.evidence_ids = basis;
+        }
+        if !tally.names_record()
+            && let Some(result_amount) = amount(&result.value).filter(|amount| !amount.date)
+            && claim_amount(claim, &tally.written, slots.get(&index)).is_none_or(|claim_amount| {
+                claim_amount.malformed_unit || claim_amount.unit.is_some() && result_amount.unit != claim_amount.unit
+            })
+        {
+            let field = text::repr(tally.field.as_deref().unwrap_or("value"));
+            worked.insert(
+                index,
+                Err(Unworked::Draft(format!(
+                    "The computed {field} value or unit does not match the claim's written amount. Include the entire numeric value in tally.written; code will not preserve obsolete digits or signs or relabel its unit."
+                ))),
+            );
+            continue;
         }
         let value = if tally.names_record() || amount(&result.value).is_some_and(|value| value.date) {
             result.value.clone()
@@ -1416,17 +1609,111 @@ pub(super) async fn work_selected(
     Ok(worked)
 }
 
+/// Winner fields are read only after numeric selection, so copying a name never asks a model to rank records.
+///
+/// The check sees the task, which says what the field means on these pages: asked "which shop sells the Burr Grinder
+/// cheaper, and tell me its name", a shop's page headed "Clerkenwell Coffee" scored 0.37 to 0.57 as that record's
+/// `shop` without it and 0.69 to 0.80 with it, while another shop's name and the price stayed at 0.03 or below.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn winner_fields(
+    jev: &dyn DecisionClient,
+    llm: &dyn LLMClient,
+    task: &str,
+    tally: &Tally,
+    worked: &Worked,
+    fields: &[String],
+    notes: &Notes,
+    tokens: &TokenBudget,
+    ledger: Option<&Ledger>,
+) -> Result<std::result::Result<HashMap<String, String>, Unworked>> {
+    let candidates = candidates_from(notes, false);
+    let ids = worked.winner_ids.as_ref().unwrap_or(&worked.evidence_ids);
+    let mut found = Vec::new();
+    for record in &worked.winner_records {
+        let parts: Option<Vec<_>> =
+            record.iter().map(|id| candidates.iter().find(|candidate| &candidate.id == id)).collect();
+        let Some(parts) = parts else {
+            return Ok(Err(Unworked::Unjudged));
+        };
+        let Some(first) = parts.first() else {
+            return Ok(Err(Unworked::Unjudged));
+        };
+        let quote = parts.iter().map(|part| part.quote.as_str()).collect::<Vec<_>>().join("\n");
+        found.push(Candidate {
+            quote,
+            note: json!({"quotes":parts.iter().map(|part| &part.note).collect::<Vec<_>>()}),
+            ..(**first).clone()
+        });
+    }
+    if found.is_empty() {
+        return Ok(Err(Unworked::Unjudged));
+    }
+    let records: Vec<usize> = (0..found.len()).collect();
+    let mut result = HashMap::new();
+    for field in fields {
+        let Some(groups) = read_groups(llm, field, &tally.of, &records, &found, ledger).await? else {
+            return Ok(Err(Unworked::Notes {
+                reason: format!("The selected records do not state an unambiguous {}.", text::repr(field)),
+                notes: ids.clone(),
+            }));
+        };
+        let mut questions = IndexMap::new();
+        for (group, (written, members)) in groups.values().enumerate() {
+            for record in members {
+                questions.insert(format!("field{group}/r{record}"), Question::Noul(NoulQuestion::new(
+                    format!("{UNTRUSTED} Doing `task`, does this copied text give the complete, unambiguous {} of exactly this record, without another record's value or an unrelated field? Copied text: {}. Record: {}", text::repr(field), text::repr(written), dumps(&found[*record].note)),
+                    Some("The copied text is exactly this record's requested field."),
+                    Some("It is missing, ambiguous, incomplete, another field, or another record's value."),
+                )));
+            }
+        }
+        let Some(answers) = ask(jev, &json!({"task":task,"field":field}), &questions, tokens, ledger).await? else {
+            return Ok(Err(Unworked::Unjudged));
+        };
+        for key in questions.keys() {
+            match answers.get(key) {
+                Some(Answer::Noul(value)) if (0.0..=1.0).contains(&value.probability) && value.probability > 0.5 => {}
+                Some(Answer::Noul(value)) if (0.0..=1.0).contains(&value.probability) => {
+                    return Ok(Err(Unworked::Notes {
+                        reason: format!(
+                            "The copied {} is not an unambiguous field of the selected record.",
+                            text::repr(field)
+                        ),
+                        notes: ids.clone(),
+                    }));
+                }
+                _ => return Ok(Err(Unworked::Unjudged)),
+            }
+        }
+        // Every field follows the same winner order, including repeated values, so tied names and other fields stay aligned.
+        let values: Option<Vec<&str>> = records
+            .iter()
+            .map(|record| {
+                groups.values().find(|(_, members)| members.contains(record)).map(|(written, _)| written.as_str())
+            })
+            .collect();
+        let Some(values) = values else {
+            return Ok(Err(Unworked::Unjudged));
+        };
+        result.insert(field.clone(), values.join(", "));
+    }
+    Ok(Ok(result))
+}
+
 /// A worked amount in the form the claim writes its value: code puts its number where the claim's number is and keeps
-/// the words around it, so "GBP 84.99" keeps its code where the note gave the number alone, and a claim whose
+/// the words around it, so "GBP 84.99" keeps its matching code, and a claim whose
 /// `written` leaves the currency sign in the text beside it ("$" then "251.00") is not given a second sign.
 fn as_written(value: &str, written: &str) -> String {
-    let number: String = value.chars().filter(|c| !currency(*c)).collect();
+    let number: String = value.chars().filter(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '-' | '+')).collect();
     let digit = |c: char| c.is_ascii_digit();
     match (written.find(digit), written.rfind(digit)) {
         (Some(start), Some(end)) => {
             // A sign written just before the number belongs to it, so the worked value's own sign takes its place.
-            let start =
-                written[..start].char_indices().rev().find(|(_, c)| !currency(*c)).map_or(0, |(i, c)| i + c.len_utf8());
+            let start = written[..start]
+                .char_indices()
+                .rev()
+                .find(|(_, c)| !currency(*c) && !matches!(c, '+' | '-'))
+                .map_or(0, |(i, c)| i + c.len_utf8());
             let sign: String = value.chars().filter(|c| currency(*c)).collect();
             let sign = if written[start..].chars().next().is_some_and(currency) { sign } else { String::new() };
             format!("{}{sign}{number}{}", &written[..start], &written[end + 1..])
@@ -1460,6 +1747,19 @@ mod tests {
     use fastbrowse_core::models::{CostBasis, CostComponent, CostLine};
 
     use super::*;
+
+    #[test]
+    fn tally_response_requires_a_field_only_for_value_operations() {
+        let schema = Typed::<Tally>::default();
+        for op in ["count", "sum", "min", "max"] {
+            let mut value = json!({"op":op,"of":"inspection record","written":"3"});
+            assert_eq!(schema.validate_json(&value.to_string()).is_ok(), op == "count", "{value}");
+            value["field"] = serde_json::Value::Null;
+            assert_eq!(schema.validate_json(&value.to_string()).is_ok(), op == "count", "{value}");
+            value["field"] = json!("duration");
+            assert!(schema.validate_json(&value.to_string()).is_ok(), "{value}");
+        }
+    }
 
     #[test]
     fn missing_fields_are_judged_with_the_captures_record_extent() {
@@ -1626,7 +1926,7 @@ mod tests {
             let evidence: Evidence = serde_json::from_value(json!({
                 "source_id": "s1", "url": page, "frame_id": null,
                 "captured_at": "2026-01-01T00:00:00Z", "capture_sha256": page,
-                "start": start, "end": start + quote.len(), "quote": quote,
+                "start": start, "end": start + quote.chars().count(), "quote": quote,
                 "heading_path": ["Product", "Offer"],
             }))
             .unwrap();
@@ -1790,9 +2090,12 @@ mod tests {
             }
         }
 
-        let mut captured =
-            capture(&[(BlockKind::Record, "\"Choices\" by Ada (about)"), (BlockKind::Paragraph, "Made by Zyte")]);
-        captured.blocks[0].whole_record = true;
+        let mut captured = capture(&[
+            (BlockKind::Heading, "Ada"),
+            (BlockKind::Record, "\"Choices\" by Ada (about)"),
+            (BlockKind::Paragraph, "Made by Zyte"),
+        ]);
+        captured.blocks[1].whole_record = true;
         let page = Page::new(&captured);
         let facts = captured.blocks.iter().map(|block| {
             let quote = evidence(&page, block, block.start, block.end);
@@ -1800,7 +2103,8 @@ mod tests {
         });
         let mut notes = Notes::new(facts.collect::<Vec<_>>());
         notes.remember_capture(&captured, 0);
-        let cited = vec![candidates(&notes)[0].id.clone()];
+        let found = candidates(&notes);
+        let cited = vec![found[0].id.clone(), found[1].id.clone()];
         let tally = Tally {
             op: Op::Count,
             of: "quote".into(),
@@ -1858,14 +2162,15 @@ mod tests {
     #[test]
     fn amounts_keep_their_sign_and_places() {
         let found = amount("£10.69").unwrap();
-        assert_eq!((found.value, found.places, found.sign), (10.69, 2, Some('£')));
+        assert_eq!((found.value, found.places, found.unit.as_deref()), (10.69, 2, Some("£")));
         assert_eq!(amount("1,234").unwrap().value, 1234.0);
         assert_eq!(amount("GBP 84.99").unwrap().value, 84.99);
+        assert_eq!(amount("GBP 84.99").unwrap().unit.as_deref(), Some("GBP"));
         assert_eq!(amount("Galaxy S20 Ultra"), None, "a name with a model number is not a number");
         assert_eq!(amount("Pixel 2"), None);
         let (a, b) = (amount("£1.5").unwrap(), amount("£2.25").unwrap());
         assert_eq!(total(&[&a, &b]), "£3.75");
-        assert_eq!(total(&[&a, &amount("2").unwrap()]), "3.5");
+        assert_eq!(total(&[&amount("GBP 1.5").unwrap(), &amount("GBP 2.25").unwrap()]), "GBP 3.75");
     }
 
     #[test]
@@ -1875,6 +2180,8 @@ mod tests {
         assert_eq!(as_written("3.5", "3"), "3.5");
         assert_eq!(as_written("84.99", "GBP 84.99"), "GBP 84.99", "the claim's currency code stays");
         assert_eq!(as_written("£12.00", "£12"), "£12.00");
+        assert_eq!(as_written("GBP -1009", "GBP -23"), "GBP -1009");
+        assert_eq!(as_written("£1009", "£-23"), "£1009");
     }
 
     #[test]
@@ -1896,7 +2203,188 @@ mod tests {
     }
 
     /// Reads every listed record's group as `reads` gives it by the record's id.
+    struct FieldSupport(bool);
+    impl DecisionClient for FieldSupport {
+        fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+            FirstField.profile()
+        }
+        fn evaluate<'a>(
+            &'a self,
+            state: &'a serde_json::Value,
+            questions: &'a IndexMap<String, Question>,
+        ) -> fastbrowse_core::BoxFuture<
+            'a,
+            std::result::Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>,
+        > {
+            use fastbrowse_core::decision::{Evaluation, NoulAnswer};
+            // The task says what the field means on these pages; without it a shop's page heading was a coin flip.
+            assert_eq!(state["task"], "Which shop is cheaper? Tell me its name.", "{state}");
+            let answers = questions
+                .iter()
+                .map(|(key, question)| {
+                    let Question::Noul(question) = question else { panic!("field support only") };
+                    assert!(question.instructions.contains("Doing `task`, does this copied text"));
+                    assert!(question.instructions.contains("exactly this record"));
+                    (
+                        key.clone(),
+                        Answer::Noul(NoulAnswer {
+                            kind: Default::default(),
+                            probability: if self.0 { 1.0 } else { 0.0 },
+                        }),
+                    )
+                })
+                .collect();
+            Box::pin(async move {
+                Ok(Evaluation {
+                    model: "test".into(),
+                    answers,
+                    input_tokens: 1,
+                    cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                    requests: 1,
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn winner_fields_use_only_computed_winners_and_preserve_ties() {
+        let facts: Vec<_> = ["Wrong record £20", "Winner A £210", "Winner B £210"].iter().enumerate().map(|(index, quote)| {
+            let evidence = serde_json::from_value(json!({"source_id":format!("s{index}"),"url":"https://example.test/records","frame_id":null,"captured_at":"2026-01-01T00:00:00Z","capture_sha256":format!("sha{index}"),"start":0,"end":quote.len(),"quote":quote})).unwrap();
+            crate::memory::Fact::read(quote, evidence, fastbrowse_core::models::FactReader::JevChoice)
+        }).collect();
+        let ids: Vec<_> = facts.iter().map(fact_id).collect();
+        let notes = Notes::new(facts);
+        let tally = Tally {
+            op: Op::Max,
+            of: "record".into(),
+            field: Some("price".into()),
+            rank: None,
+            by: None,
+            group: None,
+            written: "£20".into(),
+        };
+        let tokens = FirstField.profile().fit(None).tokens;
+        let worked = work(
+            &FirstField,
+            &ReadsGroups(&[]),
+            "Find the highest-priced records",
+            &[(0, &tally, "£20", &[])],
+            &notes,
+            &tokens,
+            None,
+        )
+        .await
+        .unwrap();
+        let done = worked[&0].as_ref().unwrap();
+        assert_eq!(done.value, "£210");
+        assert_eq!(done.winner_records, vec![vec![ids[1].clone()], vec![ids[2].clone()]]);
+        let fields = ["name".into()];
+        let result = winner_fields(
+            &FieldSupport(true),
+            &ReadsGroups(&[("r0", Some("Winner A")), ("r1", Some("Winner B"))]),
+            "Which shop is cheaper? Tell me its name.",
+            &tally,
+            done,
+            &fields,
+            &notes,
+            &tokens,
+            None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(result["name"], "Winner A, Winner B");
+        for reads in
+            [vec![("r0", Some("Wrong record")), ("r1", Some("Winner B"))], vec![("r0", None), ("r1", Some("Winner B"))]]
+        {
+            assert!(
+                winner_fields(
+                    &FieldSupport(true),
+                    &ReadsGroups(&reads),
+                    "Which shop is cheaper? Tell me its name.",
+                    &tally,
+                    done,
+                    &fields,
+                    &notes,
+                    &tokens,
+                    None
+                )
+                .await
+                .unwrap()
+                .is_err()
+            );
+        }
+        assert!(
+            winner_fields(
+                &FieldSupport(false),
+                &ReadsGroups(&[("r0", Some("£210")), ("r1", Some("£210"))]),
+                "Which shop is cheaper? Tell me its name.",
+                &tally,
+                done,
+                &fields,
+                &notes,
+                &tokens,
+                None
+            )
+            .await
+            .unwrap()
+            .is_err()
+        );
+    }
+
     struct ReadsGroups<'a>(&'a [(&'a str, Option<&'a str>)]);
+
+    #[tokio::test]
+    async fn winner_fields_can_copy_the_selected_records_captured_heading() {
+        let facts: Vec<_> = [("First supplier", "Valve - GBP 18"), ("Second supplier", "Valve - GBP 25")]
+            .iter()
+            .enumerate()
+            .map(|(index, (heading, quote))| {
+                let evidence = serde_json::from_value(json!({"source_id":format!("s{index}"),"url":format!("https://example.test/supplier/{index}"),"frame_id":null,"captured_at":"2026-01-01T00:00:00Z","capture_sha256":format!("sha{index}"),"start":0,"end":quote.len(),"quote":quote,"heading_path":[heading]})).unwrap();
+                crate::memory::Fact::read(quote, evidence, fastbrowse_core::models::FactReader::JevChoice)
+            })
+            .collect();
+        let ids: Vec<_> = facts.iter().map(fact_id).collect();
+        let notes = Notes::new(facts);
+        let tally = Tally {
+            op: Op::Min,
+            of: "supplier of the valve".into(),
+            field: Some("price".into()),
+            rank: None,
+            by: None,
+            group: None,
+            written: "GBP 18".into(),
+        };
+        let worked = Worked {
+            value: "GBP 18".into(),
+            evidence_ids: ids.clone(),
+            winner_ids: Some(vec![ids[0].clone()]),
+            winner_records: vec![vec![ids[0].clone()]],
+        };
+        let tokens = FirstField.profile().fit(None).tokens;
+        for (copied, accepted) in [
+            ("First supplier", true),
+            ("Second supplier", false),
+            ("Invented supplier", false),
+            ("example.test", false),
+            ("First supplier Valve", false),
+        ] {
+            let result = winner_fields(
+                &FieldSupport(true),
+                &ReadsGroups(&[("r0", Some(copied))]),
+                "Which shop is cheaper? Tell me its name.",
+                &tally,
+                &worked,
+                &["supplier name".into()],
+                &notes,
+                &tokens,
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(result.is_ok(), accepted, "{copied}: {result:?}");
+        }
+    }
 
     impl LLMClient for ReadsGroups<'_> {
         fn generate_value<'a>(
@@ -1912,7 +2400,11 @@ mod tests {
                 .iter()
                 .map(|(record, text)| {
                     let mut value = json!({"record": record, "text": text});
-                    if schema.json_schema().to_string().contains("heading") {
+                    if schema.json_schema().get("$defs").and_then(serde_json::Value::as_object).is_some_and(|defs| {
+                        defs.values().any(|definition| {
+                            definition.get("properties").and_then(|properties| properties.get("heading")).is_some()
+                        })
+                    }) {
                         value["heading"] = serde_json::Value::Null;
                     }
                     value
@@ -2109,9 +2601,191 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mixed_currency_tallies_are_unworked() {
+        for op in [Op::Sum, Op::Min, Op::Max] {
+            let worked = amount_tally(&["£23", "$986"], op, "£23").await;
+            assert!(
+                matches!(&worked, Err(Unworked::Draft(reason)) if reason.contains("incompatible units")),
+                "{op:?} failed to reject incompatible currencies: {worked:?}"
+            );
+        }
+    }
+
+    fn amount_notes(values: &[&str]) -> Notes {
+        let facts = values.iter().enumerate().map(|(index, value)| {
+            let quote = format!("Record {} {value}", char::from(b'A' + index as u8));
+            let evidence = serde_json::from_value(json!({"source_id": format!("s{index}"), "url": "https://example.test/records", "frame_id": null, "captured_at": "2026-01-01T00:00:00Z", "capture_sha256": format!("sha{index}"), "start": 0, "end": quote.chars().count(), "quote": quote})).unwrap();
+            crate::memory::Fact::read(&quote, evidence, fastbrowse_core::models::FactReader::JevChoice)
+        });
+        Notes::new(facts)
+    }
+
+    async fn amount_tally(values: &[&str], op: Op, written: &str) -> std::result::Result<Worked, Unworked> {
+        amount_tally_in_claim(values, op, written, written).await
+    }
+
+    async fn amount_tally_in_claim(
+        values: &[&str],
+        op: Op,
+        written: &str,
+        claim: &str,
+    ) -> std::result::Result<Worked, Unworked> {
+        let notes = amount_notes(values);
+        let tally = Tally {
+            op,
+            of: "record".into(),
+            field: Some("amount".into()),
+            rank: None,
+            by: None,
+            group: None,
+            written: written.into(),
+        };
+        work(
+            &FirstField,
+            &ReadsGroups(&[]),
+            "Calculate the amounts",
+            &[(0, &tally, claim, &[])],
+            &notes,
+            &FirstField.profile().fit(None).tokens,
+            None,
+        )
+        .await
+        .unwrap()
+        .swap_remove(&0)
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn explicit_amount_units_survive_candidate_selection_and_arithmetic() {
+        for (values, unit) in [
+            (["GBP 23", "GBP 986"], "GBP "),
+            (["23 GBP", "986 GBP"], "GBP "),
+            (["from GBP 23", "from GBP 986"], "GBP "),
+            (["FOR 23", "FOR 986"], ""),
+            (["23 FOR", "986 FOR"], ""),
+            (["DEM 23", "DEM 986"], "DEM "),
+            (["(GBP 23)", "(GBP 986)"], "GBP "),
+            (["(23 GBP)", "(986 GBP)"], "GBP "),
+            (["£23", "£986"], "£"),
+            (["23 £", "986 £"], "£"),
+            (["23£", "986£"], "£"),
+            (["23", "986"], ""),
+        ] {
+            for (op, expected) in [(Op::Sum, "1009"), (Op::Min, "23"), (Op::Max, "986")] {
+                let written = format!("{unit}23");
+                let result = amount_tally(&values, op, &written).await;
+                assert_eq!(
+                    result.as_ref().map(|worked| worked.value.as_str()),
+                    Ok(format!("{unit}{expected}").as_str()),
+                    "{values:?} {op:?}: {result:?}"
+                );
+            }
+        }
+        for values in
+            [["GBP 23", "USD 986"], ["23 GBP", "986 USD"], ["23 £", "986 $"], ["23", "£986"], ["GBP 23", "986"]]
+        {
+            for op in [Op::Sum, Op::Min, Op::Max] {
+                let result = amount_tally(&values, op, "23").await;
+                assert!(
+                    matches!(result, Err(Unworked::Draft(ref reason)) if reason.contains("incompatible units")),
+                    "{values:?} {op:?}: {result:?}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn computed_amounts_cannot_be_relabelled_with_another_unit() {
+        for values in [["USD 23", "USD 986"], ["23", "986"]] {
+            let result = amount_tally(&values, Op::Sum, "GBP 23").await;
+            assert!(matches!(result, Err(Unworked::Draft(ref reason)) if reason.contains("unit")), "{result:?}");
+            let result = amount_tally_in_claim(&values, Op::Sum, "23", "GBP 23").await;
+            assert!(matches!(result, Err(Unworked::Draft(ref reason)) if reason.contains("unit")), "{result:?}");
+        }
+        let result = amount_tally(&["£23", "£986"], Op::Sum, "23").await.unwrap();
+        assert_eq!(result.value, "1009", "a numeric computed slot can have its unit in the surrounding claim");
+        for (values, claim) in [(["£23", "£986"], "£23"), (["GBP 23", "GBP 986"], "23 GBP")] {
+            let result = amount_tally_in_claim(&values, Op::Sum, "23", claim).await.unwrap();
+            assert_eq!(result.value, "1009", "a matching unit outside the computed slot stays in the claim");
+        }
+        for claim in ["GBP -23", "GBP 023", "GBP 23.0"] {
+            assert!(amount_tally_in_claim(&["GBP 23", "GBP 986"], Op::Sum, "23", claim).await.is_err());
+        }
+        let result = amount_tally_in_claim(&["GBP -23", "GBP -986"], Op::Sum, "-23", "GBP -23").await.unwrap();
+        assert_eq!(result.value, "-1009");
+        for values in [
+            ["GBP £23", "GBP £986"],
+            ["GBP£23", "GBP£986"],
+            ["USD $23", "USD $986"],
+            ["USD GBP 23", "USD GBP 986"],
+            ["23 USD GBP", "986 USD GBP"],
+            ["£$23", "£$986"],
+        ] {
+            assert!(amount_tally(&values, Op::Sum, "23").await.is_err(), "malformed units accepted: {values:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn nested_amounts_require_compatible_units_within_each_group() {
+        for (values, compatible) in [
+            (["GBP 23", "USD 986", "GBP 5"], false),
+            (["GBP 23", "GBP 986", "USD 5"], true),
+            (["23", "986", "5"], true),
+        ] {
+            let grouped = [
+                format!("Category A {}", values[0]),
+                format!("Category A {}", values[1]),
+                format!("Category B {}", values[2]),
+            ];
+            let notes = amount_notes(&grouped.iter().map(String::as_str).collect::<Vec<_>>());
+            let found = candidates(&notes);
+            let fields = values
+                .iter()
+                .enumerate()
+                .map(|(note, value)| ((0, note), FieldAnswer::Value((*value).into())))
+                .collect();
+            let tally = Tally {
+                op: Op::Min,
+                of: "record".into(),
+                field: Some("amount".into()),
+                rank: None,
+                by: None,
+                group: None,
+                written: "23".into(),
+            };
+            let within =
+                Within { by: "category".into(), op: super::super::reduction::Extreme::Max, field: "amount".into() };
+            let reads = [("r0", Some("A")), ("r1", Some("A")), ("r2", Some("B"))];
+            let selected = select_records(
+                &FirstField,
+                &ReadsGroups(&reads),
+                &HashMap::new(),
+                &tally,
+                0,
+                &fields,
+                &within,
+                &[0, 1, 2],
+                &found,
+                &FirstField.profile().fit(None).tokens,
+                None,
+            )
+            .await
+            .unwrap();
+            if compatible {
+                assert_eq!(selected.unwrap(), vec![1, 2]);
+            } else {
+                assert!(
+                    matches!(selected, Err(Unworked::Draft(ref reason)) if reason.contains("incompatible units")),
+                    "{selected:?}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn a_nested_comparison_works_through_the_actual_tally_path() {
         let facts: Vec<_> = ["Release A Dec 6, 2019", "Release A Dec 6, 2024", "Release B Nov 8, 2026"].iter().enumerate().map(|(index, quote)| {
-            let evidence = serde_json::from_value(json!({"source_id": format!("s{index}"), "url": "https://example.test/releases", "frame_id": null, "captured_at": "2026-01-01T00:00:00Z", "capture_sha256": format!("sha{index}"), "start": 0, "end": quote.len(), "quote": quote})).unwrap();
+            let evidence = serde_json::from_value(json!({"source_id": format!("s{index}"), "url": "https://example.test/releases", "frame_id": null, "captured_at": "2026-01-01T00:00:00Z", "capture_sha256": format!("sha{index}"), "start": 0, "end": quote.chars().count(), "quote": quote})).unwrap();
             crate::memory::Fact::read(quote, evidence, fastbrowse_core::models::FactReader::JevChoice)
         }).collect();
         let expected = fact_id(&facts[1]);
@@ -2200,7 +2874,7 @@ mod tests {
     #[tokio::test]
     async fn different_inner_fields_select_before_requiring_an_outer_value() {
         let facts: Vec<_> = ["Release A Dec 6, 2019", "Release A Dec 6, 2024 £9", "Release B Nov 8, 2026 £5"].iter().enumerate().map(|(index, quote)| {
-            let evidence = serde_json::from_value(json!({"source_id": format!("s{index}"), "url": "https://example.test/releases", "frame_id": null, "captured_at": "2026-01-01T00:00:00Z", "capture_sha256": format!("sha{index}"), "start": 0, "end": quote.len(), "quote": quote})).unwrap();
+            let evidence = serde_json::from_value(json!({"source_id": format!("s{index}"), "url": "https://example.test/releases", "frame_id": null, "captured_at": "2026-01-01T00:00:00Z", "capture_sha256": format!("sha{index}"), "start": 0, "end": quote.chars().count(), "quote": quote})).unwrap();
             crate::memory::Fact::read(quote, evidence, fastbrowse_core::models::FactReader::JevChoice)
         }).collect();
         let expected = fact_id(&facts[1]);

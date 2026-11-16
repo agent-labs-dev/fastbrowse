@@ -931,6 +931,7 @@ impl McpServer {
                             );
                             outbox(notification("notifications/progress", Value::Object(params)));
                         }
+                        Event::BrowserWarning(_) => {}
                     }
                 }) as fastbrowse_core::BoxFuture<'static, ()>
             })

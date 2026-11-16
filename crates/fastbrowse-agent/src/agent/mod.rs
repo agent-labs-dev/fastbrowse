@@ -20,7 +20,7 @@ pub(crate) mod state;
 #[cfg(test)]
 mod tests;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -106,6 +106,8 @@ struct Seen {
     artifact_start: usize,
     /// The masked text of each capture a read took facts from, by digest, for the captures a result cites.
     read_captures: HashMap<String, String>,
+    screenshot_artifacts: Vec<Artifact>,
+    screenshot_attempts: HashSet<String>,
     /// The ended run, kept for a browser to carry on from.
     resume: Option<Resume>,
 }
@@ -222,6 +224,25 @@ impl Agent {
         self.redactor().mask(value)
     }
 
+    // A task scoped to "the whole site" loses its referent after navigation unless its starting address stays
+    // with it. It is stated as what happened, not as an instruction: worded "Start at <url>." it read as one more
+    // step no action had taken, and Jev chose DONE over typing a sign-in code it had just read. Mask at the call
+    // boundary: a secret may have been resolved since the run began.
+    fn model_task(&self, state: &RunState) -> String {
+        let task = self.mask(&state.task);
+        match state.caller_start.as_deref() {
+            Some(start) => format!("The browser opened {} for this task. {task}", self.mask(start)),
+            None => task,
+        }
+    }
+
+    // What the caller asked, without where the run opened. The authorization gate and the done check judge this: the
+    // start is not a step the caller authorized or one any action shows, and beside it a form posting to /list/delete
+    // under "Tidy it up" scored 0.49 to 0.59 as irreversible, where the task alone scored 0.56 to 0.65.
+    fn caller_task(&self, state: &RunState) -> String {
+        self.mask(&state.task)
+    }
+
     fn reveals_text(&self, value: &str) -> bool {
         self.redactor().reveals(value)
     }
@@ -246,7 +267,12 @@ impl Agent {
         };
         let began = Instant::now();
         ledger.set_started(Some(began));
-        self.seen().artifact_start = self.page.artifacts().len();
+        {
+            let mut seen = self.seen();
+            seen.artifact_start = self.page.artifacts().len();
+            seen.screenshot_artifacts.clear();
+            seen.screenshot_attempts.clear();
+        }
         // The ledger checks `max_seconds` between operations; only a deadline around the awaits bounds a browser or
         // provider call that never returns.
         let deadline = ledger.limits.max_seconds.map(|seconds| began + Duration::from_secs_f64(seconds));
@@ -309,9 +335,11 @@ impl Agent {
         // A question the run already asked beside the same state is answered from what Jev said then.
         let scoped = crate::batches::knowing(Default::default(), spending);
         let (mut result, mut loop_returned, needs_browser) = self.trace.phase("run", scoped).await;
+        let screenshot_artifacts = std::mem::take(&mut self.seen().screenshot_artifacts);
         let result = if needs_browser {
             // A run that needs a browser reports what the ledger spent and nothing else: no budget check and no ending
             // frame.
+            result.artifacts.extend(screenshot_artifacts);
             result.cost = ledger.breakdown();
             result
         } else {
@@ -349,6 +377,18 @@ impl Agent {
                 None => changed,
             });
         }
+        // Spend checks and final screenshots can change an earlier result's status.
+        self.event("run_finished", || {
+            Map::from_iter([
+                ("status".into(), json!(result.status)),
+                ("error_present".into(), result.error.is_some().into()),
+                ("budget_resource".into(), json!(result.budget.as_ref().map(|budget| budget.resource))),
+                ("wall_kind".into(), json!(result.wall.as_ref().map(|wall| wall.kind))),
+                ("steps".into(), result.steps.len().into()),
+                ("artifacts".into(), result.artifacts.len().into()),
+                ("final_frame".into(), result.final_frame.is_some().into()),
+            ])
+        });
         result
     }
 
@@ -554,7 +594,7 @@ impl Agent {
                 let steps = state.executed_steps();
                 if state.compose
                     && let Ok(composed) =
-                        compose(&*self.jev, &*self.llm, &state.task, &notes, Some(&reporting), &steps).await
+                        compose(&*self.jev, &*self.llm, &self.model_task(state), &notes, Some(&reporting), &steps).await
                     && !composed.claims.is_empty()
                 {
                     // Only a rejected composition stops a run unverified, so one that passes every claim and coverage
@@ -767,6 +807,8 @@ impl Agent {
         };
         let start = self.seen().artifact_start;
         let artifacts = self.page.artifacts();
+        let mut artifacts = artifacts.get(start..).map(<[_]>::to_vec).unwrap_or_default();
+        artifacts.extend(self.seen().screenshot_artifacts.iter().cloned());
         RunResult {
             browser: None,
             status,
@@ -776,7 +818,7 @@ impl Agent {
             evidence: outcome.evidence,
             steps: state.map(|state| state.steps.clone()).unwrap_or_default(),
             cost: ledger.breakdown(),
-            artifacts: artifacts.get(start..).map(<[_]>::to_vec).unwrap_or_default(),
+            artifacts,
             citations: outcome.citations,
             error: outcome.error,
             final_url: match (state, observed) {
@@ -925,7 +967,8 @@ impl Agent {
             page_facts.push(source);
         }
         Ok(StepContext {
-            task: state.task.clone(),
+            task: self.model_task(state),
+            literal_task: Some(state.task.clone()),
             web_search: self.page.search_price().is_some(),
             subgoal: state.hint.clone(),
             dates: state.dates.clone(),

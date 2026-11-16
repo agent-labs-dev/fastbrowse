@@ -17,7 +17,7 @@
 //!
 //! A browserless fetch and a browser capture both read a JSON document here, so a value has the same blocks either way.
 
-use super::BlockKind;
+use super::{BlockKind, SourceField};
 use crate::py::text;
 
 /// One block of a JSON document: its kind, its text and the keys and indices that lead to it.
@@ -28,6 +28,16 @@ pub struct Found {
     pub heading_path: Vec<String>,
     /// The block is an array item's whole text, its textless values named.
     pub whole_record: bool,
+    /// Offsets relative to this block's decoded rendering, before capture concatenation.
+    pub fields: Vec<SourceField>,
+}
+
+struct Record {
+    depth: usize,
+    path: Vec<String>,
+    rendered: String,
+    fields: Vec<SourceField>,
+    offset: i64,
 }
 
 /// Whether a `Content-Type` names a JSON document: `application/json` or a `+json` type such as
@@ -46,7 +56,7 @@ pub fn blocks(body: &str) -> Option<Vec<Found>> {
     // than a call stack, so a deeply nested document cannot overflow one.
     let mut open: Vec<Option<usize>> = Vec::new();
     // The array item being read as a record: the containers open around its members, its path, and its lines.
-    let mut record: Option<(usize, Vec<String>, Vec<String>)> = None;
+    let mut record: Option<Record> = None;
     'value: loop {
         reader.space();
         let leaf = match reader.peek()? {
@@ -57,7 +67,13 @@ pub fn blocks(body: &str) -> Option<Vec<Found>> {
                     "{}".to_string()
                 } else {
                     if record.is_none() && matches!(open.last(), Some(Some(_))) {
-                        record = Some((open.len() + 1, path.clone(), Vec::new()));
+                        record = Some(Record {
+                            depth: open.len() + 1,
+                            path: path.clone(),
+                            rendered: String::new(),
+                            fields: Vec::new(),
+                            offset: 0,
+                        });
                     }
                     open.push(None);
                     reader.key(&mut path, &mut found, record.is_none())?;
@@ -82,13 +98,26 @@ pub fn blocks(body: &str) -> Option<Vec<Found>> {
             _ => reader.number()?,
         };
         match &mut record {
-            Some((_, at, lines)) => {
-                let within = path[at.len()..].join(".");
-                lines.push(if text::strip(&leaf).is_empty() {
-                    format!("[{within}: no text]")
+            Some(record) => {
+                let field_path = path[record.path.len()..].to_vec();
+                let within = field_path.join(".");
+                if !record.rendered.is_empty() {
+                    record.rendered.push('\n');
+                    record.offset += 1;
+                }
+                if text::strip(&leaf).is_empty() {
+                    let line = format!("[{within}: no text]");
+                    record.offset += text::len(&line) as i64;
+                    record.rendered.push_str(&line);
                 } else {
-                    format!("{within}: {leaf}")
-                });
+                    let prefix = format!("{within}: ");
+                    record.offset += text::len(&prefix) as i64;
+                    record.rendered.push_str(&prefix);
+                    let start = record.offset;
+                    record.rendered.push_str(&leaf);
+                    record.offset += text::len(&leaf) as i64;
+                    record.fields.push(SourceField { path: field_path, start, end: record.offset });
+                }
             }
             None => push(&mut found, BlockKind::Paragraph, leaf, &path),
         }
@@ -111,9 +140,13 @@ pub fn blocks(body: &str) -> Option<Vec<Found>> {
                 }
                 (b'}', None) | (b']', Some(_)) => {
                     open.pop();
-                    if record.as_ref().is_some_and(|(depth, _, _)| *depth == open.len() + 1) {
-                        let (_, at, lines) = record.take().expect("a record is open");
-                        found.push(Found { whole_record: true, ..block(BlockKind::Record, lines.join("\n"), &at) });
+                    if record.as_ref().is_some_and(|record| record.depth == open.len() + 1) {
+                        let record = record.take().expect("a record is open");
+                        found.push(Found {
+                            whole_record: true,
+                            fields: record.fields,
+                            ..block(BlockKind::Record, record.rendered, &record.path)
+                        });
                     }
                 }
                 _ => return None,
@@ -130,7 +163,7 @@ fn push(found: &mut Vec<Found>, kind: BlockKind, text: String, path: &[String]) 
 }
 
 fn block(kind: BlockKind, text: String, path: &[String]) -> Found {
-    Found { kind, text, heading_path: path.to_vec(), whole_record: false }
+    Found { kind, text, heading_path: path.to_vec(), whole_record: false, fields: Vec::new() }
 }
 
 struct Reader<'a> {

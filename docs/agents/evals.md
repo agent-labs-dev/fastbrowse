@@ -49,14 +49,29 @@ measured fastbrowse SHA. It runs `parallax run` with the plugin installed,
 pool GCP service account and the `harness_sha` and `FASTBROWSE_SHA` install
 order intact.
 
+Before paid work, each workflow authenticates its OpenRouter credentials with
+`GET https://openrouter.ai/api/v1/key`. This validates the credentials but does
+not compare remaining provider credit with the approved budget. The request
+wallet still bounds committed work, and a provider cap can stop later calls
+after a campaign has started.
+
 Parallax writes `manifest.json`, `results.jsonl`, `budget.jsonl`, and trial
 artifacts. Resume a stopped run with `parallax run --resume RUN_DIR` and keep
 the same budget and reserve. Environment interruptions are retried with
 `--retry-invalid` and `--retry-wait`; an agent failure is not retried as an
 environment interruption.
 
+After the run artifacts pass validation, each group's job summary contains
+trial tallies, costs and failed check IDs from `parallax report RUN_ID`. Task evidence and judge commentary
+are excluded. When both `PARALLAX_REPORT_WEBHOOK_URL` and
+`PARALLAX_REPORT_WEBHOOK_SECRET` are configured, the same summary is sent as
+JSON with `X-Webhook-Signature` containing the hex HMAC-SHA256 of the exact
+request body. Reporting failures do not change campaign acceptance or
+publication. The report's status is the campaign matrix outcome, not a
+claim that every task passed.
+
 New task records belong in the combined task source. A record must use
-`Area.BROWSER`, require `Capability.BROWSER`, and name `browser-evidence-v1`.
+`Area.BROWSER`, require `Capability.BROWSER`, and name `browser-evidence-v2`.
 Task identity comes from `versions.json`. Do not put a password or token in a
 record or prompt. The fastbrowse harness resolves task secrets by origin.
 
@@ -79,7 +94,7 @@ The mapping preserves these public arm names:
 `fastbrowse-hosted` and `cua-codex` remain diagnostic. Candidate schema 7,
 `GROUPS`, site groups, and all files under `docs/results` stay as recorded.
 
-The official benchmark workflow uses Parallax dev20's `bu-bench` and
+The official benchmark workflow uses Parallax 2.0.0.dev26's `bu-bench` and
 `online-mind2web` sources. It clones the pinned upstream judge for each source,
 installs its dependencies in that checkout's own virtual environment, and
 passes the official source's sanitized run directory to the normal publication

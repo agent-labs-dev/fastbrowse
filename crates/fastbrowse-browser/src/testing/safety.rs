@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use fastbrowse_core::config::Config;
-use fastbrowse_core::models::{Attachment, StepOutcome};
+use fastbrowse_core::models::{Attachment, StepFailure, StepOutcome};
 use fastbrowse_core::origins::OriginGrant;
 use serde_json::json;
 use tokio::sync::watch;
@@ -50,7 +50,7 @@ pub async fn upload(
     control_id: &str,
     files: &[Attachment],
     grant: Option<Vec<String>>,
-) -> Result<(StepOutcome, Option<String>), BrowserError> {
+) -> Result<(StepOutcome, Option<String>, Option<StepFailure>), BrowserError> {
     let target = page.state.lock().unwrap().last.as_ref().and_then(|l| l.controls.get(control_id).cloned());
     let target = target.expect("the control was observed");
     let Some(grant) = grant else { return page.upload(Some(&target), files, Point::At(1.0, 1.0)).await };
@@ -75,6 +75,7 @@ pub async fn upload(
         require_chooser_interception: false,
         on_frame: None,
         on_stop: None,
+        on_warning: None,
         trace: fastbrowse_core::telemetry::Trace::disabled(),
         viewport: None,
         client: Mutex::new(shared.client.lock().unwrap().clone()),

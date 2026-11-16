@@ -5,7 +5,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from parallax.models import Area, Capability, TaskRecord
+from parallax.models import Area, Capability, TaskRecord, TurnInput
 from parallax.task import task_from_record
 
 from fastbrowse_evals import hosted_api
@@ -20,7 +20,7 @@ TASK = task_from_record(
         area=Area.BROWSER,
         summary="Report the page title.",
         prompt="Report the page title.",
-        grading="browser-evidence-v1",
+        grading="browser-evidence-v2",
         requires=frozenset({Capability.BROWSER}),
         data={"start_url": "https://example.com/"},
     ),
@@ -41,6 +41,47 @@ def test_a_recorded_live_run_reports_the_charge_the_worker_time_and_the_citation
     assert ("https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html", "A Light in the Attic") in {
         (c["url"], c["quote"]) for c in outcome["citations"]
     }
+
+
+async def test_the_hosted_arm_preserves_action_outcomes_for_the_judge(monkeypatch: pytest.MonkeyPatch) -> None:
+    run = json.loads(RUN.read_text())
+    run["status"] = "needs_confirmation"
+    run["steps"] = [
+        {
+            "operation": "click",
+            "outcome": "failed",
+            "note": "This action needs confirmation",
+            "url": "https://shop.example/review",
+            "target": "Place order",
+        }
+    ]
+
+    async def finished(*args: object) -> tuple[dict[str, object], float]:
+        return run, 1.0
+
+    monkeypatch.setattr(hosted_api, "submit_and_wait", finished)
+    harness = hosted_api.FastbrowseHostedHarness(observer="plain-cdp")
+    harness.bind_task(TASK)
+    result = await harness.execute(TurnInput(index=0, text=TASK.turns[0].text, new_session=True))
+    assert result["step_log"][0]["action"] == "click (failed): This action needs confirmation"
+
+
+@pytest.mark.parametrize("data", [{"name": "widget", "revision": 3}, [], False, 0])
+async def test_the_hosted_arm_submits_structured_data_as_the_answer(
+    monkeypatch: pytest.MonkeyPatch, data: object
+) -> None:
+    run = json.loads(RUN.read_text())
+    run["answer"] = "A prose description of the result."
+    run["data"] = data
+
+    async def finished(*args: object) -> tuple[dict[str, object], float]:
+        return run, 1.0
+
+    monkeypatch.setattr(hosted_api, "submit_and_wait", finished)
+    harness = hosted_api.FastbrowseHostedHarness(observer="plain-cdp")
+    harness.bind_task(TASK)
+    result = await harness.execute(TurnInput(index=0, text=TASK.turns[0].text, new_session=True))
+    assert json.loads(result["answer"]) == data
 
 
 @pytest.mark.hosted_simulator

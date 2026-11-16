@@ -95,6 +95,9 @@ Steps go to stderr; the status, cost, step count, why a run stopped short, and t
 prints the full result: every step, the quotes behind the answer, cost by component, and the build that ran it. The
 exit code is the status, and only `complete` exits 0.
 
+The starting address stays with the task in subsequent model decisions and reads, so references such as "the whole
+site" retain their starting context after navigation. Tasks can still ask to visit other sites.
+
 ```sh
 export SAUCE_PASSWORD=secret_sauce
 uvx fastbrowse "Log in as standard_user with the saved password and add the backpack to the cart." \
@@ -294,10 +297,16 @@ names it in `capture_artifact`; `start` and `end` index into that text. Its `lin
 quote: the link's `text`, where that text sits as `start` and `end`, and the `href` it leads to. Captures go where downloads go, so pass
 `downloads` or `artifact_sink` to keep them past the run. A page fetched over HTTP keeps none.
 
+Secret-safe screenshots used for image reads use the same storage as other browser artifacts: pass `downloads` or
+`artifact_sink` to retain them beyond the run. The default scratch storage is removed on exit, and a sink failure or
+deadline can leave an image unavailable; a result reference is not a durability guarantee. This applies to browser
+pages with screenshot storage, not HTTP-only or other pages whose artifact sink does not support screenshots.
+
 **Watching a run.**
 
 - `on_event=` gets a `BrowserEvent` with a cloud browser's live-view URL, then a `StepEvent` per step, carrying the
-  facts that step added. `Config(step_frames=True)` adds a PNG of each step's page.
+  facts that step added. It also receives `BrowserWarningEvent` objects with closed `operation` and `failure` codes,
+  without page content or transport error text. `Config(step_frames=True)` adds a PNG of each step's page.
 - A task requesting a final screenshot receives a safe PNG in `result.final_frame` without enabling step frames.
   JSON clients receive a `screenshot` artifact with a base64 data URI. A missing requested image leaves a
   completed task `unverified`.

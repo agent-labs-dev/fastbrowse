@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::models::{Artifact, Operation, StepOutcome};
+use fastbrowse_core::models::{Artifact, Operation, StepFailure, StepOutcome};
 use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Observation, Page, PageResult};
 use fastbrowse_core::safety::origin_of;
 
@@ -361,15 +361,26 @@ impl DeskpilotPage {
         observation: &Observation,
         seconds: f64,
     ) -> PageResult<ActResult> {
-        let outcome =
-            |outcome, detail: Option<String>| ActResult { outcome, page_changed: false, detail, moved: false };
+        let outcome = |outcome, detail: Option<String>| ActResult {
+            failure: (outcome == StepOutcome::Failed).then_some(StepFailure::BrowserError),
+            outcome,
+            page_changed: false,
+            detail,
+            moved: false,
+        };
         match sent {
             Ok(Some(refused)) => Ok(outcome(StepOutcome::Failed, Some(refused))),
             Ok(None) => {
                 self.generation.fetch_add(1, Ordering::Relaxed);
                 let changed = self.changed_within(observation, seconds, None).await?;
                 let detail = (!changed).then(|| "the window did not change".to_string());
-                Ok(ActResult { outcome: StepOutcome::Executed, page_changed: changed, detail, moved: false })
+                Ok(ActResult {
+                    outcome: StepOutcome::Executed,
+                    failure: None,
+                    page_changed: changed,
+                    detail,
+                    moved: false,
+                })
             }
             Err(ToolError::Refused { code, message }) => match code.as_str() {
                 "stale" => Ok(outcome(StepOutcome::Stale, Some(message))),
@@ -387,6 +398,7 @@ impl DeskpilotPage {
         if observation.page_key.is_empty() || latest.as_deref() != Some(observation.page_key.as_str()) {
             return Ok(ActResult {
                 outcome: StepOutcome::Stale,
+                failure: None,
                 page_changed: false,
                 detail: Some("the window was read again since this observation".to_string()),
                 moved: false,

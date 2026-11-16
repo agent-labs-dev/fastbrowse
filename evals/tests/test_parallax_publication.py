@@ -1,6 +1,7 @@
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastbrowse.evals.benchmarks import check_catalog
@@ -26,6 +27,7 @@ from parallax.task import source_tasks
 from fastbrowse_evals.arms import binding, invocations
 from fastbrowse_evals.publication import (
     VERIFICATION_MARKER,
+    _measured_identity,
     candidate_from_run,
     candidate_from_runs,
     main,
@@ -97,8 +99,45 @@ def result(
         timing_breakdown={"open": 250.0, "agent": 1_000.0, "close": 250.0},
         cost_by_component={"agent": 0.01},
         details=details or {"status": "complete"},
-        judge_identity="browser-evidence-v1",
+        judge_identity="browser-evidence-v2",
     )
+
+
+def test_measured_identity_rejects_selected_competitor_provenance_mismatch() -> None:
+    fastbrowse_run = SimpleNamespace(path=Path("fastbrowse"))
+    competitor_run = SimpleNamespace(path=Path("competitor"))
+    fastbrowse_result = result("pypi-version", 0)
+    competitor_result = fastbrowse_result.model_copy(update={"harness": "browser-use-cloud"})
+    selected = {
+        ("internal-fastbrowse", "fastbrowse", "pypi-version", 0): (fastbrowse_run, fastbrowse_result),
+        ("bu-bench", "browser-use", "bu-bench-task-001", 0): (competitor_run, competitor_result),
+    }
+    metadata = {
+        Path("fastbrowse"): (AGENT_SHA, RUNNER_SHA, {}),
+        Path("competitor"): ("c" * 40, "d" * 40, {}),
+    }
+    selected_fastbrowse = {key: value for key, value in selected.items() if key[1] == "fastbrowse"}
+    assert _measured_identity(metadata, selected_fastbrowse) == (AGENT_SHA, RUNNER_SHA)
+    with pytest.raises(ValueError, match="same measured build"):
+        _measured_identity(metadata, selected)
+    mismatched = dict(selected)
+    mismatched[("internal-fastbrowse", "fastbrowse", "other", 0)] = (
+        SimpleNamespace(path=Path("other-fastbrowse")),
+        fastbrowse_result,
+    )
+    metadata[Path("other-fastbrowse")] = ("e" * 40, RUNNER_SHA, {})
+    with pytest.raises(ValueError, match="same measured build"):
+        _measured_identity(metadata, mismatched)
+
+
+def test_measured_identity_ignores_older_unselected_fastbrowse_run() -> None:
+    current = SimpleNamespace(path=Path("current"))
+    selected = {("internal-fastbrowse", "fastbrowse", "pypi-version", 0): (current, result("pypi-version", 0))}
+    metadata = {
+        Path("current"): (AGENT_SHA, RUNNER_SHA, {}),
+        Path("old"): ("c" * 40, "d" * 40, {}),
+    }
+    assert _measured_identity(metadata, selected) == (AGENT_SHA, RUNNER_SHA)
 
 
 def test_trial_result_to_row_keeps_typed_measurements_and_retries() -> None:
@@ -216,7 +255,7 @@ def test_synthetic_parallax_run_projects_to_a_candidate(tmp_path: Path) -> None:
     manifest = RunManifest(
         run_id="synthetic-run",
         created_at=datetime(2026, 11, 13, tzinfo=UTC),
-        parallax_version="2.0.0.dev22",
+        parallax_version="2.0.0.dev23",
         harnesses=(),
         models=("test/model",),
         tasks=tuple((task.id, source_task_map[task.id].hash) for task in tasks),
@@ -224,7 +263,7 @@ def test_synthetic_parallax_run_projects_to_a_candidate(tmp_path: Path) -> None:
         judge=("test/judge",),
         isolation=Isolation.HOST,
         selection="fastbrowse",
-        grading_policy="browser-evidence-v1",
+        grading_policy="browser-evidence-v2",
     )
     (run / "manifest.json").write_text(manifest.model_dump_json() + "\n")
     (run / "results.jsonl").write_text(
@@ -280,7 +319,7 @@ def test_official_run_uses_upstream_score_and_execution_completion(tmp_path: Pat
     manifest = RunManifest(
         run_id="official-run",
         created_at=datetime(2026, 11, 13, tzinfo=UTC),
-        parallax_version="2.0.0.dev22",
+        parallax_version="2.0.0.dev23",
         harnesses=(),
         models=("test/model",),
         tasks=tuple((task_id, "c" * 64) for task_id in task_ids),
@@ -331,7 +370,7 @@ def test_official_groups_use_their_own_selected_task_ids(tmp_path: Path) -> None
         manifest = RunManifest(
             run_id=f"{source}-run",
             created_at=datetime(2026, 11, 13, tzinfo=UTC),
-            parallax_version="2.0.0.dev22",
+            parallax_version="2.0.0.dev23",
             harnesses=(),
             models=("test/model",),
             tasks=tuple((task_id, "c" * 64) for task_id in task_ids),

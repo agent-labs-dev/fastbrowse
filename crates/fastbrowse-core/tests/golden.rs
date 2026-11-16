@@ -264,3 +264,14 @@ fn output_data_is_dumped_as_python_dumps_it() {
         assert_eq!(dumps(&dumped), text_of(case, "dumped"), "{name}");
     }
 }
+
+#[test]
+fn older_step_results_may_omit_failure() {
+    let mut value = serde_json::json!({"index": 0, "operation": "click", "decided_by": "code", "outcome": "failed", "url": "https://example.test/", "duration_ms": 0});
+    let old: StepResult = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(old.failure, None);
+    value["failure"] = serde_json::json!("dialog_interrupted");
+    let typed: StepResult = serde_json::from_value(value).unwrap();
+    assert_eq!(typed.failure, Some(StepFailure::DialogInterrupted));
+    assert_eq!(serde_json::to_value(typed).unwrap()["failure"], "dialog_interrupted");
+}

@@ -6,6 +6,32 @@ export type ArtifactKind = 'download' | 'screenshot' | 'capture';
  * How a run reached the browser it drove.
  */
 export type BrowserVia = 'cloud' | 'launched' | 'attached' | 'extension';
+export type BrowserWarningOperation =
+  | 'screencast_start'
+  | 'screencast_stop'
+  | 'screencast_frame_ack'
+  | 'paint_keeper_attach'
+  | 'popup_setup_close'
+  | 'popup_setup_release'
+  | 'frame_callback_shutdown'
+  | 'live_frame_delivery'
+  | 'download_capture';
+export type BrowserWarningFailure =
+  | 'browser_error'
+  | 'context_lost'
+  | 'browser_unavailable'
+  | 'screenshots_unavailable'
+  | 'navigation_timeout'
+  | 'site_unreachable'
+  | 'browser_unresponsive'
+  | 'page_unresponsive'
+  | 'origin_not_allowed'
+  | 'script_error'
+  | 'timeout'
+  | 'callback_exception'
+  | 'payload_decode'
+  | 'capture_failed'
+  | 'cancelled';
 export type Operation =
   | 'click'
   | 'hover'
@@ -32,6 +58,16 @@ export type Operation =
  */
 export type Decider = 'jev' | 'code' | 'recipe';
 export type StepOutcome = 'executed' | 'covered' | 'stale' | 'failed';
+/**
+ * A closed reason for a failed browser step; ``note`` remains diagnostic text.
+ */
+export type StepFailure =
+  | 'missing_target'
+  | 'target_gone'
+  | 'unauthorized_origin'
+  | 'navigation_failed'
+  | 'dialog_interrupted'
+  | 'browser_error';
 export type FactReader = 'jev_choice' | 'llm_image';
 export type CostComponent = 'jev' | 'llm' | 'browser' | 'proxy' | 'search';
 export type CostBasis = 'metered' | 'estimated' | 'bounded' | 'unsettled' | 'unknown';
@@ -122,6 +158,14 @@ export interface BrowserUsed {
    */
   browser: string | null;
 }
+/**
+ * A browser warning with only a closed operation and failure kind; it contains no page or transport text.
+ */
+export interface BrowserWarningEvent {
+  type: 'browser_warning';
+  operation: BrowserWarningOperation;
+  failure: BrowserWarningFailure;
+}
 export interface BudgetStop {
   resource: 'steps' | 'dollars' | 'seconds' | 'jev_calls' | 'llm_calls';
   limit: number;
@@ -145,6 +189,7 @@ export interface StepResult {
   operation: Operation;
   decided_by: Decider;
   outcome: StepOutcome;
+  failure: StepFailure | null;
   url: string;
   /**
    * Human-readable label of the chosen element; never contains a secret value.
@@ -378,7 +423,7 @@ export interface RunCancelParams {
  */
 export interface RunEvent {
   run_id: string;
-  event: StepEvent | BrowserEvent;
+  event: StepEvent | BrowserEvent | BrowserWarningEvent;
 }
 export interface StepEvent {
   type: 'step';

@@ -69,6 +69,47 @@ const (
 	BrowserViaExtension BrowserVia = "extension"
 )
 
+// A browser warning with only a closed operation and failure kind; it contains no page or transport text.
+type BrowserWarningEvent struct {
+	Type      string                  `json:"type"`
+	Operation BrowserWarningOperation `json:"operation"`
+	Failure   BrowserWarningFailure   `json:"failure"`
+}
+
+type BrowserWarningFailure string
+
+const (
+	BrowserWarningFailureBrowserError           BrowserWarningFailure = "browser_error"
+	BrowserWarningFailureContextLost            BrowserWarningFailure = "context_lost"
+	BrowserWarningFailureBrowserUnavailable     BrowserWarningFailure = "browser_unavailable"
+	BrowserWarningFailureScreenshotsUnavailable BrowserWarningFailure = "screenshots_unavailable"
+	BrowserWarningFailureNavigationTimeout      BrowserWarningFailure = "navigation_timeout"
+	BrowserWarningFailureSiteUnreachable        BrowserWarningFailure = "site_unreachable"
+	BrowserWarningFailureBrowserUnresponsive    BrowserWarningFailure = "browser_unresponsive"
+	BrowserWarningFailurePageUnresponsive       BrowserWarningFailure = "page_unresponsive"
+	BrowserWarningFailureOriginNotAllowed       BrowserWarningFailure = "origin_not_allowed"
+	BrowserWarningFailureScriptError            BrowserWarningFailure = "script_error"
+	BrowserWarningFailureTimeout                BrowserWarningFailure = "timeout"
+	BrowserWarningFailureCallbackException      BrowserWarningFailure = "callback_exception"
+	BrowserWarningFailurePayloadDecode          BrowserWarningFailure = "payload_decode"
+	BrowserWarningFailureCaptureFailed          BrowserWarningFailure = "capture_failed"
+	BrowserWarningFailureCancelled              BrowserWarningFailure = "cancelled"
+)
+
+type BrowserWarningOperation string
+
+const (
+	BrowserWarningOperationScreencastStart       BrowserWarningOperation = "screencast_start"
+	BrowserWarningOperationScreencastStop        BrowserWarningOperation = "screencast_stop"
+	BrowserWarningOperationScreencastFrameAck    BrowserWarningOperation = "screencast_frame_ack"
+	BrowserWarningOperationPaintKeeperAttach     BrowserWarningOperation = "paint_keeper_attach"
+	BrowserWarningOperationPopupSetupClose       BrowserWarningOperation = "popup_setup_close"
+	BrowserWarningOperationPopupSetupRelease     BrowserWarningOperation = "popup_setup_release"
+	BrowserWarningOperationFrameCallbackShutdown BrowserWarningOperation = "frame_callback_shutdown"
+	BrowserWarningOperationLiveFrameDelivery     BrowserWarningOperation = "live_frame_delivery"
+	BrowserWarningOperationDownloadCapture       BrowserWarningOperation = "download_capture"
+)
+
 type BudgetStop struct {
 	Resource string  `json:"resource"`
 	Limit    float64 `json:"limit"`
@@ -507,6 +548,18 @@ type StepFact struct {
 	DeepLink *string    `json:"deep_link"`
 }
 
+// A closed reason for a failed browser step; “note“ remains diagnostic text.
+type StepFailure string
+
+const (
+	StepFailureMissingTarget      StepFailure = "missing_target"
+	StepFailureTargetGone         StepFailure = "target_gone"
+	StepFailureUnauthorizedOrigin StepFailure = "unauthorized_origin"
+	StepFailureNavigationFailed   StepFailure = "navigation_failed"
+	StepFailureDialogInterrupted  StepFailure = "dialog_interrupted"
+	StepFailureBrowserError       StepFailure = "browser_error"
+)
+
 type StepOutcome string
 
 const (
@@ -517,11 +570,12 @@ const (
 )
 
 type StepResult struct {
-	Index     int64       `json:"index"`
-	Operation Operation   `json:"operation"`
-	DecidedBy Decider     `json:"decided_by"`
-	Outcome   StepOutcome `json:"outcome"`
-	URL       string      `json:"url"`
+	Index     int64        `json:"index"`
+	Operation Operation    `json:"operation"`
+	DecidedBy Decider      `json:"decided_by"`
+	Outcome   StepOutcome  `json:"outcome"`
+	Failure   *StepFailure `json:"failure"`
+	URL       string       `json:"url"`
 	// Human-readable label of the chosen element; never contains a secret value.
 	Target     *string  `json:"target"`
 	Confidence *float64 `json:"confidence"`

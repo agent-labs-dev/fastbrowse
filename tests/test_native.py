@@ -28,6 +28,7 @@ from fastbrowse.jev import Evaluation, NoulAnswer, Question
 from fastbrowse.models import (
     Attachment,
     BrowserEvent,
+    BrowserWarningEvent,
     BudgetStop,
     ConfigurationError,
     CostBasis,
@@ -170,9 +171,9 @@ async def test_cancelling_the_awaiting_task_stops_the_rust_run_and_closes_its_co
     silent = Silent()
     server = await asyncio.start_server(silent.handle, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
-    events: list[StepEvent | BrowserEvent] = []
+    events: list[StepEvent | BrowserEvent | BrowserWarningEvent] = []
 
-    async def on_event(event: StepEvent | BrowserEvent) -> None:
+    async def on_event(event: StepEvent | BrowserEvent | BrowserWarningEvent) -> None:
         events.append(event)
 
     async with server:
@@ -192,7 +193,7 @@ async def test_an_exception_a_callback_raises_comes_out_of_run_task(monkeypatch:
     class Refused(Exception):
         pass
 
-    async def on_event(_: StepEvent | BrowserEvent) -> None:
+    async def on_event(_: StepEvent | BrowserEvent | BrowserWarningEvent) -> None:
         raise Refused("not this browser")
 
     with pytest.raises(Refused, match="not this browser"):
@@ -836,3 +837,34 @@ def test_an_observation_with_an_open_modal_validates() -> None:
     }
     assert Observation.model_validate(page).modal is None
     assert Observation.model_validate({**page, "modal": "Stops"}).modal == "Stops"
+
+
+def test_capture_field_spans_cross_the_python_model_boundary() -> None:
+    from fastbrowse.page import Capture
+
+    text = "id: \u03b1\ntext: first\r\n\u00a0\r\nlast"
+    start = len("id: \u03b1\ntext: ")
+    written = {
+        "url": "https://example.test/records",
+        "title": "",
+        "captured_at": 0,
+        "sha256": "capture-hash",
+        "text": text,
+        "blocks": [
+            {
+                "source_id": "s0",
+                "kind": "record",
+                "frame_id": None,
+                "start": 0,
+                "end": len(text),
+                "fields": [{"path": ["text"], "start": start, "end": len(text)}],
+            }
+        ],
+    }
+    capture = Capture.model_validate(written)
+    field = capture.blocks[0].fields[0]
+    assert capture.text[field.start : field.end] == "first\r\n\u00a0\r\nlast"
+    assert Capture.model_validate_json(capture.model_dump_json()).blocks[0].fields == (field,)
+    legacy = capture.model_dump()
+    legacy["blocks"][0].pop("fields")
+    assert Capture.model_validate(legacy).blocks[0].fields == ()

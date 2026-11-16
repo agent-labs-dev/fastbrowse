@@ -3,9 +3,9 @@ title: Why an AI agent clicks the wrong button
 description: An agent that clicks screen coordinates can hit a control that is not there. How an indexed control set bounds what fastbrowse can click.
 topic: How the agent acts
 published: 2026-10-31
-updated: 2026-11-12
+updated: 2026-11-16
 verifiedAgainst: v0.11.0
-verifiedOn: 2026-11-12
+verifiedOn: 2026-11-16
 ---
 
 An agent that clicks screen coordinates can hit a control that is not there. The click lands on something real, just not the button the task meant, and the run reports a wrong answer.
@@ -25,9 +25,9 @@ A read decision can cover a whole list through its observed next-page links. Eac
 
 ## The authorization gate
 
-Every click the model picks is judged before it runs, including links, navigation to a supplied or proposed known address, each Enter press or key chord, and accepting a confirm or prompt dialog. A refusal is recorded as a failed step with a reason.
+Jev judges model-selected clicks, drags and key chords, navigation to a supplied address, and acceptance of confirm, prompt and before-unload dialogs. Code-selected pagination is exempt. A refusal is recorded as a failed step with a reason.
 
-An action the judge is confident cannot be undone stops the run at `needs_confirmation` with exit code 3, and an uncertain one goes to recovery. In a browser that stays open, such as a running Chrome reached over its DevTools port or through the extension, a run stopped at `needs_confirmation` leaves its tab on the step it stopped at. The judge can be wrong, so read the step before you authorize it.
+Code permits an action when Jev judges it not irreversible, or when the run is authorized and Jev judges the task asked for it. Otherwise the run stops at `needs_confirmation` with exit code 3. In a browser that stays open, such as a running Chrome reached over its DevTools port or through the extension, a run stopped at `needs_confirmation` leaves its tab on the step it stopped at. The judge can be wrong, so read the step before you authorize it.
 
 ## See what the agent was offered
 

@@ -88,6 +88,7 @@ fn capture(url: &str, title: String, found: Vec<Found>, unread_frames: usize) ->
             href: block.href,
             links: Link::locate(&block.text, start as i64, &block.links),
             whole_record: block.whole_record,
+            fields: block.fields.into_iter().map(|field| field.shifted(start as i64)).collect(),
         });
         offset += 2;
     }
@@ -103,6 +104,7 @@ fn capture(url: &str, title: String, found: Vec<Found>, unread_frames: usize) ->
         inaccessible_frames: unread_frames as i64,
         masked: Vec::new(),
     }
+    .with_document_title()
 }
 
 /// Refuse an address that is not a document this may read, naming the reason.
@@ -310,6 +312,7 @@ async fn serve(http: &Http, url: &str, allowed_origins: Option<&[String]>, secon
                     links: Vec::new(),
                     frame_id: None,
                     whole_record: false,
+                    fields: Vec::new(),
                 }]
             });
         return Ok(Served { url: final_url, title: String::new(), found, controls: Vec::new(), frames: Vec::new() });
@@ -494,7 +497,13 @@ impl Page for FetchedPage {
                 ));
             };
             self.open(&url).await.map_err(|NotFetched(message)| self.needs_browser(message))?;
-            Ok(ActResult { outcome: StepOutcome::Executed, page_changed: true, detail: None, moved: true })
+            Ok(ActResult {
+                outcome: StepOutcome::Executed,
+                failure: None,
+                page_changed: true,
+                detail: None,
+                moved: true,
+            })
         })
     }
 

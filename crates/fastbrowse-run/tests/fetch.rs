@@ -251,6 +251,32 @@ fn quoted(capture: &fastbrowse_core::page::Capture, start: i64, end: i64) -> Str
 }
 
 #[tokio::test]
+async fn json_record_fields_keep_exact_selectable_spans() {
+    let raw = r#"[{"id":"α","text":"first\r\n\u00a0\r\nlast","author":{"name":"Ada"},"id":"β"}]"#;
+    let capture = fetched(&client(raw, 200, "application/json"), "https://example.test/records")
+        .await
+        .expect("readable response");
+    let record = capture.blocks.iter().find(|block| block.kind == BlockKind::Record).unwrap();
+    let value = serde_json::to_value(record).unwrap();
+    let fields = value["fields"].as_array().expect("record fields retain their producer spans");
+    let selected: Vec<_> = fields
+        .iter()
+        .map(|field| {
+            (field["path"].clone(), quoted(&capture, field["start"].as_i64().unwrap(), field["end"].as_i64().unwrap()))
+        })
+        .collect();
+    assert_eq!(
+        selected,
+        vec![
+            (serde_json::json!(["id"]), "α".to_string()),
+            (serde_json::json!(["text"]), "first\r\n\u{a0}\r\nlast".to_string()),
+            (serde_json::json!(["author", "name"]), "Ada".to_string()),
+            (serde_json::json!(["id"]), "β".to_string()),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn test_json_responses_keep_their_exact_values_in_citable_spans() {
     let raw =
         "{\"name\":\"A  & B\",\"release\":{\"version\":\"2.1\",\"date\":\"2026-11-12\"},\"count\":9007199254740993}";
@@ -671,4 +697,21 @@ async fn test_a_frame_of_the_page_origin_is_read_where_it_stands() {
     assert_eq!(capture.blocks[3].heading_path, ["External frame"]);
     // The other origin's frame was not fetched, so the read says one document is missing.
     assert_eq!(capture.inaccessible_frames, 1);
+}
+
+#[tokio::test]
+async fn a_fetched_document_title_is_citable_separately_from_its_heading() {
+    let capture =
+        fetched(&html("<title>東京 reference</title><h1>Account settings</h1><p>Body.</p>"), "https://docs.test/")
+            .await
+            .expect("fetched");
+    let title = capture.blocks.iter().find(|block| block.source_id == "document/title").expect("title evidence");
+    assert_eq!(capture.block_text(title), "東京 reference");
+    assert_eq!(title.kind, fastbrowse_core::page::BlockKind::Observation);
+    assert_eq!(title.heading_path, ["Document title"]);
+    assert!(capture.blocks.iter().any(|block| block.kind == fastbrowse_core::page::BlockKind::Heading
+        && capture.block_text(block) == "Account settings"));
+    assert_eq!(capture.sha256, sha256_hex(capture.text.as_bytes()));
+    let shell = fetched(&html("<title>Script shell</title><script>render()</script>"), "https://docs.test/").await;
+    assert!(shell.is_err(), "metadata does not establish that a script-rendered body was read");
 }

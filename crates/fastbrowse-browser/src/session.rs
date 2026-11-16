@@ -12,7 +12,10 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 use data_encoding::BASE64;
 use fastbrowse_core::BoxFuture;
-use fastbrowse_core::models::{Artifact, ArtifactKind, ArtifactSink, BrowserConnection, FrameHandler};
+use fastbrowse_core::models::{
+    Artifact, ArtifactKind, ArtifactSink, BrowserConnection, BrowserWarningEvent, BrowserWarningFailure,
+    BrowserWarningOperation, BrowserWarningTag, FrameHandler,
+};
 use fastbrowse_core::origins::OriginGrant;
 use fastbrowse_core::page::{CaptchaSolve, Dialog, Tab};
 use fastbrowse_core::telemetry::Trace;
@@ -204,6 +207,8 @@ pub struct SessionOptions {
     pub viewport: Option<(u32, u32)>,
     /// Called when the user stops the run in their browser, over the extension backend, with what stopped it.
     pub on_stop: Option<OnStop>,
+    /// Receives browser warnings without page or transport text.
+    pub on_warning: Option<Arc<dyn Fn(BrowserWarningEvent) + Send + Sync>>,
     /// The run's trace. Over the extension backend it records every message to and from the extension.
     pub trace: Trace,
 }
@@ -218,6 +223,7 @@ impl Default for SessionOptions {
             check_access: None,
             viewport: None,
             on_stop: None,
+            on_warning: None,
             trace: Trace::disabled(),
         }
     }
@@ -380,6 +386,7 @@ pub(crate) struct Shared {
     pub(crate) require_chooser_interception: bool,
     pub(crate) on_frame: Option<FrameHandler>,
     pub(crate) on_stop: Option<OnStop>,
+    pub(crate) on_warning: Option<Arc<dyn Fn(BrowserWarningEvent) + Send + Sync>>,
     pub(crate) trace: Trace,
     pub(crate) viewport: Option<(u32, u32)>,
     pub(crate) client: Mutex<Option<Cdp>>,
@@ -445,6 +452,7 @@ impl BrowserSession {
             new_document_scripts,
             on_frame,
             on_stop: options.on_stop,
+            on_warning: options.on_warning,
             trace: options.trace,
             viewport: options.viewport,
             client: Mutex::new(None),
@@ -563,7 +571,12 @@ impl BrowserSession {
         if let Some(delivery) = delivery {
             delivery.abort();
             if timeout(secs(FRAME_RELEASE_SECONDS), delivery).await.is_err() {
-                warn("The frame callback ignored cancellation; closing without it");
+                browser_warning(
+                    &self.0,
+                    BrowserWarningOperation::FrameCallbackShutdown,
+                    BrowserWarningFailure::Cancelled,
+                    || warn("The frame callback ignored cancellation; closing without it"),
+                );
             }
         }
         {
@@ -1013,7 +1026,7 @@ impl BrowserSession {
     }
 
     /// Have a tab that joins the run render: in front of its window, or behind it and kept painting.
-    pub(crate) async fn show(&self, target_id: &str) -> Result<(), BrowserError> {
+    pub(crate) async fn show(&self, target_id: &str, session_id: &str) -> Result<(), BrowserError> {
         if self.activate(target_id).await? {
             return Ok(());
         }
@@ -1028,8 +1041,8 @@ impl BrowserSession {
             let session = {
                 let state = self.0.state.lock().unwrap();
                 let casting = self.0.on_frame.is_some() || state.frame_tap.is_some();
-                let session = state.tabs.iter().find(|t| t.target_id == target_id).map(|t| t.session_id.clone());
-                session.filter(|_| !casting)
+                // Setup knows the session before the new tab is registered; looking it up there loses its keeper.
+                (!casting).then(|| session_id.to_owned())
             };
             if let Some(session) = session {
                 self.0.state.lock().unwrap().keepers.insert(target_id.to_owned(), session.clone());
@@ -1041,11 +1054,21 @@ impl BrowserSession {
         let keeper = match timeout(secs(SCREENCAST_COMMAND_SECONDS), attach).await {
             Ok(Ok(keeper)) => str_of(&keeper["sessionId"]),
             Ok(Err(error)) => {
-                warn(&format!("Target.attachToTarget for the paint keeper failed ({})", error.kind()));
+                browser_warning(
+                    &self.0,
+                    BrowserWarningOperation::PaintKeeperAttach,
+                    browser_warning_failure(error.kind()),
+                    || warn(&format!("Target.attachToTarget for the paint keeper failed ({})", error.kind())),
+                );
                 return Ok(());
             }
             Err(_) => {
-                warn("Target.attachToTarget for the paint keeper failed (TimeoutError)");
+                browser_warning(
+                    &self.0,
+                    BrowserWarningOperation::PaintKeeperAttach,
+                    BrowserWarningFailure::Timeout,
+                    || warn("Target.attachToTarget for the paint keeper failed (TimeoutError)"),
+                );
                 return Ok(());
             }
         };
@@ -1133,7 +1156,8 @@ impl BrowserSession {
         let target_id = str_of(&target["targetId"]);
         let attach = self.send("Target.attachToTarget", json!({"targetId": target_id, "flatten": true}), None).await?;
         let session_id = str_of(&attach["sessionId"]);
-        together(vec![Box::pin(self.show(&target_id)), Box::pin(self.prepare_session(&session_id, true))]).await?;
+        together(vec![Box::pin(self.show(&target_id, &session_id)), Box::pin(self.prepare_session(&session_id, true))])
+            .await?;
         self.run_document_scripts(&session_id).await;
         self.0.state.lock().unwrap().insert_tab(TabState {
             target_id: target_id.clone(),
@@ -1236,7 +1260,8 @@ impl BrowserSession {
         let attach = self.send("Target.attachToTarget", json!({"targetId": target_id, "flatten": true}), None).await?;
         let session_id = str_of(&attach["sessionId"]);
         // Foregrounding the tab and enabling its session are independent, and both finish before the tab is used.
-        together(vec![Box::pin(self.show(&target_id)), Box::pin(self.prepare_session(&session_id, true))]).await?;
+        together(vec![Box::pin(self.show(&target_id, &session_id)), Box::pin(self.prepare_session(&session_id, true))])
+            .await?;
         self.0.state.lock().unwrap().insert_tab(TabState {
             target_id: target_id.clone(),
             session_id,
@@ -2032,8 +2057,10 @@ async fn adopt(
     };
     // Both run to the end, even when one fails: a paint keeper attached while setup failed would otherwise be left
     // attached without ever reaching `state.keepers`, where a failed adoption finds it.
-    let (shown, prepared) =
-        tokio::join!(session_handle.show(target_id), session_handle.prepare_and_resume(&session_id, true, resumed));
+    let (shown, prepared) = tokio::join!(
+        session_handle.show(target_id, &session_id),
+        session_handle.prepare_and_resume(&session_id, true, resumed)
+    );
     shown?;
     prepared?;
     if shared.connection.attach {
@@ -2082,7 +2109,12 @@ async fn release_popup(
     }
     // The error's message may carry page text, so only its kind is named.
     if owned {
-        warn(&format!("A new tab could not be set up and was closed ({})", error.kind()));
+        browser_warning(
+            shared,
+            BrowserWarningOperation::PopupSetupClose,
+            browser_warning_failure(error.kind()),
+            || warn(&format!("A new tab could not be set up and was closed ({})", error.kind())),
+        );
         // A popup that shares its opener's renderer is paused on that renderer's thread, and closing the popup does
         // not end the pause: only a resume does, and Chrome takes one from any page on that thread. The popup's own
         // sessions end with it, so the opener's carries the resume, and only once the popup is gone: resumed any
@@ -2113,7 +2145,12 @@ async fn release_popup(
             let _ = session.send("Runtime.runIfWaitingForDebugger", json!({}), Some(&opener)).await;
         }
     } else if let Some(session_id) = session_id {
-        warn(&format!("A new tab could not be set up and was let go ({})", error.kind()));
+        browser_warning(
+            shared,
+            BrowserWarningOperation::PopupSetupRelease,
+            browser_warning_failure(error.kind()),
+            || warn(&format!("A new tab could not be set up and was let go ({})", error.kind())),
+        );
         let _ = session.send("Runtime.runIfWaitingForDebugger", json!({}), Some(session_id)).await;
         let _ = session.send("Target.detachFromTarget", json!({"sessionId": session_id}), None).await;
     }
@@ -2140,9 +2177,57 @@ async fn screencast_command(shared: &Arc<Shared>, method: &str, params: Value, s
     let Some(client) = shared.client.lock().unwrap().clone() else { return };
     match timeout(secs(SCREENCAST_COMMAND_SECONDS), client.send(method, params, session_id)).await {
         Ok(Ok(_)) => {}
-        // Transport and consumer errors may contain credentials or page text.
-        Ok(Err(error)) => warn(&format!("{method} failed ({})", error.kind())),
-        Err(_) => warn(&format!("{method} failed (TimeoutError)")),
+        Ok(Err(error)) => {
+            if let Some(operation) = screencast_operation(method) {
+                browser_warning(shared, operation, browser_warning_failure(error.kind()), || {
+                    warn(&format!("{method} failed ({})", error.kind()))
+                });
+            }
+        }
+        Err(_) => {
+            if let Some(operation) = screencast_operation(method) {
+                browser_warning(shared, operation, BrowserWarningFailure::Timeout, || {
+                    warn(&format!("{method} failed (TimeoutError)"))
+                });
+            }
+        }
+    }
+}
+
+fn screencast_operation(method: &str) -> Option<BrowserWarningOperation> {
+    match method {
+        "Page.startScreencast" => Some(BrowserWarningOperation::ScreencastStart),
+        "Page.stopScreencast" => Some(BrowserWarningOperation::ScreencastStop),
+        "Page.screencastFrameAck" => Some(BrowserWarningOperation::ScreencastFrameAck),
+        _ => None,
+    }
+}
+
+fn browser_warning_failure(kind: &'static str) -> BrowserWarningFailure {
+    match kind {
+        "ContextLost" => BrowserWarningFailure::ContextLost,
+        "BrowserUnavailable" => BrowserWarningFailure::BrowserUnavailable,
+        "ScreenshotsUnavailable" => BrowserWarningFailure::ScreenshotsUnavailable,
+        "NavigationTimeout" => BrowserWarningFailure::NavigationTimeout,
+        "SiteUnreachable" => BrowserWarningFailure::SiteUnreachable,
+        "BrowserUnresponsive" => BrowserWarningFailure::BrowserUnresponsive,
+        "PageUnresponsive" => BrowserWarningFailure::PageUnresponsive,
+        "OriginNotAllowed" => BrowserWarningFailure::OriginNotAllowed,
+        "_ScriptError" => BrowserWarningFailure::ScriptError,
+        _ => BrowserWarningFailure::BrowserError,
+    }
+}
+
+fn browser_warning(
+    shared: &Arc<Shared>,
+    operation: BrowserWarningOperation,
+    failure: BrowserWarningFailure,
+    fallback: impl FnOnce(),
+) {
+    if let Some(on_warning) = &shared.on_warning {
+        on_warning(BrowserWarningEvent { kind: BrowserWarningTag, operation, failure });
+    } else {
+        fallback();
     }
 }
 
@@ -2197,7 +2282,12 @@ pub(crate) async fn deliver_frames(shared: &Arc<Shared>) {
             shared.ack(&mut state, frame);
         }
         if failed {
-            warn("Live frame delivery failed (Exception)");
+            browser_warning(
+                shared,
+                BrowserWarningOperation::LiveFrameDelivery,
+                BrowserWarningFailure::CallbackException,
+                || warn("Live frame delivery failed (Exception)"),
+            );
             break;
         }
     }
@@ -2223,7 +2313,12 @@ async fn handle_paused(shared: &Arc<Shared>, event: Value, session_id: String) {
             .await
             .is_err()
         {
-            warn("Download capture failed");
+            browser_warning(
+                shared,
+                BrowserWarningOperation::DownloadCapture,
+                BrowserWarningFailure::CaptureFailed,
+                || warn("Download capture failed"),
+            );
             refuse_download(shared, download_filename(&disposition, &url), &url, Refusal::Failed);
         }
     }

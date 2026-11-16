@@ -7,7 +7,7 @@ import hashlib
 import json
 import math
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, Literal, assert_never, cast
 
@@ -297,8 +297,20 @@ def _verify_upload(run: LoadedRun) -> bool:
     return True
 
 
+def _measured_identity(
+    metadata: Mapping[Path, tuple[str, str, dict[str, str]]],
+    selected: Mapping[tuple[GroupId, Arm, str, int], tuple[LoadedRun, TrialResult]],
+) -> tuple[str, str]:
+    """Require every selected source run to share the candidate's measured identity."""
+    selected_paths = {run.path for run, _result in selected.values()}
+    identities = {(metadata[path][0], metadata[path][1]) for path in selected_paths}
+    if len(identities) != 1:
+        raise ValueError("all runs in one candidate must name the same measured build and runner")
+    return next(iter(identities))
+
+
 def _validate_run(run: LoadedRun, source: GroupId | None) -> None:
-    expected_policy = "browser-evidence-v1" if source is None else EXPECTED_POLICIES[source]
+    expected_policy = "browser-evidence-v2" if source is None else EXPECTED_POLICIES[source]
     policy_parts = set(run.manifest.grading_policy.split(":"))
     if expected_policy not in policy_parts:
         raise ValueError(f"{run.path}: grading policy differs from the catalog")
@@ -363,10 +375,7 @@ def candidate_from_runs(run_dirs: Iterable[Path], *, campaign_id: str) -> Candid
                 selected[key] = (run, result)
     if not selected:
         raise ValueError("the Parallax runs contain no public arms")
-    measured_agent = next(iter(metadata.values()))[0]
-    measured_runner = next(iter(metadata.values()))[1]
-    if any(item[0] != measured_agent or item[1] != measured_runner for item in metadata.values()):
-        raise ValueError("all runs in one candidate must name the same measured build and runner")
+    measured_agent, measured_runner = _measured_identity(metadata, selected)
     rows_by_group: dict[GroupId, dict[str, list[Row]]] = {}
     unjudged_by_group: dict[GroupId, dict[str, list[UnjudgedSlot]]] = {}
     excluded_by_group: dict[GroupId, list[ExcludedTask]] = {}

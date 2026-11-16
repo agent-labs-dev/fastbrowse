@@ -9,6 +9,7 @@ pub(crate) use answers::{Draft, compose_reviewed, draft_reviewed, noticed};
 mod choices;
 mod chunks;
 mod fields;
+mod iso4217;
 mod reduction;
 mod screenshot;
 mod tally;
@@ -51,6 +52,7 @@ pub(crate) mod testing {
                 href: None,
                 links: Vec::new(),
                 whole_record: false,
+                fields: Vec::new(),
             });
             start += length + 2;
         }

@@ -11,8 +11,8 @@ use fastbrowse_core::decision::{
 use fastbrowse_core::effects::state_key;
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{
-    Artifact, Authorization, BudgetResource, BudgetStop, CostBasis, CostComponent, CostLine, Decider, Event,
-    EventHandler, Evidence, FactReader, LLMPurpose, Limits, Operation, Status, StepOutcome, StepResult,
+    Artifact, ArtifactKind, Authorization, BudgetResource, BudgetStop, CostBasis, CostComponent, CostLine, Decider,
+    Event, EventHandler, Evidence, FactReader, LLMPurpose, Limits, Operation, Status, StepOutcome, StepResult,
 };
 use fastbrowse_core::page::{
     ActResult, Action, BlockKind, BrowserError, CaptchaSolve, Capture, Control, Media, Observation, Page, PageResult,
@@ -90,6 +90,27 @@ impl Page for NoPage {
 
 fn agent() -> Agent {
     Agent::new(Arc::new(NoPage), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM))
+}
+
+#[tokio::test]
+async fn policy_refusals_do_not_report_browser_faults() {
+    let agent = agent();
+    let mut state = run_state();
+    let page = observation(&[]);
+    for (operation, reason) in [
+        (Operation::Click, "The action needs confirmation."),
+        (Operation::Click, "The task does not ask for this action."),
+        (Operation::Done, "The caller's until condition failed on this page."),
+    ] {
+        agent
+            .record_failure(&mut state, &page, operation, reason, None, None, Some(false), Decider::Code)
+            .await
+            .expect("recorded refusal");
+        let step = state.steps.last().expect("refusal step");
+        assert_eq!(step.outcome, StepOutcome::Failed);
+        assert_eq!(step.failure, None);
+        assert_eq!(step.note.as_deref(), Some(reason));
+    }
 }
 
 fn free() -> CostLine {
@@ -1115,6 +1136,7 @@ async fn test_a_secret_in_a_step_or_trace_event_is_redacted_on_the_way_out() {
         operation: Operation::Done,
         decided_by: Decider::Jev,
         outcome: StepOutcome::Failed,
+        failure: None,
         url: "https://acme.test/account?pw=hunter2".into(),
         target: Some("Signed in with hunter2".into()),
         confidence: None,
@@ -1245,7 +1267,8 @@ async fn test_a_commit_proceeds_when_jev_calls_it_reversible_or_the_authorized_t
             calls: Default::default(),
             edits_asked: Default::default(),
         });
-        let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+        let trace = Trace::collecting();
+        let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM)).with_trace(trace.clone());
         let mut state = run_state();
         state.task = "Check out and finish the order.".into();
         state.authorization = Authorization { irreversible_actions: authorized };
@@ -1258,6 +1281,14 @@ async fn test_a_commit_proceeds_when_jev_calls_it_reversible_or_the_authorized_t
         let case = format!("authorized {authorized}, credential {credential}, requested {requested}");
         assert_eq!(gated.is_ok(), acts, "{case}");
         assert_eq!(jev.calls.load(Ordering::SeqCst), calls, "{case}");
+        let events = trace.events();
+        let gates: Vec<_> = events.iter().filter(|event| event["event"] == "authorization_gate").collect();
+        assert_eq!(gates.len(), 1, "{case}");
+        assert_eq!(gates[0]["authorized"], authorized, "{case}");
+        assert_eq!(gates[0]["allowed"], acts, "{case}");
+        assert_eq!(gates[0]["step"], 0);
+        assert!(gates[0].get("target").is_none());
+        assert!(gates[0].get("task").is_none());
         // A refusal stops the run for confirmation rather than going round recovery.
         if let Err(flow) = gated {
             assert!(matches!(flow, Flow::Stop(stop) if stop.status == Status::NeedsConfirmation), "{case}");
@@ -1809,11 +1840,12 @@ struct DoneCheckJev(
     &'static str,
     std::sync::Mutex<Vec<serde_json::Value>>,
     std::sync::Mutex<Vec<Vec<String>>>,
+    std::sync::Mutex<Vec<String>>,
 );
 
 impl DoneCheckJev {
     fn new(requests: std::sync::Arc<std::sync::atomic::AtomicUsize>, probability: f64, pick: &'static str) -> Self {
-        Self(requests, probability, pick, Default::default(), Default::default())
+        Self(requests, probability, pick, Default::default(), Default::default(), Default::default())
     }
 }
 
@@ -1830,6 +1862,9 @@ impl DecisionClient for DoneCheckJev {
             .map(|(key, question)| {
                 if let Question::Choice(choice) = question {
                     self.4.lock().unwrap().push(choice.criteria.keys().cloned().collect());
+                }
+                if let Question::Noul(noul) = question {
+                    self.5.lock().unwrap().push(noul.instructions.clone());
                 }
                 let answer = match question {
                     Question::Choice(choice) => Answer::Choice(ChoiceAnswer {
@@ -2003,6 +2038,30 @@ async fn test_the_done_check_asks_no_choice() {
     }
 }
 
+/// The caller's start address is where the run began, before any step, so the done check judges the task without it:
+/// asked about "Start at <url>." with no action that went there, Jev held a signed-in run that had read its answer
+/// short of done on every ask.
+#[tokio::test]
+async fn test_the_done_check_judges_the_task_without_the_callers_start() {
+    let page = observation(&[]);
+    let mut state = run_state();
+    state.task = "Sign in at /login, then tell me the order reference.".into();
+    state.caller_start = Some("https://shop.test/entry".into());
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+    let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev.clone(), Arc::new(ScriptedLLM));
+    assert!(agent.model_task(&state).starts_with("The browser opened https://shop.test/entry for this task."));
+    assert!(matches!(agent.actions_done(&mut state, &page).await.unwrap(), Carried::Done));
+    let asked = jev.5.lock().unwrap();
+    assert_eq!(asked.len(), 2);
+    for instructions in asked.iter() {
+        assert!(
+            instructions.contains("# Task\nSign in at /login, then tell me the order reference.\n"),
+            "{instructions}"
+        );
+        assert!(!instructions.contains("shop.test/entry"), "{instructions}");
+    }
+}
+
 #[tokio::test]
 async fn test_the_done_check_is_told_what_was_typed_and_never_sent() {
     let page = observation(&[holding("Reference", "REF-1")]);
@@ -2025,6 +2084,58 @@ async fn test_the_done_check_is_told_what_was_typed_and_never_sent() {
     assert!(!asked[1]["page_facts"].to_string().contains("'Note'"), "{}", asked[1]);
     assert!(!asked[2]["page_facts"].to_string().contains("'Note'"), "{}", asked[2]);
     assert!(asked[4]["page_facts"].to_string().contains("'Note'"), "{}", asked[4]);
+}
+
+/// Shown the run's start beside "Tidy it up for me.", Jev judged a form posting to /list/delete reversible on an
+/// unauthorized run: the gate asks about the caller's task, never where the run opened.
+#[tokio::test]
+async fn test_the_authorization_gate_judges_the_task_without_the_callers_start() {
+    let jev = Arc::new(Unsure(ScriptedJev::new(Vec::new()), 1.0, Default::default()));
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "My saved list looks messy. Tidy it up for me.".into();
+    state.caller_start = Some("https://shop.test/list".into());
+    let tidy = button("Tidy up list");
+    let page = observation(std::slice::from_ref(&tidy));
+    let _ = agent.gate_irreversible(&mut state, &page, &code_decision(Operation::Click, Some(tidy))).await;
+    let seen = jev.2.lock().unwrap();
+    assert!(!seen.is_empty());
+    for context in seen.iter() {
+        assert_eq!(context["task"], "My saved list looks messy. Tidy it up for me.", "{context}");
+    }
+}
+
+/// The gate and the done check read the caller's task through the redactor too: a secret resolved after the run
+/// began stays out of both requests.
+#[tokio::test]
+async fn test_the_gate_and_done_check_mask_a_secret_resolved_after_preparation() {
+    let mut state = run_state();
+    state.task = "Delete the list named private-token.".into();
+    state.authorization.irreversible_actions = true;
+    let page = observation(&[]);
+
+    let gate = Arc::new(Unsure(ScriptedJev::new(Vec::new()), 1.0, Default::default()));
+    let agent = Agent::new(Arc::new(NoPage), gate.clone(), Arc::new(ScriptedLLM));
+    agent.redactor().register("token", "private-token", None);
+    let delete = button("Delete list");
+    let _ = agent.gate_irreversible(&mut state, &page, &code_decision(Operation::Click, Some(delete))).await;
+    {
+        let seen = gate.2.lock().unwrap();
+        assert!(!seen.is_empty());
+        for context in seen.iter() {
+            assert!(!context.to_string().contains("private-token"), "{context}");
+        }
+    }
+
+    let done = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+    let agent = Agent::new(Arc::new(FinishPage(page.clone())), done.clone(), Arc::new(ScriptedLLM));
+    agent.redactor().register("token", "private-token", None);
+    let _ = agent.actions_done(&mut state, &page).await;
+    let asked = done.5.lock().unwrap();
+    assert!(!asked.is_empty());
+    for instructions in asked.iter() {
+        assert!(!instructions.contains("private-token"), "{instructions}");
+    }
 }
 
 /// `DoneCheckJev`, judging that no answer gives every requested fact.
@@ -2435,7 +2546,15 @@ impl DecisionClient for Exact {
         questions: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         let picked = ["pick", "start"].iter().find_map(|key| match questions.get(*key) {
-            Some(Question::Choice(choice)) => Some((*key, choice.criteria.iter().find(|(_, v)| **v == json!(self.0)))),
+            Some(Question::Choice(choice)) => {
+                assert!(choice.instructions.contains("Each choice is a candidate span copied from"));
+                assert!(
+                    choice
+                        .instructions
+                        .contains("Choose only the field's value, without surrounding task instructions.")
+                );
+                Some((*key, choice.criteria.iter().find(|(_, v)| **v == json!(self.0))))
+            }
             _ => None,
         });
         match picked {
@@ -2897,7 +3016,20 @@ async fn test_jev_reads_a_field_value_on_a_task_that_also_acts() {
 /// A page whose uses are its 1280x900 viewport screenshot and the points clicked on it, and that has moved on from
 /// the observation asked about when its flag is set.
 #[derive(Default)]
-struct Screenshots(std::sync::Mutex<Vec<(f64, f64)>>, bool, std::sync::Mutex<Option<Vec<u8>>>, bool);
+struct Screenshots(
+    std::sync::Mutex<Vec<(f64, f64)>>,
+    bool,
+    std::sync::Mutex<Option<Vec<u8>>>,
+    bool,
+    Option<Arc<ImageStorage>>,
+);
+
+#[derive(Default)]
+struct ImageStorage {
+    writes: Mutex<Vec<(String, Vec<u8>)>>,
+    fail: bool,
+    hang: bool,
+}
 
 /// A PNG's signature and header, which is all of it the image limits read.
 fn png(width: u32, height: u32) -> Vec<u8> {
@@ -2905,13 +3037,35 @@ fn png(width: u32, height: u32) -> Vec<u8> {
 }
 
 impl Page for Screenshots {
+    fn keep_screenshot<'a>(&'a self, name: &'a str, png: &'a [u8]) -> BoxFuture<'a, PageResult<Option<Artifact>>> {
+        Box::pin(async move {
+            let Some(storage) = &self.4 else { return Ok(None) };
+            storage.writes.lock().unwrap().push((name.into(), png.into()));
+            if storage.hang {
+                std::future::pending::<()>().await;
+            }
+            if storage.fail {
+                return Err(BrowserError::Failed("private-token /private/path".into()));
+            }
+            Ok(Some(Artifact {
+                kind: ArtifactKind::Screenshot,
+                name: name.into(),
+                mime_type: "image/png".into(),
+                size_bytes: png.len() as i64,
+                sha256: fastbrowse_core::py::sha256_hex(png),
+                uri: format!("memory://{name}"),
+            }))
+        })
+    }
+
     fn artifacts(&self) -> Vec<Artifact> {
         Vec::new()
     }
 
     fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
         assert!(self.3, "this screenshot-only path must not observe for reading");
-        Box::pin(async { Ok(observation(&[])) })
+        let page = Observation { visual_content: self.4.is_some(), ..observation(&[]) };
+        Box::pin(async move { Ok(page) })
     }
 
     fn glance(&self) -> BoxFuture<'_, PageResult<Observation>> {
@@ -2933,8 +3087,19 @@ impl Page for Screenshots {
         Box::pin(async { Ok(capture(&[])) })
     }
 
-    fn act<'a>(&'a self, _: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
-        unreachable!("recovery does not act")
+    fn act<'a>(&'a self, action: &'a Action, _: &'a Observation) -> BoxFuture<'a, PageResult<ActResult>> {
+        if self.4.is_some() && action.operation == Operation::Escape {
+            return Box::pin(async {
+                Ok(ActResult {
+                    outcome: StepOutcome::Executed,
+                    failure: None,
+                    page_changed: false,
+                    detail: None,
+                    moved: false,
+                })
+            });
+        }
+        unreachable!("recovery does not act: {action:?}")
     }
 
     fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
@@ -2948,7 +3113,8 @@ impl Page for Screenshots {
 
     fn click_viewport(&self, x: f64, y: f64) -> BoxFuture<'_, PageResult<ActResult>> {
         self.0.lock().unwrap().push((x, y));
-        let clicked = ActResult { outcome: StepOutcome::Executed, page_changed: true, detail: None, moved: false };
+        let clicked =
+            ActResult { outcome: StepOutcome::Executed, failure: None, page_changed: true, detail: None, moved: false };
         Box::pin(async move { Ok(clicked) })
     }
 
@@ -3620,7 +3786,7 @@ async fn test_an_http_task_with_a_step_to_take_escalates_whatever_it_reports() {
 
 #[tokio::test]
 async fn test_text_and_image_cannot_finish_without_text_evidence() {
-    let page = Screenshots(Default::default(), false, Default::default(), true);
+    let page = Screenshots(Default::default(), false, Default::default(), true, None);
     let agent = Agent::new(Arc::new(page), Arc::new(IntentJev::new("text_image")), Arc::new(ScriptedLLM));
     let mut state = run_state();
     state.recoveries = agent.config.stall.max_recoveries;
@@ -3634,7 +3800,7 @@ async fn test_text_and_image_cannot_finish_without_text_evidence() {
 /// whose delete button never appeared had not deleted anything, and ended complete saying the image was not there.
 #[tokio::test]
 async fn test_a_task_to_carry_out_is_not_done_by_hovering() {
-    let page = Screenshots(Default::default(), false, Default::default(), true);
+    let page = Screenshots(Default::default(), false, Default::default(), true, None);
     let agent = Agent::new(Arc::new(page), Arc::new(IntentJev::new("carried_out")), Arc::new(ScriptedLLM));
     let mut state = run_state();
     state.recoveries = agent.config.stall.max_recoveries;
@@ -3676,6 +3842,15 @@ async fn test_required_screenshot_withheld_for_a_fresh_secret_is_unverified() {
     assert_eq!(result.status, Status::Unverified);
     assert!(result.final_frame.is_none());
     assert_eq!(result.error.as_deref(), Some("The requested final screenshot could not be captured."));
+    let trace = Trace::collecting();
+    let agent = agent.with_trace(trace.clone());
+    let result = agent.with_changes(result, None);
+    let events = trace.events();
+    let finished: Vec<_> = events.iter().filter(|event| event["event"] == "run_finished").collect();
+    assert_eq!(finished.len(), 1);
+    assert_eq!(finished[0]["status"], json!(result.status));
+    assert_eq!(finished[0]["error_present"], true);
+    assert_eq!(finished[0]["final_frame"], false);
 }
 
 #[tokio::test]
@@ -4136,7 +4311,7 @@ impl DecisionClient for Seeing {
 }
 
 async fn click_where_seen(images: bool, shown: f64, moved: bool) -> (Option<ActResult>, Arc<Screenshots>, Arc<Seeing>) {
-    let page = Arc::new(Screenshots(Default::default(), moved, Default::default(), false));
+    let page = Arc::new(Screenshots(Default::default(), moved, Default::default(), false, None));
     let jev = Arc::new(Seeing { images, shown, asked: Default::default(), on_evaluate: None });
     let agent = Agent::new(page.clone(), jev.clone(), Arc::new(ScriptedLLM));
     let mut state = run_state();
@@ -4148,7 +4323,7 @@ async fn click_where_seen(images: bool, shown: f64, moved: bool) -> (Option<ActR
 
 #[tokio::test]
 async fn test_a_drawn_page_sends_its_viewport_and_a_text_page_sends_none() {
-    let page = Arc::new(Screenshots(Default::default(), false, Default::default(), false));
+    let page = Arc::new(Screenshots(Default::default(), false, Default::default(), false, None));
     let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: None });
     let agent = Agent::new(page, jev, Arc::new(ScriptedLLM));
     // A map or a photograph has none of its content in the DOM: the screenshot is the page.
@@ -4161,7 +4336,7 @@ async fn test_a_drawn_page_sends_its_viewport_and_a_text_page_sends_none() {
 
 #[tokio::test]
 async fn test_a_route_that_takes_no_images_is_sent_none_even_on_a_drawn_page() {
-    let page = Arc::new(Screenshots(Default::default(), false, Default::default(), false));
+    let page = Arc::new(Screenshots(Default::default(), false, Default::default(), false, None));
     let jev = Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default(), on_evaluate: None });
     let agent = Agent::new(page, jev, Arc::new(ScriptedLLM));
     let drawn = Observation { visual_content: true, ..observation(&[button("Open street view")]) };
@@ -4198,7 +4373,8 @@ async fn test_a_covered_control_is_not_clicked_once_the_page_moved_on_from_its_s
 
 #[tokio::test]
 async fn test_a_covered_control_is_not_clicked_when_pixels_change_while_jev_answers() {
-    let page = Arc::new(Screenshots(Default::default(), false, std::sync::Mutex::new(Some(png(1280, 900))), false));
+    let page =
+        Arc::new(Screenshots(Default::default(), false, std::sync::Mutex::new(Some(png(1280, 900))), false, None));
     let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: Some(page.clone()) });
     let agent = Agent::new(page.clone(), jev, Arc::new(ScriptedLLM));
     let mut state = run_state();
@@ -4487,6 +4663,29 @@ impl LLMClient for WritesPartial {
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
+}
+
+#[tokio::test]
+async fn test_partial_composition_supplies_missing_coverage_to_recovery() {
+    let page = capture(&[(BlockKind::Paragraph, "Quote by Ada")]);
+    let mut notes = Notes::default();
+    notes.add(Fact::read("Quote by Ada", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
+    let reviewed = crate::retrieval::compose_reviewed(
+        &JudgesCarried(true),
+        &WritesPartial("2 quotes by Ada were found.", "the quotes past page 2"),
+        "How many quotes are there across the whole list?",
+        &notes,
+        None,
+        None,
+        true,
+        &[],
+    )
+    .await
+    .unwrap();
+    let feedback: serde_json::Value =
+        serde_json::from_str(&reviewed.rejection.expect("partial coverage needs recovery")).unwrap();
+    assert!(feedback["rejected_checks"].as_array().unwrap().contains(&json!("coverage")));
+    assert_eq!(feedback["partial"], "the quotes past page 2");
 }
 
 /// Asked how many quotes an author has across a site, a run stuck after two pages of ten composed "The total across
@@ -4794,7 +4993,13 @@ impl Page for LeavingPage {
         assert_eq!(action.operation, self.expected);
         *self.now.lock().unwrap() = self.left.clone();
         Box::pin(async {
-            Ok(ActResult { outcome: StepOutcome::Executed, page_changed: false, detail: None, moved: false })
+            Ok(ActResult {
+                outcome: StepOutcome::Executed,
+                failure: None,
+                page_changed: false,
+                detail: None,
+                moved: false,
+            })
         })
     }
 
@@ -5190,7 +5395,7 @@ impl Page for Scripted {
         assert_eq!(action.operation, expected);
         let page_changed = landed != *self.now.lock().unwrap();
         *self.now.lock().unwrap() = landed;
-        Box::pin(async move { Ok(ActResult { outcome, page_changed, detail: None, moved: false }) })
+        Box::pin(async move { Ok(ActResult { outcome, failure: None, page_changed, detail: None, moved: false }) })
     }
 
     fn redrawn<'a>(&'a self, _: &'a Observation, _: f64, _: Option<&'a str>) -> BoxFuture<'a, PageResult<bool>> {
@@ -5404,7 +5609,13 @@ impl Page for Unmoved {
         let target = action.target_id.as_ref().and_then(|id| observation.controls.iter().find(|c| c.id == *id));
         self.sent.lock().unwrap().push((action.operation, target.map(|c| c.label.clone())));
         Box::pin(async {
-            Ok(ActResult { outcome: StepOutcome::Executed, page_changed: false, detail: None, moved: false })
+            Ok(ActResult {
+                outcome: StepOutcome::Executed,
+                failure: None,
+                page_changed: false,
+                detail: None,
+                moved: false,
+            })
         })
     }
 
@@ -6485,7 +6696,7 @@ async fn test_a_refused_step_keeps_a_passing_composition_after_recovery_unverifi
 #[tokio::test]
 async fn test_rejected_composition_preserves_the_callers_schema_result() {
     let agent = Agent::new(
-        Arc::new(Screenshots(Default::default(), false, Default::default(), true)),
+        Arc::new(Screenshots(Default::default(), false, Default::default(), true, None)),
         repair_jev(vec![(0.0, 1.0), (0.0, 1.0), (0.0, 1.0)]),
         Arc::new(GrowingComposer(Default::default())),
     );
@@ -6817,7 +7028,13 @@ impl Page for HungPage {
             if hang {
                 Err(BrowserError::PageUnresponsive("the renderer stopped answering".into()))
             } else {
-                Ok(ActResult { outcome: StepOutcome::Executed, page_changed: false, detail: None, moved: false })
+                Ok(ActResult {
+                    outcome: StepOutcome::Executed,
+                    failure: None,
+                    page_changed: false,
+                    detail: None,
+                    moved: false,
+                })
             }
         })
     }
@@ -7158,6 +7375,25 @@ async fn test_done_on_page_one_of_a_whole_list_task_opens_the_next_page_instead(
 }
 
 #[tokio::test]
+async fn test_schema_output_on_a_whole_list_opens_the_next_page_instead() {
+    let browser = Arc::new(HungPage::new(0));
+    let agent = pager_agent(browser);
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    read_one(&mut state, &first, Extent::EveryPage);
+    state.note_pager_pages(&first);
+    let model = fastbrowse_core::output_schema::output_model(&json!({"type": "object", "properties": {}})).unwrap();
+    let schema = crate::verification::RecordSchema::from_output(model);
+
+    let finished = agent.finish(&mut state, &first, Some(&schema), None).await.expect("the run goes on");
+    assert!(finished.is_none(), "schema output must not bypass whole-list coverage");
+    let step = state.steps.last().expect("a step opened the next page");
+    assert_eq!((step.operation, step.outcome), (Operation::Navigate, StepOutcome::Executed));
+    assert_eq!(step.decided_by, Decider::Code);
+    assert!(state.pager_followed.contains("https://list.test/page/2/"));
+}
+
+#[tokio::test]
 async fn test_done_on_a_record_page_after_leaving_the_list_returns_to_its_unread_next_page() {
     let browser = Arc::new(HungPage::new(0));
     let agent = pager_agent(browser.clone());
@@ -7331,6 +7567,30 @@ fn test_a_list_that_gave_the_task_no_note_is_not_the_one_it_reads() {
     // Once the front page gave a note, its list is the one the task reads.
     read_one(&mut state, &home, Extent::EveryPage);
     assert_eq!(state.unread_pager_page().map(String::as_str), Some("https://shop.test/catalogue/page-2.html"));
+}
+
+#[test]
+fn test_trace_read_context_records_known_progress_without_page_content() {
+    let trace = Trace::collecting();
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ScriptedLLM))
+        .with_trace(trace.clone());
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    let second = paged("https://list.test/page/2/", "/page/3/");
+    read_one(&mut state, &first, Extent::EveryPage);
+    state.note_pager_pages(&first);
+    read_one(&mut state, &second, Extent::EveryPage);
+    state.note_pager_pages(&second);
+    let decision = Decision { read_scope: crate::policy::ReadScope::List, ..code_decision(Operation::Read, None) };
+    agent.trace_read_context("decision_context", &state, &second, &decision);
+    let events = trace.events();
+    let event = events.iter().find(|event| event["event"] == "decision_context").unwrap();
+    assert_eq!(event["extent"], "every_page");
+    assert_eq!(event["read_scope"], "list");
+    assert_eq!(event["current_page"], 2);
+    assert_eq!(event["unread_pages"], 1);
+    assert_eq!(event["next_unread_available"], true);
+    assert!(!event.to_string().contains("list.test"));
 }
 
 #[test]
@@ -8036,7 +8296,13 @@ impl Page for Picker {
             field.expanded = Some(false);
         }
         Box::pin(async {
-            Ok(ActResult { outcome: StepOutcome::Executed, page_changed: true, detail: None, moved: false })
+            Ok(ActResult {
+                outcome: StepOutcome::Executed,
+                failure: None,
+                page_changed: true,
+                detail: None,
+                moved: false,
+            })
         })
     }
 
@@ -8584,4 +8850,146 @@ async fn test_recovery_does_not_reopen_an_address_reached_through_a_link() {
     let error = agent.recover(&mut state, &current, "no progress", Status::Stuck, None).await.err();
     assert!(matches!(error, Some(Flow::Stop(stop)) if stop.status == Status::Stuck));
     assert!(state.known_pages.is_empty(), "a previously observed address is not a fresh route");
+}
+
+#[tokio::test]
+async fn test_image_storage_keeps_exact_reader_bytes_once() {
+    let storage = Arc::new(ImageStorage::default());
+    let page = Arc::new(Screenshots(Default::default(), false, Default::default(), false, Some(storage.clone())));
+    let agent = Agent::new(page, Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ImageLLM));
+    let mut state = run_state();
+    let drawn = Observation { visual_content: true, ..observation(&[]) };
+    agent.read_drawn_page(&mut state, &drawn).await.expect("image read");
+    agent.read_drawn_page(&mut state, &drawn).await.expect("cached image read");
+    let writes = storage.writes.lock().unwrap();
+    assert_eq!(writes.len(), 1);
+    assert_eq!(writes[0].1, png(1280, 900));
+    let seen = agent.seen();
+    assert_eq!(seen.screenshot_artifacts.len(), 1);
+    let artifact = &seen.screenshot_artifacts[0];
+    assert_eq!(artifact.name, writes[0].0);
+    assert_eq!(artifact.sha256, fastbrowse_core::py::sha256_hex(&writes[0].1));
+    assert_eq!(artifact.mime_type, "image/png");
+    assert_eq!(artifact.size_bytes, writes[0].1.len() as i64);
+    assert!(!state.notes.facts().is_empty());
+    drop(seen);
+    let result = agent.partial_result(&state.notes, Some(&state), &state.ledger, Status::BudgetExceeded, None, None);
+    assert_eq!(result.artifacts.len(), 1);
+    assert_eq!(result.artifacts[0].name, writes[0].0);
+}
+
+#[tokio::test]
+async fn test_image_storage_failure_preserves_image_reading() {
+    let storage = Arc::new(ImageStorage { fail: true, ..Default::default() });
+    let page = Arc::new(Screenshots(Default::default(), false, Default::default(), false, Some(storage.clone())));
+    let agent = Agent::new(page, Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ImageLLM));
+    let mut state = run_state();
+    let drawn = Observation { visual_content: true, ..observation(&[]) };
+    agent.read_drawn_page(&mut state, &drawn).await.expect("storage failure does not stop reading");
+    assert_eq!(storage.writes.lock().unwrap().len(), 1);
+    assert!(agent.seen().screenshot_artifacts.is_empty());
+    assert!(!state.notes.facts().is_empty());
+}
+
+#[tokio::test]
+async fn test_image_storage_withholds_newly_visible_secrets() {
+    let storage = Arc::new(ImageStorage::default());
+    let page = Arc::new(Screenshots(Default::default(), false, Default::default(), false, Some(storage.clone())));
+    let llm = Arc::new(EmptyImageLLM::default());
+    let agent = Agent::new(page, Arc::new(ScriptedJev::new(Vec::new())), llm.clone());
+    agent.redactor().register("credential", "private-token", None);
+    let drawn = Observation { visual_content: true, ..observation(&[]) };
+    agent.read_drawn_page(&mut run_state(), &drawn).await.expect("secret withheld");
+    assert!(storage.writes.lock().unwrap().is_empty());
+    assert!(agent.seen().screenshot_artifacts.is_empty());
+    assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn test_image_storage_cancelled_write_publishes_no_artifact() {
+    let storage = Arc::new(ImageStorage { hang: true, ..Default::default() });
+    let page = Arc::new(Screenshots(Default::default(), false, Default::default(), false, Some(storage.clone())));
+    let llm = Arc::new(EmptyImageLLM::default());
+    let agent = Agent::new(page, Arc::new(ScriptedJev::new(Vec::new())), llm.clone());
+    let mut state = run_state();
+    let drawn = Observation { visual_content: true, ..observation(&[]) };
+    let reading = agent.read_drawn_page(&mut state, &drawn);
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(10), reading).await.is_err());
+    assert_eq!(storage.writes.lock().unwrap().len(), 1);
+    assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let result = agent.partial_result(&state.notes, Some(&state), &state.ledger, Status::BudgetExceeded, None, None);
+    assert_eq!(result.status, Status::BudgetExceeded);
+    assert!(result.artifacts.is_empty());
+}
+
+#[tokio::test]
+async fn test_image_storage_obeys_public_run_deadline() {
+    let storage = Arc::new(ImageStorage { hang: true, ..Default::default() });
+    let page = Arc::new(Screenshots(Default::default(), false, Default::default(), true, Some(storage.clone())));
+    let llm = Arc::new(EmptyImageLLM::default());
+    let agent = Agent::new(page, Arc::new(IntentJev::new("text")), llm.clone());
+    for attempt in 1..=2 {
+        let mut state = run_state();
+        state.appearance = true;
+        let options = super::RunOptions {
+            limits: Some(Limits { max_seconds: Some(0.05), ..Default::default() }),
+            resume: Some(super::Resume { state: Box::new(state), url: None }),
+            ..Default::default()
+        };
+        let result =
+            tokio::time::timeout(std::time::Duration::from_secs(1), agent.run("Read the displayed value", options))
+                .await
+                .expect("run deadline")
+                .expect("run result");
+        assert_eq!(storage.writes.lock().unwrap().len(), attempt, "{result:?}");
+        assert_eq!(result.status, Status::BudgetExceeded, "{:?}", result.error);
+        assert_eq!(result.budget.unwrap().resource, BudgetResource::Seconds);
+        assert!(result.artifacts.is_empty());
+    }
+    assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[test]
+fn model_task_preserves_caller_scope_without_changing_recipe_identity() {
+    let agent = agent();
+    let mut state = run_state();
+    state.task = "Compare this site's plan with https://other.test/pricing.".into();
+    state.given_task = state.task.clone();
+    state.caller_start = Some("https://start.test/catalog?view=all#plans".into());
+    state.started_url = state.caller_start.clone();
+    let original = state.given_task.clone();
+    assert_eq!(
+        agent.model_task(&state),
+        "The browser opened https://start.test/catalog?view=all#plans for this task. Compare this site's plan with https://other.test/pricing."
+    );
+    let context = agent.context(&state, &at("https://other.test/pricing", &[]), vec![], false, false).unwrap();
+    assert_eq!(context.task, agent.model_task(&state));
+    assert_eq!(context.literal_task.as_deref(), Some(original.as_str()));
+    assert!(serde_json::to_value(&context).unwrap().get("literal_task").is_none());
+    assert_eq!(state.task, original);
+    assert_eq!(state.given_task, original);
+    let sink = Default::default();
+    agent.store_recipe(&state, &sink);
+    let saved = sink.lock().unwrap();
+    let recipe = &saved.as_ref().unwrap().recipe;
+    assert_eq!(recipe.task, original);
+    assert_eq!(recipe.start, state.caller_start);
+    drop(saved);
+    state.caller_start = None;
+    assert_eq!(agent.model_task(&state), original);
+}
+
+#[test]
+fn model_task_masks_secrets_resolved_after_run_preparation() {
+    let agent = agent();
+    let mut state = run_state();
+    state.task = "Find private-token.".into();
+    state.caller_start = Some("https://start.test/?token=private-token".into());
+    assert!(agent.model_task(&state).contains("private-token"));
+    agent.redactor().register("token", "private-token", None);
+    let task = agent.model_task(&state);
+    assert!(!task.contains("private-token"), "{task}");
+    let context = agent.context(&state, &observation(&[]), vec![], false, false).unwrap();
+    assert_eq!(context.task, task);
+    assert!(state.caller_start.as_deref().unwrap().contains("private-token"));
 }

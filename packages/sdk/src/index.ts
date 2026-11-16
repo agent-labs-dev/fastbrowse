@@ -13,6 +13,7 @@ export {
 export type {
   Artifact,
   BrowserEvent,
+  BrowserWarningEvent,
   BudgetStop,
   CancellationReceipt,
   Citation,

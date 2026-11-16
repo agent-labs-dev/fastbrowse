@@ -5,6 +5,7 @@ which case it reads those alone. The harness passes them, so the Jev route is on
 environment is read as fastbrowse reads it (`environment`).
 """
 
+import json
 import os
 import time
 from collections.abc import AsyncIterator, Iterable, Mapping
@@ -21,6 +22,7 @@ from parallax.harnesses.browser import BrowserHarness
 from parallax.harnesses.browser.cloud import Browser, cloud_browser
 from parallax.models import Capability, CostSource, HarnessInfo, HarnessKind, Isolation, Task, TurnInput
 
+from fastbrowse_evals.evidence import result_answer, step_action
 from fastbrowse_evals.task_specs import answer_model
 
 PROVIDER_KEYS = ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "EXA_API_KEY")
@@ -98,6 +100,7 @@ class FastbrowseHarness(BrowserHarness):
         super().__init__(observer=observer)
         self._task: Task | None = None
         self._product_status: Status | None = None
+        self._events: list[object] = []
 
     def bind_task(self, task: Task) -> None:
         super().bind_task(task)
@@ -125,6 +128,7 @@ class FastbrowseHarness(BrowserHarness):
             self._agent_started(browser.open_seconds)
             began = time.perf_counter()
             with traced() as events:
+                self._events = events
                 output = await run_task(
                     turn.text,
                     start=start_url,
@@ -142,6 +146,10 @@ class FastbrowseHarness(BrowserHarness):
             # opened on; what it saw is in `pages`.
             page = None if output.browser is None else await self.observe(browser.cdp_url, url=output.final_url)
         return _run_result(output, page, browser, events, latency_ms=latency_ms)
+
+    @property
+    def trial_metadata(self) -> dict[str, object]:
+        return super().trial_metadata | {"events": self._scrub(json.loads(json.dumps(self._events, default=str)))}
 
     def trial_details(self) -> dict[str, object]:
         details = super().trial_details()
@@ -229,7 +237,10 @@ def _run_result(
     pages, seen_at = read_pages(events)
     steps = []
     for step in output.steps:
-        item: dict[str, object] = {"action": step.operation.value, "url": step.url}
+        item: dict[str, object] = {
+            "action": step_action(step.operation.value, step.outcome.value, step.note),
+            "url": step.url,
+        }
         if step.target:
             item["value"] = step.target
         if step.facts:
@@ -239,7 +250,7 @@ def _run_result(
         steps.append(item)
     return {
         "status": _turn_status(output.status),
-        "answer": output.answer,
+        "answer": result_answer(output.answer, output.data),
         "error": output.error,
         "final_page": page,
         "final_url": output.final_url,

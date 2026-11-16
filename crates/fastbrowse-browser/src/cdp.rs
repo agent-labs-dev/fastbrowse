@@ -49,7 +49,7 @@ pub const CDP_PAGE_SECONDS: f64 = 10.0;
 /// so the next read waited it out again: one login run met it thirteen times, 26 minutes on a page it could not
 /// use. Browser-level commands (closing the run's tabs) are still sent.
 pub const CDP_DEADLINES_BEFORE_STOP: u32 = 2;
-/// The code Chrome answers when the document or frame a command addressed is gone, as after a navigation.
+/// CDP's generic server error. Unclassified replies keep the existing document-loss recovery.
 pub const SERVER_ERROR: i64 = -32000;
 
 const APPROVAL_HINT: &str = "If this is a Chrome you started yourself, it may be waiting for you to approve remote \
@@ -90,7 +90,13 @@ pub enum CdpError {
     /// The connection is gone. Carries why, the same for every call it failed.
     Closed(Arc<str>),
     /// The browser answered with an error. Its message is kept out: it can quote page text or evaluated source.
-    Protocol { code: i64 },
+    Protocol { code: i64, failure: Option<ProtocolFailure> },
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProtocolFailure {
+    NavigationDenied,
 }
 
 #[derive(Debug, Clone)]
@@ -132,6 +138,8 @@ impl Incoming {
 #[derive(Deserialize)]
 struct RemoteError {
     code: i64,
+    #[serde(default, rename = "fastbrowseFailure")]
+    failure: Option<ProtocolFailure>,
 }
 
 type Reply = Result<Value, CdpError>;
@@ -553,10 +561,15 @@ pub fn browser_error(method: &str, error: &CdpError, lost_is_outage: bool) -> Br
             BrowserError::BrowserUnresponsive(format!("{method} failed ({why})"))
         }
         CdpError::Closed(why) => BrowserError::Failed(format!("{method} failed ({why})")),
-        CdpError::Protocol { code: SERVER_ERROR } => {
+        CdpError::Protocol { code: SERVER_ERROR, failure: Some(ProtocolFailure::NavigationDenied) }
+            if method == "Page.navigate" =>
+        {
+            BrowserError::Failed("Page.navigate was denied by the browser access policy".into())
+        }
+        CdpError::Protocol { code: SERVER_ERROR, .. } => {
             BrowserError::ContextLost(format!("{method} failed (CDP {SERVER_ERROR})"))
         }
-        CdpError::Protocol { code } => BrowserError::Failed(format!("{method} failed (CDP {code})")),
+        CdpError::Protocol { code, .. } => BrowserError::Failed(format!("{method} failed (CDP {code})")),
     }
 }
 
@@ -566,7 +579,7 @@ impl Inner {
             // A reply nobody waits for any more (its caller was dropped) is read and discarded here.
             let Some(tx) = self.state.lock().unwrap().pending.remove(&id) else { return };
             let reply = match message.error {
-                Some(error) => Err(CdpError::Protocol { code: error.code }),
+                Some(error) => Err(CdpError::Protocol { code: error.code, failure: error.failure }),
                 None => Ok(message.result),
             };
             let _ = tx.send(reply);
@@ -609,6 +622,39 @@ impl Drop for PendingGuard<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn navigation_denial_is_typed_without_reporting_remote_text() {
+        for (method, marked, denied) in
+            [("Page.navigate", true, true), ("Page.navigate", false, false), ("Runtime.evaluate", true, false)]
+        {
+            let (tx, rx) = oneshot::channel();
+            let (out, _) = mpsc::unbounded_channel();
+            let inner = Inner {
+                state: Mutex::new(State { pending: HashMap::from([(7, tx)]), ..Default::default() }),
+                handlers: Default::default(),
+                out,
+                answered: false.into(),
+                deadlines: Default::default(),
+                pong: false.into(),
+            };
+            let mut response = serde_json::json!({"id": 7, "error": {"code": -32000,
+                "message": "private page text and https://private.test/"}});
+            if marked {
+                response["error"]["fastbrowseFailure"] = serde_json::json!("navigation_denied");
+            }
+            inner.dispatch(serde_json::from_value(response).unwrap());
+            let error = rx.await.unwrap().unwrap_err();
+            let public = browser_error(method, &error, true);
+            assert_eq!(matches!(public, BrowserError::Failed(_)), denied);
+            assert_eq!(matches!(public, BrowserError::ContextLost(_)), !denied);
+            let text = public.to_string();
+            assert!(!text.contains("private"));
+            if denied {
+                assert!(text.contains("access policy"));
+            }
+        }
+    }
 
     #[tokio::test]
     async fn a_reply_already_landed_at_the_deadline_is_the_answer() {

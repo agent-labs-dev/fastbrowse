@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::BoxFuture;
-use crate::models::{Artifact, Attachment, Link, MaybeUnavailable, Operation, SourceControl, StepOutcome};
+use crate::models::{Artifact, Attachment, Link, MaybeUnavailable, Operation, SourceControl, StepFailure, StepOutcome};
 use crate::py::datetime::DateTime;
 use crate::py::json::dumped_len;
 use crate::py::{lax, text};
@@ -329,6 +329,25 @@ str_enum! {
     }
 }
 
+/// One structured value's exact place in the rendered capture, in Unicode code points.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceField {
+    pub path: Vec<String>,
+    #[serde(deserialize_with = "lax::int_ge0")]
+    pub start: i64,
+    #[serde(deserialize_with = "lax::int_ge0")]
+    pub end: i64,
+}
+
+impl SourceField {
+    pub fn shifted(mut self, offset: i64) -> Self {
+        self.start += offset;
+        self.end += offset;
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Block {
@@ -361,6 +380,9 @@ pub struct Block {
     /// show. A record can be a `list_item` as well as a `record`, so its kind does not say this.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub whole_record: bool,
+    /// Structured values retain their boundaries, so copying one never requires retyping its whitespace.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<SourceField>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -381,6 +403,35 @@ pub struct Capture {
 }
 
 impl Capture {
+    /// A document title is otherwise context only: a reader cannot cite it when it is absent from the body.
+    pub fn with_document_title(mut self) -> Self {
+        if self.title.trim().is_empty() {
+            return self;
+        }
+        if !self.text.is_empty() && !self.text.ends_with("\n\n") {
+            self.text.push_str("\n\n");
+        }
+        let start = text::len(&self.text) as i64;
+        self.text.push_str(&self.title);
+        self.blocks.push(Block {
+            source_id: "document/title".into(),
+            source_url: None,
+            complete_source: false,
+            kind: BlockKind::Observation,
+            frame_id: None,
+            start,
+            end: text::len(&self.text) as i64,
+            heading_path: vec!["Document title".into()],
+            control_context: None,
+            href: None,
+            links: Vec::new(),
+            whole_record: false,
+            fields: Vec::new(),
+        });
+        self.sha256 = crate::py::sha256_hex(self.text.as_bytes());
+        self
+    }
+
     /// `text[block.start:block.end]`: the offsets are code points, as Python slices.
     pub fn block_text(&self, block: &Block) -> &str {
         let start = block.start.max(0) as usize;
@@ -501,6 +552,8 @@ impl MaybeUnavailable for BrowserError {
 #[serde(deny_unknown_fields)]
 pub struct ActResult {
     pub outcome: StepOutcome,
+    #[serde(default)]
+    pub failure: Option<StepFailure>,
     #[serde(deserialize_with = "lax::boolean")]
     pub page_changed: bool,
     #[serde(default)]
@@ -556,6 +609,11 @@ pub trait Page: Send + Sync {
     /// Keeps a capture's masked text as a `capture` artifact where this page keeps its downloads. A page with nowhere
     /// to keep one, such as a page fetched over HTTP, keeps none.
     fn keep_capture<'a>(&'a self, _name: &'a str, _text: &'a str) -> BoxFuture<'a, PageResult<Option<Artifact>>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    /// Keeps a secret-safe screenshot artifact where this page keeps its downloads.
+    fn keep_screenshot<'a>(&'a self, _name: &'a str, _png: &'a [u8]) -> BoxFuture<'a, PageResult<Option<Artifact>>> {
         Box::pin(async { Ok(None) })
     }
 
@@ -661,6 +719,56 @@ pub struct SearchOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn document_title_secret_masking_keeps_the_title_span_valid() {
+        let mut capture = Capture {
+            url: "https://docs.test/".into(),
+            title: "東京 private-token reference".into(),
+            captured_at: DateTime::now_utc(),
+            sha256: crate::py::sha256_hex(b""),
+            text: String::new(),
+            blocks: Vec::new(),
+            inaccessible_frames: 0,
+            masked: Vec::new(),
+        }
+        .with_document_title();
+        let mut redactor = crate::safety::Redactor::new();
+        redactor.register("token", "private-token", None);
+        capture.masked = redactor.masked_spans(&capture.text);
+        capture.text = redactor.mask(&capture.text);
+        capture.title = redactor.mask(&capture.title);
+        assert_eq!(capture.masked, [(3, 16)]);
+        assert!(!capture.text.contains("private-token"));
+        assert_eq!(capture.block_text(&capture.blocks[0]), capture.title);
+        assert_eq!(text::len(&capture.text), text::len("東京 private-token reference"));
+    }
+
+    #[test]
+    fn document_title_is_citable_metadata_without_shifting_body_spans() {
+        let mut capture = Capture {
+            url: "https://docs.test/".into(),
+            title: "東京 🦀 reference".into(),
+            captured_at: DateTime::now_utc(),
+            sha256: crate::py::sha256_hex(b"Body"),
+            text: "Body".into(),
+            blocks: Vec::new(),
+            inaccessible_frames: 0,
+            masked: Vec::new(),
+        };
+        capture = capture.with_document_title();
+        assert!(capture.text.starts_with("Body\n\n"));
+        let title = capture.blocks.last().unwrap();
+        assert_eq!(title.start, 6);
+        assert_eq!(title.end - title.start, text::len(&capture.title) as i64);
+        assert_eq!(capture.block_text(title), capture.title);
+        assert_eq!(title.heading_path, ["Document title"]);
+        assert_eq!(title.kind, BlockKind::Observation);
+        assert_eq!(capture.sha256, crate::py::sha256_hex(capture.text.as_bytes()));
+        capture.title.clear();
+        let before = capture.clone();
+        assert_eq!(capture.with_document_title(), before);
+    }
 
     fn link(label: &str, next_page: Option<bool>, i: usize) -> Control {
         let mut control = Control::new(&format!("l{i}"), "link", label, [Operation::Click]);

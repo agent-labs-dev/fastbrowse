@@ -7,7 +7,7 @@ fastbrowse splits a browser agent into three owners:
 - **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, and budgets. Code does not second-guess a DONE: the run ends `complete` with what Jev read, and a requested record that cannot be filled, a composed claim still unsupported after recovery, an answer its composer says leaves a requested value unestablished, or a requested step the page shows the site does not allow ends `unverified`. Once the run has acted, Jev's finish check answers whether every step the task asks for was carried out: `done`, `undone` (the run recovers), or `refused` (the run reads, answers and ends `unverified`).
 
 When a field value or key chord is copied, Jev selects its source and first word. If its end needs a separate choice,
-each choice shows the complete text that would be typed from that first word to the candidate end, with one more
+each choice shows a candidate span from that first word to the candidate end, with one more
 answer: the value does not begin at that word. Jev then picks the first word again without it. The beginning is checked
 the same way against copies that end where the value ends, and an end Jev rejects there is picked again.
 Code copies the selected span unchanged. A task-provided key chord is copied only from the task, never from page text. Controls with standard ARIA keyboard interactions also offer their role's keys for Jev to choose.
@@ -165,6 +165,10 @@ state, but does not by itself prove a value was set or accepted.
 
 ## Reading and citations
 
+Browser and HTTP captures keep the document title as a citable observation labeled `Document title`. It has its
+own source span and participates in the capture hash and secret masking. It does not represent a heading in the
+page body. A title alone does not establish that a script-rendered body was read.
+
 READ is one of Jev's operations. On a page that has changed, Jev is also asked whether it shows something the task
 asks to be told that the notes do not hold yet; when it does, and Jev picked another operation, the run reads first,
 because an order total is gone once the order is placed. The step state's `page_facts` tell Jev when a page was read
@@ -278,8 +282,8 @@ each final claim against its original cited quotes, including record identity an
 The composer selects source wording by note id in private text parts, either the whole note or a part of it, such as
 one field of a record, that code finds in the note's text exactly as written. Code copies the selection and adds
 quotation delimiters when requested; prose parts, objects like the others so the composer does not write connecting
-wording as a source part, keep explanatory wording separate. A tally has one computed part,
-which code fills without replacing matching text inside a source part. Packed compositions expose their original
+wording as a source part, keep explanatory wording separate. A tally has a computed numeric part or
+requested winner-field parts, which code fills without replacing matching text inside a source part. A numeric slot retains its exact position in its prose or table cell, so unit and sign checks see the surrounding text without confusing an identical source number with the slot. Packed compositions expose their original
 sources separately, and kept claims retain these parts through a rewrite. Split notes cannot be selected as whole
 sources. The delivered claims keep the same text, cells, tally and evidence id fields.
 For a comparison restricted to each group's minimum or maximum, the composer also names a private selection:
@@ -287,7 +291,8 @@ the grouping field, the inner field and its extreme. Group names must copy an ex
 or, for captured page text, its own captured heading path. Code selects each group's tied extremes before applying
 the outer comparison. The claim cites every qualifying record used in the selection; record association checks see
 only the outer winners. This selection survives packing and rewrites without adding fields to delivered claims.
-A count, total, minimum or maximum, or a place after one such as the second cheapest, is never written or judged as a number. The composer marks it as a tally with
+An extreme can supply both its numeric result and requested fields from its winning records. Typed computed slots name those fields. Code selects the rank and every tied winner first, then copies each requested field only from those records and their associated source notes. Literal-copy checks accept wording from a record's quote or captured heading, never its address or generated metadata. Field-support checks reject a missing, ambiguous or unrelated value. A name and price can therefore share a prose claim or occupy separate table cells without the composer choosing the winning record.
+A count, total, minimum or maximum, or a place after one such as the second cheapest, is never written or judged as a number. The response schema requires a field for sums, minima and maxima; only counts may omit it. The composer marks it as a tally with
 the kind of record and the field, and Jev answers one question per note read: for a count, whether it holds exactly one
 such record, and for a total or extreme, whether it holds one with its field, then which number in it is the field. A date, ISO or a day, month name and year, is offered whole with its year beside it, and its day and month are not offered alone, since neither orders anything; code orders dates for an extreme and never adds them. A
 record's name, heading or a link to it holds no value, so it is not counted as a record without one. Code counts, adds
@@ -308,6 +313,10 @@ the tally's own among them, and the claim holds only when Jev chooses that one: 
 code then works out exactly a count where the task asked for a total. An operation another tally of the same records
 gives is not offered, so a task asking for the number of orders and their total is answered by a count and a sum, and
 a table row's tally is asked the same.
+Amounts retain their currency symbol or ISO 4217 code when extracted. Code adds or compares only matching units,
+including within each group's minimum or maximum, and refuses to relabel a calculated value with another currency.
+An amount without a currency cannot be mixed with one that states a currency. No conversion rate or equivalence
+between a symbol and an ISO code is assumed.
 A failed check tells the composer which it was, such as a claim that also lists each record's value, which then goes in
 a claim of its own.
 Packing continues only when fewer requests are needed or the rewritten claim text shrinks. Removing source-state
@@ -336,9 +345,11 @@ citations; on every other draft a long run's clicks would crowd out the notes it
 spend the same recovery, and when it ends without a checked answer they retain their extracted data and end `unverified`.
 Each schema field is chosen after the answer is checked, with its claims beside the candidates, or with the claims that
 passed when a rewrite is pending: a field choice alone cannot compare records, and chose the other package where the
-answer worked out which was newer. Recovery is not
+answer worked out which was newer. When a string value occupies part of a source passage, both the source
+choice and the word-boundary questions retain the record's other field names and the selected source's
+context. A whole table row carries its header rather than an unknown column label. Recovery is not
 attempted when a claim lacks a retained source quote or packed composition cannot reduce to one request.
-The composer says when its answer is partial and names what it leaves unestablished, such as a total over a list that continues unread. Such an answer is never `complete`: a finished run ends `unverified` with that account as its error, and a stuck run keeps its status. Exhausted composition recovery retains supported claims and ends `unverified`, unless a missing field value or
+The composer says when its answer is partial and names what it leaves unestablished, such as a total over a list that continues unread. That account reaches recovery even when the draft has no claims, so Jev can choose what evidence to gather next. Such an answer is never `complete`: a finished run ends `unverified` with that account as its error, and a stuck run keeps its status. Exhausted composition recovery retains supported claims and ends `unverified`, unless a missing field value or
 site failure establishes another status. Those claims can be reused without another composition call only while
 their source evidence remains unchanged and the run has taken no further step. A later nonempty checked repair replaces the retained draft; an empty
 repair preserves the earlier draft. Other stops also retain checked partial claims alongside their status,
@@ -351,6 +362,11 @@ where the task asks for its year. When it holds more, the composer writes the an
 told that they held more than the task asks, and its claims pass the same checks as any composed answer.
 A composed answer is judged for exactness on the text it copies through its source parts, since its own wording holds no
 page text: a source part can insert its note's whole text, so a composed answer can copy more than the task asks too.
+JSON record fields retain their exact captured spans. The composer can select a field by its local identifier
+instead of retyping its contents, and code copies its whitespace unchanged. Selectors are unavailable for masked
+fields, partial field quotes and context fragments. Other source parts must still match their source text exactly.
+Each copied span retains its enclosing claim as typed prose, copied text and computed slots. Table claims retain
+their cell boundaries. This gives the span its role without presenting the writer's words or worked values as page text.
 The check rejects copied page information the task neither asks for nor names, such as another field's value, an
 identifier or another record, not the task's own words or a sentence that states only an asked value.
 
@@ -430,8 +446,16 @@ step's page facts, so Jev reloads it when the status can clear, goes back or pic
 
 ## Run events and images
 
-`on_event` receives a `BrowserEvent` followed by `StepEvent` objects. Each step includes added facts,
+`on_event` receives a `BrowserEvent` followed by step and browser-warning events. `BrowserWarningEvent` carries
+closed `operation` and `failure` codes without page content, addresses or transport error text. Browser sessions
+without a warning consumer keep the stderr fallback. The run drains remaining warning events after closing the browser and
+before returning. Each step includes added facts,
 their reader and source links in `StepResult.facts`, and any available explanation in `StepResult.note`.
+`StepResult.failure` carries an optional typed cause: `missing_target`, `target_gone`, `unauthorized_origin`,
+`navigation_failed`, `dialog_interrupted` or `browser_error`. The browser records the cause where it detects
+it, including a disconnected target reported as `stale`. A changed or covered control without a known cause
+has no failure value. Policy refusals and an unmet caller condition also leave it unset, because the browser
+has reported no fault. Older results without the field still parse; `note` remains diagnostic text.
 `Config(step_frames=True)` attaches a PNG to each step unless a fresh observation shows a resolved secret.
 This safety reading preserves the pending action's guards and leaves download notices for the next decision.
 
@@ -603,7 +627,9 @@ the caller asks to watch. Otherwise the tab is created with `background: true` a
 behind another is hidden, so two things stand in for being in front. Focus emulation makes the document visible
 and focused, which runs animation frames and lets it take typing. A screencast keeps the tab's compositor
 awake, without which a screenshot of an idle page waits seconds for a frame; it is 16 pixels, every thousandth
-frame, on a session of its own so that live frames and recordings cannot replace it. Measured on Chrome 155 in
+frame. Direct CDP uses a separate session so live frames and recordings cannot replace it. The extension has
+one session per tab, so setup starts the keeper on that session unless live frames or a recording already
+keep it painting. Measured on Chrome 155 in
 a headed window beside a focused window of another program: none of the session's commands moved focus.
 
 New popup pages pause until Fetch can capture their first response, including an inline PDF, and scoped sessions

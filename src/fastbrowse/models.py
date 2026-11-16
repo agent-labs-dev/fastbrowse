@@ -112,6 +112,17 @@ class Decider(StrEnum):
     RECIPE = "recipe"
 
 
+class StepFailure(StrEnum):
+    """A closed reason for a failed browser step; ``note`` remains diagnostic text."""
+
+    MISSING_TARGET = "missing_target"
+    TARGET_GONE = "target_gone"
+    UNAUTHORIZED_ORIGIN = "unauthorized_origin"
+    NAVIGATION_FAILED = "navigation_failed"
+    DIALOG_INTERRUPTED = "dialog_interrupted"
+    BROWSER_ERROR = "browser_error"
+
+
 class StepOutcome(StrEnum):
     EXECUTED = "executed"
     COVERED = "covered"
@@ -312,6 +323,7 @@ class StepResult(Frozen):
     operation: Operation
     decided_by: Decider
     outcome: StepOutcome
+    failure: StepFailure | None = None
     url: str
     target: str | None = None
     """Human-readable label of the chosen element; never contains a secret value."""
@@ -522,7 +534,45 @@ class BrowserEvent(Frozen):
     start a browser of its own (local Chrome, or one handed over through `cdp_url`)."""
 
 
-type EventHandler = Callable[[StepEvent | BrowserEvent], Awaitable[None]]
+class BrowserWarningOperation(StrEnum):
+    SCREENCAST_START = "screencast_start"
+    SCREENCAST_STOP = "screencast_stop"
+    SCREENCAST_FRAME_ACK = "screencast_frame_ack"
+    PAINT_KEEPER_ATTACH = "paint_keeper_attach"
+    POPUP_SETUP_CLOSE = "popup_setup_close"
+    POPUP_SETUP_RELEASE = "popup_setup_release"
+    FRAME_CALLBACK_SHUTDOWN = "frame_callback_shutdown"
+    LIVE_FRAME_DELIVERY = "live_frame_delivery"
+    DOWNLOAD_CAPTURE = "download_capture"
+
+
+class BrowserWarningFailure(StrEnum):
+    BROWSER_ERROR = "browser_error"
+    CONTEXT_LOST = "context_lost"
+    BROWSER_UNAVAILABLE = "browser_unavailable"
+    SCREENSHOTS_UNAVAILABLE = "screenshots_unavailable"
+    NAVIGATION_TIMEOUT = "navigation_timeout"
+    SITE_UNREACHABLE = "site_unreachable"
+    BROWSER_UNRESPONSIVE = "browser_unresponsive"
+    PAGE_UNRESPONSIVE = "page_unresponsive"
+    ORIGIN_NOT_ALLOWED = "origin_not_allowed"
+    SCRIPT_ERROR = "script_error"
+    TIMEOUT = "timeout"
+    CALLBACK_EXCEPTION = "callback_exception"
+    PAYLOAD_DECODE = "payload_decode"
+    CAPTURE_FAILED = "capture_failed"
+    CANCELLED = "cancelled"
+
+
+class BrowserWarningEvent(Frozen):
+    """A browser warning with only a closed operation and failure kind; it contains no page or transport text."""
+
+    type: Literal["browser_warning"] = "browser_warning"
+    operation: BrowserWarningOperation
+    failure: BrowserWarningFailure
+
+
+type EventHandler = Callable[[StepEvent | BrowserEvent | BrowserWarningEvent], Awaitable[None]]
 type FrameHandler = Callable[[bytes], Awaitable[None]]
 """Receives the active tab's JPEG bytes on the caller's event loop. A handler must honour cancellation: one that
 swallows `CancelledError` keeps that loop alive, so `asyncio.run` waits for it at shutdown."""

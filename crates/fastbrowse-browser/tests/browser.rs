@@ -22,7 +22,7 @@ use fastbrowse_browser::page::CdpPage;
 use fastbrowse_browser::session::{BrowserSession, SessionOptions, str_of};
 use fastbrowse_browser::testing;
 use fastbrowse_core::config::Config;
-use fastbrowse_core::models::{Attachment, BrowserConnection, Bytes, LocalChrome, Operation, StepOutcome};
+use fastbrowse_core::models::{Attachment, BrowserConnection, Bytes, LocalChrome, Operation, StepFailure, StepOutcome};
 use fastbrowse_core::page::{ActResult, Action, BlockKind, Control, Observation};
 use serde_json::{Value, json};
 use tokio::time::{Instant, sleep, timeout};
@@ -2754,5 +2754,55 @@ async fn test_a_next_page_is_marked_by_rel_or_a_next_class_in_pagination_and_not
     assert!(!marked("Previous"));
     assert!(!marked("Next article"), "a class that only starts with next");
     assert!(!marked("Next steps"), "the word alone");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn step_failures_preserve_the_producer_cause() {
+    let _turn = turn().await;
+    let Some(h) = loaded().await else { return };
+    let obs = h.observe().await;
+    for operation in [
+        Operation::Click,
+        Operation::Hover,
+        Operation::Fill,
+        Operation::Select,
+        Operation::Blur,
+        Operation::Upload,
+        Operation::Drag,
+    ] {
+        let missing = act(&h.page, Action::new(operation), &obs).await;
+        assert_eq!(
+            (missing.outcome, missing.failure),
+            (StepOutcome::Failed, Some(StepFailure::MissingTarget)),
+            "{operation}"
+        );
+    }
+    let invalid = Action { url: Some("file:///private".into()), ..Action::new(Operation::Navigate) };
+    let navigation = act(&h.page, invalid, &obs).await;
+    assert_eq!((navigation.outcome, navigation.failure), (StepOutcome::Failed, Some(StepFailure::NavigationFailed)));
+    let field = find(&obs, "Username");
+    let unknown_drop =
+        Action { operation: Operation::Drag, destination_id: Some("not-observed".into()), ..fill(field, "") };
+    let missing_drop = act(&h.page, unknown_drop, &obs).await;
+    assert_eq!((missing_drop.outcome, missing_drop.failure), (StepOutcome::Stale, Some(StepFailure::MissingTarget)));
+    let unauthorized = Action { secret: true, ..fill(field, "private") };
+    let refused = act(&h.page, unauthorized, &obs).await;
+    assert_eq!((refused.outcome, refused.failure), (StepOutcome::Failed, Some(StepFailure::UnauthorizedOrigin)));
+    eval_active(&h, "document.getElementById('username').hidden = true").await;
+    let hidden = act(&h.page, fill(field, "text"), &obs).await;
+    assert_eq!((hidden.outcome, hidden.failure), (StepOutcome::Stale, None));
+    eval_active(&h, "document.getElementById('username').remove()").await;
+    let gone = act(&h.page, fill(field, "text"), &obs).await;
+    assert_eq!((gone.outcome, gone.failure), (StepOutcome::Stale, Some(StepFailure::TargetGone)));
+    h.goto("/").await;
+    let obs = h.observe().await;
+    eval_active(
+        &h,
+        "document.querySelector('input').addEventListener('focus', () => alert('interrupted'), {once: true})",
+    )
+    .await;
+    let interrupted = act(&h.page, fill(find(&obs, "Username"), "text"), &obs).await;
+    assert_eq!((interrupted.outcome, interrupted.failure), (StepOutcome::Failed, Some(StepFailure::DialogInterrupted)));
     h.close().await;
 }

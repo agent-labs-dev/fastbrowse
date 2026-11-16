@@ -46,9 +46,13 @@ def rows(path: pathlib.Path) -> list[dict]:
 def summary(target: pathlib.Path) -> str:
     """One line on what has finished so far, short enough for a commit status."""
     if target.is_dir():
-        done = list(target.glob("**/agent.json"))
-        statuses = [json.loads(path.read_text()).get("status") for path in done]
-        return f"{len(done)} attempts, {statuses.count('complete')} complete"
+        # Parallax deletes uploaded run directories. Campaign mirrors retain their results;
+        # read those alone when present, so each attempt survives cleanup and is counted once.
+        ledgers = list(target.glob("mirror-*/results.jsonl")) or list(target.rglob("results.jsonl"))
+        attempts = [row for path in ledgers for row in rows(path)]
+        passed = sum(row.get("verdict") == "pass" for row in attempts)
+        failed = sum(row.get("verdict") == "fail" for row in attempts)
+        return f"{len(attempts)} attempts, {passed} passed, {failed} failed"
     if not target.is_file():
         return "starting"
     ledger = rows(target)

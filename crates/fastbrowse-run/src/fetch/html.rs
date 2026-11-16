@@ -640,6 +640,7 @@ pub struct Found {
     pub frame_id: Option<String>,
     /// The block is a card's whole text, what it only draws named after it, as `capture.js` marks a record.
     pub whole_record: bool,
+    pub fields: Vec<fastbrowse_core::page::SourceField>,
 }
 
 impl From<fastbrowse_core::page::json::Found> for Found {
@@ -652,6 +653,7 @@ impl From<fastbrowse_core::page::json::Found> for Found {
             links: Vec::new(),
             frame_id: None,
             whole_record: block.whole_record,
+            fields: block.fields,
         }
     }
 }
@@ -1202,6 +1204,7 @@ impl<'a> Reader<'a> {
                 links: links.next().unwrap_or_default(),
                 frame_id: None,
                 whole_record: false,
+                fields: Vec::new(),
             });
         }
         self.row = None;
@@ -1245,6 +1248,7 @@ impl<'a> Reader<'a> {
             links,
             frame_id: None,
             whole_record: false,
+            fields: Vec::new(),
         });
         if closing_heading && let Some(level) = self.heading {
             // A heading names what follows it, never itself, and a lower heading ends every higher one.

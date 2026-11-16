@@ -31,6 +31,6 @@
 pub use fastbrowse_core::config::Config;
 pub use fastbrowse_core::models::{
     Artifact, Attachment, Authorization, BrowserEvent, Citation, CostBreakdown, CostLine, Event, Evidence, Limits,
-    LocalChrome, RunResult, SecretRef, SecretResolver, Status, StepEvent, StepResult, Wall,
+    LocalChrome, RunResult, SecretRef, SecretResolver, Status, StepEvent, StepFailure, StepResult, Wall,
 };
 pub use fastbrowse_run::{ConnectCdp, Connected, Host, RunError, RunTask, connect_cdp, helper, run_task};

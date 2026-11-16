@@ -151,6 +151,19 @@ fn trace_message(trace: &Trace, direction: &str, message: &Value) {
     });
 }
 
+// Chrome's PageHandler emits this exact protocol error when MayAttachToURL denies navigation. Only a
+// native tab command can identify it: shim failures share -32000 but carry no native error object.
+fn native_navigation_denial(method: &str, message: &str) -> bool {
+    #[derive(serde::Deserialize)]
+    struct NativeError {
+        code: i64,
+        message: String,
+    }
+    method == "Page.navigate"
+        && serde_json::from_str::<NativeError>(message)
+            .is_ok_and(|error| error.code == SERVER_ERROR && error.message == "Not allowed")
+}
+
 impl Relay {
     async fn op(&self, op: &str, mut body: Value) -> Result<Value, String> {
         let (tx, rx) = oneshot::channel();
@@ -196,7 +209,9 @@ impl Relay {
         let method = message["method"].as_str().unwrap_or_default().to_owned();
         let params = message.get("params").cloned().unwrap_or(json!({}));
         let session = message["sessionId"].as_str();
-        let outcome = match self.route(session) {
+        let route = self.route(session);
+        let native = matches!(&route, Ok(Route::Tab(_) | Route::Child { .. }));
+        let outcome = match route {
             Err(error) => Err(error),
             Ok(Route::Browser) => self.browser_command(&method, params).await,
             Ok(Route::Tab(tab)) => self.tab_command(tab, None, &method, params).await,
@@ -204,7 +219,13 @@ impl Relay {
         };
         match outcome {
             Ok(result) => json!({"id": id, "result": result}),
-            Err(message) => json!({"id": id, "error": {"code": SERVER_ERROR, "message": message}}),
+            Err(message) => {
+                let mut error = json!({"code": SERVER_ERROR, "message": message});
+                if native && native_navigation_denial(&method, &message) {
+                    error["fastbrowseFailure"] = json!(crate::cdp::ProtocolFailure::NavigationDenied);
+                }
+                json!({"id": id, "error": error})
+            }
         }
     }
 
@@ -766,6 +787,47 @@ mod tests {
         relay.event(&frame("chrome-extension://abcdefgh/audio-devices.html"));
         relay.event(&json!({"event": "cdp", "tabId": 7, "method": "Page.frameDetached", "params": {"frameId": "F"}}));
         assert_eq!(relay.event(&serde_json::from_str(DETACHED).unwrap()), None, "the frame went before the detach");
+    }
+
+    #[test]
+    fn only_the_native_navigation_error_identifies_access_denial() {
+        let native = r#"{"code":-32000,"message":"Not allowed"}"#;
+        assert!(native_navigation_denial("Page.navigate", native));
+        assert!(!native_navigation_denial("Runtime.evaluate", native));
+        for message in [
+            "Not allowed",
+            r#"{"code":-32000,"message":"private page text"}"#,
+            r#"{"code":-32601,"message":"Not allowed"}"#,
+        ] {
+            assert!(!native_navigation_denial("Page.navigate", message));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_native_navigation_denial_keeps_its_kind_through_the_relay() {
+        let (out, mut to_extension) = mpsc::unbounded_channel();
+        let relay = Arc::new(relay_to(out));
+        let commanding = tokio::spawn({
+            let relay = relay.clone();
+            async move {
+                relay
+                    .command(json!({"id": 42, "sessionId": top_session(7),
+                    "method": "Page.navigate", "params": {"url": "https://example.test/"}}))
+                    .await
+            }
+        });
+        let sent: Value = serde_json::from_str(&to_extension.recv().await.unwrap()).unwrap();
+        let id = sent["id"].as_u64().unwrap();
+        relay
+            .pending
+            .lock()
+            .unwrap()
+            .remove(&id)
+            .unwrap()
+            .send(Err(r#"{"code":-32000,"message":"Not allowed"}"#.into()))
+            .unwrap();
+        let response = commanding.await.unwrap();
+        assert_eq!(response["error"]["fastbrowseFailure"], "navigation_denied");
     }
 
     #[tokio::test]

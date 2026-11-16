@@ -514,6 +514,22 @@ fn heading_facts(page: &Page<'_>, quote: &Evidence, reader: FactReader) -> Vec<F
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_document_title_is_a_selectable_quote_distinct_from_a_heading() {
+        let mut captured = capture(&[(BlockKind::Heading, "Account settings")]);
+        captured.title = "Service documentation".into();
+        let body = captured.blocks[0].clone();
+        let captured = captured.with_document_title();
+        assert_eq!(captured.blocks[0], body);
+        let candidates = read_candidates(&captured, None);
+        let title = candidates.iter().find(|c| c.value.to_str() == "Service documentation").unwrap();
+        assert_eq!(title.evidence.quote, "Service documentation");
+        assert_eq!(title.evidence.source_id, "document/title");
+        assert_eq!(title.evidence.heading_path, ["Document title"]);
+        assert_eq!(title.evidence.capture_sha256, captured.sha256);
+        assert!(candidates.iter().any(|c| c.value.to_str() == "Account settings"));
+    }
     use crate::retrieval::testing::capture;
     use crate::support::testing::block_on;
     use fastbrowse_core::BoxFuture;
