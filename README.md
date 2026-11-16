@@ -95,6 +95,9 @@ Steps go to stderr; the status, cost, step count, why a run stopped short, and t
 prints the full result: every step, the quotes behind the answer, cost by component, and the build that ran it. The
 exit code is the status, and only `complete` exits 0.
 
+The starting address stays with the task in subsequent model decisions and reads, so references such as "the whole
+site" retain their starting context after navigation. Tasks can still ask to visit other sites.
+
 ```sh
 export SAUCE_PASSWORD=secret_sauce
 uvx fastbrowse "Log in as standard_user with the saved password and add the backpack to the cart." \

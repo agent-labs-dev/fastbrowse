@@ -162,7 +162,7 @@ impl Agent {
             ledger: Some(&state.ledger),
             answer: claims.as_deref().filter(|claims| !claims.is_empty()),
         };
-        Ok(Some(extract(&*self.jev, &state.task, &capture, schema, &options).await?))
+        Ok(Some(extract(&*self.jev, &self.model_task(state), &capture, schema, &options).await?))
     }
 
     /// Open a next page of the list that a task over the whole list, or over pages of it it names, left unread, as a
@@ -250,7 +250,8 @@ impl Agent {
                     .event("screenshot_not_kept", || Map::from_iter([("error".into(), "artifact sink failed".into())])),
             }
         }
-        let reading = crate::retrieval::read_image(&*self.llm, &state.task, png.clone(), Some(&state.ledger)).await?;
+        let reading =
+            crate::retrieval::read_image(&*self.llm, &self.model_task(state), png.clone(), Some(&state.ledger)).await?;
         state.ledger.record([reading.cost.clone()])?;
         // A look is never in the text layer, so only a reading of text can merely repeat it.
         let reading_text = reading.data.text.filter(|text| {
@@ -295,7 +296,7 @@ impl Agent {
             // page 1 to 4.5 seconds of composing (#910). A step the site refused is reported, as REFUSED says.
             draft_answer(&outcome_notes(state))
         } else if state.compose {
-            let (notes, task, ledger) = (state.notes_to_compose(), state.task.clone(), state.ledger.clone());
+            let (notes, task, ledger) = (state.notes_to_compose(), self.model_task(state), state.ledger.clone());
             let steps = state.executed_steps();
             let reviewed = self
                 .trace
@@ -316,7 +317,7 @@ impl Agent {
             rejection = reviewed.rejection;
             Some(reviewed.answer)
         } else if matches!(intent, OutputIntent::Text | OutputIntent::TextAndImage) {
-            let (notes, task, ledger) = (state.notes.clone(), state.task.clone(), state.ledger.clone());
+            let (notes, task, ledger) = (state.notes.clone(), self.model_task(state), state.ledger.clone());
             let reviewed =
                 match self.trace.phase("coverage", draft_reviewed(&*self.jev, &task, &notes, Some(&ledger))).await? {
                     Some(Draft::Reviewed(reviewed)) => Some(reviewed),
@@ -467,7 +468,7 @@ impl Agent {
         let capture = self.capture().await?;
         let messages = [
             Message::system(UNOBTAINABLE_INSTRUCTIONS),
-            Message::user(format!("# Task\n{}\n\n# Page\n{}", state.task, capture.text)),
+            Message::user(format!("# Task\n{}\n\n# Page\n{}", self.model_task(state), capture.text)),
         ];
         let named = generate::<UnobtainableItem>(&*self.llm, LLMPurpose::Unobtainable, &messages, Some(&state.ledger));
         let named = match named.await {

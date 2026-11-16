@@ -8826,3 +8826,46 @@ async fn test_image_storage_obeys_public_run_deadline() {
     }
     assert_eq!(llm.0.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
+
+#[test]
+fn model_task_preserves_caller_scope_without_changing_recipe_identity() {
+    let agent = agent();
+    let mut state = run_state();
+    state.task = "Compare this site's plan with https://other.test/pricing.".into();
+    state.given_task = state.task.clone();
+    state.caller_start = Some("https://start.test/catalog?view=all#plans".into());
+    state.started_url = state.caller_start.clone();
+    let original = state.given_task.clone();
+    assert_eq!(
+        agent.model_task(&state),
+        "Start at https://start.test/catalog?view=all#plans. Compare this site's plan with https://other.test/pricing."
+    );
+    let context = agent.context(&state, &at("https://other.test/pricing", &[]), vec![], false, false).unwrap();
+    assert_eq!(context.task, agent.model_task(&state));
+    assert_eq!(state.task, original);
+    assert_eq!(state.given_task, original);
+    let sink = Default::default();
+    agent.store_recipe(&state, &sink);
+    let saved = sink.lock().unwrap();
+    let recipe = &saved.as_ref().unwrap().recipe;
+    assert_eq!(recipe.task, original);
+    assert_eq!(recipe.start, state.caller_start);
+    drop(saved);
+    state.caller_start = None;
+    assert_eq!(agent.model_task(&state), original);
+}
+
+#[test]
+fn model_task_masks_secrets_resolved_after_run_preparation() {
+    let agent = agent();
+    let mut state = run_state();
+    state.task = "Find private-token.".into();
+    state.caller_start = Some("https://start.test/?token=private-token".into());
+    assert!(agent.model_task(&state).contains("private-token"));
+    agent.redactor().register("token", "private-token", None);
+    let task = agent.model_task(&state);
+    assert!(!task.contains("private-token"), "{task}");
+    let context = agent.context(&state, &observation(&[]), vec![], false, false).unwrap();
+    assert_eq!(context.task, task);
+    assert!(state.caller_start.as_deref().unwrap().contains("private-token"));
+}

@@ -224,6 +224,16 @@ impl Agent {
         self.redactor().mask(value)
     }
 
+    // A task scoped to "the whole site" loses its referent after navigation unless its starting address stays
+    // with it. Mask at the call boundary: a secret may have been resolved since the run began.
+    fn model_task(&self, state: &RunState) -> String {
+        let task = self.mask(&state.task);
+        match state.caller_start.as_deref() {
+            Some(start) => format!("Start at {}. {task}", self.mask(start)),
+            None => task,
+        }
+    }
+
     fn reveals_text(&self, value: &str) -> bool {
         self.redactor().reveals(value)
     }
@@ -563,7 +573,7 @@ impl Agent {
                 let steps = state.executed_steps();
                 if state.compose
                     && let Ok(composed) =
-                        compose(&*self.jev, &*self.llm, &state.task, &notes, Some(&reporting), &steps).await
+                        compose(&*self.jev, &*self.llm, &self.model_task(state), &notes, Some(&reporting), &steps).await
                     && !composed.claims.is_empty()
                 {
                     // Only a rejected composition stops a run unverified, so one that passes every claim and coverage
@@ -936,7 +946,7 @@ impl Agent {
             page_facts.push(source);
         }
         Ok(StepContext {
-            task: state.task.clone(),
+            task: self.model_task(state),
             web_search: self.page.search_price().is_some(),
             subgoal: state.hint.clone(),
             dates: state.dates.clone(),

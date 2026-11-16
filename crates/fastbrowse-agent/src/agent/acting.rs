@@ -317,7 +317,7 @@ impl Agent {
                         source_question,
                         sources,
                     ) {
-                        add(Operation::Fill, name, page_question(&state.task, &question, criteria));
+                        add(Operation::Fill, name, page_question(&self.model_task(state), &question, criteria));
                     }
                 }
             }
@@ -463,7 +463,7 @@ impl Agent {
                 let accept = self.accept_dialog(state, observation).await?;
                 if accept
                     && let Some(dialog) = &observation.dialog
-                    && let Some(irreversible) = dialog_question(&state.task, Some(dialog))
+                    && let Some(irreversible) = dialog_question(&self.model_task(state), Some(dialog))
                 {
                     let action = format!("accept this {} dialog: {}.\n", dialog.kind, text::repr(&dialog.message));
                     self.gate_question(
@@ -634,7 +634,7 @@ impl Agent {
     ) -> Step {
         if !questions.is_empty() {
             state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
-            let context = json!({"task": state.task, "page": {"origin": origin_of(&observation.url)}});
+            let context = json!({"task": self.model_task(state), "page": {"origin": origin_of(&observation.url)}});
             let evaluation = jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&context, &questions)).await?;
             state.ledger.record([evaluation.cost])?;
             let noul = |key: &str| match evaluation.answers.get(key) {
@@ -676,8 +676,11 @@ impl Agent {
         }
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
         let questions = IndexMap::from([("edits".to_string(), Question::Choice(edits_question()))]);
-        let evaluation =
-            jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&json!({"task": state.task}), &questions)).await?;
+        let evaluation = jev_purpose(
+            JevPurpose::Authorization,
+            self.jev.evaluate(&json!({"task": self.model_task(state)}), &questions),
+        )
+        .await?;
         state.ledger.record([evaluation.cost.clone()])?;
         let edits = match evaluation.answers.get("edits") {
             Some(Answer::Choice(answer)) => match answer.choice.as_str() {
@@ -698,8 +701,11 @@ impl Agent {
     async fn task_rules_out(&self, state: &mut RunState, key: &str, question: NoulQuestion) -> Step<Option<bool>> {
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
         let questions = IndexMap::from([(key.to_string(), Question::Noul(question))]);
-        let evaluation =
-            jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&json!({"task": state.task}), &questions)).await?;
+        let evaluation = jev_purpose(
+            JevPurpose::Authorization,
+            self.jev.evaluate(&json!({"task": self.model_task(state)}), &questions),
+        )
+        .await?;
         state.ledger.record([evaluation.cost.clone()])?;
         let Some(Answer::Noul(answer)) = evaluation.answers.get(key) else { return Ok(None) };
         Ok(Some(answer.probability > EVEN_ODDS))
@@ -741,8 +747,11 @@ impl Agent {
                 ),
             ),
         ]);
-        let evaluation =
-            jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&json!({"task": state.task}), &questions)).await?;
+        let evaluation = jev_purpose(
+            JevPurpose::Authorization,
+            self.jev.evaluate(&json!({"task": self.model_task(state)}), &questions),
+        )
+        .await?;
         state.ledger.record([evaluation.cost.clone()])?;
         let yes = |key: &str| match evaluation.answers.get(key) {
             Some(Answer::Noul(answer)) => Some(answer.probability > EVEN_ODDS),
@@ -803,7 +812,7 @@ impl Agent {
             // Never asked beside the decision: the page's own text is what would argue a harmful action is harmless,
             // and the control's label and form are already in the questions. The title, path and query are the page's
             // to write too, so only the origin goes with them.
-            let page = json!({"task": state.task, "page": {"origin": origin_of(&observation.url)}});
+            let page = json!({"task": self.model_task(state), "page": {"origin": origin_of(&observation.url)}});
             let evaluation = jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&page, &questions)).await?;
             state.ledger.record([evaluation.cost.clone()])?;
             let answers = evaluation.answers;
@@ -901,7 +910,7 @@ impl Agent {
             "recent_actions": state.history.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
         });
         self.mask_strings(&mut page);
-        page["task"] = state.task.clone().into();
+        page["task"] = self.model_task(state).into();
         page["date"] = crate::dates::dated(observation.captured_at, &state.dates).into();
         let questions = IndexMap::from([
             ("met".to_string(), Question::Choice(met_question(action))),
@@ -1097,7 +1106,7 @@ impl Agent {
         if source == WRITTEN {
             let written = write_value(
                 &*self.llm,
-                &state.task,
+                &self.model_task(state),
                 &label,
                 target.input_type.as_deref(),
                 &typed_into(state, target),
@@ -1195,7 +1204,7 @@ impl Agent {
                     (index.parse::<usize>().ok(), kept.parse::<usize>().ok().filter(|_| every))
                 };
                 let holder = if source == IN_READ { "what was read" } else { "the task" };
-                let run_task = state.task.clone();
+                let run_task = self.model_task(state);
                 let several = several_values(target);
                 let exact = |bound: &str, options: &[(String, String)], elsewhere: &str| {
                     let question = format!(
@@ -1347,7 +1356,7 @@ impl Agent {
             .into_iter()
             .map(|(edge, options)| {
                 let options: Vec<_> = options.into_iter().map(|(kept, value)| (kept.to_string(), value)).collect();
-                let (question, options) = self.offered_copies(&state.task, question.to_string(), &options);
+                let (question, options) = self.offered_copies(&self.model_task(state), question.to_string(), &options);
                 (edge, question, options)
             })
             .collect();
@@ -1821,9 +1830,11 @@ impl Agent {
             Some(answers) => *answers,
             None => {
                 state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
-                let evaluation =
-                    jev_purpose(JevPurpose::Action, self.jev.evaluate(&json!({"task": state.task}), &questions))
-                        .await?;
+                let evaluation = jev_purpose(
+                    JevPurpose::Action,
+                    self.jev.evaluate(&json!({"task": self.model_task(state)}), &questions),
+                )
+                .await?;
                 state.ledger.record([evaluation.cost])?;
                 evaluation.answers
             }
@@ -1850,7 +1861,7 @@ impl Agent {
     /// The first and last page of the list the task names, read from the task. `None` when it names no last page, or
     /// the reading failed, so the run neither walks the list nor leaves any page of it out.
     async fn page_range(&self, state: &RunState) -> Step<Option<(usize, usize)>> {
-        let Ok(range) = crate::start::page_range(&*self.llm, &state.task, Some(&state.ledger)).await else {
+        let Ok(range) = crate::start::page_range(&*self.llm, &self.model_task(state), Some(&state.ledger)).await else {
             return Ok(None);
         };
         state.ledger.record([range.cost])?;
@@ -1883,7 +1894,7 @@ impl Agent {
         let carried = NoulQuestion::new(
             format!(
                 "{UNTRUSTED}\n\n# Task\n{}\n\nJudged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out?",
-                state.task
+                self.model_task(state)
             ),
             Some("Every such step has been carried out, or the task asks only to find, read or report something."),
             Some("A step the task asks for, other than finding, reading or reporting, has not been carried out yet."),
@@ -1891,7 +1902,7 @@ impl Agent {
         let refused = NoulQuestion::new(
             format!(
                 "{UNTRUSTED}\n\n# Task\n{}\n\nDo the current page or the recent actions show that the site does not allow a step the task asks to be carried out, such as an option the page marks unavailable or a control it shows disabled?",
-                state.task
+                self.model_task(state)
             ),
             Some(
                 "The page or the recent actions show the site does not allow a step the task asks for, and nothing left to try on the site would carry it out.",
@@ -1988,7 +1999,9 @@ impl Agent {
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
         let questions: IndexMap<String, Question> = asked
             .into_iter()
-            .map(|(key, question, criteria)| (key.to_string(), page_question(&state.task, &question, criteria)))
+            .map(|(key, question, criteria)| {
+                (key.to_string(), page_question(&self.model_task(state), &question, criteria))
+            })
             .collect();
         let dumped: Vec<String> = questions.values().map(Dump::dump_json).collect();
         let page = match observation {

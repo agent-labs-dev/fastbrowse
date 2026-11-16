@@ -168,8 +168,7 @@ impl Agent {
     }
 
     pub(super) async fn search_query(&self, state: &mut RunState, observation: &Observation) -> Step<String> {
-        let mut context =
-            json!({"task":state.task,"page":observation,"notes":self.decision_notes(state),"history":state.history});
+        let mut context = json!({"task":self.model_task(state),"page":observation,"notes":self.decision_notes(state),"history":state.history});
         self.mask_strings(&mut context);
         let messages = [
             Message::system(format!(

@@ -225,7 +225,7 @@ impl Agent {
                     let mut visited: Vec<_> = state.visited_addresses.iter().collect();
                     visited.sort();
                     let mut context = json!({
-                        "task": state.task,
+                        "task": self.model_task(state),
                         "page": observation,
                         "evidence": state.notes.render_for_navigation(),
                         "history": state.history,
@@ -307,7 +307,8 @@ impl Agent {
         let walled: Vec<String> = state.walled.iter().map(|url| self.redact(url)).collect();
         let mut opened: Vec<String> = state.routes.iter().map(|url| self.redact(url)).collect();
         opened.sort();
-        let proposal = propose_route(&*self.llm, &state.task, &walled, &opened, Some(&state.ledger)).await?;
+        let proposal =
+            propose_route(&*self.llm, &self.model_task(state), &walled, &opened, Some(&state.ledger)).await?;
         state.ledger.record([proposal.cost])?;
         let Some(route) = accept_start(proposal.data.url.as_deref())
             .filter(|route| !state.walled.contains(route) && state.routes.insert(route.clone()))

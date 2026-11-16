@@ -42,9 +42,17 @@ impl Agent {
         }
         let known = read_sources(&state.notes);
         let (tokens, ledger) = (&self.config.tokens, state.ledger.clone());
-        let read =
-            read_page(&*self.jev, &capture, &state.task, &state.dates, tokens, Some(&ledger), &self.trace, shows)
-                .await?;
+        let read = read_page(
+            &*self.jev,
+            &capture,
+            &self.model_task(state),
+            &state.dates,
+            tokens,
+            Some(&ledger),
+            &self.trace,
+            shows,
+        )
+        .await?;
         Ok(self.end_read(state, capture, observation, tries, known, read))
     }
 
@@ -65,7 +73,7 @@ impl Agent {
         }
         let tries = state.begin_read(observation);
         let known = read_sources(&state.notes);
-        let (task, dates, ledger) = (state.task.clone(), state.dates.clone(), state.ledger.clone());
+        let (task, dates, ledger) = (self.model_task(state), state.dates.clone(), state.ledger.clone());
         let tokens = &self.config.tokens;
         let reading = read_page(&*self.jev, &capture, &task, &dates, tokens, Some(&ledger), &self.trace, shows);
         let (read, done) = tokio::join!(self.trace.phase("read", reading), work(state));
