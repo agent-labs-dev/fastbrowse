@@ -129,6 +129,26 @@ async fn test_a_keeper_that_cannot_attach_leaves_the_tab_to_the_run() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_a_new_background_extension_tab_starts_its_paint_keeper() {
+    let fake = FakeChrome::start().await;
+    let source = fake.session(fake.background()).await;
+    let casts_before = fake.script().requested("Page.startScreencast", &keep_painting(), Some("session"));
+    let mut connection = fake.background();
+    connection.cdp_url = "fastbrowse-extension:test".into();
+    let session = fake.new_session(connection, SessionOptions::default());
+
+    testing::open_owned_tab_with_client(&session, &source, "https://example.com/").await.unwrap();
+
+    {
+        let script = fake.script();
+        assert!(!script.calls.iter().any(|method| method == "Target.activateTarget"));
+        assert_eq!(script.requested("Page.startScreencast", &keep_painting(), Some("session")), casts_before + 1);
+        assert_eq!(testing::keepers(&session), vec![("owned".to_owned(), "session".to_owned())]);
+    }
+    session.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_the_cloud_solver_reports_the_captcha_it_works_on_and_wakes_a_wait() {
     // Browser Use Cloud sends these on the browser's own connection, as seen live on a Cloudflare challenge.
     let fake = FakeChrome::start().await;

@@ -1026,7 +1026,7 @@ impl BrowserSession {
     }
 
     /// Have a tab that joins the run render: in front of its window, or behind it and kept painting.
-    pub(crate) async fn show(&self, target_id: &str) -> Result<(), BrowserError> {
+    pub(crate) async fn show(&self, target_id: &str, session_id: &str) -> Result<(), BrowserError> {
         if self.activate(target_id).await? {
             return Ok(());
         }
@@ -1041,8 +1041,8 @@ impl BrowserSession {
             let session = {
                 let state = self.0.state.lock().unwrap();
                 let casting = self.0.on_frame.is_some() || state.frame_tap.is_some();
-                let session = state.tabs.iter().find(|t| t.target_id == target_id).map(|t| t.session_id.clone());
-                session.filter(|_| !casting)
+                // Setup knows the session before the new tab is registered; looking it up there loses its keeper.
+                (!casting).then(|| session_id.to_owned())
             };
             if let Some(session) = session {
                 self.0.state.lock().unwrap().keepers.insert(target_id.to_owned(), session.clone());
@@ -1156,7 +1156,8 @@ impl BrowserSession {
         let target_id = str_of(&target["targetId"]);
         let attach = self.send("Target.attachToTarget", json!({"targetId": target_id, "flatten": true}), None).await?;
         let session_id = str_of(&attach["sessionId"]);
-        together(vec![Box::pin(self.show(&target_id)), Box::pin(self.prepare_session(&session_id, true))]).await?;
+        together(vec![Box::pin(self.show(&target_id, &session_id)), Box::pin(self.prepare_session(&session_id, true))])
+            .await?;
         self.run_document_scripts(&session_id).await;
         self.0.state.lock().unwrap().insert_tab(TabState {
             target_id: target_id.clone(),
@@ -1259,7 +1260,8 @@ impl BrowserSession {
         let attach = self.send("Target.attachToTarget", json!({"targetId": target_id, "flatten": true}), None).await?;
         let session_id = str_of(&attach["sessionId"]);
         // Foregrounding the tab and enabling its session are independent, and both finish before the tab is used.
-        together(vec![Box::pin(self.show(&target_id)), Box::pin(self.prepare_session(&session_id, true))]).await?;
+        together(vec![Box::pin(self.show(&target_id, &session_id)), Box::pin(self.prepare_session(&session_id, true))])
+            .await?;
         self.0.state.lock().unwrap().insert_tab(TabState {
             target_id: target_id.clone(),
             session_id,
@@ -2055,8 +2057,10 @@ async fn adopt(
     };
     // Both run to the end, even when one fails: a paint keeper attached while setup failed would otherwise be left
     // attached without ever reaching `state.keepers`, where a failed adoption finds it.
-    let (shown, prepared) =
-        tokio::join!(session_handle.show(target_id), session_handle.prepare_and_resume(&session_id, true, resumed));
+    let (shown, prepared) = tokio::join!(
+        session_handle.show(target_id, &session_id),
+        session_handle.prepare_and_resume(&session_id, true, resumed)
+    );
     shown?;
     prepared?;
     if shared.connection.attach {

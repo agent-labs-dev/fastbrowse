@@ -90,6 +90,16 @@ pub async fn open_owned_tab(session: &BrowserSession, url: &str) -> Result<(), B
     session.open_owned_tab(url).await
 }
 
+/// Reuse a connected test client while selecting the extension lifecycle branch.
+pub async fn open_owned_tab_with_client(
+    session: &BrowserSession,
+    client_source: &BrowserSession,
+    url: &str,
+) -> Result<(), BrowserError> {
+    *shared(session).client.lock().unwrap() = Some(client_source.client()?);
+    session.open_owned_tab(url).await
+}
+
 pub async fn prepare_session(session: &BrowserSession, session_id: &str) -> Result<(), BrowserError> {
     session.prepare_session(session_id, true).await
 }

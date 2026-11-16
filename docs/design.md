@@ -627,7 +627,9 @@ the caller asks to watch. Otherwise the tab is created with `background: true` a
 behind another is hidden, so two things stand in for being in front. Focus emulation makes the document visible
 and focused, which runs animation frames and lets it take typing. A screencast keeps the tab's compositor
 awake, without which a screenshot of an idle page waits seconds for a frame; it is 16 pixels, every thousandth
-frame, on a session of its own so that live frames and recordings cannot replace it. Measured on Chrome 155 in
+frame. Direct CDP uses a separate session so live frames and recordings cannot replace it. The extension has
+one session per tab, so setup starts the keeper on that session unless live frames or a recording already
+keep it painting. Measured on Chrome 155 in
 a headed window beside a focused window of another program: none of the session's commands moved focus.
 
 New popup pages pause until Fetch can capture their first response, including an inline PDF, and scoped sessions
