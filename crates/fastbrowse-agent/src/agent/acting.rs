@@ -182,9 +182,13 @@ fn value_questions<'a>(
 
 /// Which of `holder`'s words `end` the value for `label`, with which of several values it takes, as `several_values`
 /// says, and what `tried` says the field already had.
+///
+/// Asked only where a value begins, Jev began a document's text at the answer to the task's own question: told to type
+/// a quoted list and then say which item it lists second, it began at the second item 3 times in 3 (#1187). Told that
+/// the value is text given to be entered, it began at the quote's first word 5 times in 5.
 fn word_question((holder, label): (&str, &str), end: &str, several: &str, tried: &str) -> String {
     format!(
-        "If {holder} states the value for {label}, which of its words {end} the value? When it gives this field several values, {several} A search takes what is looked for, not the request around it.{tried}"
+        "If {holder} states the value for {label}, which of its words {end} the value? The value is text {holder} gives to be entered, not the answer to a question the task asks. When it gives this field several values, {several} A search takes what is looked for, not the request around it.{tried}"
     )
 }
 
@@ -1501,13 +1505,15 @@ impl Agent {
         for name in &secrets {
             sources.insert(format!("secret:{name}"), format!("The stored secret named {name} (value hidden)").into());
         }
+        // Said as the exact text to type: a task to write a three-line list of three items it names was copied as one
+        // of the items, since the task holds them word for word, though not as the lines it asks for (#1187).
         sources.insert(
             IN_TASK.into(),
-            "The task states this field's value word for word, whole or as part of something longer.".into(),
+            "The task states the exact text to type, word for word, whole or as part of something longer.".into(),
         );
         sources.insert(
             WRITTEN.into(),
-            "The task asks for a value it does not state word for word, such as a search query for what it looks for, so it is written from the task.".into(),
+            "The task asks for text it does not state word for word, such as a search query for what it looks for, or text it asks to be written or composed, so it is written from the task.".into(),
         );
         if !read.is_empty() {
             sources

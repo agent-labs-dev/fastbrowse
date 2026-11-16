@@ -2871,6 +2871,42 @@ fn test_the_value_questions_say_which_record_a_field_sits_in() {
     assert!(spans("search").iter().all(|q| !q.contains(IN_RECORD)), "{:?}", spans("search"));
 }
 
+/// A task to write a three-line list of three items it names had one item copied into the document: asked whether the
+/// task states the field's value word for word, Jev said it does, since the items are there, though not as the lines
+/// asked for. Told to type a quoted list and then say which item it lists second, it began the copy at that item
+/// (#1187). The value questions say the copy is the exact text to type, a value the task asks to be written is
+/// written, and the value is never the answer to the task's question.
+#[test]
+fn test_the_value_questions_say_a_copy_is_the_exact_text_to_type() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(EndValues), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "In a new document, write a three-line packing list: passport, charger, toothbrush.".into();
+    let document = Control::new("doc", "textbox", "textbox", [Operation::Fill]);
+    let asked = agent.ahead(&state, &observation(&[document]));
+    let choices: Vec<_> = asked
+        .iter()
+        .filter_map(|ahead| match &ahead.question {
+            Question::Choice(choice) => Some(choice),
+            _ => None,
+        })
+        .collect();
+    let source = choices.iter().find(|choice| choice.criteria.contains_key("write")).expect("the source question");
+    let said = |key: &str| source.criteria[key].as_str().unwrap_or_default().to_string();
+    assert!(said("task").contains("states the exact text to type, word for word"), "{}", said("task"));
+    assert!(said("write").contains("or text it asks to be written or composed"), "{}", said("write"));
+    let words: Vec<_> = choices.iter().filter(|choice| choice.instructions.contains("which of its words")).collect();
+    assert_eq!(words.len(), 2, "the beginning and the end are asked");
+    for question in words {
+        assert!(
+            question.instructions.contains(
+                "The value is text the task gives to be entered, not the answer to a question the task asks."
+            ),
+            "{}",
+            question.instructions
+        );
+    }
+}
+
 #[tokio::test]
 async fn test_only_new_read_evidence_renews_recovery_without_an_explicit_read_step() {
     let field = "Capacity: 12";
