@@ -2049,7 +2049,7 @@ async fn test_the_done_check_judges_the_task_without_the_callers_start() {
     state.caller_start = Some("https://shop.test/entry".into());
     let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
     let agent = Agent::new(Arc::new(FinishPage(page.clone())), jev.clone(), Arc::new(ScriptedLLM));
-    assert!(agent.model_task(&state).starts_with("Start at https://shop.test/entry."));
+    assert!(agent.model_task(&state).starts_with("The browser opened https://shop.test/entry for this task."));
     assert!(matches!(agent.actions_done(&mut state, &page).await.unwrap(), Carried::Done));
     let asked = jev.5.lock().unwrap();
     assert_eq!(asked.len(), 2);
@@ -8908,7 +8908,7 @@ fn model_task_preserves_caller_scope_without_changing_recipe_identity() {
     let original = state.given_task.clone();
     assert_eq!(
         agent.model_task(&state),
-        "Start at https://start.test/catalog?view=all#plans. Compare this site's plan with https://other.test/pricing."
+        "The browser opened https://start.test/catalog?view=all#plans for this task. Compare this site's plan with https://other.test/pricing."
     );
     let context = agent.context(&state, &at("https://other.test/pricing", &[]), vec![], false, false).unwrap();
     assert_eq!(context.task, agent.model_task(&state));

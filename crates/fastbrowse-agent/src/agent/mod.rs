@@ -225,11 +225,13 @@ impl Agent {
     }
 
     // A task scoped to "the whole site" loses its referent after navigation unless its starting address stays
-    // with it. Mask at the call boundary: a secret may have been resolved since the run began.
+    // with it. It is stated as what happened, not as an instruction: worded "Start at <url>." it read as one more
+    // step no action had taken, and Jev chose DONE over typing a sign-in code it had just read. Mask at the call
+    // boundary: a secret may have been resolved since the run began.
     fn model_task(&self, state: &RunState) -> String {
         let task = self.mask(&state.task);
         match state.caller_start.as_deref() {
-            Some(start) => format!("Start at {}. {task}", self.mask(start)),
+            Some(start) => format!("The browser opened {} for this task. {task}", self.mask(start)),
             None => task,
         }
     }
