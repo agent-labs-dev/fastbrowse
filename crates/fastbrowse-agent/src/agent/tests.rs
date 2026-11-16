@@ -2119,10 +2119,12 @@ async fn test_the_gate_and_done_check_mask_a_secret_resolved_after_preparation()
     agent.redactor().register("token", "private-token", None);
     let delete = button("Delete list");
     let _ = agent.gate_irreversible(&mut state, &page, &code_decision(Operation::Click, Some(delete))).await;
-    let seen = gate.2.lock().unwrap();
-    assert!(!seen.is_empty());
-    for context in seen.iter() {
-        assert!(!context.to_string().contains("private-token"), "{context}");
+    {
+        let seen = gate.2.lock().unwrap();
+        assert!(!seen.is_empty());
+        for context in seen.iter() {
+            assert!(!context.to_string().contains("private-token"), "{context}");
+        }
     }
 
     let done = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
