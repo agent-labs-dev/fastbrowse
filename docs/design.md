@@ -308,6 +308,10 @@ the tally's own among them, and the claim holds only when Jev chooses that one: 
 code then works out exactly a count where the task asked for a total. An operation another tally of the same records
 gives is not offered, so a task asking for the number of orders and their total is answered by a count and a sum, and
 a table row's tally is asked the same.
+Amounts retain their currency symbol or ISO 4217 code when extracted. Code adds or compares only matching units,
+including within each group's minimum or maximum, and refuses to relabel a calculated value with another currency.
+An amount without a currency cannot be mixed with one that states a currency. No conversion rate or equivalence
+between a symbol and an ISO code is assumed.
 A failed check tells the composer which it was, such as a claim that also lists each record's value, which then goes in
 a claim of its own.
 Packing continues only when fewer requests are needed or the rewritten claim text shrinks. Removing source-state

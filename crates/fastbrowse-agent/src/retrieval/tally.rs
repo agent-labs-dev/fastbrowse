@@ -780,14 +780,63 @@ fn numbers(quote: &str) -> Vec<String> {
         .enumerate()
         .map(|(at, c)| if dated.iter().any(|(start, end, _)| (*start..*end).contains(&at)) { ' ' } else { *c })
         .collect();
-    found.extend(spans(&rest, SpanKind::Number).into_iter().map(|span| span.2));
+    found.extend(number_candidates(&rest));
     let cells = rest.lines().flat_map(|line| line.split(','));
-    for number in cells.flat_map(|cell| spans(cell, SpanKind::Number)).map(|span| span.2) {
+    for number in cells.flat_map(number_candidates) {
         if !found.contains(&number) {
             found.push(number);
         }
     }
     found
+}
+
+fn number_candidates(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    spans(text, SpanKind::Number)
+        .into_iter()
+        .map(|(mut start, mut end, _)| {
+            loop {
+                let mut prefix = start;
+                while prefix > 0 && chars[prefix - 1].is_ascii_whitespace() {
+                    prefix -= 1;
+                }
+                if prefix > 0 && currency(chars[prefix - 1]) && (prefix == 1 || !chars[prefix - 2].is_ascii_digit()) {
+                    start = prefix - 1;
+                    continue;
+                }
+                if let Some(code_start) = prefix.checked_sub(3)
+                    && super::iso4217::is_code(&chars[code_start..prefix].iter().collect::<String>())
+                    && (code_start == 0 || !is_word(chars[code_start - 1]))
+                {
+                    start = code_start;
+                } else {
+                    break;
+                }
+            }
+            loop {
+                let mut suffix = end;
+                while suffix < chars.len() && chars[suffix].is_ascii_whitespace() {
+                    suffix += 1;
+                }
+                if chars.get(suffix).is_some_and(|c| currency(*c))
+                    && chars.get(suffix + 1).is_none_or(|c| !c.is_ascii_digit())
+                {
+                    end = suffix + 1;
+                    continue;
+                }
+                let word_end =
+                    chars[suffix..].iter().position(|c| !c.is_ascii_uppercase()).map_or(chars.len(), |i| suffix + i);
+                if super::iso4217::is_code(&chars[suffix..word_end].iter().collect::<String>())
+                    && chars.get(word_end).is_none_or(|c| !is_word(*c))
+                {
+                    end = word_end;
+                } else {
+                    break;
+                }
+            }
+            chars[start..end].iter().collect()
+        })
+        .collect()
 }
 
 /// The months as a date writes them, in calendar order: the full name, its first three letters, or "Sept". These are
@@ -881,9 +930,10 @@ fn prose_date() -> Pat {
 struct Amount {
     value: f64,
     places: usize,
-    sign: Option<char>,
+    unit: Option<String>,
     written: String,
     date: bool,
+    malformed_unit: bool,
 }
 
 /// `written` read as a number: one word of digits, beside at most currency signs and ISO 4217 codes such as "GBP".
@@ -894,7 +944,14 @@ fn amount(written: &str) -> Option<Amount> {
     if let [(0, end, value)] = dates(trimmed)[..]
         && end == trimmed.chars().count()
     {
-        return Some(Amount { value, places: 0, sign: None, written: trimmed.to_string(), date: true });
+        return Some(Amount {
+            value,
+            places: 0,
+            unit: None,
+            written: trimmed.to_string(),
+            date: true,
+            malformed_unit: false,
+        });
     }
     let mut number = None;
     for word in written.split_whitespace() {
@@ -904,24 +961,43 @@ fn amount(written: &str) -> Option<Amount> {
                 return None;
             }
             number = Some(word);
-        } else if !(word.chars().all(currency) || word.len() == 3 && word.chars().all(|c| c.is_ascii_uppercase())) {
+        } else if !(word.chars().all(currency) || super::iso4217::is_code(word)) {
             return None;
         }
     }
-    let sign = written.chars().find(|c| currency(*c));
+    let units: Vec<String> = written
+        .split_whitespace()
+        .filter_map(|word| {
+            if word.chars().all(currency) || super::iso4217::is_code(word) {
+                Some(word.to_string())
+            } else if word.chars().any(currency) {
+                Some(word.chars().filter(|c| currency(*c)).collect())
+            } else {
+                None
+            }
+        })
+        .collect();
+    let malformed_unit =
+        units.len() > 1 || units.iter().any(|unit| !super::iso4217::is_code(unit) && unit.chars().count() != 1);
+    let unit = units.into_iter().next();
     let digits: String = number?.chars().filter(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+')).collect();
     let value = digits.parse::<f64>().ok()?;
     let places = digits.split_once('.').map_or(0, |(_, places)| places.len());
-    Some(Amount { value, places, sign, written: trimmed.to_string(), date: false })
+    Some(Amount { value, places, unit, written: trimmed.to_string(), date: false, malformed_unit })
 }
 
-/// The total of `amounts` written as they are: their currency sign when they share one, and their most places.
+/// The total after compatibility checks, retaining its currency unit and greatest decimal precision.
 fn total(amounts: &[&Amount]) -> String {
     let places = amounts.iter().map(|amount| amount.places).max().unwrap_or(0);
     let sum: f64 = amounts.iter().map(|amount| amount.value).sum();
-    let sign =
-        amounts.first().and_then(|first| first.sign).filter(|sign| amounts.iter().all(|a| a.sign == Some(*sign)));
-    format!("{}{sum:.places$}", sign.map(String::from).unwrap_or_default())
+    let unit = amounts
+        .first()
+        .and_then(|first| first.unit.as_deref())
+        .filter(|unit| amounts.iter().all(|amount| amount.unit.as_deref() == Some(*unit)));
+    let prefix = unit.map_or_else(String::new, |unit| {
+        if unit.chars().all(|c| c.is_ascii_uppercase()) { format!("{unit} ") } else { unit.to_string() }
+    });
+    format!("{prefix}{sum:.places$}")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1040,6 +1116,7 @@ async fn select_records(
     let (answered, oversized) = by_page(jev, states, questions, tokens, ledger).await?;
     let mut dated = None;
     let mut values = Vec::new();
+    let mut units: HashMap<String, Option<String>> = HashMap::new();
     for note in records {
         let answer = answered.as_ref().and_then(|answers| answers.get(&format!("inner/n{note}")));
         let value = match known.remove(&note) {
@@ -1052,6 +1129,13 @@ async fn select_records(
             },
         };
         let Some(value) = amount(&value) else { return Ok(Err(missing(note))) };
+        if value.malformed_unit || units.get(&groups[&note]).is_some_and(|unit| *unit != value.unit) {
+            return Ok(Err(Unworked::Draft(format!(
+                "The inner {} mixes incompatible units, which code cannot compare.",
+                text::repr(&within.field)
+            ))));
+        }
+        units.insert(groups[&note].clone(), value.unit.clone());
         if dated.is_some_and(|date| date != value.date) {
             return Ok(Err(Unworked::Draft(format!(
                 "The inner {} mixes dates and numbers, which code cannot compare.",
@@ -1360,6 +1444,16 @@ pub(super) async fn work_selected(
             worked.insert(index, Err(Unworked::Draft(reason)));
             continue;
         }
+        let unit = amounts.first().and_then(|(_, amount)| amount.unit.as_deref());
+        if amounts.iter().any(|(_, amount)| amount.malformed_unit)
+            || !amounts.iter().all(|(_, amount)| amount.unit.as_deref() == unit)
+        {
+            let field = text::repr(tally.field.as_deref().unwrap_or("value"));
+            worked.insert(index, Err(Unworked::Draft(format!(
+                "The notes give incompatible units for {field}; code cannot compare or add them without an explicit conversion."
+            ))));
+            continue;
+        }
         let mut result = match tally.op {
             Op::Sum => {
                 let all: Vec<&Amount> = amounts.iter().map(|(_, amount)| amount).collect();
@@ -1405,6 +1499,21 @@ pub(super) async fn work_selected(
             result.winner_ids = Some(result.evidence_ids.clone());
             result.evidence_ids = basis;
         }
+        if !tally.names_record()
+            && let Some(result_amount) = amount(&result.value).filter(|amount| !amount.date)
+            && amount(&tally.written).is_none_or(|claim_amount| {
+                claim_amount.malformed_unit || claim_amount.unit.is_some() && result_amount.unit != claim_amount.unit
+            })
+        {
+            let field = text::repr(tally.field.as_deref().unwrap_or("value"));
+            worked.insert(
+                index,
+                Err(Unworked::Draft(format!(
+                    "The computed {field} unit does not match the claim's written unit; code will not relabel it."
+                ))),
+            );
+            continue;
+        }
         let value = if tally.names_record() || amount(&result.value).is_some_and(|value| value.date) {
             result.value.clone()
         } else {
@@ -1416,16 +1525,19 @@ pub(super) async fn work_selected(
 }
 
 /// A worked amount in the form the claim writes its value: code puts its number where the claim's number is and keeps
-/// the words around it, so "GBP 84.99" keeps its code where the note gave the number alone, and a claim whose
+/// the words around it, so "GBP 84.99" keeps its matching code, and a claim whose
 /// `written` leaves the currency sign in the text beside it ("$" then "251.00") is not given a second sign.
 fn as_written(value: &str, written: &str) -> String {
-    let number: String = value.chars().filter(|c| !currency(*c)).collect();
+    let number: String = value.chars().filter(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '-' | '+')).collect();
     let digit = |c: char| c.is_ascii_digit();
     match (written.find(digit), written.rfind(digit)) {
         (Some(start), Some(end)) => {
             // A sign written just before the number belongs to it, so the worked value's own sign takes its place.
-            let start =
-                written[..start].char_indices().rev().find(|(_, c)| !currency(*c)).map_or(0, |(i, c)| i + c.len_utf8());
+            let start = written[..start]
+                .char_indices()
+                .rev()
+                .find(|(_, c)| !currency(*c) && !matches!(c, '+' | '-'))
+                .map_or(0, |(i, c)| i + c.len_utf8());
             let sign: String = value.chars().filter(|c| currency(*c)).collect();
             let sign = if written[start..].chars().next().is_some_and(currency) { sign } else { String::new() };
             format!("{}{sign}{number}{}", &written[..start], &written[end + 1..])
@@ -1625,7 +1737,7 @@ mod tests {
             let evidence: Evidence = serde_json::from_value(json!({
                 "source_id": "s1", "url": page, "frame_id": null,
                 "captured_at": "2026-01-01T00:00:00Z", "capture_sha256": page,
-                "start": start, "end": start + quote.len(), "quote": quote,
+                "start": start, "end": start + quote.chars().count(), "quote": quote,
                 "heading_path": ["Product", "Offer"],
             }))
             .unwrap();
@@ -1861,14 +1973,15 @@ mod tests {
     #[test]
     fn amounts_keep_their_sign_and_places() {
         let found = amount("£10.69").unwrap();
-        assert_eq!((found.value, found.places, found.sign), (10.69, 2, Some('£')));
+        assert_eq!((found.value, found.places, found.unit.as_deref()), (10.69, 2, Some("£")));
         assert_eq!(amount("1,234").unwrap().value, 1234.0);
         assert_eq!(amount("GBP 84.99").unwrap().value, 84.99);
+        assert_eq!(amount("GBP 84.99").unwrap().unit.as_deref(), Some("GBP"));
         assert_eq!(amount("Galaxy S20 Ultra"), None, "a name with a model number is not a number");
         assert_eq!(amount("Pixel 2"), None);
         let (a, b) = (amount("£1.5").unwrap(), amount("£2.25").unwrap());
         assert_eq!(total(&[&a, &b]), "£3.75");
-        assert_eq!(total(&[&a, &amount("2").unwrap()]), "3.5");
+        assert_eq!(total(&[&amount("GBP 1.5").unwrap(), &amount("GBP 2.25").unwrap()]), "GBP 3.75");
     }
 
     #[test]
@@ -1878,6 +1991,8 @@ mod tests {
         assert_eq!(as_written("3.5", "3"), "3.5");
         assert_eq!(as_written("84.99", "GBP 84.99"), "GBP 84.99", "the claim's currency code stays");
         assert_eq!(as_written("£12.00", "£12"), "£12.00");
+        assert_eq!(as_written("GBP -1009", "GBP -23"), "GBP -1009");
+        assert_eq!(as_written("£1009", "£-23"), "£1009");
     }
 
     #[test]
@@ -2112,9 +2227,171 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mixed_currency_tallies_are_unworked() {
+        for op in [Op::Sum, Op::Min, Op::Max] {
+            let worked = amount_tally(&["£23", "$986"], op, "£23").await;
+            assert!(
+                matches!(&worked, Err(Unworked::Draft(reason)) if reason.contains("incompatible units")),
+                "{op:?} failed to reject incompatible currencies: {worked:?}"
+            );
+        }
+    }
+
+    fn amount_notes(values: &[&str]) -> Notes {
+        let facts = values.iter().enumerate().map(|(index, value)| {
+            let quote = format!("Record {} {value}", char::from(b'A' + index as u8));
+            let evidence = serde_json::from_value(json!({"source_id": format!("s{index}"), "url": "https://example.test/records", "frame_id": null, "captured_at": "2026-01-01T00:00:00Z", "capture_sha256": format!("sha{index}"), "start": 0, "end": quote.chars().count(), "quote": quote})).unwrap();
+            crate::memory::Fact::read(&quote, evidence, fastbrowse_core::models::FactReader::JevChoice)
+        });
+        Notes::new(facts)
+    }
+
+    async fn amount_tally(values: &[&str], op: Op, written: &str) -> std::result::Result<Worked, Unworked> {
+        let notes = amount_notes(values);
+        let tally = Tally {
+            op,
+            of: "record".into(),
+            field: Some("amount".into()),
+            rank: None,
+            by: None,
+            group: None,
+            written: written.into(),
+        };
+        work(
+            &FirstField,
+            &ReadsGroups(&[]),
+            "Calculate the amounts",
+            &[(0, &tally, written, &[])],
+            &notes,
+            &FirstField.profile().fit(None).tokens,
+            None,
+        )
+        .await
+        .unwrap()
+        .swap_remove(&0)
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn explicit_amount_units_survive_candidate_selection_and_arithmetic() {
+        for (values, unit) in [
+            (["GBP 23", "GBP 986"], "GBP "),
+            (["23 GBP", "986 GBP"], "GBP "),
+            (["from GBP 23", "from GBP 986"], "GBP "),
+            (["FOR 23", "FOR 986"], ""),
+            (["23 FOR", "986 FOR"], ""),
+            (["DEM 23", "DEM 986"], "DEM "),
+            (["(GBP 23)", "(GBP 986)"], "GBP "),
+            (["(23 GBP)", "(986 GBP)"], "GBP "),
+            (["£23", "£986"], "£"),
+            (["23 £", "986 £"], "£"),
+            (["23£", "986£"], "£"),
+            (["23", "986"], ""),
+        ] {
+            for (op, expected) in [(Op::Sum, "1009"), (Op::Min, "23"), (Op::Max, "986")] {
+                let written = format!("{unit}23");
+                let result = amount_tally(&values, op, &written).await;
+                assert_eq!(
+                    result.as_ref().map(|worked| worked.value.as_str()),
+                    Ok(format!("{unit}{expected}").as_str()),
+                    "{values:?} {op:?}: {result:?}"
+                );
+            }
+        }
+        for values in
+            [["GBP 23", "USD 986"], ["23 GBP", "986 USD"], ["23 £", "986 $"], ["23", "£986"], ["GBP 23", "986"]]
+        {
+            for op in [Op::Sum, Op::Min, Op::Max] {
+                let result = amount_tally(&values, op, "23").await;
+                assert!(
+                    matches!(result, Err(Unworked::Draft(ref reason)) if reason.contains("incompatible units")),
+                    "{values:?} {op:?}: {result:?}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn computed_amounts_cannot_be_relabelled_with_another_unit() {
+        for values in [["USD 23", "USD 986"], ["23", "986"]] {
+            let result = amount_tally(&values, Op::Sum, "GBP 23").await;
+            assert!(matches!(result, Err(Unworked::Draft(ref reason)) if reason.contains("unit")), "{result:?}");
+        }
+        let result = amount_tally(&["£23", "£986"], Op::Sum, "23").await.unwrap();
+        assert_eq!(result.value, "1009", "a numeric computed slot can have its unit in the surrounding claim");
+        for values in [
+            ["GBP £23", "GBP £986"],
+            ["GBP£23", "GBP£986"],
+            ["USD $23", "USD $986"],
+            ["USD GBP 23", "USD GBP 986"],
+            ["23 USD GBP", "986 USD GBP"],
+            ["£$23", "£$986"],
+        ] {
+            assert!(amount_tally(&values, Op::Sum, "23").await.is_err(), "malformed units accepted: {values:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn nested_amounts_require_compatible_units_within_each_group() {
+        for (values, compatible) in [
+            (["GBP 23", "USD 986", "GBP 5"], false),
+            (["GBP 23", "GBP 986", "USD 5"], true),
+            (["23", "986", "5"], true),
+        ] {
+            let grouped = [
+                format!("Category A {}", values[0]),
+                format!("Category A {}", values[1]),
+                format!("Category B {}", values[2]),
+            ];
+            let notes = amount_notes(&grouped.iter().map(String::as_str).collect::<Vec<_>>());
+            let found = candidates(&notes);
+            let fields = values
+                .iter()
+                .enumerate()
+                .map(|(note, value)| ((0, note), FieldAnswer::Value((*value).into())))
+                .collect();
+            let tally = Tally {
+                op: Op::Min,
+                of: "record".into(),
+                field: Some("amount".into()),
+                rank: None,
+                by: None,
+                group: None,
+                written: "23".into(),
+            };
+            let within =
+                Within { by: "category".into(), op: super::super::reduction::Extreme::Max, field: "amount".into() };
+            let reads = [("r0", Some("A")), ("r1", Some("A")), ("r2", Some("B"))];
+            let selected = select_records(
+                &FirstField,
+                &ReadsGroups(&reads),
+                &HashMap::new(),
+                &tally,
+                0,
+                &fields,
+                &within,
+                &[0, 1, 2],
+                &found,
+                &FirstField.profile().fit(None).tokens,
+                None,
+            )
+            .await
+            .unwrap();
+            if compatible {
+                assert_eq!(selected.unwrap(), vec![1, 2]);
+            } else {
+                assert!(
+                    matches!(selected, Err(Unworked::Draft(ref reason)) if reason.contains("incompatible units")),
+                    "{selected:?}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn a_nested_comparison_works_through_the_actual_tally_path() {
         let facts: Vec<_> = ["Release A Dec 6, 2019", "Release A Dec 6, 2024", "Release B Nov 8, 2026"].iter().enumerate().map(|(index, quote)| {
-            let evidence = serde_json::from_value(json!({"source_id": format!("s{index}"), "url": "https://example.test/releases", "frame_id": null, "captured_at": "2026-01-01T00:00:00Z", "capture_sha256": format!("sha{index}"), "start": 0, "end": quote.len(), "quote": quote})).unwrap();
+            let evidence = serde_json::from_value(json!({"source_id": format!("s{index}"), "url": "https://example.test/releases", "frame_id": null, "captured_at": "2026-01-01T00:00:00Z", "capture_sha256": format!("sha{index}"), "start": 0, "end": quote.chars().count(), "quote": quote})).unwrap();
             crate::memory::Fact::read(quote, evidence, fastbrowse_core::models::FactReader::JevChoice)
         }).collect();
         let expected = fact_id(&facts[1]);
@@ -2203,7 +2480,7 @@ mod tests {
     #[tokio::test]
     async fn different_inner_fields_select_before_requiring_an_outer_value() {
         let facts: Vec<_> = ["Release A Dec 6, 2019", "Release A Dec 6, 2024 £9", "Release B Nov 8, 2026 £5"].iter().enumerate().map(|(index, quote)| {
-            let evidence = serde_json::from_value(json!({"source_id": format!("s{index}"), "url": "https://example.test/releases", "frame_id": null, "captured_at": "2026-01-01T00:00:00Z", "capture_sha256": format!("sha{index}"), "start": 0, "end": quote.len(), "quote": quote})).unwrap();
+            let evidence = serde_json::from_value(json!({"source_id": format!("s{index}"), "url": "https://example.test/releases", "frame_id": null, "captured_at": "2026-01-01T00:00:00Z", "capture_sha256": format!("sha{index}"), "start": 0, "end": quote.chars().count(), "quote": quote})).unwrap();
             crate::memory::Fact::read(quote, evidence, fastbrowse_core::models::FactReader::JevChoice)
         }).collect();
         let expected = fact_id(&facts[1]);
