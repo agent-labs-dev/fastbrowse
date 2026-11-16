@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Extension navigation denied by Chrome reports a browser access-policy error instead of a lost document, without exposing the native error text ([#1143](https://github.com/agent-labs-dev/fastbrowse/issues/1143)).
+
 - Traces record read progress, authorization gate outcomes and the final run status, so failures can be diagnosed alongside the retained model requests.
 
 - Background extension tabs start their paint keeper during setup, so screenshots do not depend on a tab being brought forward ([#1165](https://github.com/agent-labs-dev/fastbrowse/issues/1165)).
