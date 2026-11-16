@@ -2105,6 +2105,37 @@ async fn test_the_authorization_gate_judges_the_task_without_the_callers_start()
     }
 }
 
+/// The gate and the done check read the caller's task through the redactor too: a secret resolved after the run
+/// began stays out of both requests.
+#[tokio::test]
+async fn test_the_gate_and_done_check_mask_a_secret_resolved_after_preparation() {
+    let mut state = run_state();
+    state.task = "Delete the list named private-token.".into();
+    state.authorization.irreversible_actions = true;
+    let page = observation(&[]);
+
+    let gate = Arc::new(Unsure(ScriptedJev::new(Vec::new()), 1.0, Default::default()));
+    let agent = Agent::new(Arc::new(NoPage), gate.clone(), Arc::new(ScriptedLLM));
+    agent.redactor().register("token", "private-token", None);
+    let delete = button("Delete list");
+    let _ = agent.gate_irreversible(&mut state, &page, &code_decision(Operation::Click, Some(delete))).await;
+    let seen = gate.2.lock().unwrap();
+    assert!(!seen.is_empty());
+    for context in seen.iter() {
+        assert!(!context.to_string().contains("private-token"), "{context}");
+    }
+
+    let done = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+    let agent = Agent::new(Arc::new(FinishPage(page.clone())), done.clone(), Arc::new(ScriptedLLM));
+    agent.redactor().register("token", "private-token", None);
+    let _ = agent.actions_done(&mut state, &page).await;
+    let asked = done.5.lock().unwrap();
+    assert!(!asked.is_empty());
+    for instructions in asked.iter() {
+        assert!(!instructions.contains("private-token"), "{instructions}");
+    }
+}
+
 /// `DoneCheckJev`, judging that no answer gives every requested fact.
 struct RefusesCoverage(DoneCheckJev);
 
