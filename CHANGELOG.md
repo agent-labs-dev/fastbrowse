@@ -13,6 +13,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [0.11.1] - 2026-11-14
 
+- Copied field values are selected from candidate spans without describing every alternative as the complete value, which could cause surrounding task instructions to be typed into the field ([#1155](https://github.com/agent-labs-dev/fastbrowse/issues/1155)). Quoted literals and punctuation remain Jev's choice.
 - A Jev provider that exhausts its retries is reported as unavailable without a second request that silently removes off-screen controls ([#1154](https://github.com/agent-labs-dev/fastbrowse/issues/1154)).
 - Browser steps expose an optional `failure` code across Rust, Python and the client SDKs, so callers can distinguish missing or disconnected targets, refused secret origins, navigation failures and dialog interruptions without parsing the diagnostic note ([#1127](https://github.com/agent-labs-dev/fastbrowse/issues/1127)). Older step results without the field still parse.
 

@@ -1199,7 +1199,7 @@ impl Agent {
                 let several = several_values(target);
                 let exact = |bound: &str, options: &[(String, String)], elsewhere: &str| {
                     let question = format!(
-                        "Which exact text belongs in {label}? Each choice is the complete value that would be copied from {holder}, {bound}. Choose only the field's value, without surrounding task instructions. When {holder} gives this field several values, {several}"
+                        "Which exact text belongs in {label}? Each choice is a candidate span copied from {holder}, {bound}. Choose only the field's value, without surrounding task instructions. When {holder} gives this field several values, {several}"
                     );
                     let (question, mut options) = self.offered_copies(&run_task, question, options);
                     options.insert(ELSEWHERE.into(), JsonValue::from(elsewhere));

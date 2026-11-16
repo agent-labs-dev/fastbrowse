@@ -2457,7 +2457,15 @@ impl DecisionClient for Exact {
         questions: &'a IndexMap<String, Question>,
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
         let picked = ["pick", "start"].iter().find_map(|key| match questions.get(*key) {
-            Some(Question::Choice(choice)) => Some((*key, choice.criteria.iter().find(|(_, v)| **v == json!(self.0)))),
+            Some(Question::Choice(choice)) => {
+                assert!(choice.instructions.contains("Each choice is a candidate span copied from"));
+                assert!(
+                    choice
+                        .instructions
+                        .contains("Choose only the field's value, without surrounding task instructions.")
+                );
+                Some((*key, choice.criteria.iter().find(|(_, v)| **v == json!(self.0))))
+            }
             _ => None,
         });
         match picked {
