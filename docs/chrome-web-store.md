@@ -32,8 +32,9 @@ The archive holds the nine files at its root, which is the layout the store read
 The name is the `name` in `manifest.json`, and the store will not take a listing title that differs from it without a
 new upload, so the title stays `fastbrowse`. The sentence under it carries what the extension does.
 
-**Short description** (115 characters, inside the store's 132, and the `description` in `manifest.json`, so keep the
-two the same):
+**Short description** (115 characters, inside the store's 132). This is the line to paste into the dashboard, and the
+line `manifest.json`'s `description` should carry from the next version bump: a copy-only manifest edit cannot reach the
+store, because the store only takes a new revision from a higher `version`.
 
 ```
 Run fastbrowse tasks in your own Chrome, already signed in, in their own tab group. The popup lists and stops runs.
