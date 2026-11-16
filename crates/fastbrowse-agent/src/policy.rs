@@ -222,6 +222,10 @@ impl HistoryEntry {
 #[serde(deny_unknown_fields)]
 pub struct StepContext {
     pub task: String,
+    /// The caller's literal task for URL extraction: model context can mention the starting address without asking
+    /// to navigate back to it. Older embedders that supply only `task` keep that source.
+    #[serde(skip)]
+    pub literal_task: Option<String>,
     #[serde(default)]
     pub web_search: bool,
     #[serde(deserialize_with = "lax::nullable")]
@@ -305,6 +309,7 @@ impl StepContext {
     pub fn new(task: &str) -> StepContext {
         StepContext {
             task: task.into(),
+            literal_task: None,
             web_search: false,
             subgoal: None,
             dates: Vec::new(),
@@ -947,7 +952,7 @@ pub fn build_request(
     // The caller's start address is held back so a working form is not reopened and emptied. A page with no controls
     // has no form to lose, and a run asked again because it is stuck may need to start over.
     let mut urls = navigation_urls(
-        &context.task,
+        context.literal_task.as_deref().unwrap_or(&context.task),
         &observation.url,
         context.start_url.as_deref(),
         context.start_landing_url.as_deref(),

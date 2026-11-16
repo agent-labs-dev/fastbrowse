@@ -8842,6 +8842,8 @@ fn model_task_preserves_caller_scope_without_changing_recipe_identity() {
     );
     let context = agent.context(&state, &at("https://other.test/pricing", &[]), vec![], false, false).unwrap();
     assert_eq!(context.task, agent.model_task(&state));
+    assert_eq!(context.literal_task.as_deref(), Some(original.as_str()));
+    assert!(serde_json::to_value(&context).unwrap().get("literal_task").is_none());
     assert_eq!(state.task, original);
     assert_eq!(state.given_task, original);
     let sink = Default::default();

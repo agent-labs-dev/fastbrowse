@@ -947,6 +947,7 @@ impl Agent {
         }
         Ok(StepContext {
             task: self.model_task(state),
+            literal_task: Some(state.task.clone()),
             web_search: self.page.search_price().is_some(),
             subgoal: state.hint.clone(),
             dates: state.dates.clone(),
