@@ -93,19 +93,31 @@ impl Tally {
 
 impl Schema for Tally {
     fn ty() -> Ty {
-        ModelTy::frozen(
-            "Tally",
-            vec![
-                Field::required("op", Ty::literals(&["count", "sum", "min", "max"])),
-                Field::required("of", Ty::Str),
+        // A count needs no numeric field. Other operations cannot run without one, so the response contract must
+        // not admit the null field that otherwise spends recovery rejecting an unusable comparison.
+        let operation = |name, ops: &[&str], field| {
+            ModelTy::frozen(
+                name,
+                vec![
+                    Field::required("op", Ty::literals(ops)),
+                    Field::required("of", Ty::Str),
+                    field,
+                    Field::default("rank", Ty::optional(Ty::Int), serde_json::Value::Null),
+                    Field::default("by", Ty::optional(Ty::Str), serde_json::Value::Null),
+                    Field::default("group", Ty::optional(Ty::Str), serde_json::Value::Null),
+                    Field::required("written", Ty::Str),
+                ],
+            )
+            .ty()
+        };
+        Ty::Union(vec![
+            operation(
+                "CountTally",
+                &["count"],
                 Field::default("field", Ty::optional(Ty::Str), serde_json::Value::Null),
-                Field::default("rank", Ty::optional(Ty::Int), serde_json::Value::Null),
-                Field::default("by", Ty::optional(Ty::Str), serde_json::Value::Null),
-                Field::default("group", Ty::optional(Ty::Str), serde_json::Value::Null),
-                Field::required("written", Ty::Str),
-            ],
-        )
-        .ty()
+            ),
+            operation("ValueTally", &["sum", "min", "max"], Field::required("field", Ty::Str)),
+        ])
     }
 }
 
@@ -1730,6 +1742,19 @@ mod tests {
     use fastbrowse_core::models::{CostBasis, CostComponent, CostLine};
 
     use super::*;
+
+    #[test]
+    fn tally_response_requires_a_field_only_for_value_operations() {
+        let schema = Typed::<Tally>::default();
+        for op in ["count", "sum", "min", "max"] {
+            let mut value = json!({"op":op,"of":"inspection record","written":"3"});
+            assert_eq!(schema.validate_json(&value.to_string()).is_ok(), op == "count", "{value}");
+            value["field"] = serde_json::Value::Null;
+            assert_eq!(schema.validate_json(&value.to_string()).is_ok(), op == "count", "{value}");
+            value["field"] = json!("duration");
+            assert!(schema.validate_json(&value.to_string()).is_ok(), "{value}");
+        }
+    }
 
     #[test]
     fn missing_fields_are_judged_with_the_captures_record_extent() {

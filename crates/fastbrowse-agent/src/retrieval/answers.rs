@@ -2656,6 +2656,7 @@ mod tests {
 
     /// Retained requests and responses exercise the real client's repair conversation with the private schema.
     /// Their repaired replies were recorded when prose was a bare string and now write it as a prose part.
+    /// Tally fields retain their values in the nested union shape the current response schema requires.
     #[tokio::test]
     async fn retained_source_requests_repair_through_the_production_client() {
         use std::collections::VecDeque;
