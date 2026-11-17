@@ -598,7 +598,7 @@ impl Agent {
                     && !composed.claims.is_empty()
                 {
                     // Only a rejected composition stops a run unverified, so one that passes every claim and coverage
-                    // check, and that its composer did not call partial, answers what that stop was about, as it would
+                    // check, and that answers what that stop was about, as it would
                     // have at done. A run stuck going back and
                     // forth over pages it had read held such an answer too, and came back stuck under "Partial
                     // evidence only": when the task asks only to be told, the stop was over navigation, not the
@@ -613,7 +613,6 @@ impl Agent {
                         Status::Stuck => told,
                         _ => false,
                     } && composed.problem.is_none()
-                        && composed.partial.is_none()
                         && !state.refused
                         && state.undone.is_none();
                     // A task asking to be told can also ask for steps, such as setting a field and then reporting it,
@@ -634,13 +633,9 @@ impl Agent {
                         let requested = state.output_intent == state::OutputIntent::TextAndImage;
                         return self.ending_frame(result, requested).await;
                     }
-                    // A partial draft keeps the stop's own status: the composer said what the answer leaves out.
-                    let missing =
-                        composed.partial.as_ref().map(|partial| format!("{}{partial}", finishing::PARTIAL_ANSWER));
+                    // A draft that does not answer keeps the stop's own status.
                     let partial = marked_partial(composed);
-                    let error = error
-                        .or_else(|| state.refused.then(|| self.redact(finishing::REFUSED)))
-                        .or_else(|| missing.map(|missing| self.redact(&missing)));
+                    let error = error.or_else(|| state.refused.then(|| self.redact(finishing::REFUSED)));
                     return self.answered(&partial, &notes, Some(state), ledger, stop.status, error, budget);
                 }
                 // A task that only carries something out reports what it read after its last step, as at done, and
