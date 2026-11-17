@@ -538,7 +538,7 @@ impl CdpPage {
         let downloads_before = self.session.downloads_settled();
         let mut waited = None;
         let (outcome, mut detail, failure) = if action.operation == Operation::Wait {
-            let seen = self.await_change(wait_seconds, &before_fingerprint, observation).await?;
+            let seen = self.await_change(wait_seconds).await?;
             waited = Some(seen);
             (StepOutcome::Executed, (!seen.semantic && !seen.clock).then(|| UNCHANGED.into()), None)
         } else {
@@ -1441,7 +1441,7 @@ impl CdpPage {
     /// itself the page changing, and a dialog opening blocks the page, which is too. When `seconds` run out a player's
     /// clock having moved counts as well: the fingerprint leaves it out, and a Wait while a player plays is not told
     /// that the page did not change.
-    async fn await_change(&self, seconds: f64, before: &str, observed: &Observation) -> Result<Waited, BrowserError> {
+    async fn await_change(&self, seconds: f64) -> Result<Waited, BrowserError> {
         let main = self.session.active_session_id()?;
         let token = NEXT_WAIT.fetch_add(1, Ordering::Relaxed);
         let deadline = seconds.is_finite().then(|| Instant::now() + secs(seconds.max(0.0)));
@@ -1451,7 +1451,6 @@ impl CdpPage {
         tokio::pin!(dialog);
         let mut installed = HashSet::new();
         let mut first = true;
-        let mut compared = false;
         let moved = 'wait: loop {
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 if first {
@@ -1470,21 +1469,8 @@ impl CdpPage {
             loop {
                 // Taken before the frames are listed, so a frame that attaches in between wakes the next pass.
                 let mark = self.lifecycle_mark();
-                if self
-                    .watch_sessions(token, (&main, before), &mut offered, &mut installed, &mut cleanup, &mut holds)
-                    .await?
-                {
+                if self.watch_sessions(token, &main, &mut offered, &mut installed, &mut cleanup, &mut holds).await? {
                     break 'wait true;
-                }
-                // The baseline was read after the decision, so a page that changed in between is the baseline and no
-                // watch would see it move. It is read against what the decision saw once the watch is armed: a change
-                // before this read shows here and a change after it reaches the watch, with no gap between them.
-                if !compared {
-                    compared = true;
-                    let live = self.glance().await?;
-                    if live.page_key != observed.page_key || live.offscreen_text != observed.offscreen_text {
-                        break 'wait true;
-                    }
                 }
                 tokio::select! {
                     Some((session_id, held)) = holds.next() => {
@@ -1548,7 +1534,7 @@ impl CdpPage {
     async fn watch_sessions<'a>(
         &'a self,
         token: u64,
-        (main, before): (&str, &str),
+        main: &str,
         offered: &mut HashSet<String>,
         installed: &mut HashSet<String>,
         cleanup: &mut WaitCleanup,
@@ -1562,9 +1548,7 @@ impl CdpPage {
             if !installed.contains(&session_id) {
                 // Recorded before it is sent, so a wait dropped mid-install still removes what it may have put there.
                 cleanup.sessions.push(session_id.clone());
-                // Only the tab's own fingerprint was read before the dispatch, so only its watch is seeded with it.
-                let seed = if is_main { before } else { "" };
-                match self.wait_evaluate(&session_id, &self.wait_arm_js(token, true, seed), !is_main).await {
+                match self.wait_evaluate(&session_id, &self.wait_arm_js(token, true), !is_main).await {
                     Ok(Value::Bool(found)) => {
                         installed.insert(session_id.clone());
                         if found {
@@ -1582,7 +1566,7 @@ impl CdpPage {
                     Err(_) => continue,
                 }
             }
-            let hold = self.wait_arm_js(token, false, "");
+            let hold = self.wait_arm_js(token, false);
             holds.push(Box::pin(async move {
                 let held = self.evaluate(&session_id, &hold).await;
                 (session_id, held)
@@ -1603,18 +1587,19 @@ impl CdpPage {
     }
 
     /// Install the watch for wait `token` and report whether it has seen the page change, or with `install` false find
-    /// the one installed before and resolve once it has. A `seed` is the fingerprint read before the dispatch: a page that
-    /// changed between that read and this install would otherwise become the baseline and never be told apart. A document the run may not read gets no watch. Each arming renews its lease, so a watch whose run went away removes itself.
+    /// the one installed before and resolve once it has. The page holds the fingerprint of its last observation (snapshot.js), and an install
+    /// that finds the page different from it has seen it change: a page that changed between the observation a Wait was
+    /// decided on and this install would otherwise become the baseline and never be told apart. A document the run may not read gets no watch. Each arming renews its lease, so a watch whose run went away removes itself.
     ///
     /// The watch hears every document the fingerprint walked, so a granted child frame wakes it as the page does. The
     /// timer samples the fingerprint too, because a script writing `checked` or `selected` as a property raises no
     /// mutation or event for any listener to hear: sampling is the only way to see it, and it stops with the watch.
-    fn wait_arm_js(&self, token: u64, install: bool, seed: &str) -> String {
+    fn wait_arm_js(&self, token: u64, install: bool) -> String {
         format!(
             "(() => {{ const r = window.__fastbrowse, home = r ?? window; \
              const waits = (home.__fastbrowseWaits ??= new Map()); \
              const later = r?.nativeSetTimeout ?? setTimeout, clear = r?.nativeClearTimeout ?? clearTimeout; \
-             let w = waits.get({token}); const seed = {seed}; \
+             let w = waits.get({token}); \
              if (!w) {{ if (!{install}) return null; {read} const f0 = read(); \
              if (f0 && !f0.granted) return null; \
              w = {{before: keyOf(f0), clocks: f0?.media ?? null, moved: false, wake: [], queued: false, stopped: false, \
@@ -1637,11 +1622,10 @@ impl CdpPage {
              window.navigation?.removeEventListener('currententrychange', nudge); }}; \
              window.navigation?.addEventListener('currententrychange', nudge); hear(f0); \
              w.timer = later(tick, {sample}); waits.set({token}, w); \
-             if (seed !== null && f0 && f0.fingerprint !== seed) {{ w.moved = true; w.stop(); }} }} \
+             if (f0 && r?.observedFingerprint != null && f0.fingerprint !== r.observedFingerprint) {{ w.moved = true; w.stop(); }} }} \
              clear(w.lease); w.lease = later(() => {{ w.stop(); waits.delete({token}); }}, {lease}); \
              return {install} ? w.moved : w.moved || new Promise(resolve => w.wake.push(() => resolve(true))); }})()",
             read = self.wait_read_js(),
-            seed = if seed.is_empty() { "null".to_owned() } else { py_json(&json!(seed)) },
             types = WAIT_EVENTS_JS,
             sample = py_float(WAIT_SAMPLE_SECONDS * 1000.0),
             lease = py_float(WAIT_ARM_SECONDS * 2.0 * 1000.0),
