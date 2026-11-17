@@ -77,6 +77,10 @@ def chrome(binary: str | None = None, *, timeout: float = 90.0) -> Generator[str
                 f"--user-data-dir={profile}",
                 "--no-first-run",
                 "--disable-popup-blocking",
+                # Back reloads the earlier page. A page restored from the back/forward cache keeps the focus it left
+                # with, so the link a run clicked read as focused on return in one run and not in another, by timing
+                # the run does not control, and a recorded request missed on replay.
+                "--disable-features=BackForwardCache",
                 "--no-startup-window",
             ],
             stdout=subprocess.DEVNULL,

@@ -108,7 +108,8 @@ const ops = {
     };
     runs.set(conn, run);
     updateBadge();
-    return { protocol: PROTOCOL, ...(await identity()) };
+    // The methods it relays, so a run that needs one this copy predates fails before it starts instead of mid-task.
+    return { protocol: PROTOCOL, extensionVersion: chrome.runtime.getManifest().version, methods: [...(await allowedMethods())], ...(await identity()) };
   },
   async ping() {
     return {};
@@ -139,6 +140,12 @@ const ops = {
   async closeTab(conn, { tabId }) {
     closing.add(ownedTab(conn, tabId));
     await chrome.tabs.remove(tabId);
+    return {};
+  },
+  // A tab the run hands to the person, such as a form left for them to confirm, is released as an adopted tab is:
+  // detached and ungrouped, never closed.
+  async keepTab(conn, { tabId }) {
+    runOf(conn).adopted.add(ownedTab(conn, tabId));
     return {};
   },
   async activate(conn, { tabId }) {

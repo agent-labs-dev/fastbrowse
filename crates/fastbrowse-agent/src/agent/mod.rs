@@ -619,7 +619,10 @@ impl Agent {
                     // A task asking to be told can also ask for steps, such as setting a field and then reporting it,
                     // and a run stuck before any finish check judged its steps may have left one undone: that check's
                     // own question decides, asked of the last page.
-                    if answers && stop.status == Status::Stuck && state.history.iter().any(HistoryEntry::acts) {
+                    if answers
+                        && stop.status == Status::Stuck
+                        && (state.history.iter().any(HistoryEntry::acts) || state.asks_steps)
+                    {
                         answers = match self.observed() {
                             Some(page) => matches!(self.actions_done(state, &page).await, Ok(Carried::Done)),
                             None => false,

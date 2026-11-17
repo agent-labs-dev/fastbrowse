@@ -21,7 +21,7 @@ use fastbrowse_core::models::{Artifact, Operation, StepFailure, StepOutcome};
 use fastbrowse_core::page::{ActResult, Action, BrowserError, Capture, Observation, Page, PageResult};
 use fastbrowse_core::safety::origin_of;
 
-pub use mcp::{Deskpilot, ToolError};
+pub use mcp::{Deskpilot, ToolError, View};
 use tree::{Element, Window};
 
 /// How long an action's effect is waited for before it is reported as having changed nothing.
@@ -67,11 +67,12 @@ impl DeskpilotPage {
     /// Starts deskpilot as an agent of this page's own and launches `command` (a program and its arguments, run
     /// without a shell) through it, driving the window `launch` returns. A command deskpilot cannot start, that exits
     /// before it opens a window, or opens none in time is refused here, before any step.
-    pub async fn open(program: &str, command: &[String]) -> Result<DeskpilotPage, OpenError> {
+    pub async fn open(program: &str, command: &[String], view: View) -> Result<DeskpilotPage, OpenError> {
         // An agent of its own, so two runs in one `fastbrowse serve` never share a hidden workspace or a cursor.
         let agent = fastbrowse_browser::cursor::deskpilot_agent();
-        let client =
-            Deskpilot::start(program, &agent).await.map_err(|error| OpenError::Unavailable(error.message().into()))?;
+        let client = Deskpilot::start(program, &agent, view)
+            .await
+            .map_err(|error| OpenError::Unavailable(error.message().into()))?;
         if !client.offers("launch") {
             return Err(OpenError::Unavailable(
                 "this deskpilot has no launch tool; a desktop run needs a deskpilot with launch \
@@ -91,7 +92,7 @@ impl DeskpilotPage {
                 _ => OpenError::Unavailable(message),
             }
         })?;
-        if found.get("xwayland").and_then(Value::as_bool) == Some(true) {
+        if view == View::Hidden && found.get("xwayland").and_then(Value::as_bool) == Some(true) {
             return Err(OpenError::Invalid(format!(
                 "{shown} opened an XWayland window; fastbrowse drives desktop windows in deskpilot's hidden mode, \
                  which needs a native Wayland window"
@@ -130,7 +131,7 @@ impl DeskpilotPage {
         let window = self.refresh().await?;
         let value = self
             .client
-            .call_json("elements", json!({"window": window.address, "hidden": true, "peek": peek}))
+            .call_json("elements", self.client.placed("elements", json!({"window": window.address, "peek": peek})))
             .await
             .map_err(|error| match error {
                 ToolError::Refused { code, message } if code == "no_tree" => BrowserError::Failed(message),
@@ -197,9 +198,9 @@ impl DeskpilotPage {
         Ok(())
     }
 
-    /// Calls an input tool, in hidden mode wherever the connected deskpilot's schema offers it for that tool.
+    /// Calls an input tool, in the run's view wherever the connected deskpilot's schema offers it for that tool.
     async fn tool(&self, name: &str, arguments: Value) -> Result<(), ToolError> {
-        self.client.call(name, self.client.hidden(name, arguments)).await.map(|_| ())
+        self.client.call(name, self.client.placed(name, arguments)).await.map(|_| ())
     }
 
     async fn dispatch(&self, action: &Action, observation: &Observation) -> Result<Option<String>, ToolError> {
@@ -209,12 +210,9 @@ impl DeskpilotPage {
         let bound = action.target_id.as_deref().map(|id| format!("{}:{id}", observation.page_key));
         let target = bound.as_deref();
         match action.operation {
-            Operation::Click => {
-                self.tool("click", json!({"window": window, "element": target, "hidden": true})).await?
-            }
+            Operation::Click => self.tool("click", json!({"window": window, "element": target})).await?,
             Operation::Hover => {
-                self.tool("hover", json!({"window": window, "element": target, "hidden": true, "wait": SETTLE_SECONDS}))
-                    .await?
+                self.tool("hover", json!({"window": window, "element": target, "wait": SETTLE_SECONDS})).await?
             }
             Operation::Fill => {
                 let text = action.text.as_deref().unwrap_or_default();
@@ -222,7 +220,7 @@ impl DeskpilotPage {
                     return Ok(Some("the secret is not for this app".into()));
                 }
                 // The click focuses the field; everything after it goes to that field's window and replaces its text.
-                self.tool("click", json!({"window": window, "element": target, "hidden": true})).await?;
+                self.tool("click", json!({"window": window, "element": target})).await?;
                 self.tool("key", json!({"combo": "ctrl+a", "window": window})).await?;
                 if text.is_empty() {
                     self.tool("key", json!({"combo": "BackSpace", "window": window})).await?;
@@ -247,7 +245,7 @@ impl DeskpilotPage {
                     .iter()
                     .any(|c| Some(c.id.as_str()) == action.target_id.as_deref() && c.focused == Some(true));
                 if target.is_some() && !focused {
-                    self.tool("click", json!({"window": window, "element": target, "hidden": true})).await?;
+                    self.tool("click", json!({"window": window, "element": target})).await?;
                 }
                 self.tool("key", json!({"combo": "Return", "window": window})).await?;
             }
@@ -257,7 +255,7 @@ impl DeskpilotPage {
                     .iter()
                     .any(|c| Some(c.id.as_str()) == action.target_id.as_deref() && c.focused == Some(true));
                 if target.is_some() && !focused {
-                    self.tool("click", json!({"window": window, "element": target, "hidden": true})).await?;
+                    self.tool("click", json!({"window": window, "element": target})).await?;
                 }
                 let Some(combo) = action.text.as_deref().filter(|combo| !combo.is_empty()) else {
                     return Ok(Some("press needs a key or key chord".into()));
@@ -269,7 +267,7 @@ impl DeskpilotPage {
                 // The root is the window itself, so with no target the scroll lands in its middle.
                 let at = target.map(str::to_string).unwrap_or_else(|| format!("{}:e1", observation.page_key));
                 let dy = if action.operation == Operation::Scroll { -SCROLL_CLICKS } else { SCROLL_CLICKS };
-                self.tool("scroll", json!({"window": window, "element": at, "dy": dy, "hidden": true})).await?
+                self.tool("scroll", json!({"window": window, "element": at, "dy": dy})).await?
             }
             Operation::Select => {
                 let wanted = action.text.as_deref().unwrap_or_default();
@@ -280,7 +278,7 @@ impl DeskpilotPage {
                     return Ok(Some(format!("no option labelled {wanted:?}")));
                 }
                 // The click gives the combo box the window's keyboard focus.
-                self.tool("click", json!({"window": window, "element": target, "hidden": true})).await?;
+                self.tool("click", json!({"window": window, "element": target})).await?;
                 return self.choose(&window, id, wanted, offered).await;
             }
             Operation::Wait => {}
@@ -291,7 +289,10 @@ impl DeskpilotPage {
 
     /// The window's tree, read without replacing the snapshot.
     async fn peeked(&self, window: &str) -> Result<Element, ToolError> {
-        let value = self.client.call_json("elements", json!({"window": window, "hidden": true, "peek": true})).await?;
+        let value = self
+            .client
+            .call_json("elements", self.client.placed("elements", json!({"window": window, "peek": true})))
+            .await?;
         serde_json::from_value(value)
             .map_err(|error| ToolError::Transport(format!("deskpilot sent a tree fastbrowse cannot read: {error}")))
     }
@@ -477,7 +478,7 @@ impl Page for DeskpilotPage {
             let window = self.address();
             let content = self
                 .client
-                .call("shot", json!({"window": window, "hidden": true}))
+                .call("shot", self.client.placed("shot", json!({"window": window})))
                 .await
                 .map_err(|error| BrowserError::ScreenshotsUnavailable(error.message().to_string()))?;
             let taken = mcp::json_block(&content)
@@ -506,7 +507,7 @@ impl Page for DeskpilotPage {
             };
             let before = self.glance().await?;
             let point = json!({
-                "window": self.address(), "x": x * shot.width, "y": y * shot.height, "shot": shot.id, "hidden": true,
+                "window": self.address(), "x": x * shot.width, "y": y * shot.height, "shot": shot.id,
             });
             let sent = self.tool("click", point).await.map(|()| None);
             self.measured(sent, &before, SETTLE_SECONDS).await
