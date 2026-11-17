@@ -538,15 +538,7 @@ impl CdpPage {
         let downloads_before = self.session.downloads_settled();
         let mut waited = None;
         let (outcome, mut detail, failure) = if action.operation == Operation::Wait {
-            // The baseline above was read after the decision. A page that changed in between is a page the decision
-            // never saw, and nothing would change from the baseline again: it is read once more, after the baseline,
-            // so a change lands either here or in the watch and none falls between them.
-            let live = self.glance().await?;
-            let seen = if live.page_key == observation.page_key && live.offscreen_text == observation.offscreen_text {
-                self.await_change(wait_seconds, &before_fingerprint).await?
-            } else {
-                Waited { semantic: true, clock: false }
-            };
+            let seen = self.await_change(wait_seconds, &before_fingerprint, observation).await?;
             waited = Some(seen);
             (StepOutcome::Executed, (!seen.semantic && !seen.clock).then(|| UNCHANGED.into()), None)
         } else {
@@ -1449,7 +1441,7 @@ impl CdpPage {
     /// itself the page changing, and a dialog opening blocks the page, which is too. When `seconds` run out a player's
     /// clock having moved counts as well: the fingerprint leaves it out, and a Wait while a player plays is not told
     /// that the page did not change.
-    async fn await_change(&self, seconds: f64, before: &str) -> Result<Waited, BrowserError> {
+    async fn await_change(&self, seconds: f64, before: &str, observed: &Observation) -> Result<Waited, BrowserError> {
         let main = self.session.active_session_id()?;
         let token = NEXT_WAIT.fetch_add(1, Ordering::Relaxed);
         let deadline = seconds.is_finite().then(|| Instant::now() + secs(seconds.max(0.0)));
@@ -1459,6 +1451,7 @@ impl CdpPage {
         tokio::pin!(dialog);
         let mut installed = HashSet::new();
         let mut first = true;
+        let mut compared = false;
         let moved = 'wait: loop {
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 if first {
@@ -1482,6 +1475,16 @@ impl CdpPage {
                     .await?
                 {
                     break 'wait true;
+                }
+                // The baseline was read after the decision, so a page that changed in between is the baseline and no
+                // watch would see it move. It is read against what the decision saw once the watch is armed: a change
+                // before this read shows here and a change after it reaches the watch, with no gap between them.
+                if !compared {
+                    compared = true;
+                    let live = self.glance().await?;
+                    if live.page_key != observed.page_key || live.offscreen_text != observed.offscreen_text {
+                        break 'wait true;
+                    }
                 }
                 tokio::select! {
                     Some((session_id, held)) = holds.next() => {
