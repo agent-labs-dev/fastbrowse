@@ -1,7 +1,7 @@
 name: Paper campaign
 
 # The browser reruns behind "Pick, Don't Generate": every arm on one task source, sharded so no job nears the six-hour
-# runner limit, graded by one independent judge panel with no Jev stage (`parallax run --no-jev`).
+# runner limit, graded by one independent judge panel (Parallax grades with the panel alone).
 #
 # Dispatch only: every task drives a real browser and real model calls. Each arm and shard is one job, writing one
 # Parallax run. `paper-<arm>-<shard>` holds its manifest, provenance, results and budget journal; `paper-private-...`
@@ -151,7 +151,8 @@ jobs:
           source, smoke = os.environ["SOURCE"], os.environ["SMOKE"] == "true"
           defaults = {
               "fastbrowse": "fastbrowse fastbrowse-llm-picker browser-use-cloud:bu-4.0 browser-use-cloud:bu-fast "
-              "browser-use-oss:bu-4.0 browser-harness",
+              "browser-use-oss:bu-4.0 browser-harness:openai/gpt-6-luna "
+              "browser-harness-claude-code:anthropic/claude-haiku-5.5",
               "online-mind2web": "fastbrowse fastbrowse-llm-picker browser-use-cloud:bu-4.0 browser-use-cloud:bu-fast",
           }
           arms = os.environ["ARMS"].split() or defaults[source].split()
@@ -197,8 +198,9 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
-      OUT: ${{ github.workspace }}/runs/run
-      PRIVATE_RUN: ${{ github.workspace }}/private-runs/run
+      # The directory name is the run id Parallax records and `parallax watch` groups by, so it names the arm and shard.
+      OUT: ${{ github.workspace }}/runs/${{ inputs.campaign_id }}-${{ matrix.arm }}-${{ matrix.shard }}
+      PRIVATE_RUN: ${{ github.workspace }}/private-runs/${{ inputs.campaign_id }}-${{ matrix.arm }}-${{ matrix.shard }}
       NAME: ${{ inputs.campaign_id }}-${{ matrix.arm }}-${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -210,6 +212,10 @@ jobs:
           cd evals
           uv sync --locked
           sudo apt-get install -y -qq age
+      # Parallax installs browser-harness's pinned CLI and agent itself, the agent with npm.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: ${{ startsWith(matrix.harness, 'browser-harness') }}
+        with: {node-version: "24"}
       - name: Check out the pinned upstream judge
         if: ${{ inputs.source == 'online-mind2web' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -218,6 +224,9 @@ jobs:
           ref: b422075b059f0bba670ddda168444eb1d326aa45
           path: upstream/online-mind2web
           persist-credentials: false
+          # The judge needs only `src/` and the root files (its requirements); `data/` and `images/` hold 3.2 GB.
+          sparse-checkout: src
+          sparse-checkout-cone-mode: true
       - name: Install the upstream judge in its own environment
         if: ${{ inputs.source == 'online-mind2web' }}
         run: |
@@ -228,6 +237,8 @@ jobs:
         id: shard
         env:
           FASTBROWSE_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_BENCHMARKS_API_KEY }}
+          # The browser-harness agents' model calls, relayed so each trial records what OpenRouter billed.
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_BENCHMARKS_API_KEY }}
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
@@ -289,9 +300,14 @@ jobs:
           mirror()
           PY
           mirror_pid=$!
+          # Every arm gets the same turn limit, recorded in the run's provenance. It is over four times the
+          # longest finished smoke trial (409 s), so it ends only a hung turn, which would otherwise hold the job to
+          # its cap.
+          turn_timeout=1800
           args=(--harness "$HARNESS" --repeats "$REPEAT" --concurrency "$WORKERS" --budget "$BUDGET" --reserve 3
-            --retry-invalid 2 --retry-wait 60 --no-jev
+            --retry-invalid 2 --retry-wait 60 --turn-timeout "$turn_timeout"
             --provenance "paper.campaign=$CAMPAIGN_ID" --provenance "paper.arm=$ARM" --provenance "paper.shard=$SHARD"
+            --provenance "paper.turn_timeout_s=$turn_timeout"
             --out "$OUT")
           test -z "$MODEL" || args+=(--model "$MODEL")
           set +e

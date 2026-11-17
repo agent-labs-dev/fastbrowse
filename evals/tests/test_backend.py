@@ -164,3 +164,18 @@ def test_campaign_traces_scrub_bound_task_secrets() -> None:
     metadata = harness.trial_metadata
     assert "fixture-private-value" not in json.dumps(metadata)
     assert metadata["events"] == [{"event": "llm_request", "text": "Use <secret>PASSWORD</secret>"}]
+
+
+def test_a_cancelled_run_reports_the_pages_and_steps_it_reached() -> None:
+    """2026-11-17 paper smoke: a run stuck in a wait (#1213) was cancelled at Parallax's 1800 s turn limit and
+    reported no page or step, so the trial graded invalid and was retried (#1215). Its recorded trace events."""
+    events = json.loads((Path(__file__).parent / "fixtures" / "cancelled_wait_events.json").read_text())
+    evidence = backend.cancelled_evidence(events)
+    url = "https://practice.expandtesting.com/dynamic-loading/2"
+    assert [step["action"] for step in evidence["step_log"]] == ["click", "wait (cancelled)"]
+    assert evidence["step_log"][-1]["url"] == url
+    pages = evidence["pages"]
+    assert isinstance(pages, list) and pages[evidence["step_log"][-1]["page"]]["url"] == url
+    BrowserEvidence.model_validate(
+        {"final_page": None, "answer": None, "steps": evidence["step_log"], "pages": pages, "citations": []}
+    )

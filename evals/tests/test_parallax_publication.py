@@ -192,6 +192,15 @@ def test_trial_result_to_row_maps_jev_and_llm_usage_separately() -> None:
     assert row.jev_calls == 2
 
 
+def test_browser_harness_is_public_only_on_its_pinned_model_or_none() -> None:
+    from fastbrowse_evals.arms import public_arm as arm_for
+
+    assert arm_for("browser-harness", "openai/gpt-6-luna") == "browser-harness"
+    assert arm_for("browser-harness", None) == "browser-harness"
+    assert arm_for("browser-harness", "anthropic/claude-haiku-5.5") is None
+    assert arm_for("fastbrowse", "test/model") == "fastbrowse"
+
+
 def test_public_arm_maps_parallax_competitor_identity() -> None:
     cloud = result("pypi-version", 0).model_copy(update={"harness": "browser-use-cloud"})
     ultrafast = cloud.model_copy(update={"model": "bu-ultrafast"})

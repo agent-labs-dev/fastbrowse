@@ -132,7 +132,9 @@ class FastbrowseHarness(BrowserHarness):
                     start=start,
                     open_browser=lambda: _ready_browser(browser),
                     output_schema=answer_model(task.id),
-                    limits=Limits(),
+                    # Parallax's turn limit, less the browser's start: fastbrowse ends the run itself, with its
+                    # answer and evidence, rather than being cancelled mid-step.
+                    limits=Limits(max_seconds=self.seconds_left()),
                     authorization=authorization,
                     secrets=secrets,
                     http=http,
@@ -149,6 +151,12 @@ class FastbrowseHarness(BrowserHarness):
 
     def settings(self) -> dict[str, str]:
         return run_settings()
+
+    def cancelled(self) -> dict[str, object]:
+        """The pages and steps a run reached before Parallax's turn limit cancelled it, from its trace events: a
+        cancelled `run_task` never returns the steps `_run_result` reads. The step it was in has no outcome yet, so
+        it reads `cancelled`."""
+        return cancelled_evidence(self._events)
 
     @property
     def trial_metadata(self) -> dict[str, object]:
@@ -223,6 +231,33 @@ def read_pages(events: Iterable[object]) -> tuple[list[dict[str, object]], dict[
             pages.append(record)
         seen_at[event["step"]] = index[key]
     return pages, seen_at
+
+
+def cancelled_evidence(events: Iterable[object]) -> dict[str, object]:
+    """`pages` and `step_log`, as `_run_result` reports them, rebuilt from the trace of a run that never returned."""
+    events = list(events)
+    pages, seen_at = read_pages(events)
+    decided: dict[int, Mapping[str, object]] = {}
+    for event in events:
+        if (
+            isinstance(event, Mapping)
+            and event.get("event") == "decision_context"
+            and isinstance(event.get("step"), int)
+        ):
+            decided[event["step"]] = (
+                event  # a step decided again, as when a read moves into the browser, keeps its last
+            )
+    steps: list[dict[str, object]] = []
+    for position, (index, decision) in enumerate(sorted(decided.items())):
+        outcome = "cancelled" if position == len(decided) - 1 else None
+        item: dict[str, object] = {"action": step_action(str(decision.get("operation")), outcome, None)}
+        if index in seen_at:
+            item["page"] = seen_at[index]
+            item["url"] = pages[seen_at[index]].get("url")
+        if isinstance(decision.get("target_id"), str):
+            item["value"] = decision["target_id"]
+        steps.append(item)
+    return {"pages": pages, "step_log": steps}
 
 
 def _run_result(

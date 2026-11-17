@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 import httpx
 from fastbrowse.models import Status
 from parallax.harnesses.browser import BrowserHarness
-from parallax.harnesses.browser.site import Unavailable, retryable_status, transient_transport
+from parallax.harnesses.browser.site import TRANSIENT_TRANSPORT, Unavailable, retryable_status
 from parallax.models import Capability, CostSource, HarnessInfo, HarnessKind, Isolation, Task, TurnInput
 
 from fastbrowse_evals.evidence import result_answer, step_action
@@ -52,7 +52,7 @@ def test_key() -> bool:
 
 def _failure(what: str, status: int | None = None, error: Exception | None = None) -> Exception:
     if error is not None:
-        failure = Unavailable if transient_transport(error) else RuntimeError
+        failure = Unavailable if isinstance(error, TRANSIENT_TRANSPORT) else RuntimeError
         return failure(f"fastbrowse-hosted {what} failed ({type(error).__name__})")
     failure = Unavailable if retryable_status(status) else RuntimeError
     return failure(f"fastbrowse-hosted {what} returned HTTP {status}")
