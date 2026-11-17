@@ -18,7 +18,7 @@ name: Cassette refill
 #     and none for a head the check was not run on. A commit that changes the head starts a new check and a new refill.
 #   - the spend is capped by the repository variable CASSETTE_REFILL_BUDGET (default 1 dollar), checked between tasks.
 #
-# `workflow_dispatch` reruns it by hand for a pull request (`retry` lifts only the one-refill-per-head guard).
+# `workflow_dispatch` (or a call from another workflow here) reruns it by hand for a pull request (`retry` lifts only the one-refill-per-head guard).
 # Repository configuration: secrets OPENROUTER_API_KEY and AUR_SYNC_TOKEN (a token with contents and pull request
 # write access to this repository; a push made with the run's own token starts no checks). Without the token the fill
 # still runs and the pull request is told why nothing was committed.
@@ -38,6 +38,16 @@ on:
         required: false
         type: boolean
         default: false
+  # Another workflow of this repository may call it with the same two inputs (and `secrets: inherit`).
+  workflow_call:
+    inputs:
+      pr:
+        required: true
+        type: string
+      retry:
+        required: false
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -52,7 +62,7 @@ env:
 jobs:
   plan:
     if: >-
-      github.repository == 'agent-labs-dev/fastbrowse' && (github.event_name == 'workflow_dispatch' || (
+      github.repository == 'agent-labs-dev/fastbrowse' && (github.event_name != 'workflow_run' || (
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.conclusion == 'failure' &&
       github.event.workflow_run.head_repository.full_name == github.repository))
@@ -73,7 +83,6 @@ jobs:
       - id: resolve
         run: python3 scripts/cassette_refill.py resolve
         env:
-          EVENT_NAME: ${{ github.event_name }}
           REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ github.event.workflow_run.id }}

@@ -342,8 +342,9 @@ def upsert_comment(repo: str, number: str, token: str, body: str) -> None:
 
 def resolve() -> int:
     env, repo, token = os.environ, os.environ["REPO"], os.environ["GH_TOKEN"]
-    if env["EVENT_NAME"] == "workflow_dispatch":
-        number = env["INPUT_PR"]
+    number = env["INPUT_PR"]
+    if number:
+        # A rerun by hand names the pull request; a check run names itself.
         sha = gh(f"repos/{repo}/pulls/{number}", token=token)["head"]["sha"]
         runs = gh(
             f"repos/{repo}/actions/workflows/ci.yml/runs?head_sha={sha}&event=pull_request&status=completed&per_page=1",
