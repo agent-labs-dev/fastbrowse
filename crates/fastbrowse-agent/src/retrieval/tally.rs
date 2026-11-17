@@ -1562,13 +1562,13 @@ pub(super) async fn work_selected_with_slots(
         }
         if !tally.names_record()
             && let Some(result_amount) = amount(&result.value).filter(|amount| !amount.date)
-            && amount(&tally.written).is_none_or(|written| {
-                written.malformed_unit || written.unit.is_some() && result_amount.unit != written.unit
-            })
+            && amount(&tally.written).is_none_or(|written| written.malformed_unit || written.unit != result_amount.unit)
         {
             // Only the tally's own written value is compared: the prose around the computed part is the composer's
             // wording, judged by Jev, never parsed. Scanning it rejected "GBP" written beside a computed "GBP 59" with a
-            // message about tally.written, and the rewrite repeated it until the run ended unverified (#1195).
+            // message about tally.written, and the rewrite repeated it until the run ended unverified (#1195). The
+            // written value carries the computed unit, so the unit always comes from code: a unitless "23" beside prose
+            // "USD" would otherwise have written a total of GBP values as USD.
             let field = text::repr(tally.field.as_deref().unwrap_or("value"));
             worked.insert(
                 index,
@@ -2681,10 +2681,16 @@ mod tests {
             let result = amount_tally(&values, Op::Sum, "GBP 23").await;
             assert!(matches!(result, Err(Unworked::Draft(ref reason)) if reason.contains("unit")), "{result:?}");
         }
-        let result = amount_tally(&["£23", "£986"], Op::Sum, "23").await.unwrap();
-        assert_eq!(result.value, "1009", "a numeric computed slot can have its unit in the surrounding claim");
-        let result = amount_tally_in_claim(&["GBP -23", "GBP -986"], Op::Sum, "-23", "GBP -23").await.unwrap();
-        assert_eq!(result.value, "-1009");
+        for written in ["23", "USD 23"] {
+            let result =
+                amount_tally_in_claim(&["GBP 23", "GBP 986"], Op::Sum, written, &format!("USD {written}")).await;
+            assert!(
+                matches!(result, Err(Unworked::Draft(ref reason)) if reason.contains("unit")),
+                "{written}: {result:?}"
+            );
+        }
+        let result = amount_tally(&["GBP -23", "GBP -986"], Op::Sum, "GBP -23").await.unwrap();
+        assert_eq!(result.value, "GBP -1009");
         // The prose around the computed part is the composer's wording, judged by Jev and never parsed: "GBP" written
         // beside a computed "GBP 59" was rejected with a message about tally.written, and the run ended unverified.
         let result = amount_tally_in_claim(&["GBP 23", "GBP 986"], Op::Sum, "GBP 23", "GBP GBP 23").await.unwrap();
