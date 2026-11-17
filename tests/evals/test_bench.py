@@ -209,6 +209,18 @@ def test_replay_ignores_the_bearer_token_and_serves_duplicates_in_order() -> Non
     assert served == [1, 2, 2, 2]
 
 
+def test_an_upstream_error_is_shown_to_the_agent_but_never_recorded() -> None:
+    """A fill that met a 429 once replayed it on every later fill instead of asking again (#1198)."""
+    answers = iter([(429, "application/json", '{"error": "rate limited"}'), (200, "application/json", '{"n": 1}')])
+    cassette = Cassette(task="t")
+    proxy = Proxy(cassette, forward=lambda path, body: next(answers))
+    with proxy as base:
+        assert _post(base, JEV, {"q": 1}).status_code == 429
+        assert cassette.exchanges == [] and proxy.upstream_errors == [429]
+        assert _post(base, JEV, {"q": 1}).json() == {"n": 1}
+    assert [e.status for e in cassette.exchanges] == [200] and proxy.forwarded == 1
+
+
 def test_replay_keeps_each_sent_request_with_its_response_as_a_trace_line() -> None:
     cassette = Cassette(task="t")
     cassette.exchanges.append(_exchange(JEV, {"q": 1}, '{"n": 1}'))

@@ -452,7 +452,8 @@ class Proxy:
 
     With `forward` and not `replay` it records: every request goes upstream. With `replay` and no `forward` it
     replays, and a request it has no response for is a miss. With both it fills: what it has is served, and a miss
-    is sent upstream and added to the cassette. Filling at zero latency records the path a run takes when every
+    is sent upstream and added to the cassette, unless upstream refused it (`upstream_errors`): an error response is
+    never recorded. Filling at zero latency records the path a run takes when every
     answer is instant, which a live recording cannot (see `bench.py` on the plan race).
     """
 
@@ -482,6 +483,7 @@ class Proxy:
         self.sent: list[dict[str, Any]] = []
         self.requests = 0
         self.forwarded = 0
+        self.upstream_errors: list[int] = []
         self._server: ThreadingHTTPServer | None = None
         self._fixture_origin: tuple[str, str] | None = None
         self._requested_origin: str | None = None
@@ -553,6 +555,12 @@ class Proxy:
             return MISS_STATUS, "application/json", json.dumps({"error": {"message": message}}), 0.0
         started = time.monotonic()
         status, content_type, text = self._forward(path, raw)
+        if not 200 <= status < 300:
+            # A provider's refusal (a 429, a 5xx) says nothing about what the model answers. Kept, a later replay
+            # would serve it as the answer and never ask again (#1198); the agent still sees it, as it would live.
+            with self._lock:
+                self.upstream_errors.append(status)
+            return status, content_type, text, 0.0
         exchange = Exchange(
             key=key,
             path=path,

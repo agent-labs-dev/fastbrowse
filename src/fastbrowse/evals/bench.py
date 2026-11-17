@@ -562,6 +562,7 @@ async def bench_task(
         | {"misses": sorted(f"{m.purpose} {m.model}" for m in proxy.misses)},
         "misses": [m.to_json() for m in proxy.misses],
         "forwarded": proxy.forwarded,
+        "upstream_errors": proxy.upstream_errors,
         "unused_responses": proxy.unused(),
     }
     return entry
@@ -660,7 +661,7 @@ async def run_suite(args: argparse.Namespace) -> int:
                 cassette.save(path)
             if mode == "fill":
                 entry["fill_passes"] = done
-                if not proxy.forwarded:
+                if not proxy.forwarded or proxy.upstream_errors:
                     break
         cost, unpriced = priced(cassette.exchanges[before:])
         spent += cost
@@ -683,6 +684,10 @@ async def run_suite(args: argparse.Namespace) -> int:
             extra += f", {entry['forwarded']} forwarded, ${cost:.4f} (total ${spent:.4f})"
             if unpriced:
                 extra += f", {unpriced} unpriced, so the budget undercounts"
+            if entry["upstream_errors"]:
+                extra += (
+                    f", upstream refused {len(entry['upstream_errors'])} (not recorded: {entry['upstream_errors']})"
+                )
         _print_row(entry, extra=extra)
     # The file is rewritten after every task, so a reader can tell a finished run from one still going.
     run["meta"]["finished"] = datetime.now(UTC).isoformat(timespec="seconds")
