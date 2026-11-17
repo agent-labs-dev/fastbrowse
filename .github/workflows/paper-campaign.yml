@@ -224,6 +224,9 @@ jobs:
           ref: b422075b059f0bba670ddda168444eb1d326aa45
           path: upstream/online-mind2web
           persist-credentials: false
+          # The judge needs only `src/` and the root files (its requirements); `data/` and `images/` hold 3.2 GB.
+          sparse-checkout: src
+          sparse-checkout-cone-mode: true
       - name: Install the upstream judge in its own environment
         if: ${{ inputs.source == 'online-mind2web' }}
         run: |
