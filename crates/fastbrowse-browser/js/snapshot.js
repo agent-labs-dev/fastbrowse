@@ -1772,8 +1772,12 @@
   registry.pictured = new Map();
   // A box with no text that paints a background shows what only its pixels say: a shop's colour swatch is an empty
   // span filled green, and its radio, named only "radio", was told from the three beside it by nothing.
+  // A field that shows a typed or chosen value fills its box with the browser's own field colour, which pictures
+  // nothing: a page repeating a booking form had every field marked as pictured.
+  const SHOWS_VALUE =
+    'textarea,select,input:not([type=button],[type=submit],[type=reset],[type=image],[type=radio],[type=checkbox],[type=color])';
   const painted = e => {
-    if (e.textContent.trim() || decorative(e) || !visible(e)) return false;
+    if (e.textContent.trim() || e.matches(SHOWS_VALUE) || decorative(e) || !visible(e)) return false;
     const style = getComputedStyle(e);
     return style.backgroundImage !== 'none' || style.backgroundColor !== 'rgba(0, 0, 0, 0)';
   };

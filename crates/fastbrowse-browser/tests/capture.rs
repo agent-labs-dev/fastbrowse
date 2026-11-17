@@ -779,16 +779,16 @@ mod benchmark {
         for digest in ["document_key", "page_key", "retarget_keys", "read"] {
             view.remove(digest);
         }
-        // A guard holds its document's `performance.timeOrigin` at index 15.
+        // A guard holds its document's `performance.timeOrigin` at index 16.
         let Value::Object(guards) = guards else { panic!("guards are not an object: {guards}") };
         let guards = guards
             .into_iter()
             .map(|(k, g)| {
                 let g = match g {
                     Value::Array(items) => {
-                        let mut kept: Vec<Value> = items.iter().take(15).cloned().collect();
+                        let mut kept: Vec<Value> = items.iter().take(16).cloned().collect();
                         kept.push(Value::Null);
-                        kept.extend(items.into_iter().skip(16));
+                        kept.extend(items.into_iter().skip(17));
                         Value::Array(kept)
                     }
                     other => other,

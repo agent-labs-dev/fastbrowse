@@ -199,6 +199,25 @@ async fn test_radios_told_apart_only_by_a_painted_swatch_are_pictured() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_fields_of_a_repeated_form_are_not_pictured() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = [0, 1].map(i => `<form><h2>Booking ${i}</h2><label>Name <input></label>` +
+          '<select aria-label="Room"><option>Single</option></select><textarea aria-label="Notes"></textarea></form>')
+          .join('');
+        "#,
+    )
+    .await;
+    let obs = h.observe().await;
+    assert_eq!(obs.controls.iter().filter(|c| c.label == "Name").count(), 2, "{:?}", obs.controls);
+    assert!(obs.controls.iter().all(|c| c.pictured.is_none()), "{:?}", obs.controls);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_an_open_modal_is_named_and_the_page_behind_it_leaves() {
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");
