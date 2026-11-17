@@ -18,6 +18,7 @@ depends=(
   'python>=3.13'
   'python-h2'
   'python-httpx>=0.28.1'
+  'python-packaging>=24'
   'python-pydantic>=2.11'
 )
 makedepends=('python-build' 'python-installer' 'python-maturin' 'rust')

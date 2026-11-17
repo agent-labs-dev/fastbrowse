@@ -13,6 +13,7 @@ pkgbase = fastbrowse
 	depends = python>=3.13
 	depends = python-h2
 	depends = python-httpx>=0.28.1
+	depends = python-packaging>=24
 	depends = python-pydantic>=2.11
 	optdepends = chromium: a local browser for --local
 	optdepends = google-chrome: a local browser for --local

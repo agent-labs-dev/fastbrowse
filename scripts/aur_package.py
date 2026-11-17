@@ -69,6 +69,7 @@ depends=(
   'python>=3.13'
   'python-h2'
   'python-httpx>=0.28.1'
+  'python-packaging>=24'
   'python-pydantic>=2.11'
 )
 makedepends=('python-build' 'python-installer' 'python-maturin' 'rust')
@@ -121,6 +122,7 @@ pkgbase = fastbrowse
 \tdepends = python>=3.13
 \tdepends = python-h2
 \tdepends = python-httpx>=0.28.1
+\tdepends = python-packaging>=24
 \tdepends = python-pydantic>=2.11
 \toptdepends = chromium: a local browser for --local
 \toptdepends = google-chrome: a local browser for --local
@@ -307,11 +309,22 @@ def main() -> int:
             raise SystemExit(f"packaging/aur pins {old.version}, and --publish was asked for {version}")
         return publish(directory, old)
     new = published(version, args.wait)
+    # The files are compared whole, not by the release they pin, so a change to the template reaches them too: a
+    # dependency added to `depends` was never written while the version stayed the same.
+    rendered = render(new)
+    current = all(
+        (directory / name).is_file() and (directory / name).read_text(encoding="utf-8") == text
+        for name, text in rendered.items()
+    )
     if not args.write:
         # Both gaps are checked in one run: the committed files, and what the AUR itself holds.
         status = 0
-        if old == new:
+        if current:
             print(f"packaging/aur is fastbrowse {new.version}")
+        elif old == new:
+            print(f"packaging/aur pins {new.version} but differs from its template", file=sys.stderr)
+            print("run scripts/aur_package.py --write", file=sys.stderr)
+            status = 1
         else:
             print(f"packaging/aur is fastbrowse {old.version}, and PyPI has {new.version}", file=sys.stderr)
             print("run scripts/aur_package.py --write", file=sys.stderr)
@@ -327,10 +340,10 @@ def main() -> int:
             print("run scripts/aur_package.py --publish, as the release's aur job does", file=sys.stderr)
             status = 1
         return status
-    if old == new:
+    if current:
         print(f"the AUR package is fastbrowse {new.version}")
         return 0
-    for name, text in render(new).items():
+    for name, text in rendered.items():
         (directory / name).write_text(text, encoding="utf-8")
     print(f"the AUR package is now fastbrowse {new.version}")
     return 0
