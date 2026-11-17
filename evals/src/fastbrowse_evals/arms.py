@@ -54,8 +54,15 @@ def binding(public: str) -> ArmBinding:
         raise ValueError(f"unknown public arm {public!r}") from None
 
 
+# Harnesses whose public arm is one model: a run on any other model is not that arm. Rows recorded before the arm
+# pinned its model carry none and match their model-less entry exactly.
+ONE_MODEL: frozenset[str] = frozenset({"browser-harness"})
+
+
 def public_arm(harness: str, model: str | None) -> PublicArm | None:
-    return BY_PARALLAX.get((harness, model)) or BY_PARALLAX.get((harness, None))
+    if (exact := BY_PARALLAX.get((harness, model))) is not None:
+        return exact
+    return None if harness in ONE_MODEL else BY_PARALLAX.get((harness, None))
 
 
 def invocations(public_arms: tuple[str, ...] | list[str]) -> tuple[ArmBinding, ...]:
