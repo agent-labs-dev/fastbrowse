@@ -348,6 +348,9 @@ pub(crate) struct RunState {
     pub idle: Vec<Idle>,
     /// The page the last action was taken on, until the next observation says what it did.
     pub acted_from: Option<Observation>,
+    /// Jev's word, comparing the viewport before and after a click placed by sight, that the click changed what the
+    /// page shows as the step meant. Pixels a drawn surface redraws change no element, so the DOM cannot say.
+    pub drawn_changed: Option<bool>,
     /// Jev's word that the task rules out downloading, asked once a control the page says downloads is in play.
     pub downloads_forbidden: Option<bool>,
     /// Jev's word on which changes to the page's fields and settings the task allows, asked once an edit is in play.
@@ -730,6 +733,7 @@ impl RunState {
             landing: None,
             idle: Vec::new(),
             acted_from: None,
+            drawn_changed: None,
             followed: None,
             changed_page: None,
             unchanged: 0,
@@ -794,6 +798,7 @@ impl RunState {
             landing: None,
             idle: Vec::new(),
             acted_from: None,
+            drawn_changed: None,
             downloads_forbidden: None,
             edits: None,
             read_documents: HashMap::new(),

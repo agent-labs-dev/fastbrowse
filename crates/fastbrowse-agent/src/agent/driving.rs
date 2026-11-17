@@ -1102,8 +1102,11 @@ impl Agent {
             {
                 written.record(target, &held);
             }
+            // A click placed by sight that changed no element was judged by the pixels it changed.
+            let drawn = state.drawn_changed.take();
             let judged = match edit {
                 _ if !executed => Some(false),
+                _ if drawn.is_some() => drawn,
                 Some(edited) => Some(edited),
                 // The fingerprint reads neither field values nor focus, so a field left reported no change even when
                 // its change handler rewrote it. Nor does it read a control without text, so a hover that showed a
@@ -1131,7 +1134,8 @@ impl Agent {
                 };
                 state.hint = Some(self.redact(&hint));
             }
-            state.acted_from = Some(observation.clone());
+            // The DOM diff of a surface whose picture changed as meant would add that nothing visible changed.
+            state.acted_from = (drawn != Some(true)).then(|| observation.clone());
             state.showing = executed.then(|| doing(decision.operation, label.as_deref()));
             // The address a click or navigation asked for, so reading where it landed also reads that address: a
             // site that redirects `/page/2` to `/page/2/` left the asked one unread, and a whole-list answer unverified.

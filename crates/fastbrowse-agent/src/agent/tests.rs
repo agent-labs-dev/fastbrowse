@@ -3222,8 +3222,15 @@ impl Page for Screenshots {
 
     fn click_viewport<'a>(&'a self, x: f64, y: f64, within: Option<&'a str>) -> BoxFuture<'a, PageResult<ActResult>> {
         self.0.lock().unwrap().push((x, y, within.map(str::to_string)));
-        let clicked =
-            ActResult { outcome: StepOutcome::Executed, failure: None, page_changed: true, detail: None, moved: false };
+        // A drawn surface: the click redraws its pixels and changes no element.
+        *self.2.lock().unwrap() = Some(png(1280, 901));
+        let clicked = ActResult {
+            outcome: StepOutcome::Executed,
+            failure: None,
+            page_changed: false,
+            detail: None,
+            moved: false,
+        };
         Box::pin(async move { Ok(clicked) })
     }
 
@@ -4401,6 +4408,7 @@ impl DecisionClient for Seeing {
         }
         let answers = IndexMap::from([
             ("shown".to_string(), Answer::Noul(NoulAnswer { kind: Default::default(), probability: self.shown })),
+            ("changed".to_string(), Answer::Noul(NoulAnswer { kind: Default::default(), probability: self.shown })),
             (
                 "where".to_string(),
                 Answer::Box(BoxAnswer {
@@ -4515,6 +4523,13 @@ async fn test_a_click_inside_a_drawn_surface_lands_where_jev_sees_it_and_on_the_
     let (asked_state, questions, _) = &asked[0];
     assert_eq!(asked_state["surface"]["label"], "Store map");
     assert!(matches!(questions["shown"], Question::Noul(_)) && matches!(questions["where"], Question::Box(_)));
+    // The click changed no element, so the frames before and after it say whether it did what it meant: a drawn
+    // switch read as unchanged would be pressed again, turning it back.
+    let (compared, questions, images) = &asked[1];
+    assert!(questions.contains_key("changed"), "{questions:?}");
+    assert_eq!(images.len(), 2);
+    assert_ne!(compared["before"], compared["after"]);
+    assert_eq!(state.drawn_changed, Some(true));
 }
 
 /// A step Jev doubts is one visible click, such as typing into a canvas field, is not clicked.

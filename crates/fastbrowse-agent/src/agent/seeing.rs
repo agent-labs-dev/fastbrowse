@@ -3,7 +3,7 @@
 
 use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::decision::{Answer, BoxQuestion, DecisionError, Images, NoulQuestion, Question};
-use fastbrowse_core::models::{CostComponent, JevPurpose, UNTRUSTED};
+use fastbrowse_core::models::{CostComponent, JevPurpose, StepOutcome, UNTRUSTED};
 use fastbrowse_core::page::{ActResult, Control, Observation};
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
@@ -19,6 +19,8 @@ const WHERE: &str = "The control described in `control`, in `viewport_screenshot
 const DRAWN_SHOWN: &str = "The page element described in `surface` is drawn: it shows its content as pixels, with no \
                            elements inside it. Is the next step of `task` one click on something shown inside that \
                            surface in `viewport_screenshot`, with that thing visible and nothing drawn over it?";
+const REDRAWN: &str = "`before` is the viewport just before the last click toward `task`, and `after` is the viewport \
+                       now. Does `after` show the change that click was meant to make?";
 const DRAWN_WHERE: &str = "The thing inside the surface described in `surface` that the next step of `task` must \
                            click, in `viewport_screenshot`.";
 
@@ -142,6 +144,48 @@ impl Agent {
             return Ok(None);
         }
         let (x, y) = found.edges.centre();
-        Ok(Some(self.page.click_viewport(x, y, on_target.then_some(target.id.as_str())).await?))
+        let mut result = self.page.click_viewport(x, y, on_target.then_some(target.id.as_str())).await?;
+        if result.outcome == StepOutcome::Executed && !result.page_changed {
+            state.drawn_changed = self.changed_as_meant(state, png).await?;
+            if state.drawn_changed == Some(true) {
+                result.page_changed = true;
+                result.detail = Some("the picture on the page changed as the click meant".to_string());
+            }
+        }
+        Ok(Some(result))
+    }
+
+    /// Whether a click that changed no element changed the pixels as it meant to. A frame byte for byte the same as
+    /// `before` changed nothing, which needs no question. None when there is no screenshot or Jev cannot answer.
+    async fn changed_as_meant(&self, state: &mut RunState, before: Vec<u8>) -> Step<Option<bool>> {
+        let Some(after) = self.viewport().await? else { return Ok(None) };
+        if after == before {
+            return Ok(Some(false));
+        }
+        let (was, now) = (screenshot_reference(&before), screenshot_reference(&after));
+        let seen = json!({"task": self.model_task(state), "before": was, "after": now});
+        let questions: IndexMap<String, Question> = IndexMap::from([(
+            "changed".to_string(),
+            NoulQuestion::new(
+                format!("{UNTRUSTED}\n{REDRAWN}"),
+                Some("It shows the change the click was meant to make."),
+                Some("It shows no change, or a different one."),
+            )
+            .into(),
+        )]);
+        state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+        let images = Images::from([(was, before), (now, after)]);
+        let evaluation =
+            match jev_purpose(JevPurpose::Verify, self.jev.evaluate_images(&seen, &questions, &images)).await {
+                Ok(evaluation) => evaluation,
+                Err(error @ DecisionError::Budget(_)) => return Err(error.into()),
+                Err(error) => {
+                    self.event("redrawn_failed", || Map::from_iter([("error".into(), error.to_string().into())]));
+                    return Ok(None);
+                }
+            };
+        state.ledger.record([evaluation.cost.clone()])?;
+        let Some(Answer::Noul(changed)) = evaluation.answers.get("changed") else { return Ok(None) };
+        Ok(Some(changed.probability >= fastbrowse_core::decision::EVEN_ODDS))
     }
 }
