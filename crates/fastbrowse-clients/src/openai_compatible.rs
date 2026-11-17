@@ -471,13 +471,18 @@ impl Billing<'_> {
     fn charge_unanswered(&mut self, usage: &Usage) -> usize {
         let offset = self.costs.len();
         let usage = usage.snapshot();
-        self.costs.extend((0..usage.unaccounted_requests).map(|_| unknown(self.purpose)));
+        let requested = self.model.clone();
+        self.costs.extend(
+            (0..usage.unaccounted_requests)
+                .map(|_| CostLine { model: Some(requested.clone()), ..unknown(self.purpose) }),
+        );
         let answered = usage.requests - usage.unaccounted_requests;
         if answered > 0 {
             // Rejected responses can cost nothing while still consuming physical provider requests.
             self.costs.push(CostLine {
                 purpose: Some(self.purpose),
                 physical_requests: Some(answered),
+                model: Some(self.model.clone()),
                 ..CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.0))
             });
         }

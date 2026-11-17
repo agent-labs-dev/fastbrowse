@@ -27,12 +27,16 @@ public record CostLine(
     @JsonProperty("cache_write_tokens") Long cacheWriteTokens,
     @JsonProperty("model") String model) {
 
-    public CostLine(CostComponent component, CostBasis basis, Double dollars, LLMPurpose purpose, JevPurpose decisionPurpose, long inputTokens, long outputTokens, Double seconds, Long physicalRequests, String model) {
-        this(component, basis, dollars, purpose, decisionPurpose, inputTokens, outputTokens, seconds, physicalRequests, null, null, null, model);
+    public CostLine(CostComponent component, CostBasis basis, Double dollars, LLMPurpose purpose, JevPurpose decisionPurpose, long inputTokens, long outputTokens, Double seconds, Long physicalRequests) {
+        this(component, basis, dollars, purpose, decisionPurpose, inputTokens, outputTokens, seconds, physicalRequests, null, null, null, null);
     }
 
-    public CostLine(CostComponent component, CostBasis basis, Double dollars, LLMPurpose purpose, JevPurpose decisionPurpose, long inputTokens, long outputTokens, Double seconds, Long physicalRequests, Long images, String model) {
-        this(component, basis, dollars, purpose, decisionPurpose, inputTokens, outputTokens, seconds, physicalRequests, images, null, null, model);
+    public CostLine(CostComponent component, CostBasis basis, Double dollars, LLMPurpose purpose, JevPurpose decisionPurpose, long inputTokens, long outputTokens, Double seconds, Long physicalRequests, Long images) {
+        this(component, basis, dollars, purpose, decisionPurpose, inputTokens, outputTokens, seconds, physicalRequests, images, null, null, null);
+    }
+
+    public CostLine(CostComponent component, CostBasis basis, Double dollars, LLMPurpose purpose, JevPurpose decisionPurpose, long inputTokens, long outputTokens, Double seconds, Long physicalRequests, Long images, Long cacheReadTokens, Long cacheWriteTokens) {
+        this(component, basis, dollars, purpose, decisionPurpose, inputTokens, outputTokens, seconds, physicalRequests, images, cacheReadTokens, cacheWriteTokens, null);
     }
 
     /** A builder for a {@code CostLine}, every field unset. */

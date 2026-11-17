@@ -1941,7 +1941,8 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null,
-      "physical_requests": 6
+      "physical_requests": 6,
+      "model": "model-start"
      }
     ],
     "llm_calls": 6,
@@ -2173,7 +2174,8 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null,
-      "physical_requests": 1
+      "physical_requests": 1,
+      "model": "model-start"
      }
     ],
     "llm_calls": 1,
@@ -2681,7 +2683,8 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null,
-      "physical_requests": 1
+      "physical_requests": 1,
+      "model": "model-start"
      },
      {
       "component": "llm",
@@ -2691,7 +2694,8 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null,
-      "physical_requests": 1
+      "physical_requests": 1,
+      "model": "model-start"
      },
      {
       "component": "llm",
@@ -2701,7 +2705,8 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null,
-      "physical_requests": 1
+      "physical_requests": 1,
+      "model": "model-start"
      },
      {
       "component": "llm",
@@ -2711,7 +2716,8 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null,
-      "physical_requests": 1
+      "physical_requests": 1,
+      "model": "model-start"
      },
      {
       "component": "llm",
@@ -2721,7 +2727,8 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null,
-      "physical_requests": 1
+      "physical_requests": 1,
+      "model": "model-start"
      },
      {
       "component": "llm",
@@ -2731,7 +2738,8 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null,
-      "physical_requests": 1
+      "physical_requests": 1,
+      "model": "model-start"
      }
     ],
     "llm_calls": 6,
@@ -2970,7 +2978,8 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null,
-      "physical_requests": 1
+      "physical_requests": 1,
+      "model": "model-start"
      }
     ],
     "llm_calls": 1,
@@ -3083,7 +3092,8 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null,
-      "physical_requests": 1
+      "physical_requests": 1,
+      "model": "model-start"
      }
     ],
     "llm_calls": 2,
@@ -3362,7 +3372,8 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "seconds": null,
-      "physical_requests": 1
+      "physical_requests": 1,
+      "model": "model-start"
      }
     ],
     "llm_calls": 1,
