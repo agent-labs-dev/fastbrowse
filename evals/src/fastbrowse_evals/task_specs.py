@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import NamedTuple
 
 from fastbrowse.evals.live_tasks import Release
+from fastbrowse.safety import origin_of
 from parallax.models import Area, Capability, Maturity, Provenance, Task, TaskRecord
 from pydantic import BaseModel
 
@@ -828,11 +829,19 @@ def records() -> list[TaskRecord]:
     return [record(spec) for spec in _SPECS]
 
 
-def start_url(task: Task) -> str:
-    """Where a browser task begins. This catalog names it `start_url`; Parallax's official suites (Online-Mind2Web,
-    BU Bench) name the same page `website`, as their upstream datasets do."""
+def start_url(task: Task) -> str | None:
+    """Where a browser task begins. This catalog names it `start_url`; Parallax's official suites name the same page
+    `website`, as their upstream datasets do. BU Bench tasks name no page and begin in a blank browser, so None."""
     for key in ("start_url", "website"):
         value = task.data.get(key)
         if isinstance(value, str):
             return value
-    raise ValueError(f"browser task {task.id} has no start_url or website")
+    return None
+
+
+def secrets_origin(task: Task) -> str:
+    """The origin a task's logins may be typed on: its start page's. A task with logins must name that page."""
+    start = start_url(task)
+    if start is None:
+        raise ValueError(f"browser task {task.id} has logins but no start page to scope them to")
+    return origin_of(start)

@@ -16,14 +16,14 @@ import httpx
 from fastbrowse.evals import harness
 from fastbrowse.models import Authorization, Citation, Limits, RunResult, Status
 from fastbrowse.run import run_task
-from fastbrowse.safety import ScopedSecrets, origin_of
+from fastbrowse.safety import ScopedSecrets
 from fastbrowse.telemetry import traced
 from parallax.harnesses.browser import BrowserHarness
 from parallax.harnesses.browser.cloud import Browser, cloud_browser
 from parallax.models import Capability, CostSource, HarnessInfo, HarnessKind, Isolation, Task, TurnInput
 
 from fastbrowse_evals.evidence import result_answer, step_action
-from fastbrowse_evals.task_specs import answer_model, start_url
+from fastbrowse_evals.task_specs import answer_model, secrets_origin, start_url
 
 PROVIDER_KEYS = ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "EXA_API_KEY")
 """The provider keys a fastbrowse arm is given: Jev, its LLM and optional web search use these.
@@ -118,7 +118,7 @@ class FastbrowseHarness(BrowserHarness):
         start = start_url(task)
         # The runner made the trial INVALID before this point if any of these variables is unset.
         values = {alias: os.environ[env_name] for alias, env_name in task.secrets.items()}
-        secrets = ScopedSecrets(values, origin_of(start)) if values else None
+        secrets = ScopedSecrets(values, secrets_origin(task)) if values else None
         authorization = Authorization(irreversible_actions=task.meta.authorizes)
         async with httpx.AsyncClient() as http, self.browser(http) as browser:
             self._browser = browser
