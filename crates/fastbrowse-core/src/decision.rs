@@ -67,6 +67,29 @@ pub fn without_images(state: &Value, images: &Images) -> Value {
     }
 }
 
+/// `questions` with every image reference left out of each Choice option's criteria, for a route that takes no image
+/// or reads none nested in a question. The options themselves stay, described by their text.
+pub fn questions_without_images(questions: &IndexMap<String, Question>, images: &Images) -> IndexMap<String, Question> {
+    let strip = |question: &Question| match question {
+        Question::Choice(choice) => Question::Choice(ChoiceQuestion {
+            criteria: choice.criteria.iter().map(|(key, value)| (key.clone(), without_images(value, images))).collect(),
+            ..choice.clone()
+        }),
+        other => other.clone(),
+    };
+    questions.iter().map(|(key, question)| (key.clone(), strip(question))).collect()
+}
+
+/// The images `state` or `questions` refer to. TypeSafe refuses a request with an asset nothing refers to, and a
+/// request split into batches carries only some of its questions.
+pub fn referenced(images: &Images, state: &Value, questions: &IndexMap<String, Question>) -> Images {
+    if images.is_empty() {
+        return Images::new();
+    }
+    let written = format!("{state}{}", serde_json::to_string(questions).unwrap_or_default());
+    images.iter().filter(|(key, _)| written.contains(key.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect()
+}
+
 literal_tag!(ChoiceTag = "choice");
 literal_tag!(NoulTag = "noul");
 literal_tag!(ScoreTag = "score");
@@ -618,7 +641,9 @@ pub trait DecisionClient: Send + Sync {
         questions: &'a IndexMap<String, Question>,
         images: &'a Images,
     ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
-        Box::pin(async move { self.evaluate(&without_images(state, images), questions).await })
+        Box::pin(async move {
+            self.evaluate(&without_images(state, images), &questions_without_images(questions, images)).await
+        })
     }
 
     /// The model this client asks, whose limits fit every request sent to it.
@@ -691,6 +716,28 @@ mod tests {
         assert_eq!(
             without_images(&state, &images),
             json!({"page": {"text": "ref-1 is text here"}, "frames": ["kept"]})
+        );
+    }
+
+    #[test]
+    fn a_route_without_images_is_asked_each_option_by_its_text_and_a_request_carries_only_what_it_names() {
+        let images = Images::from([("ref-1".to_string(), png(300, 300)), ("ref-2".to_string(), png(300, 300))]);
+        let pick: Question = ChoiceQuestion::new(
+            "Pick",
+            IndexMap::from([
+                ("a".to_string(), json!({"label": "Add", "looks_like": "ref-1"})),
+                ("b".to_string(), json!({"label": "Add"})),
+            ]),
+        )
+        .into();
+        let questions = IndexMap::from([("click_target".to_string(), pick)]);
+        let Question::Choice(stripped) = &questions_without_images(&questions, &images)["click_target"] else {
+            panic!("a choice")
+        };
+        assert_eq!(stripped.criteria["a"], json!({"label": "Add"}));
+        assert_eq!(
+            referenced(&images, &json!({"text": "none here"}), &questions).keys().collect::<Vec<_>>(),
+            ["ref-1"]
         );
     }
 

@@ -7,14 +7,13 @@ use fastbrowse_core::decision::{Answer, DecisionError};
 use fastbrowse_core::llm::{Generation, LLMError};
 use fastbrowse_core::models::{Attachment, Authorization, Evidence, Status, StepChoice, StepResult, WallKind};
 use fastbrowse_core::page::{BrowserError, Capture, Control, Observation};
-use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::telemetry::{BudgetExceeded, Ledger};
 use indexmap::IndexMap;
 
 use super::recovery::{Idle, Withheld};
 use crate::error::AgentError;
 use crate::memory::{Fact, Notes, address, fact_id};
-use crate::policy::{Decision, HistoryEntry};
+use crate::policy::{Decision, HistoryEntry, Look};
 use crate::retrieval::ComposedAnswer;
 use crate::retrieval::whole_page_facts;
 use crate::start::KnownPages;
@@ -306,8 +305,8 @@ pub(crate) struct RunState {
     pub http_seen: HashSet<(String, String, i64)>,
     pub hint: Option<String>,
     /// Jev's pick when asked again after a stall, by the page state it was asked on, taken as the
-    /// next decision there.
-    pub picked: Option<(String, Decision)>,
+    /// next decision there, with the card of the target it chose.
+    pub picked: Option<(String, Decision, Option<Look>)>,
     /// The action the next step carries out, built while the page was read.
     pub(super) built: Option<Step<super::driving::Watched<fastbrowse_core::page::Action>>>,
     pub unchanged: i64,
@@ -322,8 +321,9 @@ pub(crate) struct RunState {
     /// The one renderer hang this run may recover without risking a replay of the action.
     pub hung_page_reopened: bool,
     pub last_page: Option<(String, String)>,
-    /// The document in which Jev was last asked whether the task needs an action inside a drawn surface.
-    pub surface_judged: Option<(String, String)>,
+    /// The document in which Jev was last asked whether the task needs an action inside a drawn surface, and its
+    /// answer, which places every click on that document's surface.
+    pub surface_judged: Option<((String, String), f64)>,
     /// The source of the latest navigation, scoped to the destination that followed it.
     pub navigation_from: Option<((String, String), Observation)>,
     /// Jev's sign-in readings stay with the document they described, not with every later route.
@@ -353,6 +353,23 @@ pub(crate) struct RunState {
     pub idle: Vec<Idle>,
     /// The page the last action was taken on, until the next observation says what it did.
     pub acted_from: Option<Observation>,
+    /// Jev's word, comparing the viewport before and after a click placed by sight, that the click changed what the
+    /// page shows as the step meant. Pixels a drawn surface redraws change no element, so the DOM cannot say.
+    pub drawn_changed: Option<bool>,
+    /// The task step a click Jev placed inside a drawn surface, or an action on a pictured control, was for, until the
+    /// next observation says what it did.
+    pub sighted: Option<String>,
+    /// The card of the pictured control the decision chose, for its history entry.
+    pub look: Option<Look>,
+    /// The gate let the step go as a change the site keeps, such as a save, so the text the page adds in reply is what
+    /// records it: an editor's "Saved." read as "only the page text changed", and the save was judged never made.
+    pub keeping: bool,
+    /// The change the site keeps was answered with text the page did not show before, such as "Saved.". The state a
+    /// page reaches is keyed by its controls, so that reply alone left the save on a state already seen, the stall rule
+    /// withheld it, and the run went on looking for a save it had made. Saving again adds no new text. A click on a
+    /// control told apart by its pixels is answered the same way: Leaflet's triangle swapped one popup for another, and
+    /// its "I am a polygon." alone was the progress.
+    pub replied: bool,
     /// Jev's word that the task rules out downloading, asked once a control the page says downloads is in play.
     pub downloads_forbidden: Option<bool>,
     /// Jev's word on which changes to the page's fields and settings the task allows, asked once an edit is in play.
@@ -459,6 +476,12 @@ pub(crate) struct RunState {
 pub type PartialComposition = (ComposedAnswer, Vec<(Fact, bool)>, usize);
 
 impl RunState {
+    /// Jev's answer to whether the task needs an action inside a drawn surface, when it was asked in `page` and holds
+    /// there still; `None` when the next step must ask it. A failed page is asked again.
+    pub(super) fn surface_judgement(&self, page: &(String, String)) -> Option<f64> {
+        self.surface_judged.as_ref().filter(|(judged, _)| judged == page && !self.page_failed).map(|(_, odds)| *odds)
+    }
+
     /// The address of the page at `url` when a site failure that can clear stands on it: opening it again reloads it.
     pub fn reload_target(&self, url: &str) -> Option<String> {
         self.site_failure.as_ref().filter(|failure| failure.url == url && failure.transient()).map(|f| f.url.clone())
@@ -480,7 +503,7 @@ impl RunState {
 
     /// The steps this run carried out that act on a page, as the models deciding steps are shown them.
     pub fn executed_steps(&self) -> Vec<serde_json::Value> {
-        self.history.iter().filter(|entry| entry.changed_site()).map(Dump::dump_exclude_none).collect()
+        self.history.iter().filter(|entry| entry.changed_site()).map(HistoryEntry::shown).collect()
     }
 
     pub fn checked_composition(&self, notes: &Notes) -> Option<&ComposedAnswer> {
@@ -735,6 +758,8 @@ impl RunState {
             landing: None,
             idle: Vec::new(),
             acted_from: None,
+            drawn_changed: None,
+            sighted: None,
             followed: None,
             changed_page: None,
             unchanged: 0,
@@ -800,6 +825,11 @@ impl RunState {
             landing: None,
             idle: Vec::new(),
             acted_from: None,
+            drawn_changed: None,
+            sighted: None,
+            keeping: false,
+            look: None,
+            replied: false,
             downloads_forbidden: None,
             edits: None,
             read_documents: HashMap::new(),

@@ -16,6 +16,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -37,6 +38,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -59,6 +61,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "link",
    "sensitive": false,
    "submit_semantics": null,
@@ -80,6 +83,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -101,6 +105,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -123,6 +128,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "link",
    "sensitive": false,
    "submit_semantics": null,
@@ -144,6 +150,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -165,6 +172,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -187,6 +195,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "link",
    "sensitive": false,
    "submit_semantics": null,
@@ -208,6 +217,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -229,6 +239,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -251,6 +262,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "link",
    "sensitive": false,
    "submit_semantics": null,
@@ -344,6 +356,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "link",
    "sensitive": false,
    "submit_semantics": null,
@@ -366,6 +379,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "link",
    "sensitive": false,
    "submit_semantics": null,
@@ -388,6 +402,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "link",
    "sensitive": false,
    "submit_semantics": null,
@@ -410,6 +425,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "link",
    "sensitive": false,
    "submit_semantics": null,
@@ -431,6 +447,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -452,6 +469,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -473,6 +491,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -494,6 +513,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -515,6 +535,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -536,6 +557,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -557,6 +579,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -578,6 +601,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -660,6 +684,7 @@
    null,
    null,
    null,
+   null,
    "bfb8f182341efc55",
    "http://fixture",
    null,
@@ -678,6 +703,7 @@
    null,
    false,
    false,
+   null,
    null,
    null,
    null,
@@ -704,6 +730,7 @@
    null,
    null,
    null,
+   null,
    "5645d55ce5b197f5",
    "http://fixture",
    null,
@@ -722,6 +749,7 @@
    null,
    false,
    false,
+   null,
    null,
    null,
    null,
@@ -748,6 +776,7 @@
    null,
    null,
    null,
+   null,
    "c65282ec3f580f16",
    "http://fixture",
    null,
@@ -770,6 +799,7 @@
    null,
    null,
    null,
+   null,
    "c65282ec3f580f16",
    "http://fixture",
    null,
@@ -788,6 +818,7 @@
    null,
    false,
    false,
+   null,
    null,
    null,
    null,
@@ -814,6 +845,7 @@
    null,
    null,
    null,
+   null,
    "00415498289e68a2",
    "http://fixture",
    null,
@@ -836,6 +868,7 @@
    null,
    null,
    null,
+   null,
    "00415498289e68a2",
    "http://fixture",
    null,
@@ -854,6 +887,7 @@
    null,
    false,
    false,
+   null,
    null,
    null,
    null,
@@ -880,6 +914,7 @@
    null,
    null,
    null,
+   null,
    "3e8b2457c650353a",
    "http://fixture",
    null,
@@ -898,6 +933,7 @@
    null,
    false,
    false,
+   null,
    null,
    null,
    null,
@@ -924,6 +960,7 @@
    null,
    null,
    null,
+   null,
    "3e8b2457c650353a",
    "http://fixture",
    null,
@@ -942,6 +979,7 @@
    null,
    false,
    false,
+   null,
    null,
    null,
    null,
@@ -968,6 +1006,7 @@
    null,
    null,
    null,
+   null,
    "782e0d1df7921f6b",
    "http://fixture",
    null,
@@ -990,6 +1029,7 @@
    null,
    null,
    null,
+   null,
    "782e0d1df7921f6b",
    "http://fixture",
    null,
@@ -1008,6 +1048,7 @@
    null,
    false,
    false,
+   null,
    null,
    null,
    null,
@@ -1034,6 +1075,7 @@
    null,
    null,
    null,
+   null,
    "9037e5032610a20b",
    "http://fixture",
    null,
@@ -1052,6 +1094,7 @@
    null,
    false,
    false,
+   null,
    null,
    null,
    null,
@@ -1078,6 +1121,7 @@
    null,
    null,
    null,
+   null,
    "9037e5032610a20b",
    "http://fixture",
    null,
@@ -1096,6 +1140,7 @@
    null,
    false,
    false,
+   null,
    null,
    null,
    null,
@@ -1122,6 +1167,7 @@
    null,
    null,
    null,
+   null,
    "9037e5032610a20b",
    "http://fixture",
    null,
@@ -1140,6 +1186,7 @@
    null,
    false,
    false,
+   null,
    null,
    null,
    null,
@@ -1166,6 +1213,7 @@
    null,
    null,
    null,
+   null,
    "9037e5032610a20b",
    "http://fixture",
    null,
@@ -1184,6 +1232,7 @@
    null,
    false,
    false,
+   null,
    null,
    null,
    null,
@@ -1210,6 +1259,7 @@
    null,
    null,
    null,
+   null,
    "9037e5032610a20b",
    "http://fixture",
    null,
@@ -1228,6 +1278,7 @@
    null,
    false,
    false,
+   null,
    null,
    null,
    null,
@@ -1254,6 +1305,7 @@
    null,
    null,
    null,
+   null,
    "383a96968539dc8f",
    "http://fixture",
    null,
@@ -1276,6 +1328,7 @@
    null,
    null,
    null,
+   null,
    "383a96968539dc8f",
    "http://fixture",
    null,
@@ -1294,6 +1347,7 @@
    null,
    false,
    false,
+   null,
    null,
    null,
    null,
@@ -1320,6 +1374,7 @@
    null,
    null,
    null,
+   null,
    "615540fd45956724",
    "http://fixture",
    null,
@@ -1342,6 +1397,7 @@
    null,
    null,
    null,
+   null,
    "615540fd45956724",
    "http://fixture",
    null,
@@ -1360,6 +1416,7 @@
    null,
    false,
    false,
+   null,
    null,
    null,
    null,

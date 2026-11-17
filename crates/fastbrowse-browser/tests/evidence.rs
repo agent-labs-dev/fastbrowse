@@ -2,7 +2,7 @@ mod common;
 mod misc_support;
 
 use common::{eval_active, harness, sites};
-use fastbrowse_core::models::Operation;
+use fastbrowse_core::models::{Operation, StepOutcome};
 use fastbrowse_core::page::{Action, BlockKind};
 use misc_support::text_of;
 
@@ -109,6 +109,121 @@ async fn test_an_image_or_canvas_that_takes_input_is_a_drawn_control() {
     assert_eq!(drawn("Remote browser view"), Some(Some(true)), "{:?}", obs.controls);
     assert_eq!(drawn("Board"), Some(Some(true)), "{:?}", obs.controls);
     assert_eq!(drawn("Cart"), Some(None), "{:?}", obs.controls);
+    h.close().await;
+}
+
+/// A map library listens for clicks on its viewport, beside its own zoom buttons, rather than on the canvas it draws
+/// the map on: the canvas is still what a click on the map presses. Nameless, it is called a canvas, not by its role.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_canvas_heard_by_its_viewport_is_a_drawn_control() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = '<div id="viewport"><canvas width="320" height="240"></canvas>' +
+          '<button>Zoom in</button></div><canvas aria-label="Backdrop" width="320" height="240"></canvas>';
+        document.getElementById('viewport').addEventListener('pointerdown', () => {});
+        "#,
+    )
+    .await;
+    let obs = h.observe().await;
+    let drawn = |label: &str| obs.controls.iter().find(|c| c.label == label).map(|c| c.drawn);
+    assert_eq!(drawn("canvas"), Some(Some(true)), "{:?}", obs.controls);
+    assert_eq!(drawn("Zoom in"), Some(None), "{:?}", obs.controls);
+    assert_eq!(drawn("Backdrop"), None, "a canvas no listener hears is no control: {:?}", obs.controls);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_drawn_map_is_named_by_its_cards_heading_not_its_first_link() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        r##"
+        const block = inner => `<div class="row-fluid">${inner}</div>`;
+        document.body.innerHTML = block('<a href="#">Edit</a><h4>Icon Symbolizer</h4>' +
+          '<div id="viewport"><canvas width="320" height="240"></canvas><button>Zoom in</button></div>') +
+          block('<p>main.js</p>');
+        document.getElementById('viewport').addEventListener('pointerdown', () => {});
+        "##,
+    )
+    .await;
+    let obs = h.observe().await;
+    let canvas = obs.controls.iter().find(|c| c.label == "canvas").expect("the map is a control");
+    assert_eq!(canvas.context.as_deref(), Some("Icon Symbolizer"), "{:?}", obs.controls);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_map_shapes_and_markers_are_controls_not_drawn_surfaces() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    // Leaflet's map: two unnamed SVG paths, a marker image the page gives role button, and beside them an image that
+    // takes clicks on its pixels as a streamed view does.
+    let pixel = "data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==";
+    eval_active(
+        &h.session,
+        &format!(
+            r#"
+        document.body.innerHTML = '<svg width="300" height="200"><g>' +
+          '<path d="M20 20 h60 v60 h-60 z" fill="red"></path><path d="M150 20 l40 60 h-80 z" fill="blue"></path></g></svg>' +
+          '<img src="{pixel}" alt="Marker" role="button" tabindex="0" width="25" height="41">' +
+          '<img src="{pixel}" alt="Remote view" width="200" height="100">';
+        for (const e of document.querySelectorAll('path, img')) e.addEventListener('click', () => {{}});
+        "#
+        ),
+    )
+    .await;
+    let obs = h.observe().await;
+    let shapes: Vec<_> =
+        obs.controls.iter().filter(|c| c.context.as_deref().is_some_and(|c| c.ends_with("of 2"))).collect();
+    assert_eq!(shapes.len(), 2, "{:?}", obs.controls);
+    assert!(shapes.iter().all(|c| c.pictured == Some(true) && c.drawn.is_none()), "{:?}", obs.controls);
+    let drawn = |label: &str| obs.controls.iter().find(|c| c.label == label).map(|c| c.drawn);
+    assert_eq!(drawn("Marker"), Some(None), "{:?}", obs.controls);
+    assert_eq!(drawn("Remote view"), Some(Some(true)), "{:?}", obs.controls);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_radios_told_apart_only_by_a_painted_swatch_are_pictured() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = '<fieldset><legend>Colour</legend>' + ['red', 'green'].map(colour =>
+          '<label style="display:inline-block;position:relative"><input type="radio" name="c" ' +
+          'style="position:absolute;inset:0;opacity:0;margin:0"><span style="display:inline-block;width:44px;' +
+          'height:44px;background:' + colour + '"></span></label>').join('') + '</fieldset>';
+        "#,
+    )
+    .await;
+    let obs = h.observe().await;
+    let radios: Vec<_> = obs.controls.iter().filter(|c| c.role == "radio").collect();
+    assert_eq!(radios.len(), 2, "{:?}", obs.controls);
+    assert!(radios.iter().all(|c| c.pictured == Some(true)), "{:?}", obs.controls);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fields_of_a_repeated_form_are_not_pictured() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = [0, 1].map(i => `<form><h2>Booking ${i}</h2><label>Name <input></label>` +
+          '<select aria-label="Room"><option>Single</option></select><textarea aria-label="Notes"></textarea></form>')
+          .join('');
+        "#,
+    )
+    .await;
+    let obs = h.observe().await;
+    assert_eq!(obs.controls.iter().filter(|c| c.label == "Name").count(), 2, "{:?}", obs.controls);
+    assert!(obs.controls.iter().all(|c| c.pictured.is_none()), "{:?}", obs.controls);
     h.close().await;
 }
 
@@ -508,5 +623,69 @@ async fn test_every_icon_link_destination_is_observed_whole() {
     let capture = h.page.capture().await.expect("capture");
     assert_eq!(capture.text.matches("Link element DOM metadata").count(), 100);
     assert!(capture.text.contains(&format!("/f/99?k={}", "x".repeat(4000))));
+    h.close().await;
+}
+
+/// A click Jev placed inside a drawn surface lands only on that surface: a point beside it would press an element no
+/// decision chose.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_viewport_click_held_to_a_surface_is_made_only_on_it() {
+    let Some(h) = harness().await else { return };
+    h.page
+        .navigate(
+            "data:text/html,<body style='margin:0'>\
+             <canvas id=map style='position:fixed;left:0;top:0;width:50vw;height:50vh' \
+             onclick='document.title=\"map\"'></canvas>\
+             <button style='position:fixed;right:0;bottom:0;width:20vw;height:20vh' \
+             onclick='document.title=\"delete\"'>Delete</button></body>",
+            None,
+        )
+        .await
+        .expect("navigate");
+    let observation = h.observe().await;
+    let map = observation.controls.iter().find(|c| c.drawn == Some(true)).expect("the canvas is a drawn surface");
+    let beside = h.page.click_viewport(0.9, 0.9, Some(&map.id)).await.expect("asked");
+    assert_eq!(beside.outcome, StepOutcome::Covered);
+    assert_eq!(eval_active(&h.session, "document.title").await, "");
+    let inside = h.page.click_viewport(0.25, 0.25, Some(&map.id)).await.expect("clicked");
+    assert_eq!(inside.outcome, StepOutcome::Executed);
+    assert_eq!(eval_active(&h.session, "document.title").await, "map");
+    h.close().await;
+}
+
+/// Twins whose cards show a picture are marked, and their cards are found in the viewport; twins told apart by text
+/// alone are not.
+#[tokio::test]
+async fn test_twins_told_apart_only_by_a_picture_are_pictured_with_their_cards() {
+    let Some(h) = harness().await else { return };
+    let card = |fill: &str| {
+        format!(
+            "<li style='height:200px'><svg width=100 height=100><circle r=40 cx=50 cy=50 fill={fill} /></svg>\
+             <button>Add</button></li>"
+        )
+    };
+    h.page
+        .navigate(
+            &format!(
+                "data:text/html,<body style='margin:0'><ul style='margin:0'>{}{}</ul>\
+                 <div><p>First note</p><button>Remove</button></div>\
+                 <div><p>Second note</p><button>Remove</button></div></body>",
+                card("red"),
+                card("blue")
+            ),
+            None,
+        )
+        .await
+        .expect("navigate");
+    let observation = h.observe().await;
+    let adds: Vec<String> = observation.controls.iter().filter(|c| c.label == "Add").map(|c| c.id.clone()).collect();
+    assert_eq!(adds.len(), 2);
+    for control in &observation.controls {
+        assert_eq!(control.pictured, (control.label == "Add").then_some(true), "{}", control.label);
+    }
+    let cards = h.page.pictures(&adds).await.expect("cards");
+    assert_eq!(cards.keys().collect::<Vec<_>>(), adds.iter().collect::<Vec<_>>());
+    let (first, second) = (&cards[&adds[0]], &cards[&adds[1]]);
+    assert!(first.top < first.bottom && first.bottom <= second.top && second.top < second.bottom, "{cards:?}");
     h.close().await;
 }

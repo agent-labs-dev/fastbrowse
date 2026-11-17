@@ -319,11 +319,13 @@ def _finding(severity: Literal["refuse", "regress", "advise"], check: str, detai
 def _suite_ids() -> dict[str, tuple[str, ...]]:
     """Every suite this build knows, so a row's suite version can be checked against the tasks it ran."""
     from fastbrowse.evals.mock_tasks import TASKS as MOCK
+    from fastbrowse.evals.mock_tasks import VISUAL_TASKS
     from fastbrowse.evals.tasks import TASKS as LOCAL
 
     known = {name: tuple(task.id for task in tasks) for name, tasks in catalog.SUITES.items()}
     known["local"] = tuple(task.id for task in LOCAL)
     known["mock"] = tuple(task.id for task in MOCK)
+    known["mock-visual"] = tuple(task.id for task in VISUAL_TASKS)
     return known
 
 

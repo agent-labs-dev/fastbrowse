@@ -500,8 +500,18 @@ impl Page for DeskpilotPage {
         })
     }
 
-    fn click_viewport(&self, x: f64, y: f64) -> BoxFuture<'_, PageResult<ActResult>> {
+    /// deskpilot hit-tests no point against a control, so a click held to one is refused.
+    fn click_viewport<'a>(&'a self, x: f64, y: f64, within: Option<&'a str>) -> BoxFuture<'a, PageResult<ActResult>> {
         Box::pin(async move {
+            if within.is_some() {
+                return Ok(ActResult {
+                    outcome: StepOutcome::Covered,
+                    failure: None,
+                    page_changed: false,
+                    detail: Some("deskpilot cannot tell which control a point is on".into()),
+                    moved: false,
+                });
+            }
             let Some(shot) = self.shot.lock().unwrap().clone() else {
                 return Err(BrowserError::ScreenshotsUnavailable("no screenshot of the window was taken".into()));
             };

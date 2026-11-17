@@ -308,6 +308,12 @@ public sealed record CostLine
     /// </summary>
     [JsonPropertyName("physical_requests")]
     public long? PhysicalRequests { get; init; }
+
+    /// <summary>
+    /// Images the call sent as Jev assets; absent for a call that sent none, and on historical receipts.
+    /// </summary>
+    [JsonPropertyName("images")]
+    public long? Images { get; init; }
 }
 
 /// <summary>

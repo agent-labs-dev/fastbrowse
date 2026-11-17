@@ -1,7 +1,7 @@
 # Benchmark
 
 This directory holds the cassettes and results for `src/fastbrowse/evals/bench.py`. The harness runs
-every fixture task (the `local` and `mock` suites) against any program that speaks `fastbrowse serve --stdio`, with
+every fixture task in the `local` and `mock` suites, and the opt-in `mock-visual` suite when named with `--only`, against any program that speaks `fastbrowse serve --stdio`, with
 the model traffic played back from a cassette. It checks two things: given the same model responses, the agent
 reaches the same results, and how much time, CPU and memory it takes to get there.
 

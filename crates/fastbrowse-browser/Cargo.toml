@@ -32,6 +32,7 @@ zip = { version = "9.5.1", default-features = false, features = ["deflate"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0.229", features = ["derive"] }
 # Objects keep insertion order, as Python dicts do: a reply parsed and written back keeps its keys where they were.
+indexmap = { version = "2.14.2", features = ["serde"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
 tokio = { version = "1.54.1", default-features = false, features = ["rt", "net", "time", "macros", "sync", "process", "io-util", "io-std", "fs"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }

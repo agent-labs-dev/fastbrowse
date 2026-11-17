@@ -1,10 +1,14 @@
 """Run the fixture eval suites with real Jev and LLM clients against sites served in a headless Chrome.
 
-    uv run python -m fastbrowse.evals.runner [--suite local mock] [--only TASK_ID ...] [--repeat N] [--out FILE]
+    uv run python -m fastbrowse.evals.runner [--suite SUITE ...] [--only TASK_ID ...] [--repeat N] [--out FILE]
 
-Two suites run here. `local` serves static pages and grades what the site recorded. `mock` serves a stateful site
+Two suites run by default. `local` serves static pages and grades what the site recorded. `mock` serves a stateful site
 with a sign-in, a session and a second step, and grades the site's own state: which account signed in, what was
 posted, whether an order was placed or a password changed.
+
+`mock-visual` runs only when named: its pages say what the task needs only in pixels (pictured products, icon
+buttons, canvas maps and charts), work the agent cannot yet do, so it stays out of the default run and the nightly
+gate.
 
 Each mock task gets a site of its own, so one task's session, basket or order can never decide another's grade.
 
@@ -34,7 +38,7 @@ from fastbrowse.evals.judge import jev_from_environment, judge
 from fastbrowse.evals.local import Recorder, fixture_server
 from fastbrowse.evals.mock import mock_site
 from fastbrowse.evals.mock_tasks import TASKS as MOCK_TASKS
-from fastbrowse.evals.mock_tasks import MockTask
+from fastbrowse.evals.mock_tasks import VISUAL_TASKS, MockTask
 from fastbrowse.evals.status import TIMING_BASIS, normalize
 from fastbrowse.evals.tasks import TASKS, LocalTask
 from fastbrowse.evals.versions import load_lock, provenance, suite_version, task_version
@@ -271,6 +275,7 @@ async def run_mock_task(
     downloads: Path,
     *,
     limits: Limits = MOCK_LIMITS,
+    suite: str = "mock",
 ) -> dict[str, object]:
     """A site of this task's own, so nothing it does can be read by, or decided by, another task's run."""
     with mock_site() as (base_url, site):
@@ -291,7 +296,7 @@ async def run_mock_task(
         return {
             "arm": "fastbrowse",
             "category": "mock",
-            "suite": "mock",
+            "suite": suite,
             "expected_status": task.expect.value,
             "providers": route,
             "events": events,
@@ -309,7 +314,11 @@ async def run_mock_task(
 
 
 def _tasks(only: list[str], suites: list[str]) -> tuple[list[tuple[str, LocalTask | MockTask]], list[str]]:
-    chosen: list[tuple[str, LocalTask | MockTask]] = [("local", t) for t in TASKS] + [("mock", t) for t in MOCK_TASKS]
+    chosen: list[tuple[str, LocalTask | MockTask]] = [
+        *(("local", t) for t in TASKS),
+        *(("mock", t) for t in MOCK_TASKS),
+        *(("mock-visual", t) for t in VISUAL_TASKS),
+    ]
     chosen = [(suite, task) for suite, task in chosen if suite in suites]
     if only:
         chosen = [(suite, t) for suite, t in chosen if t.id in only]
@@ -319,7 +328,8 @@ def _tasks(only: list[str], suites: list[str]) -> tuple[list[tuple[str, LocalTas
 
 def parser() -> argparse.ArgumentParser:
     argument = argparse.ArgumentParser()
-    argument.add_argument("--suite", nargs="+", choices=["local", "mock"], default=["local", "mock"])
+    # `mock-visual` is opt-in: it measures work the agent cannot yet do, so the nightly default leaves it out.
+    argument.add_argument("--suite", nargs="+", choices=["local", "mock", "mock-visual"], default=["local", "mock"])
     # Repeated --only flags accumulate.
     argument.add_argument("--only", nargs="*", action="extend", default=[])
     argument.add_argument("--repeat", type=int, default=1)
@@ -343,7 +353,8 @@ async def main(argv: list[str]) -> int:
         arguments.error("budgeted fixture output already exists; reconcile its receipts before another campaign")
     lock = load_lock()
     stamps = {
-        name: suite_version((t.id for t in tasks), lock) for name, tasks in (("local", TASKS), ("mock", MOCK_TASKS))
+        name: suite_version((t.id for t in tasks), lock)
+        for name, tasks in (("local", TASKS), ("mock", MOCK_TASKS), ("mock-visual", VISUAL_TASKS))
     }
     run = provenance(argv=list(argv))
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -377,7 +388,7 @@ async def main(argv: list[str]) -> int:
                     row = await run_task(task, base_url, recorder, cdp_url, Path(downloads), limits=limits)
                 else:
                     assert isinstance(task, MockTask)
-                    row = await run_mock_task(task, cdp_url, Path(downloads), limits=limits)
+                    row = await run_mock_task(task, cdp_url, Path(downloads), limits=limits, suite=suite)
                 row |= {
                     "run": run
                     | {

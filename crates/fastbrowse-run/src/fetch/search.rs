@@ -213,8 +213,8 @@ impl Page for SearchPage {
             self.inner.screenshot()
         }
     }
-    fn click_viewport(&self, x: f64, y: f64) -> BoxFuture<'_, PageResult<ActResult>> {
-        self.view().click_viewport(x, y)
+    fn click_viewport<'a>(&'a self, x: f64, y: f64, within: Option<&'a str>) -> BoxFuture<'a, PageResult<ActResult>> {
+        self.view().click_viewport(x, y, within)
     }
     fn withhold_frames(&self, withheld: bool) {
         self.inner.withhold_frames(withheld || self.active.load(Ordering::Relaxed));

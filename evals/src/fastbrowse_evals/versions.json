@@ -215,6 +215,18 @@
     "fingerprint": "a2bf16aa87d7b172",
     "version": 6
   },
+  "visual-leaflet-circle": {
+    "fingerprint": "f12a7374953277db",
+    "version": 1
+  },
+  "visual-leaflet-polygon": {
+    "fingerprint": "d5d23a72c59d7d92",
+    "version": 1
+  },
+  "visual-map-marker": {
+    "fingerprint": "e851a2fdcfe426d5",
+    "version": 1
+  },
   "wiki-godel": {
     "fingerprint": "f2917ea4fb0bef54",
     "version": 10
