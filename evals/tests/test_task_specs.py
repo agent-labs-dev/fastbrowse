@@ -57,7 +57,11 @@ def test_an_official_suite_task_starts_at_its_website() -> None:
 def test_a_task_naming_no_page_starts_blank() -> None:
     # BU Bench tasks name no website: the agent begins in a blank browser rather than the trial failing to start.
     task = task_from_record("fastbrowse", record(spec_for("saucedemo-checkout")))
-    blank = task.model_copy(update={"data": {}})
-    assert start_url(blank) is None
-    with pytest.raises(ValueError, match="no start page"):
-        secrets_origin(blank)
+    assert start_url(task.model_copy(update={"data": {}})) is None
+
+
+def test_a_login_is_typed_only_on_the_site_it_declares() -> None:
+    task = task_from_record("fastbrowse", record(spec_for("expandtesting-login")))
+    assert secrets_origin(task) == "https://practice.expandtesting.com"
+    with pytest.raises(ValueError, match="declares no login_origin"):
+        secrets_origin(task.model_copy(update={"data": {}}))
