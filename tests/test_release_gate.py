@@ -4,6 +4,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -100,6 +101,7 @@ def test_run_rows_keeps_two_groups_whose_runs_share_a_run_id(monkeypatch, tmp_pa
     monkeypatch.syspath_prepend(str(Path(__file__).parent.parent / "evals" / "src"))
     import fastbrowse_evals.publication as publication
     from parallax.models import Verdict
+    from parallax.track.rows import LoadedRun
 
     class TemporaryDirectory:
         def __enter__(self):
@@ -115,13 +117,10 @@ def test_run_rows_keeps_two_groups_whose_runs_share_a_run_id(monkeypatch, tmp_pa
         repeat = 0
         verdict = Verdict.PASS
 
-    class Loaded:
-        def __init__(self, path):
-            self.path = path
-            self.results = (Result(),)
-
-        def physical_runs(self, _key):
-            return self.results
+    def loaded(path):
+        # Only the fields the gate reads; the real class still checks the attribute names it uses.
+        trials = cast(Any, (Result(),))
+        return LoadedRun(path=Path(path), manifest=cast(Any, {}), results=trials, attempts=trials)
 
     class Projected:
         def __init__(self, path):
@@ -141,9 +140,9 @@ def test_run_rows_keeps_two_groups_whose_runs_share_a_run_id(monkeypatch, tmp_pa
 
     monkeypatch.setattr(gate.tempfile, "TemporaryDirectory", lambda: TemporaryDirectory())
     monkeypatch.setattr(gate, "_gh", lambda *args: "")
-    monkeypatch.setattr("parallax.track.rows.load_run", lambda path: Loaded(path))
+    monkeypatch.setattr("parallax.track.rows.load_run", loaded)
     monkeypatch.setattr(publication, "public_arm", lambda result: "fastbrowse")
-    monkeypatch.setattr(publication, "trial_result_to_row", lambda result, attempts: Projected(attempts[0]))
+    monkeypatch.setattr(publication, "trial_result_to_row", lambda result, attempts: Projected(attempts))
 
     rows = gate.run_rows("owner/repo", 1)
 
