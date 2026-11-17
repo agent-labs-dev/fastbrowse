@@ -459,7 +459,8 @@ def test_a_competitor_measured_later_by_another_runner_joins_the_candidate(tmp_p
                         "harness": harness,
                         "model": model,
                         "verdict": Verdict.NA,
-                        "na_reason": catalog[task_id].excluded.get(harness),
+                        # Parallax names only the capability the harness lacks; the catalog's reason is published.
+                        "na_reason": "requires credentials",
                     }
                 )
                 .model_dump_json()
@@ -483,6 +484,12 @@ def test_a_competitor_measured_later_by_another_runner_joins_the_candidate(tmp_p
     assert (group.agent_sha, group.runner_sha) == ("c" * 40, "d" * 40)
     assert {source.arm for source in group.sources} == {"fastbrowse", "browser-use-oss"}
     assert {row.status for row in group.rows if row.arm == "browser-use-oss"} == {"complete"}
+    assert {(e.arm, e.task): e.reason for e in group.excluded} == {
+        ("browser-use-oss", task_id): catalog[task_id].excluded["browser-use-oss"]
+        for task_id in task_ids
+        if not eligible("browser-use-oss", catalog[task_id])
+    }
+    check_catalog(candidate, CATALOG_PATH)
 
 
 def test_an_arm_on_a_model_pinning_harness_names_its_model() -> None:
@@ -492,3 +499,48 @@ def test_an_arm_on_a_model_pinning_harness_names_its_model() -> None:
     (oss,) = invocations(["browser-use-oss"])
     assert load_harness(oss.harness).info.pins_model
     assert (oss.harness, oss.model) == ("browser-use-oss", "bu-fast")
+
+
+def test_a_changed_task_drops_only_its_own_earlier_rows(tmp_path: Path) -> None:
+    tasks = [task for suite in CATALOG.suites.values() for task in suite]
+    source_task_map = {task.id: task for task in source_tasks(source_names=("fastbrowse",))}
+    changed = tasks[0].id
+
+    def fastbrowse_run(name: str, day: int, task_ids: list[str], *, stale: str | None = None) -> Path:
+        hashes = {t: ("0" * 64 if t == stale else source_task_map[t].hash) for t in task_ids}
+        run = tmp_path / name
+        run.mkdir()
+        manifest = RunManifest(
+            run_id=name,
+            created_at=datetime(2026, 11, day, tzinfo=UTC),
+            parallax_version="2.0.0.dev32",
+            harnesses=(),
+            models=("test/model",),
+            tasks=tuple(hashes.items()),
+            repeats=3,
+            judge=("test/judge",),
+            isolation=Isolation.HOST,
+            selection="fastbrowse",
+            grading_policy="browser-evidence-v2",
+        )
+        (run / "manifest.json").write_text(manifest.model_dump_json() + "\n")
+        (run / "results.jsonl").write_text(
+            "".join(
+                result(t, repeat, task_hash=hashes[t], task_version=source_task_map[t].meta.version).model_dump_json()
+                + "\n"
+                for t in task_ids
+                for repeat in range(3)
+            )
+        )
+        _support(run, manifest)
+        return run
+
+    earlier = fastbrowse_run("earlier", 14, [task.id for task in tasks], stale=changed)
+    # The changed task's earlier rows no longer count, so the run alone leaves its slots unmeasured.
+    with pytest.raises(ValueError, match="every scheduled slot"):
+        candidate_from_runs([earlier], campaign_id="changed-task")
+
+    rerun = fastbrowse_run("rerun", 16, [changed])
+    candidate = candidate_from_runs([earlier, rerun], campaign_id="changed-task")
+    assert len(candidate.groups[0].rows) == len(tasks) * 3
+    check_catalog(candidate, CATALOG_PATH)

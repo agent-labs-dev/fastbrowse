@@ -16,7 +16,8 @@ def test_a_login_task_names_its_secret_variables_and_needs_protected_credentials
         "username": "FASTBROWSE_EVAL_SAUCEDEMO_USERNAME",
         "password": "FASTBROWSE_EVAL_SAUCEDEMO_PASSWORD",
     }
-    assert {Capability.CREDENTIALS, Capability.AUTHORIZATION} <= login.requires
+    assert Capability.CREDENTIALS in login.requires
+    assert login.authorizes and Capability.AUTHORIZATION not in login.requires
     assert task_from_record("fastbrowse", login).secrets == login.secrets
 
 

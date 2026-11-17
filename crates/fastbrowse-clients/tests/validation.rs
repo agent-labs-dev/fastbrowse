@@ -383,8 +383,13 @@ async fn test_split_cancellation_retains_answered_and_cancelled_costs_once() {
 }
 
 #[tokio::test]
-async fn image_cancellation_keeps_a_context_bound_without_inventing_tokens() {
-    for (long_context, unpriced) in [(false, false), (true, false), (true, true)] {
+async fn image_cancellation_charges_the_text_it_sent_instead_of_the_whole_context() {
+    // A cancelled call loses its own usage, so its input is estimated from the request it dispatched. An image travels
+    // as base64, which is not its token count, so the estimate prices the text and leaves the picture out. It used to
+    // record a bound on the route's whole context window instead, and hosted never bills a bound, so a call we paid for
+    // went unbilled on about 16% of hosted runs (#1171).
+    let mut estimates = Vec::new();
+    for (long_context, unpriced, bytes) in [(false, false, 1), (true, false, 300_000), (true, true, 300_000)] {
         let script = Script::new([common::Step::Cancel]);
         let trace = Trace::collecting();
         let mut client = SystemOneClient::new("key", script.traced(&trace), TYPESAFE_URL, JEV_MODEL).images();
@@ -395,28 +400,34 @@ async fn image_cancellation_keeps_a_context_bound_without_inventing_tokens() {
             client = client.unpriced();
         }
         let paid = Paid::default();
-        let images = Images::from([("viewport".into(), vec![0; 300_000])]);
+        let images = Images::from([("viewport".into(), vec![0; bytes])]);
         let page = json!({"screenshot": "viewport"});
         let questions = one();
         tokio::select! {
             _ = jev_spend(Lines::Paid(paid.clone()), None, jev_purpose(JevPurpose::Locate, client.evaluate_images(&page, &questions, &images))) => panic!("cancelled"),
             _ = script.cancel.notified() => {}
         }
+        let body = script.bodies().remove(0);
+        assert!(dumps(&body["assets"]).len() > bytes, "the image is in the body the request sent");
         let costs = paid.lines();
         assert_eq!(costs.len(), 1);
         assert_eq!(costs[0].decision_purpose, Some(JevPurpose::Locate));
         assert_eq!(events(&trace, "cancelled_request_cost")[0]["decision_purpose"], "locate");
         assert_eq!(events(&trace, "call")[0]["decision_purpose"], "locate");
-        assert_eq!(costs[0].input_tokens, 0);
+        assert_ne!(costs[0].input_tokens, 0);
         if unpriced {
             assert_eq!(costs[0].basis, CostBasis::Unknown);
             assert_eq!(costs[0].dollars, None);
-        } else {
-            assert_eq!(costs[0].basis, CostBasis::Bounded);
-            let context = if long_context { 262_144 } else { 64_000 };
-            assert_eq!(costs[0].dollars, Some(context as f64 * JEV_DOLLARS_PER_INPUT_TOKEN));
+            continue;
         }
+        assert_eq!(costs[0].basis, CostBasis::Estimated);
+        assert_eq!(costs[0].dollars, Some(costs[0].input_tokens as f64 * JEV_DOLLARS_PER_INPUT_TOKEN));
+        estimates.push(costs[0].input_tokens);
     }
+    // 300KB of base64 is not 100k tokens: the estimate holds at the size of the text the request carried.
+    assert_eq!(estimates.len(), 2);
+    assert_eq!(estimates[0], estimates[1]);
+    assert!(estimates[1] < 1_000, "a 300KB image must not be priced as its bytes: {estimates:?}");
 }
 
 #[tokio::test]
