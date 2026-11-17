@@ -496,9 +496,9 @@ def test_an_arm_on_a_model_pinning_harness_names_its_model() -> None:
     """Parallax refuses to plan a harness that pins a model without one, so an arm run alone must carry it."""
     from parallax.harnesses.base import load_harness
 
-    (oss,) = invocations(["browser-use-oss"])
-    assert load_harness(oss.harness).info.pins_model
-    assert (oss.harness, oss.model) == ("browser-use-oss", "bu-fast")
+    cloud, oss = invocations(["browser-use", "browser-use-oss"])
+    assert load_harness(cloud.harness).info.pins_model and load_harness(oss.harness).info.pins_model
+    assert (cloud.model, oss.model) == ("bu-4.0", "bu-4.0")
 
 
 def test_a_changed_task_drops_only_its_own_earlier_rows(tmp_path: Path) -> None:

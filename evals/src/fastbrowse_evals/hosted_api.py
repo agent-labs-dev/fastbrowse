@@ -239,6 +239,7 @@ class FastbrowseHostedHarness(BrowserHarness):
             raise RuntimeError("fastbrowse-hosted harness has no task")
         async with httpx.AsyncClient() as http:
             run, wall = await submit_and_wait(http, self._task, turn.text)
+        self._agent_finished()
         self._product_status = _product_status(status_of(run))
         fields = report_fields(run, wall)
         components = fields.get("components") or {}

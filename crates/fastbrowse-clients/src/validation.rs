@@ -746,7 +746,7 @@ tokio::task_local! {
     static PURPOSE: JevPurpose;
 }
 
-fn current_jev_purpose() -> Option<JevPurpose> {
+pub(crate) fn current_jev_purpose() -> Option<JevPurpose> {
     PURPOSE.try_with(|purpose| *purpose).ok()
 }
 
@@ -853,6 +853,11 @@ impl JevSpend {
 
     pub async fn scope<F: Future>(self, future: F) -> F::Output {
         SPEND.scope(self, future).await
+    }
+
+    /// The ledger a request in this scope is priced against.
+    pub(crate) fn ledger(&self) -> Option<Arc<Ledger>> {
+        self.0.ledger.clone()
     }
 
     /// `record_jev_spend`.

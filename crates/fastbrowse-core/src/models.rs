@@ -496,6 +496,8 @@ str_enum! {
         Search = "search",
         Unobtainable = "unobtainable",
         Groups = "groups",
+        /// The next browser action, picked by the LLM in place of Jev (FASTBROWSE_ACTION_PICKER=llm).
+        Action = "action",
     }
 }
 

@@ -727,7 +727,8 @@
         "recovery_pages",
         "search",
         "unobtainable",
-        "groups"
+        "groups",
+        "action"
       ],
       "title": "LLMPurpose",
       "type": "string"
