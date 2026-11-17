@@ -68,10 +68,6 @@ pub struct ComposedAnswer {
     /// A composed claim lacked support, or its support could not be judged.
     #[serde(skip)]
     pub problem: Option<String>,
-    /// What the composer said its answer leaves unestablished of what the task asks, such as a total over a list it
-    /// saw continue unread. A run whose answer is partial is never complete.
-    #[serde(skip)]
-    pub partial: Option<String>,
 }
 
 impl Schema for Claim {
@@ -149,7 +145,6 @@ pub fn assemble_answer(claims: &[Claim], notes: &Notes, steps: &[Value]) -> Comp
         linked_answer: linked.join("\n\n"),
         claims: claims.to_vec(),
         problem: None,
-        partial: None,
         citations: known.into_values().collect(),
     }
 }
@@ -163,9 +158,6 @@ struct AnswerDraft {
     /// The task asks for a numbered list, which code numbers in the order the claims are written.
     #[serde(default)]
     numbered: bool,
-    /// What the answer leaves unestablished of what the task asks, when it is partial.
-    #[serde(default)]
-    partial: Option<String>,
 }
 
 impl Schema for AnswerDraft {
@@ -176,16 +168,17 @@ impl Schema for AnswerDraft {
                 Field::required("claims", Ty::list(DraftClaim::ty())),
                 Field::default("columns", Ty::optional(Ty::list(Ty::Str)), serde_json::Value::Null),
                 Field::default("numbered", Ty::Bool, false),
-                Field::default("partial", Ty::optional(Ty::Str), serde_json::Value::Null),
             ],
         )
         .ty()
     }
 }
 
-/// What the composer wrote: the columns when the task asks for a table, whether it asks for a numbered list, the claims,
-/// and what the answer leaves unestablished when it is partial.
-type Drafted = (Option<Vec<String>>, bool, Vec<BoundClaim>, Option<String>);
+/// What the composer wrote: the columns when the task asks for a table, whether it asks for a numbered list, and the
+/// claims. Whether the answer leaves out what the task asks is judged by Jev's coverage question and by code's list
+/// extent, never by the composer: asked for the most expensive product after sorting by price descending, it called
+/// page 1 of 3 partial in 1 of 3 runs that Jev's coverage passed at 0.96, and the run ended unverified (#1194).
+type Drafted = (Option<Vec<String>>, bool, Vec<BoundClaim>);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -744,7 +737,7 @@ impl ComposeItem {
 
 // Told only "self-contained", the composer split a price off its record as "It costs £56.88.", which its support
 // check, judging that claim alone, rightly failed (6 of 10 first drafts; 0 of 15 once told how claims are checked).
-const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Each claim is checked alone, against only the notes it cites and without the other claims, so it names the record its values belong to instead of referring back to a record another claim named. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself, and every number in digits. For a count, total, minimum or maximum across records, whether found by comparing values or by the order a list is sorted in, set tally to its op (count, sum, min or max), of (the kind of record it ranges over, with the scope the task gives it, such as \"quote by Albert Einstein\" or \"book in the Mystery category\"), field (the value added or compared, such as \"price\"; null for a count), rank (for a place after the extreme, such as 2 for the second cheapest, with op min; null otherwise) and written (the initial value and format of its computed part, such as \"$14.99\" for a price; for a claim that answers which record is at a minimum or maximum without its field value, the record's name). A task that asks for several places, such as the two cheapest, gets one claim per place, each with its own tally. A claim stating how many records one group has, or a group's place by how many it has, such as the author with the most quotes, is a count per group: set op count, of the kind of record without the group (\"quote\"), by the field that groups them (\"author\"), group (the one this claim counts, as the notes write it) and rank (its place by count, 1 for the most, or null when the claim states none), one claim per group; code reads every record's group from its note. Otherwise set by and group null. Code works the value out from every note read, fills the computed part and cites the records. Source parts never supply that computed part: every tally also includes its own computed part, even when the source writes the same value. A claim that repeats a single note's own value without asserting an aggregate, such as a page's own total of results, has tally null; so does every claim that works nothing out. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. Say an answer is partial only when a requested value is not established or a note itself shows part of what the task covers was not reached, never because the notes might lack something, and then set partial to what it leaves unestablished, in a few words; otherwise set partial to null. When the task asks for a table, set columns to its column names and make each claim one row: set cells to its values in column order, which code writes as the claim's text. Otherwise set columns and cells to null. When the task asks for a numbered list, set numbered and write no number in any claim: a claim's place among the others is not in the notes it cites, so code numbers the claims in the order written. Otherwise set numbered to false.\n\n";
+const COMPOSER: &str = "# Composer\nWrite the answer to the task as self-contained plain-text claims in reading order, each citing the evidence_ids of the notes it rests on. Each claim is checked alone, against only the notes it cites and without the other claims, so it names the record its values belong to instead of referring back to a record another claim named. Answer only what the task asks to be told: a step the task asks to be carried out stays out of the answer unless the task asks to be told about it. Write every value the task asks for in the claim text itself, and every number in digits. For a count, total, minimum or maximum across records, whether found by comparing values or by the order a list is sorted in, set tally to its op (count, sum, min or max), of (the kind of record it ranges over, with the scope the task gives it, such as \"quote by Albert Einstein\" or \"book in the Mystery category\"), field (the value added or compared, such as \"price\"; null for a count), rank (for a place after the extreme, such as 2 for the second cheapest, with op min; null otherwise) and written (the initial value and format of its computed part, such as \"$14.99\" for a price, in which form code writes the computed part, so prose beside it never repeats a unit written there; for a claim that answers which record is at a minimum or maximum without its field value, the record's name). A task that asks for several places, such as the two cheapest, gets one claim per place, each with its own tally. A claim stating how many records one group has, or a group's place by how many it has, such as the author with the most quotes, is a count per group: set op count, of the kind of record without the group (\"quote\"), by the field that groups them (\"author\"), group (the one this claim counts, as the notes write it) and rank (its place by count, 1 for the most, or null when the claim states none), one claim per group; code reads every record's group from its note. Otherwise set by and group null. Code works the value out from every note read, fills the computed part and cites the records. Source parts never supply that computed part: every tally also includes its own computed part, even when the source writes the same value. A claim that repeats a single note's own value without asserting an aggregate, such as a page's own total of results, has tally null; so does every claim that works nothing out. Do not claim what the notes do not evidence: state what remains unsupported instead of supplying a related value. Write what the notes show as what was found, and never mention the notes. When the task asks for a table, set columns to its column names and make each claim one row: set cells to its values in column order, which code writes as the claim's text. Otherwise set columns and cells to null. When the task asks for a numbered list, set numbered and write no number in any claim: a claim's place among the others is not in the notes it cites, so code numbers the claims in the order written. Otherwise set numbered to false.\n\n";
 
 const DESCRIPTIVE_VALUES: &str = "Interpret the requested field by its meaning, not by literal labels in the source. A value stated in descriptive prose counts even when no heading names that field. A statement that a value is not shown contradicts such a value. Use only a value stated by the description, including equivalent wording; do not infer a value from a merely related detail.";
 
@@ -865,8 +858,7 @@ async fn compose_part(
         .map(|claim| claim.bind(items))
         .collect::<std::result::Result<_, _>>()
         .map_err(LLMError::Failed)?;
-    let partial = draft.partial.map(|partial| text::strip(&partial).to_string()).filter(|partial| !partial.is_empty());
-    Ok((columns, draft.numbered, claims, partial))
+    Ok((columns, draft.numbered, claims))
 }
 
 /// How much composing a packing still needs: its requests, then the bytes of the notes they carry. A round may shorten
@@ -943,29 +935,25 @@ async fn compose_packed(
         let mut claims = Vec::new();
         let mut columns = None;
         let mut numbered = false;
-        let mut partial = None;
         for part in &parts {
-            let (part_columns, part_numbered, part_claims, part_partial) =
-                compose_part(llm, task, part, ledger).await?;
+            let (part_columns, part_numbered, part_claims) = compose_part(llm, task, part, ledger).await?;
             columns = columns.or(part_columns);
             numbered |= part_numbered;
             claims.extend(part_claims);
-            partial = part_partial;
         }
-        // A part sees only its own notes, so only a request that saw them all says whether the answer is partial; an
-        // answer that never reduced to one is unverified for that already.
+        // An answer that never reduced to one request is unverified for that already.
         if parts.len() == 1 {
-            return Ok(((columns, numbered, claims, partial), true));
+            return Ok(((columns, numbered, claims), true));
         }
         // Rewording a lone claim cannot recover the notes other requests omitted.
         if claims.len() <= 1 {
-            return Ok(((columns, numbered, claims, None), false));
+            return Ok(((columns, numbered, claims), false));
         }
         let Some(next) = pack_compositions(task, &claims, limit) else {
-            return Ok(((columns, numbered, claims, None), false));
+            return Ok(((columns, numbered, claims), false));
         };
         if packed_size(&next) >= packed_size(&parts) {
-            return Ok(((columns, numbered, claims, None), false));
+            return Ok(((columns, numbered, claims), false));
         }
         parts = next;
     }
@@ -1025,7 +1013,7 @@ pub(crate) async fn compose_reviewed(
     let writing_task = writing_task.as_str();
     let written: Vec<String> = items.iter().map(ComposeItem::written).collect();
     let messages = compose_messages(writing_task, &written);
-    let ((columns, numbers, claims, partial), reduced) = match llm.context_tokens(LLMPurpose::Compose).await {
+    let ((columns, numbers, claims), reduced) = match llm.context_tokens(LLMPurpose::Compose).await {
         Some(context) if estimated_context_bytes(&messages) > context_limit(context)? => {
             compose_packed(llm, writing_task, items, context_limit(context)?, ledger).await?
         }
@@ -1040,20 +1028,8 @@ pub(crate) async fn compose_reviewed(
     // A composed answer is held to what the task asks to be told as a pick is: a source part inserts its note's
     // entire text, and unchecked, a whole release record of 16 fields stood in for "httpx", and a rewrite repeated
     // "The site received the file Received stocktake.txt (34 bytes)." after that check rejected it.
-    let reviewed = review_composition(
-        jev,
-        llm,
-        task,
-        columns.as_deref(),
-        claims,
-        notes,
-        ledger,
-        reports,
-        true,
-        partial.as_deref(),
-        steps,
-    )
-    .await?;
+    let reviewed =
+        review_composition(jev, llm, task, columns.as_deref(), claims, notes, ledger, reports, true, steps).await?;
     let CheckedClaims { claims, problem, rejection, denies_steps } = reviewed;
     let claims = if numbers { numbered(claims) } else { claims };
     if !reports {
@@ -1065,7 +1041,7 @@ pub(crate) async fn compose_reviewed(
     // Each claim was still judged against its quotes, but a count or comparison across requests is not established.
     let problem = problem.or_else(|| (!reduced).then(|| UNREDUCED.to_string()));
     Ok(ReviewedComposition {
-        answer: tabled(columns, ComposedAnswer { problem, partial, ..assemble_answer(&claims, notes, steps) }),
+        answer: tabled(columns, ComposedAnswer { problem, ..assemble_answer(&claims, notes, steps) }),
         rejection: reduced.then_some(rejection).flatten(),
     })
 }
@@ -1168,7 +1144,6 @@ async fn review_claims(
         ledger,
         require_coverage,
         false,
-        None,
         steps,
     )
     .await
@@ -1185,19 +1160,17 @@ async fn review_composition(
     ledger: Option<&Ledger>,
     require_coverage: bool,
     exact: bool,
-    partial: Option<&str>,
     steps: &[Value],
 ) -> Result<CheckedClaims> {
     if claims.is_empty() {
-        // A writer can name missing evidence without making any claim. That shortfall still belongs in recovery,
-        // as it does for a partial draft with supported claims, rather than disappearing at this early return.
-        let rejection = partial.filter(|_| require_coverage).map(|partial| {
+        // A draft with no claim gives none of what the task asks to be told, so it fails coverage without asking and
+        // goes to recovery: one with no claims ended unverified after one navigation, with no recovery (#1160).
+        let rejection = require_coverage.then(|| {
             dumps(&json!({
                 "columns": columns,
                 "draft_claims": [],
                 "drafted_claims": [],
                 "rejected_checks": ["coverage"],
-                "partial": partial,
             }))
         });
         return Ok(CheckedClaims {
@@ -1501,11 +1474,6 @@ async fn review_composition(
     let mut rejected_checks: Vec<_> = questions.keys().filter(|key| holds(key) == Some(false)).cloned().collect();
     rejected_checks.extend(uncited.iter().map(|claim| format!("claim{}/citations", claim["claim"])));
     rejected_checks.extend(untallied.iter().map(|claim| format!("claim{}/tally", claim["claim"])));
-    // The composer already marks missing coverage as incomplete. Give that same shortfall to recovery instead of
-    // ending immediately, even when the separate coverage check accepted the claims it did write.
-    if require_coverage && partial.is_some() && !rejected_checks.iter().any(|check| check == "coverage") {
-        rejected_checks.push("coverage".into());
-    }
     let coverage = !require_coverage || holds("coverage") == Some(true);
     let only_asked = !questions.contains_key("exact") || holds("exact") == Some(true);
     // A contradiction of the run's own steps cannot be pinned to one claim, so none is shown unless the answer agrees.
@@ -1523,9 +1491,6 @@ async fn review_composition(
         "drafted_within": drafted_within,
         "rejected_checks": rejected_checks,
     });
-    if let Some(partial) = partial {
-        feedback["partial"] = json!(partial);
-    }
     if !uncited.is_empty() {
         feedback["uncited_claims"] = json!(uncited);
     }
@@ -1735,7 +1700,8 @@ fn tally_checks(tally: &Tally, text: &str, winners: &[serde_json::Value]) -> Vec
     // reads as needing both, so Jev says which it states. A record is named by its own details, which the record
     // check below judges.
     let named = format!(
-        "{COMPUTED} stands for the {side} {field}, worked out from the records. The record may be named by what its own note says, such as its name, number or item."
+        "{COMPUTED} stands for the {side} {field}, worked out from the records and written in the form of {}. The record may be named by what its own note says, such as its name, number or item.",
+        text::repr(&tally.written)
     );
     let mut stated = IndexMap::new();
     stated.insert("value".into(), json!(format!("Only the {side} {field}.")));
@@ -2248,69 +2214,6 @@ mod tests {
             claims,
             citations: Vec::new(),
             problem: None,
-            partial: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn a_computed_slot_cannot_be_relabelled_by_adjacent_prose() {
-        let notes = Notes::new([fact(0, "record £210".into())]);
-        let items = initial_items(&notes, false);
-        let draft = json!({"evidence_ids":[],"tally":{"op":"max","of":"record","field":"price","written":"1"},"text":[{"prose":"$"},{"computed":true}]});
-        let claim = serde_json::from_value::<DraftClaim>(draft).unwrap().bind(&items).unwrap();
-        let checked = review_composition(
-            &Tallying::new("record", "£210"),
-            &READS,
-            "Report the highest price",
-            None,
-            vec![claim],
-            &notes,
-            None,
-            false,
-            false,
-            None,
-            &[],
-        )
-        .await
-        .unwrap();
-        assert!(checked.problem.is_some(), "wrong-unit claim escaped as {:?}", checked.claims);
-    }
-
-    #[tokio::test]
-    async fn numeric_slot_context_keeps_source_digits_and_checks_prose_and_cells() {
-        let notes = Notes::new([fact(0, "record £210".into())]);
-        let items = initial_items(&notes, false);
-        for table in [false, true] {
-            for prefix in ["$", "USD ", "-", "0", "1", "é £"] {
-                let parts =
-                    json!([{"note":"e0","quoted":true},{"prose":format!("; maximum: {prefix}")},{"computed":true}]);
-                let mut draft = json!({"evidence_ids":[],"tally":{"op":"max","of":"record","field":"price","written":"1"},"text":parts});
-                if table {
-                    draft["cells"] = json!([draft["text"].clone()]);
-                }
-                let claim = serde_json::from_value::<DraftClaim>(draft).unwrap().bind(&items).unwrap();
-                let checked = review_composition(
-                    &Tallying::new("record", "£210"),
-                    &READS,
-                    "Report the source and maximum price",
-                    None,
-                    vec![claim],
-                    &notes,
-                    None,
-                    false,
-                    false,
-                    None,
-                    &[],
-                )
-                .await
-                .unwrap();
-                if prefix == "é £" {
-                    assert!(checked.problem.is_none(), "{prefix} table={table}: {:?}", checked.problem);
-                    assert_eq!(checked.claims[0].text, "\"record £210\"; maximum: é £210");
-                } else {
-                    assert!(checked.problem.is_some(), "{prefix} table={table}: {:?}", checked.claims);
-                }
-            }
         }
     }
 
@@ -2330,7 +2233,6 @@ mod tests {
             None,
             false,
             false,
-            None,
             &[],
         )
         .await
@@ -2959,7 +2861,6 @@ mod tests {
             None,
             false,
             true,
-            None,
             &[],
         )
         .await
@@ -3008,9 +2909,8 @@ mod tests {
         );
         let jev = Tallying::new("Galaxy", "1399.00|1299.00");
         let task = "Tell me the most expensive Samsung phone and its price";
-        let checked = review_composition(&jev, &READS, task, None, vec![bound], &notes, None, false, false, None, &[])
-            .await
-            .unwrap();
+        let checked =
+            review_composition(&jev, &READS, task, None, vec![bound], &notes, None, false, false, &[]).await.unwrap();
         assert!(checked.claims.is_empty(), "{:?}", checked.claims);
         let rejection = format!("{:?} {:?}", checked.problem, checked.rejection);
         assert!(
@@ -3024,9 +2924,8 @@ mod tests {
         let tally = tallied("", "a", Op::Max, "Samsung phone", Some("price"), vec![]).tally;
         let bound = bind_claim(&items, json!([{"computed":true}, {"prose": " has the highest price."}]), tally);
         let jev = Tallying::new("Galaxy", "1399.00|1299.00");
-        let checked = review_composition(&jev, &READS, task, None, vec![bound], &notes, None, false, false, None, &[])
-            .await
-            .unwrap();
+        let checked =
+            review_composition(&jev, &READS, task, None, vec![bound], &notes, None, false, false, &[]).await.unwrap();
         let rejection = format!("{:?} {:?}", checked.problem, checked.rejection);
         assert!(!rejection.contains("names the record already"), "{rejection}");
     }
@@ -3152,7 +3051,6 @@ mod tests {
             None,
             true,
             false,
-            None,
             &[],
         )
         .await
@@ -4132,7 +4030,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_empty_partial_draft_keeps_its_missing_coverage_for_recovery() {
+    async fn an_empty_draft_fails_coverage_and_goes_to_recovery() {
         let notes = Notes::new([fact(0, "Inspection records continue on another page.".into())]);
         for require_coverage in [true, false] {
             let jev = Support::new(true);
@@ -4146,7 +4044,6 @@ mod tests {
                 None,
                 require_coverage,
                 true,
-                Some("The remaining inspection results"),
                 &[],
             )
             .await
@@ -4157,7 +4054,6 @@ mod tests {
                 let feedback: Value =
                     serde_json::from_str(checked.rejection.as_deref().expect("coverage recovery")).unwrap();
                 assert_eq!(feedback["rejected_checks"], json!(["coverage"]));
-                assert_eq!(feedback["partial"], "The remaining inspection results");
                 assert_eq!(feedback["draft_claims"], json!([]));
             } else {
                 assert!(checked.rejection.is_none());
@@ -4312,9 +4208,7 @@ mod tests {
                 serde_json::from_value(json!({"evidence_ids": ["e0"], "text": text, "tally": null})).unwrap();
             let bound = draft.bind(&items).unwrap();
             let checked =
-                review_composition(&jev, &READS, task, None, vec![bound], &notes, None, true, true, None, &[])
-                    .await
-                    .unwrap();
+                review_composition(&jev, &READS, task, None, vec![bound], &notes, None, true, true, &[]).await.unwrap();
             assert_eq!(jev.asked.lock().unwrap().iter().any(|questions| questions.contains_key("exact")), asked);
             if asked {
                 let batches = jev.asked.lock().unwrap();
@@ -4463,7 +4357,7 @@ mod tests {
         let notes = Notes::new([fact(0, "Record B: 34".into())]);
         let mut llm = RecordingLlm::new(None);
         llm.columns = Some(vec![]);
-        let (columns, _, _, _) = compose_part(&llm, "Report B", &initial_items(&notes, false), None).await.unwrap();
+        let (columns, _, _) = compose_part(&llm, "Report B", &initial_items(&notes, false), None).await.unwrap();
         assert_eq!(columns, None);
     }
 
@@ -4726,6 +4620,15 @@ mod tests {
 
     /// A task that asks for its answer as JSON had a complete answer rejected as missing what it asks for, since code
     /// writes every answer as claims (#898).
+    /// Completeness is Jev's coverage question and code's list extent: offered a field to call its own answer partial,
+    /// the composer called a price-descending page 1 of 3 partial after Jev's coverage passed it at 0.96 (#1194).
+    #[test]
+    fn the_composer_is_not_asked_whether_its_answer_is_partial() {
+        let schema = fastbrowse_core::schema::json_schema(&AnswerDraft::ty()).to_string();
+        assert!(!schema.contains("\"partial\""), "{schema}");
+        assert!(!COMPOSER.contains("partial"), "{COMPOSER}");
+    }
+
     #[test]
     fn coverage_question_says_the_form_a_task_asks_for_is_not_judged() {
         let Question::Noul(coverage) = coverage_question(

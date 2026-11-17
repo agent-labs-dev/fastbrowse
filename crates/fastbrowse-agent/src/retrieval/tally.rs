@@ -1012,30 +1012,6 @@ fn amount(written: &str) -> Option<Amount> {
     Some(Amount { value, places, unit, written: trimmed.to_string(), date: false, malformed_unit })
 }
 
-/// A currency may sit outside the computed slot, so validate the whole amount containing it before replacement.
-fn claim_amount(claim: &str, written: &str, slot: Option<&std::ops::Range<usize>>) -> Option<Amount> {
-    let range = slot.cloned().or_else(|| claim.find(written).map(|start| start..start + written.len()))?;
-    if claim.get(range.clone()) != Some(written) {
-        return None;
-    }
-    for candidate in number_candidates(claim) {
-        for (start, _) in claim.match_indices(&candidate) {
-            let end = start + candidate.len();
-            if start > range.start || end < range.end {
-                continue;
-            }
-            let before = &claim[start..range.start];
-            let after = &claim[range.end..end];
-            // Leaving digits or an arithmetic sign outside the slot would preserve part of the obsolete number.
-            if before.chars().chain(after.chars()).any(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '+' | '-')) {
-                return None;
-            }
-            return amount(&candidate);
-        }
-    }
-    None
-}
-
 /// The total after compatibility checks, retaining its currency unit and greatest decimal precision.
 fn total(amounts: &[&Amount]) -> String {
     let places = amounts.iter().map(|amount| amount.places).max().unwrap_or(0);
@@ -1417,7 +1393,7 @@ pub(super) async fn work_selected_with_slots(
     }
     let repeated = ask(jev, &state, &repeats, tokens, ledger).await?;
     let mut pending = Vec::new();
-    for (index, tally, claim, _) in claims {
+    for (index, tally, _, _) in claims {
         if worked.contains_key(index) {
             continue;
         }
@@ -1456,7 +1432,7 @@ pub(super) async fn work_selected_with_slots(
             worked.insert(*index, Err(Unworked::Draft(reason)));
             continue;
         }
-        pending.push((*index, *tally, *claim, kept));
+        pending.push((*index, *tally, kept));
     }
     for (index, tally, _, _) in claims {
         let Some((by, group)) = tally.grouped() else { continue };
@@ -1472,7 +1448,7 @@ pub(super) async fn work_selected_with_slots(
         };
         worked.insert(*index, result);
     }
-    for (index, tally, claim, kept) in pending {
+    for (index, tally, kept) in pending {
         let basis = kept.cited(kept.records.iter().copied(), &found);
         let mut records = kept.records.clone();
         if let Some(within) = selections.get(&index) {
@@ -1586,15 +1562,20 @@ pub(super) async fn work_selected_with_slots(
         }
         if !tally.names_record()
             && let Some(result_amount) = amount(&result.value).filter(|amount| !amount.date)
-            && claim_amount(claim, &tally.written, slots.get(&index)).is_none_or(|claim_amount| {
-                claim_amount.malformed_unit || claim_amount.unit.is_some() && result_amount.unit != claim_amount.unit
+            && amount(&tally.written).is_none_or(|written| {
+                written.malformed_unit || written.unit.is_some() && result_amount.unit != written.unit
             })
         {
+            // Only the tally's own written value is compared: the prose around the computed part is the composer's
+            // wording, judged by Jev, never parsed. Scanning it rejected "GBP" written beside a computed "GBP 59" with a
+            // message about tally.written, and the rewrite repeated it until the run ended unverified (#1195).
             let field = text::repr(tally.field.as_deref().unwrap_or("value"));
             worked.insert(
                 index,
                 Err(Unworked::Draft(format!(
-                    "The computed {field} value or unit does not match the claim's written amount. Include the entire numeric value in tally.written; code will not preserve obsolete digits or signs or relabel its unit."
+                    "tally.written {} is not a {field} in the unit the notes give it, as {} is. Write tally.written as the notes write the {field}; code writes the computed part in that form, so the claim's prose never repeats a unit written there.",
+                    text::repr(&tally.written),
+                    text::repr(&result.value)
                 ))),
             );
             continue;
@@ -2699,20 +2680,15 @@ mod tests {
         for values in [["USD 23", "USD 986"], ["23", "986"]] {
             let result = amount_tally(&values, Op::Sum, "GBP 23").await;
             assert!(matches!(result, Err(Unworked::Draft(ref reason)) if reason.contains("unit")), "{result:?}");
-            let result = amount_tally_in_claim(&values, Op::Sum, "23", "GBP 23").await;
-            assert!(matches!(result, Err(Unworked::Draft(ref reason)) if reason.contains("unit")), "{result:?}");
         }
         let result = amount_tally(&["£23", "£986"], Op::Sum, "23").await.unwrap();
         assert_eq!(result.value, "1009", "a numeric computed slot can have its unit in the surrounding claim");
-        for (values, claim) in [(["£23", "£986"], "£23"), (["GBP 23", "GBP 986"], "23 GBP")] {
-            let result = amount_tally_in_claim(&values, Op::Sum, "23", claim).await.unwrap();
-            assert_eq!(result.value, "1009", "a matching unit outside the computed slot stays in the claim");
-        }
-        for claim in ["GBP -23", "GBP 023", "GBP 23.0"] {
-            assert!(amount_tally_in_claim(&["GBP 23", "GBP 986"], Op::Sum, "23", claim).await.is_err());
-        }
         let result = amount_tally_in_claim(&["GBP -23", "GBP -986"], Op::Sum, "-23", "GBP -23").await.unwrap();
         assert_eq!(result.value, "-1009");
+        // The prose around the computed part is the composer's wording, judged by Jev and never parsed: "GBP" written
+        // beside a computed "GBP 59" was rejected with a message about tally.written, and the run ended unverified.
+        let result = amount_tally_in_claim(&["GBP 23", "GBP 986"], Op::Sum, "GBP 23", "GBP GBP 23").await.unwrap();
+        assert_eq!(result.value, "GBP 1009");
         for values in [
             ["GBP £23", "GBP £986"],
             ["GBP£23", "GBP£986"],
