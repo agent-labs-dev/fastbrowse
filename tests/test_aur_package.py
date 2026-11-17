@@ -160,3 +160,21 @@ def test_one_check_reports_a_stale_package_and_a_missing_aur_release(
     err = capsys.readouterr().err
     assert "packaging/aur is fastbrowse 9.9.8, and PyPI has 9.9.9" in err
     assert "the AUR has no fastbrowse, and PyPI has 9.9.9" in err
+
+
+def test_a_template_change_at_the_same_release_is_reported_and_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A dependency added to the template leaves the pinned release unchanged, so only the files show the drift.
+    _checkout(tmp_path, NEW, _aur_holding("9.9.9-1"), monkeypatch)
+    pkgbuild = tmp_path / "packaging" / "aur" / "PKGBUILD"
+    pkgbuild.write_text(
+        pkgbuild.read_text(encoding="utf-8").replace("  'python-packaging>=24'\n", ""), encoding="utf-8"
+    )
+
+    assert aur_package.main() == 1
+    assert "packaging/aur pins 9.9.9 but differs from its template" in capsys.readouterr().err
+
+    monkeypatch.setattr("sys.argv", ["aur_package.py", "--root", str(tmp_path), "--write"])
+    assert aur_package.main() == 0
+    assert pkgbuild.read_text(encoding="utf-8") == aur_package.render(NEW)["PKGBUILD"]
