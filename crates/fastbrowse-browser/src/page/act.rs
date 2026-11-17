@@ -538,7 +538,15 @@ impl CdpPage {
         let downloads_before = self.session.downloads_settled();
         let mut waited = None;
         let (outcome, mut detail, failure) = if action.operation == Operation::Wait {
-            let seen = self.await_change(wait_seconds, &before_fingerprint).await?;
+            // The baseline above was read after the decision. A page that changed in between is a page the decision
+            // never saw, and nothing would change from the baseline again: it is read once more, after the baseline,
+            // so a change lands either here or in the watch and none falls between them.
+            let live = self.glance().await?;
+            let seen = if live.page_key == observation.page_key && live.offscreen_text == observation.offscreen_text {
+                self.await_change(wait_seconds, &before_fingerprint).await?
+            } else {
+                Waited { semantic: true, clock: false }
+            };
             waited = Some(seen);
             (StepOutcome::Executed, (!seen.semantic && !seen.clock).then(|| UNCHANGED.into()), None)
         } else {
