@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- `FASTBROWSE_ACTION_PICKER=llm` has the run's own LLM pick each browser action in place of Jev, and the `fastbrowse-llm-picker` eval arm runs it. It is an ablation: the LLM sees the state and questions Jev would, every other decision (authorization, relevance, reading, verifying) stays with Jev, and its spend is reported under the new `action` LLM purpose. The `browser-use` and `browser-use-oss` eval arms now name their model, `bu-4.0`, since Parallax 2.0.0.dev34 requires one, and the open-source arm runs browser-use 1.0.6. The fastbrowse arms stop their clock when the agent answers, before the final page is read and the browser stops.
+
 - A `--desktop` run drives GTK 4 apps such as GNOME Text Editor. GTK 4 reports a usable control as sensitive and never as enabled, so the run saw none of the window's buttons, text areas or combo box options and ended stuck after a few steps; a control is now usable when the app reports either state, and a disabled one still drops ([#1185](https://github.com/agent-labs-dev/fastbrowse/pull/1185)).
 
 - `FASTBROWSE_DESKTOP_SHOWN=1` runs a `--desktop` task on the window in view, where deskpilot draws the run's agent cursor at each action, so a run can be recorded. It takes the view and keyboard focus of the desktop it runs on, so it is meant for a desktop of its own, such as deskpilot's nested Hyprland ([#1185](https://github.com/agent-labs-dev/fastbrowse/pull/1185)).
