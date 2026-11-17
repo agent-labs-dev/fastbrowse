@@ -66,6 +66,25 @@ def test_a_release_without_the_python_core_is_read_off_pypi(monkeypatch: pytest.
     assert aur_package.published("9.9.9") == NEW
 
 
+def test_a_release_listed_before_its_sdist_is_waited_for(monkeypatch: pytest.MonkeyPatch) -> None:
+    import io
+    import json
+
+    wheel = {"packagetype": "bdist_wheel", "digests": {"sha256": "c" * 64}}
+    sdist = {"packagetype": "sdist", "digests": {"sha256": NEW.sha256}}
+    served = iter([[wheel], [wheel, sdist]])
+
+    def urlopen(_url: str, timeout: float) -> io.BytesIO:
+        return io.BytesIO(
+            json.dumps({"info": {"name": "fastbrowse", "version": "9.9.9"}, "urls": next(served)}).encode()
+        )
+
+    monkeypatch.setattr(aur_package.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(aur_package.time, "sleep", lambda _: None)
+
+    assert aur_package._pypi("fastbrowse", "9.9.9", 300)["urls"][-1] == sdist
+
+
 def test_a_source_is_named_by_the_stable_url_the_package_fetches() -> None:
     # The PKGBUILD names its source by this address, so this is the one a release has to wait for.
     assert (
