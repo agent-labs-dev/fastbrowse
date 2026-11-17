@@ -9275,11 +9275,17 @@ impl DecisionClient for Counted {
 async fn test_a_decision_the_page_redrew_under_sends_no_new_request() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let (asked, answered) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
-    let agent = Agent::new(
-        Arc::new(Picker::new()),
-        Arc::new(Counted(asked.clone(), answered.clone())),
-        Arc::new(ScriptedLLM),
-    );
+    let events: Arc<std::sync::Mutex<Vec<Event>>> = Arc::default();
+    let sink = events.clone();
+    let on_event: EventHandler = Arc::new(move |event: Event| {
+        sink.lock().unwrap().push(event);
+        Box::pin(async {})
+    });
+    let trace = Trace::collecting();
+    let agent =
+        Agent::new(Arc::new(Picker::new()), Arc::new(Counted(asked.clone(), answered.clone())), Arc::new(ScriptedLLM))
+            .with_events(Some(on_event))
+            .with_trace(trace.clone());
     let (state, questions) = (serde_json::json!({}), IndexMap::new());
     let work = async {
         let _ = agent.jev.evaluate(&state, &questions).await;
@@ -9288,4 +9294,7 @@ async fn test_a_decision_the_page_redrew_under_sends_no_new_request() {
     let watched = agent.unless_redrawn(false, work, &at("https://shop.test/ticket", &[]), None).await.unwrap();
     assert!(matches!(watched, super::driving::Watched::Redrawn));
     assert_eq!((asked.load(Ordering::SeqCst), answered.load(Ordering::SeqCst)), (1, 1));
+    // The refused request is an expected discard, not a failure: nothing reaches the host's events or the trace.
+    assert!(events.lock().unwrap().is_empty());
+    assert_eq!(trace.events(), Vec::<serde_json::Value>::new());
 }
