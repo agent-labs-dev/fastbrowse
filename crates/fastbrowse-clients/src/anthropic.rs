@@ -157,7 +157,19 @@ pub(crate) fn as_chat_completion(payload: Map<String, Value>) -> Map<String, Val
             .iter()
             .map(|key| tokens(usage, key))
             .sum::<i64>();
-        completion["usage"] = json!({"prompt_tokens": prompt, "completion_tokens": tokens(usage, "output_tokens")});
+        let mut details = Map::new();
+        for (native, compatible) in
+            [("cache_read_input_tokens", "cached_tokens"), ("cache_creation_input_tokens", "cache_write_tokens")]
+        {
+            if let Some(count) = usage.get(native).filter(|count| !count.is_null()) {
+                details.insert(compatible.into(), count.clone());
+            }
+        }
+        completion["usage"] = json!({
+            "prompt_tokens": prompt,
+            "completion_tokens": tokens(usage, "output_tokens"),
+            "prompt_tokens_details": details,
+        });
     }
     match completion {
         Value::Object(map) => map,

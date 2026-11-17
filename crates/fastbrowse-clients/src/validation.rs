@@ -260,6 +260,8 @@ pub fn with_discarded(cost: CostLine, usage: &RequestUsage) -> CostLine {
         dollars: cost.dollars.map(|dollars| dollars * sent as f64),
         input_tokens: cost.input_tokens * sent,
         images: cost.images.map(|images| images * sent),
+        cache_read_tokens: cost.cache_read_tokens.map(|tokens| tokens * sent),
+        cache_write_tokens: cost.cache_write_tokens.map(|tokens| tokens * sent),
         physical_requests: Some(usage.requests),
         ..cost
     }
@@ -992,9 +994,15 @@ pub fn merged_cost(lines: &[CostLine]) -> CostLine {
         seconds: Some(py::sum(lines.iter().map(|line| line.seconds.unwrap_or(0.0)))),
         physical_requests: lines.iter().map(|line| line.physical_requests).sum(),
         images: lines.iter().filter_map(|line| line.images).reduce(|a, b| a + b),
-        cache_read_tokens: lines.iter().filter_map(|line| line.cache_read_tokens).reduce(|a, b| a + b),
-        cache_write_tokens: lines.iter().filter_map(|line| line.cache_write_tokens).reduce(|a, b| a + b),
+        cache_read_tokens: known_total(lines.iter().map(|line| line.cache_read_tokens)),
+        cache_write_tokens: known_total(lines.iter().map(|line| line.cache_write_tokens)),
     }
+}
+
+/// The sum of a count every line reports, or None when any line lacks it or there are none: a partial sum would read
+/// as a smaller known total.
+pub(crate) fn known_total(counts: impl ExactSizeIterator<Item = Option<i64>>) -> Option<i64> {
+    if counts.len() == 0 { None } else { counts.sum() }
 }
 
 pub(crate) type Ask<'a> =
