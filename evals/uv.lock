@@ -417,7 +417,7 @@ requires-dist = [
     { name = "fastbrowse", extras = ["eval-data"], directory = "../" },
     { name = "httpx" },
     { name = "langfuse", specifier = ">=5.0.4,<6" },
-    { name = "parallax-evals", extras = ["browser"], git = "https://github.com/agent-labs-dev/parallax?rev=fef1356" },
+    { name = "parallax-evals", extras = ["browser"], git = "https://github.com/agent-labs-dev/parallax?rev=1bf98ed97ded" },
     { name = "pydantic", specifier = ">=2.12" },
 ]
 
@@ -792,7 +792,7 @@ wheels = [
 [[package]]
 name = "parallax-evals"
 version = "2.0.0.dev46"
-source = { git = "https://github.com/agent-labs-dev/parallax?rev=fef1356#fef1356c91c995a1c806ff2ebf63bafe10ae8183" }
+source = { git = "https://github.com/agent-labs-dev/parallax?rev=1bf98ed97ded#1bf98ed97ded4c83f574ac4d684f90b2f1e68c36" }
 dependencies = [
     { name = "croniter" },
     { name = "genai-prices" },
