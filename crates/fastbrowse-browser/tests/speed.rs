@@ -680,19 +680,23 @@ async fn test_a_settle_of_an_idle_page_pays_no_quiet_window() {
     // than charging every action a fixed quiet window. Asserted on what the settle recorded, not on wall time, which a
     // loaded runner stretches (#1085).
     let Some((h, proxy)) = proxied().await else { return };
+    let navigation = proxy.len();
     h.page.navigate(&sites().main, None).await.expect("navigate");
-    let written = proxy.len();
     eval_active(&h.session, "document.body.innerHTML = '<button>Idle</button>'; setTimeout(() => {}, 10000);").await;
     let obs = h.observe().await;
-    // The load's lifecycle events keep arriving after the page is drawn, and the settle reads the page again for
-    // each one that lands during it, so an act that overlapped one recorded two ends (#1210). The click starts once
-    // the network has gone idle after the page was written, which is the last of them.
+    // Every frame of the load, the cross-origin iframe among them, keeps emitting lifecycle events after the page is
+    // drawn, and the settle reads the page again for each one that lands during it, so an act that overlapped one
+    // recorded two ends (#1210). The click starts once each frame's own load has reached `networkIdle`, its last.
     wait_until(
         || async {
-            proxy
-                .events_since(written, "Page.lifecycleEvent")
-                .iter()
-                .any(|event| event["params"]["name"] == "networkIdle")
+            let frames = proxy.events_since(navigation, "Page.frameNavigated");
+            let idle = proxy.events_since(navigation, "Page.lifecycleEvent");
+            !frames.is_empty()
+                && frames.iter().all(|frame| {
+                    let loader = &frame["params"]["frame"]["loaderId"];
+                    idle.iter()
+                        .any(|event| event["params"]["loaderId"] == *loader && event["params"]["name"] == "networkIdle")
+                })
         },
         5.0,
     )
