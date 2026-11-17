@@ -147,6 +147,7 @@ fn llm_error(error: &LLMError) -> Value {
         LLMError::RetriesExhausted(_) => "LLMRetriesExhausted",
         LLMError::Rejected(_) => "LLMRejected",
         LLMError::Budget(_) => "BudgetExceeded",
+        LLMError::Superseded => "Superseded",
     };
     json!({"error": {"type": kind, "message": normalized(&error.to_string())}})
 }
@@ -159,6 +160,7 @@ fn jev_error(error: &DecisionError) -> Value {
         DecisionError::RetriesExhausted(_) => "JevRetriesExhausted",
         DecisionError::Rejected(_) => "JevRejected",
         DecisionError::Budget(_) => "BudgetExceeded",
+        DecisionError::Superseded => "Superseded",
     };
     let mut dumped = json!({"type": kind, "message": normalized(&error.to_string())});
     if let DecisionError::RetriesExhausted(exhausted) = error {

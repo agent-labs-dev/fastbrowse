@@ -9244,3 +9244,48 @@ async fn test_a_stale_decision_slower_than_the_time_left_does_not_overrun_the_li
     assert_eq!(result.status, Status::BudgetExceeded, "{:?}", result.error);
     assert!(began.elapsed() < std::time::Duration::from_secs(5), "ran {:?} past a 0.5 s limit", began.elapsed());
 }
+
+/// A decision client that takes a moment to answer, counting the requests it was sent and the ones it answered.
+struct Counted(Arc<std::sync::atomic::AtomicUsize>, Arc<std::sync::atomic::AtomicUsize>);
+
+impl DecisionClient for Counted {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        _: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        use std::sync::atomic::Ordering;
+        Box::pin(async move {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            self.1.fetch_add(1, Ordering::SeqCst);
+            Err(DecisionError::Failed("a counted request has no answer".into()))
+        })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile::jev()
+    }
+}
+
+/// A grouped choice asks a second question once the first is answered. When the page redrew under the first, the
+/// second would be a request about a page that is gone, paid for an answer nobody reads: the request already sent
+/// finishes, and no new one is sent.
+#[tokio::test]
+async fn test_a_decision_the_page_redrew_under_sends_no_new_request() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (asked, answered) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let agent = Agent::new(
+        Arc::new(Picker::new()),
+        Arc::new(Counted(asked.clone(), answered.clone())),
+        Arc::new(ScriptedLLM),
+    );
+    let (state, questions) = (serde_json::json!({}), IndexMap::new());
+    let work = async {
+        let _ = agent.jev.evaluate(&state, &questions).await;
+        agent.jev.evaluate(&state, &questions).await.map_err(super::state::Flow::from)
+    };
+    let watched = agent.unless_redrawn(false, work, &at("https://shop.test/ticket", &[]), None).await.unwrap();
+    assert!(matches!(watched, super::driving::Watched::Redrawn));
+    assert_eq!((asked.load(Ordering::SeqCst), answered.load(Ordering::SeqCst)), (1, 1));
+}

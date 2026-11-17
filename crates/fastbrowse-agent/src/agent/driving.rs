@@ -613,9 +613,9 @@ impl Agent {
     /// Watching while Jev decides and gates finds the work doomed, and the next decision is made on the settled page.
     /// Only one redraw per action: a control that never stops changing is still acted on.
     ///
-    /// Doomed work still runs to its end before `Redrawn` is returned. Its requests are already sent and billed, and a
-    /// request dropped before its response has no cost the run can know (#1218); finishing costs the rest of one
-    /// request, about half a second on Online-Mind2Web, and its receipts land in the ledger like any other.
+    /// Doomed work still runs before `Redrawn` is returned, to finish the requests it already sent and record what they
+    /// cost (#1218), but it sends no new one ([`super::superseding`]). That costs the rest of one request, about half a
+    /// second on Online-Mind2Web, and stays inside the run's time limit.
     pub(super) async fn unless_redrawn<T, F>(
         &self,
         redecided: bool,
@@ -631,6 +631,8 @@ impl Agent {
         }
         let raw = self.raw().unwrap_or_else(|| observation.clone());
         let watching = self.page.redrawn(&raw, REDRAW_WATCH_SECONDS, target);
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let work = super::superseding::superseding(flag.clone(), work);
         tokio::pin!(work);
         tokio::pin!(watching);
         tokio::select! {
@@ -638,6 +640,7 @@ impl Agent {
             done = &mut work => done.map(Watched::Done),
             redrawn = &mut watching => match redrawn {
                 Ok(true) => {
+                    super::superseding::supersede(&flag);
                     // Its outcome was decided on a page that is gone, so it is discarded, an error included; the next
                     // decision meets any limit it reached.
                     let _ = work.await;
