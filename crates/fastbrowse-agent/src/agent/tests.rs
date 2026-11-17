@@ -2954,6 +2954,33 @@ fn test_the_value_questions_say_a_copy_is_the_exact_text_to_type() {
 }
 
 #[tokio::test]
+async fn test_a_field_already_holding_the_lines_still_offers_items_set_out_as_lines_as_written() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(EndValues), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "In a new document, write a three-line packing list: passport, charger, toothbrush.".into();
+    let document = Control {
+        value: Some("passport\ncharger\ntoothbrush".into()),
+        ..Control::new("doc", "textbox", "textbox", [Operation::Fill])
+    };
+    let asked = agent.ahead(&state, &observation(&[document]));
+    let source = asked
+        .iter()
+        .filter_map(|ahead| match &ahead.question {
+            Question::Choice(choice) if choice.criteria.contains_key("write") => Some(choice),
+            _ => None,
+        })
+        .next()
+        .expect("the source question");
+    let written = source.criteria["write"].as_str().unwrap_or_default();
+    assert!(written.contains("items it names set out as the lines, sentences or list it asks for"), "{written}");
+    assert!(
+        source.instructions.contains("The field holds 'passport\\ncharger\\ntoothbrush' now"),
+        "{}",
+        source.instructions
+    );
+}
+
+#[tokio::test]
 async fn test_only_new_read_evidence_renews_recovery_without_an_explicit_read_step() {
     let field = "Capacity: 12";
     let agent = Agent::new(Arc::new(NoPage), Arc::new(FieldReader(Some(field), 0.1)), Arc::new(ScriptedLLM));

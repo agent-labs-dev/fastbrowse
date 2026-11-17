@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A field that already holds the lines a task asks to be written is filled with those lines, not with one of the task's items. A run that restored a GNOME Text Editor draft already holding "passport", "charger" and "toothbrush" was asked to write that list as three lines, and Jev took the task's own words as the text to type, so the only copy it could end on was one item and the run typed "charger" until it ended stuck. The choice of where a value comes from now says that items a task names, set out as the lines, sentences or list it asks for, are written from the task; three of three such runs ended complete where three of three had ended stuck ([#1189](https://github.com/agent-labs-dev/fastbrowse/issues/1189)).
+
 - A `--desktop` run drives GTK 4 apps such as GNOME Text Editor. GTK 4 reports a usable control as sensitive and never as enabled, so the run saw none of the window's buttons, text areas or combo box options and ended stuck after a few steps; a control is now usable when the app reports either state, and a disabled one still drops ([#1185](https://github.com/agent-labs-dev/fastbrowse/pull/1185)).
 
 - `FASTBROWSE_DESKTOP_SHOWN=1` runs a `--desktop` task on the window in view, where deskpilot draws the run's agent cursor at each action, so a run can be recorded. It takes the view and keyboard focus of the desktop it runs on, so it is meant for a desktop of its own, such as deskpilot's nested Hyprland ([#1185](https://github.com/agent-labs-dev/fastbrowse/pull/1185)).
