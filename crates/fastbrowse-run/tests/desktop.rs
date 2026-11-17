@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use fastbrowse_core::models::{Operation, StepOutcome};
 use fastbrowse_core::page::Action;
 use fastbrowse_core::page::Page;
-use fastbrowse_run::desktop::{DeskpilotPage, OpenError};
+use fastbrowse_run::desktop::{DeskpilotPage, OpenError, View};
 use serde_json::{Value, json};
 
 const SCRIPT: &str = r#"#!/bin/sh
@@ -64,7 +64,7 @@ fn command() -> Vec<String> {
 #[tokio::test]
 async fn a_desktop_run_launches_its_app_as_a_named_deskpilot_agent() {
     let program = fake("launches", &[launch_tool()], &[ok(3, &window(false)), ok(4, &window(false))]);
-    let page = DeskpilotPage::open(program.to_str().unwrap(), &command()).await.unwrap();
+    let page = DeskpilotPage::open(program.to_str().unwrap(), &command(), View::Hidden).await.unwrap();
     page.address().await.unwrap();
     let sent = requests(&program);
     let launch = sent.iter().find(|request| request.pointer("/params/name") == Some(&json!("launch"))).unwrap();
@@ -81,7 +81,7 @@ async fn a_desktop_run_launches_its_app_as_a_named_deskpilot_agent() {
 #[tokio::test]
 async fn a_desktop_run_on_a_deskpilot_without_launch_is_unavailable() {
     let program = fake("no-launch", &[], &[]);
-    let error = DeskpilotPage::open(program.to_str().unwrap(), &command()).await.err().unwrap();
+    let error = DeskpilotPage::open(program.to_str().unwrap(), &command(), View::Hidden).await.err().unwrap();
     assert!(matches!(error, OpenError::Unavailable(_)), "{error:?}");
 }
 
@@ -93,7 +93,7 @@ async fn a_desktop_app_that_exits_before_a_window_is_invalid() {
         "content": [{"type": "text", "text": "gnome-text-editor exited before it opened a window"}],
     }});
     let program = fake("refused", &[launch_tool()], &[refused]);
-    let error = DeskpilotPage::open(program.to_str().unwrap(), &command()).await.err().unwrap();
+    let error = DeskpilotPage::open(program.to_str().unwrap(), &command(), View::Hidden).await.err().unwrap();
     let OpenError::Invalid(message) = error else { panic!("{error:?}") };
     assert!(message.contains("exited before it opened a window"), "{message}");
 }
@@ -101,7 +101,7 @@ async fn a_desktop_app_that_exits_before_a_window_is_invalid() {
 #[tokio::test]
 async fn a_desktop_app_on_xwayland_is_invalid() {
     let program = fake("xwayland", &[launch_tool()], &[ok(3, &window(true))]);
-    let error = DeskpilotPage::open(program.to_str().unwrap(), &command()).await.err().unwrap();
+    let error = DeskpilotPage::open(program.to_str().unwrap(), &command(), View::Hidden).await.err().unwrap();
     assert!(matches!(error, OpenError::Invalid(_)), "{error:?}");
 }
 
@@ -126,7 +126,7 @@ fn waiting_window(name: &str, after: u64, continuous: bool) -> PathBuf {
 #[tokio::test]
 async fn a_desktop_wait_uses_the_supplied_remaining_time() {
     let program = waiting_window("wait-budget", 60, false);
-    let page = DeskpilotPage::open(program.to_str().unwrap(), &command()).await.unwrap();
+    let page = DeskpilotPage::open(program.to_str().unwrap(), &command(), View::Hidden).await.unwrap();
     let before = page.observe().await.unwrap();
     let wait = Action::new(Operation::Wait);
     let result = tokio::time::timeout(std::time::Duration::from_secs(1), page.wait(&wait, &before, 0.15))
@@ -142,7 +142,7 @@ async fn a_desktop_wait_uses_the_supplied_remaining_time() {
 async fn an_unlimited_desktop_wait_sees_a_change_after_five_seconds() {
     // Sixty unchanged polls take six seconds, beyond the old five-second WAIT bound.
     let program = waiting_window("wait-unlimited", 60, false);
-    let page = DeskpilotPage::open(program.to_str().unwrap(), &command()).await.unwrap();
+    let page = DeskpilotPage::open(program.to_str().unwrap(), &command(), View::Hidden).await.unwrap();
     let before = page.observe().await.unwrap();
     let wait = Action::new(Operation::Wait);
     let result = tokio::time::timeout(std::time::Duration::from_secs(15), page.wait(&wait, &before, f64::INFINITY))
@@ -156,7 +156,7 @@ async fn an_unlimited_desktop_wait_sees_a_change_after_five_seconds() {
 #[tokio::test]
 async fn a_desktop_wait_ends_after_a_change_even_when_the_window_keeps_updating() {
     let program = waiting_window("wait-busy", 2, true);
-    let page = DeskpilotPage::open(program.to_str().unwrap(), &command()).await.unwrap();
+    let page = DeskpilotPage::open(program.to_str().unwrap(), &command(), View::Hidden).await.unwrap();
     let before = page.observe().await.unwrap();
     let wait = Action::new(Operation::Wait);
     let result = tokio::time::timeout(std::time::Duration::from_millis(1500), page.wait(&wait, &before, 4.0))

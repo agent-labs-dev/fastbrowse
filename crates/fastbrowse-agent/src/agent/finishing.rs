@@ -71,8 +71,9 @@ impl Agent {
         // Acting is not having done everything asked: a read that answers can come before the steps the task put first.
         // A step the site refuses is no step left to take: the run reads and answers, and ends unverified (#779).
         // A step tried and not carried out, such as a click on a covered button, is asked about too: a task that wants
-        // text after a step is not one whose only step is reading.
-        if state.history.iter().any(crate::policy::HistoryEntry::acts) {
+        // text after a step is not one whose only step is reading. So is a task that asks for a step when none has been
+        // taken: a page can already show what it asks to be made (#1186).
+        if state.history.iter().any(crate::policy::HistoryEntry::acts) || state.asks_steps {
             let carried = self.actions_done(state, observation).await?;
             state.refused = carried == Carried::Refused;
             state.undone = match carried {

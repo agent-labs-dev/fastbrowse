@@ -1408,11 +1408,21 @@ async fn desktop(
     told: &Told,
 ) -> Result<RunResult, RunError> {
     let program = std::env::var("FASTBROWSE_DESKPILOT").unwrap_or_else(|_| "deskpilot".into());
+    // Shown acts where it can be seen, with deskpilot's agent cursor: for a desktop of its own that a recording is
+    // taken of, never the user's, where it would take their view and focus.
+    let view = match std::env::var("FASTBROWSE_DESKTOP_SHOWN").as_deref() {
+        Err(std::env::VarError::NotPresent) => desktop::View::Hidden,
+        Ok("1") => desktop::View::Shown,
+        Ok(other) => return Err(RunError::Invalid(format!("FASTBROWSE_DESKTOP_SHOWN is 1 or unset, not {other:?}"))),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(RunError::Invalid("FASTBROWSE_DESKTOP_SHOWN is 1 or unset".into()));
+        }
+    };
     let ledger = Arc::new(Ledger::new(task.limits.clone().unwrap_or_default()));
     let run = async {
         // `check` refused a command line that does not split into words.
         let command = shlex::split(app).unwrap_or_default();
-        let page = match desktop::DeskpilotPage::open(&program, &command).await {
+        let page = match desktop::DeskpilotPage::open(&program, &command, view).await {
             Ok(page) => page,
             Err(desktop::OpenError::Invalid(message)) => return Err(RunError::Invalid(message)),
             // A deskpilot that cannot start or answer is an outage, as a cloud browser that cannot start is.
