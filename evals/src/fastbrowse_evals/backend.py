@@ -246,7 +246,8 @@ def _run_result(
                 "input": line.input_tokens,
                 "output": line.output_tokens,
                 "requests": line.physical_requests or 0,
-                "images": line.images or 0,
+                # A campaign measures any fastbrowse_ref, and builds before 0.11.2 have no image count on a cost line.
+                "images": getattr(line, "images", None) or 0,
                 "cost_usd": line.dollars,
                 "source": "harness",
             }

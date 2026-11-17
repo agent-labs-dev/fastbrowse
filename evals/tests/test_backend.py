@@ -78,6 +78,11 @@ def test_a_jev_calls_image_count_reaches_parallax_usage() -> None:
     result = backend._run_result(output, None, Browser(cdp_url="ws://browser"), [], latency_ms=0)
     assert [usage["images"] for usage in result["usage"]] == [3]
 
+    # A campaign also measures builds whose cost lines predate the image count.
+    del line.__dict__["images"]
+    result = backend._run_result(output, None, Browser(cdp_url="ws://browser"), [], latency_ms=0)
+    assert [usage["images"] for usage in result["usage"]] == [0]
+
 
 @pytest.mark.parametrize("data", [{"name": "widget", "revision": 3}, [], False, 0])
 def test_structured_result_reaches_the_judge_instead_of_its_prose(data: JsonValue) -> None:
