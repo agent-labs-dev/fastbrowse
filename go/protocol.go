@@ -280,6 +280,7 @@ const (
 	LLMPurposeSearch        LLMPurpose = "search"
 	LLMPurposeUnobtainable  LLMPurpose = "unobtainable"
 	LLMPurposeGroups        LLMPurpose = "groups"
+	LLMPurposeAction        LLMPurpose = "action"
 )
 
 type Limits struct {

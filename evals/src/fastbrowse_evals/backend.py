@@ -138,14 +138,19 @@ class FastbrowseHarness(BrowserHarness):
                     authorization=authorization,
                     secrets=secrets,
                     http=http,
-                    settings=run_settings(),
+                    settings=self.settings(),
                 )
+            # The answer is in: reading the final page and stopping the browser are not the agent's time.
+            self._agent_finished()
             self._product_status = output.status
             latency_ms = round((time.perf_counter() - began) * 1000)
             # A run that read every page over HTTP never drove the browser, which still shows the blank tab it
             # opened on; what it saw is in `pages`.
             page = None if output.browser is None else await self.observe(browser.cdp_url, url=output.final_url)
         return _run_result(output, page, browser, events, latency_ms=latency_ms)
+
+    def settings(self) -> dict[str, str]:
+        return run_settings()
 
     @property
     def trial_metadata(self) -> dict[str, object]:
@@ -156,6 +161,17 @@ class FastbrowseHarness(BrowserHarness):
         if self._product_status is not None:
             details["status"] = self._product_status.value
         return details
+
+
+class FastbrowseLlmPickerHarness(FastbrowseHarness):
+    """fastbrowse with its LLM picking each browser action in place of Jev: the same-model ablation of the picker.
+
+    Every other decision, and every input the picker sees, is the `fastbrowse` arm's."""
+
+    info = FastbrowseHarness.info.model_copy(update={"name": "fastbrowse-llm-picker"})
+
+    def settings(self) -> dict[str, str]:
+        return run_settings() | {"FASTBROWSE_ACTION_PICKER": "llm"}
 
 
 async def _ready_browser(browser: Browser) -> str:

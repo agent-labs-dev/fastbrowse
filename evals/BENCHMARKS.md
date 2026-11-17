@@ -64,7 +64,7 @@ Publication maps Parallax results to the existing public arm names in one place:
 | `browser-use-cloud` with model `bu-ultrafast` | `browser-use-ultrafast` |
 | `browser-use-cloud` otherwise | `browser-use` |
 | `browser-harness` | `browser-harness` |
-| `browser-use-oss` with model `bu-fast` (browser-use 1.0.5's default) | `browser-use-oss` |
+| `browser-use-oss` with model `bu-4.0` (browser-use 1.0.6's default), or `bu-fast` from browser-use 1.0.5 | `browser-use-oss` |
 | `fastbrowse-hosted` and `cua-codex` | diagnostic only |
 
 The public schema remains 7. `GROUPS`, site groups, task versions, catalog

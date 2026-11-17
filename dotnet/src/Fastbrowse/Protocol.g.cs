@@ -462,6 +462,8 @@ public enum LLMPurpose
     Unobtainable,
     [JsonStringEnumMemberName("groups")]
     Groups,
+    [JsonStringEnumMemberName("action")]
+    Action,
 }
 
 public sealed record Limits

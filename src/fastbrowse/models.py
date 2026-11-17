@@ -254,6 +254,7 @@ class LLMPurpose(StrEnum):
     SEARCH = "search"
     UNOBTAINABLE = "unobtainable"
     GROUPS = "groups"
+    ACTION = "action"
 
 
 class JevPurpose(StrEnum):

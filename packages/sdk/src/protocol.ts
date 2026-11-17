@@ -82,7 +82,8 @@ export type LLMPurpose =
   | 'recovery_pages'
   | 'search'
   | 'unobtainable'
-  | 'groups';
+  | 'groups'
+  | 'action';
 export type JevPurpose = 'action' | 'authorization' | 'relevance' | 'read' | 'verify' | 'locate';
 /**
  * Every code an error reply can carry: the JSON-RPC standard ones, then this protocol's own.

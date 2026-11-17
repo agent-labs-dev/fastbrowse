@@ -1497,9 +1497,10 @@ async fn test_a_wait_outlasts_a_change_later_than_the_settle_bound() {
     h.goto("").await;
     let script = "{ const line = document.createElement('p'); line.textContent = 'Queue position 4'; \
                   document.body.append(line); setTimeout(() => { line.textContent = 'Queue position 3'; }, 6500); } true";
+    // Timed from before the page's timer is set, so the change can never land under 6.5 s on this clock.
+    let started = std::time::Instant::now();
     assert_eq!(eval_active(&h.page, script).await, json!(true));
     let before = h.observe().await;
-    let started = std::time::Instant::now();
     let result = h.page.wait(&Action::new(Operation::Wait), &before, 60.0).await.expect("wait");
     let waited = started.elapsed();
     assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{result:?}");

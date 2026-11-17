@@ -28,16 +28,21 @@ ARM_BINDINGS: tuple[ArmBinding, ...] = (
     ArmBinding("fastbrowse", "fastbrowse"),
     ArmBinding("fastbrowse-pool", "fastbrowse-pool"),
     ArmBinding("fastbrowse-hosted", "fastbrowse-hosted"),
-    ArmBinding("browser-use", "browser-use-cloud"),
+    ArmBinding("browser-use", "browser-use-cloud", "bu-4.0"),
     ArmBinding("browser-use-ultrafast", "browser-use-cloud", "bu-ultrafast"),
-    # browser-use 1.0.5 defaults to bu-fast, and Parallax's harness takes the model it runs explicitly.
-    ArmBinding("browser-use-oss", "browser-use-oss", "bu-fast"),
+    # Parallax's Browser Use harnesses take the model they run explicitly; bu-4.0 is browser-use 1.0.6's default.
+    ArmBinding("browser-use-oss", "browser-use-oss", "bu-4.0"),
     ArmBinding("browser-harness", "browser-harness"),
     ArmBinding("cua-codex", "cua-codex"),
 )
 
 BY_PUBLIC = {binding.public: binding for binding in ARM_BINDINGS}
-BY_PARALLAX = {(binding.harness, binding.model): binding.public for binding in ARM_BINDINGS}
+# Rows recorded before each arm pinned its model: the cloud agent on its project default, browser-use 1.0.5 on bu-fast.
+LEGACY: dict[tuple[str, str | None], PublicArm] = {
+    ("browser-use-cloud", None): "browser-use",
+    ("browser-use-oss", "bu-fast"): "browser-use-oss",
+}
+BY_PARALLAX = LEGACY | {(binding.harness, binding.model): binding.public for binding in ARM_BINDINGS}
 
 
 def binding(public: str) -> ArmBinding:

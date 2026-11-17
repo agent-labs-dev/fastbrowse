@@ -8,7 +8,7 @@ use fastbrowse_clients::validation::{Lines, Paid, jev_purpose, jev_spend};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::config::TokenBudget;
 use fastbrowse_core::decision::{Answer, DecisionClient, DecisionError, Question};
-use fastbrowse_core::models::{CostComponent, CostLine, JevPurpose};
+use fastbrowse_core::models::{CostLine, JevPurpose};
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::dumps;
 use fastbrowse_core::py::text;
@@ -172,7 +172,7 @@ pub async fn evaluate_batches(
         // once billed: the whole pass is priced, and every call counted, before any is sent.
         let sent = sent_chars as f64 / ratio;
         let estimate = profile.input_dollars(batches.len() as f64 * state_size + sent).unwrap_or(0.0);
-        ledger.reserve(CostComponent::Jev, estimate, batches.len() as i64)?;
+        fastbrowse_core::decision::reserve(ledger, jev, purpose, estimate, batches.len() as i64)?;
     }
 
     let spent = Mutex::new(Spent::default());
@@ -243,6 +243,7 @@ pub async fn evaluate_batches(
 
 #[cfg(test)]
 mod tests {
+    use fastbrowse_core::models::CostComponent;
     use std::future::Future;
     use std::task::{Context, Poll, Waker};
 
