@@ -1333,8 +1333,11 @@
     if (base.checked === undefined && e.hasAttribute('aria-pressed')) base.checked = e.getAttribute('aria-pressed') === 'true';
     // Input on an image, canvas or video lands on pixels: a streamed remote browser draws its page as a picture
     // that takes clicks, and what it shows has no elements here to read or act on (#1084). A shape inside an SVG is
-    // pixels too: Leaflet's red circle, offered as a plain "button", lost to the one drawn control beside it, a marker.
-    if (e.tagName in DRAWN_KINDS || e.ownerSVGElement) base.drawn = true;
+    // its own element and takes its own click, so it is pictured, not drawn: Leaflet's circle marked drawn had the run
+    // asked whether the task needed a click inside it, and stop when it judged so. An image the page itself gives a
+    // widget role is that one control: Leaflet's marker, role button, marked drawn drew the step to it as the surface
+    // that held the red circle beside it.
+    if (e.tagName in DRAWN_KINDS && !ARIA_ROLES.includes(e.getAttribute('role'))) base.drawn = true;
     if (['checkbox', 'radio'].includes(nativeProperty(source, 'type'))) base.checked = nativeProperty(source, 'checked');
     // What the page says about the field. A custom widget marks the element the user sees, not the input
     // underneath it, so both are asked.

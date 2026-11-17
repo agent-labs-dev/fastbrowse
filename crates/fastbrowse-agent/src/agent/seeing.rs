@@ -3,18 +3,17 @@
 
 use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::decision::{
-    Answer, BoxQuestion, ChoiceQuestion, DecisionError, Edges, Images, JEV_IMAGE_SIDE, NoulQuestion, Question,
-    jev_takes_png,
+    Answer, BoxQuestion, DecisionError, Edges, Images, JEV_IMAGE_SIDE, NoulQuestion, Question, jev_takes_png,
 };
 use fastbrowse_core::models::{CostComponent, JevPurpose, StepOutcome, UNTRUSTED};
 use fastbrowse_core::page::{ActResult, Control, Observation};
+use fastbrowse_core::py::text;
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
 use super::Agent;
 use super::state::{RunState, Step};
-use crate::policy::{Look, element, screenshot_reference};
-use crate::retrieval::text::{SpanKind, spans};
+use crate::policy::{Look, chosen_step, element, keys, screenshot_reference, step_question, task_steps};
 
 const SHOWN: &str = "Is the control described in `control` shown in `viewport_screenshot` with nothing drawn over it, \
                      such as a dialog, banner or menu, so that a click on it would press that control?";
@@ -29,6 +28,8 @@ const REDRAWN: &str = "`before` is the viewport just before the last click towar
                        now. Does `after` show the change that click was meant to make?";
 const DRAWN_WHERE: &str = "The thing inside the surface described in `surface` that the next step of `task` must \
                            click, in `viewport_screenshot`.";
+const DRAWN_ZOOMED: &str = "The thing inside the surface described in `surface` that the next step of `task` must \
+                            click, in `zoomed_view`, an enlarged part of that surface.";
 
 /// One located click: what Jev is shown and asked, and the names its events go under.
 struct Sighting<'a> {
@@ -38,6 +39,8 @@ struct Sighting<'a> {
     yes: &'a str,
     no: &'a str,
     place: &'a str,
+    /// `place` asked of `zoomed_view`, a part of the screenshot around the first answer, to place the click finer.
+    zoomed: Option<&'a str>,
     /// The control whose redraw voids the answer.
     target: &'a Control,
     /// Whether the click must land on `target`. A covered control's point is on its cover by definition.
@@ -74,6 +77,8 @@ impl Agent {
             yes: "The control is visible and nothing covers it.",
             no: "It is hidden, covered or absent.",
             place: WHERE,
+            // A control is boxed whole, as large as the page draws it.
+            zoomed: None,
             target,
             on_target: false,
             steps: Vec::new(),
@@ -97,10 +102,11 @@ impl Agent {
             yes: "The step is one click on something visible inside the surface.",
             no: "The step needs typing, dragging or another action, or what it needs is hidden, covered or absent.",
             place: DRAWN_WHERE,
+            zoomed: Some(DRAWN_ZOOMED),
             target: surface,
             // A point Jev placed outside the surface would press an element no decision chose.
             on_target: true,
-            steps: spans(&state.task, SpanKind::Str).into_iter().map(|(_, _, step)| step).collect(),
+            steps: task_steps(&state.task),
             event: "drawn",
         };
         self.click_sighted(state, observation, sighting).await
@@ -114,7 +120,7 @@ impl Agent {
         observation: &Observation,
         sighting: Sighting<'_>,
     ) -> Step<Option<ActResult>> {
-        let Sighting { state: mut seen, shown, yes, no, place, target, on_target, steps, event } = sighting;
+        let Sighting { state: mut seen, shown, yes, no, place, zoomed, target, on_target, steps, event } = sighting;
         let mut questions: IndexMap<String, Question> = IndexMap::from([
             ("shown".to_string(), NoulQuestion::new(format!("{UNTRUSTED}\n{shown}"), Some(yes), Some(no)).into()),
             (
@@ -122,10 +128,8 @@ impl Agent {
                 BoxQuestion { kind: Default::default(), instructions: format!("{UNTRUSTED}\n{place}") }.into(),
             ),
         ]);
-        if steps.len() > 1 {
-            let criteria =
-                steps.iter().enumerate().map(|(index, step)| (index.to_string(), step.clone().into())).collect();
-            questions.insert("step".into(), ChoiceQuestion::new(format!("{UNTRUSTED}\n{DRAWN_STEP}"), criteria).into());
+        if let Some(question) = step_question(&steps, DRAWN_STEP) {
+            questions.insert(keys::STEP.into(), question);
         }
         // The target is measured before the screenshot, so a viewport resized after it shows as a moved target: a
         // cloud browser's viewport grew from 524 to 568 px between the screenshot and a later measure, and the click
@@ -161,6 +165,10 @@ impl Agent {
         if shown.probability < bar || found.confidence.is_some_and(|confidence| confidence < bar) {
             return Ok(None);
         }
+        let (x, y) = match zoomed {
+            Some(zoomed) => self.placed_finer(state, &seen, zoomed, &png, &found.edges, event).await?,
+            None => found.edges.centre(),
+        };
         // The box is a point in the screenshot's page: on another document, tab or redrawn control it presses whatever
         // is there now, which the gate on this target never authorized.
         if self.page.document_changed(observation).await?
@@ -181,18 +189,21 @@ impl Agent {
             self.event(&format!("{event}_box_changed"), Map::new);
             return Ok(Some(moved("the page moved after the screenshot")));
         }
-        let (x, y) = found.edges.centre();
         let mut result = self.page.click_viewport(x, y, on_target.then_some(target.id.as_str())).await?;
+        // Jev found what the step needs, but not on the surface the step chose: Leaflet's red circle, boxed where it
+        // is, lies outside the marker image the step had picked. The step aimed at the wrong element, which the next
+        // step can correct, so it fails rather than ending the run as an action the surface cannot take.
+        if on_target && result.outcome == StepOutcome::Covered {
+            self.event(&format!("{event}_box_outside"), Map::new);
+            let outside =
+                format!("what the step needs is shown outside {}, so nothing was clicked", text::repr(&target.label));
+            return Ok(Some(ActResult { outcome: StepOutcome::Failed, detail: Some(outside), ..result }));
+        }
         // The history entry shows what the box held, before the click and after it: told only that the canvas was
         // clicked and its picture changed, the step after the Library pin's click could not see which pin it was, and
         // clicked the map again.
         let before = place_card(&png, &found.edges);
-        state.sighted = match evaluation.answers.get("step") {
-            Some(Answer::Choice(picked)) => {
-                picked.choice.parse::<usize>().ok().and_then(|index| steps.get(index).cloned())
-            }
-            _ => steps.first().cloned(),
-        };
+        state.sighted = chosen_step(&evaluation, &steps);
         // A click inside a drawn surface is judged by its pixels even when the page also added text: a map's
         // "Directions ready." is no control, so a page state keyed by its controls read the right pin as no progress,
         // and the map was withheld from the steps after it.
@@ -201,6 +212,71 @@ impl Agent {
         state.look =
             before.map(|before| Look { before, after: after.and_then(|after| place_card(&after, &found.edges)) });
         Ok(Some(result))
+    }
+
+    /// The point to click for `found`, a box in `png`. Box edges come in hundredths of the image, about 13 CSS px of a
+    /// 1265 px viewport, and one hundredth to the left of OpenLayers' 28 px pin was a click on the map beside it. The
+    /// same question asked of the largest square of the screenshot around the box places it about twice as finely
+    /// (TypeSafe's own advice for a small target). Its answer counts when it clears the bar and falls inside `found`,
+    /// the same thing found again; otherwise, or on a square screenshot, which no square crop narrows, the click goes
+    /// to the centre of `found`.
+    async fn placed_finer(
+        &self,
+        state: &mut RunState,
+        seen: &Value,
+        zoomed: &str,
+        png: &[u8],
+        found: &Edges,
+        event: &str,
+    ) -> Step<(f64, f64)> {
+        let centre = found.centre();
+        let Some(image) = rgba(png) else { return Ok(centre) };
+        let (width, height) = (image.width(), image.height());
+        let side = width.min(height);
+        if side == width.max(height) {
+            return Ok(centre);
+        }
+        let start =
+            |at: f64, total: u32| (at * total as f64 - side as f64 / 2.0).round().clamp(0.0, (total - side) as f64);
+        let (left, top) = (start(centre.0, width), start(centre.1, height));
+        let mut part = Vec::new();
+        let square = image::imageops::crop_imm(&image, left as u32, top as u32, side, side).to_image();
+        if square.write_to(&mut std::io::Cursor::new(&mut part), image::ImageFormat::Png).is_err()
+            || !jev_takes_png(&part)
+        {
+            return Ok(centre);
+        }
+        let reference = screenshot_reference(&part);
+        let mut seen = seen.clone();
+        if let Some(seen) = seen.as_object_mut() {
+            seen.remove("viewport_screenshot");
+            seen.insert("zoomed_view".into(), reference.clone().into());
+        }
+        let questions: IndexMap<String, Question> = IndexMap::from([(
+            "where".to_string(),
+            BoxQuestion { kind: Default::default(), instructions: format!("{UNTRUSTED}\n{zoomed}") }.into(),
+        )]);
+        state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+        let evaluation = match jev_purpose(
+            JevPurpose::Locate,
+            self.jev.evaluate_images(&seen, &questions, &Images::from([(reference, part)])),
+        )
+        .await
+        {
+            Ok(evaluation) => evaluation,
+            Err(error @ DecisionError::Budget(_)) => return Err(error.into()),
+            Err(_) => return Ok(centre),
+        };
+        state.ledger.record([evaluation.cost.clone()])?;
+        let Some(Answer::Box(fine)) = evaluation.answers.get("where") else { return Ok(centre) };
+        let (x, y) = fine.edges.centre();
+        let point = ((left + x * side as f64) / width as f64, (top + y * side as f64) / height as f64);
+        let agrees = (found.left..=found.right).contains(&point.0) && (found.top..=found.bottom).contains(&point.1);
+        if fine.confidence.is_some_and(|confidence| confidence < fastbrowse_core::decision::EVEN_ODDS) || !agrees {
+            self.event(&format!("{event}_finer_refused"), Map::new);
+            return Ok(centre);
+        }
+        Ok(point)
     }
 
     /// Judges an executed click by the frames before and after it, for a click whose effect is in pixels: one that

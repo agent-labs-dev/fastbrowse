@@ -11,7 +11,7 @@ use serde_json::{Map, json};
 use super::Agent;
 use super::helpers::{decision_label, describe};
 use super::state::{Edits, RunState, Step, Stop};
-use crate::policy::{Decision, StepContext, decide, takes};
+use crate::policy::{Decision, Look, StepContext, decide, takes};
 use crate::start::{accept_start, propose_route, recovery_pages};
 
 /// The action a stall is about, which the next ask leaves out: its operation, and the control it acted on by label.
@@ -339,7 +339,9 @@ impl Agent {
         state.mark_shown(&mut offered);
         let reason = context.problem.take().unwrap_or_default();
         withhold(&mut offered, &mut context, &reason, &withheld);
-        context.screenshot = self.viewport().await?;
+        // Asked again, Jev is shown the pictured controls' cards as the first ask was: without them Leaflet's red circle
+        // and blue triangle were two unnamed buttons beside a "Marker", and the run clicked the marker twice.
+        (context.screenshot, context.looks) = self.step_images(&offered, true).await?;
         let decision = decide(&*self.jev, &offered, &context, &self.config, Some(&state.ledger), &self.trace).await?;
         self.event("recover", || {
             Map::from_iter([
@@ -348,7 +350,8 @@ impl Agent {
                 ("target".into(), json!(decision_label(&decision).map(|label| self.redact(&label)))),
             ])
         });
-        state.picked = Some((state_key(observation), decision));
+        let look = Look::of(&decision, &context.looks);
+        state.picked = Some((state_key(observation), decision, look));
         Ok(())
     }
 }

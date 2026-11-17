@@ -202,6 +202,7 @@ impl Agent {
             destination: None,
             replayed: false,
             by_code: true,
+            step: None,
             offered: Vec::new(),
             plan: Vec::new(),
             read_scope: crate::policy::ReadScope::Page,

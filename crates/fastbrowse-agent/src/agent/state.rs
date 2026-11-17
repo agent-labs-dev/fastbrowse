@@ -305,8 +305,8 @@ pub(crate) struct RunState {
     pub http_seen: HashSet<(String, String, i64)>,
     pub hint: Option<String>,
     /// Jev's pick when asked again after a stall, by the page state it was asked on, taken as the
-    /// next decision there.
-    pub picked: Option<(String, Decision)>,
+    /// next decision there, with the card of the target it chose.
+    pub picked: Option<(String, Decision, Option<Look>)>,
     /// The action the next step carries out, built while the page was read.
     pub(super) built: Option<Step<super::driving::Watched<fastbrowse_core::page::Action>>>,
     pub unchanged: i64,
@@ -351,7 +351,8 @@ pub(crate) struct RunState {
     /// Jev's word, comparing the viewport before and after a click placed by sight, that the click changed what the
     /// page shows as the step meant. Pixels a drawn surface redraws change no element, so the DOM cannot say.
     pub drawn_changed: Option<bool>,
-    /// The task step a click Jev placed inside a drawn surface was for, until the next observation says what it did.
+    /// The task step a click Jev placed inside a drawn surface, or an action on a pictured control, was for, until the
+    /// next observation says what it did.
     pub sighted: Option<String>,
     /// The card of the pictured control the decision chose, for its history entry.
     pub look: Option<Look>,
@@ -360,7 +361,9 @@ pub(crate) struct RunState {
     pub keeping: bool,
     /// The change the site keeps was answered with text the page did not show before, such as "Saved.". The state a
     /// page reaches is keyed by its controls, so that reply alone left the save on a state already seen, the stall rule
-    /// withheld it, and the run went on looking for a save it had made. Saving again adds no new text.
+    /// withheld it, and the run went on looking for a save it had made. Saving again adds no new text. A click on a
+    /// control told apart by its pixels is answered the same way: Leaflet's triangle swapped one popup for another, and
+    /// its "I am a polygon." alone was the progress.
     pub replied: bool,
     /// Jev's word that the task rules out downloading, asked once a control the page says downloads is in play.
     pub downloads_forbidden: Option<bool>,

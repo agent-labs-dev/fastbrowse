@@ -1967,14 +1967,22 @@ impl Agent {
         let task = self.caller_task(state);
         let carried = NoulQuestion::new(
             format!(
-                "{UNTRUSTED}\n\n# Task\n{task}\n\nJudged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out?"
+                "{UNTRUSTED}\n\n# Task\n{task}\n\n{}",
+                HistoryEntry::told(
+                    "Judged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out?",
+                    &state.history
+                )
             ),
             Some("Every such step has been carried out, or the task asks only to find, read or report something."),
             Some("A step the task asks for, other than finding, reading or reporting, has not been carried out yet."),
         );
         let refused = NoulQuestion::new(
             format!(
-                "{UNTRUSTED}\n\n# Task\n{task}\n\nDo the current page or the recent actions show that the site does not allow a step the task asks to be carried out, such as an option the page marks unavailable or a control it shows disabled?"
+                "{UNTRUSTED}\n\n# Task\n{task}\n\n{}",
+                HistoryEntry::told(
+                    "Do the current page or the recent actions show that the site does not allow a step the task asks to be carried out, such as an option the page marks unavailable or a control it shows disabled?",
+                    &state.history
+                )
             ),
             Some(
                 "The page or the recent actions show the site does not allow a step the task asks for, and nothing left to try on the site would carry it out.",

@@ -30,6 +30,7 @@ use serde_json::{Map, Value, json};
 
 use crate::batches::evaluate_batches;
 use crate::error::{AgentError, Result};
+use crate::retrieval::text::{SpanKind, spans};
 
 /// The keys of the questions a step request asks Jev, which it answers under the same keys.
 pub(crate) mod keys {
@@ -46,6 +47,7 @@ pub(crate) mod keys {
     pub const SHOWS_ANSWER: &str = "shows_answer";
     pub const UNOBTAINABLE: &str = "unobtainable";
     pub const INSIDE_DRAWN: &str = "inside_drawn";
+    pub const STEP: &str = "step";
 
     /// The question that picks `operation`'s target.
     pub fn target(operation: Operation) -> String {
@@ -182,6 +184,14 @@ pub struct Look {
     pub after: Option<Vec<u8>>,
 }
 
+impl Look {
+    /// The card of the target `decision` chose, among the `looks` its question showed.
+    pub fn of(decision: &Decision, looks: &IndexMap<String, Vec<u8>>) -> Option<Look> {
+        let target = decision.target.as_ref()?;
+        looks.get(&target.id).map(|card| Look { before: card.clone(), after: None })
+    }
+}
+
 impl HistoryEntry {
     pub fn new(operation: Option<Operation>, target: Option<&str>, outcome: StepOutcome, page_changed: bool) -> Self {
         HistoryEntry {
@@ -224,6 +234,22 @@ impl HistoryEntry {
             None => {}
         }
         shown
+    }
+
+    /// What `seen` adds to an entry, told once in a question that is sent the entries' images. Not told, a Leaflet
+    /// run that had clicked the blue triangle, its card beside "button (2 of 2)" and "I am a polygon." on the page,
+    /// was judged three times not to have clicked it.
+    pub const LOOKS: &str = "A recent action's `looks_like` is an image of the element it acted on, as the page drew \
+                             it before the action and outlined in magenta: it shows which element the action's target \
+                             names. `looked_like_before` and `looks_like_after` are the place a click inside a drawn \
+                             surface acted on, before and after the click.";
+
+    /// `instructions` with `LOOKS` added when an entry of `history` has a card.
+    pub fn told(instructions: &str, history: &[HistoryEntry]) -> String {
+        match history.iter().any(|entry| entry.look.is_some()) {
+            true => format!("{instructions}\n{}", Self::LOOKS),
+            false => instructions.to_string(),
+        }
     }
 
     /// The images `seen` refers to.
@@ -503,6 +529,9 @@ pub struct Decision {
     pub plan: Vec<Planned>,
     #[serde(skip)]
     pub read_scope: ReadScope,
+    /// The task step Jev said an action on a pictured control is for, kept for its history entry.
+    #[serde(skip)]
+    pub step: Option<String>,
 }
 
 /// A list read keeps page judgments while leaving target selection to an ordinary decision.
@@ -553,6 +582,8 @@ pub struct Request {
     pub images: Images,
     /// The card of each pictured control, which its target option shows, again when a group's pick asks for it.
     pub looks: IndexMap<String, Vec<u8>>,
+    /// The task steps the step question offers, by its options' order.
+    pub steps: Vec<String>,
     pub questions: IndexMap<String, Question>,
     pub targets: IndexMap<Operation, Vec<Control>>,
     pub groups: IndexMap<Operation, Vec<Vec<Control>>>,
@@ -1037,7 +1068,7 @@ pub fn build_request(
     questions.insert(
         keys::OPERATION.into(),
         choice(
-            NEXT_ACTION.as_str(),
+            HistoryEntry::told(&NEXT_ACTION, &context.history),
             offered.iter().map(|op| {
                 // The operation is chosen apart from its target, and a choice of one address is answered without Jev
                 // at all, so the operation names where navigate goes: told only "another address", Jev searched the
@@ -1196,14 +1227,17 @@ pub fn build_request(
     }
     // Only the task says whether what it needs is inside a drawn surface, where the run cannot act, or among the
     // page's elements (#1084). Asked once per document that shows one, whenever one comes into view: a streamed view
-    // shows a spinner before its picture, in the same document.
+    // shows a spinner before its picture, in the same document. The line drawn is whether the action has to land on
+    // one place in the surface: asked instead whether the surface was "pressed as a whole", with only a streamed
+    // screen's field and button as examples, an OpenLayers marker was put at 0.45 to 0.58, and clicked at the canvas
+    // centre half the time; asked this way it is put at 0.97, and a canvas switch stays under 0.25.
     if context.check_surface && !drawn_surfaces(controls).is_empty() {
         questions.insert(
             keys::INSIDE_DRAWN.into(),
             noul(
-                "An element marked `drawn` is a drawn surface: it shows its content as pixels, with no elements inside it. Does the task need an action on something shown inside such a surface, such as typing into a field or pressing a button drawn in it? Pressing a surface as a whole, as one element, is not such an action, and neither is reading what it shows.",
-                "The task needs an action on something drawn inside a surface.",
-                "The task needs only this page's elements, a surface pressed as a whole, or what a surface shows read.",
+                "An element marked `drawn` is a drawn surface: it shows its content as pixels, with no elements inside it. Does the task need an action that has to land on one particular thing drawn inside such a surface, such as a marker, pin or shape on a map, a bar of a chart, or a field or button in a streamed screen? An action that does the same wherever it lands on the surface is not such an action, and neither is reading what it shows.",
+                "The task needs an action on one particular thing drawn inside a surface.",
+                "The task needs only this page's elements, an action that does the same anywhere on a surface, or what a surface shows read.",
             ),
         );
     }
@@ -1213,6 +1247,14 @@ pub fn build_request(
                 questions.insert(format!("{PLAN_PREFIX}{}", control.id), plan_question(control));
             }
         }
+    }
+    // A pictured control is named only by its place, so its history entry names the task step it was for, as a click
+    // inside a drawn surface does: told only that "button (2 of 2)" was clicked, a done check after the click that
+    // opened a Leaflet triangle's popup put the task at 0.75 carried, and at 0.97 told it was for "Click the blue
+    // triangle drawn on the map."
+    let steps = if context.looks.is_empty() { Vec::new() } else { task_steps(&context.task) };
+    if let Some(question) = step_question(&steps, PICTURED_STEP) {
+        questions.insert(keys::STEP.into(), question);
     }
     let described: HashSet<&str> = targets.values().flatten().map(|control| control.id.as_str()).collect();
     let state = state(observation, controls, context, &described);
@@ -1256,6 +1298,7 @@ pub fn build_request(
         state,
         images,
         looks: context.looks.clone(),
+        steps,
         questions,
         targets,
         groups,
@@ -1441,6 +1484,7 @@ async fn evaluate(
         by_code: false,
         offered: Vec::new(),
         ahead,
+        step: chosen_step(&evaluation, &request.steps),
     })
 }
 
@@ -1633,6 +1677,29 @@ fn destination_question(candidates: &[Control]) -> ChoiceQuestion {
 }
 
 /// What a target option's `looks_like` is, told to Jev once in the question rather than in every option.
+/// The task's sentences and clauses, which a click that names nothing on the page is recorded as made for.
+pub fn task_steps(task: &str) -> Vec<String> {
+    spans(task, SpanKind::Str).into_iter().map(|(_, _, step)| step).collect()
+}
+
+/// The question choosing which of `steps` an action is for; none when the task is one step.
+pub fn step_question(steps: &[String], instructions: &str) -> Option<Question> {
+    (steps.len() > 1).then(|| {
+        let criteria = steps.iter().enumerate().map(|(index, step)| (index.to_string(), step.clone().into())).collect();
+        ChoiceQuestion::new(format!("{UNTRUSTED}\n{instructions}"), criteria).into()
+    })
+}
+
+/// The step `evaluation` chose among `steps`, or the only one.
+pub fn chosen_step(evaluation: &Evaluation, steps: &[String]) -> Option<String> {
+    match evaluation.answers.get(keys::STEP) {
+        Some(Answer::Choice(picked)) => picked.choice.parse::<usize>().ok().and_then(|index| steps.get(index).cloned()),
+        _ => steps.first().cloned(),
+    }
+}
+
+const PICTURED_STEP: &str = "If the next action is on an element whose option shows `looks_like`, which sentence or clause \
+                             of `task` is that action for? Choose the task's own wording.";
 const LOOKS_LIKE: &str = "An option's `looks_like` is an image of the card or row that holds that element as the page \
                           draws it, outlined in magenta, for a task that names it by what its picture shows.";
 
@@ -2205,6 +2272,13 @@ mod tests {
         assert_eq!(request.state["recent_actions"][1]["looked_like_before"], json!(red));
         assert_eq!(request.state["recent_actions"][1]["looks_like_after"], json!(blue));
         assert!(request.images.contains_key(&red) && request.images.contains_key(&blue));
+        // Jev is told what the cards are, and only when there are any.
+        let Question::Choice(operation) = &request.questions[keys::OPERATION] else { unreachable!() };
+        assert!(operation.instructions.contains(HistoryEntry::LOOKS));
+        context.history.iter_mut().for_each(|entry| entry.look = None);
+        let request = build_request(&page, &page.controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
+        let Question::Choice(operation) = &request.questions[keys::OPERATION] else { unreachable!() };
+        assert!(!operation.instructions.contains(HistoryEntry::LOOKS));
         // Questions that send no image name no card.
         assert!(context.history[0].shown().get("looks_like").is_none());
     }
@@ -2237,6 +2311,21 @@ mod tests {
         let Question::Choice(target) = &request.questions["click_target"] else { panic!("a choice") };
         assert_eq!(target.criteria["b1"]["looks_like"], json!(screenshot_reference(b"one")));
         assert!(!referenced(&request.images, &request.state, &request.questions).is_empty());
+    }
+
+    #[test]
+    fn test_an_action_on_a_pictured_control_says_which_task_step_it_is_for() {
+        let jev = fake(&[("operation", "click"), ("click_target", "b1"), (keys::STEP, "0")], "");
+        let page = observation((0..3).map(button).collect());
+        let mut context =
+            StepContext::new("Click the blue triangle drawn on the map. What does the popup that opens say?");
+        context.looks = IndexMap::from([("b1".to_string(), b"one".to_vec())]);
+        let decision = block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
+        assert!(decision.step.unwrap().starts_with("Click the blue triangle"));
+        // With no pictured control in view, an option's label names it, and no step is asked.
+        context.looks.clear();
+        let request = build_request(&page, &page.controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
+        assert!(!request.questions.contains_key(keys::STEP));
     }
 
     #[test]

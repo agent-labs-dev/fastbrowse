@@ -157,23 +157,33 @@ async fn test_a_drawn_map_is_named_by_its_cards_heading_not_its_first_link() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_unnamed_shapes_in_an_svg_are_drawn_and_pictured() {
+async fn test_map_shapes_and_markers_are_controls_not_drawn_surfaces() {
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");
+    // Leaflet's map: two unnamed SVG paths, a marker image the page gives role button, and beside them an image that
+    // takes clicks on its pixels as a streamed view does.
+    let pixel = "data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==";
     eval_active(
         &h.session,
-        r#"
+        &format!(
+            r#"
         document.body.innerHTML = '<svg width="300" height="200"><g>' +
-          '<path d="M20 20 h60 v60 h-60 z" fill="red"></path><path d="M150 20 l40 60 h-80 z" fill="blue"></path></g></svg>';
-        for (const path of document.querySelectorAll('path')) path.addEventListener('click', () => {});
-        "#,
+          '<path d="M20 20 h60 v60 h-60 z" fill="red"></path><path d="M150 20 l40 60 h-80 z" fill="blue"></path></g></svg>' +
+          '<img src="{pixel}" alt="Marker" role="button" tabindex="0" width="25" height="41">' +
+          '<img src="{pixel}" alt="Remote view" width="200" height="100">';
+        for (const e of document.querySelectorAll('path, img')) e.addEventListener('click', () => {{}});
+        "#
+        ),
     )
     .await;
     let obs = h.observe().await;
     let shapes: Vec<_> =
         obs.controls.iter().filter(|c| c.context.as_deref().is_some_and(|c| c.ends_with("of 2"))).collect();
     assert_eq!(shapes.len(), 2, "{:?}", obs.controls);
-    assert!(shapes.iter().all(|c| c.pictured == Some(true) && c.drawn == Some(true)), "{:?}", obs.controls);
+    assert!(shapes.iter().all(|c| c.pictured == Some(true) && c.drawn.is_none()), "{:?}", obs.controls);
+    let drawn = |label: &str| obs.controls.iter().find(|c| c.label == label).map(|c| c.drawn);
+    assert_eq!(drawn("Marker"), Some(None), "{:?}", obs.controls);
+    assert_eq!(drawn("Remote view"), Some(Some(true)), "{:?}", obs.controls);
     h.close().await;
 }
 

@@ -137,9 +137,9 @@ impl Agent {
             let picked = state
                 .picked
                 .take()
-                .filter(|(key, _)| *key == state_key(&observation))
-                .map(|(_, picked)| picked)
-                .filter(|picked| {
+                .filter(|(key, ..)| *key == state_key(&observation))
+                .map(|(_, picked, look)| (picked, look))
+                .filter(|(picked, _)| {
                     picked.target.as_ref().is_none_or(|target| observation.controls.iter().any(|c| c.id == target.id))
                 });
             if picked.is_some()
@@ -155,8 +155,8 @@ impl Agent {
                 state.reached_known_pages.push(url.clone());
             }
             let mut decision = match picked {
-                Some(picked) => {
-                    state.look = None;
+                Some((picked, look)) => {
+                    state.look = look;
                     picked
                 }
                 None => {
@@ -206,7 +206,7 @@ impl Agent {
                             });
                         }
                         None => {
-                            (context.screenshot, context.looks) = self.step_images(&offered).await?;
+                            (context.screenshot, context.looks) = self.step_images(&offered, false).await?;
                         }
                     }
                     let redecided = state.redecided;
@@ -246,15 +246,14 @@ impl Agent {
                     if let Some(probability) = decision.inside_drawn {
                         state.surface_judged = Some((page.clone(), probability));
                     }
-                    state.look = decision
-                        .target
-                        .as_ref()
-                        .and_then(|target| context.looks.get(&target.id))
-                        .map(|card| Look { before: card.clone(), after: None });
+                    state.look = Look::of(&decision, &context.looks);
                     state.last_page = Some(page);
                     decision
                 }
             };
+            if state.look.is_some() {
+                state.sighted = decision.step.clone();
+            }
             self.record_page(state, &observation);
             self.trace_read_context("decision_context", state, &observation, &decision);
             state.choices = self.choices(&decision);
@@ -567,6 +566,7 @@ impl Agent {
                 destination: None,
                 replayed: false,
                 by_code: false,
+                step: None,
                 offered: Vec::new(),
                 ahead: planned.ahead.clone(),
                 plan: Vec::new(),
@@ -1013,11 +1013,10 @@ impl Agent {
                 && action.operation == Operation::Click
                 && decision.target.as_ref().is_some_and(|target| target.drawn == Some(true));
             let located = match (inside_drawn, decision.target.as_ref()) {
+                // Only Jev's doubt that the step is one click on something it sees there ends the run.
                 (true, Some(surface)) => match self.click_inside_drawn(state, &raw, surface).await? {
-                    Some(result) if matches!(result.outcome, StepOutcome::Executed | StepOutcome::Stale) => {
-                        Some(result)
-                    }
-                    _ => return Err(drawn_surface_stop(&observation.url, &[surface]).into()),
+                    Some(result) => Some(result),
+                    None => return Err(drawn_surface_stop(&observation.url, &[surface]).into()),
                 },
                 _ => None,
             };
@@ -1516,7 +1515,7 @@ impl Agent {
                 changed: false,
                 shown: Vec::new(),
             }
-        } else if (state.committing || keeping || sighted.is_some())
+        } else if (state.committing || keeping || sighted.is_some() || last.look.is_some())
             && last.outcome == StepOutcome::Executed
             && observation.dialog.is_none()
         {
@@ -1524,9 +1523,11 @@ impl Agent {
             // was sent has a reply: one the page redrew or covered before it went, or one waiting on a dialog, did
             // not put there the text a page added meanwhile. A click inside a drawn surface changes no element it
             // names, so the text the page added in reply is all that records it: the popup a click on an OpenLayers
-            // marker opened read as "only the page text changed", and the step was judged never carried out.
-            state.replied =
-                (state.committing || keeping) && !fastbrowse_core::effects::added_text(&before, observation).is_empty();
+            // marker opened read as "only the page text changed", and the step was judged never carried out. So does a
+            // control told apart only by its pixels (it has a card): Leaflet's unnamed triangle swapped one popup for
+            // another, read as "showed 1 control: Close popup; removed 1 control: Close popup", and was clicked again.
+            state.replied = (state.committing || keeping || last.look.is_some())
+                && !fastbrowse_core::effects::added_text(&before, observation).is_empty();
             fastbrowse_core::effects::effect_of_commit(&before, observation, None, waited)
         } else {
             effect(&before, observation, None, waited)
@@ -1684,12 +1685,14 @@ impl Agent {
     /// no elements to say what they show, so the state carries the viewport: given it only for drawn controls, a sales
     /// chart drawn on a canvas that is no control was never seen, and the run scrolled and waited on it. A pictured
     /// control's text leaves it alike to another or unnamed, so its option carries its card, cut from the viewport.
+    /// `whole` sends the viewport whatever the page shows.
     pub(super) async fn step_images(
         &self,
         observation: &Observation,
+        whole: bool,
     ) -> Step<(Option<Vec<u8>>, IndexMap<String, Vec<u8>>)> {
         let controls = &observation.controls;
-        let pixels = observation.visual_content || controls.iter().any(|control| control.drawn == Some(true));
+        let pixels = whole || observation.visual_content || controls.iter().any(|control| control.drawn == Some(true));
         let pictured: Vec<String> = controls
             .iter()
             .filter(|control| control.pictured == Some(true))
