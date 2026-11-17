@@ -69,7 +69,7 @@ from fastbrowse.evals.replay import (
     openrouter_forward,
     translate_origin,
 )
-from fastbrowse.evals.runner import LOCAL_LIMITS, MOCK_LIMITS
+from fastbrowse.evals.runner import LOCAL_LIMITS, MOCK_LIMITS, TASK_SECONDS
 from fastbrowse.evals.tasks import TASKS as LOCAL_TASKS
 from fastbrowse.evals.tasks import LocalTask
 from fastbrowse.models import CostBreakdown, RunResult
@@ -84,7 +84,6 @@ TIMING_SENSITIVE = {
 }
 """Tasks whose result depends on wall time, not on the model responses. A diff in one is reported, and labelled."""
 
-TASK_SECONDS = 900.0
 SHUTDOWN_SECONDS = 30.0
 
 AGENT_ENV_DROPPED = (
