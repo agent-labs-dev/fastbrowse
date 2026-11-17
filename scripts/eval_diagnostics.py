@@ -16,6 +16,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from cassette_refill import fill_verdict
+
 ModelSetting = Literal[
     "FASTBROWSE_DECISION_SOURCE",
     "FASTBROWSE_DECISION_MODEL",
@@ -299,16 +302,12 @@ def main() -> int:
     if not report_path.exists():
         return 1
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    entries = report["tasks"]
-    known = sum(entry.get("recorded_cost_usd") or 0 for entry in entries)
-    unknown = any(entry.get("unpriced_exchanges", 0) for entry in entries)
-    receipt["recorded_known_cost_usd"] = known
-    receipt["has_unpriced_exchanges"] = unknown
-    complete = {entry["task"] for entry in entries} == set(tasks)
-    converged = all(not entry["misses"] and entry["result"]["grade"]["passed"] for entry in entries)
-    receipt["complete"] = complete
-    receipt["converged"] = converged
-    accepted = code == 0 and complete and converged and not unknown and known <= dollars
+    verdict = fill_verdict(report, tasks, dollars, code)
+    receipt["recorded_known_cost_usd"] = verdict.spent
+    receipt["has_unpriced_exchanges"] = verdict.unpriced
+    receipt["complete"] = verdict.complete
+    receipt["converged"] = verdict.converged
+    accepted = verdict.accepted
     if accepted:
         receipt.pop("unresolved_budget_hold_usd", None)
     write(out / "fill.receipt.json", receipt)
