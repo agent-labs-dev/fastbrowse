@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- The fixture bench and runner give every run a time limit. A run with no `max_seconds` holds a Wait until the page changes, with no bound, so a model that chose Wait on a static page left a bench run silent until the harness's 900 s client timeout, which reported "no run reply" with no result or evidence. A run now stops itself at the limit as `budget_exceeded`, with its evidence, before that timeout. The product is unchanged: a run with no time limit still waits for the page, so set `max_seconds` for any run nobody is watching ([#1213](https://github.com/agent-labs-dev/fastbrowse/issues/1213)).
+
 ## [0.11.1] - 2026-11-17
 
 - A run whose answer every check holds ends `complete`, and whether an answer is complete is decided only by Jev and by code, never by the model writing it. Asked for the most expensive product after sorting a shop by price descending, the writer called page 1 of 3 partial although Jev judged the answer complete, and the run ended `unverified` ([#1194](https://github.com/agent-labs-dev/fastbrowse/issues/1194)). A draft with no claims now goes to recovery instead of ending the run ([#1160](https://github.com/agent-labs-dev/fastbrowse/issues/1160)). A computed value is written whole, unit included, by code: the words around it are no longer parsed, so "GBP" written beside a computed "GBP 59" no longer sends the answer back until the run ends `unverified` ([#1195](https://github.com/agent-labs-dev/fastbrowse/issues/1195)), and a claim naming the cheapest or dearest record has one way to name it ([#1199](https://github.com/agent-labs-dev/fastbrowse/pull/1199)).

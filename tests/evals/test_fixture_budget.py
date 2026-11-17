@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from fastbrowse.evals.runner import _FixtureBudget, main
+from fastbrowse.evals.runner import RUN_SECONDS, _FixtureBudget, main
 from fastbrowse.models import CostBasis, CostBreakdown, CostComponent, CostLine
 
 
@@ -24,7 +24,8 @@ def test_fixture_budget_uses_full_remaining_balance_without_task_caps(tmp_path: 
     budget = _FixtureBudget(path, 10)
     first = budget.reserve("first", 0)
     assert first.max_dollars == 10
-    assert first.max_steps is first.max_seconds is first.max_llm_calls is first.max_jev_calls is None
+    assert first.max_seconds == RUN_SECONDS
+    assert first.max_steps is first.max_llm_calls is first.max_jev_calls is None
     assert json.loads(path.read_text())["reserved_usd"] == 10
     budget.settle(cost(0.0000049))
     assert budget.reserve("second", 0).max_dollars == 10 - 0.0000049
