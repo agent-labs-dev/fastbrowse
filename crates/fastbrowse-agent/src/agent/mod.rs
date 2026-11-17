@@ -16,6 +16,7 @@ mod replay;
 mod search;
 mod seeing;
 pub(crate) mod state;
+mod superseding;
 
 #[cfg(test)]
 mod tests;
@@ -135,8 +136,8 @@ impl Agent {
         let redactor = Arc::default();
         Agent {
             page,
-            jev,
-            llm,
+            jev: Arc::new(superseding::Decisions(jev)),
+            llm: Arc::new(superseding::Generations(llm)),
             config,
             secrets: None,
             on_event: None,

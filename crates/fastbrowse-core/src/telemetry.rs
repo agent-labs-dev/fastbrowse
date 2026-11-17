@@ -123,7 +123,17 @@ impl Ledger {
     /// Refuse calls that would break a limit; `record` the actual lines afterwards.
     ///
     /// Calls sent together are reserved together, so a limit reached partway counts none of them.
+    ///
+    /// A Jev or LLM request for a decision the page redrew under is refused unsent by the run's clients, so it reserves
+    /// nothing.
     pub fn reserve(&self, component: CostComponent, estimate_dollars: f64, calls: i64) -> Result<(), BudgetExceeded> {
+        let gated = match component {
+            CostComponent::Jev | CostComponent::Llm => true,
+            CostComponent::Browser | CostComponent::Proxy | CostComponent::Search => false,
+        };
+        if gated && crate::superseding::superseded() {
+            return Ok(());
+        }
         let mut state = self.state();
         match component {
             CostComponent::Jev => {

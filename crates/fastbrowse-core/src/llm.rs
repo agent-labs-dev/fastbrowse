@@ -66,6 +66,9 @@ pub enum LLMError {
     /// The client's reservation, or the receipt it recorded, broke a limit.
     #[error(transparent)]
     Budget(#[from] BudgetExceeded),
+    /// The page redrew under the decision that would have sent this request, so it was not sent.
+    #[error("the page redrew, so the decision it was for is discarded")]
+    Superseded,
 }
 
 impl MaybeUnavailable for LLMError {

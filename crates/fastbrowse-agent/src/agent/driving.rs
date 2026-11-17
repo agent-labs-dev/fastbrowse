@@ -636,8 +636,12 @@ impl Agent {
     ///
     /// A page can draw after it settles, and nothing says it will: picking a day in Google Flights' date picker blanks
     /// the prices, the page waits about 400ms with no request, spinner or mutation, and then fetches and draws them.
-    /// Watching while Jev decides and gates drops the work as soon as it is doomed, and the next decision is made on
-    /// the settled page. Only one drop per action: a control that never stops changing is still acted on.
+    /// Watching while Jev decides and gates finds the work doomed, and the next decision is made on the settled page.
+    /// Only one redraw per action: a control that never stops changing is still acted on.
+    ///
+    /// Doomed work still runs before `Redrawn` is returned, to finish the requests it already sent and record what they
+    /// cost (#1218), but it sends no new one ([`fastbrowse_core::superseding`]). That costs the rest of one request, about half a
+    /// second on Online-Mind2Web, and stays inside the run's time limit.
     pub(super) async fn unless_redrawn<T, F>(
         &self,
         redecided: bool,
@@ -653,13 +657,21 @@ impl Agent {
         }
         let raw = self.raw().unwrap_or_else(|| observation.clone());
         let watching = self.page.redrawn(&raw, REDRAW_WATCH_SECONDS, target);
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let work = fastbrowse_core::superseding::superseding(flag.clone(), work);
         tokio::pin!(work);
         tokio::pin!(watching);
         tokio::select! {
             biased;
             done = &mut work => done.map(Watched::Done),
             redrawn = &mut watching => match redrawn {
-                Ok(true) => Ok(Watched::Redrawn),
+                Ok(true) => {
+                    fastbrowse_core::superseding::supersede(&flag);
+                    // Its outcome was decided on a page that is gone, so it is discarded, an error included; the next
+                    // decision meets any limit it reached.
+                    let _ = work.await;
+                    Ok(Watched::Redrawn)
+                }
                 Ok(false) => work.await.map(Watched::Done),
                 Err(error) => Err(error.into()),
             },

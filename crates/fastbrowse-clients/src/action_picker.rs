@@ -119,6 +119,7 @@ impl LlmDecisionClient {
                     LLMError::RetriesExhausted(message) => DecisionError::TransportFailed(message),
                     LLMError::Rejected(message) => DecisionError::Rejected(message),
                     LLMError::Budget(exceeded) => DecisionError::Budget(exceeded),
+                    LLMError::Superseded => DecisionError::Superseded,
                 },
             )?;
         let answers = answers(questions, &generated.data).map_err(DecisionError::Failed)?;

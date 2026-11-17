@@ -27,6 +27,7 @@ pub mod py;
 pub mod recipe;
 pub mod safety;
 pub mod schema;
+pub mod superseding;
 pub mod telemetry;
 pub mod validation;
 

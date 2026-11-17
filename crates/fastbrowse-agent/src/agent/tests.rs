@@ -9841,3 +9841,140 @@ async fn switching_between_two_shown_tabs_is_no_progress_though_one_ticks() {
     let (offered, _, withheld) = next_ask(&agent, &state).await;
     assert!(withheld.contains(&Operation::SwitchTab), "the ask after it leaves switch_tab out: {offered:?}");
 }
+
+/// The scripted Jev, answering a step decision only after a pause, and counting the decisions asked and answered.
+struct SlowDecision(ScriptedJev, Arc<std::sync::atomic::AtomicUsize>, Arc<std::sync::atomic::AtomicUsize>, u64);
+
+impl DecisionClient for SlowDecision {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        use std::sync::atomic::Ordering;
+        Box::pin(async move {
+            let deciding = questions.contains_key("operation");
+            if deciding {
+                self.1.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(self.3)).await;
+            }
+            let evaluation = self.0.evaluate(state, questions).await;
+            if deciding {
+                self.2.fetch_add(1, Ordering::SeqCst);
+            }
+            evaluation
+        })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        self.0.profile()
+    }
+}
+
+/// A decision the page redrew under was dropped mid-request, and a request dropped before its response has no cost
+/// to record: the run's cost went unpriced (#1218). The stale decision now finishes before the run decides again, so
+/// every request the run sent is answered and priced.
+#[tokio::test]
+async fn test_a_decision_the_page_redrew_under_is_answered_before_the_run_decides_again() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (asked, answered) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let jev = SlowDecision(
+        ScriptedJev::new(crate::scripted::steps("click One way").unwrap()),
+        asked.clone(),
+        answered.clone(),
+        20,
+    );
+    let agent = Agent::new(Arc::new(Picker::new()), Arc::new(jev), Arc::new(ScriptedLLM));
+    let options = super::RunOptions {
+        start: Some("https://shop.test/ticket".into()),
+        limits: Some(Limits { max_steps: Some(1), ..Limits::default() }),
+        ..Default::default()
+    };
+    agent.run("Choose One way as the ticket type and tell me the price", options).await.unwrap();
+    assert!(asked.load(Ordering::SeqCst) >= 2, "the page redrew under the first decision, so it was asked again");
+    assert_eq!(answered.load(Ordering::SeqCst), asked.load(Ordering::SeqCst));
+}
+
+/// Finishing a decision the page redrew under happens inside the run's time limit: a stale request slower than the time
+/// left is cut off at the limit, and the run ends there rather than waiting on an answer it would discard.
+#[tokio::test]
+async fn test_a_stale_decision_slower_than_the_time_left_does_not_overrun_the_limit() {
+    use std::sync::atomic::AtomicUsize;
+    let jev = SlowDecision(
+        ScriptedJev::new(crate::scripted::steps("click One way").unwrap()),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
+        30_000,
+    );
+    let agent = Agent::new(Arc::new(Picker::new()), Arc::new(jev), Arc::new(ScriptedLLM));
+    let options = super::RunOptions {
+        start: Some("https://shop.test/ticket".into()),
+        limits: Some(Limits { max_seconds: Some(0.5), ..Limits::default() }),
+        ..Default::default()
+    };
+    let began = std::time::Instant::now();
+    let result = agent.run("Choose One way as the ticket type and tell me the price", options).await.unwrap();
+    assert_eq!(result.status, Status::BudgetExceeded, "{:?}", result.error);
+    assert!(began.elapsed() < std::time::Duration::from_secs(5), "ran {:?} past a 0.5 s limit", began.elapsed());
+}
+
+/// A decision client that takes a moment to answer, counting the requests it was sent and the ones it answered.
+struct Counted(Arc<std::sync::atomic::AtomicUsize>, Arc<std::sync::atomic::AtomicUsize>);
+
+impl DecisionClient for Counted {
+    fn evaluate<'a>(
+        &'a self,
+        _: &'a serde_json::Value,
+        _: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        use std::sync::atomic::Ordering;
+        Box::pin(async move {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            self.1.fetch_add(1, Ordering::SeqCst);
+            Err(DecisionError::Failed("a counted request has no answer".into()))
+        })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile::jev()
+    }
+}
+
+/// A grouped choice asks a second question once the first is answered. When the page redrew under the first, the
+/// second would be a request about a page that is gone, paid for an answer nobody reads: the request already sent
+/// finishes, and no new one is sent.
+#[tokio::test]
+async fn test_a_decision_the_page_redrew_under_sends_no_new_request() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (asked, answered) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let events: Arc<std::sync::Mutex<Vec<Event>>> = Arc::default();
+    let sink = events.clone();
+    let on_event: EventHandler = Arc::new(move |event: Event| {
+        sink.lock().unwrap().push(event);
+        Box::pin(async {})
+    });
+    let trace = Trace::collecting();
+    let agent =
+        Agent::new(Arc::new(Picker::new()), Arc::new(Counted(asked.clone(), answered.clone())), Arc::new(ScriptedLLM))
+            .with_events(Some(on_event))
+            .with_trace(trace.clone());
+    let (state, questions) = (serde_json::json!({}), IndexMap::new());
+    let ledger = fastbrowse_core::telemetry::Ledger::new(Limits::default());
+    // Each request reserves its call first, as the run's call sites do.
+    let ask = || async {
+        ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+        agent.jev.evaluate(&state, &questions).await.map_err(super::state::Flow::from)
+    };
+    let work = async {
+        let _ = ask().await;
+        ask().await
+    };
+    let watched = agent.unless_redrawn(false, work, &at("https://shop.test/ticket", &[]), None).await.unwrap();
+    assert!(matches!(watched, super::driving::Watched::Redrawn));
+    assert_eq!((asked.load(Ordering::SeqCst), answered.load(Ordering::SeqCst)), (1, 1));
+    assert_eq!(ledger.state().jev_calls, 1, "the run counts only the request it sent");
+    // The refused request is an expected discard, not a failure: nothing reaches the host's events or the trace.
+    assert!(events.lock().unwrap().is_empty());
+    assert_eq!(trace.events(), Vec::<serde_json::Value>::new());
+}

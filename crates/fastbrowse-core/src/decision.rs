@@ -447,6 +447,9 @@ pub enum DecisionError {
     /// A request would break a limit, so it was not sent. Python raises `BudgetExceeded` through `evaluate` itself.
     #[error(transparent)]
     Budget(#[from] BudgetExceeded),
+    /// The page redrew under the decision that would have sent this request, so it was not sent.
+    #[error("the page redrew, so the decision it was for is discarded")]
+    Superseded,
 }
 
 impl MaybeUnavailable for DecisionError {
