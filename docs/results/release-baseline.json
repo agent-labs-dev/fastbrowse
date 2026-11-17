@@ -1,6 +1,6 @@
 {
-  "version": "0.10.0",
-  "campaign": "release-0.10.0",
+  "version": "0.11.1",
+  "campaign": "release-0.11.1",
   "note": "The campaign a release is compared with: the last release's, each task from its newest run that measured it three times, as the candidate is read. `tasks` is every task that campaign measured; the gate refuses a baseline that no longer supplies all of them, such as after a ledger artifact expires. scripts/release_gate.py reads it.",
   "tasks": [
     "core/arxiv-open",

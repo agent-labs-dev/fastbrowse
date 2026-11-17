@@ -19,10 +19,11 @@ from urllib.parse import urlsplit
 import httpx
 from fastbrowse.models import Status
 from parallax.harnesses.browser import BrowserHarness
-from parallax.harnesses.browser.site import Unavailable, retryable_status, transient_transport
+from parallax.harnesses.browser.site import TRANSIENT_TRANSPORT, Unavailable, retryable_status
 from parallax.models import Capability, CostSource, HarnessInfo, HarnessKind, Isolation, Task, TurnInput
 
 from fastbrowse_evals.evidence import result_answer, step_action
+from fastbrowse_evals.task_specs import start_url
 
 DEFAULT_URL = "https://api.fastbrowse.ai"
 POLL_SECONDS = 2.0
@@ -51,7 +52,7 @@ def test_key() -> bool:
 
 def _failure(what: str, status: int | None = None, error: Exception | None = None) -> Exception:
     if error is not None:
-        failure = Unavailable if transient_transport(error) else RuntimeError
+        failure = Unavailable if isinstance(error, TRANSIENT_TRANSPORT) else RuntimeError
         return failure(f"fastbrowse-hosted {what} failed ({type(error).__name__})")
     failure = Unavailable if retryable_status(status) else RuntimeError
     return failure(f"fastbrowse-hosted {what} returned HTTP {status}")
@@ -67,16 +68,9 @@ async def _call(http: httpx.AsyncClient, method: str, url: str, what: str, **kwa
     return response.json()
 
 
-def _start_url(task: Task) -> str:
-    start_url = task.data.get("start_url")
-    if not isinstance(start_url, str):
-        raise ValueError(f"browser task {task.id} has no start_url")
-    return start_url
-
-
 def _run_secrets(task: Task) -> list[dict[str, Any]]:
     """The task's logins as the hosted API's per-run inline secrets, each typed only on the start origin."""
-    parts = urlsplit(_start_url(task))
+    parts = urlsplit(start_url(task))
     origin = f"{parts.scheme}://{parts.netloc}"
     # The runner made the trial INVALID before this point if any of these variables is unset.
     return [{"name": alias, "value": os.environ[env], "origins": [origin]} for alias, env in task.secrets.items()]
@@ -96,7 +90,7 @@ async def submit_and_wait(http: httpx.AsyncClient, task: Task, prompt: str) -> t
             headers=headers | {"Idempotency-Key": f"parallax-{task.id}-{uuid.uuid4().hex}"},
             json={
                 "task": prompt,
-                "start": _start_url(task),
+                "start": start_url(task),
                 "output_schema": task.answer_schema,
                 "secrets": _run_secrets(task),
                 "authorize": task.meta.authorizes,

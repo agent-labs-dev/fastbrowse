@@ -23,7 +23,7 @@ from parallax.harnesses.browser.cloud import Browser, cloud_browser
 from parallax.models import Capability, CostSource, HarnessInfo, HarnessKind, Isolation, Task, TurnInput
 
 from fastbrowse_evals.evidence import result_answer, step_action
-from fastbrowse_evals.task_specs import answer_model
+from fastbrowse_evals.task_specs import answer_model, start_url
 
 PROVIDER_KEYS = ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "EXA_API_KEY")
 """The provider keys a fastbrowse arm is given: Jev, its LLM and optional web search use these.
@@ -115,12 +115,10 @@ class FastbrowseHarness(BrowserHarness):
         task = self._task
         if task is None:
             raise RuntimeError("fastbrowse harness has no task")
-        start_url = task.data.get("start_url")
-        if not isinstance(start_url, str):
-            raise ValueError("browser task has no start_url")
+        start = start_url(task)
         # The runner made the trial INVALID before this point if any of these variables is unset.
         values = {alias: os.environ[env_name] for alias, env_name in task.secrets.items()}
-        secrets = ScopedSecrets(values, origin_of(start_url)) if values else None
+        secrets = ScopedSecrets(values, origin_of(start)) if values else None
         authorization = Authorization(irreversible_actions=task.meta.authorizes)
         async with httpx.AsyncClient() as http, self.browser(http) as browser:
             self._browser = browser
@@ -131,10 +129,12 @@ class FastbrowseHarness(BrowserHarness):
                 self._events = events
                 output = await run_task(
                     turn.text,
-                    start=start_url,
+                    start=start,
                     open_browser=lambda: _ready_browser(browser),
                     output_schema=answer_model(task.id),
-                    limits=Limits(),
+                    # Parallax's turn limit, less the browser's start: fastbrowse ends the run itself, with its
+                    # answer and evidence, rather than being cancelled mid-step.
+                    limits=Limits(max_seconds=self.seconds_left()),
                     authorization=authorization,
                     secrets=secrets,
                     http=http,
@@ -151,6 +151,12 @@ class FastbrowseHarness(BrowserHarness):
 
     def settings(self) -> dict[str, str]:
         return run_settings()
+
+    def cancelled(self) -> dict[str, object]:
+        """The pages and steps a run reached before Parallax's turn limit cancelled it, from its trace events: a
+        cancelled `run_task` never returns the steps `_run_result` reads. The step it was in has no outcome yet, so
+        it reads `cancelled`."""
+        return cancelled_evidence(self._events)
 
     @property
     def trial_metadata(self) -> dict[str, object]:
@@ -225,6 +231,33 @@ def read_pages(events: Iterable[object]) -> tuple[list[dict[str, object]], dict[
             pages.append(record)
         seen_at[event["step"]] = index[key]
     return pages, seen_at
+
+
+def cancelled_evidence(events: Iterable[object]) -> dict[str, object]:
+    """`pages` and `step_log`, as `_run_result` reports them, rebuilt from the trace of a run that never returned."""
+    events = list(events)
+    pages, seen_at = read_pages(events)
+    decided: dict[int, Mapping[str, object]] = {}
+    for event in events:
+        if (
+            isinstance(event, Mapping)
+            and event.get("event") == "decision_context"
+            and isinstance(event.get("step"), int)
+        ):
+            decided[event["step"]] = (
+                event  # a step decided again, as when a read moves into the browser, keeps its last
+            )
+    steps: list[dict[str, object]] = []
+    for position, (index, decision) in enumerate(sorted(decided.items())):
+        outcome = "cancelled" if position == len(decided) - 1 else None
+        item: dict[str, object] = {"action": step_action(str(decision.get("operation")), outcome, None)}
+        if index in seen_at:
+            item["page"] = seen_at[index]
+            item["url"] = pages[seen_at[index]].get("url")
+        if isinstance(decision.get("target_id"), str):
+            item["value"] = decision["target_id"]
+        steps.append(item)
+    return {"pages": pages, "step_log": steps}
 
 
 def _run_result(

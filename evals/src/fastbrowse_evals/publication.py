@@ -419,7 +419,7 @@ def candidate_from_runs(run_dirs: Iterable[Path], *, campaign_id: str) -> Candid
         if result.verdict in {Verdict.PASS, Verdict.FAIL}:
             row = trial_result_to_row(
                 result,
-                attempts=run.physical_runs(result.key),
+                attempts=tuple(attempt for attempt in run.attempts if attempt.key == result.key),
                 official=group_id in OFFICIAL_SOURCES.values(),
             )
             rows_by_group.setdefault(group_id, {}).setdefault(arm, []).append(row)

@@ -30,7 +30,7 @@ fastbrowse-mcp --help > /dev/null
 
 # pacman knows only the lower bounds in `depends`. The installed metadata states the full ranges, so this
 # fails when a package in the official repositories has moved outside one, or a release needs one `depends` lacks.
-pacman -S --noconfirm --needed python-packaging
+# It runs on what `depends` installed and nothing else, so the check itself never supplies a missing dependency.
 /opt/fastbrowse/bin/python - <<'EOF'
 from importlib.metadata import PackageNotFoundError, distribution, version
 

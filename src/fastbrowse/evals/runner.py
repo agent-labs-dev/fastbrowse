@@ -51,10 +51,22 @@ from fastbrowse.models import (
     RunResult,
 )
 
-MOCK_LIMITS = Limits(max_steps=40)
+TASK_SECONDS = 900.0
+"""How long a harness waits for one run's reply, the backstop for a product that ignores its own time limit."""
+
+ENDING_FRAME_SECONDS = 6.0
+"""What the agent keeps after a run's time limit: the ending frame is bounded by `ENDING_FRAME_SECONDS` in
+crates/fastbrowse-agent/src/agent/mod.rs, which a test keeps equal to this."""
+
+RUN_SECONDS = TASK_SECONDS - ENDING_FRAME_SECONDS
+"""The run's own `max_seconds`. A run with none lets a Wait wait for the page to change with no bound, so a static page
+the model chose to wait on hung a harness until its client timeout. The product stops itself at this limit as
+`budget_exceeded` with its evidence, and its ending frame fits before `TASK_SECONDS`."""
+
+MOCK_LIMITS = Limits(max_steps=40, max_seconds=RUN_SECONDS)
 """A mock task signs in, walks to a page and acts, which is more steps than the local suite's single form needs."""
 
-LOCAL_LIMITS = Limits(max_steps=25)
+LOCAL_LIMITS = Limits(max_steps=25, max_seconds=RUN_SECONDS)
 """A local fixture is one page and one form, so it needs far fewer steps than a mock task does."""
 
 assert MOCK_LIMITS.max_steps is not None
@@ -105,7 +117,7 @@ class _FixtureBudget:
             raise ValueError("Fixture campaign has no unreserved budget")
         self.receipt = self.receipt.model_copy(update={"reserved_usd": remaining, "task": task, "repeat": repeat})
         self._save()
-        return Limits(max_dollars=remaining)
+        return Limits(max_dollars=remaining, max_seconds=RUN_SECONDS)
 
     def settle(self, cost: CostBreakdown) -> None:
         reserved = self.receipt.reserved_usd

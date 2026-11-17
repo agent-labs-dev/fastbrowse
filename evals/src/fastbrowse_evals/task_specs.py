@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import NamedTuple
 
 from fastbrowse.evals.live_tasks import Release
-from parallax.models import Area, Capability, Maturity, Provenance, TaskRecord
+from parallax.models import Area, Capability, Maturity, Provenance, Task, TaskRecord
 from pydantic import BaseModel
 
 from fastbrowse_evals.versions import task_version
@@ -826,3 +826,13 @@ def record(spec: TaskSpec) -> TaskRecord:
 
 def records() -> list[TaskRecord]:
     return [record(spec) for spec in _SPECS]
+
+
+def start_url(task: Task) -> str:
+    """Where a browser task begins. This catalog names it `start_url`; Parallax's official suites (Online-Mind2Web,
+    BU Bench) name the same page `website`, as their upstream datasets do."""
+    for key in ("start_url", "website"):
+        value = task.data.get(key)
+        if isinstance(value, str):
+            return value
+    raise ValueError(f"browser task {task.id} has no start_url or website")

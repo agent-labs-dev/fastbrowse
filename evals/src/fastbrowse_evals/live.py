@@ -19,7 +19,7 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
 from parallax.harnesses.browser.cloud import Browser
-from parallax.harnesses.browser.site import Unavailable, retryable_status, transient_transport
+from parallax.harnesses.browser.site import TRANSIENT_TRANSPORT, Unavailable, retryable_status
 from parallax.models import CostSource, HarnessInfo, HarnessKind, Isolation
 
 from fastbrowse_evals.backend import FastbrowseHarness
@@ -66,7 +66,7 @@ def on_pool_origin(url: str, pool: str) -> str:
 
 def _pool_failure(what: str, status: int | None = None, error: Exception | None = None) -> Exception:
     if error is not None:
-        failure = Unavailable if transient_transport(error) else RuntimeError
+        failure = Unavailable if isinstance(error, TRANSIENT_TRANSPORT) else RuntimeError
         return failure(f"browser pool {what} failed ({type(error).__name__})")
     failure = Unavailable if retryable_status(status) else RuntimeError
     return failure(f"browser pool {what} returned HTTP {status}")

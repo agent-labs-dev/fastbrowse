@@ -3,6 +3,7 @@ import errno
 import gc
 import hashlib
 import json
+import re
 import socket
 import warnings
 from contextlib import ExitStack, contextmanager
@@ -41,6 +42,7 @@ from fastbrowse.evals.replay import (
     translate_origin,
     translate_response_origin,
 )
+from fastbrowse.evals.runner import ENDING_FRAME_SECONDS, LOCAL_LIMITS, MOCK_LIMITS, RUN_SECONDS, TASK_SECONDS
 from fastbrowse.models import CostBasis, CostBreakdown, CostComponent, CostLine
 
 LLM = "/llm/chat/completions"
@@ -480,6 +482,23 @@ def test_run_params_hand_over_chrome_and_scope_secrets() -> None:
     assert params["cdp_url"] == "ws://127.0.0.1:9/devtools/browser/x"
     assert params["secrets"] == [{"name": "password", "origins": ["http://127.0.0.1:47308"]}]
     assert "battery-staple" not in json.dumps(params)
+
+
+def test_every_fixture_run_carries_the_time_limit_the_client_waits_for() -> None:
+    """A run with no `max_seconds` lets a Wait on a static page wait for ever (#1213), so the harness's client timeout
+    was the only thing that ended it, with no evidence. The run's own limit ends it first."""
+    for task in corpus():
+        params = run_params(task, "http://127.0.0.1:47308", "ws://127.0.0.1:9/devtools/browser/x", "r")
+        assert params["limits"]["max_seconds"] == RUN_SECONDS
+    assert MOCK_LIMITS.max_seconds == LOCAL_LIMITS.max_seconds == RUN_SECONDS
+    assert RUN_SECONDS + ENDING_FRAME_SECONDS == TASK_SECONDS
+
+
+def test_ending_frame_allowance_is_the_agents_own() -> None:
+    source = (Path(__file__).parents[2] / "crates/fastbrowse-agent/src/agent/mod.rs").read_text()
+    declared = re.search(r"const ENDING_FRAME_SECONDS: f64 = ([0-9.]+);", source)
+    assert declared is not None
+    assert float(declared[1]) == ENDING_FRAME_SECONDS
 
 
 def test_compare_reports_only_differing_tasks() -> None:

@@ -3,6 +3,13 @@
 Read this page before changing a task, the browser plugin, or a benchmark
 publication result. Do not run a paid campaign while iterating on code.
 
+## Time limit
+
+Every run an eval harness starts sets `max_seconds`. Without it a Wait on a page that never changes waits for ever,
+and the run ends only when the harness gives up. The fixture bench and runner derive the run's limit from their one
+client timeout (`TASK_SECONDS` in `src/fastbrowse/evals/runner.py`), less the agent's ending-frame allowance, so
+the agent stops itself as `budget_exceeded` with its evidence before the client's backstop fires.
+
 ## Local checks
 
 From the repository root, install the pinned eval environment and the local
@@ -91,7 +98,7 @@ The mapping preserves these public arm names:
 - `browser-harness` to `browser-harness`;
 - `browser-use-oss` to `browser-use-oss`.
 
-`fastbrowse-hosted` and `cua-codex` remain diagnostic. Candidate schema 7,
+`fastbrowse-hosted`, `cua-codex` and `browser-harness-claude-code` remain diagnostic. Candidate schema 7,
 `GROUPS`, site groups, and all files under `docs/results` stay as recorded.
 
 The official benchmark workflow uses Parallax 2.0.0.dev26's `bu-bench` and
