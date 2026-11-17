@@ -1,0 +1,41 @@
+[
+ {
+  "event": "page",
+  "step": 0,
+  "url": "https://practice.expandtesting.com/dynamic-loading/2",
+  "title": "Dynamic Loading 2 page for Automation Testing PracticeSUT",
+  "text": "PMP Practice\n\n| Free PMP Certification Mock Exam Test +900 Questions & Quizzes\n\n[Best Website for Practice Automation Te"
+ },
+ {
+  "event": "decision_context",
+  "step": 0,
+  "operation": "click",
+  "target_id": "fetched-18"
+ },
+ {
+  "event": "page",
+  "step": 0,
+  "url": "https://practice.expandtesting.com/dynamic-loading/2",
+  "title": "Dynamic Loading 2 page for Automation Testing Practice",
+  "text": "PMP Practice\n| Free PMP Certification Mock Exam Test +900 Questions & Quizzes\nTry Dev Tools\nPractice\nDemos\nTools\nTips\nTe"
+ },
+ {
+  "event": "decision_context",
+  "step": 0,
+  "operation": "click",
+  "target_id": "main:14"
+ },
+ {
+  "event": "page",
+  "step": 1,
+  "url": "https://practice.expandtesting.com/dynamic-loading/2",
+  "title": "Dynamic Loading 2 page for Automation Testing Practice",
+  "text": "Practice\nDemos\nTools\nTips\nTest Cases\nAPI Testing\nAbout\nFree ISTQB\n\t        Mock Exams\nDo you enjoy this platform? \u2764\ufe0f\nBuy"
+ },
+ {
+  "event": "decision_context",
+  "step": 1,
+  "operation": "wait",
+  "target_id": null
+ }
+]
