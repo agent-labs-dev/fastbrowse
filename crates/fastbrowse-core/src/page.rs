@@ -8,10 +8,12 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::BoxFuture;
+use crate::decision::Edges;
 use crate::models::{Artifact, Attachment, Link, MaybeUnavailable, Operation, SourceControl, StepFailure, StepOutcome};
 use crate::py::datetime::DateTime;
 use crate::py::json::dumped_len;
 use crate::py::{lax, text};
+use indexmap::IndexMap;
 
 pub mod json;
 
@@ -128,6 +130,10 @@ pub struct Control {
     /// to read or act on, such as a streamed remote browser or a canvas app.
     #[serde(default, deserialize_with = "lax::opt_boolean", skip_serializing_if = "Option::is_none")]
     pub drawn: Option<bool>,
+    /// A control whose card shows a picture while its text leaves it alike to another control or unnamed: the task
+    /// may name it by what the picture shows.
+    #[serde(default, deserialize_with = "lax::opt_boolean", skip_serializing_if = "Option::is_none")]
+    pub pictured: Option<bool>,
     /// A link to a page the run has already read, as a browser styles a visited link: the agent marks it, the page
     /// never does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -172,6 +178,7 @@ impl Control {
             next_page: None,
             download: None,
             drawn: None,
+            pictured: None,
             already_read: None,
             shown_by: None,
         }
@@ -664,9 +671,27 @@ pub trait Page: Send + Sync {
     fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>>;
 
     /// Click at `x` and `y`, fractions of the viewport's width and height as `screenshot` shows it, and report what
-    /// changed as `act` does. A page that draws no screenshot has no point to click.
-    fn click_viewport(&self, _x: f64, _y: f64) -> BoxFuture<'_, PageResult<ActResult>> {
+    /// changed as `act` does. With `within`, the point must be on that control of the last observation, or the click
+    /// is refused as covered: a page that cannot tell refuses it. A page that draws no screenshot has no point to click.
+    fn click_viewport<'a>(
+        &'a self,
+        _x: f64,
+        _y: f64,
+        _within: Option<&'a str>,
+    ) -> BoxFuture<'a, PageResult<ActResult>> {
         Box::pin(async { Err(BrowserError::ScreenshotsUnavailable("this page has no viewport to click".into())) })
+    }
+
+    /// The card of each `pictured` control of the last observation among `ids`, as fractions of the viewport
+    /// `screenshot` shows: what Jev is shown of it. A control out of view, gone, or in another frame has none.
+    fn pictures<'a>(&'a self, _ids: &'a [String]) -> BoxFuture<'a, PageResult<IndexMap<String, Edges>>> {
+        Box::pin(async { Ok(IndexMap::new()) })
+    }
+
+    /// Where control `id` of the last observation sits, as `pictures` measures a card. None out of view, gone, or in
+    /// another frame.
+    fn edges<'a>(&'a self, _id: &'a str) -> BoxFuture<'a, PageResult<Option<Edges>>> {
+        Box::pin(async { Ok(None) })
     }
 
     /// Hold back live and recorded frames while the page may show a secret, which pixels cannot mask.

@@ -447,6 +447,20 @@
           "default": null,
           "description": "Physical provider requests represented by this line; absent on historical receipts.",
           "title": "Physical Requests"
+        },
+        "images": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Images the call sent as Jev assets; absent for a call that sent none, and on historical receipts.",
+          "title": "Images"
         }
       },
       "required": [

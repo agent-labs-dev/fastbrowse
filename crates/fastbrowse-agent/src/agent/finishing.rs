@@ -202,6 +202,7 @@ impl Agent {
             destination: None,
             replayed: false,
             by_code: true,
+            step: None,
             offered: Vec::new(),
             plan: Vec::new(),
             read_scope: crate::policy::ReadScope::Page,
@@ -229,7 +230,11 @@ impl Agent {
         }
         // How a page looks is in its pixels whether or not it shows a picture, and whatever its text answered. Jev is
         // asked that with the task's output, at the first DONE; a run giving up before one reads only drawn pages.
-        let drawn_unanswered = observation.visual_content && !state.notes.answered();
+        // A rejected draft says what was read does not answer the task: a chart's title, read as the answer to "how
+        // many units were sold in April", stood as answered, the bars were never read, and the rewrite said the value
+        // is not shown.
+        let drawn_unanswered =
+            observation.visual_content && (!state.notes.answered() || state.composition_feedback.is_some());
         if !drawn_unanswered && !state.appearance {
             return Ok(());
         }

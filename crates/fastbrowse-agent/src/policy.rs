@@ -13,7 +13,7 @@ use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::{
     Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, EVEN_ODDS, Evaluation, Images, NoulQuestion,
-    Question,
+    Question, referenced,
 };
 use fastbrowse_core::effects::leavable;
 use fastbrowse_core::keys::role_keys;
@@ -30,6 +30,7 @@ use serde_json::{Map, Value, json};
 
 use crate::batches::evaluate_batches;
 use crate::error::{AgentError, Result};
+use crate::retrieval::text::{SpanKind, spans};
 
 /// The keys of the questions a step request asks Jev, which it answers under the same keys.
 pub(crate) mod keys {
@@ -46,6 +47,7 @@ pub(crate) mod keys {
     pub const SHOWS_ANSWER: &str = "shows_answer";
     pub const UNOBTAINABLE: &str = "unobtainable";
     pub const INSIDE_DRAWN: &str = "inside_drawn";
+    pub const STEP: &str = "step";
 
     /// The question that picks `operation`'s target.
     pub fn target(operation: Operation) -> String {
@@ -58,7 +60,7 @@ pub(crate) mod keys {
     }
 }
 
-const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPreserve authentication unless the task requires a session change.\nWhen navigate names a page that holds the item the task names, open it rather than searching the site for that item.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\npage.text is what the viewport shows; page.offscreen_text is the page's text outside it.\nA read takes in the whole page, so do not scroll through a page's text to find what a read would.\nA link's href shows where it leads; use it to tell site navigation from content links. A link marked next_page\nis the one the page itself names as its next page.\nA matching link is not an opened result.\nA list the page shows in part is not read yet: while it offers more of a list the task covers, a next page or a load\nmore, take it, not one record's own page.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.";
+const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPreserve authentication unless the task requires a session change.\nWhen navigate names a page that holds the item the task names, open it rather than searching the site for that item.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\npage.text is what the viewport shows; page.offscreen_text is the page's text outside it.\nA read takes in the whole page, so do not scroll through a page's text to find what a read would.\nA link's href shows where it leads; use it to tell site navigation from content links. A link marked next_page\nis the one the page itself names as its next page.\nA matching link is not an opened result.\nA list the page shows in part is not read yet: while it offers more of a list the task covers, a next page or a load\nmore, take it, not one record's own page.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.\nWhen the task asks for an action, such as a click, and then for what that action shows, the answer is only what\nthe page shows after that action is among the recent actions; what the page already showed before it is not the\nanswer, however close it looks.";
 const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose only an offered element.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode is not the one the task needs, the control that sets the mode is the target, not the\nform's submit.\nElements marked offscreen can be targeted directly. A link's href shows where it leads, already_read marks one to a page this run\nhas read, and next_page marks the one the page itself names as its next page.\nElements carry a `context`: the card, row or section each one belongs to. When the task names one, choose\nby context; a link in one record's context opens it and shows no more of the list.";
 const DESTINATION_RULES: &str = "Another question picks the element to drag; choose the element it should be dropped onto. Prefer the drop\ntarget, drop zone, slot, list, folder, bucket or column the task names, not the element being dragged.";
 const RELEVANCE_RULES: &str = "Could the task's next few actions, or reading what it needs, act on or rely on the element in each question?\nJudge by its label, role, context and href. Site chrome, footers, ads, social links and unrelated navigation\nare not relevant.";
@@ -105,12 +107,15 @@ pub fn operation_label(operation: Operation) -> &'static str {
             "Wait without acting while the page changes by itself, as a clock or a live status line does."
         }
         Operation::Read => {
-            "Read this page's content, the whole page including text outside the viewport, to extract information the task needs."
+            "Read this page's content, the whole page including text outside the viewport, to extract information the task needs. What an action the task asks for will show is not on the page until that action is among the recent actions."
         }
+        // The action condition stops done before the task's own click on Leaflet's quick-start page, whose standalone
+        // popup is open on load: done 0.30 to 0.15 and click 0.32 to 0.62 on the captured first step, with the
+        // NEXT_ACTION_RULES sentence on an action's answer and the matching clause on Read (#1202).
         // Defined only for a written answer, done lost to a link on the very page a task asked to open: on PyPI's
         // httpx page Jev split 0.51 done against 0.42 for the Homepage link and sometimes left for GitHub (#964).
         Operation::Done => {
-            "The task is done: what it asks is carried out. A task that only asks to open or reach a page is carried out once the current page is that page. When it asks for a written answer, notes.selected_answer gives every requested fact and value, with no unrelated text or unresolved requirement; a value present only in retained_notes is not in that answer. When composition_pending or structured_output_pending is true, the retained sources cover every requested item and the answer or structured result will be generated and checked before delivery."
+            "The task is done: what it asks is carried out. A task that asks for an action first, such as a click, is not carried out until that action is among the recent actions, whatever the page already shows. A task that only asks to open or reach a page is carried out once the current page is that page. When it asks for a written answer, notes.selected_answer gives every requested fact and value, with no unrelated text or unresolved requirement; a value present only in retained_notes is not in that answer. When composition_pending or structured_output_pending is true, the retained sources cover every requested item and the answer or structured result will be generated and checked before delivery."
         }
     }
 }
@@ -161,6 +166,33 @@ pub struct HistoryEntry {
     /// holding after the click. Kept out of what models are shown: it is the run's own record of what it changed.
     #[serde(skip)]
     pub set: Vec<(String, String)>,
+    /// The task step a click placed inside a drawn surface was made for. Kept apart from `target`, which actions are
+    /// withheld and counted by.
+    #[serde(skip)]
+    pub for_step: Option<String>,
+    /// The card of the pictured control the step acted on, as its option showed it. Such a control is named only by
+    /// its place, so without it an editor's Bold and Save read as "button (2 of 5)" and "button (5 of 5)": the run was
+    /// judged not to have made the text bold, and pressed Bold again.
+    #[serde(skip)]
+    pub look: Option<Look>,
+}
+
+/// What the place a step acted on looked like: the card the decision saw and, for a click placed in pixels, the same
+/// place after it. A click inside a drawn surface changes nothing but its picture, and the card from before shows the
+/// map's Library pin unselected: shown that card alone, the step after the right click put done at 0.2 and clicked the
+/// map again; shown the pin turned from red to blue, it put done at 0.9.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Look {
+    pub before: Vec<u8>,
+    pub after: Option<Vec<u8>>,
+}
+
+impl Look {
+    /// The card of the target `decision` chose, among the `looks` its question showed.
+    pub fn of(decision: &Decision, looks: &IndexMap<String, Vec<u8>>) -> Option<Look> {
+        let target = decision.target.as_ref()?;
+        looks.get(&target.id).map(|card| Look { before: card.clone(), after: None })
+    }
 }
 
 impl HistoryEntry {
@@ -177,7 +209,58 @@ impl HistoryEntry {
             setting: None,
             added: false,
             set: Vec::new(),
+            for_step: None,
+            look: None,
         }
+    }
+
+    /// The entry as models are shown it. A drawn surface names no part of itself, so a click placed inside one names
+    /// the task step it was for: told only that "button (2 of 2)" was clicked, the step after the click that opened
+    /// a Leaflet triangle's popup clicked the circle beside it, and the run never answered.
+    pub fn shown(&self) -> Value {
+        let mut shown = self.dump_exclude_none();
+        if let (Some(step), Some(target)) = (&self.for_step, &self.target) {
+            shown["target"] = format!("{target}, for the task step {step:?}").into();
+        }
+        shown
+    }
+
+    /// The entry as shown with its control's card, for a question that sends the card among its images.
+    pub fn seen(&self) -> Value {
+        let mut shown = self.shown();
+        match &self.look {
+            Some(Look { before, after: None }) => shown["looks_like"] = screenshot_reference(before).into(),
+            Some(Look { before, after: Some(after) }) => {
+                shown["looked_like_before"] = screenshot_reference(before).into();
+                shown["looks_like_after"] = screenshot_reference(after).into();
+            }
+            None => {}
+        }
+        shown
+    }
+
+    /// What `seen` adds to an entry, told once in a question that is sent the entries' images. Not told, a Leaflet
+    /// run that had clicked the blue triangle, its card beside "button (2 of 2)" and "I am a polygon." on the page,
+    /// was judged three times not to have clicked it.
+    pub const LOOKS: &str = "A recent action's `looks_like` is an image of the element it acted on, as the page drew \
+                             it before the action and outlined in magenta: it shows which element the action's target \
+                             names. `looked_like_before` and `looks_like_after` are the place a click inside a drawn \
+                             surface acted on, before and after the click.";
+
+    /// `instructions` with `LOOKS` added when an entry of `history` has a card.
+    pub fn told(instructions: &str, history: &[HistoryEntry]) -> String {
+        match history.iter().any(|entry| entry.look.is_some()) {
+            true => format!("{instructions}\n{}", Self::LOOKS),
+            false => instructions.to_string(),
+        }
+    }
+
+    /// The images `seen` refers to.
+    pub fn looks(history: &[HistoryEntry]) -> impl Iterator<Item = &Vec<u8>> {
+        history
+            .iter()
+            .filter_map(|entry| entry.look.as_ref())
+            .flat_map(|look| std::iter::once(&look.before).chain(&look.after))
     }
 
     /// The step was carried out and acts on the page: a read, scroll, hover or wait only shows what is there, and DONE
@@ -285,6 +368,10 @@ pub struct StepContext {
     /// The viewport as a PNG, given to a route that takes images.
     #[serde(skip)]
     pub screenshot: Option<Vec<u8>>,
+    /// The card of each `pictured` control in view, as a PNG cut from the viewport, keyed by control id. A target
+    /// option shows it beside its text.
+    #[serde(skip)]
+    pub looks: IndexMap<String, Vec<u8>>,
     /// The follow-ups each action would need, asked beside the decision. Questions the provider cannot take at speed
     /// in one request stay follow-ups.
     #[serde(skip)]
@@ -334,6 +421,7 @@ impl StepContext {
             page_facts: Vec::new(),
             reload: None,
             screenshot: None,
+            looks: IndexMap::new(),
             ahead: Vec::new(),
             plan_ahead: false,
             list_read: ListRead::None,
@@ -444,6 +532,9 @@ pub struct Decision {
     pub plan: Vec<Planned>,
     #[serde(skip)]
     pub read_scope: ReadScope,
+    /// The task step Jev said an action on a pictured control is for, kept for its history entry.
+    #[serde(skip)]
+    pub step: Option<String>,
 }
 
 /// A list read keeps page judgments while leaving target selection to an ordinary decision.
@@ -490,8 +581,12 @@ impl Decision {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Request {
     pub state: Value,
-    /// The images the state refers to, keyed by the reference written in it.
+    /// The images the state or a target option refers to, keyed by the reference written in it.
     pub images: Images,
+    /// The card of each pictured control, which its target option shows, again when a group's pick asks for it.
+    pub looks: IndexMap<String, Vec<u8>>,
+    /// The task steps the step question offers, by its options' order.
+    pub steps: Vec<String>,
     pub questions: IndexMap<String, Question>,
     pub targets: IndexMap<Operation, Vec<Control>>,
     pub groups: IndexMap<Operation, Vec<Vec<Control>>>,
@@ -776,7 +871,7 @@ async fn shortlist(
         "task": context.task,
         "subgoal": context.subgoal,
         "answered_in_notes": context.answered_in_notes,
-        "recent_actions": context.history.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
+        "recent_actions": context.history.iter().map(HistoryEntry::shown).collect::<Vec<_>>(),
         "page": {"url": observation.url, "title": observation.title},
     });
     // The rubric sits once in the state; repeating it in every question would pack a third as many per request.
@@ -976,7 +1071,7 @@ pub fn build_request(
     questions.insert(
         keys::OPERATION.into(),
         choice(
-            NEXT_ACTION.as_str(),
+            HistoryEntry::told(&NEXT_ACTION, &context.history),
             offered.iter().map(|op| {
                 // The operation is chosen apart from its target, and a choice of one address is answered without Jev
                 // at all, so the operation names where navigate goes: told only "another address", Jev searched the
@@ -1045,7 +1140,10 @@ pub fn build_request(
         }
         let Some(candidates) = indexed.get(operation) else { continue };
         if candidates.len() <= limit {
-            questions.insert(keys::target(*operation), target_question(*operation, candidates, target_rules).into());
+            questions.insert(
+                keys::target(*operation),
+                target_question(*operation, candidates, target_rules, &context.looks).into(),
+            );
             targets.insert(*operation, candidates.clone());
             continue;
         }
@@ -1132,14 +1230,17 @@ pub fn build_request(
     }
     // Only the task says whether what it needs is inside a drawn surface, where the run cannot act, or among the
     // page's elements (#1084). Asked once per document that shows one, whenever one comes into view: a streamed view
-    // shows a spinner before its picture, in the same document.
+    // shows a spinner before its picture, in the same document. The line drawn is whether the action has to land on
+    // one place in the surface: asked instead whether the surface was "pressed as a whole", with only a streamed
+    // screen's field and button as examples, an OpenLayers marker was put at 0.45 to 0.58, and clicked at the canvas
+    // centre half the time; asked this way it is put at 0.97, and a canvas switch stays under 0.25.
     if context.check_surface && !drawn_surfaces(controls).is_empty() {
         questions.insert(
             keys::INSIDE_DRAWN.into(),
             noul(
-                "An element marked `drawn` is a drawn surface: it shows its content as pixels, with no elements inside it. Does the task need an action on something shown inside such a surface, such as typing into a field or pressing a button drawn in it? Pressing a surface as a whole, as one element, is not such an action, and neither is reading what it shows.",
-                "The task needs an action on something drawn inside a surface.",
-                "The task needs only this page's elements, a surface pressed as a whole, or what a surface shows read.",
+                "An element marked `drawn` is a drawn surface: it shows its content as pixels, with no elements inside it. Does the task need an action that has to land on one particular thing drawn inside such a surface, such as a marker, pin or shape on a map, a bar of a chart, or a field or button in a streamed screen? An action that does the same wherever it lands on the surface is not such an action, and neither is reading what it shows.",
+                "The task needs an action on one particular thing drawn inside a surface.",
+                "The task needs only this page's elements, an action that does the same anywhere on a surface, or what a surface shows read.",
             ),
         );
     }
@@ -1150,9 +1251,25 @@ pub fn build_request(
             }
         }
     }
+    // A pictured control is named only by its place, so its history entry names the task step it was for, as a click
+    // inside a drawn surface does: told only that "button (2 of 2)" was clicked, a done check after the click that
+    // opened a Leaflet triangle's popup put the task at 0.75 carried, and at 0.97 told it was for "Click the blue
+    // triangle drawn on the map."
+    let steps = if context.looks.is_empty() { Vec::new() } else { task_steps(&context.task) };
+    if let Some(question) = step_question(&steps, PICTURED_STEP) {
+        questions.insert(keys::STEP.into(), question);
+    }
     let described: HashSet<&str> = targets.values().flatten().map(|control| control.id.as_str()).collect();
     let state = state(observation, controls, context, &described);
-    if context.screenshot.is_some() && context.plan_ahead {
+    let images: Images = context
+        .screenshot
+        .iter()
+        .chain(context.looks.values())
+        .chain(HistoryEntry::looks(&context.history))
+        .map(|png| (screenshot_reference(png), png.clone()))
+        .collect();
+    let imaged = !referenced(&images, &state, &questions).is_empty();
+    if imaged && context.plan_ahead {
         // An image puts the request in long-context mode already, so the questions asked ahead cost no mode switch and
         // save the round trip each would otherwise take after the decision.
         for ahead in &context.ahead {
@@ -1160,7 +1277,7 @@ pub fn build_request(
                 questions.insert(ahead.key(), ahead.question.clone());
             }
         }
-    } else if context.screenshot.is_none() {
+    } else if !imaged {
         let written: usize = questions.iter().map(|(key, question)| key.len() + question.dump_json().len()).sum();
         let mut room = LONG_CONTEXT_BYTES.saturating_sub(dumps(&state).len() + written);
         let mut ahead: Vec<(usize, &Ahead)> = context
@@ -1182,7 +1299,9 @@ pub fn build_request(
     }
     Request {
         state,
-        images: context.screenshot.iter().map(|png| (screenshot_reference(png), png.clone())).collect(),
+        images,
+        looks: context.looks.clone(),
+        steps,
         questions,
         targets,
         groups,
@@ -1251,8 +1370,10 @@ async fn evaluate(
         let group_answer = choice_answer(&evaluation, &keys::group(operation))?;
         let group = &groups[group_index(&group_answer.choice, groups.len())?];
         let key = keys::target(operation);
-        let questions =
-            IndexMap::from([(key.clone(), target_question(operation, group, &request.target_rules).into())]);
+        let questions = IndexMap::from([(
+            key.clone(),
+            target_question(operation, group, &request.target_rules, &request.looks).into(),
+        )]);
         let inner = ask(&questions).await?;
         let target_answer = choice_answer(&inner, &key)?;
         target = Some(find_control(group, &target_answer.choice)?);
@@ -1366,6 +1487,7 @@ async fn evaluate(
         by_code: false,
         offered: Vec::new(),
         ahead,
+        step: chosen_step(&evaluation, &request.steps),
     })
 }
 
@@ -1404,7 +1526,7 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext,
     }
     state.insert("answered_in_notes".into(), context.answered_in_notes.into());
     state.insert("notes".into(), context.notes.clone().into());
-    state.insert("recent_actions".into(), Value::Array(context.history.iter().map(Dump::dump_exclude_none).collect()));
+    state.insert("recent_actions".into(), Value::Array(context.history.iter().map(HistoryEntry::seen).collect()));
     if context.omitted_actions > 0 {
         state.insert("omitted_actions".into(), context.omitted_actions.into());
     }
@@ -1557,14 +1679,54 @@ fn destination_question(candidates: &[Control]) -> ChoiceQuestion {
     )
 }
 
-fn target_question(operation: Operation, candidates: &[Control], rules: &str) -> ChoiceQuestion {
+/// What a target option's `looks_like` is, told to Jev once in the question rather than in every option.
+/// The task's sentences and clauses, which a click that names nothing on the page is recorded as made for.
+pub fn task_steps(task: &str) -> Vec<String> {
+    spans(task, SpanKind::Str).into_iter().map(|(_, _, step)| step).collect()
+}
+
+/// The question choosing which of `steps` an action is for; none when the task is one step.
+pub fn step_question(steps: &[String], instructions: &str) -> Option<Question> {
+    (steps.len() > 1).then(|| {
+        let criteria = steps.iter().enumerate().map(|(index, step)| (index.to_string(), step.clone().into())).collect();
+        ChoiceQuestion::new(format!("{UNTRUSTED}\n{instructions}"), criteria).into()
+    })
+}
+
+/// The step `evaluation` chose among `steps`, or the only one.
+pub fn chosen_step(evaluation: &Evaluation, steps: &[String]) -> Option<String> {
+    match evaluation.answers.get(keys::STEP) {
+        Some(Answer::Choice(picked)) => picked.choice.parse::<usize>().ok().and_then(|index| steps.get(index).cloned()),
+        _ => steps.first().cloned(),
+    }
+}
+
+const PICTURED_STEP: &str = "If the next action is on an element whose option shows `looks_like`, which sentence or clause \
+                             of `task` is that action for? Choose the task's own wording.";
+const LOOKS_LIKE: &str = "An option's `looks_like` is an image of the card or row that holds that element as the page \
+                          draws it, outlined in magenta, for a task that names it by what its picture shows.";
+
+fn target_question(
+    operation: Operation,
+    candidates: &[Control],
+    rules: &str,
+    looks: &IndexMap<String, Vec<u8>>,
+) -> ChoiceQuestion {
     // Sending only the label and pointing Jev at the shared state for the rest is two thirds smaller on a dense page,
     // and it was tried. It bought no measured latency, because the request was never the slow part, and a criterion
     // the model has to go and look up is a worse criterion: the choice is what this whole design rests on, so it gets
     // the attributes in front of it.
+    let shown = candidates.iter().any(|c| looks.contains_key(&c.id));
+    let rules = if shown { json!([rules, LOOKS_LIKE]) } else { json!(rules) };
     choice(
         dumps(&json!({"rules": rules, "operation": operation.as_str()})),
-        candidates.iter().map(|c| (c.id.clone(), Value::Object(target_element(c, operation)))),
+        candidates.iter().map(|c| {
+            let mut element = target_element(c, operation);
+            if let Some(png) = looks.get(&c.id) {
+                element.insert("looks_like".into(), screenshot_reference(png).into());
+            }
+            (c.id.clone(), Value::Object(element))
+        }),
     )
 }
 
@@ -1720,6 +1882,15 @@ mod tests {
     impl DecisionClient for Fake {
         fn profile(&self) -> DecisionProfile {
             DecisionProfile { max_choice_options: self.options, ..DecisionProfile::jev() }
+        }
+
+        fn evaluate_images<'a>(
+            &'a self,
+            state: &'a Value,
+            questions: &'a IndexMap<String, Question>,
+            _images: &'a Images,
+        ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
+            self.evaluate(state, questions)
         }
 
         fn evaluate<'a>(
@@ -2084,6 +2255,80 @@ mod tests {
         assert_eq!(inner.criteria.keys().collect::<Vec<_>>(), ["b8", "b9", "b10", "b11"]);
         assert_eq!(decision.cost.len(), 2);
         assert!((decision.confidence() - 0.81).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_a_step_on_a_pictured_control_shows_its_card_in_the_recent_actions() {
+        let page = observation((0..3).map(button).collect());
+        let mut context = StepContext::new("make the text bold, then save");
+        let mut bold = HistoryEntry::new(Some(Operation::Click), Some("button (2 of 5)"), StepOutcome::Executed, true);
+        bold.look = Some(Look { before: b"bold".to_vec(), after: None });
+        let mut pin = HistoryEntry::new(Some(Operation::Click), Some("canvas"), StepOutcome::Executed, true);
+        pin.look = Some(Look { before: b"red pin".to_vec(), after: Some(b"blue pin".to_vec()) });
+        context.history = vec![bold, pin];
+        let request = build_request(&page, &page.controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
+        let card = screenshot_reference(b"bold");
+        assert_eq!(request.state["recent_actions"][0]["looks_like"], json!(card));
+        assert_eq!(request.images.get(&card), Some(&b"bold".to_vec()));
+        // A click placed in pixels shows its place before and after.
+        let (red, blue) = (screenshot_reference(b"red pin"), screenshot_reference(b"blue pin"));
+        assert_eq!(request.state["recent_actions"][1]["looked_like_before"], json!(red));
+        assert_eq!(request.state["recent_actions"][1]["looks_like_after"], json!(blue));
+        assert!(request.images.contains_key(&red) && request.images.contains_key(&blue));
+        // Jev is told what the cards are, and only when there are any.
+        let Question::Choice(operation) = &request.questions[keys::OPERATION] else { unreachable!() };
+        assert!(operation.instructions.contains(HistoryEntry::LOOKS));
+        context.history.iter_mut().for_each(|entry| entry.look = None);
+        let request = build_request(&page, &page.controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
+        let Question::Choice(operation) = &request.questions[keys::OPERATION] else { unreachable!() };
+        assert!(!operation.instructions.contains(HistoryEntry::LOOKS));
+        // Questions that send no image name no card.
+        assert!(context.history[0].shown().get("looks_like").is_none());
+    }
+
+    #[test]
+    fn test_a_pictured_target_option_shows_its_card_and_a_group_follow_up_sends_only_its_own() {
+        let config = grouped();
+        let jev =
+            Fake { options: 10, ..fake(&[("operation", "click"), ("click_group", "2"), ("click_target", "b9")], "") };
+        let page = observation((0..12).map(button).collect());
+        let mut context = StepContext::new("add the red kettle");
+        context.looks = IndexMap::from([("b1".to_string(), b"one".to_vec()), ("b9".to_string(), b"nine".to_vec())]);
+        let decision = block_on(decide(&jev, &page, &context, &config, None, &Trace::disabled())).unwrap();
+        assert_eq!(decision.target.as_ref().unwrap().id, "b9");
+        let nine = screenshot_reference(b"nine");
+        let requests = jev.requests.lock().unwrap();
+        // The group question names no card; the follow-up shows the one card among its options.
+        let states = jev.states.lock().unwrap();
+        let images = Images::from([(nine.clone(), b"nine".to_vec()), (screenshot_reference(b"one"), b"one".to_vec())]);
+        assert!(referenced(&images, &states[0], &requests[0]).is_empty());
+        assert_eq!(referenced(&images, &states[1], &requests[1]).keys().collect::<Vec<_>>(), [&nine]);
+        let Question::Choice(inner) = &requests[1]["click_target"] else { panic!("a choice") };
+        assert_eq!(inner.criteria["b9"]["looks_like"], json!(nine));
+        assert!(inner.criteria["b8"].get("looks_like").is_none());
+        assert!(inner.instructions.contains(LOOKS_LIKE));
+
+        // Within the option limit the card goes on the target option of the first request.
+        let page = observation((0..3).map(button).collect());
+        let request = build_request(&page, &page.controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
+        let Question::Choice(target) = &request.questions["click_target"] else { panic!("a choice") };
+        assert_eq!(target.criteria["b1"]["looks_like"], json!(screenshot_reference(b"one")));
+        assert!(!referenced(&request.images, &request.state, &request.questions).is_empty());
+    }
+
+    #[test]
+    fn test_an_action_on_a_pictured_control_says_which_task_step_it_is_for() {
+        let jev = fake(&[("operation", "click"), ("click_target", "b1"), (keys::STEP, "0")], "");
+        let page = observation((0..3).map(button).collect());
+        let mut context =
+            StepContext::new("Click the blue triangle drawn on the map. What does the popup that opens say?");
+        context.looks = IndexMap::from([("b1".to_string(), b"one".to_vec())]);
+        let decision = block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
+        assert!(decision.step.unwrap().starts_with("Click the blue triangle"));
+        // With no pictured control in view, an option's label names it, and no step is asked.
+        context.looks.clear();
+        let request = build_request(&page, &page.controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
+        assert!(!request.questions.contains_key(keys::STEP));
     }
 
     #[test]

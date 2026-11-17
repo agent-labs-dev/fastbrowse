@@ -58,7 +58,7 @@ from fastbrowse.evals.judge import OPENROUTER_MODEL, Jev, judge
 from fastbrowse.evals.local import fixture_server
 from fastbrowse.evals.mock import mock_site
 from fastbrowse.evals.mock_tasks import TASKS as MOCK_TASKS
-from fastbrowse.evals.mock_tasks import MockTask
+from fastbrowse.evals.mock_tasks import VISUAL_TASKS, MockTask
 from fastbrowse.evals.replay import (
     JEV_MOUNT,
     LLM_MOUNT,
@@ -143,8 +143,11 @@ class BenchTask:
 
 
 def corpus() -> list[BenchTask]:
-    tasks: list[LocalTask | MockTask] = [*LOCAL_TASKS, *MOCK_TASKS]
-    return [BenchTask("local" if isinstance(task, LocalTask) else "mock", task) for task in tasks]
+    return [
+        *(BenchTask("local", task) for task in LOCAL_TASKS),
+        *(BenchTask("mock", task) for task in MOCK_TASKS),
+        *(BenchTask("mock-visual", task) for task in VISUAL_TASKS),
+    ]
 
 
 type Grader = Callable[[RunResult], Awaitable[tuple[str | None, dict[str, Any]]]]
@@ -597,12 +600,13 @@ def _write(path: Path, run: dict[str, Any]) -> None:
 
 def _select(only: list[str]) -> list[BenchTask]:
     tasks = corpus()
-    if only:
-        unknown = sorted(set(only) - {t.id for t in tasks})
-        if unknown:
-            raise SystemExit(f"--only names no task: {', '.join(unknown)}")
-        tasks = [t for t in tasks if t.id in only]
-    return tasks
+    if not only:
+        # `mock-visual` is opt-in, as in the fixture runner: it measures work the agent cannot yet do.
+        return [t for t in tasks if t.suite != "mock-visual"]
+    unknown = sorted(set(only) - {t.id for t in tasks})
+    if unknown:
+        raise SystemExit(f"--only names no task: {', '.join(unknown)}")
+    return [t for t in tasks if t.id in only]
 
 
 def _cassette_path(directory: Path, task: str) -> Path:

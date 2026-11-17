@@ -83,6 +83,7 @@ impl Replay {
             destination: None,
             replayed: true,
             by_code: false,
+            step: None,
             offered: Vec::new(),
             plan: Vec::new(),
             read_scope: crate::policy::ReadScope::Page,

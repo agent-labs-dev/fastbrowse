@@ -495,7 +495,9 @@ impl CdpPage {
                 return Ok(result(
                     StepOutcome::Stale,
                     false,
-                    "control changed while the cursor moved",
+                    // Every check that finds the control changed says the same: which check caught it depends on how long
+                    // the page took, and a request that carried that timing would differ between identical runs.
+                    "control changed since observation",
                     (!fresh.6).then_some(StepFailure::TargetGone),
                 ));
             }
@@ -1808,7 +1810,7 @@ impl CdpPage {
                 return Ok((
                     (
                         StepOutcome::Stale,
-                        Some("control changed before pointer press".into()),
+                        Some("control changed since observation".into()),
                         (!connected).then_some(StepFailure::TargetGone),
                     ),
                     point,

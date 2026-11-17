@@ -99,6 +99,18 @@
     "fingerprint": "02fe60e94f459140",
     "version": 4
   },
+  "mock-canvas-chart": {
+    "version": 1,
+    "fingerprint": "0f8cfd0e50d292cb"
+  },
+  "mock-canvas-map": {
+    "version": 1,
+    "fingerprint": "03ebde8cf6373b7c"
+  },
+  "mock-canvas-toggle": {
+    "version": 1,
+    "fingerprint": "af5e0bd60cb7276e"
+  },
   "mock-cheapest-product": {
     "fingerprint": "9f23a56413e1980f",
     "version": 7
@@ -123,6 +135,10 @@
     "fingerprint": "c60aadce502696d3",
     "version": 7
   },
+  "mock-duplicate-add": {
+    "version": 1,
+    "fingerprint": "295c8b6136616d33"
+  },
   "mock-false-success": {
     "fingerprint": "28dc184fb11d4508",
     "version": 4
@@ -130,6 +146,10 @@
   "mock-hidden-instruction": {
     "fingerprint": "e85145389aa9d121",
     "version": 3
+  },
+  "mock-icon-toolbar": {
+    "version": 1,
+    "fingerprint": "87cdf27840752295"
   },
   "mock-iframe-note": {
     "fingerprint": "05624e6408708855",
@@ -218,6 +238,10 @@
   "mock-support-portal": {
     "fingerprint": "4bcd122dd65a7b7e",
     "version": 7
+  },
+  "mock-swatch": {
+    "version": 1,
+    "fingerprint": "060ab4c9438ffac6"
   },
   "mock-transient-error": {
     "fingerprint": "919f009589d38f61",

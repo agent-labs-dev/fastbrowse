@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use fastbrowse_clients::validation::jev_purpose;
-use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionError, EVEN_ODDS, NoulQuestion, Question};
+use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionError, EVEN_ODDS, Images, NoulQuestion, Question};
 use fastbrowse_core::keys::role_keys;
 use fastbrowse_core::models::{CostComponent, Decider, JevPurpose, Operation, Status, StepOutcome, UNTRUSTED};
 use fastbrowse_core::navigation::task_urls;
@@ -24,9 +24,10 @@ use serde_json::{Map, Value as JsonValue, json};
 use super::Agent;
 use super::driving::require;
 use super::helpers::{caller_link, describe, dialog_question, empty_fields_fact, navigation_question, unsent_fact};
+use super::seeing::cards;
 use super::state::{Edits, Extent, Flow, OutputIntent, RunState, SignInNeeds, Step, Stop, Unsure};
 use crate::memory::Notes;
-use crate::policy::{Ahead, Decision, HistoryEntry};
+use crate::policy::{Ahead, Decision, HistoryEntry, screenshot_reference};
 use crate::retrieval::text::{SpanKind, Word, edge_options, spans, words};
 use crate::verification::{page_state, page_verdict_state};
 use crate::writing::write_value;
@@ -569,6 +570,17 @@ impl Agent {
         self.gate_question(state, observation, decision, &label, irreversible, &action, Some(lasting)).await
     }
 
+    /// The card of a pictured target, cut from the viewport, as one image keyed by its reference. Empty for any other
+    /// target, or when there is no viewport to cut it from.
+    async fn looks_of(&self, decision: &Decision) -> Step<Images> {
+        let Some(target) = decision.target.as_ref().filter(|target| target.pictured == Some(true)) else {
+            return Ok(Images::new());
+        };
+        let Some(png) = self.viewport().await? else { return Ok(Images::new()) };
+        let cut = cards(&png, &self.page.pictures(std::slice::from_ref(&target.id)).await?);
+        Ok(cut.into_values().map(|card| (screenshot_reference(&card), card)).collect())
+    }
+
     /// Refuse a control the page says downloads a file when the task rules downloading out.
     ///
     /// The irreversible question cannot catch it: a download commits nothing anyone else sees. Authorization does not
@@ -844,8 +856,21 @@ impl Agent {
             // Never asked beside the decision: the page's own text is what would argue a harmful action is harmless,
             // and the control's label and form are already in the questions. The title, path and query are the page's
             // to write too, so only the origin goes with them.
-            let page = json!({"task": self.caller_task(state), "page": {"origin": origin_of(&observation.url)}});
-            let evaluation = jev_purpose(JevPurpose::Authorization, self.jev.evaluate(&page, &questions)).await?;
+            let mut page = json!({"task": self.caller_task(state), "page": {"origin": origin_of(&observation.url)}});
+            // A pictured control's label does not say what it is: a switch drawn on a canvas is labelled "canvas", and
+            // asked whether "Turn email alerts on." asks for a click on 'canvas', Jev could not say, so the click was
+            // refused as a change the task never asked for. Its card is the label it has, as the page's as the text.
+            let looks = self.looks_of(decision).await?;
+            if let Some((reference, _)) = looks.iter().next() {
+                page["looks_like"] = reference.clone().into();
+                for question in questions.values_mut() {
+                    if let Question::Noul(question) = question {
+                        question.instructions.push_str("\nThe element is the one outlined in magenta in `looks_like`.");
+                    }
+                }
+            }
+            let evaluation =
+                jev_purpose(JevPurpose::Authorization, self.jev.evaluate_images(&page, &questions, &looks)).await?;
             state.ledger.record([evaluation.cost.clone()])?;
             let answers = evaluation.answers;
             let noul = |key: &str| match answers.get(key) {
@@ -886,6 +911,7 @@ impl Agent {
             }
             if reversible || wanted {
                 state.committing = !reversible;
+                state.keeping = keeps;
                 if state.committing {
                     // What this commits can still be redirecting or awaiting a 3-D Secure check when the run ends,
                     // and closing the tab would abort it (#748).
@@ -947,7 +973,7 @@ impl Agent {
             "dialog": observation.dialog.as_ref().map(Dump::dump_exclude_none),
             "tabs": observation.tabs.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
             "notes": self.decision_notes(state),
-            "recent_actions": state.history.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
+            "recent_actions": state.history.iter().map(HistoryEntry::shown).collect::<Vec<_>>(),
         });
         self.mask_strings(&mut page);
         page["task"] = self.caller_task(state).into();
@@ -1152,7 +1178,7 @@ impl Agent {
                 &typed_into(state, target),
                 holding(target).as_deref(),
                 &crate::dates::dated(observation.captured_at, &state.dates),
-                &state.history.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
+                &state.history.iter().map(HistoryEntry::shown).collect::<Vec<_>>(),
                 Some(&state.ledger),
             )
             .await?;
@@ -1941,21 +1967,29 @@ impl Agent {
         let task = self.caller_task(state);
         let carried = NoulQuestion::new(
             format!(
-                "{UNTRUSTED}\n\n# Task\n{task}\n\nJudged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out?"
+                "{UNTRUSTED}\n\n# Task\n{task}\n\n{}",
+                HistoryEntry::told(
+                    "Judged from the recent actions and the current page, has every step the task asks to be carried out, other than finding, reading or reporting something, been carried out?",
+                    &state.history
+                )
             ),
             Some("Every such step has been carried out, or the task asks only to find, read or report something."),
             Some("A step the task asks for, other than finding, reading or reporting, has not been carried out yet."),
         );
         let refused = NoulQuestion::new(
             format!(
-                "{UNTRUSTED}\n\n# Task\n{task}\n\nDo the current page or the recent actions show that the site does not allow a step the task asks to be carried out, such as an option the page marks unavailable or a control it shows disabled?"
+                "{UNTRUSTED}\n\n# Task\n{task}\n\n{}",
+                HistoryEntry::told(
+                    "Do the current page or the recent actions show that the site does not allow a step the task asks to be carried out, such as an option the page marks unavailable or a control it shows disabled?",
+                    &state.history
+                )
             ),
             Some(
                 "The page or the recent actions show the site does not allow a step the task asks for, and nothing left to try on the site would carry it out.",
             ),
             Some("Nothing shown says the site refuses a step the task asks for."),
         );
-        let history = state.history.iter().map(Dump::dump_exclude_none).collect();
+        let history = state.history.iter().map(HistoryEntry::seen).collect();
         let mut context = Map::from_iter([("recent_actions".to_string(), JsonValue::Array(history))]);
         // What code already knows was left undone, as the step decision is told it: values typed and never sent, and
         // fields left empty once the run stalled on a task to carry out (#812).
@@ -1970,6 +2004,20 @@ impl Agent {
         if !facts.is_empty() {
             context.insert("page_facts".into(), facts.into());
         }
+        // A drawn surface shows what was done to it only as pixels: the popup a click on an OpenLayers map opened read
+        // as one bare line of page text, and the step was judged never carried out. A pictured control is named in
+        // the recent actions only by its place, so an editor's Bold and Save, both pressed and the text bold and saved,
+        // read as "button (2 of 5)" and "button (5 of 5)", and the run was held back from finishing three times.
+        let pixels = |control: &Control| control.drawn == Some(true) || control.pictured == Some(true);
+        let viewport = match observation.controls.iter().any(pixels) {
+            true => self.viewport().await?,
+            false => None,
+        };
+        let mut images = Images::from_iter(viewport.map(|png| (screenshot_reference(&png), png)));
+        if let Some(reference) = images.keys().next() {
+            context.insert("viewport_screenshot".into(), reference.clone().into());
+        }
+        images.extend(HistoryEntry::looks(&state.history).map(|png| (screenshot_reference(png), png.clone())));
         // The whole page, not only what is in view: a feed loaded to its end showed its count at the top and "End of
         // list" below the fold, and judged from the top alone the loading looked unfinished.
         let page = Observation {
@@ -1993,7 +2041,8 @@ impl Agent {
             &state.dates,
         )?;
         fastbrowse_core::decision::reserve(&state.ledger, self.jev.as_ref(), JevPurpose::Action, 0.0, 1)?;
-        let evaluation = jev_purpose(JevPurpose::Action, self.jev.evaluate(&state_json, &questions)).await?;
+        let evaluation =
+            jev_purpose(JevPurpose::Action, self.jev.evaluate_images(&state_json, &questions, &images)).await?;
         state.ledger.record([evaluation.cost.clone()])?;
         let holds = |key: &str| match evaluation.answers.get(key) {
             Some(Answer::Noul(answer)) => Ok(answer.probability > 0.5),

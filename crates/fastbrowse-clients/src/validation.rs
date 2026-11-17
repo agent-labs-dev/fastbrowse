@@ -246,8 +246,8 @@ pub fn exhausted(requests: i64, seconds: f64, last: &str) -> String {
     format!("Jev request failed after {}; last: {last}", attempts(requests, seconds))
 }
 
-/// A call's cost including requests sent but not delivered: each carried the same input, so each is charged as the one
-/// that answered, as an estimate. A bound holds for any request with that input, so it stays a bound.
+/// A call's cost including requests sent but not delivered: each carried the same input and images, so each is charged
+/// as the one that answered, as an estimate. A bound holds for any request with that input, so it stays a bound.
 pub fn with_discarded(cost: CostLine, usage: &RequestUsage) -> CostLine {
     if usage.unaccounted_requests == 0 {
         return CostLine { physical_requests: (usage.requests > 0).then_some(usage.requests), ..cost };
@@ -259,6 +259,7 @@ pub fn with_discarded(cost: CostLine, usage: &RequestUsage) -> CostLine {
         basis: if cost.dollars.is_none() { CostBasis::Unknown } else { basis },
         dollars: cost.dollars.map(|dollars| dollars * sent as f64),
         input_tokens: cost.input_tokens * sent,
+        images: cost.images.map(|images| images * sent),
         physical_requests: Some(usage.requests),
         ..cost
     }
@@ -938,7 +939,8 @@ fn text_chars(body: &Value) -> usize {
 /// estimate of the input that was sent, never a bound on what the whole context could have cost.
 fn input_cost(body: &Value, price: Option<f64>) -> CostLine {
     let tokens = (text_chars(body) as f64 / TokenBudget::default().chars_per_token).ceil() as i64;
-    estimated_cost(price, tokens, 0)
+    let images = body.get("assets").and_then(Value::as_object).map(|assets| assets.len() as i64).filter(|n| *n > 0);
+    CostLine { images, ..estimated_cost(price, tokens, 0) }
 }
 
 /// The most one request could cost if every token of the route's documented context window were billed.
@@ -989,6 +991,7 @@ pub fn merged_cost(lines: &[CostLine]) -> CostLine {
         output_tokens: lines.iter().map(|line| line.output_tokens).sum(),
         seconds: Some(py::sum(lines.iter().map(|line| line.seconds.unwrap_or(0.0)))),
         physical_requests: lines.iter().map(|line| line.physical_requests).sum(),
+        images: lines.iter().filter_map(|line| line.images).reduce(|a, b| a + b),
     }
 }
 
@@ -1155,6 +1158,7 @@ pub fn reported_cost(
             output_tokens,
             seconds: None,
             physical_requests: None,
+            images: None,
         }),
         _ => Ok(estimated_cost(price, input_tokens, output_tokens)),
     }
@@ -1172,6 +1176,7 @@ pub fn estimated_cost(price: Option<f64>, input_tokens: i64, output_tokens: i64)
         output_tokens,
         seconds: None,
         physical_requests: None,
+        images: None,
     }
 }
 
