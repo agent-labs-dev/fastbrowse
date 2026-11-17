@@ -20,7 +20,8 @@ pub struct SearchResponse {
 #[derive(Debug)]
 pub struct SearchFailure {
     pub message: String,
-    pub cost: CostLine,
+    /// Boxed so the error stays small beside the response it fails in place of.
+    pub cost: Box<CostLine>,
 }
 
 #[derive(Clone)]
@@ -45,7 +46,7 @@ impl Exa {
                 timeout_seconds,
             )
             .await
-            .map_err(|error| SearchFailure { message: error.name().into(), cost: bounded() })?;
+            .map_err(|error| SearchFailure { message: error.name().into(), cost: Box::new(bounded()) })?;
         let body: Option<Value> = serde_json::from_str(&response.scrub(&response.text())).ok();
         // Exa documents costDollars as an estimate, including the value it reports for this request.
         // https://exa.ai/docs/reference/search.md
@@ -57,11 +58,17 @@ impl Exa {
             .map(|cost| CostLine::new(CostComponent::Search, CostBasis::Estimated, Some(cost)))
             .unwrap_or_else(bounded);
         if !response.is_success() {
-            return Err(SearchFailure { message: format!("search provider returned HTTP {}", response.status), cost });
+            return Err(SearchFailure {
+                message: format!("search provider returned HTTP {}", response.status),
+                cost: Box::new(cost),
+            });
         }
         let results =
             body.as_ref().and_then(|body| body.get("results")).and_then(Value::as_array).cloned().ok_or_else(|| {
-                SearchFailure { message: "search provider returned no result array".into(), cost: cost.clone() }
+                SearchFailure {
+                    message: "search provider returned no result array".into(),
+                    cost: Box::new(cost.clone()),
+                }
             })?;
         Ok(SearchResponse { results, cost })
     }

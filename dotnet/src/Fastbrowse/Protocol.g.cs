@@ -316,6 +316,18 @@ public sealed record CostLine
     public long? Images { get; init; }
 
     /// <summary>
+    /// Input tokens read from the provider's prompt cache; absent when it reports none, and on old receipts.
+    /// </summary>
+    [JsonPropertyName("cache_read_tokens")]
+    public long? CacheReadTokens { get; init; }
+
+    /// <summary>
+    /// Input tokens written to the provider's prompt cache; absent when it reports none, and on old receipts.
+    /// </summary>
+    [JsonPropertyName("cache_write_tokens")]
+    public long? CacheWriteTokens { get; init; }
+
+    /// <summary>
     /// The model that served the call, as the provider reported it; absent on historical receipts.
     /// </summary>
     [JsonPropertyName("model")]

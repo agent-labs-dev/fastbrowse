@@ -74,7 +74,7 @@ pub fn messages_schema(schema: &Value) -> Value {
 }
 
 fn content(message: &Message) -> Result<Value, LLMError> {
-    if message.images.is_empty() {
+    if message.images.is_empty() && !message.cache_through {
         return Ok(message.content.clone().into());
     }
     let mut blocks = Vec::new();
@@ -85,7 +85,11 @@ fn content(message: &Message) -> Result<Value, LLMError> {
             "source": {"type": "base64", "media_type": media_type, "data": base64::encode(&image.0)},
         }));
     }
-    blocks.push(json!({"type": "text", "text": message.content}));
+    let mut text = json!({"type": "text", "text": message.content});
+    if message.cache_through {
+        text["cache_control"] = json!({"type": "ephemeral"});
+    }
+    blocks.push(text);
     Ok(Value::Array(blocks))
 }
 
@@ -156,7 +160,19 @@ pub(crate) fn as_chat_completion(payload: Map<String, Value>) -> Map<String, Val
             .iter()
             .map(|key| tokens(usage, key))
             .sum::<i64>();
-        completion["usage"] = json!({"prompt_tokens": prompt, "completion_tokens": tokens(usage, "output_tokens")});
+        let mut details = Map::new();
+        for (native, compatible) in
+            [("cache_read_input_tokens", "cached_tokens"), ("cache_creation_input_tokens", "cache_write_tokens")]
+        {
+            if let Some(count) = usage.get(native).filter(|count| !count.is_null()) {
+                details.insert(compatible.into(), count.clone());
+            }
+        }
+        completion["usage"] = json!({
+            "prompt_tokens": prompt,
+            "completion_tokens": tokens(usage, "output_tokens"),
+            "prompt_tokens_details": details,
+        });
     }
     match completion {
         Value::Object(map) => map,

@@ -11,7 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- Every cost line now says which model served the call. A language-model line carries the `model` its provider's response reported, or the model the run asked for when the response named none, and a Jev line carries the Jev model it called; the field is in the protocol and every SDK, and receipts from earlier versions, which lack it, still read. A fastbrowse eval trial records those models as its `actual_models`, where it used to record none and filled each usage entry's `model` with the decision purpose such as `action` or `read` ([#1229](https://github.com/agent-labs-dev/fastbrowse/issues/1229)).
+- Every cost line reports `cache_read_tokens` and `cache_write_tokens`, the prompt tokens the provider read from and wrote to its cache, in the protocol and every SDK. A message can mark the end of a prefix to cache, which Amazon Bedrock and Anthropic need before they cache anything; the mark goes through OpenRouter, the gateway and Anthropic's own API, and a provider reached directly through its OpenAI-compatible API, which caches without one, never gets it. The LLM action picker (`FASTBROWSE_ACTION_PICKER=llm`) now sends the same schema on every call and puts the state before the questions, behind a cache mark. It used to build a new schema from each call's questions, which ended the cached prefix before the state, so every pick paid to write a cache entry that no later call read. Its answers are checked as before, but the schema no longer limits each choice to the offered options while it is generated ([#1224](https://github.com/agent-labs-dev/fastbrowse/issues/1224)).
 
 ## [0.11.2] - 2026-11-17
 

@@ -175,6 +175,10 @@ type CostLine struct {
 	PhysicalRequests *int64 `json:"physical_requests,omitempty"`
 	// Images the call sent as Jev assets; absent for a call that sent none, and on historical receipts.
 	Images *int64 `json:"images,omitempty"`
+	// Input tokens read from the provider's prompt cache; absent when it reports none, and on old receipts.
+	CacheReadTokens *int64 `json:"cache_read_tokens,omitempty"`
+	// Input tokens written to the provider's prompt cache; absent when it reports none, and on old receipts.
+	CacheWriteTokens *int64 `json:"cache_write_tokens,omitempty"`
 	// The model that served the call, as the provider reported it; absent on historical receipts.
 	Model *string `json:"model,omitempty"`
 }

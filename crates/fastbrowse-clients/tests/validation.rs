@@ -12,7 +12,9 @@ use std::sync::{Arc, Mutex};
 use common::{Script, answering, direct, keys, noul, one, reply, text};
 use fastbrowse_clients::http::{Response, TransportError};
 use fastbrowse_clients::system_one::{SystemOneClient, TYPESAFE_URL};
-use fastbrowse_clients::validation::{Lines, Paid, RETRY_DELAYS_SECONDS, RequestUsage, jev_spend, with_discarded};
+use fastbrowse_clients::validation::{
+    Lines, Paid, RETRY_DELAYS_SECONDS, RequestUsage, jev_spend, merged_cost, with_discarded,
+};
 use fastbrowse_clients::vercel::{GATEWAY_URL, VercelGatewayJevClient};
 use fastbrowse_core::decision::{
     DecisionClient, DecisionError, Images, JEV_DOLLARS_PER_INPUT_TOKEN, JEV_MODEL, Question,
@@ -183,9 +185,18 @@ fn test_a_discarded_jev_request_is_charged_as_an_estimate() {
     let charged = with_discarded(cost.clone(), &RequestUsage { unaccounted_requests: 1, ..RequestUsage::default() });
     assert_eq!((charged.basis, charged.dollars, charged.input_tokens), (CostBasis::Estimated, Some(0.004), 1800));
     assert_eq!(with_discarded(cost.clone(), &RequestUsage::default()), cost);
-    let pictured = CostLine { images: Some(2), ..cost };
+    let pictured = CostLine { images: Some(2), cache_read_tokens: Some(600), cache_write_tokens: Some(0), ..cost };
     let charged = with_discarded(pictured, &RequestUsage { unaccounted_requests: 1, ..RequestUsage::default() });
     assert_eq!(charged.images, Some(4), "each resent request carried the same images");
+    assert_eq!((charged.cache_read_tokens, charged.cache_write_tokens), (Some(1200), Some(0)), "and the same prefix");
+}
+
+#[test]
+fn test_a_cache_count_one_line_lacks_is_unknown_in_the_total() {
+    let line =
+        |read| CostLine { cache_read_tokens: read, ..CostLine::new(CostComponent::Jev, CostBasis::Metered, None) };
+    assert_eq!(merged_cost(&[line(Some(5)), line(Some(7))]).cache_read_tokens, Some(12));
+    assert_eq!(merged_cost(&[line(Some(5)), line(None)]).cache_read_tokens, None, "a partial sum reads as smaller");
 }
 
 /// Python fixes the clock to check the error's seconds (27); a paused clock counts the backoff waits, so only the

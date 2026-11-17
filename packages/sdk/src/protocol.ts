@@ -263,6 +263,14 @@ export interface CostLine {
    */
   images?: number | null;
   /**
+   * Input tokens read from the provider's prompt cache; absent when it reports none, and on old receipts.
+   */
+  cache_read_tokens?: number | null;
+  /**
+   * Input tokens written to the provider's prompt cache; absent when it reports none, and on old receipts.
+   */
+  cache_write_tokens?: number | null;
+  /**
    * The model that served the call, as the provider reported it; absent on historical receipts.
    */
   model?: string | null;
