@@ -2,7 +2,7 @@ mod common;
 mod misc_support;
 
 use common::{eval_active, harness, sites};
-use fastbrowse_core::models::Operation;
+use fastbrowse_core::models::{Operation, StepOutcome};
 use fastbrowse_core::page::{Action, BlockKind};
 use misc_support::text_of;
 
@@ -508,5 +508,32 @@ async fn test_every_icon_link_destination_is_observed_whole() {
     let capture = h.page.capture().await.expect("capture");
     assert_eq!(capture.text.matches("Link element DOM metadata").count(), 100);
     assert!(capture.text.contains(&format!("/f/99?k={}", "x".repeat(4000))));
+    h.close().await;
+}
+
+/// A click Jev placed inside a drawn surface lands only on that surface: a point beside it would press an element no
+/// decision chose.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_viewport_click_held_to_a_surface_is_made_only_on_it() {
+    let Some(h) = harness().await else { return };
+    h.page
+        .navigate(
+            "data:text/html,<body style='margin:0'>\
+             <canvas id=map style='position:fixed;left:0;top:0;width:50vw;height:50vh' \
+             onclick='document.title=\"map\"'></canvas>\
+             <button style='position:fixed;right:0;bottom:0;width:20vw;height:20vh' \
+             onclick='document.title=\"delete\"'>Delete</button></body>",
+            None,
+        )
+        .await
+        .expect("navigate");
+    let observation = h.observe().await;
+    let map = observation.controls.iter().find(|c| c.drawn == Some(true)).expect("the canvas is a drawn surface");
+    let beside = h.page.click_viewport(0.9, 0.9, Some(&map.id)).await.expect("asked");
+    assert_eq!(beside.outcome, StepOutcome::Covered);
+    assert_eq!(eval_active(&h.session, "document.title").await, "");
+    let inside = h.page.click_viewport(0.25, 0.25, Some(&map.id)).await.expect("clicked");
+    assert_eq!(inside.outcome, StepOutcome::Executed);
+    assert_eq!(eval_active(&h.session, "document.title").await, "map");
     h.close().await;
 }

@@ -3126,7 +3126,7 @@ async fn test_jev_reads_a_field_value_on_a_task_that_also_acts() {
 /// the observation asked about when its flag is set.
 #[derive(Default)]
 struct Screenshots(
-    std::sync::Mutex<Vec<(f64, f64)>>,
+    std::sync::Mutex<Vec<(f64, f64, Option<String>)>>,
     bool,
     std::sync::Mutex<Option<Vec<u8>>>,
     bool,
@@ -3220,8 +3220,8 @@ impl Page for Screenshots {
         Box::pin(async move { Ok(image) })
     }
 
-    fn click_viewport(&self, x: f64, y: f64) -> BoxFuture<'_, PageResult<ActResult>> {
-        self.0.lock().unwrap().push((x, y));
+    fn click_viewport<'a>(&'a self, x: f64, y: f64, within: Option<&'a str>) -> BoxFuture<'a, PageResult<ActResult>> {
+        self.0.lock().unwrap().push((x, y, within.map(str::to_string)));
         let clicked =
             ActResult { outcome: StepOutcome::Executed, failure: None, page_changed: true, detail: None, moved: false };
         Box::pin(async move { Ok(clicked) })
@@ -4456,8 +4456,10 @@ async fn test_a_route_that_takes_no_images_is_sent_none_even_on_a_drawn_page() {
 async fn test_a_covered_control_jev_sees_is_clicked_at_the_centre_of_its_box() {
     let (clicked, page, jev) = click_where_seen(true, 0.9, false).await;
     assert_eq!(clicked.map(|result| result.outcome), Some(StepOutcome::Executed));
-    let (x, y) = page.0.lock().unwrap()[0];
+    let (x, y, within) = page.0.lock().unwrap()[0].clone();
     assert!((x - 0.3).abs() < 1e-9 && (y - 0.6).abs() < 1e-9, "{x}, {y}");
+    // The point is on the cover by definition, so it is not held to the control.
+    assert_eq!(within, None);
     let asked = jev.asked.lock().unwrap();
     let (state, questions, images) = &asked[0];
     let reference = state["viewport_screenshot"].as_str().unwrap();
@@ -4491,6 +4493,40 @@ async fn test_a_covered_control_is_not_clicked_when_pixels_change_while_jev_answ
     let seen = observation(std::slice::from_ref(&target));
     let result = agent.click_where_seen(&mut state, &seen, &target).await.expect("asked");
     assert!(result.is_none());
+    assert!(page.0.lock().unwrap().is_empty());
+}
+
+/// A map or canvas app has no elements inside it: the step Jev judges is inside it is clicked where Jev sees the thing,
+/// and only on the surface itself.
+#[tokio::test]
+async fn test_a_click_inside_a_drawn_surface_lands_where_jev_sees_it_and_on_the_surface() {
+    let page = Arc::new(Screenshots(Default::default(), false, Default::default(), false, None));
+    let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: None });
+    let agent = Agent::new(page.clone(), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let map = Control { drawn: Some(true), ..button("Store map") };
+    let seen = observation(std::slice::from_ref(&map));
+    let clicked = agent.click_inside_drawn(&mut state, &seen, &map).await.expect("asked");
+    assert_eq!(clicked.map(|result| result.outcome), Some(StepOutcome::Executed));
+    let (x, y, within) = page.0.lock().unwrap()[0].clone();
+    assert!((x - 0.3).abs() < 1e-9 && (y - 0.6).abs() < 1e-9, "{x}, {y}");
+    assert_eq!(within.as_deref(), Some(map.id.as_str()));
+    let asked = jev.asked.lock().unwrap();
+    let (asked_state, questions, _) = &asked[0];
+    assert_eq!(asked_state["surface"]["label"], "Store map");
+    assert!(matches!(questions["shown"], Question::Noul(_)) && matches!(questions["where"], Question::Box(_)));
+}
+
+/// A step Jev doubts is one visible click, such as typing into a canvas field, is not clicked.
+#[tokio::test]
+async fn test_a_drawn_surface_step_jev_doubts_is_not_clicked() {
+    let page = Arc::new(Screenshots(Default::default(), false, Default::default(), false, None));
+    let jev = Arc::new(Seeing { images: true, shown: 0.2, asked: Default::default(), on_evaluate: None });
+    let agent = Agent::new(page.clone(), jev, Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let map = Control { drawn: Some(true), ..button("Store map") };
+    let seen = observation(std::slice::from_ref(&map));
+    assert!(agent.click_inside_drawn(&mut state, &seen, &map).await.expect("asked").is_none());
     assert!(page.0.lock().unwrap().is_empty());
 }
 

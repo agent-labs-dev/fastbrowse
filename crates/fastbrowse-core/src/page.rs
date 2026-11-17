@@ -664,8 +664,14 @@ pub trait Page: Send + Sync {
     fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>>;
 
     /// Click at `x` and `y`, fractions of the viewport's width and height as `screenshot` shows it, and report what
-    /// changed as `act` does. A page that draws no screenshot has no point to click.
-    fn click_viewport(&self, _x: f64, _y: f64) -> BoxFuture<'_, PageResult<ActResult>> {
+    /// changed as `act` does. With `within`, the point must be on that control of the last observation, or the click
+    /// is refused as covered: a page that cannot tell refuses it. A page that draws no screenshot has no point to click.
+    fn click_viewport<'a>(
+        &'a self,
+        _x: f64,
+        _y: f64,
+        _within: Option<&'a str>,
+    ) -> BoxFuture<'a, PageResult<ActResult>> {
         Box::pin(async { Err(BrowserError::ScreenshotsUnavailable("this page has no viewport to click".into())) })
     }
 

@@ -1923,8 +1923,8 @@ impl Page for CdpPage {
         Box::pin(async move { seam(CdpPage::screenshot(self).await) })
     }
 
-    fn click_viewport(&self, x: f64, y: f64) -> BoxFuture<'_, PageResult<ActResult>> {
-        Box::pin(async move { seam(CdpPage::click_viewport(self, x, y).await) })
+    fn click_viewport<'a>(&'a self, x: f64, y: f64, within: Option<&'a str>) -> BoxFuture<'a, PageResult<ActResult>> {
+        Box::pin(async move { seam(CdpPage::click_viewport(self, x, y, within).await) })
     }
 
     fn withhold_frames(&self, withheld: bool) {
