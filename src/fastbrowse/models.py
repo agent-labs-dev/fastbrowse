@@ -403,6 +403,8 @@ class RunResult(Frozen):
     artifacts: tuple[Artifact, ...]
     citations: tuple[Citation, ...] = ()
     error: str | None = None
+    failure_kind: str | None = None
+    """The error's provider or browser variant path, never message text; present for failures, absent otherwise."""
     final_url: str | None = None
     """Where the browser was last observed; what a caller checks when the task was to arrive somewhere."""
     final_frame: bytes | None = Field(default=None, exclude=True, repr=False)

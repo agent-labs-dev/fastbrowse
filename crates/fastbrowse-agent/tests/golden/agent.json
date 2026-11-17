@@ -408,6 +408,7 @@
    "artifacts": [],
    "citations": [],
    "error": "sign-in required at https://shop.test: the page asks for Password",
+   "failure_kind": null,
    "final_url": "https://shop.test/",
    "recordings": [],
    "wall": {
@@ -751,6 +752,7 @@
    "artifacts": [],
    "citations": [],
    "error": "bot check at https://shop.test; it is not a sign-in and no credential passes it, and no other route to the task was found. Retry after the check clears or choose another source for the task.",
+   "failure_kind": null,
    "final_url": "https://shop.test/",
    "recordings": [],
    "wall": {
@@ -1233,6 +1235,7 @@
    "artifacts": [],
    "citations": [],
    "error": "bot check at https://shop.test; it is not a sign-in and no credential passes it, and no other route to the task was found. Retry after the check clears or choose another source for the task.",
+   "failure_kind": null,
    "final_url": "https://shop.test/",
    "recordings": [],
    "wall": {
@@ -1627,6 +1630,7 @@
    "artifacts": [],
    "citations": [],
    "error": "click 'Place order' needs confirmation",
+   "failure_kind": null,
    "final_url": "https://shop.test/cart",
    "recordings": [],
    "wall": null,
@@ -2132,6 +2136,7 @@
     }
    ],
    "error": "step limit 1 reached",
+   "failure_kind": null,
    "final_url": "https://books.test/",
    "recordings": [],
    "wall": null,
@@ -2349,6 +2354,7 @@
    "artifacts": [],
    "citations": [],
    "error": "the task names no page to start from, and none was given",
+   "failure_kind": null,
    "final_url": null,
    "recordings": [],
    "wall": null,
@@ -2771,6 +2777,7 @@
     }
    ],
    "error": null,
+   "failure_kind": null,
    "final_url": "https://shop.test/missing",
    "recordings": [],
    "wall": null,
@@ -3352,6 +3359,7 @@
     }
    ],
    "error": "click 'Download 2.0' downloads a file, and the task rules out downloading",
+   "failure_kind": null,
    "final_url": "https://files.test/",
    "recordings": [],
    "wall": null,
@@ -4144,6 +4152,7 @@
     }
    ],
    "error": "step limit 2 reached",
+   "failure_kind": null,
    "final_url": "https://forms.test/",
    "recordings": [],
    "wall": null,
@@ -4918,6 +4927,7 @@
     }
    ],
    "error": "step limit 2 reached",
+   "failure_kind": null,
    "final_url": "https://forms.test/",
    "recordings": [],
    "wall": null,
@@ -5435,6 +5445,7 @@
     }
    ],
    "error": "step limit 1 reached",
+   "failure_kind": null,
    "final_url": "https://acme.test/login",
    "recordings": [],
    "wall": null,
@@ -5926,6 +5937,7 @@
     }
    ],
    "error": "step limit 1 reached",
+   "failure_kind": null,
    "final_url": "https://travel.test/",
    "recordings": [],
    "wall": null,
@@ -6356,6 +6368,7 @@
    "artifacts": [],
    "citations": [],
    "error": "dialog 'Discard this draft?' needs confirmation",
+   "failure_kind": null,
    "final_url": "https://mail.test/draft",
    "recordings": [],
    "wall": null,
@@ -7159,6 +7172,7 @@
     }
    ],
    "error": null,
+   "failure_kind": null,
    "final_url": "https://site.test",
    "recordings": [],
    "wall": null,
@@ -7841,6 +7855,7 @@
     }
    ],
    "error": "step limit 3 reached",
+   "failure_kind": null,
    "final_url": "https://app.test/",
    "recordings": [],
    "wall": null,
@@ -8410,6 +8425,7 @@
     }
    ],
    "error": "step limit 2 reached",
+   "failure_kind": null,
    "final_url": "https://shop.test/menu",
    "recordings": [],
    "wall": null,
@@ -8891,6 +8907,7 @@
     }
    ],
    "error": "step limit 1 reached",
+   "failure_kind": null,
    "final_url": "https://jobs.test/apply",
    "recordings": [],
    "wall": null,
@@ -9396,6 +9413,7 @@
     }
    ],
    "error": "step limit 1 reached",
+   "failure_kind": null,
    "final_url": "https://news.test/signup",
    "recordings": [],
    "wall": null,
@@ -9946,6 +9964,7 @@
     }
    ],
    "error": "step limit 1 reached",
+   "failure_kind": null,
    "final_url": "https://bank.test/login",
    "recordings": [],
    "wall": null,
@@ -10261,6 +10280,7 @@
    "artifacts": [],
    "citations": [],
    "error": "Jev call limit 2 reached",
+   "failure_kind": null,
    "final_url": "https://app.test/",
    "recordings": [],
    "wall": null,
@@ -11023,6 +11043,7 @@
     }
    ],
    "error": null,
+   "failure_kind": null,
    "final_url": "https://shop.test/contact/sent",
    "recordings": [],
    "wall": null,
@@ -11980,6 +12001,7 @@
     }
    ],
    "error": "no_progress (3)",
+   "failure_kind": null,
    "final_url": "https://app.test/panel",
    "recordings": [],
    "wall": null,
@@ -12517,6 +12539,7 @@
    "artifacts": [],
    "citations": [],
    "error": "'Password' wants a secret and none is stored",
+   "failure_kind": null,
    "final_url": "https://acme.test/login",
    "recordings": [],
    "wall": {
@@ -12966,6 +12989,7 @@
    "artifacts": [],
    "citations": [],
    "error": "'Password' wants a secret and none is stored",
+   "failure_kind": null,
    "final_url": "https://acme.test/login",
    "recordings": [],
    "wall": {
@@ -13444,6 +13468,7 @@
     }
    ],
    "error": "step limit 1 reached",
+   "failure_kind": null,
    "final_url": "https://files.test/",
    "recordings": [],
    "wall": null,
@@ -13876,6 +13901,7 @@
     }
    ],
    "error": "step limit 1 reached",
+   "failure_kind": null,
    "final_url": "https://mail.test/inbox",
    "recordings": [],
    "wall": null,

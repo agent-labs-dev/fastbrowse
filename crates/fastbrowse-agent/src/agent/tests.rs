@@ -896,7 +896,7 @@ async fn test_an_unreachable_opening_stays_unavailable_without_a_resume() {
             [BrowserError::NavigationTimeout("timed out".into()), BrowserError::SiteUnreachable("offline".into())]
         {
             let agent = Agent::new(
-                Arc::new(Unfetchable { failure: Some(failure), ..Default::default() }),
+                Arc::new(Unfetchable { failure: Some(failure.clone()), ..Default::default() }),
                 Arc::new(ScriptedJev::new(Vec::new())),
                 Arc::new(ScriptedLLM),
             );
@@ -909,6 +909,14 @@ async fn test_an_unreachable_opening_stays_unavailable_without_a_resume() {
             };
             let result = agent.run("Read the price", options).await.unwrap();
             assert_eq!(result.status, Status::Unavailable);
+            assert_eq!(
+                result.failure_kind.as_deref(),
+                Some(match failure {
+                    BrowserError::NavigationTimeout(_) => "NavigationTimeout",
+                    BrowserError::SiteUnreachable(_) => "SiteUnreachable",
+                    _ => unreachable!(),
+                })
+            );
             assert!(agent.resume().is_none(), "only a browser handoff keeps an unopened run");
             assert!(sink.lock().unwrap().is_none(), "an unopened run has no recipe");
         }
@@ -4893,6 +4901,8 @@ fn a_failure_kind_names_the_error_and_none_of_its_text() {
     assert_eq!(failure_kind(&invalid), "Invalid");
     let llm = fastbrowse_core::llm::LLMError::Rejected("the page said secret".into());
     assert_eq!(failure_kind(&AgentError::Llm(llm)), "Llm.Rejected");
+    let outage = fastbrowse_core::llm::LLMError::RetriesExhausted("provider offline".into());
+    assert_eq!(failure_kind(&AgentError::Llm(outage)), "Llm.RetriesExhausted");
     let navigation =
         BrowserError::Failed("Page.navigate failed (net::ERR_ABORTED) for https://a.test/?q=secret".into());
     assert_eq!(super::browser_failure_kind(&navigation), "Failed/Page.navigate/net::ERR_ABORTED");

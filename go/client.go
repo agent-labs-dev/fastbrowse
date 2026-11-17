@@ -347,14 +347,15 @@ func endedBy(failure string, spent CancellationReceipt) *RunResult {
 		spent.Recordings = []string{}
 	}
 	return &RunResult{
-		Status:     StatusError,
-		Data:       json.RawMessage("null"),
-		Evidence:   []Evidence{},
-		Steps:      spent.Steps,
-		Cost:       spent.Cost,
-		Artifacts:  []Artifact{},
-		Citations:  []Citation{},
-		Error:      &failure,
-		Recordings: spent.Recordings,
+		Status:      StatusError,
+		Data:        json.RawMessage("null"),
+		Evidence:    []Evidence{},
+		Steps:       spent.Steps,
+		Cost:        spent.Cost,
+		Artifacts:   []Artifact{},
+		Citations:   []Citation{},
+		Error:       &failure,
+		FailureKind: nil,
+		Recordings:  spent.Recordings,
 	}
 }
