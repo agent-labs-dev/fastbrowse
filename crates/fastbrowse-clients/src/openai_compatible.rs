@@ -99,12 +99,17 @@ fn image_url(content: &[u8]) -> Result<String, LLMError> {
 }
 
 fn wire_message(message: &Message) -> Result<Value, LLMError> {
-    if message.images.is_empty() {
+    if message.images.is_empty() && !message.cache_through {
         return Ok(json!({"role": message.role.as_str(), "content": message.content}));
     }
     let mut parts = vec![json!({"type": "text", "text": message.content})];
     for image in &message.images {
         parts.push(json!({"type": "image_url", "image_url": {"url": image_url(&image.0)?}}));
+    }
+    if message.cache_through
+        && let Some(last) = parts.last_mut()
+    {
+        last["cache_control"] = json!({"type": "ephemeral"});
     }
     Ok(json!({"role": message.role.as_str(), "content": parts}))
 }
@@ -171,9 +176,22 @@ fn cost(payload: &Map<String, Value>, purpose: LLMPurpose) -> CostLine {
             seconds: None,
             physical_requests: None,
             images: None,
+            cache_read_tokens: cache_tokens(usage, "cached_tokens")?,
+            cache_write_tokens: cache_tokens(usage, "cache_write_tokens")?,
         })
     };
     read().unwrap_or_else(|_| unknown(purpose))
+}
+
+/// A prompt-cache count from `usage.prompt_tokens_details`, where OpenAI-compatible APIs report it; None when the
+/// provider leaves it out.
+fn cache_tokens(usage: &Map<String, Value>, key: &str) -> Result<Option<i64>, String> {
+    let details = usage.get("prompt_tokens_details").and_then(Value::as_object);
+    details
+        .and_then(|details| details.get(key))
+        .filter(|count| !count.is_null())
+        .map(|count| token_count(Some(count)))
+        .transpose()
 }
 
 fn unknown(purpose: LLMPurpose) -> CostLine {
@@ -197,6 +215,8 @@ fn total_cost(costs: &[CostLine], purpose: LLMPurpose) -> CostLine {
         seconds: None,
         physical_requests: costs.iter().map(|line| line.physical_requests).sum(),
         images: None,
+        cache_read_tokens: costs.iter().filter_map(|line| line.cache_read_tokens).reduce(|a, b| a + b),
+        cache_write_tokens: costs.iter().filter_map(|line| line.cache_write_tokens).reduce(|a, b| a + b),
     }
 }
 

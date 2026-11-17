@@ -74,7 +74,7 @@ pub fn messages_schema(schema: &Value) -> Value {
 }
 
 fn content(message: &Message) -> Result<Value, LLMError> {
-    if message.images.is_empty() {
+    if message.images.is_empty() && !message.cache_through {
         return Ok(message.content.clone().into());
     }
     let mut blocks = Vec::new();
@@ -85,7 +85,11 @@ fn content(message: &Message) -> Result<Value, LLMError> {
             "source": {"type": "base64", "media_type": media_type, "data": base64::encode(&image.0)},
         }));
     }
-    blocks.push(json!({"type": "text", "text": message.content}));
+    let mut text = json!({"type": "text", "text": message.content});
+    if message.cache_through {
+        text["cache_control"] = json!({"type": "ephemeral"});
+    }
+    blocks.push(text);
     Ok(Value::Array(blocks))
 }
 

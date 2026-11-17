@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Every cost line reports `cache_read_tokens` and `cache_write_tokens`, the prompt tokens the provider read from and wrote to its cache, in the protocol and every SDK. A message can mark the end of a prefix to cache, which Amazon Bedrock and Anthropic need before they cache anything. The LLM action picker (`FASTBROWSE_ACTION_PICKER=llm`) now sends the same schema on every call and puts the state before the questions, behind a cache mark. It used to build a new schema from each call's questions, which ended the cached prefix before the state, so every pick paid to write a cache entry that no later call read. Its answers are checked as before, but the schema no longer limits each choice to the offered options while it is generated ([#1224](https://github.com/agent-labs-dev/fastbrowse/issues/1224)).
+
 ## [0.11.2] - 2026-11-17
 
 - A run can act where only a picture tells controls apart. When offered controls share the same text, such as six "Add" buttons under different product photos, each one is offered with a picture of its card, so the run picks by what it shows rather than by position. A click inside a canvas or a map no longer ends the run: the run points at what it means to click on the drawn surface, clicks only there, and compares the frames before and after to tell whether anything changed. The whole viewport is sent only when a drawn control is offered, rather than whenever the page shows an image. Every cost line now reports `images`, the number of images the request carried, in the protocol and every SDK ([#1205](https://github.com/agent-labs-dev/fastbrowse/pull/1205)).

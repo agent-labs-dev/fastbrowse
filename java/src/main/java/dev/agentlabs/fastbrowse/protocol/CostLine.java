@@ -8,6 +8,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param seconds Wall time of the call, retries included, or the time a metered browser was held. None when unknown.
  * @param physicalRequests Physical provider requests represented by this line; absent on historical receipts.
  * @param images Images the call sent as Jev assets; absent for a call that sent none, and on historical receipts.
+ * @param cacheReadTokens Input tokens read from the provider's prompt cache; absent when it reports none, and on old receipts.
+ * @param cacheWriteTokens Input tokens written to the provider's prompt cache; absent when it reports none, and on old receipts.
  */
 public record CostLine(
     @JsonProperty("component") CostComponent component,
@@ -19,10 +21,16 @@ public record CostLine(
     @JsonProperty("output_tokens") long outputTokens,
     @JsonProperty("seconds") Double seconds,
     @JsonProperty("physical_requests") Long physicalRequests,
-    @JsonProperty("images") Long images) {
+    @JsonProperty("images") Long images,
+    @JsonProperty("cache_read_tokens") Long cacheReadTokens,
+    @JsonProperty("cache_write_tokens") Long cacheWriteTokens) {
 
     public CostLine(CostComponent component, CostBasis basis, Double dollars, LLMPurpose purpose, JevPurpose decisionPurpose, long inputTokens, long outputTokens, Double seconds, Long physicalRequests) {
-        this(component, basis, dollars, purpose, decisionPurpose, inputTokens, outputTokens, seconds, physicalRequests, null);
+        this(component, basis, dollars, purpose, decisionPurpose, inputTokens, outputTokens, seconds, physicalRequests, null, null, null);
+    }
+
+    public CostLine(CostComponent component, CostBasis basis, Double dollars, LLMPurpose purpose, JevPurpose decisionPurpose, long inputTokens, long outputTokens, Double seconds, Long physicalRequests, Long images) {
+        this(component, basis, dollars, purpose, decisionPurpose, inputTokens, outputTokens, seconds, physicalRequests, images, null, null);
     }
 
     /** A builder for a {@code CostLine}, every field unset. */
@@ -42,6 +50,8 @@ public record CostLine(
         private Double seconds;
         private Long physicalRequests;
         private Long images;
+        private Long cacheReadTokens;
+        private Long cacheWriteTokens;
 
         private Builder() {}
 
@@ -95,8 +105,18 @@ public record CostLine(
             return this;
         }
 
+        public Builder cacheReadTokens(Long cacheReadTokens) {
+            this.cacheReadTokens = cacheReadTokens;
+            return this;
+        }
+
+        public Builder cacheWriteTokens(Long cacheWriteTokens) {
+            this.cacheWriteTokens = cacheWriteTokens;
+            return this;
+        }
+
         public CostLine build() {
-            return new CostLine(component, basis, dollars, purpose, decisionPurpose, inputTokens, outputTokens, seconds, physicalRequests, images);
+            return new CostLine(component, basis, dollars, purpose, decisionPurpose, inputTokens, outputTokens, seconds, physicalRequests, images, cacheReadTokens, cacheWriteTokens);
         }
     }
 }

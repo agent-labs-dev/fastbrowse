@@ -992,6 +992,8 @@ pub fn merged_cost(lines: &[CostLine]) -> CostLine {
         seconds: Some(py::sum(lines.iter().map(|line| line.seconds.unwrap_or(0.0)))),
         physical_requests: lines.iter().map(|line| line.physical_requests).sum(),
         images: lines.iter().filter_map(|line| line.images).reduce(|a, b| a + b),
+        cache_read_tokens: lines.iter().filter_map(|line| line.cache_read_tokens).reduce(|a, b| a + b),
+        cache_write_tokens: lines.iter().filter_map(|line| line.cache_write_tokens).reduce(|a, b| a + b),
     }
 }
 
@@ -1159,6 +1161,8 @@ pub fn reported_cost(
             seconds: None,
             physical_requests: None,
             images: None,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
         }),
         _ => Ok(estimated_cost(price, input_tokens, output_tokens)),
     }
@@ -1177,6 +1181,8 @@ pub fn estimated_cost(price: Option<f64>, input_tokens: i64, output_tokens: i64)
         seconds: None,
         physical_requests: None,
         images: None,
+        cache_read_tokens: None,
+        cache_write_tokens: None,
     }
 }
 

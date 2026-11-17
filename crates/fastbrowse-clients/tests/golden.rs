@@ -266,6 +266,7 @@ async fn replay(case: &Value) -> Value {
                                 images.iter().map(|i| Bytes(base64::decode(i.as_str().unwrap()).unwrap())).collect()
                             })
                             .unwrap_or_default(),
+                        cache_through: false,
                     })
                     .collect();
                 let model = schema(call["schema"].as_str().unwrap());

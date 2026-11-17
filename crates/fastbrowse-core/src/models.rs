@@ -546,6 +546,14 @@ pub struct CostLine {
     /// Images the call sent as Jev assets. None for a call that sent none, and on historical receipts.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lax::opt_int_ge0")]
     pub images: Option<i64>,
+    /// Input tokens the provider read from its prompt cache, included in `input_tokens`. None when the provider did not
+    /// report it, and on historical receipts.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lax::opt_int_ge0")]
+    pub cache_read_tokens: Option<i64>,
+    /// Input tokens the provider wrote to its prompt cache, included in `input_tokens`. None when the provider did not
+    /// report it, and on historical receipts.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lax::opt_int_ge0")]
+    pub cache_write_tokens: Option<i64>,
 }
 
 impl CostLine {
@@ -561,6 +569,8 @@ impl CostLine {
             seconds: None,
             physical_requests: None,
             images: None,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
         }
     }
 
@@ -597,6 +607,12 @@ impl Schema for CostLine {
                     .doc("Physical provider requests represented by this line; absent on historical receipts."),
                 Field::default("images", Ty::optional(Ty::Int.ge(0)), Value::Null).omitted_when_empty().doc(
                     "Images the call sent as Jev assets; absent for a call that sent none, and on historical receipts.",
+                ),
+                Field::default("cache_read_tokens", Ty::optional(Ty::Int.ge(0)), Value::Null).omitted_when_empty().doc(
+                    "Input tokens read from the provider's prompt cache; absent when it reports none, and on old receipts.",
+                ),
+                Field::default("cache_write_tokens", Ty::optional(Ty::Int.ge(0)), Value::Null).omitted_when_empty().doc(
+                    "Input tokens written to the provider's prompt cache; absent when it reports none, and on old receipts.",
                 ),
             ],
         )
