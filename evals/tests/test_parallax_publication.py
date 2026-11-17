@@ -201,6 +201,17 @@ def test_browser_harness_is_public_only_on_its_pinned_model_or_none() -> None:
     assert arm_for("fastbrowse", "test/model") == "fastbrowse"
 
 
+def test_agent_browser_is_a_one_model_arm_beside_browser_harness() -> None:
+    from fastbrowse_evals.arms import invocations
+    from fastbrowse_evals.arms import public_arm as arm_for
+    from fastbrowse_evals.catalog import ARMS
+
+    assert arm_for("agent-browser", "openai/gpt-6-luna") == "agent-browser"
+    assert arm_for("agent-browser", "anthropic/claude-haiku-5.5") is None
+    assert not ARMS["agent-browser"].default
+    assert [(b.harness, b.model) for b in invocations(["agent-browser"])] == [("agent-browser", "openai/gpt-6-luna")]
+
+
 def test_public_arm_maps_parallax_competitor_identity() -> None:
     cloud = result("pypi-version", 0).model_copy(update={"harness": "browser-use-cloud"})
     ultrafast = cloud.model_copy(update={"model": "bu-ultrafast"})
