@@ -1,0 +1,340 @@
+name: Paper campaign
+
+# The browser reruns behind "Pick, Don't Generate": every arm on one task source, sharded so no job nears the six-hour
+# runner limit, graded by one independent judge panel with no Jev stage (`parallax run --no-jev`).
+#
+# Dispatch only: every task drives a real browser and real model calls. Each arm and shard is one job, writing one
+# Parallax run. `paper-<arm>-<shard>` holds its manifest, provenance, results and budget journal; `paper-private-...`
+# holds the whole run, encrypted to PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT, since pages and screenshots stay private.
+#
+# An arm is a Parallax harness, with `:model` for a harness that pins one, such as `browser-use-cloud:bu-4.0`.
+# `smoke` runs the first ten tasks of the source once per arm, to check each run's manifest before the full spend.
+#
+# Repository configuration checked before any paid call:
+#   secrets: OPENROUTER_BENCHMARKS_API_KEY, OPENROUTER_JUDGE_API_KEY, BROWSER_USE_API_KEY, LANGFUSE_PUBLIC_KEY,
+#            LANGFUSE_SECRET_KEY, and HF_TOKEN for online-mind2web
+#   vars:    PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT, PARALLAX_JUDGE_BASE_URL
+
+on:
+  workflow_dispatch:
+    inputs:
+      campaign_id:
+        description: Names every artifact of this campaign
+        required: true
+        type: string
+      source:
+        description: The task source
+        required: true
+        type: choice
+        options: [fastbrowse, online-mind2web]
+      arms:
+        description: Space separated arms (harness or harness:model); empty runs the source's default arms
+        required: false
+        type: string
+        default: ""
+      judge_models:
+        description: The judge panel (OpenRouter ids, comma separated), independent of every arm
+        required: true
+        type: string
+        default: openai/gpt-6.1-terra
+      repeat:
+        description: Runs per task
+        required: true
+        type: string
+        default: "3"
+      shards:
+        description: Jobs each arm's tasks are split across
+        required: true
+        type: string
+        default: "4"
+      budget:
+        description: Approved dollars for each arm and shard; it gates new trials
+        required: true
+        type: string
+        default: "100"
+      concurrency:
+        description: Trials in flight in each job
+        required: true
+        type: string
+        default: "4"
+      smoke:
+        description: The first ten tasks, one repeat, one shard
+        required: false
+        type: boolean
+        default: true
+      task_ids:
+        description: Space separated task ids to run instead of the whole source
+        required: false
+        type: string
+        default: ""
+
+permissions: {}
+
+env:
+  UV_PYTHON: "3.13"
+  CAMPAIGN_ID: ${{ inputs.campaign_id }}
+  SOURCE: ${{ inputs.source }}
+  SMOKE: ${{ inputs.smoke }}
+
+jobs:
+  plan:
+    name: Plan the shards
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions: {contents: read}
+    timeout-minutes: 20
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      repeat: ${{ steps.matrix.outputs.repeat }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with: {python-version: "3.13"}
+      - name: Check the credentials
+        env:
+          FASTBROWSE_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_BENCHMARKS_API_KEY }}
+          PARALLAX_JUDGE_API_KEY: ${{ secrets.OPENROUTER_JUDGE_API_KEY }}
+          BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          RECIPIENT: ${{ vars.PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT }}
+          PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
+        run: |
+          missing=""
+          need() { test -n "$2" || missing="$missing $1"; }
+          need OPENROUTER_BENCHMARKS_API_KEY "$FASTBROWSE_OPENROUTER_API_KEY"
+          need OPENROUTER_JUDGE_API_KEY "$PARALLAX_JUDGE_API_KEY"
+          need BROWSER_USE_API_KEY "$BROWSER_USE_API_KEY"
+          need LANGFUSE_PUBLIC_KEY "$LANGFUSE_PUBLIC_KEY"
+          need LANGFUSE_SECRET_KEY "$LANGFUSE_SECRET_KEY"
+          need PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT "$RECIPIENT"
+          need PARALLAX_JUDGE_BASE_URL "$PARALLAX_JUDGE_BASE_URL"
+          if test "$SOURCE" = online-mind2web; then need HF_TOKEN "$HF_TOKEN"; fi
+          test -z "$missing" || { echo "::error::missing repository configuration:$missing"; exit 1; }
+          # Every one of these fails a paid shard only after it has spent, so each is proven here first.
+          [[ "$CAMPAIGN_ID" =~ ^[A-Za-z0-9._-]+$ ]] \
+            || { echo "::error::campaign_id may hold only letters, digits, dot, underscore and hyphen"; exit 1; }
+          sudo apt-get install -y -qq age
+          echo probe | age -r "$RECIPIENT" > /dev/null \
+            || { echo "::error::PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT is not an age recipient"; exit 1; }
+          for key_name in FASTBROWSE_OPENROUTER_API_KEY PARALLAX_JUDGE_API_KEY; do
+            KEY_NAME="$key_name" KEY="${!key_name}" python3 - <<'PY'
+          import json, os, urllib.request
+
+          request = urllib.request.Request("https://openrouter.ai/api/v1/key",
+                                           headers={"Authorization": "Bearer " + os.environ["KEY"]})
+          try:
+              with urllib.request.urlopen(request, timeout=30) as reply:
+                  json.load(reply)
+          except Exception as error:
+              raise SystemExit(f"::error::{os.environ['KEY_NAME']} failed OpenRouter authentication: {type(error).__name__}")
+          PY
+          done
+      - name: Install the harness
+        run: cd evals && uv sync --locked
+      - name: Build the matrix
+        id: matrix
+        env:
+          ARMS: ${{ inputs.arms }}
+          SHARDS: ${{ inputs.shards }}
+          REPEAT: ${{ inputs.repeat }}
+          TASK_IDS: ${{ inputs.task_ids }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          cd evals
+          uv run --no-sync python - <<'PY'
+          import json, os, re
+
+          from parallax.task import source_tasks
+
+          source, smoke = os.environ["SOURCE"], os.environ["SMOKE"] == "true"
+          defaults = {
+              "fastbrowse": "fastbrowse fastbrowse-llm-picker browser-use-cloud:bu-4.0 browser-use-cloud:bu-fast "
+              "browser-use-oss:bu-4.0 browser-harness",
+              "online-mind2web": "fastbrowse fastbrowse-llm-picker browser-use-cloud:bu-4.0 browser-use-cloud:bu-fast",
+          }
+          arms = os.environ["ARMS"].split() or defaults[source].split()
+          for arm in arms:
+              if not re.fullmatch(r"[a-z0-9-]+(:[a-zA-Z0-9._/-]+)?", arm):
+                  raise SystemExit(f"::error::arm {arm!r} is not harness or harness:model")
+          for name in ("SHARDS", "REPEAT"):
+              if not re.fullmatch(r"[1-9][0-9]*", os.environ[name]):
+                  raise SystemExit(f"::error::{name.lower()} must be a positive integer")
+          known = [task.id for task in source_tasks(source_names=(source,))]
+          named = os.environ["TASK_IDS"].split()
+          unknown = sorted(set(named) - set(known))
+          if unknown:
+              raise SystemExit(f"::error::not tasks of {source}: {' '.join(unknown)}")
+          tasks = named or (known[:10] if smoke else known)
+          shards = 1 if smoke else min(int(os.environ["SHARDS"]), len(tasks))
+          matrix = []
+          for arm in arms:
+              harness, _, model = arm.partition(":")
+              for shard in range(shards):
+                  matrix.append({
+                      "arm": arm.replace(":", "-").replace("/", "-"),
+                      "harness": harness,
+                      "model": model,
+                      "shard": shard,
+                      "tasks": " ".join(tasks[shard::shards]),
+                  })
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"matrix={json.dumps(matrix)}\n")
+              output.write(f"repeat={1 if smoke else os.environ['REPEAT']}\n")
+          print(f"{len(tasks)} tasks, {len(arms)} arms, {shards} shards: {len(matrix)} jobs")
+          PY
+
+  run:
+    name: ${{ matrix.arm }} ${{ matrix.shard }}
+    needs: plan
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions: {contents: read}
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      OUT: ${{ github.workspace }}/runs/run
+      PRIVATE_RUN: ${{ github.workspace }}/private-runs/run
+      NAME: ${{ inputs.campaign_id }}-${{ matrix.arm }}-${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with: {python-version: "3.13"}
+      - name: Install the harness
+        run: |
+          cd evals
+          uv sync --locked
+          sudo apt-get install -y -qq age
+      - name: Check out the pinned upstream judge
+        if: ${{ inputs.source == 'online-mind2web' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: OSU-NLP-Group/Online-Mind2Web
+          ref: b422075b059f0bba670ddda168444eb1d326aa45
+          path: upstream/online-mind2web
+          persist-credentials: false
+      - name: Install the upstream judge in its own environment
+        if: ${{ inputs.source == 'online-mind2web' }}
+        run: |
+          cd upstream/online-mind2web
+          uv venv --python 3.11 .venv
+          uv pip install --python .venv/bin/python -r requirements.txt
+      - name: Run the shard
+        id: shard
+        env:
+          FASTBROWSE_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_BENCHMARKS_API_KEY }}
+          BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          PARALLAX_LANGFUSE_PROJECT: fastbrowse-evals
+          PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
+          PARALLAX_JUDGE_API_KEY: ${{ secrets.OPENROUTER_JUDGE_API_KEY }}
+          PARALLAX_JUDGE_MODELS: ${{ inputs.judge_models }}
+          PARALLAX_OFFICIAL_ONLINE_MIND2WEB_ROOT: ${{ github.workspace }}/upstream/online-mind2web
+          PARALLAX_OFFICIAL_ONLINE_MIND2WEB_JUDGE_PYTHON: ${{ github.workspace }}/upstream/online-mind2web/.venv/bin/python
+          # The demo logins each practice site prints on its own login page; public, and scrubbed from evidence.
+          FASTBROWSE_EVAL_SAUCEDEMO_USERNAME: standard_user
+          FASTBROWSE_EVAL_SAUCEDEMO_PASSWORD: secret_sauce
+          FASTBROWSE_EVAL_EXPANDTESTING_USERNAME: practice
+          FASTBROWSE_EVAL_EXPANDTESTING_PASSWORD: SuperSecretPassword!
+          FASTBROWSE_EVAL_PRACTICE_USERNAME: student
+          FASTBROWSE_EVAL_PRACTICE_PASSWORD: Password123
+          HARNESS: ${{ matrix.harness }}
+          MODEL: ${{ matrix.model }}
+          TASKS: ${{ matrix.tasks }}
+          REPEAT: ${{ needs.plan.outputs.repeat }}
+          BUDGET: ${{ inputs.budget }}
+          WORKERS: ${{ inputs.concurrency }}
+          ARM: ${{ matrix.arm }}
+          SHARD: ${{ matrix.shard }}
+        run: |
+          cd evals
+          # The upstream Online-Mind2Web judge asks the panel's first model, and the run's judge identity names it.
+          export PARALLAX_OFFICIAL_ONLINE_JUDGE_MODEL="${PARALLAX_JUDGE_MODELS%%,*}"
+          read -ra tasks <<< "$TASKS"
+          mkdir -p "$(dirname "$OUT")" "$PRIVATE_RUN"
+          # `parallax run` uploads and removes a finished local run, so hard links keep the evidence while it runs.
+          python3 - "$OUT" "$PRIVATE_RUN" <<'PY' &
+          import os, shutil, sys, time
+          from pathlib import Path
+
+          source, target = map(Path, sys.argv[1:])
+
+          def mirror() -> None:
+              for path in source.rglob("*") if source.is_dir() else ():
+                  destination = target / path.relative_to(source)
+                  if not path.is_file() or destination.exists():
+                      continue
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  try:
+                      os.link(path, destination)
+                  except OSError:
+                      try:
+                          shutil.copy2(path, destination)
+                      except FileNotFoundError:
+                          pass
+
+          while not source.exists():
+              time.sleep(0.25)
+          while source.exists():
+              mirror()
+              time.sleep(0.25)
+          mirror()
+          PY
+          mirror_pid=$!
+          args=(--harness "$HARNESS" --repeats "$REPEAT" --concurrency "$WORKERS" --budget "$BUDGET" --reserve 3
+            --retry-invalid 2 --retry-wait 60 --no-jev
+            --provenance "paper.campaign=$CAMPAIGN_ID" --provenance "paper.arm=$ARM" --provenance "paper.shard=$SHARD"
+            --out "$OUT")
+          test -z "$MODEL" || args+=(--model "$MODEL")
+          set +e
+          uv run --no-sync parallax run "source=$SOURCE" "${tasks[@]}" "${args[@]}"
+          status=$?
+          set -e
+          kill "$mirror_pid" 2> /dev/null || true
+          wait "$mirror_pid" 2> /dev/null || true
+          exit "$status"
+      - name: Write the public run projection
+        if: always()
+        env:
+          RUN_OUTCOME: ${{ steps.shard.outcome }}
+        run: |
+          public="$RUNNER_TEMP/public/$NAME"
+          mkdir -p "$public"
+          lost=""
+          for name in manifest.json provenance.json results.jsonl budget.jsonl; do
+            if test -f "$PRIVATE_RUN/$name"; then cp "$PRIVATE_RUN/$name" "$public/$name"; else lost="$lost $name"; fi
+          done
+          # A shard that finished must leave its rows: a run whose evidence was lost measured nothing it can report.
+          if test "$RUN_OUTCOME" = success && test -n "$lost"; then
+            echo "::error::the finished shard left no$lost"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: paper-${{ env.NAME }}
+          path: ${{ runner.temp }}/public/${{ env.NAME }}/
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Encrypt the private run
+        if: always()
+        env:
+          RECIPIENT: ${{ vars.PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT }}
+        run: |
+          test -d "$PRIVATE_RUN" || { echo "::warning::no private run was written"; exit 0; }
+          tar -C "$(dirname "$PRIVATE_RUN")" -czf - "$(basename "$PRIVATE_RUN")" | age -r "$RECIPIENT" -o "$RUNNER_TEMP/$NAME.tar.gz.age"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: paper-private-${{ env.NAME }}
+          path: ${{ runner.temp }}/${{ env.NAME }}.tar.gz.age
+          if-no-files-found: warn
+          retention-days: 90
