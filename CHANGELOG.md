@@ -11,6 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- The fixture bench and runner give every run a time limit. A run with no `max_seconds` holds a Wait until the page changes, with no bound, so a model that chose Wait on a static page left a bench run silent until the harness's 900 s client timeout, which reported "no run reply" with no result or evidence. A run now stops itself at the limit as `budget_exceeded`, with its evidence, before that timeout. The product is unchanged: a run with no time limit still waits for the page, so set `max_seconds` for any run nobody is watching ([#1213](https://github.com/agent-labs-dev/fastbrowse/issues/1213)).
 - A Wait no longer hangs on a page that finished changing while the run was deciding to wait. On a page that swaps "Loading..." for its result a moment after the run read it, the run chose Wait, the page changed before the Wait took its starting point, and the Wait then waited for a change from a page that was already finished, until the run's time ran out ([#1213](https://github.com/agent-labs-dev/fastbrowse/issues/1213)). A Wait now compares the page with what the run saw when it decided, and ends at once, reporting the page as changed, when they differ.
 
 ## [0.11.1] - 2026-11-17
