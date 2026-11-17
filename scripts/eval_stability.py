@@ -56,9 +56,10 @@ def provider_gaps(env: Mapping[str, str]) -> list[str]:
 def uncovered(measured: Sequence[tuple[str, str, int, int]], suites: Sequence[str], repeat: int) -> list[str]:
     """Tasks of `suites` with fewer than `repeat` recorded runs, each as `suite task runs/repeat`."""
     from fastbrowse.evals.mock_tasks import TASKS as MOCK_TASKS
+    from fastbrowse.evals.mock_tasks import VISUAL_TASKS
     from fastbrowse.evals.tasks import TASKS
 
-    expected = {"local": TASKS, "mock": MOCK_TASKS}
+    expected = {"local": TASKS, "mock": MOCK_TASKS, "mock-visual": VISUAL_TASKS}
     runs = {(suite, task): count for suite, task, _, count in measured}
     return [
         f"{suite} {task.id} {runs.get((suite, task.id), 0)}/{repeat}"
@@ -71,7 +72,9 @@ def uncovered(measured: Sequence[tuple[str, str, int, int]], suites: Sequence[st
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="check that every task of a fixture eval run passed every run")
     parser.add_argument("rows", nargs="?", type=Path, help="the JSONL file the runner wrote")
-    parser.add_argument("--suite", nargs="+", choices=["local", "mock"], default=[], help="suites the run covers")
+    parser.add_argument(
+        "--suite", nargs="+", choices=["local", "mock", "mock-visual"], default=[], help="suites the run covers"
+    )
     parser.add_argument("--repeat", type=int, default=1, help="runs each task of those suites must have")
     parser.add_argument(
         "--check-providers", action="store_true", help="check that a fixture run can call its models, then exit"

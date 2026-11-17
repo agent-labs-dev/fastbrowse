@@ -7,6 +7,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 /**
  * @param seconds Wall time of the call, retries included, or the time a metered browser was held. None when unknown.
  * @param physicalRequests Physical provider requests represented by this line; absent on historical receipts.
+ * @param images Images the call sent as Jev assets; absent for a call that sent none, and on historical receipts.
  */
 public record CostLine(
     @JsonProperty("component") CostComponent component,
@@ -17,7 +18,12 @@ public record CostLine(
     @JsonProperty("input_tokens") long inputTokens,
     @JsonProperty("output_tokens") long outputTokens,
     @JsonProperty("seconds") Double seconds,
-    @JsonProperty("physical_requests") Long physicalRequests) {
+    @JsonProperty("physical_requests") Long physicalRequests,
+    @JsonProperty("images") Long images) {
+
+    public CostLine(CostComponent component, CostBasis basis, Double dollars, LLMPurpose purpose, JevPurpose decisionPurpose, long inputTokens, long outputTokens, Double seconds, Long physicalRequests) {
+        this(component, basis, dollars, purpose, decisionPurpose, inputTokens, outputTokens, seconds, physicalRequests, null);
+    }
 
     /** A builder for a {@code CostLine}, every field unset. */
     public static Builder builder() {
@@ -35,6 +41,7 @@ public record CostLine(
         private long outputTokens;
         private Double seconds;
         private Long physicalRequests;
+        private Long images;
 
         private Builder() {}
 
@@ -83,8 +90,13 @@ public record CostLine(
             return this;
         }
 
+        public Builder images(Long images) {
+            this.images = images;
+            return this;
+        }
+
         public CostLine build() {
-            return new CostLine(component, basis, dollars, purpose, decisionPurpose, inputTokens, outputTokens, seconds, physicalRequests);
+            return new CostLine(component, basis, dollars, purpose, decisionPurpose, inputTokens, outputTokens, seconds, physicalRequests, images);
         }
     }
 }

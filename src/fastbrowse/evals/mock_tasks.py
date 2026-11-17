@@ -22,6 +22,7 @@ from fastbrowse.evals.judge import Claim
 from fastbrowse.evals.live_tasks import Outcome
 from fastbrowse.evals.mock import (
     ACCOUNTS,
+    EDITOR_TEXT,
     FEED_BATCH,
     FEED_TOTAL,
     LONG_DESCRIPTION,
@@ -335,6 +336,48 @@ def _ticket_type(result: MockResult, site: Site) -> str | None:
     saved = [fields.get("type") for fields in _posted(site, "/ticket")]
     if not saved or saved[-1] != "One way":
         return f"the site saved the ticket types {saved}, not One way"
+    return _status(result, Status.COMPLETE)
+
+
+def _picture_basket(result: MockResult, site: Site) -> str | None:
+    added = [fields.get("item") for fields in _posted(site, "/visual/basket")]
+    if added != ["item-3"]:
+        return f"the basket received {added}, expected only the red kettle (item-3)"
+    return _status(result, Status.COMPLETE)
+
+
+def _swatch(result: MockResult, site: Site) -> str | None:
+    added = [fields.get("colour") for fields in _posted(site, "/visual/tee")]
+    if added != ["swatch-2"]:
+        return f"the basket received the colours {added}, expected only green (swatch-2)"
+    return _status(result, Status.COMPLETE)
+
+
+def _bold_saved(result: MockResult, site: Site) -> str | None:
+    saved = _posted(site, "/visual/editor")
+    if not saved:
+        return "the document was never saved"
+    expected = {"text": EDITOR_TEXT, "bold": "true", "italic": "false", "underline": "false"}
+    if saved[-1] != expected:
+        return f"the site saved {saved[-1]}, expected {expected}"
+    return _status(result, Status.COMPLETE)
+
+
+def _map_pin(result: MockResult, site: Site) -> str | None:
+    chosen = [fields.get("pin") for fields in _posted(site, "/visual/map")]
+    if not chosen or chosen[-1] != "Library":
+        return f"the map selected {chosen}, not the Library"
+    return _status(result, Status.COMPLETE)
+
+
+def _chart_read(result: MockResult, _: Site) -> str | None:
+    return _status(result, Status.COMPLETE)
+
+
+def _switched_on(result: MockResult, site: Site) -> str | None:
+    states = [fields.get("on") for fields in _posted(site, "/visual/switch")]
+    if states != ["true"]:
+        return f"the switch posted {states}, expected one press turning it on"
     return _status(result, Status.COMPLETE)
 
 
@@ -659,3 +702,49 @@ TASKS: tuple[MockTask, ...] = (
         expect=Status.NEEDS_INPUT,
     ),
 )
+
+VISUAL_TASKS: tuple[MockTask, ...] = (
+    MockTask(
+        "mock-duplicate-add",
+        "/visual/shop",
+        "Add the red kettle to the basket.",
+        _picture_basket,
+    ),
+    MockTask(
+        "mock-swatch",
+        "/visual/tee",
+        "Add the green T-shirt to the basket.",
+        _swatch,
+    ),
+    MockTask(
+        "mock-icon-toolbar",
+        "/visual/editor",
+        "Make the document's text bold, then save the document.",
+        _bold_saved,
+        authorization=AUTHORIZED,
+    ),
+    MockTask(
+        "mock-canvas-map",
+        "/visual/map",
+        "On the map, select the Library pin.",
+        _map_pin,
+    ),
+    MockTask(
+        "mock-canvas-chart",
+        "/visual/chart",
+        "According to the chart, how many units were sold in April?",
+        _chart_read,
+        claims=(Claim("The answer says 340 units were sold in April."),),
+    ),
+    MockTask(
+        "mock-canvas-toggle",
+        "/visual/settings",
+        "Turn email alerts on.",
+        _switched_on,
+        authorization=AUTHORIZED,
+    ),
+)
+"""Tasks whose target or answer is only in the page's pixels: a picture, an icon, a swatch or a canvas.
+
+They run as their own fixture suite, `mock-visual`, rather than in `mock`: the nightly gate requires every `mock` task
+to pass every run, and these measure work the agent cannot yet do."""

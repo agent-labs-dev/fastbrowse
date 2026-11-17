@@ -445,6 +445,13 @@ def test_agent_gets_no_real_key(monkeypatch: pytest.MonkeyPatch) -> None:
     assert env["FASTBROWSE_LLM_BASE_URL"] == "http://127.0.0.1:9/llm"
 
 
+def test_the_visual_suite_runs_only_when_named() -> None:
+    from fastbrowse.evals.bench import _select
+
+    assert all(task.suite != "mock-visual" for task in _select([]))
+    assert [task.id for task in _select(["mock-canvas-map"])] == ["mock-canvas-map"]
+
+
 def test_corpus_task_ids_are_unique() -> None:
     tasks = corpus()
     assert len({t.id for t in tasks}) == len(tasks)

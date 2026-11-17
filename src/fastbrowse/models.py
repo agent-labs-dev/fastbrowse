@@ -277,6 +277,8 @@ class CostLine(Frozen):
     """Wall time of the call, retries included, or the time a metered browser was held. None when unknown."""
     physical_requests: int | None = Field(default=None, ge=0, exclude_if=lambda requests: requests is None)
     """Physical provider requests represented by this line; absent on historical receipts."""
+    images: int | None = Field(default=None, ge=0, exclude_if=lambda images: images is None)
+    """Images the call sent as Jev assets; absent for a call that sent none, and on historical receipts."""
 
     @property
     def label(self) -> str:

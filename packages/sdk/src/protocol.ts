@@ -257,6 +257,10 @@ export interface CostLine {
    * Physical provider requests represented by this line; absent on historical receipts.
    */
   physical_requests?: number | null;
+  /**
+   * Images the call sent as Jev assets; absent for a call that sent none, and on historical receipts.
+   */
+  images?: number | null;
 }
 export interface Citation {
   /**

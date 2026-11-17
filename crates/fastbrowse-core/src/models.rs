@@ -541,6 +541,9 @@ pub struct CostLine {
     /// Physical provider requests represented by this line. Absent on historical receipts.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lax::opt_int_ge0")]
     pub physical_requests: Option<i64>,
+    /// Images the call sent as Jev assets. None for a call that sent none, and on historical receipts.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lax::opt_int_ge0")]
+    pub images: Option<i64>,
 }
 
 impl CostLine {
@@ -555,6 +558,7 @@ impl CostLine {
             output_tokens: 0,
             seconds: None,
             physical_requests: None,
+            images: None,
         }
     }
 
@@ -589,6 +593,9 @@ impl Schema for CostLine {
                 Field::default("physical_requests", Ty::optional(Ty::Int.ge(0)), Value::Null)
                     .omitted_when_empty()
                     .doc("Physical provider requests represented by this line; absent on historical receipts."),
+                Field::default("images", Ty::optional(Ty::Int.ge(0)), Value::Null).omitted_when_empty().doc(
+                    "Images the call sent as Jev assets; absent for a call that sent none, and on historical receipts.",
+                ),
             ],
         )
         .ty()

@@ -143,6 +143,7 @@ async fn test_only_a_route_that_takes_images_is_sent_them() {
         };
         let result = client.evaluate_images(&state, &questions([("q", noul("Is it?"))]), &images).await.unwrap();
         assert!(matches!(result.answers["q"], Answer::Noul(_)));
+        assert_eq!(result.cost.images, sent.then_some(1), "{route}: the cost line counts the images sent");
     }
 }
 
@@ -171,6 +172,7 @@ async fn test_a_backup_route_is_asked_without_images() {
     );
     let result = client.evaluate_images(&state, &questions([("q", noul("Is it?"))]), &images).await.unwrap();
     assert!(matches!(result.answers["q"], Answer::Noul(_)));
+    assert_eq!(result.cost.images, None, "the backup answered without the image");
 }
 
 /// A request with no image never asks for image input, even on TypeSafe's own API.
@@ -187,7 +189,8 @@ async fn test_a_request_without_images_carries_no_image_input() {
         Box::pin(async move { Ok(response) })
     });
     let client = SystemOneClient::new("key", http, "https://direct.test", JEV_MODEL).typesafe();
-    client.evaluate(&json!("page"), &questions([("q", noul("Is it?"))])).await.unwrap();
+    let result = client.evaluate(&json!("page"), &questions([("q", noul("Is it?"))])).await.unwrap();
+    assert_eq!(result.cost.images, None);
 }
 
 /// A box question goes out with its instructions and no criteria, and its answer comes back as four edges and a

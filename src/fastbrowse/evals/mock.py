@@ -158,6 +158,45 @@ def _long_description() -> str:
 LONG_DESCRIPTION = _long_description()
 OLD_DESCRIPTION = "A notebook for tea and coffee. More soon."
 TICKET_TYPES = ("Round trip", "One way", "Multi-city")
+
+VISUAL_PRODUCTS: tuple[tuple[str, str, str], ...] = (
+    ("item-1", "blue", "kettle"),
+    ("item-2", "green", "mug"),
+    ("item-3", "red", "kettle"),
+    ("item-4", "red", "mug"),
+    ("item-5", "green", "kettle"),
+    ("item-6", "blue", "mug"),
+)
+"""The picture shop's products as (id, colour, kind). Only the picture tells them apart: every card has the same price
+and an identical Add button, and the picture has no alt text, as on a shop that never wrote any."""
+HUES = {"red": "#d32f2f", "green": "#388e3c", "blue": "#1976d2", "yellow": "#f9a825"}
+SWATCHES: tuple[tuple[str, str], ...] = (
+    ("swatch-1", "red"),
+    ("swatch-2", "green"),
+    ("swatch-3", "blue"),
+    ("swatch-4", "yellow"),
+)
+"""The T-shirt's colour radios as (value, colour). A radio has no name: the colour exists only as a drawn swatch."""
+EDITOR_TEXT = "Release notes for version 2."
+EDITOR_TOOLS = ("underline", "bold", "clear", "italic", "save")
+"""The editor's toolbar in page order. Each button holds only a drawn icon, with no title or label."""
+MAP_PINS: tuple[tuple[str, int, int], ...] = (
+    ("Harbour", 140, 400),
+    ("Mill", 300, 150),
+    ("Library", 520, 320),
+    ("Station", 700, 120),
+    ("Market", 760, 430),
+)
+"""Pins drawn on the map canvas as (name, x, y) in canvas pixels; the names exist only as drawn text."""
+CHART_SALES: tuple[tuple[str, int], ...] = (
+    ("Jan", 210),
+    ("Feb", 260),
+    ("Mar", 190),
+    ("Apr", 340),
+    ("May", 300),
+    ("Jun", 280),
+)
+"""The sales chart's bars; the values exist only as drawn text on a canvas."""
 PROFILE = {"name": "Ada", "bio": "", "country": ""}
 """The profile form's fields as the page opens them; the country is required and no task gives one."""
 
@@ -453,12 +492,20 @@ class _Handler(BaseHTTPRequestHandler):
             "/project/edit": self._project_edit,
             "/ticket": self._ticket,
             "/profile": self._profile,
+            "/visual/shop": self._visual_shop,
+            "/visual/tee": self._visual_tee,
+            "/visual/editor": self._visual_editor,
+            "/visual/map": self._visual_map,
+            "/visual/chart": self._visual_chart,
+            "/visual/settings": self._visual_settings,
         }.get(path)
         if route is None:
             if path.startswith("/product/"):
                 self._product(path.removeprefix("/product/"))
             elif path.startswith("/compare/"):
                 self._compare(path.removeprefix("/compare/"))
+            elif path.startswith("/visual/img/"):
+                self._visual_image(path.removeprefix("/visual/img/"))
             else:
                 self._send(HTTPStatus.NOT_FOUND, b"<h1>Not found</h1>")
             return
@@ -492,6 +539,11 @@ class _Handler(BaseHTTPRequestHandler):
             "/ticket": self._saved,
             "/profile": self._saved,
             "/profile/draft": self._saved,
+            "/visual/basket": self._visual_basket,
+            "/visual/tee": self._visual_basket,
+            "/visual/editor": self._saved,
+            "/visual/map": self._saved,
+            "/visual/switch": self._saved,
         }.get(path)
         if route is None:
             self._send(HTTPStatus.NOT_FOUND, b"<h1>Not found</h1>")
@@ -1268,6 +1320,176 @@ class _Handler(BaseHTTPRequestHandler):
     def _list_delete(self, _: dict[str, str]) -> None:
         self.site.saved_list.clear()
         self._html("Saved list", "<p>List tidied.</p>")
+
+    # ---- pages whose meaning is in their pixels -------------------------------------------------------------
+    # Each holds what a task needs only in what it draws: a picture with no alt text, an icon with no name, a
+    # swatch with no label, or a canvas. Text alone cannot decide these, which is what they measure.
+
+    def _visual_shop(self, _: dict[str, str]) -> None:
+        cards = "".join(
+            "<div style='display:inline-block;width:220px;margin:8px;padding:8px;border:1px solid #ccc;"
+            "text-align:center'>"
+            f"<img src='/visual/img/{pid.removeprefix('item-')}.svg' width='200' height='200'>"
+            "<p>£24.00</p>" + _form("/visual/basket", "", "Add", {"item": pid}) + "</div>"
+            for pid, _, _ in VISUAL_PRODUCTS
+        )
+        self._html("Kitchen shop", "<p>Kettles and mugs, all one price.</p>" + cards)
+
+    def _visual_image(self, name: str) -> None:
+        drawn = {pid.removeprefix("item-") + ".svg": (colour, kind) for pid, colour, kind in VISUAL_PRODUCTS}
+        if name not in drawn:
+            self._send(HTTPStatus.NOT_FOUND, b"")
+            return
+        colour, kind = drawn[name]
+        fill = HUES[colour]
+        if kind == "kettle":
+            shape = (
+                f"<ellipse cx='100' cy='120' rx='60' ry='55' fill='{fill}' stroke='#222' stroke-width='4'/>"
+                f"<path d='M155 100 L190 80 L160 135 Z' fill='{fill}' stroke='#222' stroke-width='3'/>"
+                "<path d='M65 70 Q100 20 135 70' fill='none' stroke='#222' stroke-width='8'/>"
+            )
+        else:
+            shape = (
+                f"<rect x='55' y='60' width='80' height='110' rx='6' fill='{fill}' stroke='#222' stroke-width='4'/>"
+                "<path d='M135 85 Q175 115 135 145' fill='none' stroke='#222' stroke-width='10'/>"
+            )
+        svg = (
+            "<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'>"
+            f"<rect width='200' height='200' fill='#f4f1ea'/>{shape}</svg>"
+        )
+        self._send(HTTPStatus.OK, svg.encode(), "image/svg+xml")
+
+    def _visual_basket(self, _: dict[str, str]) -> None:
+        self._html("Basket", "<p>Added to your basket.</p><p><a href='/visual/shop'>Keep shopping</a></p>")
+
+    def _visual_tee(self, _: dict[str, str]) -> None:
+        """Swatch radios: the input is invisible over its swatch, as most shops draw them, and has no name."""
+        radios = "".join(
+            "<label style='display:inline-block;position:relative;margin:6px'>"
+            f"<input type='radio' name='colour' value='{value}' style='position:absolute;inset:0;opacity:0;margin:0'>"
+            f"<span style='display:inline-block;width:44px;height:44px;border-radius:50%;background:{HUES[colour]}'>"
+            "</span></label>"
+            for value, colour in SWATCHES
+        )
+        body = (
+            "<style>input:checked + span { box-shadow: 0 0 0 3px #fff, 0 0 0 6px #111; }</style>"
+            "<p>Organic cotton T-shirt, £18.00.</p>"
+            + _form("/visual/tee", f"<fieldset><legend>Colour</legend>{radios}</fieldset>", "Add to basket")
+        )
+        self._html("T-shirt", body)
+
+    def _visual_editor(self, _: dict[str, str]) -> None:
+        """A rich-text toolbar of icon buttons. Each icon is drawn with paths, so no text in the page names it."""
+        icons = {
+            "bold": "<path d='M7 4h6a4 4 0 0 1 0 8H7z M7 12h7a4 4 0 0 1 0 8H7z' stroke-width='3'/>",
+            "italic": "<path d='M10 4h8 M6 20h8 M15 4 9 20' stroke-width='2.5'/>",
+            "underline": "<path d='M7 4v7a5 5 0 0 0 10 0V4 M5 21h14' stroke-width='2.5'/>",
+            "clear": "<path d='M4 7h16 M9 7V4h6v3 M6 7l1 13h10l1-13' stroke-width='2'/>",
+            "save": "<path d='M5 4h11l3 3v13H5z M8 4v5h7V4 M8 20v-6h8v6' stroke-width='2'/>",
+        }
+        buttons = "".join(
+            f"<button type='button' onclick='act({index})' style='width:40px;height:40px;margin:2px'"
+            + (" aria-pressed='false'" if tool in ("bold", "italic", "underline") else "")
+            + "><svg width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor'>"
+            + icons[tool]
+            + "</svg></button>"
+            for index, tool in enumerate(EDITOR_TOOLS)
+        )
+        body = (
+            f"<div role='toolbar' id='toolbar'>{buttons}</div>"
+            "<div id='doc' contenteditable='true' style='border:1px solid #999;padding:12px;min-height:80px'>"
+            f"{EDITOR_TEXT}</div>"
+            "<p id='status' role='status'></p>"
+            "<script>"
+            f"const tools = {json.dumps(EDITOR_TOOLS)};"
+            "const doc = document.getElementById('doc');"
+            "const state = {bold: false, italic: false, underline: false};"
+            "function act(index){ const tool = tools[index];"
+            " if (tool === 'save') { store(); return; }"
+            " if (tool === 'clear') { doc.textContent = ''; return; }"
+            " state[tool] = !state[tool];"
+            " document.querySelectorAll('#toolbar button')[index].setAttribute('aria-pressed', String(state[tool]));"
+            " doc.style.fontWeight = state.bold ? '700' : '400';"
+            " doc.style.fontStyle = state.italic ? 'italic' : 'normal';"
+            " doc.style.textDecoration = state.underline ? 'underline' : 'none'; }"
+            "async function store(){ await fetch('/visual/editor', {method: 'POST',"
+            " headers: {'Content-Type': 'application/x-www-form-urlencoded'},"
+            " body: new URLSearchParams({text: doc.textContent, bold: String(state.bold),"
+            " italic: String(state.italic), underline: String(state.underline)})});"
+            " document.getElementById('status').textContent = 'Saved.'; }"
+            "</script>"
+        )
+        self._html("Editor", body)
+
+    def _visual_map(self, _: dict[str, str]) -> None:
+        """A map drawn on a canvas. A click near a pin selects it and posts its name, as a map widget's own
+        script would; nothing outside the canvas names a pin."""
+        body = (
+            "<p>Choose a place on the map for directions.</p>"
+            "<canvas id='map' width='900' height='560' style='border:1px solid #888'></canvas>"
+            "<p id='status' role='status'></p>"
+            "<script>"
+            f"const pins = {json.dumps([{'name': n, 'x': x, 'y': y} for n, x, y in MAP_PINS])};"
+            "const canvas = document.getElementById('map'); const ctx = canvas.getContext('2d');"
+            "let chosen = null;"
+            "function draw(){ ctx.fillStyle = '#e8efe3'; ctx.fillRect(0, 0, 900, 560);"
+            " ctx.strokeStyle = '#8ab4d8'; ctx.lineWidth = 26; ctx.beginPath(); ctx.moveTo(0, 250);"
+            " ctx.bezierCurveTo(250, 200, 450, 480, 900, 300); ctx.stroke();"
+            " ctx.strokeStyle = '#fff'; ctx.lineWidth = 10; ctx.beginPath(); ctx.moveTo(60, 60); ctx.lineTo(840, 500);"
+            " ctx.moveTo(100, 520); ctx.lineTo(820, 80); ctx.stroke();"
+            " ctx.font = '18px sans-serif';"
+            " for (const pin of pins) { ctx.fillStyle = pin === chosen ? '#1a237e' : '#c62828'; ctx.beginPath();"
+            " ctx.arc(pin.x, pin.y, 12, 0, 2 * Math.PI); ctx.fill(); ctx.fillStyle = '#222';"
+            " ctx.fillText(pin.name, pin.x + 18, pin.y + 6); } }"
+            "canvas.addEventListener('click', async (event) => { const box = canvas.getBoundingClientRect();"
+            " const x = (event.clientX - box.left) * canvas.width / box.width;"
+            " const y = (event.clientY - box.top) * canvas.height / box.height;"
+            " const hit = pins.find((pin) => Math.hypot(pin.x - x, pin.y - y) <= 18); if (!hit) return;"
+            " chosen = hit; draw(); await fetch('/visual/map', {method: 'POST',"
+            " headers: {'Content-Type': 'application/x-www-form-urlencoded'},"
+            " body: new URLSearchParams({pin: hit.name})});"
+            " document.getElementById('status').textContent = 'Directions ready.'; });"
+            "draw();"
+            "</script>"
+        )
+        self._html("Map", body)
+
+    def _visual_chart(self, _: dict[str, str]) -> None:
+        """A bar chart drawn on a canvas, each bar's value printed above it and nowhere else on the page."""
+        body = (
+            "<p>Units sold each month this year.</p>"
+            "<canvas id='chart' width='760' height='420'></canvas>"
+            "<script>"
+            f"const sales = {json.dumps([{'month': m, 'units': u} for m, u in CHART_SALES])};"
+            "const ctx = document.getElementById('chart').getContext('2d');"
+            "ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, 760, 420); ctx.font = '16px sans-serif';"
+            "ctx.strokeStyle = '#ddd'; ctx.fillStyle = '#555';"
+            "for (let v = 0; v <= 400; v += 100) { const y = 370 - v * 0.8; ctx.beginPath(); ctx.moveTo(60, y);"
+            " ctx.lineTo(740, y); ctx.stroke(); ctx.fillText(String(v), 14, y + 5); }"
+            "sales.forEach((bar, i) => { const x = 90 + i * 110; const h = bar.units * 0.8;"
+            " ctx.fillStyle = '#3949ab'; ctx.fillRect(x, 370 - h, 60, h); ctx.fillStyle = '#222';"
+            " ctx.fillText(bar.month, x + 14, 395); ctx.fillText(String(bar.units), x + 12, 362 - h); });"
+            "</script>"
+        )
+        self._html("Monthly sales", body)
+
+    def _visual_settings(self, _: dict[str, str]) -> None:
+        """A switch drawn on a canvas: its on or off state is only in the drawing. Each click flips it and posts the
+        new state, so the site knows how many times it was pressed."""
+        body = (
+            "<p>Email alerts <canvas id='switch' width='96' height='48' style='vertical-align:middle'></canvas></p>"
+            "<script>"
+            "const canvas = document.getElementById('switch'); const ctx = canvas.getContext('2d'); let on = false;"
+            "function draw(){ ctx.clearRect(0, 0, 96, 48); ctx.fillStyle = on ? '#2e7d32' : '#9e9e9e';"
+            " ctx.beginPath(); ctx.roundRect(4, 8, 88, 32, 16); ctx.fill(); ctx.fillStyle = '#fff'; ctx.beginPath();"
+            " ctx.arc(on ? 72 : 24, 24, 13, 0, 2 * Math.PI); ctx.fill(); }"
+            "canvas.addEventListener('click', async () => { on = !on; draw(); await fetch('/visual/switch',"
+            " {method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'},"
+            " body: new URLSearchParams({on: String(on)})}); });"
+            "draw();"
+            "</script>"
+        )
+        self._html("Settings", body)
 
 
 def _code_address(back: str) -> str:

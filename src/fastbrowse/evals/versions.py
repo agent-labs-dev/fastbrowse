@@ -216,9 +216,10 @@ def all_tasks() -> tuple[dict[str, tuple[Any, ...]], tuple[Any, ...]]:
     """The live suites and the local fixtures; imported here so the harness can import this module."""
     from fastbrowse.evals.catalog import SUITES
     from fastbrowse.evals.mock_tasks import TASKS as MOCK_TASKS
+    from fastbrowse.evals.mock_tasks import VISUAL_TASKS
     from fastbrowse.evals.tasks import TASKS
 
-    return SUITES, (*TASKS, *MOCK_TASKS)
+    return SUITES, (*TASKS, *MOCK_TASKS, *VISUAL_TASKS)
 
 
 # Published results.

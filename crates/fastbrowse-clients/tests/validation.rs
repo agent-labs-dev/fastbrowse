@@ -183,6 +183,9 @@ fn test_a_discarded_jev_request_is_charged_as_an_estimate() {
     let charged = with_discarded(cost.clone(), &RequestUsage { unaccounted_requests: 1, ..RequestUsage::default() });
     assert_eq!((charged.basis, charged.dollars, charged.input_tokens), (CostBasis::Estimated, Some(0.004), 1800));
     assert_eq!(with_discarded(cost.clone(), &RequestUsage::default()), cost);
+    let pictured = CostLine { images: Some(2), ..cost };
+    let charged = with_discarded(pictured, &RequestUsage { unaccounted_requests: 1, ..RequestUsage::default() });
+    assert_eq!(charged.images, Some(4), "each resent request carried the same images");
 }
 
 /// Python fixes the clock to check the error's seconds (27); a paused clock counts the backoff waits, so only the
@@ -314,6 +317,7 @@ async fn test_cancelled_dispatched_request_retains_estimated_input_cost() {
     assert_eq!((costs[0].component, costs[0].basis), (CostComponent::Jev, CostBasis::Estimated));
     assert_eq!(costs[0].input_tokens, tokens);
     assert_eq!(costs[0].dollars, Some(tokens as f64 * JEV_DOLLARS_PER_INPUT_TOKEN));
+    assert_eq!(costs[0].images, None);
 }
 
 #[tokio::test(start_paused = true)]
@@ -415,6 +419,7 @@ async fn image_cancellation_charges_the_text_it_sent_instead_of_the_whole_contex
         assert_eq!(events(&trace, "cancelled_request_cost")[0]["decision_purpose"], "locate");
         assert_eq!(events(&trace, "call")[0]["decision_purpose"], "locate");
         assert_ne!(costs[0].input_tokens, 0);
+        assert_eq!(costs[0].images, Some(1), "the image it sent is counted though its tokens are not");
         if unpriced {
             assert_eq!(costs[0].basis, CostBasis::Unknown);
             assert_eq!(costs[0].dollars, None);

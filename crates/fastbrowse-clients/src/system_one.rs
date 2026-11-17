@@ -6,6 +6,7 @@ use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{
     DecisionClient, DecisionError, DecisionProfile, Evaluation, Images, NO_IMAGES, Question, without_images,
 };
+use fastbrowse_core::models::CostLine;
 use fastbrowse_core::py::base64;
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
@@ -168,7 +169,10 @@ impl SystemOneClient {
                 model,
                 answers: parse_answers(payload.get("answers"), questions, false, None)?,
                 input_tokens: tokens,
-                cost: timed(cost, &sent, started),
+                cost: CostLine {
+                    images: (!images.is_empty()).then(|| images.len() as i64),
+                    ..timed(cost, &sent, started)
+                },
             })
         })();
         parsed.map_err(|detail| invalid_response(&response, "Invalid Jev response", &detail))

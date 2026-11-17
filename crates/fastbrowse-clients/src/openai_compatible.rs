@@ -170,6 +170,7 @@ fn cost(payload: &Map<String, Value>, purpose: LLMPurpose) -> CostLine {
             output_tokens: token_count(Some(usage.get("completion_tokens").unwrap_or(&zero)))?,
             seconds: None,
             physical_requests: None,
+            images: None,
         })
     };
     read().unwrap_or_else(|_| unknown(purpose))
@@ -195,6 +196,7 @@ fn total_cost(costs: &[CostLine], purpose: LLMPurpose) -> CostLine {
         output_tokens: costs.iter().map(|line| line.output_tokens).sum(),
         seconds: None,
         physical_requests: costs.iter().map(|line| line.physical_requests).sum(),
+        images: None,
     }
 }
 
