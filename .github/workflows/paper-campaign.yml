@@ -211,19 +211,10 @@ jobs:
           cd evals
           uv sync --locked
           sudo apt-get install -y -qq age
+      # Parallax installs browser-harness's pinned CLI and agent itself, the agent with npm.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: ${{ startsWith(matrix.harness, 'browser-harness') }}
         with: {node-version: "24"}
-      - name: Install browser-harness and the agent that runs it
-        if: ${{ startsWith(matrix.harness, 'browser-harness') }}
-        # The pins match Parallax's parallax/harnesses/browser/pins.json, which the manifest records.
-        run: |
-          uv tool install browser-harness==0.1.13
-          npm install --global @openai/codex@0.169.0 @anthropic-ai/claude-code@2.1.326
-          skill="$(uv tool dir)/browser-harness/lib/python3.13/site-packages/browser_harness/SKILL.md"
-          test -f "$skill" || skill="$(find "$(uv tool dir)/browser-harness" -path '*/browser_harness/SKILL.md' -print -quit)"
-          test -f "$skill"
-          echo "PARALLAX_BROWSER_HARNESS_SKILL=$skill" >> "$GITHUB_ENV"
       - name: Check out the pinned upstream judge
         if: ${{ inputs.source == 'online-mind2web' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
