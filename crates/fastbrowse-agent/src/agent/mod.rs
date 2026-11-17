@@ -1209,7 +1209,7 @@ pub fn breakdown(lines: Vec<CostLine>) -> CostBreakdown {
 /// A run whose page has no browser behind it reached a step only a browser can take. The document was never the
 /// problem and a second attempt cannot help, so it ends `blocked` with the reason, carrying nothing it read.
 /// The variant names of an error and no text it carries, so a public log can say what failed without quoting a page.
-fn failure_kind(error: &impl std::fmt::Debug) -> String {
+pub fn failure_kind(error: &impl std::fmt::Debug) -> String {
     let debug = format!("{error:?}");
     let names: String = debug.chars().take_while(|c| c.is_alphanumeric() || *c == '(').collect();
     names.trim_end_matches('(').replace('(', ".")

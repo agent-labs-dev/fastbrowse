@@ -11,7 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- Run results that end as `unavailable` or `error` expose `failure_kind`, the provider or browser variant path that failed, so callers do not need to parse `error`.
+- Run results that end as `unavailable` or `error` expose `failure_kind`, the provider or browser variant path that failed (a browser that could not start included, such as `BrowserUseCloud.Unavailable`), so callers do not need to parse `error`.
 
 - A Jev call the run abandons in flight is charged for the input it sent, instead of being priced at the model's whole context window and left unbilled. A page that redrew while Jev was deciding drops that decision, and the dropped request kept neither its own usage nor a charge: it was recorded as a ceiling on what the call could have cost, which hosted excludes from what a tenant pays, so about 16% of hosted runs carried one or two paid action calls that were never billed and were counted in the run's cost at roughly thirty times their real price ([#1171](https://github.com/agent-labs-dev/fastbrowse/issues/1171)). The abandoned request now keeps an estimate of the text it carried, priced at the route's list rate, and the base64 an image travels as is left out of it rather than counted as tokens. Admission still holds the whole context window against a dollar cap for a request carrying an image, since no smaller number is a bound on one, so the cap holds as before.
 
