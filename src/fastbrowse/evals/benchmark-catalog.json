@@ -7,7 +7,7 @@
     "live_tasks.py": "f38f85fb15765c6740f59875c7ccbc3a252a76b3e66e698877830ee6bfa24892",
     "more_tasks.py": "f4fd910a5a939052aa88e7450d0e65f0b6c34c44048805b61010d856fec502fe",
     "sweep_tasks.py": "794208a46b1ed4603869cc94a0a5d98264858b3c5b51f04901cc9f637867f643",
-    "task_specs.py": "1f4cb26f670a943a0eed2fae108d94d6788b1403f14f8641874ffa981c4362d6",
+    "task_specs.py": "9caf902add765c9eacde80ba62476ccf28b6b6c2881623ed03b35f078d6fc35a",
     "versions.json": "5262339746ac3b679d7c613bd5bf7d64b277e8cd14bc75eb63c8ade0dd2b2883"
   },
   "suites": {
@@ -997,7 +997,7 @@
       "default": false
     },
     "browser-harness": {
-      "pin": "browser-harness==0.1.13; codex-cli==0.169.0; cli+skill",
+      "pin": "browser-harness==0.1.13; codex-cli==0.169.0 on openai/gpt-6-luna; cli+skill",
       "tier": "A",
       "default": false
     }

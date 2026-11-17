@@ -91,7 +91,7 @@ The mapping preserves these public arm names:
 - `browser-harness` to `browser-harness`;
 - `browser-use-oss` to `browser-use-oss`.
 
-`fastbrowse-hosted` and `cua-codex` remain diagnostic. Candidate schema 7,
+`fastbrowse-hosted`, `cua-codex` and `browser-harness-claude-code` remain diagnostic. Candidate schema 7,
 `GROUPS`, site groups, and all files under `docs/results` stay as recorded.
 
 The official benchmark workflow uses Parallax 2.0.0.dev26's `bu-bench` and

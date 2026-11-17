@@ -32,7 +32,8 @@ ARM_BINDINGS: tuple[ArmBinding, ...] = (
     ArmBinding("browser-use-ultrafast", "browser-use-cloud", "bu-ultrafast"),
     # Parallax's Browser Use harnesses take the model they run explicitly; bu-4.0 is browser-use 1.0.6's default.
     ArmBinding("browser-use-oss", "browser-use-oss", "bu-4.0"),
-    ArmBinding("browser-harness", "browser-harness"),
+    # Codex on Luna, price-matched with the Claude Code arm (browser-harness-claude-code on Haiku 5.5, diagnostic).
+    ArmBinding("browser-harness", "browser-harness", "openai/gpt-6-luna"),
     ArmBinding("cua-codex", "cua-codex"),
 )
 
@@ -41,6 +42,7 @@ BY_PUBLIC = {binding.public: binding for binding in ARM_BINDINGS}
 LEGACY: dict[tuple[str, str | None], PublicArm] = {
     ("browser-use-cloud", None): "browser-use",
     ("browser-use-oss", "bu-fast"): "browser-use-oss",
+    ("browser-harness", None): "browser-harness",
 }
 BY_PARALLAX = LEGACY | {(binding.harness, binding.model): binding.public for binding in ARM_BINDINGS}
 
