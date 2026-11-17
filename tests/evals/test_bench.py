@@ -178,7 +178,7 @@ def test_nearest_body_is_the_most_similar() -> None:
 def test_cassette_round_trips_and_writes_the_same_bytes(tmp_path: Path) -> None:
     cassette = Cassette(task="t", meta={"recorded_at": "2026-10-23"})
     cassette.exchanges.append(_exchange(JEV, {"q": 1}, '{"usage": {"cost": 0.5}}', latency=1.25))
-    first, second = tmp_path / "a.jsonl.gz", tmp_path / "b.jsonl.gz"
+    first, second = tmp_path / "a.jsonl", tmp_path / "b.jsonl"
     cassette.save(first)
     cassette.save(second)
     assert first.read_bytes() == second.read_bytes()
@@ -188,13 +188,28 @@ def test_cassette_round_trips_and_writes_the_same_bytes(tmp_path: Path) -> None:
     assert loaded.exchanges[0].latency == 1.25
 
 
+def test_a_cassette_is_plain_jsonl_a_reviewer_can_read_in_a_diff(tmp_path: Path) -> None:
+    cassette = Cassette(task="t")
+    cassette.exchanges += [_exchange(JEV, {"b": 1, "a": 2}, "{}"), _exchange(JEV, {"q": "later"}, "{}")]
+    path = tmp_path / "t.jsonl"
+    cassette.save(path)
+    head, first, second = path.read_text(encoding="utf-8").splitlines()
+    assert json.loads(head)["task"] == "t" and Cassette.is_cassette(path)
+    assert first.startswith('{"purpose":') and '"request": {"b": 1, "a": 2}' in first
+    assert json.loads(second)["request"] == {"q": "later"}
+    assert '"key"' not in first and Cassette.load(path).exchanges[0].key == request_key(JEV, {"b": 1, "a": 2})
+    trace = tmp_path / "trace.jsonl"
+    trace.write_text('{"event": "http"}\n')
+    assert not Cassette.is_cassette(trace)
+
+
 def test_loading_rekeys_from_the_request(tmp_path: Path) -> None:
     cassette = Cassette(task="t")
     stale = _exchange(JEV, {"q": 1}, "{}")
     stale.key = "stale"
     cassette.exchanges.append(stale)
-    cassette.save(tmp_path / "c.jsonl.gz")
-    assert Cassette.load(tmp_path / "c.jsonl.gz").exchanges[0].key == request_key(JEV, {"q": 1})
+    cassette.save(tmp_path / "c.jsonl")
+    assert Cassette.load(tmp_path / "c.jsonl").exchanges[0].key == request_key(JEV, {"q": 1})
 
 
 def _post(base: str, path: str, body: object, token: str = "one") -> httpx.Response:
@@ -349,8 +364,8 @@ def test_recording_saves_actual_origin_and_replays_at_two_new_ports(tmp_path: Pa
     with recording as base:
         response = _post(base, JEV, {"q": 1})
     assert response.status_code == 201 and response.headers["content-type"] == "application/custom"
-    cassette.save(tmp_path / "cassette.jsonl.gz")
-    loaded = Cassette.load(tmp_path / "cassette.jsonl.gz")
+    cassette.save(tmp_path / "cassette.jsonl")
+    loaded = Cassette.load(tmp_path / "cassette.jsonl")
     assert loaded.meta == {"port": 39123}
 
     for port in (40234, 41234):
@@ -375,9 +390,9 @@ def test_fill_records_live_origin_per_exchange_before_replay_at_another_port(tmp
     filling.set_fixture_origin("http://127.0.0.1:39123")
     with filling as base:
         assert _post(base, JEV, {"q": "new"}).json()["url"].endswith(":39123/new")
-    cassette.save(tmp_path / "filled.jsonl.gz")
+    cassette.save(tmp_path / "filled.jsonl")
 
-    loaded = Cassette.load(tmp_path / "filled.jsonl.gz")
+    loaded = Cassette.load(tmp_path / "filled.jsonl")
     assert loaded.exchanges[-1].fixture_origin == "http://127.0.0.1:39123"
     replay = Proxy(loaded)
     replay.set_fixture_origin("http://127.0.0.1:41234")

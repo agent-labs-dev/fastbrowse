@@ -36,7 +36,7 @@ STALE: dict[str, str] = {}
 def recorded_tasks() -> list[Any]:
     """The corpus task of every cassette; a cassette no task owns is an error, not a skip."""
     tasks = {task.id: task for task in corpus()}
-    ids = sorted(path.name.removesuffix(".jsonl.gz") for path in CASSETTES.glob("*.jsonl.gz"))
+    ids = sorted(path.name.removesuffix(".jsonl") for path in CASSETTES.glob("*.jsonl"))
     orphans = [task_id for task_id in ids if task_id not in tasks]
     if orphans:
         raise LookupError(f"cassettes with no corpus task: {', '.join(orphans)}")
@@ -49,7 +49,7 @@ def recorded_tasks() -> list[Any]:
 
 
 async def replayed(task: BenchTask, logs: Path) -> dict[str, Any]:
-    proxy = Proxy(Cassette.load(CASSETTES / f"{task.id}.jsonl.gz"), forward=None, replay=True, latency=Latency.ZERO)
+    proxy = Proxy(Cassette.load(CASSETTES / f"{task.id}.jsonl"), forward=None, replay=True, latency=Latency.ZERO)
     return await bench_task(task, agent_argv=[IN_PROCESS], proxy=proxy, logs=logs)
 
 

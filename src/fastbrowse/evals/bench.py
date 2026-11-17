@@ -611,7 +611,7 @@ def _select(only: list[str]) -> list[BenchTask]:
 
 
 def _cassette_path(directory: Path, task: str) -> Path:
-    return directory / f"{task}.jsonl.gz"
+    return directory / f"{task}.jsonl"
 
 
 async def run_suite(args: argparse.Namespace) -> int:
