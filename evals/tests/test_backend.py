@@ -4,7 +4,20 @@ from pathlib import Path
 
 import pytest
 from fastbrowse.evals import harness
-from fastbrowse.models import Citation, CostBreakdown, Decider, Operation, RunResult, Status, StepOutcome, StepResult
+from fastbrowse.models import (
+    Citation,
+    CostBasis,
+    CostBreakdown,
+    CostComponent,
+    CostLine,
+    Decider,
+    JevPurpose,
+    Operation,
+    RunResult,
+    Status,
+    StepOutcome,
+    StepResult,
+)
 from parallax.browser_evidence import BrowserEvidence
 from parallax.harnesses.base import credential_env_problems
 from parallax.harnesses.browser.cloud import Browser
@@ -43,6 +56,27 @@ def test_browser_evidence_distinguishes_a_blocked_attempt_from_an_executed_actio
     result = backend._run_result(executed, None, Browser(cdp_url="ws://browser"), [], latency_ms=0)
     evidence = BrowserEvidence.model_validate({"answer": None, "steps": result["step_log"]})
     assert evidence.steps[0].action == "click (executed)"
+
+
+def test_a_jev_calls_image_count_reaches_parallax_usage() -> None:
+    line = CostLine(
+        component=CostComponent.JEV,
+        basis=CostBasis.METERED,
+        decision_purpose=JevPurpose.ACTION,
+        input_tokens=4200,
+        images=3,
+    )
+    output = RunResult(
+        status=Status.COMPLETE,
+        answer="done",
+        data=None,
+        evidence=(),
+        steps=(),
+        cost=CostBreakdown(lines=(line,)),
+        artifacts=(),
+    )
+    result = backend._run_result(output, None, Browser(cdp_url="ws://browser"), [], latency_ms=0)
+    assert [usage["images"] for usage in result["usage"]] == [3]
 
 
 @pytest.mark.parametrize("data", [{"name": "widget", "revision": 3}, [], False, 0])

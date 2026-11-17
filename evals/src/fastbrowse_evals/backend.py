@@ -230,6 +230,7 @@ def _run_result(
                 "input": line.input_tokens,
                 "output": line.output_tokens,
                 "requests": line.physical_requests or 0,
+                "images": line.images or 0,
                 "cost_usd": line.dollars,
                 "source": "harness",
             }
