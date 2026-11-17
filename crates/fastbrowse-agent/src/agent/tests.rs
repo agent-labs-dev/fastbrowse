@@ -4439,25 +4439,58 @@ async fn click_where_seen(images: bool, shown: f64, moved: bool) -> (Option<ActR
 }
 
 #[tokio::test]
-async fn test_a_drawn_page_sends_its_viewport_and_a_text_page_sends_none() {
+async fn test_a_drawn_control_sends_the_viewport_and_a_picture_the_text_tells_apart_sends_none() {
     let page = Arc::new(Screenshots(Default::default(), false, Default::default(), false, None));
     let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: None });
     let agent = Agent::new(page, jev, Arc::new(ScriptedLLM));
-    // A map or a photograph has none of its content in the DOM: the screenshot is the page.
-    let drawn = Observation { visual_content: true, ..observation(&[button("Open street view")]) };
-    assert_eq!(agent.drawn_viewport(&drawn).await.expect("the viewport"), Some(png(1280, 900)));
-    // A page whose content is its text is asked about as text, with no image cost.
-    let text = Observation { visual_content: false, ..observation(&[button("Next")]) };
-    assert_eq!(agent.drawn_viewport(&text).await.expect("no image"), None);
+    // A canvas app or a streamed screen has none of what it shows in the DOM: the screenshot is the control.
+    let canvas = Control { drawn: Some(true), ..button("Street view") };
+    let (viewport, looks) = agent.step_images(&[canvas, button("Next")]).await.expect("the viewport");
+    assert_eq!((viewport, looks.len()), (Some(png(1280, 900)), 0));
+    // A page of named controls is asked about as text, however many photographs it shows.
+    let (viewport, looks) = agent.step_images(&[button("Next")]).await.expect("no image");
+    assert_eq!((viewport, looks.len()), (None, 0));
+}
+
+#[test]
+fn test_a_card_is_cut_from_the_viewport_at_least_as_large_as_jev_takes() {
+    let mut viewport = Vec::new();
+    image::RgbImage::new(1280, 900)
+        .write_to(&mut std::io::Cursor::new(&mut viewport), image::ImageFormat::Png)
+        .expect("a png");
+    let side = |png: &[u8]| {
+        (u32::from_be_bytes(png[16..20].try_into().unwrap()), u32::from_be_bytes(png[20..24].try_into().unwrap()))
+    };
+    let cards = super::seeing::cards(
+        &viewport,
+        &IndexMap::from([
+            // A product card a quarter of the viewport wide.
+            ("card".to_string(), Edges { left: 0.25, right: 0.5, top: 0.1, bottom: 0.6 }),
+            // An icon button in the corner, smaller than Jev's smallest image: widened within the viewport.
+            ("icon".to_string(), Edges { left: 0.98, right: 1.0, top: 0.0, bottom: 0.03 }),
+        ]),
+    );
+    assert_eq!(side(&cards["card"]), (320, 450));
+    assert_eq!(side(&cards["icon"]), (280, 280));
+    assert!(cards.values().all(|png| fastbrowse_core::decision::jev_takes_png(png)));
+    // A screenshot that is not a PNG yields no card.
+    assert!(
+        super::seeing::cards(
+            &png(1280, 900),
+            &IndexMap::from([("card".to_string(), Edges { left: 0.0, right: 0.5, top: 0.0, bottom: 0.5 })])
+        )
+        .is_empty()
+    );
 }
 
 #[tokio::test]
-async fn test_a_route_that_takes_no_images_is_sent_none_even_on_a_drawn_page() {
+async fn test_a_route_that_takes_no_images_is_sent_none_even_for_a_drawn_control() {
     let page = Arc::new(Screenshots(Default::default(), false, Default::default(), false, None));
     let jev = Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default(), on_evaluate: None });
     let agent = Agent::new(page, jev, Arc::new(ScriptedLLM));
-    let drawn = Observation { visual_content: true, ..observation(&[button("Open street view")]) };
-    assert_eq!(agent.drawn_viewport(&drawn).await.expect("no image"), None);
+    let canvas = Control { drawn: Some(true), pictured: Some(true), ..button("Street view") };
+    let (viewport, looks) = agent.step_images(&[canvas]).await.expect("no image");
+    assert_eq!((viewport, looks.len()), (None, 0));
 }
 
 #[tokio::test]

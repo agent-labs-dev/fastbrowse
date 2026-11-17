@@ -18,7 +18,7 @@ use data_encoding::{BASE64, HEXLOWER};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::addresses::search_address;
 use fastbrowse_core::config::Config;
-use fastbrowse_core::decision::JEV_IMAGE_SIDE;
+use fastbrowse_core::decision::{Edges, JEV_IMAGE_SIDE};
 use fastbrowse_core::models::{Artifact, ArtifactKind, Link, Operation, SourceControl};
 use fastbrowse_core::origins::origin_of;
 use fastbrowse_core::page::json as json_document;
@@ -27,6 +27,7 @@ use fastbrowse_core::page::{
 };
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::text;
+use indexmap::IndexMap;
 use ring::digest::{SHA256, digest};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -161,6 +162,8 @@ struct SnapshotControl {
     download: Option<bool>,
     #[serde(default)]
     drawn: Option<bool>,
+    #[serde(default)]
+    pictured: Option<bool>,
 }
 
 pub(crate) trait FrameText: DeserializeOwned {
@@ -493,6 +496,7 @@ fn control_from_raw(
         next_page: c.next_page,
         download: c.download,
         drawn: c.drawn,
+        pictured: c.pictured,
         already_read: None,
         shown_by: None,
     }
@@ -1925,6 +1929,10 @@ impl Page for CdpPage {
 
     fn click_viewport<'a>(&'a self, x: f64, y: f64, within: Option<&'a str>) -> BoxFuture<'a, PageResult<ActResult>> {
         Box::pin(async move { seam(CdpPage::click_viewport(self, x, y, within).await) })
+    }
+
+    fn pictures<'a>(&'a self, ids: &'a [String]) -> BoxFuture<'a, PageResult<IndexMap<String, Edges>>> {
+        Box::pin(async move { seam(CdpPage::pictures(self, ids).await) })
     }
 
     fn withhold_frames(&self, withheld: bool) {

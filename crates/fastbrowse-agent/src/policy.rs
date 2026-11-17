@@ -13,7 +13,7 @@ use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::{
     Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, EVEN_ODDS, Evaluation, Images, NoulQuestion,
-    Question,
+    Question, referenced,
 };
 use fastbrowse_core::effects::leavable;
 use fastbrowse_core::keys::role_keys;
@@ -285,6 +285,10 @@ pub struct StepContext {
     /// The viewport as a PNG, given to a route that takes images.
     #[serde(skip)]
     pub screenshot: Option<Vec<u8>>,
+    /// The card of each `pictured` control in view, as a PNG cut from the viewport, keyed by control id. A target
+    /// option shows it beside its text.
+    #[serde(skip)]
+    pub looks: IndexMap<String, Vec<u8>>,
     /// The follow-ups each action would need, asked beside the decision. Questions the provider cannot take at speed
     /// in one request stay follow-ups.
     #[serde(skip)]
@@ -334,6 +338,7 @@ impl StepContext {
             page_facts: Vec::new(),
             reload: None,
             screenshot: None,
+            looks: IndexMap::new(),
             ahead: Vec::new(),
             plan_ahead: false,
             list_read: ListRead::None,
@@ -490,8 +495,10 @@ impl Decision {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Request {
     pub state: Value,
-    /// The images the state refers to, keyed by the reference written in it.
+    /// The images the state or a target option refers to, keyed by the reference written in it.
     pub images: Images,
+    /// The card of each pictured control, which its target option shows, again when a group's pick asks for it.
+    pub looks: IndexMap<String, Vec<u8>>,
     pub questions: IndexMap<String, Question>,
     pub targets: IndexMap<Operation, Vec<Control>>,
     pub groups: IndexMap<Operation, Vec<Vec<Control>>>,
@@ -1045,7 +1052,10 @@ pub fn build_request(
         }
         let Some(candidates) = indexed.get(operation) else { continue };
         if candidates.len() <= limit {
-            questions.insert(keys::target(*operation), target_question(*operation, candidates, target_rules).into());
+            questions.insert(
+                keys::target(*operation),
+                target_question(*operation, candidates, target_rules, &context.looks).into(),
+            );
             targets.insert(*operation, candidates.clone());
             continue;
         }
@@ -1152,7 +1162,14 @@ pub fn build_request(
     }
     let described: HashSet<&str> = targets.values().flatten().map(|control| control.id.as_str()).collect();
     let state = state(observation, controls, context, &described);
-    if context.screenshot.is_some() && context.plan_ahead {
+    let images: Images = context
+        .screenshot
+        .iter()
+        .chain(context.looks.values())
+        .map(|png| (screenshot_reference(png), png.clone()))
+        .collect();
+    let imaged = !referenced(&images, &state, &questions).is_empty();
+    if imaged && context.plan_ahead {
         // An image puts the request in long-context mode already, so the questions asked ahead cost no mode switch and
         // save the round trip each would otherwise take after the decision.
         for ahead in &context.ahead {
@@ -1160,7 +1177,7 @@ pub fn build_request(
                 questions.insert(ahead.key(), ahead.question.clone());
             }
         }
-    } else if context.screenshot.is_none() {
+    } else if !imaged {
         let written: usize = questions.iter().map(|(key, question)| key.len() + question.dump_json().len()).sum();
         let mut room = LONG_CONTEXT_BYTES.saturating_sub(dumps(&state).len() + written);
         let mut ahead: Vec<(usize, &Ahead)> = context
@@ -1182,7 +1199,8 @@ pub fn build_request(
     }
     Request {
         state,
-        images: context.screenshot.iter().map(|png| (screenshot_reference(png), png.clone())).collect(),
+        images,
+        looks: context.looks.clone(),
         questions,
         targets,
         groups,
@@ -1251,8 +1269,10 @@ async fn evaluate(
         let group_answer = choice_answer(&evaluation, &keys::group(operation))?;
         let group = &groups[group_index(&group_answer.choice, groups.len())?];
         let key = keys::target(operation);
-        let questions =
-            IndexMap::from([(key.clone(), target_question(operation, group, &request.target_rules).into())]);
+        let questions = IndexMap::from([(
+            key.clone(),
+            target_question(operation, group, &request.target_rules, &request.looks).into(),
+        )]);
         let inner = ask(&questions).await?;
         let target_answer = choice_answer(&inner, &key)?;
         target = Some(find_control(group, &target_answer.choice)?);
@@ -1557,14 +1577,31 @@ fn destination_question(candidates: &[Control]) -> ChoiceQuestion {
     )
 }
 
-fn target_question(operation: Operation, candidates: &[Control], rules: &str) -> ChoiceQuestion {
+/// What a target option's `looks_like` is, told to Jev once in the question rather than in every option.
+const LOOKS_LIKE: &str = "An option's `looks_like` is an image of the card or row that holds that element as the page \
+                          draws it, for a task that names it by what its picture shows.";
+
+fn target_question(
+    operation: Operation,
+    candidates: &[Control],
+    rules: &str,
+    looks: &IndexMap<String, Vec<u8>>,
+) -> ChoiceQuestion {
     // Sending only the label and pointing Jev at the shared state for the rest is two thirds smaller on a dense page,
     // and it was tried. It bought no measured latency, because the request was never the slow part, and a criterion
     // the model has to go and look up is a worse criterion: the choice is what this whole design rests on, so it gets
     // the attributes in front of it.
+    let shown = candidates.iter().any(|c| looks.contains_key(&c.id));
+    let rules = if shown { json!([rules, LOOKS_LIKE]) } else { json!(rules) };
     choice(
         dumps(&json!({"rules": rules, "operation": operation.as_str()})),
-        candidates.iter().map(|c| (c.id.clone(), Value::Object(target_element(c, operation)))),
+        candidates.iter().map(|c| {
+            let mut element = target_element(c, operation);
+            if let Some(png) = looks.get(&c.id) {
+                element.insert("looks_like".into(), screenshot_reference(png).into());
+            }
+            (c.id.clone(), Value::Object(element))
+        }),
     )
 }
 
@@ -1719,6 +1756,15 @@ mod tests {
     impl DecisionClient for Fake {
         fn profile(&self) -> DecisionProfile {
             DecisionProfile { max_choice_options: self.options, ..DecisionProfile::jev() }
+        }
+
+        fn evaluate_images<'a>(
+            &'a self,
+            state: &'a Value,
+            questions: &'a IndexMap<String, Question>,
+            _images: &'a Images,
+        ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
+            self.evaluate(state, questions)
         }
 
         fn evaluate<'a>(
@@ -2083,6 +2129,36 @@ mod tests {
         assert_eq!(inner.criteria.keys().collect::<Vec<_>>(), ["b8", "b9", "b10", "b11"]);
         assert_eq!(decision.cost.len(), 2);
         assert!((decision.confidence() - 0.81).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_a_pictured_target_option_shows_its_card_and_a_group_follow_up_sends_only_its_own() {
+        let config = grouped();
+        let jev =
+            Fake { options: 10, ..fake(&[("operation", "click"), ("click_group", "2"), ("click_target", "b9")], "") };
+        let page = observation((0..12).map(button).collect());
+        let mut context = StepContext::new("add the red kettle");
+        context.looks = IndexMap::from([("b1".to_string(), b"one".to_vec()), ("b9".to_string(), b"nine".to_vec())]);
+        let decision = block_on(decide(&jev, &page, &context, &config, None, &Trace::disabled())).unwrap();
+        assert_eq!(decision.target.as_ref().unwrap().id, "b9");
+        let nine = screenshot_reference(b"nine");
+        let requests = jev.requests.lock().unwrap();
+        // The group question names no card; the follow-up shows the one card among its options.
+        let states = jev.states.lock().unwrap();
+        let images = Images::from([(nine.clone(), b"nine".to_vec()), (screenshot_reference(b"one"), b"one".to_vec())]);
+        assert!(referenced(&images, &states[0], &requests[0]).is_empty());
+        assert_eq!(referenced(&images, &states[1], &requests[1]).keys().collect::<Vec<_>>(), [&nine]);
+        let Question::Choice(inner) = &requests[1]["click_target"] else { panic!("a choice") };
+        assert_eq!(inner.criteria["b9"]["looks_like"], json!(nine));
+        assert!(inner.criteria["b8"].get("looks_like").is_none());
+        assert!(inner.instructions.contains(LOOKS_LIKE));
+
+        // Within the option limit the card goes on the target option of the first request.
+        let page = observation((0..3).map(button).collect());
+        let request = build_request(&page, &page.controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
+        let Question::Choice(target) = &request.questions["click_target"] else { panic!("a choice") };
+        assert_eq!(target.criteria["b1"]["looks_like"], json!(screenshot_reference(b"one")));
+        assert!(!referenced(&request.images, &request.state, &request.questions).is_empty());
     }
 
     #[test]

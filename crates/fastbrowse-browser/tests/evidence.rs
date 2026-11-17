@@ -537,3 +537,40 @@ async fn test_a_viewport_click_held_to_a_surface_is_made_only_on_it() {
     assert_eq!(eval_active(&h.session, "document.title").await, "map");
     h.close().await;
 }
+
+/// Twins whose cards show a picture are marked, and their cards are found in the viewport; twins told apart by text
+/// alone are not.
+#[tokio::test]
+async fn test_twins_told_apart_only_by_a_picture_are_pictured_with_their_cards() {
+    let Some(h) = harness().await else { return };
+    let card = |fill: &str| {
+        format!(
+            "<li style='height:200px'><svg width=100 height=100><circle r=40 cx=50 cy=50 fill={fill} /></svg>\
+             <button>Add</button></li>"
+        )
+    };
+    h.page
+        .navigate(
+            &format!(
+                "data:text/html,<body style='margin:0'><ul style='margin:0'>{}{}</ul>\
+                 <div><p>First note</p><button>Remove</button></div>\
+                 <div><p>Second note</p><button>Remove</button></div></body>",
+                card("red"),
+                card("blue")
+            ),
+            None,
+        )
+        .await
+        .expect("navigate");
+    let observation = h.observe().await;
+    let adds: Vec<String> = observation.controls.iter().filter(|c| c.label == "Add").map(|c| c.id.clone()).collect();
+    assert_eq!(adds.len(), 2);
+    for control in &observation.controls {
+        assert_eq!(control.pictured, (control.label == "Add").then_some(true), "{}", control.label);
+    }
+    let cards = h.page.pictures(&adds).await.expect("cards");
+    assert_eq!(cards.keys().collect::<Vec<_>>(), adds.iter().collect::<Vec<_>>());
+    let (first, second) = (&cards[&adds[0]], &cards[&adds[1]]);
+    assert!(first.top < first.bottom && first.bottom <= second.top && second.top < second.bottom, "{cards:?}");
+    h.close().await;
+}

@@ -147,6 +147,50 @@ async fn test_only_a_route_that_takes_images_is_sent_them() {
     }
 }
 
+/// An option's picture reaches Jev where it is, and only the images a request refers to are sent: TypeSafe refuses an
+/// asset nothing names. A model that reads images only as state items gets the option by its text.
+#[tokio::test]
+async fn test_an_options_picture_is_sent_to_jev_and_left_out_for_another_model() {
+    let images = Images::from([
+        ("shot-1".to_string(), b"shot".to_vec()),
+        ("crop-1".to_string(), b"crop".to_vec()),
+        ("spare".to_string(), b"spare".to_vec()),
+    ]);
+    let state = json!({"page": "text", "viewport_screenshot": "shot-1"});
+    let pick: Question = ChoiceQuestion::new(
+        "Which kettle?",
+        IndexMap::from([
+            ("a".into(), json!({"label": "Add", "looks_like": "crop-1"})),
+            ("b".into(), json!({"label": "Add"})),
+        ]),
+    )
+    .into();
+    for route in ["openrouter", "decider"] {
+        let jev = route == "openrouter";
+        let http = answering(move |request| {
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            let assets: Vec<&String> = body["assets"].as_object().unwrap().keys().collect();
+            let option = &body["questions"]["pick"]["criteria"]["a"];
+            if jev {
+                assert_eq!(assets, ["shot-1", "crop-1"]);
+                assert_eq!(option, &json!({"label": "Add", "looks_like": "crop-1"}));
+            } else {
+                assert_eq!(assets, ["shot-1"]);
+                assert_eq!(option, &json!({"label": "Add"}));
+            }
+            let response = Response::json(
+                200,
+                &json!({"answers": {"pick": choice_answer(json!({"choice": "a", "probabilities": {"a": 1.0, "b": 0.0}}))}, "usage": {"input_tokens": 1}}),
+            );
+            Box::pin(async move { Ok(response) })
+        });
+        let model = if jev { OPENROUTER_MODEL } else { "perplexity/pplx-decider-v1.2" };
+        let client = SystemOneClient::new("openrouter-key", http, OPENROUTER_URL, model).images();
+        let result = client.evaluate_images(&state, &questions([("pick", pick.clone())]), &images).await.unwrap();
+        assert_eq!(result.cost.images, Some(if jev { 2 } else { 1 }), "{route}");
+    }
+}
+
 /// A run that fails over from TypeSafe's own API asks its backup without the image or the reference to it.
 #[tokio::test]
 async fn test_a_backup_route_is_asked_without_images() {

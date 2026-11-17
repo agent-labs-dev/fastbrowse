@@ -13,11 +13,13 @@ use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::sha256_hex;
 use fastbrowse_core::py::text;
 use fastbrowse_core::safety::{may_be_irreversible, origin_of};
+use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
 use super::finishing::UNREPORTED;
 use super::helpers::{decision_label, describe, doing, drew_something, netloc_of, path_of, scheme_of};
 use super::recovery::{Idle, leave_out_idle, uncover, withheld};
+use super::seeing::cards;
 use super::state::{FailureCause, Flow, OutputIntent, RunState, SiteFailure, Step, Stop, Unsure, Written, read_key};
 
 use super::{Agent, REDRAW_WATCH_SECONDS, browsing_deadline};
@@ -200,7 +202,7 @@ impl Agent {
                             });
                         }
                         None => {
-                            context.screenshot = self.drawn_viewport(&observation).await?;
+                            (context.screenshot, context.looks) = self.step_images(&offered.controls).await?;
                         }
                     }
                     let redecided = state.redecided;
@@ -1631,12 +1633,24 @@ impl Agent {
         })
     }
 
-    /// A drawn page's controls do not describe its imagery, so a step's question carries the viewport too.
-    pub(super) async fn drawn_viewport(&self, observation: &Observation) -> Step<Option<Vec<u8>>> {
-        if !observation.visual_content {
-            return Ok(None);
+    /// What a step's question shows Jev besides text. A control drawn as pixels, a canvas app or a streamed screen, has
+    /// no elements to name what it shows, so the state carries the viewport. A pictured control's text leaves it alike
+    /// to another or unnamed, so its option carries its card, cut from the viewport. A picture the text already
+    /// tells apart costs the request its speed and adds nothing to the choice.
+    pub(super) async fn step_images(&self, controls: &[Control]) -> Step<(Option<Vec<u8>>, IndexMap<String, Vec<u8>>)> {
+        let drawn = controls.iter().any(|control| control.drawn == Some(true));
+        let pictured: Vec<String> = controls
+            .iter()
+            .filter(|control| control.pictured == Some(true))
+            .map(|control| control.id.clone())
+            .collect();
+        if !drawn && pictured.is_empty() {
+            return Ok((None, IndexMap::new()));
         }
-        self.viewport().await
+        let Some(png) = self.viewport().await? else { return Ok((None, IndexMap::new())) };
+        let looks =
+            if pictured.is_empty() { IndexMap::new() } else { cards(&png, &self.page.pictures(&pictured).await?) };
+        Ok((drawn.then_some(png), looks))
     }
 
     /// The viewport for Jev, on a route that takes images and only within the sizes it accepts.

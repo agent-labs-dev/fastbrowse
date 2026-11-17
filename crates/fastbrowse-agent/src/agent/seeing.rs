@@ -2,7 +2,9 @@
 //! refused, and a place inside a drawn surface, which has no elements to target.
 
 use fastbrowse_clients::validation::jev_purpose;
-use fastbrowse_core::decision::{Answer, BoxQuestion, DecisionError, Images, NoulQuestion, Question};
+use fastbrowse_core::decision::{
+    Answer, BoxQuestion, DecisionError, Edges, Images, JEV_IMAGE_SIDE, NoulQuestion, Question, jev_takes_png,
+};
 use fastbrowse_core::models::{CostComponent, JevPurpose, StepOutcome, UNTRUSTED};
 use fastbrowse_core::page::{ActResult, Control, Observation};
 use indexmap::IndexMap;
@@ -188,4 +190,34 @@ impl Agent {
         let Some(Answer::Noul(changed)) = evaluation.answers.get("changed") else { return Ok(None) };
         Ok(Some(changed.probability >= fastbrowse_core::decision::EVEN_ODDS))
     }
+}
+
+/// TypeSafe's shortest image side, in pixels.
+const JEV_IMAGE_MIN_SIDE: u32 = 280;
+
+/// Each card cut out of `viewport`, a PNG, as a PNG Jev takes. A card shorter or narrower than Jev's smallest image is
+/// widened about its centre, within the viewport; one Jev would refuse is left out.
+pub(super) fn cards(viewport: &[u8], edges: &IndexMap<String, Edges>) -> IndexMap<String, Vec<u8>> {
+    let Ok(image) = image::load_from_memory_with_format(viewport, image::ImageFormat::Png) else {
+        return IndexMap::new();
+    };
+    let span = |from: f64, to: f64, total: u32| {
+        let total = total as f64;
+        let length = ((to - from) * total).ceil().clamp(JEV_IMAGE_MIN_SIDE as f64, JEV_IMAGE_SIDE as f64).min(total);
+        let start = ((from + to) / 2.0 * total - length / 2.0).clamp(0.0, total - length);
+        (start.floor() as u32, length as u32)
+    };
+    edges
+        .iter()
+        .filter_map(|(id, edges)| {
+            let (x, width) = span(edges.left, edges.right, image.width());
+            let (y, height) = span(edges.top, edges.bottom, image.height());
+            let mut png = Vec::new();
+            image
+                .crop_imm(x, y, width, height)
+                .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                .ok()?;
+            jev_takes_png(&png).then(|| (id.clone(), png))
+        })
+        .collect()
 }

@@ -1,7 +1,9 @@
 //! A click at a point of the viewport, for a target Jev found in a screenshot rather than in the DOM.
 
+use fastbrowse_core::decision::Edges;
 use fastbrowse_core::models::StepOutcome;
 use fastbrowse_core::page::ActResult;
+use indexmap::IndexMap;
 use serde_json::json;
 
 use super::CdpPage;
@@ -51,6 +53,32 @@ impl CdpPage {
             ),
             moved: opened,
         })
+    }
+
+    /// The card the snapshot marked for each `pictured` control among `ids`, as fractions of the visual viewport, cut to
+    /// it. A control in another process's frame, gone from the page or wholly out of view has none.
+    pub async fn pictures(&self, ids: &[String]) -> Result<IndexMap<String, Edges>, BrowserError> {
+        let session_id = self.session.active_session_id()?;
+        let Some(last) = self.last() else { return Ok(IndexMap::new()) };
+        let nodes: Vec<(&String, i64)> = ids
+            .iter()
+            .filter_map(|id| last.controls.get(id).filter(|target| target.0 == session_id).map(|target| (id, target.2)))
+            .collect();
+        if nodes.is_empty() {
+            return Ok(IndexMap::new());
+        }
+        let script = format!(
+            "(pairs => {{ const v = window.visualViewport, out = {{}}; \
+             for (const [id, node] of pairs) {{ const e = window.__fastbrowse?.pictured?.get(node); \
+             if (!e?.isConnected || e.ownerDocument !== document) continue; const r = e.getBoundingClientRect(); \
+             const f = (a, o, n) => Math.min(1, Math.max(0, (a - o) / n)); \
+             const box = {{left: f(r.left, v.offsetLeft, v.width), right: f(r.right, v.offsetLeft, v.width), \
+             top: f(r.top, v.offsetTop, v.height), bottom: f(r.bottom, v.offsetTop, v.height)}}; \
+             if (box.right > box.left && box.bottom > box.top) out[id] = box; }} return out; }})({})",
+            json!(nodes.iter().map(|(id, node)| json!([id, node])).collect::<Vec<_>>())
+        );
+        let found = self.evaluate(&session_id, &script).await?;
+        Ok(serde_json::from_value(found).unwrap_or_default())
     }
 
     /// Whether the topmost element at `x`, `y` (CSS pixels of the active document) is `control` or inside it. A control

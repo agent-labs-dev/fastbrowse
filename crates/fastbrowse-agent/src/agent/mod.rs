@@ -1012,6 +1012,7 @@ impl Agent {
             page_facts,
             reload: state.reload_target(&observation.url),
             screenshot: None,
+            looks: IndexMap::new(),
             ahead: self.ahead(state, observation),
             plan_ahead: self.config.plan_ahead,
             list_read: crate::policy::ListRead::None,

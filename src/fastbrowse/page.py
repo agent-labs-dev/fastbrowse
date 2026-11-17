@@ -57,6 +57,9 @@ class Control(Frozen):
     drawn: bool | None = Field(default=None, exclude_if=lambda drawn: drawn is None)
     """An image, canvas or video the page takes input on: what it shows is pixels, with no page elements inside it
     to read or act on, such as a streamed remote browser or a canvas app."""
+    pictured: bool | None = Field(default=None, exclude_if=lambda pictured: pictured is None)
+    """A control whose card shows a picture while its text leaves it alike to another control or unnamed: the task
+    may name it by what the picture shows."""
 
     @field_serializer("operations", when_used="json")
     def _sorted_operations(self, operations: frozenset[Operation]) -> list[Operation]:

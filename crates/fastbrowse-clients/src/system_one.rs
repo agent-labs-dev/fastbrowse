@@ -4,7 +4,8 @@
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{
-    DecisionClient, DecisionError, DecisionProfile, Evaluation, Images, NO_IMAGES, Question, without_images,
+    DecisionClient, DecisionError, DecisionProfile, Evaluation, Images, NO_IMAGES, Question, questions_without_images,
+    referenced, without_images,
 };
 use fastbrowse_core::models::CostLine;
 use fastbrowse_core::py::base64;
@@ -116,12 +117,21 @@ impl SystemOneClient {
     ) -> Result<Evaluation, AskError> {
         let started = Instant::now();
         let sent = Usage::default();
-        let state = if images.is_empty() || reads_references_in_place(&self.model) {
-            state.clone()
+        // Another model reads an image only as a top-level item of the state: an option's picture is left out, and its
+        // option is told by its text.
+        // TypeSafe refuses an image nothing in the request refers to, and a batch of a split request asks only some of
+        // the questions that refer to them.
+        let (state, stripped, images) = if images.is_empty() || reads_references_in_place(&self.model) {
+            (state.clone(), None, referenced(images, state, questions))
         } else {
-            media_as_items(state, images)
+            let state = media_as_items(state, images);
+            let questions = questions_without_images(questions, images);
+            let images = referenced(images, &state, &questions);
+            (state, Some(questions), images)
         };
-        let mut body = json!({"model": self.model, "state": state, "questions": wire_questions(questions, false)});
+        let images = &images;
+        let asked = stripped.as_ref().unwrap_or(questions);
+        let mut body = json!({"model": self.model, "state": state, "questions": wire_questions(asked, false)});
         let mut headers = self.headers.clone();
         if !images.is_empty() {
             let assets: Map<String, Value> = images
@@ -216,7 +226,8 @@ impl DecisionClient for SystemOneClient {
             if self.profile.images {
                 self.answer(state, questions, images).await
             } else {
-                self.answer(&without_images(state, images), questions, &NO_IMAGES).await
+                self.answer(&without_images(state, images), &questions_without_images(questions, images), &NO_IMAGES)
+                    .await
             }
         })
     }

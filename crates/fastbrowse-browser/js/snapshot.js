@@ -1628,6 +1628,8 @@
     }
   }
 
+  // The card each twin or unnamed control belongs to, where a picture may be all that tells it apart.
+  const regions = new Map();
   const byLabel = new Map();
   // Context compares a line with the other controls' labels. Index those once, rather than scanning every control
   // for each card or calendar cell; counts preserve a label another control shares with this one.
@@ -1666,6 +1668,7 @@
     // line of its own card that none of those twins' cards shows, its own text.
     const lines = group.map((c, i) => {
       const scope = scopeOf(twins[i], holding);
+      regions.set(c.id, scope || twins[i]);
       return scope ? linesOf(scope, twins[i], c.label) : [];
     });
     const told = group.map((c, i) => {
@@ -1740,6 +1743,30 @@
       const context = nearestName(registry.nodes.get(c.id), c.label);
       if (context) c.context = context;
     }
+  }
+
+  // A twin, or a control with no name of its own, whose card shows a picture: the text names it by what surrounds it,
+  // but the task may name it by what the picture shows, a product photo beside one of six "Add" buttons or the icon
+  // that is an unnamed button's only face. It is marked so the step can show that card to Jev as pixels.
+  registry.pictured = new Map();
+  for (const c of controls) {
+    const element = registry.nodes.get(c.id);
+    if (unnamed.has(c.id) && !regions.has(c.id)) {
+      let card = element;
+      for (let e = element.parentElement; e && e !== e.ownerDocument.body; e = e.parentElement) {
+        if (isCard(e)) {
+          card = e;
+          break;
+        }
+      }
+      regions.set(c.id, card);
+    }
+    const region = regions.get(c.id);
+    if (!region) continue;
+    const pictures = [...(region.matches(VISUAL) ? [region] : []), ...descendants(region, VISUAL)];
+    if (!pictures.some(v => !decorative(v) && visible(v))) continue;
+    c.pictured = true;
+    registry.pictured.set(c.id, region);
   }
 
   // A revealed caption needs its actual container association, not merely the most recent action.
