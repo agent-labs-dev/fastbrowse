@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Every cost line now says which model served the call. A language-model line carries the `model` its provider's response reported, or the model the run asked for when the response named none, and a Jev line carries the Jev model it called; the field is in the protocol and every SDK, and receipts from earlier versions, which lack it, still read. A fastbrowse eval trial records those models as its `actual_models`, where it used to record none and filled each usage entry's `model` with the decision purpose such as `action` or `read` ([#1229](https://github.com/agent-labs-dev/fastbrowse/issues/1229)).
+
 ## [0.11.2] - 2026-11-17
 
 - A run can act where only a picture tells controls apart. When offered controls share the same text, such as six "Add" buttons under different product photos, each one is offered with a picture of its card, so the run picks by what it shows rather than by position. A click inside a canvas or a map no longer ends the run: the run points at what it means to click on the drawn surface, clicks only there, and compares the frames before and after to tell whether anything changed. The whole viewport is sent only when a drawn control is offered, rather than whenever the page shows an image. Every cost line now reports `images`, the number of images the request carried, in the protocol and every SDK ([#1205](https://github.com/agent-labs-dev/fastbrowse/pull/1205)).

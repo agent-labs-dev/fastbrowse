@@ -17,6 +17,7 @@ fn reply(content: Value, stop_reason: &str) -> Step {
         200,
         &json!({
             "id": "msg_1",
+            "model": "claude-haiku-5-5-20260101",
             "type": "message",
             "role": "assistant",
             "content": content,
@@ -48,7 +49,9 @@ async fn test_a_generation_is_a_messages_request_with_structured_output() {
     let messages =
         [Message::system("Plan."), Message { images: vec![Bytes(PNG.to_vec())], ..Message::user("What is shown?") }];
     let (seen, result) = generate(&ENV, &messages, vec![answer(r#"{"answer":"ok"}"#)]).await;
-    assert_eq!(result.unwrap().data["answer"], "ok");
+    let generation = result.unwrap();
+    assert_eq!(generation.data["answer"], "ok");
+    assert_eq!(generation.cost.model.as_deref(), Some("claude-haiku-5-5-20260101"), "the dated build that answered");
     let request = &seen[0];
     assert_eq!(request.url, "https://api.anthropic.com/v1/messages");
     assert_eq!(request.header("x-api-key"), Some("anthropic-secret"));

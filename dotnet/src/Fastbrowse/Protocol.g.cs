@@ -314,6 +314,12 @@ public sealed record CostLine
     /// </summary>
     [JsonPropertyName("images")]
     public long? Images { get; init; }
+
+    /// <summary>
+    /// The model that served the call, as the provider reported it; absent on historical receipts.
+    /// </summary>
+    [JsonPropertyName("model")]
+    public string? Model { get; init; }
 }
 
 /// <summary>

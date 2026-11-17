@@ -270,11 +270,10 @@ def _run_result(
         component = line.component.value
         if component not in {"llm", "jev"}:
             continue
-        label = line.label
-        model = label.partition(":")[2] or label
+        # A campaign measures any fastbrowse_ref, and builds before the served model was recorded have no `model`.
         usage.append(
             {
-                "model": model,
+                "model": getattr(line, "model", None),
                 "component": component,
                 "input": line.input_tokens,
                 "output": line.output_tokens,
@@ -285,6 +284,8 @@ def _run_result(
                 "source": "harness",
             }
         )
+    # The models that served the run, once each in the order they first appeared.
+    actual_models = list(dict.fromkeys(entry["model"] for entry in usage if entry["model"]))
     pages, seen_at = read_pages(events)
     steps = []
     for step in output.steps:
@@ -311,5 +312,5 @@ def _run_result(
         "cost_lines": lines,
         "usage": usage,
         "latency_ms": latency_ms,
-        "actual_model": None,
+        "actual_models": actual_models,
     }

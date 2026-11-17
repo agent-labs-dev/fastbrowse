@@ -280,6 +280,8 @@ class CostLine(Frozen):
     """Physical provider requests represented by this line; absent on historical receipts."""
     images: int | None = Field(default=None, ge=0, exclude_if=lambda images: images is None)
     """Images the call sent as Jev assets; absent for a call that sent none, and on historical receipts."""
+    model: str | None = Field(default=None, exclude_if=lambda model: model is None)
+    """The model that served the call, as the provider reported it; absent on historical receipts."""
 
     @property
     def label(self) -> str:

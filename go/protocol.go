@@ -175,6 +175,8 @@ type CostLine struct {
 	PhysicalRequests *int64 `json:"physical_requests,omitempty"`
 	// Images the call sent as Jev assets; absent for a call that sent none, and on historical receipts.
 	Images *int64 `json:"images,omitempty"`
+	// The model that served the call, as the provider reported it; absent on historical receipts.
+	Model *string `json:"model,omitempty"`
 }
 
 // Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev.

@@ -262,6 +262,10 @@ export interface CostLine {
    * Images the call sent as Jev assets; absent for a call that sent none, and on historical receipts.
    */
   images?: number | null;
+  /**
+   * The model that served the call, as the provider reported it; absent on historical receipts.
+   */
+  model?: string | null;
 }
 export interface Citation {
   /**

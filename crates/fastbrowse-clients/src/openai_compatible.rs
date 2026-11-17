@@ -171,6 +171,7 @@ fn cost(payload: &Map<String, Value>, purpose: LLMPurpose) -> CostLine {
             seconds: None,
             physical_requests: None,
             images: None,
+            model: payload.get("model").and_then(Value::as_str).filter(|model| !model.is_empty()).map(str::to_string),
         })
     };
     read().unwrap_or_else(|_| unknown(purpose))
@@ -197,6 +198,7 @@ fn total_cost(costs: &[CostLine], purpose: LLMPurpose) -> CostLine {
         seconds: None,
         physical_requests: costs.iter().map(|line| line.physical_requests).sum(),
         images: None,
+        model: CostLine::shared_model(costs),
     }
 }
 
@@ -634,7 +636,11 @@ impl OpenAICompatibleLLM {
         purpose: LLMPurpose,
         body: &Map<String, Value>,
     ) -> CostLine {
-        let cost = self.receipt_cost(payload, purpose).await;
+        let mut cost = self.receipt_cost(payload, purpose).await;
+        if cost.model.is_none() {
+            // The response named no model, so the one asked for is the best record of what served it.
+            cost.model = body.get("model").and_then(Value::as_str).map(str::to_string);
+        }
         if cost.dollars.is_some() { cost } else { self.bounded(cost, body).await }
     }
 

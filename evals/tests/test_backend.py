@@ -84,6 +84,32 @@ def test_a_jev_calls_image_count_reaches_parallax_usage() -> None:
     assert [usage["images"] for usage in result["usage"]] == [0]
 
 
+def test_served_models_reach_parallax_usage_and_actual_models() -> None:
+    def line(component: CostComponent, model: str | None) -> CostLine:
+        return CostLine(component=component, basis=CostBasis.METERED, model=model)
+
+    output = RunResult(
+        status=Status.COMPLETE,
+        answer="done",
+        data=None,
+        evidence=(),
+        steps=(),
+        cost=CostBreakdown(
+            lines=(
+                line(CostComponent.LLM, "openai/gpt-6-luna"),
+                line(CostComponent.JEV, "jev-1"),
+                line(CostComponent.LLM, "openai/gpt-6-luna"),
+                line(CostComponent.LLM, None),
+                line(CostComponent.BROWSER, "ignored"),
+            )
+        ),
+        artifacts=(),
+    )
+    result = backend._run_result(output, None, Browser(cdp_url="ws://browser"), [], latency_ms=0)
+    assert [usage["model"] for usage in result["usage"]] == ["openai/gpt-6-luna", "jev-1", "openai/gpt-6-luna", None]
+    assert result["actual_models"] == ["openai/gpt-6-luna", "jev-1"]
+
+
 @pytest.mark.parametrize("data", [{"name": "widget", "revision": 3}, [], False, 0])
 def test_structured_result_reaches_the_judge_instead_of_its_prose(data: JsonValue) -> None:
     output = RunResult(

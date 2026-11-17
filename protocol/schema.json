@@ -461,6 +461,19 @@
           "default": null,
           "description": "Images the call sent as Jev assets; absent for a call that sent none, and on historical receipts.",
           "title": "Images"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The model that served the call, as the provider reported it; absent on historical receipts.",
+          "title": "Model"
         }
       },
       "required": [

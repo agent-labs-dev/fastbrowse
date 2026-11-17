@@ -148,6 +148,9 @@ pub(crate) fn as_chat_completion(payload: Map<String, Value>) -> Map<String, Val
     if let Some(id) = payload.get("id") {
         completion["id"] = id.clone();
     }
+    if let Some(model) = payload.get("model") {
+        completion["model"] = model.clone();
+    }
     if let Some(Value::Object(usage)) = payload.get("usage") {
         let prompt = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"]
             .iter()
