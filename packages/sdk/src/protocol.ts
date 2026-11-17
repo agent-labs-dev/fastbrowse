@@ -508,6 +508,10 @@ export interface RunResult {
   citations: Citation[];
   error: string | null;
   /**
+   * The error's provider or browser variant path, never message text; present for failures, absent otherwise.
+   */
+  failure_kind: string | null;
+  /**
    * Where the browser was last observed; what a caller checks when the task was to arrive somewhere.
    */
   final_url: string | null;

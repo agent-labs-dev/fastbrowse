@@ -408,6 +408,7 @@ public final class Fastbrowse implements AutoCloseable {
                 .artifacts(List.of())
                 .citations(List.of())
                 .error(failure)
+                .failureKind(null)
                 .recordings(kept.recordings())
                 .browser(kept.browser())
                 .build();
