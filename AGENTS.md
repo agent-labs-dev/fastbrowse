@@ -125,6 +125,12 @@ evidence is kept.
 Read [docs/agents/publish-evals.md](docs/agents/publish-evals.md) before staging or publishing a result, or
 changing the candidate schema that `evals/` and the site share.
 
+**An eval verdict on an agent's answer comes from the LLM judge alone.** No grader in `src/fastbrowse/evals`,
+`evals/` or `tests/evals` matches answer text: no substring, regex, keyword list, case fold or other string
+heuristic. State a claim (`fastbrowse.evals.judge.Claim`) and let the judge decide it. Structured state on a mock
+site (cart, orders, saved fields compared as typed values) and protocol data (URLs, SHAs, JSON) may still be
+compared. `tests/evals/test_no_answer_matching.py` fails on a grader that matches an answer.
+
 The harness (`src/fastbrowse/evals`, `tests/evals`) reaches fastbrowse only as an embedder does: the `fastbrowse`
 package's exports, `fastbrowse.models`, `fastbrowse.config`, `fastbrowse.protocol`, `serve --stdio` and the trace.
 That way it measures what the package runs; `tests/evals/test_public_only.py` fails on anything else.
