@@ -7,10 +7,10 @@ use serde_json::Value;
 
 use crate::BoxFuture;
 use crate::config::{Config, JSON_CHARS_PER_TOKEN, Thresholds};
-use crate::models::{CostLine, MaybeUnavailable};
+use crate::models::{CostComponent, CostLine, JevPurpose, MaybeUnavailable};
 use crate::py::lax;
 use crate::schema::{Field, ModelTy, Schema, Ty};
-use crate::telemetry::BudgetExceeded;
+use crate::telemetry::{BudgetExceeded, Ledger};
 
 pub const JEV_MODEL: &str = "jev-1.14.0";
 pub const MAX_CHOICE_OPTIONS: usize = 255;
@@ -623,6 +623,26 @@ pub trait DecisionClient: Send + Sync {
 
     /// The model this client asks, whose limits fit every request sent to it.
     fn profile(&self) -> DecisionProfile;
+
+    /// The ledger counter a caller reserves before a call for `purpose`, or `None` when the client that answers it
+    /// reserves each of its own requests (an LLM, whose repairs and re-asks only it can count).
+    fn reserves(&self, _purpose: JevPurpose) -> Option<CostComponent> {
+        Some(CostComponent::Jev)
+    }
+}
+
+/// Reserve `calls` decision calls for `purpose` under the counter `client` charges them to.
+pub fn reserve(
+    ledger: &Ledger,
+    client: &dyn DecisionClient,
+    purpose: JevPurpose,
+    estimate_dollars: f64,
+    calls: i64,
+) -> Result<(), BudgetExceeded> {
+    match client.reserves(purpose) {
+        Some(component) => ledger.reserve(component, estimate_dollars, calls),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]

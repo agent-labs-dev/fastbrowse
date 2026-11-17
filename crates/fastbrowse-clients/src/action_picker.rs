@@ -13,7 +13,7 @@ use fastbrowse_core::decision::{
     NoulAnswer, Question, ScoreAnswer, without_images,
 };
 use fastbrowse_core::llm::{LLMClient, LLMError, Message, ResponseSchema};
-use fastbrowse_core::models::{JevPurpose, LLMPurpose};
+use fastbrowse_core::models::{CostComponent, JevPurpose, LLMPurpose};
 use fastbrowse_core::py::json::dumps;
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
@@ -35,7 +35,11 @@ impl ActionPicker {
 
     /// Read when the request runs, inside the caller's `jev_purpose` scope: a caller makes the future first.
     fn route(&self) -> &dyn DecisionClient {
-        match current_jev_purpose() {
+        self.client(current_jev_purpose())
+    }
+
+    fn client(&self, purpose: Option<JevPurpose>) -> &dyn DecisionClient {
+        match purpose {
             Some(JevPurpose::Action) => &*self.picker,
             Some(
                 JevPurpose::Authorization
@@ -70,6 +74,11 @@ impl DecisionClient for ActionPicker {
     /// Jev's, so every question is built as it would be for Jev and only the answerer changes.
     fn profile(&self) -> DecisionProfile {
         self.jev.profile()
+    }
+
+    /// The counter of whichever client answers `purpose`, so an LLM pick never spends a Jev call.
+    fn reserves(&self, purpose: JevPurpose) -> Option<CostComponent> {
+        self.client(Some(purpose)).reserves(purpose)
     }
 }
 
@@ -131,6 +140,11 @@ impl DecisionClient for LlmDecisionClient {
 
     fn profile(&self) -> DecisionProfile {
         DecisionProfile { dollars_per_input_token: None, images: false, thresholds: None, ..DecisionProfile::jev() }
+    }
+
+    /// `generate_value` reserves an LLM call for each request it sends, repairs included.
+    fn reserves(&self, _purpose: JevPurpose) -> Option<CostComponent> {
+        None
     }
 }
 
@@ -241,9 +255,9 @@ fn answers(questions: &IndexMap<String, Question>, picks: &Value) -> Result<Inde
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use fastbrowse_core::decision::{ChoiceQuestion, NoulQuestion};
+    use fastbrowse_core::decision::{ChoiceQuestion, NoulQuestion, reserve};
     use fastbrowse_core::llm::Generation;
-    use fastbrowse_core::models::{CostBasis, CostComponent, CostLine};
+    use fastbrowse_core::models::{CostBasis, CostComponent, CostLine, Limits};
     use fastbrowse_core::telemetry::Ledger;
 
     use super::*;
@@ -320,6 +334,16 @@ mod tests {
             assert_eq!(asked(purpose).await.unwrap().model, "jev", "{purpose}");
         }
         assert_eq!(picker.evaluate(&state, &questions).await.unwrap().model, "jev");
+    }
+
+    #[test]
+    fn an_llm_pick_spends_no_jev_call() {
+        let llm = Replying { reply: json!({}), purposes: Arc::default() };
+        let picker = ActionPicker::new(Box::new(Named("jev")), Box::new(LlmDecisionClient::new(Box::new(llm), "m")));
+        let ledger = Ledger::new(Limits { max_jev_calls: Some(0), ..Limits::default() });
+        reserve(&ledger, &picker, JevPurpose::Action, 0.0, 1).unwrap();
+        assert!(reserve(&ledger, &picker, JevPurpose::Read, 0.0, 1).is_err());
+        assert_eq!(ledger.state().jev_calls, 0);
     }
 
     #[tokio::test]

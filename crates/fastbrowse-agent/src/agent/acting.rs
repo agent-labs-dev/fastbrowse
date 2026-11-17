@@ -1874,7 +1874,7 @@ impl Agent {
         let answers = match state.output_answers.take() {
             Some(answers) => *answers,
             None => {
-                state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+                fastbrowse_core::decision::reserve(&state.ledger, self.jev.as_ref(), JevPurpose::Action, 0.0, 1)?;
                 let evaluation = jev_purpose(
                     JevPurpose::Action,
                     self.jev.evaluate(&json!({"task": self.model_task(state)}), &questions),
@@ -1992,7 +1992,7 @@ impl Agent {
             Some(&context),
             &state.dates,
         )?;
-        state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+        fastbrowse_core::decision::reserve(&state.ledger, self.jev.as_ref(), JevPurpose::Action, 0.0, 1)?;
         let evaluation = jev_purpose(JevPurpose::Action, self.jev.evaluate(&state_json, &questions)).await?;
         state.ledger.record([evaluation.cost.clone()])?;
         let holds = |key: &str| match evaluation.answers.get(key) {
@@ -2049,7 +2049,7 @@ impl Agent {
         asked: Vec<Asked<'_>>,
         context: Option<&Map<String, JsonValue>>,
     ) -> Step<IndexMap<String, String>> {
-        state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+        fastbrowse_core::decision::reserve(&state.ledger, self.jev.as_ref(), JevPurpose::Action, 0.0, 1)?;
         let questions: IndexMap<String, Question> = asked
             .into_iter()
             .map(|(key, question, criteria)| {
