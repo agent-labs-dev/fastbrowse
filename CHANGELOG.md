@@ -11,8 +11,11 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-11-17
+
 - The fixture bench and runner give every run a time limit. A run with no `max_seconds` holds a Wait until the page changes, with no bound, so a model that chose Wait on a static page left a bench run silent until the harness's 900 s client timeout, which reported "no run reply" with no result or evidence. A run now stops itself at the limit as `budget_exceeded`, with its evidence, before that timeout. The product is unchanged: a run with no time limit still waits for the page, so set `max_seconds` for any run nobody is watching ([#1213](https://github.com/agent-labs-dev/fastbrowse/issues/1213)).
 - A Wait no longer hangs on a page that finished changing while the run was deciding to wait. On a page that swaps "Loading..." for its result a moment after the run read it, the run chose Wait, the page changed before the Wait took its starting point, and the Wait then waited for a change from a page that was already finished, until the run's time ran out ([#1213](https://github.com/agent-labs-dev/fastbrowse/issues/1213)). A Wait now compares the page with what the run saw when it decided, and ends at once, reporting the page as changed, when they differ.
+- A run that switches back and forth between two tabs it has already shown is stopped by the stall rule, as other repeated steps are. When one of the tabs was a live page, such as a quotes table whose rows tick, every return counted as a page state never seen, so the rule never fired: one Mind2Web run made 82 switches between a quotes page and a search page until the page stopped answering. A tab switch changes which tab is on screen and nothing inside it, so it now counts as progress only when that tab was not already shown since the last evidence was read, even if it reloads itself ([#1219](https://github.com/agent-labs-dev/fastbrowse/issues/1219)).
 - A run's cost stays known when the page redraws while the run is deciding. The run decides again on the redrawn page, and it used to abort the decision request already in flight; a request aborted before its response has no cost the run can read, so the run reported its total as unknown, and a dollar cap on it could no longer be enforced. In an Online-Mind2Web run, 5 of 20 runs ended with an unknown cost this way. The stale request now finishes before the run decides again, which adds about half a second to each redraw, and its cost is recorded like any other ([#1218](https://github.com/agent-labs-dev/fastbrowse/issues/1218)).
 
 ## [0.11.1] - 2026-11-17
@@ -2216,7 +2219,8 @@ Fixed in the same release, from tasks that failed in the field:
 - First release: a browser agent that picks its next action from the controls the page actually has, with an
   LLM to plan and read, and code owning verification, safety and secrets.
 
-[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.11.1...HEAD
+[unreleased]: https://github.com/agent-labs-dev/fastbrowse/compare/v0.11.2...HEAD
+[0.11.2]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.11.2
 [0.11.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.11.1
 [0.10.0]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.10.0
 [0.9.1]: https://github.com/agent-labs-dev/fastbrowse/releases/tag/v0.9.1
