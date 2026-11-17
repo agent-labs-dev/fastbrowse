@@ -30,7 +30,8 @@ ARM_BINDINGS: tuple[ArmBinding, ...] = (
     ArmBinding("fastbrowse-hosted", "fastbrowse-hosted"),
     ArmBinding("browser-use", "browser-use-cloud"),
     ArmBinding("browser-use-ultrafast", "browser-use-cloud", "bu-ultrafast"),
-    ArmBinding("browser-use-oss", "browser-use-oss"),
+    # browser-use 1.0.5 defaults to bu-fast, and Parallax's harness takes the model it runs explicitly.
+    ArmBinding("browser-use-oss", "browser-use-oss", "bu-fast"),
     ArmBinding("browser-harness", "browser-harness"),
     ArmBinding("cua-codex", "cua-codex"),
 )

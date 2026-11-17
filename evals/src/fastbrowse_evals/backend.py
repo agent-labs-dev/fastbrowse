@@ -121,7 +121,7 @@ class FastbrowseHarness(BrowserHarness):
         # The runner made the trial INVALID before this point if any of these variables is unset.
         values = {alias: os.environ[env_name] for alias, env_name in task.secrets.items()}
         secrets = ScopedSecrets(values, origin_of(start_url)) if values else None
-        authorization = Authorization(irreversible_actions=Capability.AUTHORIZATION in task.meta.requires)
+        authorization = Authorization(irreversible_actions=task.meta.authorizes)
         async with httpx.AsyncClient() as http, self.browser(http) as browser:
             self._browser = browser
             self._details["browser"] = "cloud" if browser.browser_id else "pool"
