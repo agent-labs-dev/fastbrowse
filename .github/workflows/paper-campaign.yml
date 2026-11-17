@@ -112,6 +112,25 @@ jobs:
           need PARALLAX_JUDGE_BASE_URL "$PARALLAX_JUDGE_BASE_URL"
           if test "$SOURCE" = online-mind2web; then need HF_TOKEN "$HF_TOKEN"; fi
           test -z "$missing" || { echo "::error::missing repository configuration:$missing"; exit 1; }
+          # Every one of these fails a paid shard only after it has spent, so each is proven here first.
+          [[ "$CAMPAIGN_ID" =~ ^[A-Za-z0-9._-]+$ ]] \
+            || { echo "::error::campaign_id may hold only letters, digits, dot, underscore and hyphen"; exit 1; }
+          sudo apt-get install -y -qq age
+          echo probe | age -r "$RECIPIENT" > /dev/null \
+            || { echo "::error::PARALLAX_OFFICIAL_ARTIFACT_RECIPIENT is not an age recipient"; exit 1; }
+          for key_name in FASTBROWSE_OPENROUTER_API_KEY PARALLAX_JUDGE_API_KEY; do
+            KEY_NAME="$key_name" KEY="${!key_name}" python3 - <<'PY'
+          import json, os, urllib.request
+
+          request = urllib.request.Request("https://openrouter.ai/api/v1/key",
+                                           headers={"Authorization": "Bearer " + os.environ["KEY"]})
+          try:
+              with urllib.request.urlopen(request, timeout=30) as reply:
+                  json.load(reply)
+          except Exception as error:
+              raise SystemExit(f"::error::{os.environ['KEY_NAME']} failed OpenRouter authentication: {type(error).__name__}")
+          PY
+          done
       - name: Install the harness
         run: cd evals && uv sync --locked
       - name: Build the matrix
@@ -206,6 +225,7 @@ jobs:
           uv venv --python 3.11 .venv
           uv pip install --python .venv/bin/python -r requirements.txt
       - name: Run the shard
+        id: shard
         env:
           FASTBROWSE_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_BENCHMARKS_API_KEY }}
           BROWSER_USE_API_KEY: ${{ secrets.BROWSER_USE_API_KEY }}
@@ -283,12 +303,20 @@ jobs:
           exit "$status"
       - name: Write the public run projection
         if: always()
+        env:
+          RUN_OUTCOME: ${{ steps.shard.outcome }}
         run: |
           public="$RUNNER_TEMP/public/$NAME"
           mkdir -p "$public"
+          lost=""
           for name in manifest.json provenance.json results.jsonl budget.jsonl; do
-            test ! -f "$PRIVATE_RUN/$name" || cp "$PRIVATE_RUN/$name" "$public/$name"
+            if test -f "$PRIVATE_RUN/$name"; then cp "$PRIVATE_RUN/$name" "$public/$name"; else lost="$lost $name"; fi
           done
+          # A shard that finished must leave its rows: a run whose evidence was lost measured nothing it can report.
+          if test "$RUN_OUTCOME" = success && test -n "$lost"; then
+            echo "::error::the finished shard left no$lost"
+            exit 1
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
