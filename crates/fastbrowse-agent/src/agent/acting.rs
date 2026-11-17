@@ -1510,14 +1510,17 @@ impl Agent {
             sources.insert(format!("secret:{name}"), format!("The stored secret named {name} (value hidden)").into());
         }
         // Said as the exact text to type: a task to write a three-line list of three items it names was copied as one
-        // of the items, since the task holds them word for word, though not as the lines it asks for (#1187).
+        // of the items, since the task holds them word for word, though not as the lines it asks for (#1187). The
+        // write choice names that case too: on a field that already held the lines, with the items in the task and in
+        // what was read, the task choice won 0.88 to 0.09 and its span loop could only end on one of the items, where
+        // saying the items set out as lines are written took the write choice 6 times in 6 (#1189).
         sources.insert(
             IN_TASK.into(),
             "The task states the exact text to type, word for word, whole or as part of something longer.".into(),
         );
         sources.insert(
             WRITTEN.into(),
-            "The task asks for text it does not state word for word, such as a search query for what it looks for, or text it asks to be written or composed, so it is written from the task.".into(),
+            "The task asks for text it does not state word for word, such as a search query for what it looks for, or text it asks to be written or composed, including items it names set out as the lines, sentences or list it asks for, so it is written from the task.".into(),
         );
         if !read.is_empty() {
             sources
