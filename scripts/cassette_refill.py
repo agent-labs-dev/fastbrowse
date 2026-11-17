@@ -215,6 +215,8 @@ def validate_cassettes(directory: Path, tasks: Sequence[str]) -> list[Path]:
     with a cassette head line, and none may hold an exchange the provider refused. The files come from a job that ran
     the pull request's code, so the committing job checks them itself."""
     found = sorted(path for path in directory.iterdir() if path.name != "result.json") if directory.is_dir() else []
+    if any(path.is_symlink() or not path.is_file() for path in found):
+        raise ValueError("a cassette to commit is not a regular file")
     wanted = {f"{task}.jsonl" for task in tasks}
     if {path.name for path in found} != wanted:
         raise ValueError(f"expected exactly {sorted(wanted)}, found {sorted(path.name for path in found)}")
@@ -274,6 +276,8 @@ def render_comment(
 
 BOT = "github-actions[bot]"
 OUT = Path("artifacts/refill")
+WORK = Path("artifacts/refill-work")
+"""OUT is what the publishing job downloads; WORK holds bench's own report and logs, which are not uploaded."""
 COMMIT = """
 mutation($input: CreateCommitOnBranchInput!) {
   createCommitOnBranch(input: $input) { commit { oid url } }
@@ -323,7 +327,8 @@ def pull_facts(repo: str, number: str, token: str) -> tuple[PullFacts, str]:
 
 
 def find_comment(repo: str, number: str, token: str) -> dict[str, Any] | None:
-    comments = gh(f"repos/{repo}/issues/{number}/comments?per_page=100", token=token)
+    pages = gh(f"repos/{repo}/issues/{number}/comments?per_page=100", "--paginate", "--slurp", token=token)
+    comments = [comment for page in pages for comment in page]
     return next((c for c in comments if MARKER in c["body"] and c["user"]["login"] == BOT), None)
 
 
@@ -389,12 +394,17 @@ def fill() -> int:
     budget = positive(os.environ["REFILL_BUDGET"])
     shutil.rmtree(OUT, ignore_errors=True)
     OUT.mkdir(parents=True)
-    report_path = OUT / "fill.json"
+    shutil.rmtree(WORK, ignore_errors=True)
+    WORK.mkdir(parents=True)
+    report_path = WORK / "fill.json"
     command = [
         sys.executable,
         "-m",
         "fastbrowse.evals.bench",
         "fill",
+        # The agent the replay check runs, so a filled cassette answers exactly what that check asks.
+        "--agent",
+        "in-process",
         "--budget",
         str(budget),
         "--cassettes",
@@ -407,7 +417,6 @@ def fill() -> int:
     code = subprocess.run(command, check=False).returncode
     report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.exists() else None
     (OUT / "result.json").write_text(json.dumps({"exit_code": code, "report": report}, indent=1) + "\n", "utf-8")
-    report_path.unlink(missing_ok=True)
     for task in tasks:
         cassette = Path("bench/cassettes") / f"{task}.jsonl"
         if cassette.exists():

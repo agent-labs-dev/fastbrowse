@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from scripts import cassette_refill as refill
 
@@ -231,3 +232,87 @@ def test_the_comment_names_each_task_its_cost_and_why_it_failed() -> None:
     )
     assert "| `mock-basket` | passed | $0.2500 | - |" in body
     assert "| `login-wall` | failed | unknown | 1 replay misses remained |" in body
+
+
+def test_a_cassette_that_is_a_link_is_never_committed(tmp_path: Path) -> None:
+    (tmp_path / "secret").write_text("x")
+    (tmp_path / "mock-basket.jsonl").symlink_to(tmp_path / "secret")
+    with pytest.raises(ValueError, match="regular file"):
+        refill.validate_cassettes(tmp_path, ["mock-basket"])
+
+
+# The workflow keeps its trust model
+
+
+def workflow() -> dict[str, Any]:
+    return yaml.safe_load((Path(__file__).parents[1] / ".github/workflows/cassette-refill.yml").read_text())
+
+
+def test_only_the_job_that_reads_the_fill_as_data_holds_the_commit_token() -> None:
+    jobs = workflow()["jobs"]
+    holders = {name for name, job in jobs.items() if "AUR_SYNC_TOKEN" in json.dumps(job)}
+    assert holders == {"publish"}
+    assert {name for name, job in jobs.items() if "OPENROUTER_API_KEY" in json.dumps(job)} == {"fill"}
+
+
+def test_the_job_that_runs_the_pull_requests_code_can_only_read_and_keeps_no_credential() -> None:
+    fill = workflow()["jobs"]["fill"]
+    assert fill["permissions"] == {"contents": "read"}
+    checkout = next(step for step in fill["steps"] if str(step.get("uses", "")).startswith("actions/checkout"))
+    assert checkout["with"]["persist-credentials"] is False
+
+
+def test_a_pull_request_from_a_fork_never_starts_the_refill() -> None:
+    condition = workflow()["jobs"]["plan"]["if"]
+    assert "workflow_run.head_repository.full_name == github.repository" in condition
+    assert "workflow_run.event == 'pull_request'" in condition and "conclusion == 'failure'" in condition
+
+
+def test_the_replay_job_hands_the_missed_tasks_to_the_refill_as_files() -> None:
+    steps = yaml.safe_load((Path(__file__).parents[1] / ".github/workflows/ci.yml").read_text())["jobs"]["replay"][
+        "steps"
+    ]
+    test = next(step for step in steps if "test_native_replay" in str(step.get("run", "")))
+    assert "FASTBROWSE_REPLAY_MISSES" in test["env"]
+    upload = next(step for step in steps if str(step.get("uses", "")).startswith("actions/upload-artifact"))
+    assert upload["with"]["name"] == "replay-misses" and upload["if"] == "always()"
+
+
+# Review findings
+
+
+def test_the_refill_comment_is_found_past_the_first_page_of_comments(monkeypatch: pytest.MonkeyPatch) -> None:
+    ours = {"id": 9, "body": f"{refill.MARKER}\n", "user": {"login": refill.BOT}}
+    forged = {"id": 8, "body": refill.MARKER, "user": {"login": "someone"}}
+    pages = [[{"id": n, "body": "talk", "user": {"login": "u"}} for n in range(100)], [forged, ours]]
+    seen: list[tuple[str, ...]] = []
+
+    def gh(*args: str, token: str, body: Any = None) -> Any:
+        seen.append(args)
+        return pages
+
+    monkeypatch.setattr(refill, "gh", gh)
+    assert refill.find_comment(REPO, "7", "token") == ours
+    assert "--paginate" in seen[0] and "--slurp" in seen[0]
+
+
+def test_what_bench_writes_beside_its_report_is_not_in_the_artifact_that_is_committed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("REFILL_TASKS", '["mock-basket"]')
+    monkeypatch.setenv("REFILL_BUDGET", "1")
+    cassettes = tmp_path / "bench/cassettes"
+    cassettes.mkdir(parents=True)
+    write_cassette(cassettes, "mock-basket", 200)
+
+    def bench(command: list[str], check: bool) -> Any:
+        report = Path(command[command.index("--out") + 1])
+        report.write_text(json.dumps({"tasks": [entry()]}))
+        (report.with_suffix("") / "logs").mkdir(parents=True)  # as `bench` does beside any --out
+        return type("Done", (), {"returncode": 0})()
+
+    monkeypatch.setattr(refill.subprocess, "run", bench)
+    assert refill.fill() == 0
+    assert [path.name for path in refill.validate_cassettes(refill.OUT, ["mock-basket"])] == ["mock-basket.jsonl"]
+    assert json.loads((refill.OUT / "result.json").read_text())["report"]["tasks"][0]["task"] == "mock-basket"
