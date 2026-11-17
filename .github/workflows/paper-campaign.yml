@@ -1,7 +1,7 @@
 name: Paper campaign
 
 # The browser reruns behind "Pick, Don't Generate": every arm on one task source, sharded so no job nears the six-hour
-# runner limit, graded by one independent judge panel with no Jev stage (`parallax run --no-jev`).
+# runner limit, graded by one independent judge panel (Parallax grades with the panel alone).
 #
 # Dispatch only: every task drives a real browser and real model calls. Each arm and shard is one job, writing one
 # Parallax run. `paper-<arm>-<shard>` holds its manifest, provenance, results and budget journal; `paper-private-...`
@@ -297,7 +297,7 @@ jobs:
           PY
           mirror_pid=$!
           args=(--harness "$HARNESS" --repeats "$REPEAT" --concurrency "$WORKERS" --budget "$BUDGET" --reserve 3
-            --retry-invalid 2 --retry-wait 60 --no-jev
+            --retry-invalid 2 --retry-wait 60
             --provenance "paper.campaign=$CAMPAIGN_ID" --provenance "paper.arm=$ARM" --provenance "paper.shard=$SHARD"
             --out "$OUT")
           test -z "$MODEL" || args+=(--model "$MODEL")
