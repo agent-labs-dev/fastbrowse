@@ -681,9 +681,22 @@ async fn test_a_settle_of_an_idle_page_pays_no_quiet_window() {
     // loaded runner stretches (#1085).
     let Some((h, proxy)) = proxied().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");
+    let written = proxy.len();
     eval_active(&h.session, "document.body.innerHTML = '<button>Idle</button>'; setTimeout(() => {}, 10000);").await;
     let obs = h.observe().await;
-    sleep(Duration::from_millis(300)).await;
+    // The load's lifecycle events keep arriving after the page is drawn, and the settle reads the page again for
+    // each one that lands during it, so an act that overlapped one recorded two ends (#1210). The click starts once
+    // the network has gone idle after the page was written, which is the last of them.
+    wait_until(
+        || async {
+            proxy
+                .events_since(written, "Page.lifecycleEvent")
+                .iter()
+                .any(|event| event["params"]["name"] == "networkIdle")
+        },
+        5.0,
+    )
+    .await;
     let start = proxy.len();
     let result = h.page.act(&targeted(Operation::Click, &find(&obs, "Idle").id), &obs).await.expect("act");
     assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
