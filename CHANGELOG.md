@@ -11,7 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- A run that switches back and forth between two tabs it has already shown is stopped by the stall rule, as other repeated steps are. When one of the tabs was a live page, such as a quotes table whose rows tick, every return counted as a page state never seen, so the rule never fired: one Mind2Web run made 82 switches between a quotes page and a search page until the page stopped answering. A tab switch changes which document is on screen and nothing inside it, so it now counts as progress only when that document was not already shown since the last evidence was read ([#1219](https://github.com/agent-labs-dev/fastbrowse/issues/1219)).
+- A run that switches back and forth between two tabs it has already shown is stopped by the stall rule, as other repeated steps are. When one of the tabs was a live page, such as a quotes table whose rows tick, every return counted as a page state never seen, so the rule never fired: one Mind2Web run made 82 switches between a quotes page and a search page until the page stopped answering. A tab switch changes which tab is on screen and nothing inside it, so it now counts as progress only when that tab was not already shown since the last evidence was read, even if it reloads itself ([#1219](https://github.com/agent-labs-dev/fastbrowse/issues/1219)).
 
 ## [0.11.1] - 2026-11-17
 

@@ -9074,17 +9074,24 @@ fn model_task_masks_secrets_resolved_after_run_preparation() {
     assert!(state.caller_start.as_deref().unwrap().contains("private-token"));
 }
 
+fn tab(id: &str, active: bool) -> fastbrowse_core::page::Tab {
+    fastbrowse_core::page::Tab { id: id.into(), url: String::new(), title: String::new(), active, opener_id: None }
+}
+
 /// #1219: switching between two tabs already shown moves nothing, so the stall rule counts it even when one tab is a
-/// live page whose controls tick between visits, and the third one in a row ends the run.
+/// live page whose controls tick and which reloads between visits, and the third one in a row ends the run.
 #[tokio::test]
 async fn switching_between_two_shown_tabs_is_no_progress_though_one_ticks() {
     let quotes = |price: &str| {
         let mut page = buttons_at("https://finance.test/components/", &["Components", price]);
-        page.document_key = "finance".into();
+        // The tab reloads itself between visits: a new document each time, in the same tab.
+        page.document_key = price.into();
+        page.tabs = vec![tab("t1", false), tab("t2", true)];
         page
     };
     let mut results = buttons_at("https://search.test/results", &["Result"]);
     results.document_key = "search".into();
+    results.tabs = vec![tab("t1", true), tab("t2", false)];
     let turns: Vec<_> = (0..3)
         .map(|turn| {
             let landed = if turn % 2 == 0 { results.clone() } else { quotes(&format!("Price {turn}")) };

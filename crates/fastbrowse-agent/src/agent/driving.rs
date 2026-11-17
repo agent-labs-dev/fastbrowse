@@ -18,7 +18,9 @@ use serde_json::{Map, Value, json};
 use super::finishing::UNREPORTED;
 use super::helpers::{decision_label, describe, doing, drew_something, netloc_of, path_of, scheme_of};
 use super::recovery::{Idle, leave_out_idle, uncover, withheld};
-use super::state::{FailureCause, Flow, OutputIntent, RunState, SiteFailure, Step, Stop, Unsure, Written, read_key};
+use super::state::{
+    FailureCause, Flow, OutputIntent, RunState, SiteFailure, Step, Stop, Unsure, Written, read_key, tab_key,
+};
 
 use super::{Agent, REDRAW_WATCH_SECONDS, browsing_deadline};
 use crate::memory::address;
@@ -1360,11 +1362,11 @@ impl Agent {
     pub(super) async fn settle(&self, state: &mut RunState, observation: &Observation) -> Step {
         state.visited_addresses.insert(observation.url.clone());
         let state_last = state.reached.insert(state_key(observation), state.evidence_reads);
-        let document_last = state.shown.insert(read_key(observation), state.evidence_reads);
-        // A tab switch moves nothing inside either tab, so it lands on a new place only when that document was not
+        let tab_last = state.shown.insert(tab_key(observation), state.evidence_reads);
+        // A tab switch moves nothing inside either tab, so it lands on a new place only when that tab was not
         // shown before. Its controls are not compared: a live page ticks them between visits.
         let switched = matches!(state.landing, Some(Some((Operation::SwitchTab, _))));
-        let last = if switched { document_last } else { state_last };
+        let last = if switched { tab_last } else { state_last };
         if last.is_none() {
             if let Some(failure) = &state.site_failure
                 && (observation.url != failure.url

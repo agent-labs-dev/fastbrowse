@@ -7,7 +7,7 @@ use serde_json::Map;
 
 use super::Agent;
 use super::helpers::read_sources;
-use super::state::{RunState, Step, read_key};
+use super::state::{RunState, Step, tab_key};
 use crate::memory::address;
 use crate::retrieval::{PageRead, read_page};
 
@@ -134,7 +134,7 @@ impl Agent {
             // The page read is on screen as the evidence comes in, so an action that leaves it as it was has nothing
             // read since: a hover after a read was judged a return after new evidence, and so progress.
             state.reached.insert(state_key(observation), state.evidence_reads);
-            state.shown.insert(read_key(observation), state.evidence_reads);
+            state.shown.insert(tab_key(observation), state.evidence_reads);
             state.unchanged = 0;
             state.recoveries = 0;
         }
