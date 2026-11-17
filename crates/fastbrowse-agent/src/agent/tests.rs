@@ -3222,6 +3222,8 @@ struct Screenshots(
     std::sync::Mutex<Option<Edges>>,
     /// A click on the viewport also adds text to the page, as a map's "Directions ready." does.
     bool,
+    /// The viewport resizes just after each screenshot, moving the surface down, as a cloud browser's settles.
+    bool,
 );
 
 #[derive(Default)]
@@ -3323,6 +3325,11 @@ impl Page for Screenshots {
 
     fn screenshot(&self) -> BoxFuture<'_, PageResult<Vec<u8>>> {
         let image = self.2.lock().unwrap().clone().unwrap_or_else(|| png(1280, 900));
+        if self.7
+            && let Some(edges) = self.5.lock().unwrap().as_mut()
+        {
+            (edges.top, edges.bottom) = (edges.top + 0.05, edges.bottom + 0.05);
+        }
         Box::pin(async move { Ok(image) })
     }
 
@@ -4051,7 +4058,7 @@ async fn test_an_http_task_with_a_step_to_take_escalates_whatever_it_reports() {
 
 #[tokio::test]
 async fn test_text_and_image_cannot_finish_without_text_evidence() {
-    let page = Screenshots(Default::default(), false, Default::default(), true, None, Default::default(), false);
+    let page = Screenshots(Default::default(), false, Default::default(), true, None, Default::default(), false, false);
     let agent = Agent::new(Arc::new(page), Arc::new(IntentJev::new("text_image")), Arc::new(ScriptedLLM));
     let mut state = run_state();
     state.recoveries = agent.config.stall.max_recoveries;
@@ -4065,7 +4072,7 @@ async fn test_text_and_image_cannot_finish_without_text_evidence() {
 /// whose delete button never appeared had not deleted anything, and ended complete saying the image was not there.
 #[tokio::test]
 async fn test_a_task_to_carry_out_is_not_done_by_hovering() {
-    let page = Screenshots(Default::default(), false, Default::default(), true, None, Default::default(), false);
+    let page = Screenshots(Default::default(), false, Default::default(), true, None, Default::default(), false, false);
     let agent = Agent::new(Arc::new(page), Arc::new(IntentJev::new("carried_out")), Arc::new(ScriptedLLM));
     let mut state = run_state();
     state.recoveries = agent.config.stall.max_recoveries;
@@ -4585,8 +4592,16 @@ impl DecisionClient for Seeing {
 }
 
 async fn click_where_seen(images: bool, shown: f64, moved: bool) -> (Option<ActResult>, Arc<Screenshots>, Arc<Seeing>) {
-    let page =
-        Arc::new(Screenshots(Default::default(), moved, Default::default(), false, None, Default::default(), false));
+    let page = Arc::new(Screenshots(
+        Default::default(),
+        moved,
+        Default::default(),
+        false,
+        None,
+        Default::default(),
+        false,
+        false,
+    ));
     let jev = Arc::new(Seeing { images, shown, asked: Default::default(), on_evaluate: None });
     let agent = Agent::new(page.clone(), jev.clone(), Arc::new(ScriptedLLM));
     let mut state = run_state();
@@ -4598,8 +4613,16 @@ async fn click_where_seen(images: bool, shown: f64, moved: bool) -> (Option<ActR
 
 #[tokio::test]
 async fn test_a_page_showing_pixels_sends_the_viewport_and_a_page_of_text_sends_none() {
-    let page =
-        Arc::new(Screenshots(Default::default(), false, Default::default(), false, None, Default::default(), false));
+    let page = Arc::new(Screenshots(
+        Default::default(),
+        false,
+        Default::default(),
+        false,
+        None,
+        Default::default(),
+        false,
+        false,
+    ));
     let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: None });
     let agent = Agent::new(page, jev, Arc::new(ScriptedLLM));
     // A canvas app or a streamed screen has none of what it shows in the DOM: the screenshot is the control.
@@ -4667,8 +4690,16 @@ async fn test_the_gate_sees_a_pictured_control_it_is_asked_about() {
     image::RgbImage::new(1280, 900)
         .write_to(&mut std::io::Cursor::new(&mut viewport), image::ImageFormat::Png)
         .expect("a png");
-    let page =
-        Arc::new(Screenshots(Default::default(), false, Default::default(), false, None, Default::default(), false));
+    let page = Arc::new(Screenshots(
+        Default::default(),
+        false,
+        Default::default(),
+        false,
+        None,
+        Default::default(),
+        false,
+        false,
+    ));
     *page.2.lock().unwrap() = Some(viewport);
     *page.5.lock().unwrap() = Some(Edges { left: 0.1, right: 0.2, top: 0.1, bottom: 0.2 });
     let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: None });
@@ -4686,8 +4717,16 @@ async fn test_the_gate_sees_a_pictured_control_it_is_asked_about() {
 
 #[tokio::test]
 async fn test_a_route_that_takes_no_images_is_sent_none_even_for_a_drawn_control() {
-    let page =
-        Arc::new(Screenshots(Default::default(), false, Default::default(), false, None, Default::default(), false));
+    let page = Arc::new(Screenshots(
+        Default::default(),
+        false,
+        Default::default(),
+        false,
+        None,
+        Default::default(),
+        false,
+        false,
+    ));
     let jev = Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default(), on_evaluate: None });
     let agent = Agent::new(page, jev, Arc::new(ScriptedLLM));
     let canvas = Control { drawn: Some(true), pictured: Some(true), ..button("Street view") };
@@ -4722,7 +4761,8 @@ async fn test_a_covered_control_jev_doubts_or_cannot_see_is_not_clicked() {
 #[tokio::test]
 async fn test_a_covered_control_is_not_clicked_once_the_page_moved_on_from_its_screenshot() {
     let (clicked, page, jev) = click_where_seen(true, 0.9, true).await;
-    assert!(clicked.is_none() && page.0.lock().unwrap().is_empty() && !jev.asked.lock().unwrap().is_empty());
+    assert_eq!(clicked.map(|result| result.outcome), Some(StepOutcome::Stale));
+    assert!(page.0.lock().unwrap().is_empty() && !jev.asked.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -4735,6 +4775,7 @@ async fn test_a_covered_control_is_not_clicked_when_pixels_change_while_jev_answ
         None,
         Default::default(),
         false,
+        false,
     ));
     let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: Some(page.clone()) });
     let agent = Agent::new(page.clone(), jev, Arc::new(ScriptedLLM));
@@ -4742,7 +4783,7 @@ async fn test_a_covered_control_is_not_clicked_when_pixels_change_while_jev_answ
     let target = button("Pick a date");
     let seen = observation(std::slice::from_ref(&target));
     let result = agent.click_where_seen(&mut state, &seen, &target).await.expect("asked");
-    assert!(result.is_none());
+    assert_eq!(result.map(|result| result.outcome), Some(StepOutcome::Stale));
     assert!(page.0.lock().unwrap().is_empty());
 }
 
@@ -4775,6 +4816,7 @@ async fn test_a_click_inside_a_drawn_surface_lands_where_jev_sees_it_and_on_the_
             None,
             Default::default(),
             replies,
+            false,
         ));
         let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: None });
         let agent = Agent::new(page.clone(), jev.clone(), Arc::new(ScriptedLLM));
@@ -4840,6 +4882,7 @@ async fn test_a_drawn_surface_is_clicked_through_its_own_repaint_but_not_once_it
             None,
             std::sync::Mutex::new(placed),
             false,
+            false,
         ));
         let jev =
             Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: Some(page.clone()) });
@@ -4847,9 +4890,34 @@ async fn test_a_drawn_surface_is_clicked_through_its_own_repaint_but_not_once_it
         let map = Control { drawn: Some(true), ..button("Store map") };
         let seen = observation(std::slice::from_ref(&map));
         let clicked = agent.click_inside_drawn(&mut run_state(), &seen, &map).await.expect("asked");
-        assert_eq!(clicked.is_some(), clicks == 1, "{placed:?}");
+        let outcome = if clicks == 1 { StepOutcome::Executed } else { StepOutcome::Stale };
+        assert_eq!(clicked.map(|result| result.outcome), Some(outcome), "{placed:?}");
         assert_eq!(page.0.lock().unwrap().len(), clicks, "{placed:?}");
     }
+}
+
+/// A cloud browser's viewport settled from 524 to 568 px tall just after the screenshot, and the box was scaled onto
+/// the taller viewport, under the pin it framed. The surface is measured before the screenshot, so the resize shows as
+/// a moved surface, and the step is stale: nothing pressed, and the run looks again rather than stopping.
+#[tokio::test]
+async fn test_a_viewport_that_resizes_after_the_screenshot_leaves_the_drawn_click_stale() {
+    let page = Arc::new(Screenshots(
+        Default::default(),
+        false,
+        Default::default(),
+        false,
+        None,
+        std::sync::Mutex::new(Some(Edges { left: 0.0, top: 0.1, right: 1.0, bottom: 0.5 })),
+        false,
+        true,
+    ));
+    let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: None });
+    let agent = Agent::new(page.clone(), jev, Arc::new(ScriptedLLM));
+    let map = Control { drawn: Some(true), ..button("Store map") };
+    let seen = observation(std::slice::from_ref(&map));
+    let clicked = agent.click_inside_drawn(&mut run_state(), &seen, &map).await.expect("asked");
+    assert_eq!(clicked.map(|result| result.outcome), Some(StepOutcome::Stale));
+    assert!(page.0.lock().unwrap().is_empty());
 }
 
 /// What a click did to a drawn surface shows only as pixels, so the done check on a page offering one is shown the
@@ -4865,6 +4933,7 @@ async fn test_the_done_check_sees_the_viewport_of_a_page_with_a_drawn_surface() 
             false,
             None,
             Default::default(),
+            false,
             false,
         ));
         let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: None });
@@ -4882,8 +4951,16 @@ async fn test_the_done_check_sees_the_viewport_of_a_page_with_a_drawn_surface() 
 /// A step Jev doubts is one visible click, such as typing into a canvas field, is not clicked.
 #[tokio::test]
 async fn test_a_drawn_surface_step_jev_doubts_is_not_clicked() {
-    let page =
-        Arc::new(Screenshots(Default::default(), false, Default::default(), false, None, Default::default(), false));
+    let page = Arc::new(Screenshots(
+        Default::default(),
+        false,
+        Default::default(),
+        false,
+        None,
+        Default::default(),
+        false,
+        false,
+    ));
     let jev = Arc::new(Seeing { images: true, shown: 0.2, asked: Default::default(), on_evaluate: None });
     let agent = Agent::new(page.clone(), jev, Arc::new(ScriptedLLM));
     let mut state = run_state();
@@ -7175,7 +7252,16 @@ async fn test_a_refused_step_keeps_a_passing_composition_after_recovery_unverifi
 #[tokio::test]
 async fn test_rejected_composition_preserves_the_callers_schema_result() {
     let agent = Agent::new(
-        Arc::new(Screenshots(Default::default(), false, Default::default(), true, None, Default::default(), false)),
+        Arc::new(Screenshots(
+            Default::default(),
+            false,
+            Default::default(),
+            true,
+            None,
+            Default::default(),
+            false,
+            false,
+        )),
         repair_jev(vec![(0.0, 1.0), (0.0, 1.0), (0.0, 1.0)]),
         Arc::new(GrowingComposer(Default::default())),
     );
@@ -9342,6 +9428,7 @@ async fn test_image_storage_keeps_exact_reader_bytes_once() {
         Some(storage.clone()),
         Default::default(),
         false,
+        false,
     ));
     let agent = Agent::new(page, Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ImageLLM));
     let mut state = run_state();
@@ -9376,6 +9463,7 @@ async fn test_image_storage_failure_preserves_image_reading() {
         Some(storage.clone()),
         Default::default(),
         false,
+        false,
     ));
     let agent = Agent::new(page, Arc::new(ScriptedJev::new(Vec::new())), Arc::new(ImageLLM));
     let mut state = run_state();
@@ -9396,6 +9484,7 @@ async fn test_image_storage_withholds_newly_visible_secrets() {
         false,
         Some(storage.clone()),
         Default::default(),
+        false,
         false,
     ));
     let llm = Arc::new(EmptyImageLLM::default());
@@ -9418,6 +9507,7 @@ async fn test_image_storage_cancelled_write_publishes_no_artifact() {
         false,
         Some(storage.clone()),
         Default::default(),
+        false,
         false,
     ));
     let llm = Arc::new(EmptyImageLLM::default());
@@ -9443,6 +9533,7 @@ async fn test_image_storage_obeys_public_run_deadline() {
         true,
         Some(storage.clone()),
         Default::default(),
+        false,
         false,
     ));
     let llm = Arc::new(EmptyImageLLM::default());

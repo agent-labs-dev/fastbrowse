@@ -1014,7 +1014,9 @@ impl Agent {
                 && decision.target.as_ref().is_some_and(|target| target.drawn == Some(true));
             let located = match (inside_drawn, decision.target.as_ref()) {
                 (true, Some(surface)) => match self.click_inside_drawn(state, &raw, surface).await? {
-                    Some(result) if result.outcome == StepOutcome::Executed => Some(result),
+                    Some(result) if matches!(result.outcome, StepOutcome::Executed | StepOutcome::Stale) => {
+                        Some(result)
+                    }
                     _ => return Err(drawn_surface_stop(&observation.url, &[surface]).into()),
                 },
                 _ => None,
@@ -1056,7 +1058,9 @@ impl Agent {
                 }
                 Err(error) => return Err(error),
             };
+            // A drawn surface's twin is the same surface, which pressed as one element would press its centre.
             if result.outcome == StepOutcome::Stale
+                && !inside_drawn
                 && let Some(target) = &decision.target
                 && let Some(retried) = self.act_on_twin(&action, observation, target).await?
             {

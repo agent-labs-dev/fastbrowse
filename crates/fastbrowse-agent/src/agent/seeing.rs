@@ -32,6 +32,7 @@ const DRAWN_WHERE: &str = "The thing inside the surface described in `surface` t
 
 /// One located click: what Jev is shown and asked, and the names its events go under.
 struct Sighting<'a> {
+    /// What Jev is told besides the screenshot, which `click_sighted` takes and adds as `viewport_screenshot`.
     state: Value,
     shown: &'a str,
     yes: &'a str,
@@ -46,6 +47,18 @@ struct Sighting<'a> {
     event: &'a str,
 }
 
+/// A located click left unmade because the page is no longer the one the screenshot shows: the step after it looks
+/// again rather than ending the run.
+fn moved(why: &str) -> ActResult {
+    ActResult {
+        outcome: StepOutcome::Stale,
+        failure: None,
+        page_changed: false,
+        detail: Some(why.into()),
+        moved: false,
+    }
+}
+
 impl Agent {
     /// The hit test refused the click: another element is topmost at every point it tried. Jev, shown the viewport,
     /// says whether the control is plainly there to press and where. None leaves the click refused.
@@ -55,9 +68,8 @@ impl Agent {
         observation: &Observation,
         target: &Control,
     ) -> Step<Option<ActResult>> {
-        let Some(png) = self.viewport().await? else { return Ok(None) };
         let sighting = Sighting {
-            state: json!({"task": self.model_task(state), "control": element(target), "viewport_screenshot": screenshot_reference(&png)}),
+            state: json!({"task": self.model_task(state), "control": element(target)}),
             shown: SHOWN,
             yes: "The control is visible and nothing covers it.",
             no: "It is hidden, covered or absent.",
@@ -67,7 +79,7 @@ impl Agent {
             steps: Vec::new(),
             event: "covered",
         };
-        self.click_sighted(state, observation, png, sighting).await
+        self.click_sighted(state, observation, sighting).await
     }
 
     /// The task's next step is inside a drawn surface: a map, chart or canvas app shows what it needs as pixels, with
@@ -79,9 +91,8 @@ impl Agent {
         observation: &Observation,
         surface: &Control,
     ) -> Step<Option<ActResult>> {
-        let Some(png) = self.viewport().await? else { return Ok(None) };
         let sighting = Sighting {
-            state: json!({"task": self.model_task(state), "surface": element(surface), "viewport_screenshot": screenshot_reference(&png)}),
+            state: json!({"task": self.model_task(state), "surface": element(surface)}),
             shown: DRAWN_SHOWN,
             yes: "The step is one click on something visible inside the surface.",
             no: "The step needs typing, dragging or another action, or what it needs is hidden, covered or absent.",
@@ -92,7 +103,7 @@ impl Agent {
             steps: spans(&state.task, SpanKind::Str).into_iter().map(|(_, _, step)| step).collect(),
             event: "drawn",
         };
-        self.click_sighted(state, observation, png, sighting).await
+        self.click_sighted(state, observation, sighting).await
     }
 
     /// The click lands at the centre of Jev's box when both answers reach the bar an action's target is held to, and
@@ -101,10 +112,9 @@ impl Agent {
         &self,
         state: &mut RunState,
         observation: &Observation,
-        png: Vec<u8>,
         sighting: Sighting<'_>,
     ) -> Step<Option<ActResult>> {
-        let Sighting { state: seen, shown, yes, no, place, target, on_target, steps, event } = sighting;
+        let Sighting { state: mut seen, shown, yes, no, place, target, on_target, steps, event } = sighting;
         let mut questions: IndexMap<String, Question> = IndexMap::from([
             ("shown".to_string(), NoulQuestion::new(format!("{UNTRUSTED}\n{shown}"), Some(yes), Some(no)).into()),
             (
@@ -117,8 +127,13 @@ impl Agent {
                 steps.iter().enumerate().map(|(index, step)| (index.to_string(), step.clone().into())).collect();
             questions.insert("step".into(), ChoiceQuestion::new(format!("{UNTRUSTED}\n{DRAWN_STEP}"), criteria).into());
         }
-        let reference = screenshot_reference(&png);
+        // The target is measured before the screenshot, so a viewport resized after it shows as a moved target: a
+        // cloud browser's viewport grew from 524 to 568 px between the screenshot and a later measure, and the click
+        // landed below the pin Jev had boxed.
         let placed = if on_target { self.page.edges(&target.id).await? } else { None };
+        let Some(png) = self.viewport().await? else { return Ok(None) };
+        let reference = screenshot_reference(&png);
+        seen["viewport_screenshot"] = reference.clone().into();
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
         let evaluation = match jev_purpose(
             JevPurpose::Locate,
@@ -151,7 +166,7 @@ impl Agent {
         if self.page.document_changed(observation).await?
             || self.page.redrawn(observation, 0.0, Some(&target.id)).await?
         {
-            return Ok(None);
+            return Ok(Some(moved("the page changed after the screenshot")));
         }
         // Coordinates belong to the pixels Jev saw; scrolling and layout can change without semantic guards changing.
         // A drawn surface paints itself, as a map fading its tiles in or a playing video does, so its pixels differ
@@ -164,7 +179,7 @@ impl Agent {
         };
         if !unmoved {
             self.event(&format!("{event}_box_changed"), Map::new);
-            return Ok(None);
+            return Ok(Some(moved("the page moved after the screenshot")));
         }
         let (x, y) = found.edges.centre();
         let mut result = self.page.click_viewport(x, y, on_target.then_some(target.id.as_str())).await?;
