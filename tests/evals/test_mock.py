@@ -24,7 +24,7 @@ from fastbrowse.evals.mock import (
     code_for,
     mock_site,
 )
-from fastbrowse.evals.mock_tasks import ADA, CHANGED, GRACE, KATHERINE, KATHERINE_PASSWORD, TASKS, MockTask
+from fastbrowse.evals.mock_tasks import ADA, GRACE, KATHERINE, KATHERINE_PASSWORD, TASKS, MockTask
 from fastbrowse.models import JsonValue, RunResult, Status
 
 ADA_PASSWORD = ACCOUNTS[ADA]
@@ -655,19 +655,14 @@ def test_the_ticket_grader_reads_the_type_the_site_saved() -> None:
     assert task.check(_run("Saved."), site) is None
 
 
-def test_the_unfinished_write_grader_needs_each_changed_field_named_with_what_it_holds() -> None:
+def test_the_unfinished_write_grader_reads_the_site_and_leaves_the_answer_to_the_judge() -> None:
     task = next(t for t in TASKS if t.id == "mock-unfinished-write")
-    named = (
-        f"{CHANGED}\n- Display name: 'Ada Lovelace'\n- Bio (Profile): 'Writes about engines.'\n\nNo country was given."
-    )
+    assert task.claims, "the answer is graded by a claim"
     site = Site()
-    assert task.check(_run(named, status=Status.NEEDS_INPUT), site) is not None, "a run that changed nothing"
+    assert task.check(_run("anything", status=Status.NEEDS_INPUT), site) is not None, "a run that changed nothing"
     site.record("/profile/draft", {"name": "Ada Lovelace", "bio": "Writes about engines.", "country": ""})
-    assert task.check(_run(named, status=Status.NEEDS_INPUT), site) is None
+    assert task.check(_run("anything", status=Status.NEEDS_INPUT), site) is None
     for status in (Status.COMPLETE, Status.STUCK, Status.NEEDS_LOGIN):
-        assert task.check(_run(named, status=status), site) is not None, f"ended {status.value}"
-    partly = named.replace("- Bio (Profile): 'Writes about engines.'\n", "")
-    assert task.check(_run(partly, status=Status.NEEDS_INPUT), site) is not None, "a changed field left unnamed"
-    assert task.check(_run("No country was given.", status=Status.NEEDS_INPUT), site) is not None
+        assert task.check(_run("anything", status=status), site) is not None, f"ended {status.value}"
     site.record("/profile", {"name": "Ada Lovelace", "bio": "Writes about engines.", "country": "Peru"})
-    assert task.check(_run(named, status=Status.NEEDS_INPUT), site) is not None, "saved with an invented country"
+    assert task.check(_run("anything", status=Status.NEEDS_INPUT), site) is not None, "saved with an invented country"

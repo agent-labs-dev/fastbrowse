@@ -9,6 +9,7 @@ and still answer as it did.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import signal
@@ -18,11 +19,15 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+import httpx
+from fastbrowse.evals.judge import Claim, Judge, jev_from_environment
+from fastbrowse.evals.judge import judge as judge_claims
 from pydantic import BaseModel, ConfigDict
 
 
 class RecipeTask(BaseModel):
-    """A task whose fills come from named inputs, so one recipe serves `inputs` and `other_inputs` alike."""
+    """A task whose fills come from named inputs, so one recipe serves `inputs` and `other_inputs` alike. `expect` and
+    `other_expect` are sentences about the answer that the judge decides, never strings searched for in it."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -46,8 +51,8 @@ TASKS = (
         ),
         inputs={"person": "Ada Lovelace"},
         other_inputs={"person": "Grace Hopper"},
-        expect="1815",
-        other_expect="1906",
+        expect="The answer gives the birth date as 10 December 1815.",
+        other_expect="The answer gives the birth date as 9 December 1906.",
     ),
     RecipeTask(
         id="python-docs-search",
@@ -57,8 +62,8 @@ TASKS = (
         ),
         inputs={"term": "asyncio"},
         other_inputs={"term": "pathlib"},
-        expect="asyncio",
-        other_expect="pathlib",
+        expect="The answer gives the title of a page about asyncio.",
+        other_expect="The answer gives the title of a page about pathlib.",
     ),
     RecipeTask(
         id="duckduckgo-first-result",
@@ -68,8 +73,8 @@ TASKS = (
         ),
         inputs={"query": "rust borrow checker"},
         other_inputs={"query": "python asyncio tutorial"},
-        expect="borrow",
-        other_expect="asyncio",
+        expect="The answer gives the title of a page about the Rust borrow checker.",
+        other_expect="The answer gives the title of a page about Python asyncio tutorials.",
     ),
 )
 
@@ -91,8 +96,8 @@ class Measured:
     decided_by: list[str] = field(default_factory=list)
 
 
-def measure(task: str, arm: str, out: Path, expect: str) -> Measured:
-    """A finished run's numbers, from its `--json` result and its `--trace` lines."""
+def measure(task: str, arm: str, out: Path) -> Measured:
+    """A finished run's numbers, from its `--json` result and its `--trace` lines. `expected` is the judge's."""
     result = json.loads((out / f"{arm}.json").read_text() or "{}")
     calls = screenshots = 0
     for line in (out / f"{arm}.jsonl").read_text().splitlines():
@@ -116,10 +121,24 @@ def measure(task: str, arm: str, out: Path, expect: str) -> Measured:
         screenshots=screenshots,
         steps=len(steps),
         from_recipe=decided_by.count("recipe"),
-        expected=(expect.lower() in answer.lower()) if expect else None,
+        expected=None,
         error=result.get("error"),
         decided_by=decided_by,
     )
+
+
+async def holds(jev: Judge, task: str, answer: str, expect: str) -> bool:
+    """Whether the judge finds `expect` true of the answer. A run that gave no answer states nothing."""
+    if not answer.strip():
+        return False
+    return await judge_claims(jev, task=task, answer=answer, claims=(Claim(expect),)) is None
+
+
+async def judged(task: str, answer: str, expect: str) -> bool:
+    if not answer.strip():
+        return False
+    async with httpx.AsyncClient(timeout=60.0) as http:
+        return await holds(jev_from_environment(http), task, answer, expect)
 
 
 def _terminated(signum: int, frame: object) -> None:
@@ -167,7 +186,9 @@ def run(binary: str, browser: list[str], task: RecipeTask, out: Path, timeout: f
                             child.wait()
             (out / f"{arm}.wall").write_text(f"{time.monotonic() - began:.1f}")
             (out / f"{arm}.jsonl").touch()
-            measured.append(measure(task.id, arm, out, expect))
+            row = measure(task.id, arm, out)
+            row.expected = asyncio.run(judged(f"{task.task} (inputs: {json.dumps(inputs)})", row.answer, expect))
+            measured.append(row)
     finally:
         signal.signal(signal.SIGTERM, previous)
     return measured

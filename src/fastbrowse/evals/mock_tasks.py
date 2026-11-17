@@ -338,17 +338,10 @@ def _ticket_type(result: MockResult, site: Site) -> str | None:
     return _status(result, Status.COMPLETE)
 
 
-CHANGED = "This run ended without finishing after changing fields on the page, which may still hold what it entered:"
-"""The notice the agent's own bookkeeping puts first in the answer of a run that ended unfinished after changing
-fields. Code writes it, not a model, so it is matched exactly."""
-
-PROFILE_LABELS = {"name": "Display name", "bio": "Bio", "country": "Country"}
-
-
 def _unfinished_profile(result: MockResult, site: Site) -> str | None:
     """No profile can be saved, since no task gives the required country. The run must end needing that input,
-    since no step can supply a value the task lacks, and name every field it left changed with what the page holds
-    there, as the page's own drafts record it."""
+    since no step can supply a value the task lacks, and change at least one field, as the page's own drafts record
+    it. That the answer names every changed field with what the page holds is the judge's claim, not a text match."""
     if saved := _posted(site, "/profile"):
         return f"the profile was saved with fields the task never gave: {saved[-1]}"
     if not isinstance(result, RunResult):
@@ -357,15 +350,8 @@ def _unfinished_profile(result: MockResult, site: Site) -> str | None:
         return f"ended {result.status.value}, not needing the country the task never gave: {result.answer!r}"
     drafts = _posted(site, "/profile/draft")
     held = drafts[-1] if drafts else {}
-    changed = {name: value for name, value in held.items() if value != PROFILE.get(name, "")}
-    if not changed:
+    if not {name: value for name, value in held.items() if value != PROFILE.get(name, "")}:
         return "the run changed no field, so naming the changed fields was not exercised"
-    lines = (result.answer or "").splitlines()
-    if CHANGED not in lines:
-        return f"the answer does not name the fields the run changed: {result.answer!r}"
-    for name, value in changed.items():
-        if not any(line.startswith(f"- {PROFILE_LABELS[name]}") and line.endswith(f": {value!r}") for line in lines):
-            return f"the answer does not say {PROFILE_LABELS[name]} holds {value!r}: {result.answer!r}"
     return None
 
 
@@ -657,5 +643,12 @@ TASKS: tuple[MockTask, ...] = (
         _unfinished_profile,
         authorization=AUTHORIZED,
         expect=Status.NEEDS_INPUT,
+        claims=(
+            Claim(
+                "The answer says the run ended without finishing after changing fields on the page, which may still "
+                "hold what it entered, and lists the changed fields with the value the page holds in each, among "
+                "them the display name Ada Lovelace and the bio 'Writes about engines.'"
+            ),
+        ),
     ),
 )
