@@ -198,8 +198,9 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
-      OUT: ${{ github.workspace }}/runs/run
-      PRIVATE_RUN: ${{ github.workspace }}/private-runs/run
+      # The directory name is the run id Parallax records and `parallax watch` groups by, so it names the arm and shard.
+      OUT: ${{ github.workspace }}/runs/${{ inputs.campaign_id }}-${{ matrix.arm }}-${{ matrix.shard }}
+      PRIVATE_RUN: ${{ github.workspace }}/private-runs/${{ inputs.campaign_id }}-${{ matrix.arm }}-${{ matrix.shard }}
       NAME: ${{ inputs.campaign_id }}-${{ matrix.arm }}-${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
