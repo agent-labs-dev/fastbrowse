@@ -598,7 +598,7 @@ impl Agent {
                     && !composed.claims.is_empty()
                 {
                     // Only a rejected composition stops a run unverified, so one that passes every claim and coverage
-                    // check, and that its composer did not call partial, answers what that stop was about, as it would
+                    // check, and that answers what that stop was about, as it would
                     // have at done. A run stuck going back and
                     // forth over pages it had read held such an answer too, and came back stuck under "Partial
                     // evidence only": when the task asks only to be told, the stop was over navigation, not the
@@ -613,7 +613,6 @@ impl Agent {
                         Status::Stuck => told,
                         _ => false,
                     } && composed.problem.is_none()
-                        && composed.partial.is_none()
                         && !state.refused
                         && state.undone.is_none();
                     // A task asking to be told can also ask for steps, such as setting a field and then reporting it,
@@ -634,13 +633,9 @@ impl Agent {
                         let requested = state.output_intent == state::OutputIntent::TextAndImage;
                         return self.ending_frame(result, requested).await;
                     }
-                    // A partial draft keeps the stop's own status: the composer said what the answer leaves out.
-                    let missing =
-                        composed.partial.as_ref().map(|partial| format!("{}{partial}", finishing::PARTIAL_ANSWER));
+                    // A draft that does not answer keeps the stop's own status.
                     let partial = marked_partial(composed);
-                    let error = error
-                        .or_else(|| state.refused.then(|| self.redact(finishing::REFUSED)))
-                        .or_else(|| missing.map(|missing| self.redact(&missing)));
+                    let error = error.or_else(|| state.refused.then(|| self.redact(finishing::REFUSED)));
                     return self.answered(&partial, &notes, Some(state), ledger, stop.status, error, budget);
                 }
                 // A task that only carries something out reports what it read after its last step, as at done, and
@@ -701,6 +696,7 @@ impl Agent {
         state: Option<&RunState>,
         ledger: &Ledger,
     ) -> RunResult {
+        let failure_kind = kind.clone();
         self.event("run_failed", || Map::from_iter([("kind".into(), kind.into())]));
         let mut message = self.redact(&message);
         // `unavailable` tells a caller the same run may pass later, which is safe only while the run has changed
@@ -722,7 +718,9 @@ impl Agent {
             );
         }
         let notes = state.map(|state| state.notes.clone()).unwrap_or_default();
-        self.partial_result(&notes, state, ledger, status, Some(message), None)
+        let mut result = self.partial_result(&notes, state, ledger, status, Some(message), None);
+        result.failure_kind = Some(failure_kind);
+        result
     }
 
     async fn ending_frame(&self, mut result: RunResult, requested: bool) -> RunResult {
@@ -824,6 +822,7 @@ impl Agent {
             artifacts,
             citations: outcome.citations,
             error: outcome.error,
+            failure_kind: None,
             final_url: match (state, observed) {
                 (Some(_), Some(observed)) => Some(self.redact(&observed.url)),
                 _ => None,
@@ -1208,7 +1207,7 @@ pub fn breakdown(lines: Vec<CostLine>) -> CostBreakdown {
 /// A run whose page has no browser behind it reached a step only a browser can take. The document was never the
 /// problem and a second attempt cannot help, so it ends `blocked` with the reason, carrying nothing it read.
 /// The variant names of an error and no text it carries, so a public log can say what failed without quoting a page.
-fn failure_kind(error: &impl std::fmt::Debug) -> String {
+pub fn failure_kind(error: &impl std::fmt::Debug) -> String {
     let debug = format!("{error:?}");
     let names: String = debug.chars().take_while(|c| c.is_alphanumeric() || *c == '(').collect();
     names.trim_end_matches('(').replace('(', ".")
@@ -1249,6 +1248,7 @@ fn blocked_without_browser(message: String) -> RunResult {
         artifacts: Vec::new(),
         citations: Vec::new(),
         error: Some(message),
+        failure_kind: None,
         final_url: None,
         final_frame: None,
         recordings: Vec::new(),

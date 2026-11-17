@@ -120,7 +120,7 @@ async fn test_a_run_whose_client_holds_no_check_gets_none_and_is_not_asked() {
 fn errored(error: &str) -> Value {
     json!({
         "status": "error", "budget": null, "answer": null, "data": null, "evidence": [], "steps": [],
-        "cost": {"lines": []}, "artifacts": [], "citations": [], "error": error, "final_url": null,
+        "cost": {"lines": []}, "artifacts": [], "citations": [], "error": error, "failure_kind": null, "final_url": null,
         "recordings": [], "wall": null, "browser": null,
     })
 }

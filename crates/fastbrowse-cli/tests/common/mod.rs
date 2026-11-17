@@ -218,6 +218,7 @@ pub fn result(status: Status) -> RunResult {
         artifacts: Vec::new(),
         citations: Vec::new(),
         error: None,
+        failure_kind: None,
         final_url: None,
         final_frame: None,
         recordings: Vec::new(),
