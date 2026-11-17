@@ -660,6 +660,8 @@ def test_the_unfinished_write_grader_reads_the_site_and_leaves_the_answer_to_the
     assert task.claims, "the answer is graded by a claim"
     site = Site()
     assert task.check(_run("anything", status=Status.NEEDS_INPUT), site) is not None, "a run that changed nothing"
+    site.record("/profile/draft", {"name": "Ada Lovelace", "bio": "", "country": ""})
+    assert task.check(_run("anything", status=Status.NEEDS_INPUT), site) is not None, "only one requested field changed"
     site.record("/profile/draft", {"name": "Ada Lovelace", "bio": "Writes about engines.", "country": ""})
     assert task.check(_run("anything", status=Status.NEEDS_INPUT), site) is None
     for status in (Status.COMPLETE, Status.STUCK, Status.NEEDS_LOGIN):

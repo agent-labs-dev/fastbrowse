@@ -25,7 +25,6 @@ from fastbrowse.evals.mock import (
     FEED_BATCH,
     FEED_TOTAL,
     LONG_DESCRIPTION,
-    PROFILE,
     Site,
     code_for,
 )
@@ -338,10 +337,14 @@ def _ticket_type(result: MockResult, site: Site) -> str | None:
     return _status(result, Status.COMPLETE)
 
 
+REQUESTED_DRAFT = {"name": "Ada Lovelace", "bio": "Writes about engines."}
+"""The fields the unfinished-write task asks for, as the page's drafts must hold them."""
+
+
 def _unfinished_profile(result: MockResult, site: Site) -> str | None:
     """No profile can be saved, since no task gives the required country. The run must end needing that input,
-    since no step can supply a value the task lacks, and change at least one field, as the page's own drafts record
-    it. That the answer names every changed field with what the page holds is the judge's claim, not a text match."""
+    since no step can supply a value the task lacks, and leave every requested field as typed in the page's own
+    drafts. What the answer says of them is the judge's claim, not a text match."""
     if saved := _posted(site, "/profile"):
         return f"the profile was saved with fields the task never gave: {saved[-1]}"
     if not isinstance(result, RunResult):
@@ -350,8 +353,8 @@ def _unfinished_profile(result: MockResult, site: Site) -> str | None:
         return f"ended {result.status.value}, not needing the country the task never gave: {result.answer!r}"
     drafts = _posted(site, "/profile/draft")
     held = drafts[-1] if drafts else {}
-    if not {name: value for name, value in held.items() if value != PROFILE.get(name, "")}:
-        return "the run changed no field, so naming the changed fields was not exercised"
+    if wrong := {name: held.get(name) for name, value in REQUESTED_DRAFT.items() if held.get(name) != value}:
+        return f"the page's drafts do not hold every requested field: {wrong}, wanted {REQUESTED_DRAFT}"
     return None
 
 
