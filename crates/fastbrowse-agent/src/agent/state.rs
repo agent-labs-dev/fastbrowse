@@ -331,6 +331,11 @@ pub(crate) struct RunState {
     /// Each page state reached, with `evidence_reads` when it was last on screen: going back to one with nothing read
     /// since is going round, not forward.
     pub reached: HashMap<String, usize>,
+    /// Each document shown, with `evidence_reads` when it was last on screen. A tab switch is judged by this and not
+    /// by `reached`: it changes which document is on screen and nothing in it, so a live page whose controls tick
+    /// (quotes, clocks, counters) is a new page state on every return and made a loop of switches look like progress
+    /// (#1219).
+    pub shown: HashMap<(String, String), usize>,
     /// Addresses actually observed, including pages reached through ordinary links. Recovery proposes unseen routes.
     pub visited_addresses: HashSet<String>,
     /// Reads that added evidence, counted over the run.
@@ -788,6 +793,7 @@ impl RunState {
             navigation_from: None,
             login_readings: HashMap::new(),
             reached: HashMap::new(),
+            shown: HashMap::new(),
             visited_addresses: HashSet::new(),
             evidence_reads: 0,
             returned_at: 0,

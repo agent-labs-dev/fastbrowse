@@ -11,7 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- The fixture bench and runner give every run a time limit. A run with no `max_seconds` holds a Wait until the page changes, with no bound, so a model that chose Wait on a static page left a bench run silent until the harness's 900 s client timeout, which reported "no run reply" with no result or evidence. A run now stops itself at the limit as `budget_exceeded`, with its evidence, before that timeout. The product is unchanged: a run with no time limit still waits for the page, so set `max_seconds` for any run nobody is watching ([#1213](https://github.com/agent-labs-dev/fastbrowse/issues/1213)).
+- A run that switches back and forth between two tabs it has already shown is stopped by the stall rule, as other repeated steps are. When one of the tabs was a live page, such as a quotes table whose rows tick, every return counted as a page state never seen, so the rule never fired: one Mind2Web run made 82 switches between a quotes page and a search page until the page stopped answering. A tab switch changes which document is on screen and nothing inside it, so it now counts as progress only when that document was not already shown since the last evidence was read ([#1219](https://github.com/agent-labs-dev/fastbrowse/issues/1219)).
 
 ## [0.11.1] - 2026-11-17
 
