@@ -204,6 +204,19 @@ async fn test_exhausted_status_keeps_timing_usage_and_redacts_the_key() {
     assert!(error.to_string().len() < 500);
 }
 
+/// A retry resends the same images, so a call answered on its second request counts the images of both.
+#[tokio::test(start_paused = true)]
+async fn test_a_retried_image_request_counts_the_images_each_request_sent() {
+    let answered =
+        Response::json(200, &json!({"answers": {"q": {"type": "noul", "noul": 0.5}}, "usage": {"input_tokens": 9}}));
+    let script =
+        Script::new([common::Step::Fail(TransportError::Timeout("ReadTimeout")), common::Step::Reply(answered)]);
+    let client = SystemOneClient::new("key", script.http(), TYPESAFE_URL, JEV_MODEL).images();
+    let images = Images::from([("viewport".into(), vec![0; 8])]);
+    let result = client.evaluate_images(&json!({"screenshot": "viewport"}), &one(), &images).await.unwrap();
+    assert_eq!((result.cost.physical_requests, result.cost.images), (Some(2), Some(2)));
+}
+
 /// A request that timed out may still have been billed, so a call that then fails keeps its estimate, as a cancelled
 /// one does: a caller that carries on after the failure would otherwise report the run's cost without it.
 #[tokio::test(start_paused = true)]

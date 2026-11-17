@@ -169,10 +169,12 @@ impl SystemOneClient {
                 model,
                 answers: parse_answers(payload.get("answers"), questions, false, None)?,
                 input_tokens: tokens,
-                cost: CostLine {
-                    images: (!images.is_empty()).then(|| images.len() as i64),
-                    ..timed(cost, &sent, started)
-                },
+                // Counted before `timed`, so each resent request is charged the images it carried too.
+                cost: timed(
+                    CostLine { images: (!images.is_empty()).then(|| images.len() as i64), ..cost },
+                    &sent,
+                    started,
+                ),
             })
         })();
         parsed.map_err(|detail| invalid_response(&response, "Invalid Jev response", &detail))
