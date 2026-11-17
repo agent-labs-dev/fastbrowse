@@ -143,6 +143,7 @@ function endedBy(failure: string, spent?: CancellationReceipt): RunResult {
     artifacts: [],
     citations: [],
     error: failure,
+    failure_kind: null,
     final_url: null,
     recordings: spent?.recordings ?? [],
     wall: null,

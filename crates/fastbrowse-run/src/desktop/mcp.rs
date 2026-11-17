@@ -40,18 +40,39 @@ pub struct Deskpilot {
     // Killed with the client: a run that ends or is cancelled leaves no server behind.
     _child: Child,
     pipe: Mutex<Pipe>,
-    /// The tools whose input schema has `hidden`. A deskpilot before cjber/deskpilot#84 has no `hidden` on `key`,
-    /// `type_text` or `paste_text`, and a newer one refuses keys to a window off screen without it, so the server's
-    /// own schema says which calls carry it.
-    hidden: HashSet<String>,
+    /// Where the run's window is acted on, and so which flag every call carries.
+    view: View,
+    /// The tools whose input schema has the view's flag. A deskpilot before cjber/deskpilot#84 has no `hidden` on
+    /// `key`, `type_text` or `paste_text`, and a newer one refuses keys to a window off screen without it, so the
+    /// server's own schema says which calls carry it.
+    placing: HashSet<String>,
     /// Every tool the server offers, so a page can tell a deskpilot that lacks one it needs.
     tools: HashSet<String>,
+}
+
+/// Where a run acts on its window. Hidden keeps it on the agent's hidden workspace, with the user's pointer, focus and
+/// view untouched and no agent cursor. Shown brings it into view and acts there, where deskpilot draws the agent's
+/// cursor at each action: for a desktop of its own, such as a nested compositor a recording is taken of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum View {
+    Hidden,
+    Shown,
+}
+
+impl View {
+    /// The deskpilot argument that places a call in this view.
+    fn flag(self) -> &'static str {
+        match self {
+            View::Hidden => "hidden",
+            View::Shown => "show",
+        }
+    }
 }
 
 impl Deskpilot {
     /// Starts `program mcp` as the deskpilot agent named `agent` and completes MCP's handshake with it. The server
     /// owns the apps it launches for that agent, so they close when it is killed with the client.
-    pub async fn start(program: &str, agent: &str) -> Result<Deskpilot, ToolError> {
+    pub async fn start(program: &str, agent: &str, view: View) -> Result<Deskpilot, ToolError> {
         let mut child = Command::new(program)
             .arg("mcp")
             .env("DESKPILOT_AGENT", agent)
@@ -67,7 +88,7 @@ impl Deskpilot {
             next_id: 0,
         };
         let mut client =
-            Deskpilot { _child: child, pipe: Mutex::new(pipe), hidden: HashSet::new(), tools: HashSet::new() };
+            Deskpilot { _child: child, pipe: Mutex::new(pipe), view, placing: HashSet::new(), tools: HashSet::new() };
         let version = env!("CARGO_PKG_VERSION");
         client
             .request(
@@ -91,7 +112,7 @@ impl Deskpilot {
                 break;
             }
         }
-        client.hidden = taking_hidden(&tools);
+        client.placing = taking(&tools, view.flag());
         client.tools =
             tools.iter().filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_string)).collect();
         Ok(client)
@@ -102,9 +123,9 @@ impl Deskpilot {
         self.tools.contains(tool)
     }
 
-    /// `arguments` with `"hidden": true` added when `tool`'s schema offers it.
-    pub fn hidden(&self, tool: &str, arguments: Value) -> Value {
-        with_hidden(&self.hidden, tool, arguments)
+    /// `arguments` with the view's flag set when `tool`'s schema offers it.
+    pub fn placed(&self, tool: &str, arguments: Value) -> Value {
+        with_flag(&self.placing, self.view.flag(), tool, arguments)
     }
 
     async fn notify(&self, method: &str) -> Result<(), ToolError> {
@@ -172,20 +193,20 @@ impl Deskpilot {
     }
 }
 
-/// The names of the tools in a `tools/list` result whose input schema has a `hidden` property.
-fn taking_hidden(tools: &[Value]) -> HashSet<String> {
+/// The names of the tools in a `tools/list` result whose input schema has the property `flag`.
+fn taking(tools: &[Value], flag: &str) -> HashSet<String> {
     tools
         .iter()
-        .filter(|tool| tool.pointer("/inputSchema/properties/hidden").is_some())
+        .filter(|tool| tool.pointer(&format!("/inputSchema/properties/{flag}")).is_some())
         .filter_map(|tool| tool.get("name").and_then(Value::as_str).map(str::to_string))
         .collect()
 }
 
-fn with_hidden(taking: &HashSet<String>, tool: &str, mut arguments: Value) -> Value {
+fn with_flag(taking: &HashSet<String>, flag: &str, tool: &str, mut arguments: Value) -> Value {
     if taking.contains(tool)
         && let Some(object) = arguments.as_object_mut()
     {
-        object.insert("hidden".into(), Value::Bool(true));
+        object.insert(flag.into(), Value::Bool(true));
     }
     arguments
 }
@@ -223,12 +244,20 @@ mod tests {
         let with = ["key", "type_text", "paste_text"]
             .map(|name| tool(name, json!({"window": {"type": "string"}, "hidden": {"type": "boolean"}})));
         let without = ["key", "type_text", "paste_text"].map(|name| tool(name, json!({"window": {"type": "string"}})));
-        let (offered, older) = (taking_hidden(&with), taking_hidden(&without));
+        let (offered, older) = (taking(&with, "hidden"), taking(&without, "hidden"));
         for name in ["key", "type_text", "paste_text"] {
-            let sent = with_hidden(&offered, name, json!({"window": "0x1", "text": "a"}));
+            let sent = with_flag(&offered, "hidden", name, json!({"window": "0x1", "text": "a"}));
             assert_eq!(sent, json!({"window": "0x1", "text": "a", "hidden": true}), "{name}");
-            let sent = with_hidden(&older, name, json!({"window": "0x1", "text": "a"}));
+            let sent = with_flag(&older, "hidden", name, json!({"window": "0x1", "text": "a"}));
             assert_eq!(sent, json!({"window": "0x1", "text": "a"}), "{name}");
         }
+    }
+
+    #[test]
+    fn a_shown_run_brings_the_window_into_view_instead_of_hiding_it() {
+        let click = [tool("click", json!({"window": {}, "show": {}, "hidden": {}}))];
+        let shown = taking(&click, View::Shown.flag());
+        let sent = with_flag(&shown, View::Shown.flag(), "click", json!({"window": "0x1"}));
+        assert_eq!(sent, json!({"window": "0x1", "show": true}));
     }
 }

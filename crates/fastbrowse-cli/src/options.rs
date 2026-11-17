@@ -177,6 +177,7 @@ pub fn error_result(error: impl Into<String>) -> RunResult {
         artifacts: Vec::new(),
         citations: Vec::new(),
         error: Some(error.into()),
+        failure_kind: None,
         final_url: None,
         final_frame: None,
         recordings: Vec::new(),

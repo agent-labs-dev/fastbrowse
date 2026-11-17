@@ -82,7 +82,8 @@ export type LLMPurpose =
   | 'recovery_pages'
   | 'search'
   | 'unobtainable'
-  | 'groups';
+  | 'groups'
+  | 'action';
 export type JevPurpose = 'action' | 'authorization' | 'relevance' | 'read' | 'verify' | 'locate';
 /**
  * Every code an error reply can carry: the JSON-RPC standard ones, then this protocol's own.
@@ -507,6 +508,10 @@ export interface RunResult {
   artifacts: Artifact[];
   citations: Citation[];
   error: string | null;
+  /**
+   * The error's provider or browser variant path, never message text; present for failures, absent otherwise.
+   */
+  failure_kind: string | null;
   /**
    * Where the browser was last observed; what a caller checks when the task was to arrive somewhere.
    */

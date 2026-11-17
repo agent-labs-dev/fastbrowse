@@ -727,7 +727,8 @@
         "recovery_pages",
         "search",
         "unobtainable",
-        "groups"
+        "groups",
+        "action"
       ],
       "title": "LLMPurpose",
       "type": "string"
@@ -1577,6 +1578,19 @@
           "default": null,
           "title": "Error"
         },
+        "failure_kind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The error's provider or browser variant path, never message text; present for failures, absent otherwise.",
+          "title": "Failure Kind"
+        },
         "final_url": {
           "anyOf": [
             {
@@ -1636,6 +1650,7 @@
         "artifacts",
         "citations",
         "error",
+        "failure_kind",
         "final_url",
         "recordings",
         "wall",

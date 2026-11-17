@@ -224,7 +224,10 @@ that app class. `--authorize` and the step and spend ceilings work as for a brow
 popup menu's entries are controls like any other, and the run clicks the item it wants. Choosing a combo box's option
 by name uses the keyboard: a list the click opened is closed again and the arrow keys move the choice. The run stays in the one
 window: a dialog the app opens as a window of its own is out of its reach. Recipes, `--start` and every browser
-option are refused. Set `FASTBROWSE_DESKPILOT` to run a `deskpilot` that is not on `PATH`.
+option are refused. Set `FASTBROWSE_DESKPILOT` to run a `deskpilot` that is not on `PATH`. Set `FASTBROWSE_DESKTOP_SHOWN=1` to act on the window
+in view instead, where deskpilot draws the run's agent cursor at each action: for recording a run on a desktop of its
+own, such as deskpilot's nested Hyprland (`scripts/nested.py` there), since it takes the view and keyboard focus of
+whatever desktop it runs on.
 
 ## Models
 
@@ -251,6 +254,7 @@ Jev, the decision model, has settings of its own:
 | `FASTBROWSE_DECISION_BASE_URL` | retargets the selected source, and turns off automatic failover |
 | `FASTBROWSE_DECISION_MODEL` | pins the decision model, and turns off automatic failover |
 | `FASTBROWSE_DECISION_API_KEY` | the key for a decision host that takes one |
+| `FASTBROWSE_ACTION_PICKER` | `llm` has the run's LLM pick each browser action instead of Jev, an ablation for measuring the picker; every other decision stays with Jev. `jev` is the default |
 
 [Jev routing](jev.md#provider-failover) gives the provider order and failover, and
 [other decision hosts](jev.md#other-decision-hosts) lists each host with its key and models.
