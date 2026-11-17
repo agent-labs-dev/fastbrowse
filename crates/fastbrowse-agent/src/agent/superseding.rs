@@ -1,39 +1,15 @@
-//! Requests a decision sends after the page redrew under it.
-//!
-//! A decision the page redrew under is discarded, but a request it already sent is billed, and one dropped before its
-//! response has no cost the run can know (#1218). So the decision runs on to finish what it sent, and from the redraw
-//! on, the run's clients send nothing new for it: a grouped choice's follow-up question about the old page would be a
-//! request paid for an answer nobody reads.
+//! The run's clients, which send nothing for a decision the page redrew under ([`fastbrowse_core::superseding`]).
 
-use std::future::Future;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{DecisionClient, DecisionError, DecisionProfile, Evaluation, Images, Question};
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, ResponseSchema};
 use fastbrowse_core::models::{CostComponent, JevPurpose, LLMPurpose};
+use fastbrowse_core::superseding::superseded;
 use fastbrowse_core::telemetry::Ledger;
 use indexmap::IndexMap;
 use serde_json::Value;
-
-tokio::task_local! {
-    static SUPERSEDED: Arc<AtomicBool>;
-}
-
-/// Run `work` so that [`supersede`]ing `flag` stops it sending new requests. The agent spawns no tasks, so every
-/// request `work` makes is polled inside this scope.
-pub(super) async fn superseding<F: Future>(flag: Arc<AtomicBool>, work: F) -> F::Output {
-    SUPERSEDED.scope(flag, work).await
-}
-
-pub(super) fn supersede(flag: &AtomicBool) {
-    flag.store(true, Ordering::SeqCst);
-}
-
-fn superseded() -> bool {
-    SUPERSEDED.try_with(|flag| flag.load(Ordering::SeqCst)).unwrap_or(false)
-}
 
 /// The run's decision client, sending nothing for a superseded decision.
 pub(super) struct Decisions(pub(super) Arc<dyn DecisionClient>);

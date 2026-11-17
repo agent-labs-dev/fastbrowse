@@ -9287,13 +9287,20 @@ async fn test_a_decision_the_page_redrew_under_sends_no_new_request() {
             .with_events(Some(on_event))
             .with_trace(trace.clone());
     let (state, questions) = (serde_json::json!({}), IndexMap::new());
-    let work = async {
-        let _ = agent.jev.evaluate(&state, &questions).await;
+    let ledger = fastbrowse_core::telemetry::Ledger::new(Limits::default());
+    // Each request reserves its call first, as the run's call sites do.
+    let ask = || async {
+        ledger.reserve(CostComponent::Jev, 0.0, 1)?;
         agent.jev.evaluate(&state, &questions).await.map_err(super::state::Flow::from)
+    };
+    let work = async {
+        let _ = ask().await;
+        ask().await
     };
     let watched = agent.unless_redrawn(false, work, &at("https://shop.test/ticket", &[]), None).await.unwrap();
     assert!(matches!(watched, super::driving::Watched::Redrawn));
     assert_eq!((asked.load(Ordering::SeqCst), answered.load(Ordering::SeqCst)), (1, 1));
+    assert_eq!(ledger.state().jev_calls, 1, "the run counts only the request it sent");
     // The refused request is an expected discard, not a failure: nothing reaches the host's events or the trace.
     assert!(events.lock().unwrap().is_empty());
     assert_eq!(trace.events(), Vec::<serde_json::Value>::new());

@@ -614,7 +614,7 @@ impl Agent {
     /// Only one redraw per action: a control that never stops changing is still acted on.
     ///
     /// Doomed work still runs before `Redrawn` is returned, to finish the requests it already sent and record what they
-    /// cost (#1218), but it sends no new one ([`super::superseding`]). That costs the rest of one request, about half a
+    /// cost (#1218), but it sends no new one ([`fastbrowse_core::superseding`]). That costs the rest of one request, about half a
     /// second on Online-Mind2Web, and stays inside the run's time limit.
     pub(super) async fn unless_redrawn<T, F>(
         &self,
@@ -632,7 +632,7 @@ impl Agent {
         let raw = self.raw().unwrap_or_else(|| observation.clone());
         let watching = self.page.redrawn(&raw, REDRAW_WATCH_SECONDS, target);
         let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let work = super::superseding::superseding(flag.clone(), work);
+        let work = fastbrowse_core::superseding::superseding(flag.clone(), work);
         tokio::pin!(work);
         tokio::pin!(watching);
         tokio::select! {
@@ -640,7 +640,7 @@ impl Agent {
             done = &mut work => done.map(Watched::Done),
             redrawn = &mut watching => match redrawn {
                 Ok(true) => {
-                    super::superseding::supersede(&flag);
+                    fastbrowse_core::superseding::supersede(&flag);
                     // Its outcome was decided on a page that is gone, so it is discarded, an error included; the next
                     // decision meets any limit it reached.
                     let _ = work.await;
