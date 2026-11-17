@@ -2101,3 +2101,34 @@ async fn test_role_keys_capture_orientation_and_count_custom_slider_progress() {
     assert_eq!(find(&h.observe().await, "Level").value.as_deref(), Some("3"));
     h.close().await;
 }
+
+// The page swaps "Loading..." for its result after the observation a Wait was decided on and before the Wait reads
+// its baseline: the decision was made on a page that no longer exists, and an unlimited wait for the page to change
+// from the baseline it read afterwards never ended.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_sees_a_change_made_after_the_observation_it_was_decided_on() {
+    let Some(h) = harness().await else { return };
+    // Once where the viewport shows it and once below it, where only the page's whole text holds it.
+    for place in ["afterbegin", "beforeend"] {
+        h.goto("").await;
+        let script =
+            format!("{{ document.body.insertAdjacentHTML('{place}', \"<div id='loading'>Loading...</div>\"); }} true");
+        assert_eq!(eval_active(&h.page, &script).await, json!(true));
+        let before = h.observe().await;
+        // The page's own handler: hide the node, insert a hidden result before it, show that.
+        let swap = "{ const loading = document.querySelector('#loading'); loading.style.display = 'none'; \
+                loading.insertAdjacentHTML('beforebegin', \"<div id='finish' style='display:none'><h4>Hello World!</h4></div>\"); \
+                document.querySelector('#finish').style.display = ''; } true";
+        assert_eq!(eval_active(&h.page, swap).await, json!(true));
+        let wait = Action::new(Operation::Wait);
+        let result = tokio::time::timeout(Duration::from_secs(20), h.page.wait(&wait, &before, f64::INFINITY))
+            .await
+            .unwrap_or_else(|_| panic!("{place}: an unlimited wait never saw the change made after its observation"))
+            .expect("wait");
+        assert_eq!((result.outcome, result.detail.as_deref()), (StepOutcome::Executed, None), "{place}: {result:?}");
+        assert!(result.page_changed, "{place}: {result:?}");
+        assert!(h.page.capture().await.expect("capture").text.contains("Hello World!"), "{place}");
+        assert_eq!(wait_watches(&h).await, json!(0), "{place}");
+    }
+    h.close().await;
+}

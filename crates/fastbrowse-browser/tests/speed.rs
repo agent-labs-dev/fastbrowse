@@ -804,7 +804,9 @@ async fn test_a_changed_subtree_reuses_the_document_walk() {
         eval_active(&h.session, "documentWalks = 0;stableChildReads = 0").await;
         eval_active(&h.session, script).await;
         let after = h.observe().await;
-        assert_eq!(eval_active(&h.session, "documentWalks").await, json!(0), "{script}");
+        // The read derives nothing from the unchanged subtree, so its own walk is none; the one walk is the
+        // fingerprint the page keeps of what it described, which a Wait decided on this observation compares.
+        assert_eq!(eval_active(&h.session, "documentWalks").await, json!(1), "{script}");
         assert_eq!(eval_active(&h.session, "stableChildReads").await, json!(0), "{script}");
         let other = fastbrowse_browser::page::CdpPage::new(h.session.clone(), Config::default());
         let mut full = other.observe().await.expect("full read");
