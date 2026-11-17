@@ -193,7 +193,9 @@ def run_rows(repo: str, run_id: int) -> list[dict[str, Any]]:
                 suite = task_suites.get(result.task_id)
                 if suite is None:
                     continue
-                projected = trial_result_to_row(result, attempts=loaded.physical_runs(result.key))
+                projected = trial_result_to_row(
+                    result, attempts=tuple(a for a in loaded.attempts if a.key == result.key)
+                )
                 row = projected.model_dump(mode="json")
                 row.update(
                     {
