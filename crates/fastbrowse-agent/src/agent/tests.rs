@@ -4755,10 +4755,10 @@ async fn test_a_stuck_run_whose_answer_passes_every_check_answers_the_task() {
     assert_eq!(stopped(text, None, Some(true)).await.status, Status::Complete);
 }
 
-/// A composer that writes one claim citing the first note, and says its answer leaves `.1` unestablished.
-struct WritesPartial(&'static str, &'static str);
+/// A composer that writes one claim citing the first note.
+struct Writes(&'static str);
 
-impl LLMClient for WritesPartial {
+impl LLMClient for Writes {
     fn generate_value<'a>(
         &'a self,
         _: LLMPurpose,
@@ -4767,62 +4767,31 @@ impl LLMClient for WritesPartial {
         _: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         Box::pin(async move {
-            let draft = json!({"claims": [{"text": [{"prose": self.0}], "evidence_ids": ["e0"]}], "partial": self.1});
+            let draft = json!({"claims": [{"text": [{"prose": self.0}], "evidence_ids": ["e0"]}]});
             let data = schema.validate_json(&draft.to_string()).map_err(LLMError::Failed)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
 }
 
+/// Whether an answer leaves out what the task asks is Jev's coverage question and code's list extent, never the
+/// composer's: asked for the most expensive product after sorting by price descending, the composer called page 1 of 3
+/// partial in 1 of 3 runs that Jev's coverage passed at 0.96, and the run ended unverified (#1194). The composer has no
+/// such field, and an answer every check holds ends complete.
 #[tokio::test]
-async fn test_partial_composition_supplies_missing_coverage_to_recovery() {
-    let page = capture(&[(BlockKind::Paragraph, "Quote by Ada")]);
-    let mut notes = Notes::default();
-    notes.add(Fact::read("Quote by Ada", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
-    let reviewed = crate::retrieval::compose_reviewed(
-        &JudgesCarried(true),
-        &WritesPartial("2 quotes by Ada were found.", "the quotes past page 2"),
-        "How many quotes are there across the whole list?",
-        &notes,
-        None,
-        None,
-        true,
-        &[],
-    )
-    .await
-    .unwrap();
-    let feedback: serde_json::Value =
-        serde_json::from_str(&reviewed.rejection.expect("partial coverage needs recovery")).unwrap();
-    assert!(feedback["rejected_checks"].as_array().unwrap().contains(&json!("coverage")));
-    assert_eq!(feedback["partial"], "the quotes past page 2");
-}
-
-/// Asked how many quotes an author has across a site, a run stuck after two pages of ten composed "The total across
-/// the whole site is unsupported. The available pages show 2 J.K. Rowling quotes, but the site listing continues to
-/// page 3." Each claim held and coverage passed at 0.57, so the run ended complete. The composer's own account that its
-/// answer is partial keeps a stuck run stuck, and ends a finished one unverified, naming what is left out.
-#[tokio::test]
-async fn test_an_answer_its_composer_calls_partial_never_ends_complete() {
-    let composer = || Arc::new(WritesPartial("2 quotes by Ada were found.", "the quotes past page 2"));
-    let run = || {
-        let mut state = run_state();
-        state.output_intent = super::state::OutputIntent::Text;
-        state.compose = true;
-        let page = capture(&[(BlockKind::Paragraph, "Quote by Ada")]);
-        state.notes.add(Fact::read("Quote by Ada", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
-        state
-    };
-    let agent = Agent::new(Arc::new(NoPage), Arc::new(JudgesCarried(true)), composer());
-    let mut state = run();
-    let ledger = state.ledger.clone();
-    let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "no_progress (3)"));
-    let stuck = agent.stopped(stop, Some(&mut state), &ledger).await;
-    assert_eq!(stuck.status, Status::Stuck);
-    assert!(stuck.answer.unwrap_or_default().contains("2 quotes by Ada were found."));
-    let agent = Agent::new(Arc::new(NoPage), Arc::new(JudgesCarried(true)), composer());
-    let done = agent.conclude(&mut run(), &observation(&[]), None).await.unwrap();
-    assert_eq!(done.status, Status::Unverified);
-    assert_eq!(done.error.as_deref(), Some("The answer is partial; it does not establish the quotes past page 2"));
+async fn test_an_answer_every_check_holds_ends_complete_whatever_the_list_shows() {
+    let agent =
+        Agent::new(Arc::new(NoPage), Arc::new(JudgesCarried(true)), Arc::new(Writes("Drum Roaster costs GBP 210.00.")));
+    let mut state = run_state();
+    state.output_intent = super::state::OutputIntent::Text;
+    state.compose = true;
+    let page = capture(&[(BlockKind::Paragraph, "Drum Roaster - GBP 210.00"), (BlockKind::Paragraph, "Page 1 of 3")]);
+    state
+        .notes
+        .add(Fact::read("Drum Roaster - GBP 210.00", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
+    let done = agent.conclude(&mut state, &observation(&[]), None).await.unwrap();
+    assert_eq!(done.status, Status::Complete, "{:?}", done.error);
+    assert!(done.answer.unwrap_or_default().contains("Drum Roaster costs GBP 210.00."));
 }
 
 #[test]

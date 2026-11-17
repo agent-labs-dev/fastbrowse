@@ -387,7 +387,6 @@ impl Agent {
         let mut answer_text = None;
         let mut citations = Vec::new();
         let answer_problem = answered.as_ref().and_then(|answer| answer.problem.clone());
-        let answer_partial = answered.as_ref().and_then(|answer| answer.partial.clone());
         if answer_problem.is_some()
             && let Some(partial) = state.checked_composition(&state.notes_to_compose())
         {
@@ -419,13 +418,6 @@ impl Agent {
                 ),
             };
             error.get_or_insert_with(|| self.redact(&message));
-        }
-        // The composer said what its answer leaves out: a run that stopped there has not answered all of it, however
-        // well each claim holds. Asked how many quotes an author has across a site, an answer that a list continued
-        // past the two found ended complete.
-        if let Some(partial) = answer_partial {
-            status = Status::Unverified;
-            error.get_or_insert_with(|| self.redact(&format!("{PARTIAL_ANSWER}{partial}")));
         }
         if state.refused {
             status = Status::Unverified;
@@ -564,9 +556,6 @@ pub(super) fn undone_notice(step: &str) -> String {
 }
 
 /// The error of a run whose finish check found a step the site does not allow; the answer names the step.
-/// What leads the composer's own account of what a partial answer leaves out.
-pub(super) const PARTIAL_ANSWER: &str = "The answer is partial; it does not establish ";
-
 pub(super) const REFUSED: &str = "A step the task asks for was not carried out because the site does not allow it, as the page or the recent actions show. The answer reports what was and was not done.";
 
 /// What the navigator is told about a rejected draft, and what the run's error says if recovery runs out: which
@@ -585,9 +574,6 @@ fn rejection_reason(rejection: &str) -> String {
     // for four others; shown that draft, it chose the next method (#897).
     let feedback: Value = serde_json::from_str(rejection).unwrap_or_default();
     let coverage = feedback["rejected_checks"].as_array().is_some_and(|checks| checks.iter().any(|c| c == "coverage"));
-    if coverage && let Some(partial) = feedback["partial"].as_str() {
-        reason += &format!("\nThe composer says the answer leaves unestablished: {partial}");
-    }
     if coverage && let Some(claims) = drafted(rejection).filter(|claims| !claims.is_empty()) {
         reason += "\nThe rejected answer:";
         if let Some(columns) = feedback["columns"].as_array().filter(|columns| !columns.is_empty()) {
@@ -695,14 +681,12 @@ mod tests {
     use super::rejection_reason;
 
     #[test]
-    fn partial_coverage_feedback_names_what_the_navigator_still_needs() {
+    fn coverage_feedback_shows_the_navigator_the_rejected_answer() {
         let feedback = json!({
             "draft_claims": [{"text": "Two matching records were found.", "evidence_ids": ["e0"]}],
             "rejected_checks": ["coverage"],
-            "partial": "the records beyond this page",
         });
         let reason = rejection_reason(&feedback.to_string());
-        assert!(reason.contains("the records beyond this page"), "{reason}");
         assert!(reason.contains("Two matching records were found."), "{reason}");
     }
 
