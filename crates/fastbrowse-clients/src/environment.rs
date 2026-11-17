@@ -9,7 +9,8 @@
 //! PERPLEXITY_API_KEY; ollama and custom read FASTBROWSE_DECISION_API_KEY, which is optional.
 //! FASTBROWSE_DECISION_BASE_URL points any source at a proxy or another host serving the same API, and custom requires
 //! it. FASTBROWSE_DECISION_MODEL pins the model of any source but the gateway, and ollama and custom require it. A
-//! custom endpoint or model disables automatic failover.
+//! custom endpoint or model disables automatic failover. FASTBROWSE_ACTION_PICKER=llm has the LLM pick each browser
+//! action instead of Jev, an ablation; every other decision stays with Jev ([`crate::action_picker`]).
 //!
 //! LLM: OPENROUTER_API_KEY; when it is absent, AI_GATEWAY_API_KEY serves the same models through the Vercel AI
 //! Gateway's OpenAI-compatible chat completions, and when both are set the gateway takes over a run whose OpenRouter
@@ -39,6 +40,7 @@ use fastbrowse_core::models::{LLMPurpose, LocalChrome};
 use fastbrowse_core::py::lax::bool_of;
 use serde_json::{Map, Value};
 
+use crate::action_picker::{ActionPicker, LlmDecisionClient};
 use crate::anthropic::AnthropicLLM;
 use crate::failover::{FailoverDecisionClient, FailoverLLMClient};
 use crate::http::Http;
@@ -149,6 +151,25 @@ impl std::fmt::Display for DecisionSource {
     }
 }
 
+/// Who picks each browser action. Every other decision stays with the decision model either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActionPickerSource {
+    /// The decision model, as every other decision.
+    Jev,
+    /// The run's LLM, the ablation that measures what picking with Jev is worth.
+    Llm,
+}
+
+impl ActionPickerSource {
+    pub fn parse(value: &str) -> Option<ActionPickerSource> {
+        match value {
+            "jev" => Some(ActionPickerSource::Jev),
+            "llm" => Some(ActionPickerSource::Llm),
+            _ => None,
+        }
+    }
+}
+
 /// A missing key or an invalid setting in the environment, reported without a traceback.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigurationError(pub String);
@@ -204,6 +225,8 @@ pub struct Settings {
     pub decision_model: Option<String>,
     /// Bearer token for the `ollama` and `custom` sources. Optional: a local server usually takes none.
     pub decision_api_key: Option<Secret>,
+    /// FASTBROWSE_ACTION_PICKER: who picks each browser action.
+    pub action_picker: ActionPickerSource,
     pub telnyx_api_key: Option<Secret>,
     pub openai_api_key: Option<Secret>,
     pub aimlapi_api_key: Option<Secret>,
@@ -246,6 +269,7 @@ impl Default for Settings {
             decision_base_url: None,
             decision_model: None,
             decision_api_key: None,
+            action_picker: ActionPickerSource::Jev,
             telnyx_api_key: None,
             openai_api_key: None,
             aimlapi_api_key: None,
@@ -267,7 +291,7 @@ impl Default for Settings {
 }
 
 /// Each setting's name as pydantic validates it, in declaration order, and the variable it is read from.
-const FIELDS: [(&str, &str); 24] = [
+const FIELDS: [(&str, &str); 25] = [
     ("TYPESAFE_API_KEY", "typesafe_api_key"),
     ("AI_GATEWAY_API_KEY", "ai_gateway_api_key"),
     ("OPENROUTER_API_KEY", "openrouter_api_key"),
@@ -278,6 +302,7 @@ const FIELDS: [(&str, &str); 24] = [
     ("decision_base_url", "fastbrowse_decision_base_url"),
     ("decision_model", "fastbrowse_decision_model"),
     ("decision_api_key", "fastbrowse_decision_api_key"),
+    ("action_picker", "fastbrowse_action_picker"),
     ("TELNYX_API_KEY", "telnyx_api_key"),
     ("OPENAI_API_KEY", "openai_api_key"),
     ("AIMLAPI_API_KEY", "aimlapi_api_key"),
@@ -391,6 +416,7 @@ impl Settings {
             "decision_base_url" => self.decision_base_url = text(),
             "decision_model" => self.decision_model = text(),
             "decision_api_key" => self.decision_api_key = secret(),
+            "action_picker" => self.action_picker = ActionPickerSource::parse(value).ok_or(())?,
             "TELNYX_API_KEY" => self.telnyx_api_key = secret(),
             "OPENAI_API_KEY" => self.openai_api_key = secret(),
             "AIMLAPI_API_KEY" => self.aimlapi_api_key = secret(),
@@ -490,6 +516,17 @@ impl Settings {
     }
 
     pub fn decision(&self, http: &Http) -> Result<Box<dyn DecisionClient>, ConfigurationError> {
+        let jev = self.jev(http)?;
+        match self.action_picker {
+            ActionPickerSource::Jev => Ok(jev),
+            ActionPickerSource::Llm => {
+                let picker = LlmDecisionClient::new(self.llm(http)?, self.model());
+                Ok(Box::new(ActionPicker::new(jev, Box::new(picker))))
+            }
+        }
+    }
+
+    fn jev(&self, http: &Http) -> Result<Box<dyn DecisionClient>, ConfigurationError> {
         let (source, backup_source) = self.decision_route();
         let primary = self.decision_client(source, http)?;
         let Some(backup_source) = backup_source else { return Ok(primary) };

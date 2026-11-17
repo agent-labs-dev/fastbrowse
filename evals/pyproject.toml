@@ -5,7 +5,7 @@ description = "Fastbrowse's browser benchmarks on Parallax: the internal campaig
 requires-python = ">=3.13"
 dependencies = [
     # One Parallax release for every campaign; bump it deliberately, it moves the evaluator.
-    "parallax-evals[browser]==2.0.0.dev33",
+    "parallax-evals[browser]==2.0.0.dev34",
     # The measured agent and the eval contracts it shares with this harness. A campaign installs the build it
     # measures over this one (see .github/workflows/benchmark-campaign.yml).
     "fastbrowse[eval-data]",
@@ -22,6 +22,7 @@ fastbrowse-evals = "fastbrowse_evals.cli:main"
 
 [project.entry-points."parallax.harnesses"]
 fastbrowse = "fastbrowse_evals.backend:FastbrowseHarness"
+fastbrowse-llm-picker = "fastbrowse_evals.backend:FastbrowseLlmPickerHarness"
 fastbrowse-pool = "fastbrowse_evals.live:FastbrowsePoolHarness"
 fastbrowse-hosted = "fastbrowse_evals.hosted_api:FastbrowseHostedHarness"
 
