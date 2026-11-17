@@ -215,6 +215,18 @@
     "fingerprint": "a2bf16aa87d7b172",
     "version": 6
   },
+  "visual-map-countries": {
+    "fingerprint": "10b15b7b2d009c4a",
+    "version": 1
+  },
+  "visual-map-marker": {
+    "fingerprint": "e851a2fdcfe426d5",
+    "version": 1
+  },
+  "visual-map-square": {
+    "fingerprint": "138bc0ab5d1519fc",
+    "version": 1
+  },
   "wiki-godel": {
     "fingerprint": "f2917ea4fb0bef54",
     "version": 10

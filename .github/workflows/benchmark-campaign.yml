@@ -214,8 +214,8 @@ jobs:
             case "$suite" in
               core|dev|stretch-dev) ;;
               # A diagnostic suite is outside the catalog, so only a smoke, which publishes nothing, may run it.
-              sweep) test "$SMOKE" = true || { echo "::error::suite '$suite' is diagnostic and needs smoke"; exit 1; } ;;
-              *) echo "::error::suites must be core, dev, stretch-dev or (smoke only) sweep, got '$suite'"; exit 1 ;;
+              sweep|visual) test "$SMOKE" = true || { echo "::error::suite '$suite' is diagnostic and needs smoke"; exit 1; } ;;
+              *) echo "::error::suites must be core, dev, stretch-dev or (smoke only) sweep or visual, got '$suite'"; exit 1 ;;
             esac
           done
           for key in groups suites; do
