@@ -83,3 +83,6 @@ possibly-missing-import = "error"
 possibly-unresolved-reference = "warn"
 redundant-cast = "error"
 unsupported-dynamic-base = "error"
+
+[tool.hatch.metadata]
+allow-direct-references = true
