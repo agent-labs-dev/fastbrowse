@@ -297,9 +297,14 @@ jobs:
           mirror()
           PY
           mirror_pid=$!
+          # Every arm gets the same turn limit, recorded in the run's provenance. It is over four times the
+          # longest finished smoke trial (409 s), so it ends only a hung turn, which would otherwise hold the job to
+          # its cap.
+          turn_timeout=1800
           args=(--harness "$HARNESS" --repeats "$REPEAT" --concurrency "$WORKERS" --budget "$BUDGET" --reserve 3
-            --retry-invalid 2 --retry-wait 60
+            --retry-invalid 2 --retry-wait 60 --turn-timeout "$turn_timeout"
             --provenance "paper.campaign=$CAMPAIGN_ID" --provenance "paper.arm=$ARM" --provenance "paper.shard=$SHARD"
+            --provenance "paper.turn_timeout_s=$turn_timeout"
             --out "$OUT")
           test -z "$MODEL" || args+=(--model "$MODEL")
           set +e
