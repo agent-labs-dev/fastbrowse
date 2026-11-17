@@ -23,7 +23,7 @@ from parallax.harnesses.browser.cloud import Browser, cloud_browser
 from parallax.models import Capability, CostSource, HarnessInfo, HarnessKind, Isolation, Task, TurnInput
 
 from fastbrowse_evals.evidence import result_answer, step_action
-from fastbrowse_evals.task_specs import answer_model
+from fastbrowse_evals.task_specs import answer_model, start_url
 
 PROVIDER_KEYS = ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "EXA_API_KEY")
 """The provider keys a fastbrowse arm is given: Jev, its LLM and optional web search use these.
@@ -115,12 +115,10 @@ class FastbrowseHarness(BrowserHarness):
         task = self._task
         if task is None:
             raise RuntimeError("fastbrowse harness has no task")
-        start_url = task.data.get("start_url")
-        if not isinstance(start_url, str):
-            raise ValueError("browser task has no start_url")
+        start = start_url(task)
         # The runner made the trial INVALID before this point if any of these variables is unset.
         values = {alias: os.environ[env_name] for alias, env_name in task.secrets.items()}
-        secrets = ScopedSecrets(values, origin_of(start_url)) if values else None
+        secrets = ScopedSecrets(values, origin_of(start)) if values else None
         authorization = Authorization(irreversible_actions=task.meta.authorizes)
         async with httpx.AsyncClient() as http, self.browser(http) as browser:
             self._browser = browser
@@ -131,21 +129,26 @@ class FastbrowseHarness(BrowserHarness):
                 self._events = events
                 output = await run_task(
                     turn.text,
-                    start=start_url,
+                    start=start,
                     open_browser=lambda: _ready_browser(browser),
                     output_schema=answer_model(task.id),
                     limits=Limits(),
                     authorization=authorization,
                     secrets=secrets,
                     http=http,
-                    settings=run_settings(),
+                    settings=self.settings(),
                 )
+            # The answer is in: reading the final page and stopping the browser are not the agent's time.
+            self._agent_finished()
             self._product_status = output.status
             latency_ms = round((time.perf_counter() - began) * 1000)
             # A run that read every page over HTTP never drove the browser, which still shows the blank tab it
             # opened on; what it saw is in `pages`.
             page = None if output.browser is None else await self.observe(browser.cdp_url, url=output.final_url)
         return _run_result(output, page, browser, events, latency_ms=latency_ms)
+
+    def settings(self) -> dict[str, str]:
+        return run_settings()
 
     @property
     def trial_metadata(self) -> dict[str, object]:
@@ -156,6 +159,17 @@ class FastbrowseHarness(BrowserHarness):
         if self._product_status is not None:
             details["status"] = self._product_status.value
         return details
+
+
+class FastbrowseLlmPickerHarness(FastbrowseHarness):
+    """fastbrowse with its LLM picking each browser action in place of Jev: the same-model ablation of the picker.
+
+    Every other decision, and every input the picker sees, is the `fastbrowse` arm's."""
+
+    info = FastbrowseHarness.info.model_copy(update={"name": "fastbrowse-llm-picker"})
+
+    def settings(self) -> dict[str, str]:
+        return run_settings() | {"FASTBROWSE_ACTION_PICKER": "llm"}
 
 
 async def _ready_browser(browser: Browser) -> str:

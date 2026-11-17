@@ -896,7 +896,7 @@ async fn test_an_unreachable_opening_stays_unavailable_without_a_resume() {
             [BrowserError::NavigationTimeout("timed out".into()), BrowserError::SiteUnreachable("offline".into())]
         {
             let agent = Agent::new(
-                Arc::new(Unfetchable { failure: Some(failure), ..Default::default() }),
+                Arc::new(Unfetchable { failure: Some(failure.clone()), ..Default::default() }),
                 Arc::new(ScriptedJev::new(Vec::new())),
                 Arc::new(ScriptedLLM),
             );
@@ -909,6 +909,14 @@ async fn test_an_unreachable_opening_stays_unavailable_without_a_resume() {
             };
             let result = agent.run("Read the price", options).await.unwrap();
             assert_eq!(result.status, Status::Unavailable);
+            assert_eq!(
+                result.failure_kind.as_deref(),
+                Some(match failure {
+                    BrowserError::NavigationTimeout(_) => "NavigationTimeout",
+                    BrowserError::SiteUnreachable(_) => "SiteUnreachable",
+                    _ => unreachable!(),
+                })
+            );
             assert!(agent.resume().is_none(), "only a browser handoff keeps an unopened run");
             assert!(sink.lock().unwrap().is_none(), "an unopened run has no recipe");
         }
@@ -1833,7 +1841,7 @@ impl Page for FinishPage {
 }
 
 /// Answers each yes/no question at the given probability and each choice with the given pick where it is offered, else
-/// the first option, recording every request's state and each choice's options.
+/// the first option, recording every request's state, each choice's options and every question's instructions.
 struct DoneCheckJev(
     std::sync::Arc<std::sync::atomic::AtomicUsize>,
     f64,
@@ -1862,6 +1870,7 @@ impl DecisionClient for DoneCheckJev {
             .map(|(key, question)| {
                 if let Question::Choice(choice) = question {
                     self.4.lock().unwrap().push(choice.criteria.keys().cloned().collect());
+                    self.5.lock().unwrap().push(choice.instructions.clone());
                 }
                 if let Question::Noul(noul) = question {
                     self.5.lock().unwrap().push(noul.instructions.clone());
@@ -1960,6 +1969,43 @@ async fn test_a_done_with_a_step_of_the_task_undone_is_not_complete() {
         answer.contains("Sign in, enter the code the Phone page shows, then tell me your account email.")
             && answer.contains("katherine@example.com"),
         "{answer}"
+    );
+}
+
+/// Asked to write a list in a new document and then say its second line, a run on an editor that restored an old draft
+/// holding the list read it and ended `complete` with nothing written (#1186): the done check was asked only once a
+/// step had been tried. A task that asks for a step is checked with no step taken, and told that none was. The step
+/// recovery names was the answer the task asked for, not the list it asked to be written.
+#[tokio::test]
+async fn test_a_done_with_no_step_taken_on_a_task_that_asks_for_one_checks_the_task_steps() {
+    let page = capture(&[(BlockKind::Paragraph, "passport\ncharger\ntoothbrush")]);
+    let fact = Fact::read("passport\ncharger\ntoothbrush", block_evidence(&page, "s0"), FactReader::JevChoice);
+    let mut state = run_state();
+    state.output_intent = super::state::OutputIntent::Text;
+    state.asks_steps = true;
+    state.task = "In a new document, write a three-line packing list: passport, charger, toothbrush. Then tell me the \
+                  second line."
+        .into();
+    state.notes = Notes::new([fact.answering()]);
+    state.history.push(crate::policy::HistoryEntry::new(Some(Operation::Read), None, StepOutcome::Executed, true));
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "undone"));
+    let agent = Agent::new(Arc::new(FinishPage(observation(&[]))), jev.clone(), Arc::new(ScriptedLLM));
+    state.recoveries = agent.config.stall.max_recoveries;
+
+    let result = agent.finish(&mut state, &observation(&[]), None, None).await;
+    assert!(
+        matches!(&result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("task step"))),
+        "{result:?}"
+    );
+    let facts = jev.3.lock().unwrap()[0]["page_facts"].to_string();
+    assert!(facts.contains(super::acting::NOTHING_ACTED), "{facts}");
+    // Which clause is undone is asked of the steps alone: asked of any clause, Jev named the one asking for the answer.
+    let asked = jev.5.lock().unwrap();
+    assert!(
+        asked
+            .iter()
+            .any(|q| q.contains("asks for a step, other than finding, reading or reporting something, that has not")),
+        "{asked:?}"
     );
 }
 
@@ -2869,6 +2915,69 @@ fn test_the_value_questions_say_which_record_a_field_sits_in() {
         assert!(question.contains("for 'Comment text area', which"), "the label stays the field's own: {question}");
     }
     assert!(spans("search").iter().all(|q| !q.contains(IN_RECORD)), "{:?}", spans("search"));
+}
+
+/// A task to write a three-line list of three items it names had one item copied into the document: asked whether the
+/// task states the field's value word for word, Jev said it does, since the items are there, though not as the lines
+/// asked for. Told to type a quoted list and then say which item it lists second, it began the copy at that item
+/// (#1187). The value questions say the copy is the exact text to type, a value the task asks to be written is
+/// written, and the value is never the answer to the task's question.
+#[test]
+fn test_the_value_questions_say_a_copy_is_the_exact_text_to_type() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(EndValues), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "In a new document, write a three-line packing list: passport, charger, toothbrush.".into();
+    let document = Control::new("doc", "textbox", "textbox", [Operation::Fill]);
+    let asked = agent.ahead(&state, &observation(&[document]));
+    let choices: Vec<_> = asked
+        .iter()
+        .filter_map(|ahead| match &ahead.question {
+            Question::Choice(choice) => Some(choice),
+            _ => None,
+        })
+        .collect();
+    let source = choices.iter().find(|choice| choice.criteria.contains_key("write")).expect("the source question");
+    let said = |key: &str| source.criteria[key].as_str().unwrap_or_default().to_string();
+    assert!(said("task").contains("states the exact text to type, word for word"), "{}", said("task"));
+    assert!(said("write").contains("or text it asks to be written or composed"), "{}", said("write"));
+    let words: Vec<_> = choices.iter().filter(|choice| choice.instructions.contains("which of its words")).collect();
+    assert_eq!(words.len(), 2, "the beginning and the end are asked");
+    for question in words {
+        assert!(
+            question.instructions.contains(
+                "The value is text the task gives to be entered, not the answer to a question the task asks."
+            ),
+            "{}",
+            question.instructions
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_a_field_already_holding_the_lines_still_offers_items_set_out_as_lines_as_written() {
+    let agent = Agent::new(Arc::new(NoPage), Arc::new(EndValues), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.task = "In a new document, write a three-line packing list: passport, charger, toothbrush.".into();
+    let document = Control {
+        value: Some("passport\ncharger\ntoothbrush".into()),
+        ..Control::new("doc", "textbox", "textbox", [Operation::Fill])
+    };
+    let asked = agent.ahead(&state, &observation(&[document]));
+    let source = asked
+        .iter()
+        .filter_map(|ahead| match &ahead.question {
+            Question::Choice(choice) if choice.criteria.contains_key("write") => Some(choice),
+            _ => None,
+        })
+        .next()
+        .expect("the source question");
+    let written = source.criteria["write"].as_str().unwrap_or_default();
+    assert!(written.contains("items it names set out as the lines, sentences or list it asks for"), "{written}");
+    assert!(
+        source.instructions.contains("The field holds 'passport\\ncharger\\ntoothbrush' now"),
+        "{}",
+        source.instructions
+    );
 }
 
 #[tokio::test]
@@ -4646,10 +4755,10 @@ async fn test_a_stuck_run_whose_answer_passes_every_check_answers_the_task() {
     assert_eq!(stopped(text, None, Some(true)).await.status, Status::Complete);
 }
 
-/// A composer that writes one claim citing the first note, and says its answer leaves `.1` unestablished.
-struct WritesPartial(&'static str, &'static str);
+/// A composer that writes one claim citing the first note.
+struct Writes(&'static str);
 
-impl LLMClient for WritesPartial {
+impl LLMClient for Writes {
     fn generate_value<'a>(
         &'a self,
         _: LLMPurpose,
@@ -4658,62 +4767,31 @@ impl LLMClient for WritesPartial {
         _: Option<&'a Ledger>,
     ) -> BoxFuture<'a, Result<Generation<serde_json::Value>, LLMError>> {
         Box::pin(async move {
-            let draft = json!({"claims": [{"text": [{"prose": self.0}], "evidence_ids": ["e0"]}], "partial": self.1});
+            let draft = json!({"claims": [{"text": [{"prose": self.0}], "evidence_ids": ["e0"]}]});
             let data = schema.validate_json(&draft.to_string()).map_err(LLMError::Failed)?;
             Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
         })
     }
 }
 
+/// Whether an answer leaves out what the task asks is Jev's coverage question and code's list extent, never the
+/// composer's: asked for the most expensive product after sorting by price descending, the composer called page 1 of 3
+/// partial in 1 of 3 runs that Jev's coverage passed at 0.96, and the run ended unverified (#1194). The composer has no
+/// such field, and an answer every check holds ends complete.
 #[tokio::test]
-async fn test_partial_composition_supplies_missing_coverage_to_recovery() {
-    let page = capture(&[(BlockKind::Paragraph, "Quote by Ada")]);
-    let mut notes = Notes::default();
-    notes.add(Fact::read("Quote by Ada", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
-    let reviewed = crate::retrieval::compose_reviewed(
-        &JudgesCarried(true),
-        &WritesPartial("2 quotes by Ada were found.", "the quotes past page 2"),
-        "How many quotes are there across the whole list?",
-        &notes,
-        None,
-        None,
-        true,
-        &[],
-    )
-    .await
-    .unwrap();
-    let feedback: serde_json::Value =
-        serde_json::from_str(&reviewed.rejection.expect("partial coverage needs recovery")).unwrap();
-    assert!(feedback["rejected_checks"].as_array().unwrap().contains(&json!("coverage")));
-    assert_eq!(feedback["partial"], "the quotes past page 2");
-}
-
-/// Asked how many quotes an author has across a site, a run stuck after two pages of ten composed "The total across
-/// the whole site is unsupported. The available pages show 2 J.K. Rowling quotes, but the site listing continues to
-/// page 3." Each claim held and coverage passed at 0.57, so the run ended complete. The composer's own account that its
-/// answer is partial keeps a stuck run stuck, and ends a finished one unverified, naming what is left out.
-#[tokio::test]
-async fn test_an_answer_its_composer_calls_partial_never_ends_complete() {
-    let composer = || Arc::new(WritesPartial("2 quotes by Ada were found.", "the quotes past page 2"));
-    let run = || {
-        let mut state = run_state();
-        state.output_intent = super::state::OutputIntent::Text;
-        state.compose = true;
-        let page = capture(&[(BlockKind::Paragraph, "Quote by Ada")]);
-        state.notes.add(Fact::read("Quote by Ada", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
-        state
-    };
-    let agent = Agent::new(Arc::new(NoPage), Arc::new(JudgesCarried(true)), composer());
-    let mut state = run();
-    let ledger = state.ledger.clone();
-    let stop = Flow::Stop(super::state::Stop::new(Status::Stuck, "no_progress (3)"));
-    let stuck = agent.stopped(stop, Some(&mut state), &ledger).await;
-    assert_eq!(stuck.status, Status::Stuck);
-    assert!(stuck.answer.unwrap_or_default().contains("2 quotes by Ada were found."));
-    let agent = Agent::new(Arc::new(NoPage), Arc::new(JudgesCarried(true)), composer());
-    let done = agent.conclude(&mut run(), &observation(&[]), None).await.unwrap();
-    assert_eq!(done.status, Status::Unverified);
-    assert_eq!(done.error.as_deref(), Some("The answer is partial; it does not establish the quotes past page 2"));
+async fn test_an_answer_every_check_holds_ends_complete_whatever_the_list_shows() {
+    let agent =
+        Agent::new(Arc::new(NoPage), Arc::new(JudgesCarried(true)), Arc::new(Writes("Drum Roaster costs GBP 210.00.")));
+    let mut state = run_state();
+    state.output_intent = super::state::OutputIntent::Text;
+    state.compose = true;
+    let page = capture(&[(BlockKind::Paragraph, "Drum Roaster - GBP 210.00"), (BlockKind::Paragraph, "Page 1 of 3")]);
+    state
+        .notes
+        .add(Fact::read("Drum Roaster - GBP 210.00", block_evidence(&page, "s0"), FactReader::JevChoice).answering());
+    let done = agent.conclude(&mut state, &observation(&[]), None).await.unwrap();
+    assert_eq!(done.status, Status::Complete, "{:?}", done.error);
+    assert!(done.answer.unwrap_or_default().contains("Drum Roaster costs GBP 210.00."));
 }
 
 #[test]
@@ -4792,6 +4870,8 @@ fn a_failure_kind_names_the_error_and_none_of_its_text() {
     assert_eq!(failure_kind(&invalid), "Invalid");
     let llm = fastbrowse_core::llm::LLMError::Rejected("the page said secret".into());
     assert_eq!(failure_kind(&AgentError::Llm(llm)), "Llm.Rejected");
+    let outage = fastbrowse_core::llm::LLMError::RetriesExhausted("provider offline".into());
+    assert_eq!(failure_kind(&AgentError::Llm(outage)), "Llm.RetriesExhausted");
     let navigation =
         BrowserError::Failed("Page.navigate failed (net::ERR_ABORTED) for https://a.test/?q=secret".into());
     assert_eq!(super::browser_failure_kind(&navigation), "Failed/Page.navigate/net::ERR_ABORTED");

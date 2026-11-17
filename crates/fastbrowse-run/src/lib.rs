@@ -715,16 +715,19 @@ enum Owned {
 struct Refused {
     message: String,
     unavailable: bool,
+    /// `RunResult::failure_kind`: what failed, when a typed error said so. A refusal of the task's own options has none.
+    kind: Option<String>,
 }
 
 impl From<BrowserError> for Refused {
     fn from(error: BrowserError) -> Self {
-        Refused { unavailable: error.is_unavailable(), message: error.to_string() }
+        let kind = Some(fastbrowse_agent::agent::failure_kind(&error));
+        Refused { unavailable: error.is_unavailable(), message: error.to_string(), kind }
     }
 }
 
 fn refused(message: &str) -> Refused {
-    Refused { message: message.into(), unavailable: false }
+    Refused { message: message.into(), unavailable: false, kind: None }
 }
 
 /// Whether a run reads over HTTP before any browser starts. A browser it was told to use, or anything that only has a
@@ -814,8 +817,10 @@ async fn browser(
         if let Some((name, _)) = cloud.iter().find(|(_, on)| *on) {
             return Err(refused(&format!("{name} belongs to a Browser Use Cloud browser, which needs a key")));
         }
-        let (process, connection) =
-            LocalChromeProcess::launch(chrome).await.map_err(|error| refused(&error.to_string()))?;
+        let (process, connection) = LocalChromeProcess::launch(chrome).await.map_err(|error| Refused {
+            kind: Some(format!("LocalChrome.{}", fastbrowse_agent::agent::failure_kind(&error))),
+            ..refused(&error.to_string())
+        })?;
         let connection = BrowserConnection { foreground: connection.foreground || foreground, ..connection };
         return Ok((connection, Owned::Local(Box::new(process))));
     };
@@ -832,6 +837,7 @@ async fn browser(
     let cloud = |error: fastbrowse_browser::adapters::browser_use_cloud::BrowserUseCloudError| Refused {
         unavailable: error.is_unavailable(),
         message: error.to_string(),
+        kind: Some(format!("BrowserUseCloud.{}", fastbrowse_agent::agent::failure_kind(&error))),
     };
     // Held by the caller while it starts, so a start that fails or is cancelled still reports the browser it billed.
     let remote = starting.insert(BrowserUseCloudBrowser::new(key, options).map_err(cloud)?);
@@ -1139,7 +1145,10 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
             recipe: recipe.clone(),
             recipe_sink: recipe_sink.clone(),
         };
-        let result = agent.run(&task.task, run).await.map_err(|error| refused(&error.to_string()))?;
+        let result = agent.run(&task.task, run).await.map_err(|error| Refused {
+            kind: Some(fastbrowse_agent::agent::failure_kind(&error)),
+            ..refused(&error.to_string())
+        })?;
         // The card is a data: document navigated into the tab, which would replace the caller's own app page; an
         // attached window is theirs and stays where it is, as does a tab the run left for a person to finish.
         // Shown while the recording stays in its slot, so a run cancelled during the card still finishes the videos.
@@ -1201,6 +1210,7 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
                 artifacts: session.as_ref().map(BrowserSession::artifacts).unwrap_or_default(),
                 citations: Vec::new(),
                 error: Some(refusal.message),
+                failure_kind: refusal.kind,
                 final_url: None,
                 final_frame: None,
                 recordings: Vec::new(),
@@ -1336,6 +1346,7 @@ async fn fetched(
             artifacts: Vec::new(),
             citations: Vec::new(),
             error: Some("BrowserError".into()),
+            failure_kind: None,
             final_url: None,
             final_frame: None,
             recordings: Vec::new(),
@@ -1408,11 +1419,21 @@ async fn desktop(
     told: &Told,
 ) -> Result<RunResult, RunError> {
     let program = std::env::var("FASTBROWSE_DESKPILOT").unwrap_or_else(|_| "deskpilot".into());
+    // Shown acts where it can be seen, with deskpilot's agent cursor: for a desktop of its own that a recording is
+    // taken of, never the user's, where it would take their view and focus.
+    let view = match std::env::var("FASTBROWSE_DESKTOP_SHOWN").as_deref() {
+        Err(std::env::VarError::NotPresent) => desktop::View::Hidden,
+        Ok("1") => desktop::View::Shown,
+        Ok(other) => return Err(RunError::Invalid(format!("FASTBROWSE_DESKTOP_SHOWN is 1 or unset, not {other:?}"))),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(RunError::Invalid("FASTBROWSE_DESKTOP_SHOWN is 1 or unset".into()));
+        }
+    };
     let ledger = Arc::new(Ledger::new(task.limits.clone().unwrap_or_default()));
     let run = async {
         // `check` refused a command line that does not split into words.
         let command = shlex::split(app).unwrap_or_default();
-        let page = match desktop::DeskpilotPage::open(&program, &command).await {
+        let page = match desktop::DeskpilotPage::open(&program, &command, view).await {
             Ok(page) => page,
             Err(desktop::OpenError::Invalid(message)) => return Err(RunError::Invalid(message)),
             // A deskpilot that cannot start or answer is an outage, as a cloud browser that cannot start is.
@@ -1429,6 +1450,7 @@ async fn desktop(
                     artifacts: Vec::new(),
                     citations: Vec::new(),
                     error: Some(message),
+                    failure_kind: Some("Deskpilot.Unavailable".into()),
                     final_url: None,
                     final_frame: None,
                     recordings: Vec::new(),

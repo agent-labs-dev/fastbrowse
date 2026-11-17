@@ -26,5 +26,7 @@ public enum LLMPurpose {
     @JsonProperty("unobtainable")
     UNOBTAINABLE,
     @JsonProperty("groups")
-    GROUPS
+    GROUPS,
+    @JsonProperty("action")
+    ACTION
 }

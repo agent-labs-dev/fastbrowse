@@ -368,6 +368,8 @@ async fn test_a_browser_connection_that_closes_is_an_outage() {
     let result = run(options).await.unwrap();
     assert_eq!(result.status, Status::Unavailable, "{:?}", result.error);
     assert!(result.error.is_some());
+    // An outage before the agent runs still names what failed, so a caller need not parse `error`.
+    assert!(result.failure_kind.is_some(), "{:?}", result.error);
 }
 
 #[tokio::test]

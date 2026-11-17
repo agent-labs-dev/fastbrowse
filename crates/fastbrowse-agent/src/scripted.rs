@@ -207,6 +207,8 @@ impl ScriptedLLM {
             LLMPurpose::Unobtainable => Some(json!({"item": "", "reason": "", "quote": ""})),
             LLMPurpose::Groups => Some(json!({"records": []})),
             LLMPurpose::Search => Some(json!({"queries": []})),
+            // The scripted run's Jev picks every action.
+            LLMPurpose::Action => None,
         }
     }
 }

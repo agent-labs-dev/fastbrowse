@@ -456,6 +456,8 @@ public enum LLMPurpose
     Unobtainable,
     [JsonStringEnumMemberName("groups")]
     Groups,
+    [JsonStringEnumMemberName("action")]
+    Action,
 }
 
 public sealed record Limits
@@ -771,6 +773,12 @@ public sealed record RunResult
 
     [JsonPropertyName("error")]
     public string? Error { get; init; }
+
+    /// <summary>
+    /// The error's provider or browser variant path, never message text; present for failures, absent otherwise.
+    /// </summary>
+    [JsonPropertyName("failure_kind")]
+    public string? FailureKind { get; init; }
 
     /// <summary>
     /// Where the browser was last observed; what a caller checks when the task was to arrive somewhere.

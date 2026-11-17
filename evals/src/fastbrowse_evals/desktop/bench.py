@@ -4,7 +4,7 @@ Each arm starts a fresh order form (`order_form.py`) itself with deskpilot's `la
 own, so the form opens on that agent's hidden workspace and nothing shows on the user's, and drives it through
 deskpilot in hidden mode. The form writes its whole state to a JSON file on every
 change, and a task is graded on that file: the order the form submitted, or that it submitted none, field by field.
-No judge reads an answer, except a read-only task's, which must contain the expected words.
+The only answer graded is a read-only task's, and the LLM judge grades it: no string match over an answer.
 
 Every run also checks the one invariant a desktop agent owes the user: the window it drives never takes keyboard
 focus. Runs wait for deskpilot's compositor plugin to be idle, since other programs may be using it.
@@ -15,6 +15,7 @@ Recipes are not measured: `--desktop` refuses them until a desktop page identity
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import shlex
@@ -28,6 +29,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+import httpx
+from fastbrowse.evals.judge import Claim, Judge, jev_from_environment
+from fastbrowse.evals.judge import judge as judge_claims
 from pydantic import BaseModel, ConfigDict
 
 FORM = Path(__file__).with_name("order_form.py")
@@ -39,7 +43,8 @@ PERSON = {"name": "Ada Lovelace", "email": "ada@example.com"}
 
 class DesktopTask(BaseModel):
     """One task on a fresh form. `submitted` is the order the form must have placed, every field named compared
-    exactly, or None for a task that must place no order; `answer` is words a read-only task's answer contains."""
+    exactly, or None for a task that must place no order; `claim` is a sentence the judge decides of a read-only
+    task's answer."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -48,7 +53,7 @@ class DesktopTask(BaseModel):
     layout: str = "default"
     authorize: bool = False
     submitted: dict[str, Any] | None = None
-    answer: str | None = None
+    claim: str | None = None
     status: str | None = None
     """The fastbrowse status the task must end in, when it is not `complete`."""
     known_limit: str | None = None
@@ -110,7 +115,7 @@ TASKS = (
         id="read-country",
         task="Which country is selected on the order form? Change nothing.",
         submitted=None,
-        answer="United Kingdom",
+        claim="The answer says the selected country is United Kingdom.",
     ),
     DesktopTask(
         id="order-country-popup",
@@ -153,8 +158,9 @@ class Measured:
     error: str | None = None
 
 
-def grade(task: DesktopTask, state: dict[str, Any] | None, answer: str, status: str | None) -> str:
-    """Why a run failed the task, or "" when it passed: the form's saved state against the order the task wants."""
+def grade(task: DesktopTask, state: dict[str, Any] | None, status: str | None) -> str:
+    """Why a run failed the task, or "" when it passed: the form's saved state against the order the task wants.
+    The answer is not read here; `answer_fault` has the judge do it."""
     if state is None:
         return "the form saved no state"
     placed = state.get("submitted")
@@ -167,11 +173,23 @@ def grade(task: DesktopTask, state: dict[str, Any] | None, answer: str, status: 
         wrong = {key: placed.get(key) for key, value in task.submitted.items() if placed.get(key) != value}
         if wrong:
             return "the order has " + ", ".join(f"{key}={value!r}" for key, value in wrong.items())
-    if task.answer and task.answer.lower() not in answer.lower():
-        return f"the answer does not say {task.answer!r}"
     if status is not None and status != (task.status or "complete"):
         return f"the run ended {status}"
     return ""
+
+
+async def answer_fault(jev: Judge, task: DesktopTask, answer: str) -> str:
+    """Why the judge finds the answer short of the task's claim, or "" when it holds or the task has none."""
+    if task.claim is None:
+        return ""
+    if await judge_claims(jev, task=task.task, answer=answer, claims=(Claim(task.claim),)) is None:
+        return ""
+    return f"the answer does not hold: {task.claim}"
+
+
+async def _answer_fault(task: DesktopTask, answer: str) -> str:
+    async with httpx.AsyncClient(timeout=60.0) as http:
+        return await answer_fault(jev_from_environment(http), task, answer)
 
 
 def hyprctl(*arguments: str) -> str:
@@ -341,7 +359,9 @@ def run(task: DesktopTask, arm: str, out: Path, args: argparse.Namespace) -> Mea
             ran = claude_arm(args.claude_model, task, form, out, args.timeout)
         state = form.saved()
     (out / f"{arm}.state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n")
-    why = grade(task, state, ran["answer"], ran["status"])
+    why = grade(task, state, ran["status"])
+    if not why and task.claim:
+        why = asyncio.run(_answer_fault(task, ran["answer"]))
     if watch.taken:
         why = (why + "; " if why else "") + "the window took keyboard focus"
     return Measured(

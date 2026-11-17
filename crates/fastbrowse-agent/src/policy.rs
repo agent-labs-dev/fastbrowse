@@ -17,7 +17,7 @@ use fastbrowse_core::decision::{
 };
 use fastbrowse_core::effects::leavable;
 use fastbrowse_core::keys::role_keys;
-use fastbrowse_core::models::{CostComponent, CostLine, JevPurpose, Operation, StepOutcome, TARGETED, UNTRUSTED};
+use fastbrowse_core::models::{CostLine, JevPurpose, Operation, StepOutcome, TARGETED, UNTRUSTED};
 use fastbrowse_core::navigation::navigation_urls;
 use fastbrowse_core::page::{Control, Observation, cut_text, cut_with, pager_link};
 use fastbrowse_core::py::dump::Dump;
@@ -1213,7 +1213,7 @@ async fn evaluate(
     let mut tokens = 0;
     let mut ask = async |questions: &IndexMap<String, Question>| -> Result<Evaluation> {
         if let Some(ledger) = ledger {
-            ledger.reserve(CostComponent::Jev, 0.0, 1)?;
+            fastbrowse_core::decision::reserve(ledger, jev, JevPurpose::Action, 0.0, 1)?;
         }
         let answered =
             jev_purpose(JevPurpose::Action, jev.evaluate_images(&request.state, questions, &request.images)).await?;
@@ -1656,6 +1656,7 @@ fn find_control(candidates: &[Control], control_id: &str) -> Result<Control> {
 #[cfg(test)]
 mod tests {
     //! Cases about more than the bytes sent; tests/golden_policy.rs replays the recorded requests.
+    use fastbrowse_core::models::CostComponent;
     use std::future::Future;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::task::{Context, Waker};
