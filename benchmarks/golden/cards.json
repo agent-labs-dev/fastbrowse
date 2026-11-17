@@ -16,6 +16,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -37,6 +38,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -59,6 +61,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "link",
    "sensitive": false,
    "submit_semantics": null,
@@ -80,6 +83,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -101,6 +105,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -123,6 +128,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "link",
    "sensitive": false,
    "submit_semantics": null,
@@ -144,6 +150,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -165,6 +172,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -187,6 +195,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "link",
    "sensitive": false,
    "submit_semantics": null,
@@ -208,6 +217,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -229,6 +239,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -251,6 +262,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "link",
    "sensitive": false,
    "submit_semantics": null,
@@ -344,6 +356,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "link",
    "sensitive": false,
    "submit_semantics": null,
@@ -366,6 +379,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "link",
    "sensitive": false,
    "submit_semantics": null,
@@ -388,6 +402,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "link",
    "sensitive": false,
    "submit_semantics": null,
@@ -410,6 +425,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "link",
    "sensitive": false,
    "submit_semantics": null,
@@ -431,6 +447,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -452,6 +469,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -473,6 +491,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -494,6 +513,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -515,6 +535,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -536,6 +557,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -557,6 +579,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
@@ -578,6 +601,7 @@
    "operations": [
     "click"
    ],
+   "pictured": true,
    "role": "button",
    "sensitive": false,
    "submit_semantics": null,
