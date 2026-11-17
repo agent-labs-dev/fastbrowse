@@ -132,7 +132,9 @@ class FastbrowseHarness(BrowserHarness):
                     start=start,
                     open_browser=lambda: _ready_browser(browser),
                     output_schema=answer_model(task.id),
-                    limits=Limits(),
+                    # Parallax's turn limit, less the browser's start: fastbrowse ends the run itself, with its
+                    # answer and evidence, rather than being cancelled mid-step.
+                    limits=Limits(max_seconds=self.seconds_left()),
                     authorization=authorization,
                     secrets=secrets,
                     http=http,
