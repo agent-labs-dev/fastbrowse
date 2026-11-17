@@ -399,7 +399,8 @@
     ready: document.readyState === 'interactive' || document.readyState === 'complete',
     hidden: document.hidden,
   });
-  if (mode === 'fingerprint') {
+  // What a Wait compares, as one function so an observation can hold the fingerprint of the page it described.
+  const takeFingerprint = () => {
     let hash = 2166136261;
     const hashText = text => {
       for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
@@ -473,7 +474,8 @@
       // Whether this document may be read at all, which a Wait asks of a frame in a process of its own.
       granted: granted(document),
     };
-  }
+  };
+  if (mode === 'fingerprint') return takeFingerprint();
   if (!document.body) return null;
   // A child document's address when it may be read, or null.
   const readableFrame = inner => (inner?.body && granted(inner) ? inner.URL : null);
@@ -2155,6 +2157,10 @@
   const read = ++registry.reads;
   own.renderReads ||= {};
   own.renderReads[mode] = { read, document_key: String(performance.timeOrigin) };
+  // The page an observation described, in the terms a Wait compares. A Wait is decided on that page and watches the
+  // page it finds when it starts: the one reader of both keeps a page that finished changing in between from being
+  // taken as the page the Wait began on. Taken in this evaluation, so no change falls between the two.
+  if (mode === 'snapshot') registry.observedFingerprint = takeFingerprint().fingerprint;
   registry.kept ||= {};
   registry.kept[mode] = {
     mode,

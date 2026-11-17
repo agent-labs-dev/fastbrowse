@@ -6276,6 +6276,11 @@ struct Unmoved {
     sent: Mutex<Vec<(Operation, Option<String>)>>,
     handed_over: std::sync::atomic::AtomicBool,
     waits: Mutex<Vec<f64>>,
+    /// The page the next read of it shows instead of `now`: one a timer redrew after the step's observation.
+    swap: Mutex<Option<Observation>>,
+    swap_on_capture: Mutex<Option<Observation>>,
+    /// The page key of each observation a WAIT was sent.
+    waited_on: Mutex<Vec<String>>,
 }
 
 impl Page for Unmoved {
@@ -6284,7 +6289,7 @@ impl Page for Unmoved {
     }
 
     fn observe(&self) -> BoxFuture<'_, PageResult<Observation>> {
-        let now = self.now.clone();
+        let now = self.swap.lock().unwrap().clone().unwrap_or_else(|| self.now.clone());
         Box::pin(async move { Ok(now) })
     }
 
@@ -6297,6 +6302,11 @@ impl Page for Unmoved {
     }
 
     fn capture(&self) -> BoxFuture<'_, PageResult<Capture>> {
+        // The page redraws between the capture the decision used and the reads that follow it.
+        let swapped = self.swap_on_capture.lock().unwrap().take();
+        if let Some(swapped) = swapped {
+            *self.swap.lock().unwrap() = Some(swapped);
+        }
         Box::pin(async { Ok(capture(&[(BlockKind::Paragraph, "Your basket")])) })
     }
 
@@ -6321,6 +6331,7 @@ impl Page for Unmoved {
         seconds: f64,
     ) -> BoxFuture<'a, PageResult<ActResult>> {
         self.waits.lock().unwrap().push(seconds);
+        self.waited_on.lock().unwrap().push(observation.page_key.clone());
         self.act(action, observation)
     }
 
@@ -6365,6 +6376,9 @@ async fn test_an_authorized_click_that_left_the_page_unchanged_is_not_sent_again
         sent: Mutex::new(Vec::new()),
         handed_over: Default::default(),
         waits: Mutex::default(),
+        swap: Mutex::default(),
+        swap_on_capture: Mutex::default(),
+        waited_on: Mutex::default(),
     });
     let script = crate::scripted::steps("click Place order; click Place order; click Place order").unwrap();
     let agent = Agent::new(page.clone(), Arc::new(ScriptedJev::new(script)), Arc::new(ScriptedLLM));
@@ -6389,6 +6403,9 @@ async fn test_a_wait_is_given_the_time_left_to_browse() {
             sent: Mutex::new(Vec::new()),
             handed_over: Default::default(),
             waits: Mutex::default(),
+            swap: Mutex::default(),
+            swap_on_capture: Mutex::default(),
+            waited_on: Mutex::default(),
         });
         let script = crate::scripted::steps("wait").unwrap();
         let agent = Agent::new(page.clone(), Arc::new(ScriptedJev::new(script)), Arc::new(ScriptedLLM));
@@ -6405,6 +6422,33 @@ async fn test_a_wait_is_given_the_time_left_to_browse() {
             Some(limit) => assert!(seconds <= limit && seconds > limit - 30.0, "{seconds} of {limit}"),
         }
     }
+}
+
+#[tokio::test]
+async fn test_a_wait_is_sent_the_observation_its_decision_was_made_on() {
+    // #1213: the page swapped "Loading..." for its result after the observation the decision used, and the reads that
+    // followed saw the result. The WAIT is judged against the page the decision saw, so it is that observation that
+    // reaches the browser, not one read later: compared with a later one, the page never differs from it.
+    let loading = Observation { page_key: "loading".into(), ..at("https://shop.test/queue", &[button("Leave queue")]) };
+    let page = Arc::new(Unmoved {
+        now: loading.clone(),
+        sent: Mutex::new(Vec::new()),
+        handed_over: Default::default(),
+        waits: Mutex::default(),
+        swap: Mutex::default(),
+        swap_on_capture: Mutex::new(Some(Observation { page_key: "hello".into(), ..loading.clone() })),
+        waited_on: Mutex::default(),
+    });
+    let script = crate::scripted::steps("wait").unwrap();
+    let agent = Agent::new(page.clone(), Arc::new(ScriptedJev::new(script)), Arc::new(ScriptedLLM));
+    let options = super::RunOptions {
+        start: Some("https://shop.test/queue".into()),
+        limits: Some(Limits { max_steps: Some(1), ..Limits::default() }),
+        ..Default::default()
+    };
+    let _ = agent.run("Wait for your turn in the queue", options).await;
+    assert!(page.swap.lock().unwrap().is_some(), "the page never redrew");
+    assert_eq!(page.waited_on.lock().unwrap().clone(), vec!["loading".to_owned()]);
 }
 
 /// The scripted Jev, judging every action irreversible with `irreversible` and every one requested by the task.
@@ -6441,6 +6485,9 @@ async fn test_the_tab_an_authorized_commit_was_sent_from_is_handed_over() {
             sent: Mutex::new(Vec::new()),
             handed_over: Default::default(),
             waits: Mutex::default(),
+            swap: Mutex::default(),
+            swap_on_capture: Mutex::default(),
+            waited_on: Mutex::default(),
         });
         let jev = Commits(ScriptedJev::new(crate::scripted::steps("click Place order").unwrap()), irreversible);
         let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
@@ -6466,6 +6513,9 @@ async fn test_a_run_that_stops_for_a_person_leaves_them_its_tab() {
             sent: Mutex::new(Vec::new()),
             handed_over: Default::default(),
             waits: Mutex::default(),
+            swap: Mutex::default(),
+            swap_on_capture: Mutex::default(),
+            waited_on: Mutex::default(),
         });
         let jev = Commits(ScriptedJev::new(crate::scripted::steps("click Place order").unwrap()), irreversible);
         let agent = Agent::new(page.clone(), Arc::new(jev), Arc::new(ScriptedLLM));
