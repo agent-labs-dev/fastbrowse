@@ -3,7 +3,8 @@
 
 use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::decision::{
-    Answer, BoxQuestion, DecisionError, Edges, Images, JEV_IMAGE_SIDE, NoulQuestion, Question, jev_takes_png,
+    Answer, BoxQuestion, ChoiceQuestion, DecisionError, Edges, Images, JEV_IMAGE_SIDE, NoulQuestion, Question,
+    jev_takes_png,
 };
 use fastbrowse_core::models::{CostComponent, JevPurpose, StepOutcome, UNTRUSTED};
 use fastbrowse_core::page::{ActResult, Control, Observation};
@@ -12,7 +13,8 @@ use serde_json::{Map, Value, json};
 
 use super::Agent;
 use super::state::{RunState, Step};
-use crate::policy::{element, screenshot_reference};
+use crate::policy::{Look, element, screenshot_reference};
+use crate::retrieval::text::{SpanKind, spans};
 
 const SHOWN: &str = "Is the control described in `control` shown in `viewport_screenshot` with nothing drawn over it, \
                      such as a dialog, banner or menu, so that a click on it would press that control?";
@@ -21,6 +23,8 @@ const WHERE: &str = "The control described in `control`, in `viewport_screenshot
 const DRAWN_SHOWN: &str = "The page element described in `surface` is drawn: it shows its content as pixels, with no \
                            elements inside it. Is the next step of `task` one click on something shown inside that \
                            surface in `viewport_screenshot`, with that thing visible and nothing drawn over it?";
+const DRAWN_STEP: &str = "Which sentence or clause of `task` is the click on that thing for? Choose the task's own \
+                          wording.";
 const REDRAWN: &str = "`before` is the viewport just before the last click toward `task`, and `after` is the viewport \
                        now. Does `after` show the change that click was meant to make?";
 const DRAWN_WHERE: &str = "The thing inside the surface described in `surface` that the next step of `task` must \
@@ -37,6 +41,8 @@ struct Sighting<'a> {
     target: &'a Control,
     /// Whether the click must land on `target`. A covered control's point is on its cover by definition.
     on_target: bool,
+    /// The task's sentences, one of which the click is for. Empty for a covered control, which names itself.
+    steps: Vec<String>,
     event: &'a str,
 }
 
@@ -58,6 +64,7 @@ impl Agent {
             place: WHERE,
             target,
             on_target: false,
+            steps: Vec::new(),
             event: "covered",
         };
         self.click_sighted(state, observation, png, sighting).await
@@ -82,6 +89,7 @@ impl Agent {
             target: surface,
             // A point Jev placed outside the surface would press an element no decision chose.
             on_target: true,
+            steps: spans(&state.task, SpanKind::Str).into_iter().map(|(_, _, step)| step).collect(),
             event: "drawn",
         };
         self.click_sighted(state, observation, png, sighting).await
@@ -96,15 +104,21 @@ impl Agent {
         png: Vec<u8>,
         sighting: Sighting<'_>,
     ) -> Step<Option<ActResult>> {
-        let Sighting { state: seen, shown, yes, no, place, target, on_target, event } = sighting;
-        let questions: IndexMap<String, Question> = IndexMap::from([
+        let Sighting { state: seen, shown, yes, no, place, target, on_target, steps, event } = sighting;
+        let mut questions: IndexMap<String, Question> = IndexMap::from([
             ("shown".to_string(), NoulQuestion::new(format!("{UNTRUSTED}\n{shown}"), Some(yes), Some(no)).into()),
             (
                 "where".to_string(),
                 BoxQuestion { kind: Default::default(), instructions: format!("{UNTRUSTED}\n{place}") }.into(),
             ),
         ]);
+        if steps.len() > 1 {
+            let criteria =
+                steps.iter().enumerate().map(|(index, step)| (index.to_string(), step.clone().into())).collect();
+            questions.insert("step".into(), ChoiceQuestion::new(format!("{UNTRUSTED}\n{DRAWN_STEP}"), criteria).into());
+        }
         let reference = screenshot_reference(&png);
+        let placed = if on_target { self.page.edges(&target.id).await? } else { None };
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
         let evaluation = match jev_purpose(
             JevPurpose::Locate,
@@ -140,31 +154,75 @@ impl Agent {
             return Ok(None);
         }
         // Coordinates belong to the pixels Jev saw; scrolling and layout can change without semantic guards changing.
-        let Some(current) = self.viewport().await? else { return Ok(None) };
-        if current != png {
+        // A drawn surface paints itself, as a map fading its tiles in or a playing video does, so its pixels differ
+        // after any question; a point inside it keeps its meaning while the surface stays where it was. A covered
+        // control's point is on its cover, which only the pixels show.
+        let unmoved = if on_target {
+            self.page.edges(&target.id).await? == placed
+        } else {
+            self.viewport().await?.is_some_and(|current| current == png)
+        };
+        if !unmoved {
             self.event(&format!("{event}_box_changed"), Map::new);
             return Ok(None);
         }
         let (x, y) = found.edges.centre();
         let mut result = self.page.click_viewport(x, y, on_target.then_some(target.id.as_str())).await?;
-        if result.outcome == StepOutcome::Executed && !result.page_changed {
-            state.drawn_changed = self.changed_as_meant(state, png).await?;
-            if state.drawn_changed == Some(true) {
-                result.page_changed = true;
-                result.detail = Some("the picture on the page changed as the click meant".to_string());
+        // The history entry shows what the box held, before the click and after it: told only that the canvas was
+        // clicked and its picture changed, the step after the Library pin's click could not see which pin it was, and
+        // clicked the map again.
+        let before = place_card(&png, &found.edges);
+        state.sighted = match evaluation.answers.get("step") {
+            Some(Answer::Choice(picked)) => {
+                picked.choice.parse::<usize>().ok().and_then(|index| steps.get(index).cloned())
             }
-        }
+            _ => steps.first().cloned(),
+        };
+        // A click inside a drawn surface is judged by its pixels even when the page also added text: a map's
+        // "Directions ready." is no control, so a page state keyed by its controls read the right pin as no progress,
+        // and the map was withheld from the steps after it.
+        let after =
+            if on_target || !result.page_changed { self.judge_by_pixels(state, png, &mut result).await? } else { None };
+        state.look =
+            before.map(|before| Look { before, after: after.and_then(|after| place_card(&after, &found.edges)) });
         Ok(Some(result))
     }
 
+    /// Judges an executed click by the frames before and after it, for a click whose effect is in pixels: one that
+    /// changed no element is reported as a page change when the picture changed as it meant, and one that also added
+    /// text says so, since the text alone does not show which pin a map selected. Returns the frame after the click.
+    pub(super) async fn judge_by_pixels(
+        &self,
+        state: &mut RunState,
+        before: Vec<u8>,
+        result: &mut ActResult,
+    ) -> Step<Option<Vec<u8>>> {
+        if result.outcome != StepOutcome::Executed {
+            return Ok(None);
+        }
+        let Some(after) = self.viewport().await? else {
+            state.drawn_changed = None;
+            return Ok(None);
+        };
+        state.drawn_changed = self.changed_as_meant(state, before, &after).await?;
+        if state.drawn_changed == Some(true) {
+            const MEANT: &str = "the picture on the page changed as the click meant";
+            result.page_changed = true;
+            result.detail = Some(match result.detail.take() {
+                Some(detail) => format!("{detail}, and {MEANT}"),
+                None => MEANT.to_string(),
+            });
+        }
+        Ok(Some(after))
+    }
+
     /// Whether a click that changed no element changed the pixels as it meant to. A frame byte for byte the same as
-    /// `before` changed nothing, which needs no question. None when there is no screenshot or Jev cannot answer.
-    async fn changed_as_meant(&self, state: &mut RunState, before: Vec<u8>) -> Step<Option<bool>> {
-        let Some(after) = self.viewport().await? else { return Ok(None) };
+    /// `before` changed nothing, which needs no question. None when Jev cannot answer.
+    async fn changed_as_meant(&self, state: &mut RunState, before: Vec<u8>, after: &[u8]) -> Step<Option<bool>> {
         if after == before {
             return Ok(Some(false));
         }
-        let (was, now) = (screenshot_reference(&before), screenshot_reference(&after));
+        let (was, now) = (screenshot_reference(&before), screenshot_reference(after));
         let seen = json!({"task": self.model_task(state), "before": was, "after": now});
         let questions: IndexMap<String, Question> = IndexMap::from([(
             "changed".to_string(),
@@ -176,7 +234,7 @@ impl Agent {
             .into(),
         )]);
         state.ledger.reserve(CostComponent::Jev, 0.0, 1)?;
-        let images = Images::from([(was, before), (now, after)]);
+        let images = Images::from([(was, before), (now, after.to_vec())]);
         let evaluation =
             match jev_purpose(JevPurpose::Verify, self.jev.evaluate_images(&seen, &questions, &images)).await {
                 Ok(evaluation) => evaluation,
@@ -192,32 +250,64 @@ impl Agent {
     }
 }
 
+/// Draws `OUTLINE` around `edges`, fractions of a viewport `size`, on `card`, cut from that viewport at `origin`. The
+/// line sits just outside the element, so none of its own pixels are covered.
+fn outline(card: &mut image::RgbaImage, edges: &Edges, origin: (u32, u32), size: (u32, u32)) {
+    const WIDTH: i64 = 3;
+    let at = |fraction: f64, total: u32, from: u32| (fraction * total as f64).round() as i64 - from as i64;
+    let (left, right) = (at(edges.left, size.0, origin.0) - 1, at(edges.right, size.0, origin.0));
+    let (top, bottom) = (at(edges.top, size.1, origin.1) - 1, at(edges.bottom, size.1, origin.1));
+    let (w, h) = (card.width() as i64, card.height() as i64);
+    for y in (top - WIDTH + 1).max(0)..(bottom + WIDTH).min(h) {
+        for x in (left - WIDTH + 1).max(0)..(right + WIDTH).min(w) {
+            if x <= left || x >= right || y <= top || y >= bottom {
+                card.put_pixel(x as u32, y as u32, OUTLINE);
+            }
+        }
+    }
+}
+
 /// TypeSafe's shortest image side, in pixels.
 const JEV_IMAGE_MIN_SIDE: u32 = 280;
 
-/// Each card cut out of `viewport`, a PNG, as a PNG Jev takes. A card shorter or narrower than Jev's smallest image is
-/// widened about its centre, within the viewport; one Jev would refuse is left out.
+/// The colour a card's own element is outlined in, named to Jev wherever it reads a card.
+const OUTLINE: image::Rgba<u8> = image::Rgba([255, 0, 255, 255]);
+
+/// Each card cut out of `viewport`, a PNG, as a PNG Jev takes, with the card outlined in `OUTLINE` just outside its
+/// edges. A card shorter or narrower than Jev's smallest image is widened about its centre, within the viewport, so
+/// neighbouring icon buttons are cut alike: three of an editor's toolbar buttons came out as one image, and only the
+/// outline says which each is. One Jev would refuse is left out.
 pub(super) fn cards(viewport: &[u8], edges: &IndexMap<String, Edges>) -> IndexMap<String, Vec<u8>> {
-    let Ok(image) = image::load_from_memory_with_format(viewport, image::ImageFormat::Png) else {
-        return IndexMap::new();
-    };
+    let Some(image) = rgba(viewport) else { return IndexMap::new() };
+    edges.iter().filter_map(|(id, edges)| Some((id.clone(), cut(&image, edges, true)?))).collect()
+}
+
+/// The card of a place Jev's box found, cut as `cards` cuts one but with no outline: the box is Jev's estimate, not the
+/// element's own edges, and can sit inside what it marks. A box narrower than the map's Library pin outlined the pin
+/// itself, hiding that it had turned from red to blue, and the step after the right click put done at 0.5; with the
+/// card unmarked, at 0.9.
+pub(super) fn place_card(viewport: &[u8], edges: &Edges) -> Option<Vec<u8>> {
+    cut(&rgba(viewport)?, edges, false)
+}
+
+fn rgba(png: &[u8]) -> Option<image::RgbaImage> {
+    Some(image::load_from_memory_with_format(png, image::ImageFormat::Png).ok()?.to_rgba8())
+}
+
+fn cut(image: &image::RgbaImage, edges: &Edges, outlined: bool) -> Option<Vec<u8>> {
     let span = |from: f64, to: f64, total: u32| {
         let total = total as f64;
         let length = ((to - from) * total).ceil().clamp(JEV_IMAGE_MIN_SIDE as f64, JEV_IMAGE_SIDE as f64).min(total);
         let start = ((from + to) / 2.0 * total - length / 2.0).clamp(0.0, total - length);
         (start.floor() as u32, length as u32)
     };
-    edges
-        .iter()
-        .filter_map(|(id, edges)| {
-            let (x, width) = span(edges.left, edges.right, image.width());
-            let (y, height) = span(edges.top, edges.bottom, image.height());
-            let mut png = Vec::new();
-            image
-                .crop_imm(x, y, width, height)
-                .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-                .ok()?;
-            jev_takes_png(&png).then(|| (id.clone(), png))
-        })
-        .collect()
+    let (x, width) = span(edges.left, edges.right, image.width());
+    let (y, height) = span(edges.top, edges.bottom, image.height());
+    let mut card = image::imageops::crop_imm(image, x, y, width, height).to_image();
+    if outlined {
+        outline(&mut card, edges, (x, y), (image.width(), image.height()));
+    }
+    let mut png = Vec::new();
+    card.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).ok()?;
+    jev_takes_png(&png).then_some(png)
 }

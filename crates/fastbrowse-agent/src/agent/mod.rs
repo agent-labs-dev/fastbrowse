@@ -923,10 +923,30 @@ impl Agent {
         (answer, citations)
     }
 
+    /// The output intent, once something read stands as an answer: whether it is one depends on it, and the intent is
+    /// otherwise judged only where the run needs it, which a read of the start page could skip.
+    async fn resolve_answer_intent(&self, state: &mut RunState) -> state::Step {
+        if state.notes.answered() {
+            self.output_intent(state).await?;
+        }
+        Ok(())
+    }
+
+    /// The notes the run would answer with now. A task that only carries something out answers with what it read
+    /// after its last step that changes the site: a map's start page read before its pin was pressed stood as the
+    /// answer "Map", and the step after the right pin's click, told the task was answered, pressed the map again.
+    fn answer_notes(state: &RunState) -> std::borrow::Cow<'_, Notes> {
+        if state.output_intent == state::OutputIntent::CarriedOut {
+            std::borrow::Cow::Owned(outcome_notes(state))
+        } else {
+            std::borrow::Cow::Borrowed(&state.notes)
+        }
+    }
+
     fn decision_notes(&self, state: &RunState) -> String {
         // Retained evidence can contain a requested value that the selected answer leaves out.
         let selected = (!state.compose && !state.extraction_pending)
-            .then(|| draft_answer(&state.notes))
+            .then(|| draft_answer(&Self::answer_notes(state)))
             .flatten()
             .map(|answer| self.public_answer(&answer).0);
         fastbrowse_core::py::json::dumps(&json!({
@@ -975,7 +995,7 @@ impl Agent {
             subgoal: state.hint.clone(),
             dates: state.dates.clone(),
             notes: self.decision_notes(state),
-            answered_in_notes: state.notes.answered(),
+            answered_in_notes: Self::answer_notes(state).answered(),
             history: state.history.clone(),
             check_login,
             check_answer: check_bot && !state.read_pages.contains(&observation.page_key),

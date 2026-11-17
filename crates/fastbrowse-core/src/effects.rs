@@ -128,7 +128,7 @@ fn shows(control: &Control, choice: &str) -> bool {
 /// page lists them. Of a piece the page already showed and shows once more, the last one listed is the one named.
 ///
 /// The viewport's text and the text outside it are read together, so scrolling a piece into view adds nothing.
-fn added_text(before: &Observation, after: &Observation) -> Vec<String> {
+pub fn added_text(before: &Observation, after: &Observation) -> Vec<String> {
     fn pieces(observation: &Observation) -> impl Iterator<Item = &str> {
         [&observation.viewport_text, &observation.offscreen_text]
             .into_iter()
@@ -159,7 +159,8 @@ pub fn effect(before: &Observation, after: &Observation, chosen: Option<&Control
     told(before, after, chosen, waited, false)
 }
 
-/// [`effect`] for a step that committed something, which also names the text the page added in reply.
+/// [`effect`] for a step that committed something or clicked inside a drawn surface, which also names the text the
+/// page added in reply.
 ///
 /// A commit cannot be tried again to see what it does, so its record is the only thing that says the step is what
 /// put that text there: a comment form that posted showed the new comment, the effect said only that the box

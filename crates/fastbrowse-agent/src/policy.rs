@@ -161,6 +161,25 @@ pub struct HistoryEntry {
     /// holding after the click. Kept out of what models are shown: it is the run's own record of what it changed.
     #[serde(skip)]
     pub set: Vec<(String, String)>,
+    /// The task step a click placed inside a drawn surface was made for. Kept apart from `target`, which actions are
+    /// withheld and counted by.
+    #[serde(skip)]
+    pub for_step: Option<String>,
+    /// The card of the pictured control the step acted on, as its option showed it. Such a control is named only by
+    /// its place, so without it an editor's Bold and Save read as "button (2 of 5)" and "button (5 of 5)": the run was
+    /// judged not to have made the text bold, and pressed Bold again.
+    #[serde(skip)]
+    pub look: Option<Look>,
+}
+
+/// What the place a step acted on looked like: the card the decision saw and, for a click placed in pixels, the same
+/// place after it. A click inside a drawn surface changes nothing but its picture, and the card from before shows the
+/// map's Library pin unselected: shown that card alone, the step after the right click put done at 0.2 and clicked the
+/// map again; shown the pin turned from red to blue, it put done at 0.9.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Look {
+    pub before: Vec<u8>,
+    pub after: Option<Vec<u8>>,
 }
 
 impl HistoryEntry {
@@ -177,7 +196,42 @@ impl HistoryEntry {
             setting: None,
             added: false,
             set: Vec::new(),
+            for_step: None,
+            look: None,
         }
+    }
+
+    /// The entry as models are shown it. A drawn surface names no part of itself, so a click placed inside one names
+    /// the task step it was for: told only that "button (2 of 2)" was clicked, the step after the click that opened
+    /// a Leaflet triangle's popup clicked the circle beside it, and the run never answered.
+    pub fn shown(&self) -> Value {
+        let mut shown = self.dump_exclude_none();
+        if let (Some(step), Some(target)) = (&self.for_step, &self.target) {
+            shown["target"] = format!("{target}, for the task step {step:?}").into();
+        }
+        shown
+    }
+
+    /// The entry as shown with its control's card, for a question that sends the card among its images.
+    pub fn seen(&self) -> Value {
+        let mut shown = self.shown();
+        match &self.look {
+            Some(Look { before, after: None }) => shown["looks_like"] = screenshot_reference(before).into(),
+            Some(Look { before, after: Some(after) }) => {
+                shown["looked_like_before"] = screenshot_reference(before).into();
+                shown["looks_like_after"] = screenshot_reference(after).into();
+            }
+            None => {}
+        }
+        shown
+    }
+
+    /// The images `seen` refers to.
+    pub fn looks(history: &[HistoryEntry]) -> impl Iterator<Item = &Vec<u8>> {
+        history
+            .iter()
+            .filter_map(|entry| entry.look.as_ref())
+            .flat_map(|look| std::iter::once(&look.before).chain(&look.after))
     }
 
     /// The step was carried out and acts on the page: a read, scroll, hover or wait only shows what is there, and DONE
@@ -783,7 +837,7 @@ async fn shortlist(
         "task": context.task,
         "subgoal": context.subgoal,
         "answered_in_notes": context.answered_in_notes,
-        "recent_actions": context.history.iter().map(Dump::dump_exclude_none).collect::<Vec<_>>(),
+        "recent_actions": context.history.iter().map(HistoryEntry::shown).collect::<Vec<_>>(),
         "page": {"url": observation.url, "title": observation.title},
     });
     // The rubric sits once in the state; repeating it in every question would pack a third as many per request.
@@ -1166,6 +1220,7 @@ pub fn build_request(
         .screenshot
         .iter()
         .chain(context.looks.values())
+        .chain(HistoryEntry::looks(&context.history))
         .map(|png| (screenshot_reference(png), png.clone()))
         .collect();
     let imaged = !referenced(&images, &state, &questions).is_empty();
@@ -1424,7 +1479,7 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext,
     }
     state.insert("answered_in_notes".into(), context.answered_in_notes.into());
     state.insert("notes".into(), context.notes.clone().into());
-    state.insert("recent_actions".into(), Value::Array(context.history.iter().map(Dump::dump_exclude_none).collect()));
+    state.insert("recent_actions".into(), Value::Array(context.history.iter().map(HistoryEntry::seen).collect()));
     if context.omitted_actions > 0 {
         state.insert("omitted_actions".into(), context.omitted_actions.into());
     }
@@ -1579,7 +1634,7 @@ fn destination_question(candidates: &[Control]) -> ChoiceQuestion {
 
 /// What a target option's `looks_like` is, told to Jev once in the question rather than in every option.
 const LOOKS_LIKE: &str = "An option's `looks_like` is an image of the card or row that holds that element as the page \
-                          draws it, for a task that names it by what its picture shows.";
+                          draws it, outlined in magenta, for a task that names it by what its picture shows.";
 
 fn target_question(
     operation: Operation,
@@ -2130,6 +2185,28 @@ mod tests {
         assert_eq!(inner.criteria.keys().collect::<Vec<_>>(), ["b8", "b9", "b10", "b11"]);
         assert_eq!(decision.cost.len(), 2);
         assert!((decision.confidence() - 0.81).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_a_step_on_a_pictured_control_shows_its_card_in_the_recent_actions() {
+        let page = observation((0..3).map(button).collect());
+        let mut context = StepContext::new("make the text bold, then save");
+        let mut bold = HistoryEntry::new(Some(Operation::Click), Some("button (2 of 5)"), StepOutcome::Executed, true);
+        bold.look = Some(Look { before: b"bold".to_vec(), after: None });
+        let mut pin = HistoryEntry::new(Some(Operation::Click), Some("canvas"), StepOutcome::Executed, true);
+        pin.look = Some(Look { before: b"red pin".to_vec(), after: Some(b"blue pin".to_vec()) });
+        context.history = vec![bold, pin];
+        let request = build_request(&page, &page.controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
+        let card = screenshot_reference(b"bold");
+        assert_eq!(request.state["recent_actions"][0]["looks_like"], json!(card));
+        assert_eq!(request.images.get(&card), Some(&b"bold".to_vec()));
+        // A click placed in pixels shows its place before and after.
+        let (red, blue) = (screenshot_reference(b"red pin"), screenshot_reference(b"blue pin"));
+        assert_eq!(request.state["recent_actions"][1]["looked_like_before"], json!(red));
+        assert_eq!(request.state["recent_actions"][1]["looks_like_after"], json!(blue));
+        assert!(request.images.contains_key(&red) && request.images.contains_key(&blue));
+        // Questions that send no image name no card.
+        assert!(context.history[0].shown().get("looks_like").is_none());
     }
 
     #[test]

@@ -688,6 +688,12 @@ pub trait Page: Send + Sync {
         Box::pin(async { Ok(IndexMap::new()) })
     }
 
+    /// Where control `id` of the last observation sits, as `pictures` measures a card. None out of view, gone, or in
+    /// another frame.
+    fn edges<'a>(&'a self, _id: &'a str) -> BoxFuture<'a, PageResult<Option<Edges>>> {
+        Box::pin(async { Ok(None) })
+    }
+
     /// Hold back live and recorded frames while the page may show a secret, which pixels cannot mask.
     fn withhold_frames(&self, withheld: bool);
 

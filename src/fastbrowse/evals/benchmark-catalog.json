@@ -7,8 +7,8 @@
     "live_tasks.py": "f38f85fb15765c6740f59875c7ccbc3a252a76b3e66e698877830ee6bfa24892",
     "more_tasks.py": "f4fd910a5a939052aa88e7450d0e65f0b6c34c44048805b61010d856fec502fe",
     "sweep_tasks.py": "794208a46b1ed4603869cc94a0a5d98264858b3c5b51f04901cc9f637867f643",
-    "task_specs.py": "9074b3b7a472a99880869da5844be8a4e075cfce9c55a60188f2bfbc29ed5934",
-    "versions.json": "0c810316c0d8248b9e56f012ace6458b9fe19e5d6569adf74e5c5af73f6ad8af"
+    "task_specs.py": "e0c5037dd144d477293adb03e5b1a45791d5f45c9e74765c672813a4c025c5b8",
+    "versions.json": "9f847c03e4e15f733e7b49c77b06ec3f0c42355054aaabd7d3f20343643f39d7"
   },
   "suites": {
     "core": [

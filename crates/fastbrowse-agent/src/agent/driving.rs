@@ -24,7 +24,7 @@ use super::state::{FailureCause, Flow, OutputIntent, RunState, SiteFailure, Step
 
 use super::{Agent, REDRAW_WATCH_SECONDS, browsing_deadline};
 use crate::memory::address;
-use crate::policy::{Decision, HistoryEntry, ListRead, Planned, ReadScope, decide};
+use crate::policy::{Decision, HistoryEntry, ListRead, Look, Planned, ReadScope, decide};
 use crate::retrieval::page_quotes;
 use crate::start::{accept_start, propose_start};
 use crate::verification::RecordSchema;
@@ -155,10 +155,14 @@ impl Agent {
                 state.reached_known_pages.push(url.clone());
             }
             let mut decision = match picked {
-                Some(picked) => picked,
+                Some(picked) => {
+                    state.look = None;
+                    picked
+                }
                 None => {
+                    self.resolve_answer_intent(state).await?;
                     let mut context = self.context(state, &observation, secrets, check_login, fresh)?;
-                    context.check_surface = state.surface_judged.as_ref() != Some(&page) || state.page_failed;
+                    context.check_surface = state.surface_judgement(&page).is_none();
                     context.list_read = if list_walk.is_some() {
                         ListRead::Continue
                     } else if output_schema.is_none()
@@ -202,7 +206,7 @@ impl Agent {
                             });
                         }
                         None => {
-                            (context.screenshot, context.looks) = self.step_images(&offered.controls).await?;
+                            (context.screenshot, context.looks) = self.step_images(&offered).await?;
                         }
                     }
                     let redecided = state.redecided;
@@ -239,9 +243,14 @@ impl Agent {
                         });
                         replay.confirm(&offered.url, &offered.controls, &mut decision, missing);
                     }
-                    if decision.inside_drawn.is_some() {
-                        state.surface_judged = Some(page.clone());
+                    if let Some(probability) = decision.inside_drawn {
+                        state.surface_judged = Some((page.clone(), probability));
                     }
+                    state.look = decision
+                        .target
+                        .as_ref()
+                        .and_then(|target| context.looks.get(&target.id))
+                        .map(|card| Look { before: card.clone(), after: None });
                     state.last_page = Some(page);
                     decision
                 }
@@ -399,6 +408,7 @@ impl Agent {
             if self.known_pages_arrived(state, &observation.url).await? {
                 state.built = None;
                 state.committing = false;
+                state.keeping = false;
                 continue;
             }
             if let Some(shows) = Self::reads_before_leaving(state, &observation, &decision)
@@ -617,6 +627,7 @@ impl Agent {
         state.redecided = true;
         // Nothing was sent, so the commit the gate cleared is not one the run has made.
         state.committing = false;
+        state.keeping = false;
     }
 
     /// `work`'s result, or `Redrawn` when the page redrew under it: `target`, or with none any control offered.
@@ -994,7 +1005,11 @@ impl Agent {
                 self.page.withhold_frames(true);
             }
             let raw = self.raw().unwrap_or_else(|| observation.clone());
-            let inside_drawn = decision.inside_drawn.is_some_and(|probability| probability >= EVEN_ODDS)
+            // Judged once per document, on its first step, for every click on its surface after it: a map's second pin
+            // click, unjudged, pressed the canvas as one element.
+            let inside_drawn = state
+                .surface_judgement(&(raw.url.clone(), raw.document_key.clone()))
+                .is_some_and(|probability| probability >= EVEN_ODDS)
                 && action.operation == Operation::Click
                 && decision.target.as_ref().is_some_and(|target| target.drawn == Some(true));
             let located = match (inside_drawn, decision.target.as_ref()) {
@@ -1002,6 +1017,15 @@ impl Agent {
                     Some(result) if result.outcome == StepOutcome::Executed => Some(result),
                     _ => return Err(drawn_surface_stop(&observation.url, &[surface]).into()),
                 },
+                _ => None,
+            };
+            // A drawn control pressed as one element changes pixels, not elements: a canvas switch turned on read as
+            // "nothing visible changed", was withheld as idle, and the run went looking elsewhere. Its frame before the
+            // click lets the one after judge it.
+            let drawn_before = match (&located, decision.target.as_ref()) {
+                (None, Some(target)) if action.operation == Operation::Click && target.drawn == Some(true) => {
+                    self.viewport().await?
+                }
                 _ => None,
             };
             let acted = match located {
@@ -1037,6 +1061,9 @@ impl Agent {
                 && let Some(retried) = self.act_on_twin(&action, observation, target).await?
             {
                 result = retried;
+            }
+            if let Some(before) = drawn_before.filter(|_| !result.page_changed) {
+                self.judge_by_pixels(state, before, &mut result).await?;
             }
             if result.outcome == StepOutcome::Covered
                 && action.operation == Operation::Click
@@ -1209,6 +1236,7 @@ impl Agent {
         state.history.push(HistoryEntry {
             text: typed,
             effect: effect_now,
+            look: state.look.take(),
             setting: setting.then_some(true),
             set,
             read_progress: decision.operation == Operation::Read && progressed == Some(true),
@@ -1407,13 +1435,14 @@ impl Agent {
             }
             state.recoveries = 0;
         }
+        let replied = std::mem::take(&mut state.replied);
         if let Some(stalled) = state.landing.take() {
             let returned =
                 last.is_some_and(|seen_at| seen_at < state.evidence_reads) && state.returned_at < state.evidence_reads;
             if returned {
                 state.returned_at = state.evidence_reads;
             }
-            let progressed = last.is_none() || returned;
+            let progressed = last.is_none() || returned || replied;
             Box::pin(self.count_progress(state, progressed, observation, Idle::performed(stalled), Status::Stuck))
                 .await?;
         }
@@ -1445,6 +1474,13 @@ impl Agent {
             }
         }
         let showing = state.showing.take();
+        // Taken before any return, so it names only the click it was placed for: a map pin judged by its pixels left no
+        // page to diff, kept the step, and the next click on the map was shown as made for it instead.
+        let sighted = std::mem::take(&mut state.sighted);
+        let keeping = std::mem::take(&mut state.keeping);
+        if let Some(last) = state.history.last_mut() {
+            last.for_step = sighted.clone();
+        }
         let Some(before) = state.acted_from.take() else { return };
         state.settle_change(observation);
         let landed = read_key(observation);
@@ -1476,10 +1512,17 @@ impl Agent {
                 changed: false,
                 shown: Vec::new(),
             }
-        } else if state.committing && last.outcome == StepOutcome::Executed && observation.dialog.is_none() {
+        } else if (state.committing || keeping || sighted.is_some())
+            && last.outcome == StepOutcome::Executed
+            && observation.dialog.is_none()
+        {
             // Still set from the gate that let this step go: the next decision is what takes it. Only a commit that
             // was sent has a reply: one the page redrew or covered before it went, or one waiting on a dialog, did
-            // not put there the text a page added meanwhile.
+            // not put there the text a page added meanwhile. A click inside a drawn surface changes no element it
+            // names, so the text the page added in reply is all that records it: the popup a click on an OpenLayers
+            // marker opened read as "only the page text changed", and the step was judged never carried out.
+            state.replied =
+                (state.committing || keeping) && !fastbrowse_core::effects::added_text(&before, observation).is_empty();
             fastbrowse_core::effects::effect_of_commit(&before, observation, None, waited)
         } else {
             effect(&before, observation, None, waited)
@@ -1633,24 +1676,28 @@ impl Agent {
         })
     }
 
-    /// What a step's question shows Jev besides text. A control drawn as pixels, a canvas app or a streamed screen, has
-    /// no elements to name what it shows, so the state carries the viewport. A pictured control's text leaves it alike
-    /// to another or unnamed, so its option carries its card, cut from the viewport. A picture the text already
-    /// tells apart costs the request its speed and adds nothing to the choice.
-    pub(super) async fn step_images(&self, controls: &[Control]) -> Step<(Option<Vec<u8>>, IndexMap<String, Vec<u8>>)> {
-        let drawn = controls.iter().any(|control| control.drawn == Some(true));
+    /// What a step's question shows Jev besides text. A page showing pixels, a chart or a control drawn as pixels, has
+    /// no elements to say what they show, so the state carries the viewport: given it only for drawn controls, a sales
+    /// chart drawn on a canvas that is no control was never seen, and the run scrolled and waited on it. A pictured
+    /// control's text leaves it alike to another or unnamed, so its option carries its card, cut from the viewport.
+    pub(super) async fn step_images(
+        &self,
+        observation: &Observation,
+    ) -> Step<(Option<Vec<u8>>, IndexMap<String, Vec<u8>>)> {
+        let controls = &observation.controls;
+        let pixels = observation.visual_content || controls.iter().any(|control| control.drawn == Some(true));
         let pictured: Vec<String> = controls
             .iter()
             .filter(|control| control.pictured == Some(true))
             .map(|control| control.id.clone())
             .collect();
-        if !drawn && pictured.is_empty() {
+        if !pixels && pictured.is_empty() {
             return Ok((None, IndexMap::new()));
         }
         let Some(png) = self.viewport().await? else { return Ok((None, IndexMap::new())) };
         let looks =
             if pictured.is_empty() { IndexMap::new() } else { cards(&png, &self.page.pictures(&pictured).await?) };
-        Ok((drawn.then_some(png), looks))
+        Ok((pixels.then_some(png), looks))
     }
 
     /// The viewport for Jev, on a route that takes images and only within the sizes it accepts.

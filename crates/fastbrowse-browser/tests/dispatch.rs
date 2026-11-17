@@ -329,6 +329,7 @@ async fn test_fingerprint_tracks_selection_without_counting_text_field_values() 
                  fixtureRoot.innerHTML = '<input type=checkbox><select multiple><option>First</option>' \
                  + '<option>Second</option></select><button role=switch aria-checked=false>Nonstop only</button>' \
                  + '<button role=option aria-selected=false>One way</button><input type=text>' \
+                 + '<button aria-pressed=false>Bold</button>' \
                  + '<button hidden role=tab aria-selected=false>Slide 2</button>';"
             ),
         )
@@ -339,6 +340,7 @@ async fn test_fingerprint_tracks_selection_without_counting_text_field_values() 
             "fixtureRoot.querySelectorAll('option')[1].selected = true",
             "fixtureRoot.querySelector('[role=switch]').setAttribute('aria-checked', 'true')",
             "fixtureRoot.querySelector('[role=option]').setAttribute('aria-selected', 'true')",
+            "fixtureRoot.querySelector('[aria-pressed]').setAttribute('aria-pressed', 'true')",
         ] {
             eval_active(&h.page, change).await;
             let after = h.page.fingerprint().await.expect("fingerprint");
@@ -353,6 +355,8 @@ async fn test_fingerprint_tracks_selection_without_counting_text_field_values() 
         .await;
         // Neither a typed value nor a hidden carousel's selection is progress.
         assert_eq!(h.page.fingerprint().await.expect("fingerprint"), before, "{nested}");
+        // A toggle button reads as checked while it is pressed.
+        assert_eq!(find(&h.observe().await, "Bold").checked, Some(true), "{nested}");
         h.close().await;
     }
 }

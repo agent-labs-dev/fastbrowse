@@ -424,7 +424,11 @@
         // Only rendered controls: a hidden carousel's aria-selected dots churn on their own and would read as
         // progress.
         if (
-          ('checked' in e || 'selected' in e || e.hasAttribute('aria-checked') || e.hasAttribute('aria-selected')) &&
+          ('checked' in e ||
+            'selected' in e ||
+            e.hasAttribute('aria-checked') ||
+            e.hasAttribute('aria-pressed') ||
+            e.hasAttribute('aria-selected')) &&
           visibilityOf(e, { checkOpacity: !nativeChoice(e), checkVisibilityCSS: true }) &&
           (!nativeChoice(e) || shownThrough(e))
         )
@@ -433,6 +437,7 @@
               nativeProperty(e, 'checked') ?? null,
               e.selected ?? null,
               e.getAttribute('aria-checked'),
+              e.getAttribute('aria-pressed'),
               e.getAttribute('aria-selected'),
             ]),
           );
@@ -1032,6 +1037,13 @@
   // listener a script added, or the pointer cursor. The cursor inherits, so only the element it starts on counts, and
   // an element inside a control or holding one leaves the click to that control.
   const pressable = memo(e => {
+    // A canvas holds no elements to take a click, so a click on it is heard wherever the page listens for it: a map
+    // library listens on the viewport that also holds its zoom buttons, which as a container of controls is no control
+    // itself, and left the drawn map with nothing to press.
+    if (e.tagName === 'CANVAS' && !e.parentElement?.closest(SELECTOR)) {
+      for (let a = e; a && a !== e.ownerDocument.body; a = a.parentElement)
+        if (a.hasAttribute('onclick') || typeof nativeProperty(a, 'onclick') === 'function' || listened(a)) return true;
+    }
     const declared =
       e.hasAttribute('onclick') ||
       typeof nativeProperty(e, 'onclick') === 'function' ||
@@ -1195,6 +1207,7 @@
       e.getAttribute('aria-disabled') === 'true',
       e.getAttribute('aria-expanded'),
       e.getAttribute('aria-checked'),
+      e.getAttribute('aria-pressed'),
       e.getAttribute('aria-selected'),
       e.getAttribute('href'),
       scope ? scopeDigest(scope) : '',
@@ -1211,6 +1224,7 @@
     return guard && digest(JSON.stringify(guard));
   };
 
+  const DRAWN_KINDS = { IMG: 'image', CANVAS: 'canvas', VIDEO: 'video' };
   const controls = [];
   // Controls with no accessible name of their own, whose label is an icon's or only their role.
   const unnamed = new Set();
@@ -1265,7 +1279,8 @@
     const base = {
       id,
       role: rname,
-      label: named || fallbackLabel(e) || rname,
+      // A nameless drawn surface is named for what it is: called by its role, an OpenLayers map read as a "button".
+      label: named || fallbackLabel(e) || DRAWN_KINDS[e.tagName] || rname,
       offscreen: y < 0 || y >= innerHeight,
       distance: y < 0 || y >= innerHeight ? 1 + Math.abs(y - innerHeight / 2) : 0,
       sensitive: secret(source),
@@ -1313,9 +1328,13 @@
       const value = e.getAttribute('aria-' + key);
       if (value !== null) base[key] = value === 'true';
     }
+    // A toggle button's on state is aria-pressed, ARIA's checked for a button: an editor's icon-only Bold read as
+    // pressed nowhere, so turning it on was "nothing visible changed" and the run went looking for another way.
+    if (base.checked === undefined && e.hasAttribute('aria-pressed')) base.checked = e.getAttribute('aria-pressed') === 'true';
     // Input on an image, canvas or video lands on pixels: a streamed remote browser draws its page as a picture
-    // that takes clicks, and what it shows has no elements here to read or act on (#1084).
-    if (['IMG', 'CANVAS', 'VIDEO'].includes(e.tagName)) base.drawn = true;
+    // that takes clicks, and what it shows has no elements here to read or act on (#1084). A shape inside an SVG is
+    // pixels too: Leaflet's red circle, offered as a plain "button", lost to the one drawn control beside it, a marker.
+    if (e.tagName in DRAWN_KINDS || e.ownerSVGElement) base.drawn = true;
     if (['checkbox', 'radio'].includes(nativeProperty(source, 'type'))) base.checked = nativeProperty(source, 'checked');
     // What the page says about the field. A custom widget marks the element the user sees, not the input
     // underneath it, so both are asked.
@@ -1734,7 +1753,9 @@
         .filter(child => child !== path)
         .map(child => firstRenderedLine(child))
         .find(line => line && line !== label && !repeated.has(line));
-      return (aria !== label && aria) || outside || first;
+      // A card's own heading names it before its first line, which can be another control: an OpenLayers example's
+      // block opens with its "Edit" link, and the map drawn under the heading "Icon Symbolizer" was named "Edit".
+      return (aria !== label && aria) || sectionOf(e, element, label, false) || outside || first;
     }
     return first;
   };
@@ -1749,6 +1770,13 @@
   // but the task may name it by what the picture shows, a product photo beside one of six "Add" buttons or the icon
   // that is an unnamed button's only face. It is marked so the step can show that card to Jev as pixels.
   registry.pictured = new Map();
+  // A box with no text that paints a background shows what only its pixels say: a shop's colour swatch is an empty
+  // span filled green, and its radio, named only "radio", was told from the three beside it by nothing.
+  const painted = e => {
+    if (e.textContent.trim() || decorative(e) || !visible(e)) return false;
+    const style = getComputedStyle(e);
+    return style.backgroundImage !== 'none' || style.backgroundColor !== 'rgba(0, 0, 0, 0)';
+  };
   for (const c of controls) {
     const element = registry.nodes.get(c.id);
     if (unnamed.has(c.id) && !regions.has(c.id)) {
@@ -1763,8 +1791,10 @@
     }
     const region = regions.get(c.id);
     if (!region) continue;
-    const pictures = [...(region.matches(VISUAL) ? [region] : []), ...descendants(region, VISUAL)];
-    if (!pictures.some(v => !decorative(v) && visible(v))) continue;
+    // A shape drawn inside an SVG is its own picture: Leaflet's circle and triangle are two unnamed paths that only
+    // their pixels tell apart.
+    const pictures = [...(region.matches(VISUAL) || region.ownerSVGElement ? [region] : []), ...descendants(region, VISUAL)];
+    if (!pictures.some(v => !decorative(v) && visible(v)) && ![region, ...descendants(region, '*')].some(painted)) continue;
     c.pictured = true;
     registry.pictured.set(c.id, region);
   }

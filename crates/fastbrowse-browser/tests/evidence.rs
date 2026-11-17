@@ -112,6 +112,92 @@ async fn test_an_image_or_canvas_that_takes_input_is_a_drawn_control() {
     h.close().await;
 }
 
+/// A map library listens for clicks on its viewport, beside its own zoom buttons, rather than on the canvas it draws
+/// the map on: the canvas is still what a click on the map presses. Nameless, it is called a canvas, not by its role.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_canvas_heard_by_its_viewport_is_a_drawn_control() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = '<div id="viewport"><canvas width="320" height="240"></canvas>' +
+          '<button>Zoom in</button></div><canvas aria-label="Backdrop" width="320" height="240"></canvas>';
+        document.getElementById('viewport').addEventListener('pointerdown', () => {});
+        "#,
+    )
+    .await;
+    let obs = h.observe().await;
+    let drawn = |label: &str| obs.controls.iter().find(|c| c.label == label).map(|c| c.drawn);
+    assert_eq!(drawn("canvas"), Some(Some(true)), "{:?}", obs.controls);
+    assert_eq!(drawn("Zoom in"), Some(None), "{:?}", obs.controls);
+    assert_eq!(drawn("Backdrop"), None, "a canvas no listener hears is no control: {:?}", obs.controls);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_drawn_map_is_named_by_its_cards_heading_not_its_first_link() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        r##"
+        const block = inner => `<div class="row-fluid">${inner}</div>`;
+        document.body.innerHTML = block('<a href="#">Edit</a><h4>Icon Symbolizer</h4>' +
+          '<div id="viewport"><canvas width="320" height="240"></canvas><button>Zoom in</button></div>') +
+          block('<p>main.js</p>');
+        document.getElementById('viewport').addEventListener('pointerdown', () => {});
+        "##,
+    )
+    .await;
+    let obs = h.observe().await;
+    let canvas = obs.controls.iter().find(|c| c.label == "canvas").expect("the map is a control");
+    assert_eq!(canvas.context.as_deref(), Some("Icon Symbolizer"), "{:?}", obs.controls);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_unnamed_shapes_in_an_svg_are_drawn_and_pictured() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = '<svg width="300" height="200"><g>' +
+          '<path d="M20 20 h60 v60 h-60 z" fill="red"></path><path d="M150 20 l40 60 h-80 z" fill="blue"></path></g></svg>';
+        for (const path of document.querySelectorAll('path')) path.addEventListener('click', () => {});
+        "#,
+    )
+    .await;
+    let obs = h.observe().await;
+    let shapes: Vec<_> =
+        obs.controls.iter().filter(|c| c.context.as_deref().is_some_and(|c| c.ends_with("of 2"))).collect();
+    assert_eq!(shapes.len(), 2, "{:?}", obs.controls);
+    assert!(shapes.iter().all(|c| c.pictured == Some(true) && c.drawn == Some(true)), "{:?}", obs.controls);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_radios_told_apart_only_by_a_painted_swatch_are_pictured() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    eval_active(
+        &h.session,
+        r#"
+        document.body.innerHTML = '<fieldset><legend>Colour</legend>' + ['red', 'green'].map(colour =>
+          '<label style="display:inline-block;position:relative"><input type="radio" name="c" ' +
+          'style="position:absolute;inset:0;opacity:0;margin:0"><span style="display:inline-block;width:44px;' +
+          'height:44px;background:' + colour + '"></span></label>').join('') + '</fieldset>';
+        "#,
+    )
+    .await;
+    let obs = h.observe().await;
+    let radios: Vec<_> = obs.controls.iter().filter(|c| c.role == "radio").collect();
+    assert_eq!(radios.len(), 2, "{:?}", obs.controls);
+    assert!(radios.iter().all(|c| c.pictured == Some(true)), "{:?}", obs.controls);
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_an_open_modal_is_named_and_the_page_behind_it_leaves() {
     let Some(h) = harness().await else { return };
