@@ -7,7 +7,7 @@ from parallax.models import Capability
 from parallax.task import task_from_record
 
 from fastbrowse_evals import hosted_api
-from fastbrowse_evals.task_specs import record, spec_for
+from fastbrowse_evals.task_specs import record, spec_for, start_url
 
 
 def test_a_login_task_names_its_secret_variables_and_needs_protected_credentials() -> None:
@@ -45,3 +45,10 @@ async def test_the_hosted_run_types_each_login_only_on_the_start_origin(monkeypa
     ]
     assert body["authorize"] is True
     assert body["output_schema"] is None
+
+
+def test_an_official_suite_task_starts_at_its_website() -> None:
+    task = task_from_record("fastbrowse", record(spec_for("saucedemo-checkout")))
+    official = task.model_copy(update={"data": {"website": "https://www.example.org/"}})
+    assert start_url(official) == "https://www.example.org/"
+    assert start_url(task) == task.data["start_url"]
