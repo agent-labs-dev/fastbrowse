@@ -379,7 +379,7 @@ checksum = "c6e8948ce679d00a02a94739ea185595dca7118ed04feb991127e443bd3d761f"
 
 [[package]]
 name = "fastbrowse"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "fastbrowse-core",
  "fastbrowse-run",
@@ -388,7 +388,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse-agent"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "fastbrowse-clients",
  "fastbrowse-core",
@@ -404,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse-browser"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "calamine",
  "data-encoding",
@@ -428,7 +428,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse-cli"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "bytes",
  "fastbrowse-agent",
@@ -454,7 +454,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse-clients"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "bytes",
  "fastbrowse-core",
@@ -471,7 +471,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse-core"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "indexmap",
  "percent-encoding",
@@ -487,7 +487,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse-node"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "fastbrowse-cli",
  "fastbrowse-core",
@@ -509,7 +509,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse-py"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "fastbrowse-agent",
  "fastbrowse-browser",
@@ -526,7 +526,7 @@ dependencies = [
 
 [[package]]
 name = "fastbrowse-run"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "encoding_rs",
  "fastbrowse-agent",
