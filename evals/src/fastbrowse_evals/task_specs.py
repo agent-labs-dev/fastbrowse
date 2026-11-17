@@ -770,8 +770,6 @@ def record(spec: TaskSpec) -> TaskRecord:
     requires = {Capability.BROWSER}
     if secrets:
         requires.add(Capability.CREDENTIALS)
-    if spec.authorize:
-        requires.add(Capability.AUTHORIZATION)
     return TaskRecord(
         id=spec.id,
         version=task_version(spec.id),
@@ -780,6 +778,8 @@ def record(spec: TaskSpec) -> TaskRecord:
         prompt=_task_prompt(spec),
         grading="browser-evidence-v2",
         requires=frozenset(requires),
+        # The task authorizes its irreversible actions; an agent that never stops can still run it.
+        authorizes=spec.authorize,
         maturity=Maturity.ASPIRATIONAL if spec.suite == "sweep" else Maturity.CANDIDATE,
         provenance=Provenance.CONVERTED,
         secrets=secrets,

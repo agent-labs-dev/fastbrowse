@@ -43,6 +43,10 @@ EXPECTED_POLICIES = {"bu-bench": "bu-bench-upstream-v1", "online-mind2web": "onl
 VERIFICATION_MARKER = "parallax-verify.json"
 
 
+PRODUCT_ARMS = frozenset({"fastbrowse", "fastbrowse-pool"})
+"""The arms measuring fastbrowse itself, whose build is the candidate's."""
+
+
 def _official_source(run: LoadedRun) -> GroupId | None:
     selected = {term.removeprefix("source=") for term in run.manifest.selection.split()}
     if source := next((OFFICIAL_SOURCES.get(term) for term in selected if term in OFFICIAL_SOURCES), None):
@@ -106,8 +110,10 @@ def _failure(result: TrialResult) -> str | None:
 
 
 def _status(result: TrialResult) -> Status:
+    # Only fastbrowse reports its own statuses; a competitor's harness writes its own words ("done"), so its row's
+    # status comes from how the trial ended.
     raw = result.details.get("status")
-    if isinstance(raw, str):
+    if isinstance(raw, str) and public_arm(result) in PRODUCT_ARMS:
         return Status(raw)
     match result.status:
         case TrajectoryStatus.COMPLETED:
@@ -230,7 +236,10 @@ def _group(
         limits=["Parallax campaign budget and reserve"],
         rows=sorted(rows, key=lambda row: (row.arm, row.task, row.repeat)),
         unjudged=sorted(unjudged, key=lambda item: (item.arm, item.task, item.repeat)),
-        excluded=sorted(excluded, key=lambda item: (item.arm, item.task)),
+        # Parallax marks each repeat of a task an arm cannot attempt; the task is excluded once.
+        excluded=sorted(
+            {(item.arm, item.task): item for item in excluded}.values(), key=lambda item: (item.arm, item.task)
+        ),
         sources=sources,
     )
 
@@ -258,7 +267,7 @@ def _sources(
         run = next(run for run, _ in selected.values() if run.path == path)
         agent_sha, runner_sha, _ = metadata[path]
         versions = {result.harness_version for result in results if result.harness_version}
-        if arm not in {"fastbrowse", "fastbrowse-pool"} and len(versions) != 1:
+        if arm not in PRODUCT_ARMS and len(versions) != 1:
             raise ValueError(f"{path}: {arm} has no single recorded harness version")
         models = {model.replace("/", ":") for result in results for model in result.actual_models if model}
         sources.append(
@@ -269,7 +278,7 @@ def _sources(
                 runner_sha=runner_sha,
                 measured_on=run.manifest.created_at.date().isoformat(),
                 tasks=sorted({result.task_id for result in results}),
-                version=None if arm in {"fastbrowse", "fastbrowse-pool"} else next(iter(versions)),
+                version=None if arm in PRODUCT_ARMS else next(iter(versions)),
                 models=sorted(models),
             )
         )
@@ -301,15 +310,21 @@ def _measured_identity(
     metadata: Mapping[Path, tuple[str, str, dict[str, str]]],
     selected: Mapping[tuple[GroupId, Arm, str, int], tuple[LoadedRun, TrialResult]],
 ) -> tuple[str, str]:
-    """Require every selected source run to share the candidate's measured identity."""
-    selected_paths = {run.path for run, _result in selected.values()}
-    identities = {(metadata[path][0], metadata[path][1]) for path in selected_paths}
-    if len(identities) != 1:
-        raise ValueError("all runs in one candidate must name the same measured build and runner")
-    return next(iter(identities))
+    """The candidate's build: that of the newest selected run measuring fastbrowse. Rows from an earlier build stay
+    valid, so a competitor measured by an earlier runner, or a task kept from an earlier fastbrowse build, keeps its
+    rows, and each `Source` names the build that measured it."""
+    runs = {run.path: run for run, _result in selected.values()}
+    product = {run.path for (_group, arm, _task, _repeat), (run, _result) in selected.items() if arm in PRODUCT_ARMS}
+    newest = max((runs[path] for path in product or runs), key=lambda run: run.manifest.created_at)
+    agent_sha, runner_sha, _extra = metadata[newest.path]
+    return agent_sha, runner_sha
 
 
-def _validate_run(run: LoadedRun, source: GroupId | None) -> None:
+def _validate_run(run: LoadedRun, source: GroupId | None) -> frozenset[str]:
+    """Check the run, and return the tasks it measured under an identity the source no longer has.
+
+    A row measures the task as it was. When a task changes, its earlier rows stop counting and the rest of the run
+    stands, so only the changed task is measured again; `check_catalog` then requires its new rows."""
     expected_policy = "browser-evidence-v2" if source is None else EXPECTED_POLICIES[source]
     policy_parts = set(run.manifest.grading_policy.split(":"))
     if expected_policy not in policy_parts:
@@ -324,22 +339,25 @@ def _validate_run(run: LoadedRun, source: GroupId | None) -> None:
     assert identity is not None
     if identity != expected_policy and not identity.startswith(expected_policy + ":"):
         raise ValueError(f"{run.path}: judging identity differs from the catalog policy")
+    stale: set[str] = set()
     for result in run.results:
         manifest_hash = dict(run.manifest.tasks).get(result.task_id)
         if manifest_hash != result.task_hash:
             raise ValueError(f"{run.path}: {result.task_id} task hash differs from the manifest")
         if source is None:
             catalog_task = next((task for task in _catalog_tasks() if task.id == result.task_id), None)
-            if catalog_task is None or result.task_version != catalog_task.task_version:
-                raise ValueError(f"{run.path}: {result.task_id} task version differs from the catalog")
+            if catalog_task is None:
+                raise ValueError(f"{run.path}: {result.task_id} is not in the catalog")
+            if result.task_version != catalog_task.task_version:
+                stale.add(result.task_id)
     if source is None:
         expected = {task.id: (task.meta.version, task.hash) for task in source_tasks(source_names=("fastbrowse",))}
         for result in run.results:
             if result.task_id not in expected:
                 raise ValueError(f"{run.path}: {result.task_id} is not in the fastbrowse task source")
-            version, task_hash = expected[result.task_id]
-            if (result.task_version, result.task_hash) != (version, task_hash):
-                raise ValueError(f"{run.path}: {result.task_id} task identity differs from the source")
+            if (result.task_version, result.task_hash) != expected[result.task_id]:
+                stale.add(result.task_id)
+    return frozenset(stale)
 
 
 def candidate_from_runs(run_dirs: Iterable[Path], *, campaign_id: str) -> Candidate:
@@ -352,7 +370,7 @@ def candidate_from_runs(run_dirs: Iterable[Path], *, campaign_id: str) -> Candid
     selected: dict[tuple[GroupId, Arm, str, int], tuple[LoadedRun, TrialResult]] = {}
     for run in loaded:
         source = _official_source(run)
-        _validate_run(run, source)
+        stale = _validate_run(run, source)
         verified = _verify_upload(run)
         run_agent, run_runner, extra = _provenance(run)
         metadata[run.path] = (run_agent, run_runner, {**extra, "parallax.verified": str(verified).lower()})
@@ -367,7 +385,7 @@ def candidate_from_runs(run_dirs: Iterable[Path], *, campaign_id: str) -> Candid
             raise ValueError(f"{run.path}: provenance does not name a supported benchmark group")
         for result in run.results:
             arm = public_arm(result)
-            if arm is None:
+            if arm is None or result.task_id in stale:
                 continue
             key = (group_id, arm, result.task_id, result.repeat)
             previous = selected.get(key)
@@ -406,7 +424,15 @@ def candidate_from_runs(run_dirs: Iterable[Path], *, campaign_id: str) -> Candid
             )
             rows_by_group.setdefault(group_id, {}).setdefault(arm, []).append(row)
         elif result.verdict is Verdict.NA:
-            reason = _failure(result) or "Parallax marked this task not applicable"
+            # The catalog states why an arm skips a task, in public words; Parallax only names what the harness
+            # lacks. A task the catalog lists the arm for must be measured, so its not-applicable result is an error.
+            catalog_task = next(task for task in _catalog_tasks() if task.id == result.task_id)
+            reason = catalog_task.excluded.get(arm)
+            if reason is None:
+                raise ValueError(
+                    f"{run.path}: {arm} was not applicable on {result.task_id}, which the catalog lists it for:"
+                    f" {_failure(result)}"
+                )
             excluded_by_group.setdefault(group_id, []).append(ExcludedTask(arm=arm, task=result.task_id, reason=reason))
         else:
             why = (
@@ -419,15 +445,18 @@ def candidate_from_runs(run_dirs: Iterable[Path], *, campaign_id: str) -> Candid
             )
     groups: list[Group] = []
     for group_id, rows_by_arm in sorted(rows_by_group.items()):
+        sources = _sources(group_id, selected, metadata)
+        # A group names its newest source's build, which may differ from the candidate's (a competitor measured later).
+        newest = sources[0] if sources else None
         group = _group(
             group_id,
             rows_by_arm,
             unjudged_by_group.get(group_id, {}),
             excluded_by_group.get(group_id, []),
-            agent_sha=measured_agent,
-            runner_sha=measured_runner,
+            agent_sha=newest.agent_sha if newest else measured_agent,
+            runner_sha=newest.runner_sha if newest else measured_runner,
             task_ids=task_ids_by_group[group_id],
-            sources=_sources(group_id, selected, metadata),
+            sources=sources,
         )
         groups.append(group)
     if not groups:
