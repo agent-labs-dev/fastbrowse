@@ -281,6 +281,9 @@ def _run_result(
                 "requests": line.physical_requests or 0,
                 # A campaign measures any fastbrowse_ref, and builds before 0.11.2 have no image count on a cost line.
                 "images": getattr(line, "images", None) or 0,
+                # Builds before 0.11.3 report no prompt-cache counts.
+                "cache_read": getattr(line, "cache_read_tokens", None) or 0,
+                "cache_write": getattr(line, "cache_write_tokens", None) or 0,
                 "cost_usd": line.dollars,
                 "source": "harness",
             }

@@ -18,7 +18,7 @@ use crate::anthropic::{self, ANTHROPIC_VERSION};
 use crate::http::{Http, Response, scrub};
 use crate::validation::{
     Attempts, LLM_ATTEMPT_SECONDS, RetryStop, Usage, body_excerpt, describe, dollars, errors_json, json_invalid,
-    json_object, object_value, post_with_retry, retryable, token_count, with_discarded,
+    json_object, known_total, object_value, post_with_retry, retryable, token_count, with_discarded,
 };
 
 /// OpenRouter routing: an endpoint that ignores response_format would treat the schema as a hint, so none is routed
@@ -98,13 +98,18 @@ fn image_url(content: &[u8]) -> Result<String, LLMError> {
     Ok(format!("data:{};base64,{}", image_type(content)?, base64::encode(content)))
 }
 
-fn wire_message(message: &Message) -> Result<Value, LLMError> {
-    if message.images.is_empty() {
+/// A message on the Chat Completions wire. `breakpoints` says whether the endpoint takes `cache_control` on a part.
+fn wire_message(message: &Message, breakpoints: bool) -> Result<Value, LLMError> {
+    let cached = breakpoints && message.cache_through;
+    if message.images.is_empty() && !cached {
         return Ok(json!({"role": message.role.as_str(), "content": message.content}));
     }
     let mut parts = vec![json!({"type": "text", "text": message.content})];
     for image in &message.images {
         parts.push(json!({"type": "image_url", "image_url": {"url": image_url(&image.0)?}}));
+    }
+    if cached && let Some(last) = parts.last_mut() {
+        last["cache_control"] = json!({"type": "ephemeral"});
     }
     Ok(json!({"role": message.role.as_str(), "content": parts}))
 }
@@ -171,9 +176,22 @@ fn cost(payload: &Map<String, Value>, purpose: LLMPurpose) -> CostLine {
             seconds: None,
             physical_requests: None,
             images: None,
+            cache_read_tokens: cache_tokens(usage, "cached_tokens")?,
+            cache_write_tokens: cache_tokens(usage, "cache_write_tokens")?,
         })
     };
     read().unwrap_or_else(|_| unknown(purpose))
+}
+
+/// A prompt-cache count from `usage.prompt_tokens_details`, where OpenAI-compatible APIs report it; None when the
+/// provider leaves it out.
+fn cache_tokens(usage: &Map<String, Value>, key: &str) -> Result<Option<i64>, String> {
+    let details = usage.get("prompt_tokens_details").and_then(Value::as_object);
+    details
+        .and_then(|details| details.get(key))
+        .filter(|count| !count.is_null())
+        .map(|count| token_count(Some(count)))
+        .transpose()
 }
 
 fn unknown(purpose: LLMPurpose) -> CostLine {
@@ -197,6 +215,8 @@ fn total_cost(costs: &[CostLine], purpose: LLMPurpose) -> CostLine {
         seconds: None,
         physical_requests: costs.iter().map(|line| line.physical_requests).sum(),
         images: None,
+        cache_read_tokens: known_total(costs.iter().map(|line| line.cache_read_tokens)),
+        cache_write_tokens: known_total(costs.iter().map(|line| line.cache_write_tokens)),
     }
 }
 
@@ -395,6 +415,7 @@ pub struct OpenAICompatibleLLM {
     models: HashMap<LLMPurpose, String>,
     reasoning_effort: Option<ReasoningEffort>,
     provider_routing: Option<Value>,
+    cache_breakpoints: bool,
     ceilings: Mutex<HashMap<String, Ceiling>>,
 }
 
@@ -408,6 +429,9 @@ pub struct LLMOptions {
     pub output_format: OutputFormat,
     /// The header that carries the key in place of `Authorization: Bearer`, such as Azure's `api-key`.
     pub auth_header: Option<&'static str>,
+    /// Whether a cached prefix is marked with `cache_control`, which OpenRouter and the gateway pass to providers that
+    /// cache only up to such a mark. A provider's own endpoint may refuse the field, and caches without it.
+    pub cache_breakpoints: bool,
     pub extra_body: Map<String, Value>,
 }
 
@@ -420,6 +444,7 @@ impl Default for LLMOptions {
             strict: true,
             output_format: OutputFormat::JsonSchema,
             auth_header: None,
+            cache_breakpoints: true,
             extra_body: Map::new(),
         }
     }
@@ -543,6 +568,7 @@ impl OpenAICompatibleLLM {
             models,
             reasoning_effort: options.reasoning_effort,
             provider_routing: options.provider_routing,
+            cache_breakpoints: options.cache_breakpoints,
             ceilings: Mutex::new(HashMap::new()),
         })
     }
@@ -718,7 +744,10 @@ impl OpenAICompatibleLLM {
         let Some(model) = self.models.get(&purpose) else {
             return Err(LLMError::Failed(format!("No model configured for {purpose}")));
         };
-        let mut wire_messages = messages.iter().map(wire_message).collect::<Result<Vec<_>, _>>()?;
+        let mut wire_messages = messages
+            .iter()
+            .map(|message| wire_message(message, self.cache_breakpoints))
+            .collect::<Result<Vec<_>, _>>()?;
         // Strict mode needs every property required and no defaults; a decoder without strict support (some local
         // vLLM builds) gets the model's own schema instead.
         let json_schema = if self.strict {

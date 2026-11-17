@@ -262,6 +262,14 @@ export interface CostLine {
    * Images the call sent as Jev assets; absent for a call that sent none, and on historical receipts.
    */
   images?: number | null;
+  /**
+   * Input tokens read from the provider's prompt cache; absent when it reports none, and on old receipts.
+   */
+  cache_read_tokens?: number | null;
+  /**
+   * Input tokens written to the provider's prompt cache; absent when it reports none, and on old receipts.
+   */
+  cache_write_tokens?: number | null;
 }
 export interface Citation {
   /**

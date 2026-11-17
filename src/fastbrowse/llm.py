@@ -14,6 +14,9 @@ class Message(Frozen):
     content: str
     images: tuple[bytes, ...] = ()
     """JPEG or PNG bytes; clients that cannot see images must raise `LLMError`, never drop them silently."""
+    cache_through: bool = False
+    """The prompt is identical across calls up to and including this message, so a client may mark it as a cache
+    breakpoint."""
 
 
 class Generation[T: BaseModel](Frozen):

@@ -299,6 +299,7 @@ def _messages(payload: str) -> list[Message]:
             role=message["role"],
             content=message["content"],
             images=tuple(base64.b64decode(image) for image in message["images"]),
+            cache_through=message["cache_through"],
         )
         for message in json.loads(payload)
     ]
