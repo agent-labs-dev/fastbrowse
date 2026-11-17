@@ -9170,7 +9170,7 @@ async fn switching_between_two_shown_tabs_is_no_progress_though_one_ticks() {
 }
 
 /// The scripted Jev, answering a step decision only after a pause, and counting the decisions asked and answered.
-struct SlowDecision(ScriptedJev, Arc<std::sync::atomic::AtomicUsize>, Arc<std::sync::atomic::AtomicUsize>);
+struct SlowDecision(ScriptedJev, Arc<std::sync::atomic::AtomicUsize>, Arc<std::sync::atomic::AtomicUsize>, u64);
 
 impl DecisionClient for SlowDecision {
     fn evaluate<'a>(
@@ -9183,7 +9183,7 @@ impl DecisionClient for SlowDecision {
             let deciding = questions.contains_key("operation");
             if deciding {
                 self.1.fetch_add(1, Ordering::SeqCst);
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(self.3)).await;
             }
             let evaluation = self.0.evaluate(state, questions).await;
             if deciding {
@@ -9209,6 +9209,7 @@ async fn test_a_decision_the_page_redrew_under_is_answered_before_the_run_decide
         ScriptedJev::new(crate::scripted::steps("click One way").unwrap()),
         asked.clone(),
         answered.clone(),
+        20,
     );
     let agent = Agent::new(Arc::new(Picker::new()), Arc::new(jev), Arc::new(ScriptedLLM));
     let options = super::RunOptions {
@@ -9219,4 +9220,27 @@ async fn test_a_decision_the_page_redrew_under_is_answered_before_the_run_decide
     agent.run("Choose One way as the ticket type and tell me the price", options).await.unwrap();
     assert!(asked.load(Ordering::SeqCst) >= 2, "the page redrew under the first decision, so it was asked again");
     assert_eq!(answered.load(Ordering::SeqCst), asked.load(Ordering::SeqCst));
+}
+
+/// Finishing a decision the page redrew under happens inside the run's time limit: a stale request slower than the time
+/// left is cut off at the limit, and the run ends there rather than waiting on an answer it would discard.
+#[tokio::test]
+async fn test_a_stale_decision_slower_than_the_time_left_does_not_overrun_the_limit() {
+    use std::sync::atomic::AtomicUsize;
+    let jev = SlowDecision(
+        ScriptedJev::new(crate::scripted::steps("click One way").unwrap()),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
+        30_000,
+    );
+    let agent = Agent::new(Arc::new(Picker::new()), Arc::new(jev), Arc::new(ScriptedLLM));
+    let options = super::RunOptions {
+        start: Some("https://shop.test/ticket".into()),
+        limits: Some(Limits { max_seconds: Some(0.5), ..Limits::default() }),
+        ..Default::default()
+    };
+    let began = std::time::Instant::now();
+    let result = agent.run("Choose One way as the ticket type and tell me the price", options).await.unwrap();
+    assert_eq!(result.status, Status::BudgetExceeded, "{:?}", result.error);
+    assert!(began.elapsed() < std::time::Duration::from_secs(5), "ran {:?} past a 0.5 s limit", began.elapsed());
 }
