@@ -334,7 +334,7 @@ async def drive(agent: AgentProcess, params: dict[str, Any], secrets: dict[str, 
     init_id = await agent.call("initialize", {"protocol_version": PROTOCOL_VERSION})
     run_id: int | None = None
     try:
-        async with asyncio.timeout(seconds):
+        async with asyncio.timeout(seconds) as backstop:
             while True:
                 message = await agent.receive()
                 if message is None:
@@ -348,6 +348,9 @@ async def drive(agent: AgentProcess, params: dict[str, Any], secrets: dict[str, 
                             error = message["error"]
                             break
                         run_id = await agent.call("run", params)
+                        # The run's own `max_seconds` clock starts when the agent receives this request, so the
+                        # backstop does too: time spent starting the agent must not shorten the run it waits for.
+                        backstop.reschedule(asyncio.get_running_loop().time() + seconds)
                     elif message.get("id") == run_id:
                         wall = time.perf_counter() - agent.spawned
                         result, error = message.get("result"), message.get("error")
