@@ -698,6 +698,7 @@ impl Agent {
         state: Option<&RunState>,
         ledger: &Ledger,
     ) -> RunResult {
+        let failure_kind = kind.clone();
         self.event("run_failed", || Map::from_iter([("kind".into(), kind.into())]));
         let mut message = self.redact(&message);
         // `unavailable` tells a caller the same run may pass later, which is safe only while the run has changed
@@ -719,7 +720,9 @@ impl Agent {
             );
         }
         let notes = state.map(|state| state.notes.clone()).unwrap_or_default();
-        self.partial_result(&notes, state, ledger, status, Some(message), None)
+        let mut result = self.partial_result(&notes, state, ledger, status, Some(message), None);
+        result.failure_kind = Some(failure_kind);
+        result
     }
 
     async fn ending_frame(&self, mut result: RunResult, requested: bool) -> RunResult {
@@ -821,6 +824,7 @@ impl Agent {
             artifacts,
             citations: outcome.citations,
             error: outcome.error,
+            failure_kind: None,
             final_url: match (state, observed) {
                 (Some(_), Some(observed)) => Some(self.redact(&observed.url)),
                 _ => None,
@@ -1246,6 +1250,7 @@ fn blocked_without_browser(message: String) -> RunResult {
         artifacts: Vec::new(),
         citations: Vec::new(),
         error: Some(message),
+        failure_kind: None,
         final_url: None,
         final_frame: None,
         recordings: Vec::new(),

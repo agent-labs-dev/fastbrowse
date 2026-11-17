@@ -7,6 +7,7 @@ import java.util.List;
 import tools.jackson.databind.JsonNode;
 
 /**
+ * @param failureKind The error's provider or browser variant path, never message text; present for failures, absent otherwise.
  * @param finalUrl Where the browser was last observed; what a caller checks when the task was to arrive somewhere.
  * @param recordings The videos this run finished writing, captioned then plain; empty when it recorded nothing or encoding failed.
  * @param wall The sign-in or bot wall a {@code needs_login} or {@code blocked} run stopped at, when the page showed one.
@@ -23,6 +24,7 @@ public record RunResult(
     @JsonProperty("artifacts") List<Artifact> artifacts,
     @JsonProperty("citations") List<Citation> citations,
     @JsonProperty("error") String error,
+    @JsonProperty("failure_kind") String failureKind,
     @JsonProperty("final_url") String finalUrl,
     @JsonProperty("recordings") List<String> recordings,
     @JsonProperty("wall") Wall wall,
@@ -45,6 +47,7 @@ public record RunResult(
         private List<Artifact> artifacts;
         private List<Citation> citations;
         private String error;
+        private String failureKind;
         private String finalUrl;
         private List<String> recordings;
         private Wall wall;
@@ -102,6 +105,11 @@ public record RunResult(
             return this;
         }
 
+        public Builder failureKind(String failureKind) {
+            this.failureKind = failureKind;
+            return this;
+        }
+
         public Builder finalUrl(String finalUrl) {
             this.finalUrl = finalUrl;
             return this;
@@ -123,7 +131,7 @@ public record RunResult(
         }
 
         public RunResult build() {
-            return new RunResult(status, budget, answer, data, evidence, steps, cost, artifacts, citations, error, finalUrl, recordings, wall, browser);
+            return new RunResult(status, budget, answer, data, evidence, steps, cost, artifacts, citations, error, failureKind, finalUrl, recordings, wall, browser);
         }
     }
 }

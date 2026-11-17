@@ -773,6 +773,9 @@ pub struct RunResult {
     pub citations: Vec<Citation>,
     #[serde(default)]
     pub error: Option<String>,
+    /// The error's provider or browser variant path, never message text; present for failures, absent otherwise.
+    #[serde(default)]
+    pub failure_kind: Option<String>,
     /// Where the browser was last observed; what a caller checks when the task was to arrive somewhere.
     #[serde(default)]
     pub final_url: Option<String>,
@@ -812,6 +815,9 @@ impl Schema for RunResult {
                 Field::required("artifacts", Ty::list(Artifact::ty())),
                 Field::default("citations", Ty::list(Citation::ty()), empty()),
                 Field::default("error", Ty::optional(Ty::Str), none()),
+                Field::default("failure_kind", Ty::optional(Ty::Str), none()).doc(
+                    "The error's provider or browser variant path, never message text; present for failures, absent otherwise.",
+                ),
                 Field::default("final_url", Ty::optional(Ty::Str), none()).doc(
                     "Where the browser was last observed; what a caller checks when the task was to arrive somewhere.",
                 ),
