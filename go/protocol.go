@@ -445,6 +445,8 @@ type RunResult struct {
 	Artifacts []Artifact      `json:"artifacts"`
 	Citations []Citation      `json:"citations"`
 	Error     *string         `json:"error"`
+	// The error's provider or browser variant path, never message text; present for failures, absent otherwise.
+	FailureKind *string `json:"failure_kind"`
 	// Where the browser was last observed; what a caller checks when the task was to arrive somewhere.
 	FinalURL *string `json:"final_url"`
 	// The videos this run finished writing, captioned then plain; empty when it recorded nothing or encoding failed.

@@ -696,6 +696,7 @@ impl Agent {
         state: Option<&RunState>,
         ledger: &Ledger,
     ) -> RunResult {
+        let failure_kind = kind.clone();
         self.event("run_failed", || Map::from_iter([("kind".into(), kind.into())]));
         let mut message = self.redact(&message);
         // `unavailable` tells a caller the same run may pass later, which is safe only while the run has changed
@@ -717,7 +718,9 @@ impl Agent {
             );
         }
         let notes = state.map(|state| state.notes.clone()).unwrap_or_default();
-        self.partial_result(&notes, state, ledger, status, Some(message), None)
+        let mut result = self.partial_result(&notes, state, ledger, status, Some(message), None);
+        result.failure_kind = Some(failure_kind);
+        result
     }
 
     async fn ending_frame(&self, mut result: RunResult, requested: bool) -> RunResult {
@@ -819,6 +822,7 @@ impl Agent {
             artifacts,
             citations: outcome.citations,
             error: outcome.error,
+            failure_kind: None,
             final_url: match (state, observed) {
                 (Some(_), Some(observed)) => Some(self.redact(&observed.url)),
                 _ => None,
@@ -1203,7 +1207,7 @@ pub fn breakdown(lines: Vec<CostLine>) -> CostBreakdown {
 /// A run whose page has no browser behind it reached a step only a browser can take. The document was never the
 /// problem and a second attempt cannot help, so it ends `blocked` with the reason, carrying nothing it read.
 /// The variant names of an error and no text it carries, so a public log can say what failed without quoting a page.
-fn failure_kind(error: &impl std::fmt::Debug) -> String {
+pub fn failure_kind(error: &impl std::fmt::Debug) -> String {
     let debug = format!("{error:?}");
     let names: String = debug.chars().take_while(|c| c.is_alphanumeric() || *c == '(').collect();
     names.trim_end_matches('(').replace('(', ".")
@@ -1244,6 +1248,7 @@ fn blocked_without_browser(message: String) -> RunResult {
         artifacts: Vec::new(),
         citations: Vec::new(),
         error: Some(message),
+        failure_kind: None,
         final_url: None,
         final_frame: None,
         recordings: Vec::new(),
