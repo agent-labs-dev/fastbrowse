@@ -9168,3 +9168,55 @@ async fn switching_between_two_shown_tabs_is_no_progress_though_one_ticks() {
     let (offered, _, withheld) = next_ask(&agent, &state).await;
     assert!(withheld.contains(&Operation::SwitchTab), "the ask after it leaves switch_tab out: {offered:?}");
 }
+
+/// The scripted Jev, answering a step decision only after a pause, and counting the decisions asked and answered.
+struct SlowDecision(ScriptedJev, Arc<std::sync::atomic::AtomicUsize>, Arc<std::sync::atomic::AtomicUsize>);
+
+impl DecisionClient for SlowDecision {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        use std::sync::atomic::Ordering;
+        Box::pin(async move {
+            let deciding = questions.contains_key("operation");
+            if deciding {
+                self.1.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            let evaluation = self.0.evaluate(state, questions).await;
+            if deciding {
+                self.2.fetch_add(1, Ordering::SeqCst);
+            }
+            evaluation
+        })
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        self.0.profile()
+    }
+}
+
+/// A decision the page redrew under was dropped mid-request, and a request dropped before its response has no cost
+/// to record: the run's cost went unpriced (#1218). The stale decision now finishes before the run decides again, so
+/// every request the run sent is answered and priced.
+#[tokio::test]
+async fn test_a_decision_the_page_redrew_under_is_answered_before_the_run_decides_again() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (asked, answered) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let jev = SlowDecision(
+        ScriptedJev::new(crate::scripted::steps("click One way").unwrap()),
+        asked.clone(),
+        answered.clone(),
+    );
+    let agent = Agent::new(Arc::new(Picker::new()), Arc::new(jev), Arc::new(ScriptedLLM));
+    let options = super::RunOptions {
+        start: Some("https://shop.test/ticket".into()),
+        limits: Some(Limits { max_steps: Some(1), ..Limits::default() }),
+        ..Default::default()
+    };
+    agent.run("Choose One way as the ticket type and tell me the price", options).await.unwrap();
+    assert!(asked.load(Ordering::SeqCst) >= 2, "the page redrew under the first decision, so it was asked again");
+    assert_eq!(answered.load(Ordering::SeqCst), asked.load(Ordering::SeqCst));
+}

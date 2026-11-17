@@ -610,8 +610,12 @@ impl Agent {
     ///
     /// A page can draw after it settles, and nothing says it will: picking a day in Google Flights' date picker blanks
     /// the prices, the page waits about 400ms with no request, spinner or mutation, and then fetches and draws them.
-    /// Watching while Jev decides and gates drops the work as soon as it is doomed, and the next decision is made on
-    /// the settled page. Only one drop per action: a control that never stops changing is still acted on.
+    /// Watching while Jev decides and gates finds the work doomed, and the next decision is made on the settled page.
+    /// Only one redraw per action: a control that never stops changing is still acted on.
+    ///
+    /// Doomed work still runs to its end before `Redrawn` is returned. Its requests are already sent and billed, and a
+    /// request dropped before its response has no cost the run can know (#1218); finishing costs the rest of one
+    /// request, about half a second on Online-Mind2Web, and its receipts land in the ledger like any other.
     pub(super) async fn unless_redrawn<T, F>(
         &self,
         redecided: bool,
@@ -633,7 +637,12 @@ impl Agent {
             biased;
             done = &mut work => done.map(Watched::Done),
             redrawn = &mut watching => match redrawn {
-                Ok(true) => Ok(Watched::Redrawn),
+                Ok(true) => {
+                    // Its outcome was decided on a page that is gone, so it is discarded, an error included; the next
+                    // decision meets any limit it reached.
+                    let _ = work.await;
+                    Ok(Watched::Redrawn)
+                }
                 Ok(false) => work.await.map(Watched::Done),
                 Err(error) => Err(error.into()),
             },
