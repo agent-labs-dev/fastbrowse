@@ -19,7 +19,7 @@ metadata, authorization setting, and secret names. Secret values stay in the
 fastbrowse harness.
 
 Parallax supplies the browser harnesses `browser-use-cloud`, `browser-use-oss`,
-`browser-harness`, and `cua-codex`. New campaign figures use Parallax's final
+`browser-harness` (Codex), `browser-harness-claude-code`, and `cua-codex`. New campaign figures use Parallax's final
 page observer, retry rules, judging identity, typed timing, component costs,
 details, and run artifacts.
 
@@ -65,7 +65,7 @@ Publication maps Parallax results to the existing public arm names in one place:
 | `browser-use-cloud` otherwise | `browser-use` |
 | `browser-harness` | `browser-harness` |
 | `browser-use-oss` with model `bu-4.0` (browser-use 1.0.6's default), or `bu-fast` from browser-use 1.0.5 | `browser-use-oss` |
-| `fastbrowse-hosted` and `cua-codex` | diagnostic only |
+| `fastbrowse-hosted`, `cua-codex` and `browser-harness-claude-code` | diagnostic only |
 
 The public schema remains 7. `GROUPS`, site groups, task versions, catalog
 coverage, and published history are unchanged. The candidate projection reads

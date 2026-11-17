@@ -40,8 +40,8 @@ stage selects, for each task and repeat, the newest run that measured it in full
 ## Arms and task coverage
 
 The plugin registers `fastbrowse`, `fastbrowse-pool`, and `fastbrowse-hosted`.
-Parallax supplies `browser-use-cloud`, `browser-use-oss`, `browser-harness`,
-and `cua-codex`. The publication mapping is:
+Parallax supplies `browser-use-cloud`, `browser-use-oss`, `browser-harness`
+(Codex), `browser-harness-claude-code`, and `cua-codex`. The publication mapping is:
 
 | Parallax result | Public arm |
 | --- | --- |
@@ -51,7 +51,7 @@ and `cua-codex`. The publication mapping is:
 | other `browser-use-cloud` results | `browser-use` |
 | `browser-harness` | `browser-harness` |
 | `browser-use-oss` | `browser-use-oss` |
-| `fastbrowse-hosted` and `cua-codex` | diagnostic only |
+| `fastbrowse-hosted`, `cua-codex` and `browser-harness-claude-code` | diagnostic only |
 
 Every task record is world-less, uses `Area.BROWSER`, requires browser
 capability, and names `browser-evidence-v2`. Parallax owns evidence splitting,
