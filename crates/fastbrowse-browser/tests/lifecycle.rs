@@ -524,25 +524,42 @@ async fn test_back_from_a_page_opened_in_place_of_the_start_page_opens_the_start
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_background_finalizers_finish_before_socket_stops() {
-    let fake = FakeChrome::start().await;
-    fake.block("Fetch.getResponseBody");
-    let session = fake.session(fake.connection()).await;
-    testing::dispatch(
-        &session,
-        "Fetch.requestPaused",
-        json!({
-            "requestId": "download",
-            "responseHeaders": [{"name": "content-disposition", "value": "attachment"}],
-            "request": {"url": "https://example.test/file"},
-        }),
-        Some("session"),
-    );
-    fake.sent("Fetch.getResponseBody").await;
-    session.close().await.unwrap();
-    fake.stopped().await;
-    // Python also checks the body read was cancelled; `close` awaits every task it stops before it sends anything.
-    let script = fake.script();
-    assert!(script.index("Fetch.disable") < script.index("stop"));
+    for handed_over in [false, true] {
+        let fake = FakeChrome::start().await;
+        fake.block("Fetch.getResponseBody");
+        let session = fake.session(fake.connection()).await;
+        testing::dispatch(
+            &session,
+            "Fetch.requestPaused",
+            json!({
+                "requestId": "download",
+                "responseHeaders": [{"name": "content-disposition", "value": "attachment"}],
+                "request": {"url": "https://example.test/file"},
+            }),
+            Some("session"),
+        );
+        fake.sent("Fetch.getResponseBody").await;
+        if handed_over {
+            session.hand_over_active_tab();
+        }
+        session.close().await.unwrap();
+        fake.stopped().await;
+        // Python also checks the body read was cancelled; `close` awaits every task it stops before it sends anything.
+        let script = fake.script();
+        let release = if handed_over { "Fetch.disable" } else { "Target.closeTarget" };
+        assert!(script.index(release) < script.index("stop"));
+        if !handed_over {
+            let disable = json!({"autoAttach": false, "waitForDebuggerOnStart": false, "flatten": true});
+            let disabled = script
+                .requests
+                .iter()
+                .position(|(method, params, session)| {
+                    method == "Target.setAutoAttach" && *params == disable && session.is_none()
+                })
+                .expect("browser auto-attach disabled");
+            assert!(script.index("Target.closeTarget") < disabled);
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

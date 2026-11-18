@@ -293,6 +293,8 @@ pub(crate) struct State {
     /// Insertion ordered: `tabs()` lists them in this order, and a closed active tab with neither
     /// an opener nor an earlier active tab still open hands over to the first.
     pub(crate) tabs: Vec<TabState>,
+    /// Setup can fail after enabling interception but before the tab is registered, so teardown tracks it first.
+    pub(crate) prepared_sessions: HashSet<String>,
     /// Tab target ids, least recently active first: where a closed active tab with no opener hands over to.
     pub(crate) activated: Vec<String>,
     pub(crate) owned: HashSet<String>,
@@ -604,31 +606,6 @@ impl BrowserSession {
                 let _ = self.bypass_service_workers(&session_id, false).await;
             }
         }
-        // Socket close is queued: Fetch can pause the owner's next navigation after our handlers stop. Disable
-        // interception itself, including requests not yet reported, before returning the window to its owner.
-        let sessions: Vec<String> = {
-            let state = self.0.state.lock().unwrap();
-            state.tabs.iter().map(|tab| tab.session_id.clone()).collect()
-        };
-        for session_id in &sessions {
-            let _ = self.send("Fetch.disable", json!({}), Some(session_id)).await;
-            // Detaching auto-attached frames and workers also releases ones whose setup was cancelled while paused.
-            let _ = self
-                .send(
-                    "Target.setAutoAttach",
-                    json!({"autoAttach": false, "waitForDebuggerOnStart": false, "flatten": true}),
-                    Some(session_id),
-                )
-                .await;
-        }
-        let _ = self
-            .send(
-                "Target.setAutoAttach",
-                json!({"autoAttach": false, "waitForDebuggerOnStart": false, "flatten": true}),
-                None,
-            )
-            .await;
-        self.0.state.lock().unwrap().paused.clear();
         let (owned, handed_over): (Vec<String>, Vec<String>) = {
             let state = self.0.state.lock().unwrap();
             (
@@ -636,6 +613,7 @@ impl BrowserSession {
                 state.owned.intersection(&state.handed_over).cloned().collect(),
             )
         };
+        // Removing a scope gate before closing an owned tab could let its pending navigation escape the grant.
         for target_id in owned {
             // Best-effort teardown; the browser may already be gone.
             let _ = self.send("Target.closeTarget", json!({"targetId": target_id}), None).await;
@@ -646,6 +624,29 @@ impl BrowserSession {
                 let _ = self.send("Fastbrowse.keepTarget", json!({"targetId": target_id}), None).await;
             }
         }
+        // Socket close is queued: Fetch can pause the owner's next navigation after our handlers stop. Disable
+        // interception itself, including requests not yet reported, before returning the window to its owner.
+        let sessions = std::mem::take(&mut self.0.state.lock().unwrap().prepared_sessions);
+        futures_util::future::join_all(sessions.iter().map(|session_id| async move {
+            let _ = self.send("Fetch.disable", json!({}), Some(session_id)).await;
+            // Detaching auto-attached frames and workers also releases ones whose setup was cancelled while paused.
+            let _ = self
+                .send(
+                    "Target.setAutoAttach",
+                    json!({"autoAttach": false, "waitForDebuggerOnStart": false, "flatten": true}),
+                    Some(session_id),
+                )
+                .await;
+        }))
+        .await;
+        let _ = self
+            .send(
+                "Target.setAutoAttach",
+                json!({"autoAttach": false, "waitForDebuggerOnStart": false, "flatten": true}),
+                None,
+            )
+            .await;
+        self.0.state.lock().unwrap().paused.clear();
         let client = self.0.client.lock().unwrap().take();
         if let Some(client) = client {
             client.close();
@@ -1315,6 +1316,7 @@ impl BrowserSession {
         // A new popup has no renderer until it resumes, so renderer setup waits forever if it precedes this. Fetch
         // and service-worker bypass are enabled first so the initial request meets the scope gate and its response
         // can be captured.
+        self.0.state.lock().unwrap().prepared_sessions.insert(session_id.to_owned());
         self.send("Fetch.enable", json!({"patterns": patterns}), s).await?;
         if scoped {
             self.bypass_service_workers(session_id, true).await?;
@@ -1702,6 +1704,7 @@ impl Shared {
             "Target.detachedFromTarget" => {
                 let child = str_of(&params["sessionId"]);
                 let mut state = self.state.lock().unwrap();
+                state.prepared_sessions.remove(&child);
                 state.frame_parents.remove(&child);
                 state.frame_sessions.retain(|(_, sid)| *sid != child);
                 // A target that went away answers nothing more.

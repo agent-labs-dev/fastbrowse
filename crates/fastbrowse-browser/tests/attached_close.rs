@@ -3,6 +3,7 @@ mod common;
 use std::sync::{Arc, Mutex};
 
 use common::{RecordingArtifactSink, chrome, harness, sites, turn};
+use fastbrowse_browser::error::BrowserError;
 use fastbrowse_browser::session::{BrowserSession, SessionOptions};
 use fastbrowse_core::models::BrowserConnection;
 use futures_util::{SinkExt, StreamExt};
@@ -21,6 +22,7 @@ struct DisableGate {
 async fn held_disconnect(
     upstream: String,
     gate: Option<Arc<DisableGate>>,
+    fail_setup: bool,
 ) -> (String, tokio::task::JoinHandle<()>, Arc<Mutex<Vec<Value>>>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let address = listener.local_addr().expect("address");
@@ -33,10 +35,18 @@ async fn held_disconnect(
         let (mut to_client, mut from_client) = client.split();
         let (mut to_browser, mut from_browser) = browser.split();
         let disable = gate.clone();
+        let failed = Arc::new(Mutex::new(None));
+        let failure = failed.clone();
         let outgoing = async move {
             while let Some(Ok(message)) = from_client.next().await {
                 if matches!(message, Message::Close(_)) {
                     break;
+                }
+                if fail_setup && let Message::Text(text) = &message {
+                    let command: Value = serde_json::from_str(text).expect("command");
+                    if command["method"] == "Runtime.enable" {
+                        *failure.lock().unwrap() = Some(command["id"].clone());
+                    }
                 }
                 if let (Some(gate), Message::Text(text)) = (&disable, &message) {
                     let command: Value = serde_json::from_str(text).expect("command");
@@ -52,9 +62,14 @@ async fn held_disconnect(
             drop(to_browser);
         };
         let incoming = async move {
-            while let Some(Ok(message)) = from_browser.next().await {
+            while let Some(Ok(mut message)) = from_browser.next().await {
                 if let Message::Text(text) = &message {
-                    let event: Value = serde_json::from_str(text).expect("CDP message");
+                    let mut event: Value = serde_json::from_str(text).expect("CDP message");
+                    if event.get("id").is_some() && event.get("id") == failed.lock().unwrap().as_ref() {
+                        event.as_object_mut().expect("reply").remove("result");
+                        event["error"] = json!({"code": -31999, "message": "setup failed"});
+                        message = Message::text(event.to_string());
+                    }
                     if event["method"] == "Fetch.requestPaused"
                         && let Some(gate) = &gate
                     {
@@ -77,10 +92,20 @@ async fn attached_close_releases_the_page_before_socket_disconnect() {
     let Some(owner) = harness().await else { return };
     owner.page.navigate(&format!("{}/", sites().main), None).await.expect("owner navigate");
     let target = owner.session.active_target_id();
-    let (url, proxy, events) = held_disconnect(connection.cdp_url.clone(), None).await;
-    let session = attached(connection, url).await;
+    let (url, proxy, events) = held_disconnect(connection.cdp_url.clone(), None, false).await;
+    let session = attached(connection, url).await.expect("attach");
     assert_eq!(session.active_target_id(), target);
+    let children = session.frame_sessions();
+    assert!(!children.is_empty(), "the attached page has an existing out-of-process iframe");
     session.close().await.expect("close");
+    for (_, child) in children {
+        assert!(
+            events.lock().unwrap().iter().any(|event| {
+                event["method"] == "Target.detachedFromTarget" && event["params"]["sessionId"] == child
+            }),
+            "close did not detach iframe session {child}"
+        );
+    }
     let start = events.lock().unwrap().len();
     let active = owner.session.active_session_id().expect("owner session");
     let navigated = owner.page.navigate(&format!("{}/signin.html", sites().main), None).await;
@@ -106,7 +131,7 @@ async fn attached_close_releases_the_page_before_socket_disconnect() {
     assert!(paused.is_empty(), "closed session still intercepted the page: {paused:?}");
 }
 
-async fn attached(connection: &BrowserConnection, url: String) -> BrowserSession {
+async fn attached(connection: &BrowserConnection, url: String) -> Result<BrowserSession, BrowserError> {
     let session = BrowserSession::new(
         BrowserConnection {
             cdp_url: url,
@@ -118,8 +143,8 @@ async fn attached(connection: &BrowserConnection, url: String) -> BrowserSession
         Arc::new(RecordingArtifactSink::default()),
         SessionOptions::default(),
     );
-    session.open().await.expect("attach");
-    session
+    session.open().await?;
+    Ok(session)
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -129,8 +154,8 @@ async fn attached_close_releases_a_request_arriving_during_shutdown() {
     let Some(owner) = harness().await else { return };
     owner.page.navigate(&format!("{}/signin.html", sites().main), None).await.expect("owner navigate");
     let gate = Arc::new(DisableGate::default());
-    let (url, proxy, _) = held_disconnect(connection.cdp_url.clone(), Some(gate.clone())).await;
-    let session = attached(connection, url).await;
+    let (url, proxy, _) = held_disconnect(connection.cdp_url.clone(), Some(gate.clone()), false).await;
+    let session = attached(connection, url).await.expect("attach");
     let closing = session.close();
     tokio::pin!(closing);
     tokio::select! {
@@ -155,4 +180,20 @@ async fn attached_close_releases_a_request_arriving_during_shutdown() {
     closed.expect("close");
     let reply = navigated.expect("disable releases the late request");
     assert!(reply.get("errorText").is_none(), "{reply:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_attach_releases_interception_before_socket_disconnect() {
+    let _turn = turn().await;
+    let Some(connection) = chrome() else { return };
+    let Some(owner) = harness().await else { return };
+    owner.page.navigate(&format!("{}/signin.html", sites().main), None).await.expect("owner navigate");
+    let (url, proxy, _) = held_disconnect(connection.cdp_url.clone(), None, true).await;
+    let attached = attached(connection, url).await;
+    let navigated = owner.page.navigate(&format!("{}/release.html", sites().main), None).await;
+    proxy.abort();
+    let _ = proxy.await;
+    owner.close().await;
+    assert!(attached.is_err(), "setup must fail after Fetch is enabled");
+    navigated.expect("failed attach releases the owner's page");
 }
