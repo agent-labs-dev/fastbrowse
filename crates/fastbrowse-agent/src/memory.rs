@@ -228,13 +228,6 @@ fn digest16(text: &str) -> String {
 pub fn evidence_id(evidence: &Evidence) -> String {
     // Equal text on different pages must not inherit the first page's citation or record identity.
     let address = digest16(&address(&evidence.url));
-    // A downloaded file is in every capture taken after it, at offsets the page around it moves. Keyed by the capture,
-    // each read of any page stored the whole file again as a new note: ten reads of one page kept ten copies of a
-    // 23 MB file, and composing the answer sent them all (#1299). The file, its block and the text quoted from it name the same
-    // span on every read, which then stands as of its latest read, as a page's own span does.
-    if evidence.source_id.starts_with(DOWNLOAD_SOURCE) {
-        return format!("{}:{}:{address}", evidence.source_id, digest16(&evidence.quote));
-    }
     let mut identity = format!("{}:{}:{}:{address}", evidence.capture_sha256, evidence.start, evidence.end);
     if let Some(control) = &evidence.control_context {
         // Equal captions on different controls must not inherit one another's structural association.
@@ -376,6 +369,34 @@ impl Notes {
         (start, end) == (evidence.start, evidence.end)
     }
 
+    /// Where a quote from a downloaded file sits in that file: its address, its block, and its offsets inside the block.
+    /// None for a page's own text, or when the capture it was cut from was not remembered.
+    fn file_span(&self, evidence: &Evidence) -> Option<(String, String, i64, i64)> {
+        if !evidence.source_id.starts_with(DOWNLOAD_SOURCE) {
+            return None;
+        }
+        let block = self.source_block(evidence)?;
+        Some((
+            address(&evidence.url),
+            block.source_id.clone(),
+            evidence.start - block.start,
+            evidence.end - block.start,
+        ))
+    }
+
+    /// The note already holding this quote of a downloaded file. Every capture taken after a download carries the
+    /// file, at offsets the page around it moves, so each read quotes it from a new capture. Kept under the capture's
+    /// identity, each read of any page stored the whole file again: ten reads of one page held ten copies of a 23 MB
+    /// file, and composing the answer sent them all (#1299). The same place in the same file is the same span.
+    fn same_file_span(&self, fact: &Fact) -> Option<String> {
+        let evidence = fact.evidence.as_ref()?;
+        let span = self.file_span(evidence)?;
+        self.facts.iter().find_map(|(key, kept)| {
+            let before = kept.evidence.as_ref()?;
+            (before.quote == evidence.quote && self.file_span(before).as_ref() == Some(&span)).then(|| key.clone())
+        })
+    }
+
     fn source_block(&self, evidence: &Evidence) -> Option<&SourceBlock> {
         let key = (evidence.capture_sha256.clone(), evidence.url.clone(), evidence.captured_at);
         let blocks = self.source_blocks.get(&key)?;
@@ -490,7 +511,8 @@ impl Notes {
 
     /// Whether a new span was added.
     pub fn add(&mut self, fact: Fact) -> bool {
-        let key = fact_id(&fact);
+        let own = fact_id(&fact);
+        let key = self.same_file_span(&fact).unwrap_or_else(|| own.clone());
         self.retired.remove(&key);
         if fact.answers {
             self.answering.insert(key.clone());
@@ -516,6 +538,8 @@ impl Notes {
             // sorted list read again after the run had left it and come back held its top record only as the page
             // stood before those steps, and the composer named the next record as the list's first (#1082).
             let evidence = match (&previous.evidence, &fact.evidence) {
+                // A file read again keeps the evidence its note is keyed by: the file's text is the same on every read.
+                _ if key != own => previous.evidence.clone(),
                 (Some(before), Some(now)) if read_later(now, before) => Some(now.clone()),
                 _ => kept.evidence.clone(),
             };
@@ -1055,33 +1079,61 @@ mod tests {
     }
 
     /// A downloaded file is in every capture after it, at offsets the page around it moves: each read of the page
-    /// quotes it again from a new capture. Those reads are one note, standing as of the latest, where a page's own text
-    /// read from two different captures stays two.
+    /// quotes it again from a new capture, and those reads are one note. Equal text at two places in one file is two
+    /// notes, as is a page's own text read from two captures.
     #[test]
     fn a_downloaded_file_read_from_each_later_capture_is_one_note() {
-        let file = "Date,Price Quartile1\n20120103,9.01";
-        let read = |source: &str, url: &str, sha: &str, start: i64, minute| {
-            let quote = Evidence {
-                source_id: source.into(),
-                url: url.into(),
-                capture_sha256: sha.into(),
-                captured_at: DateTime::new(2026, 1, 1, 0, minute, 0).utc(),
-                quote: file.into(),
-                end: start + text::len(file) as i64,
-                ..span(sha, start, 0)
-            };
-            Fact::read(file, quote, FactReader::JevChoice)
-        };
+        use crate::retrieval::testing::capture;
+
+        let row = "20120103,9.01";
+        let file = format!("Date,Price\n{row}\nnote\n{row}");
         let zip = "https://example.test/data.zip";
+        // The page's own text, then the file as the capture appends it.
+        let captured = |page: &str, minute| {
+            let mut captured = capture(&[(BlockKind::Paragraph, page), (BlockKind::Paragraph, &file)]);
+            captured.captured_at = DateTime::new(2026, 1, 1, 0, minute, 0).utc();
+            captured.sha256 = format!("{page}-{minute}");
+            let block = &mut captured.blocks[1];
+            block.source_id = format!("{DOWNLOAD_SOURCE}0");
+            block.source_url = Some(zip.into());
+            captured
+        };
+        let quote = |captured: &Capture, at: usize| {
+            let block = &captured.blocks[1];
+            let start = block.start + file.match_indices(row).nth(at).unwrap().0 as i64;
+            let end = start + text::len(row) as i64;
+            let evidence = Evidence {
+                source_id: block.source_id.clone(),
+                url: zip.into(),
+                capture_sha256: captured.sha256.clone(),
+                captured_at: captured.captured_at,
+                quote: captured.text.chars().skip(start as usize).take((end - start) as usize).collect(),
+                ..span("", start, end)
+            };
+            Fact::read(row, evidence, FactReader::JevChoice)
+        };
+        let page = |captured: &Capture| {
+            let block = &captured.blocks[0];
+            let evidence = Evidence {
+                source_id: block.source_id.clone(),
+                capture_sha256: captured.sha256.clone(),
+                captured_at: captured.captured_at,
+                quote: "Odd lot rate".into(),
+                ..span("", block.start, block.start + 12)
+            };
+            Fact::read("Odd lot rate", evidence, FactReader::JevChoice)
+        };
+        let first = captured("Odd lot rate", 1);
+        let again = captured("Odd lot rate, quartiles by price", 2);
         let mut notes = Notes::default();
-        assert!(notes.add(read("download/0", zip, "first", 120, 1)));
-        assert!(!notes.add(read("download/0", zip, "second", 180, 2)));
-        assert_eq!(notes.facts().len(), 1);
-        assert_eq!(notes.facts()[0].evidence.as_ref().unwrap().capture_sha256, "second");
-        // Another file, or the page's own text, is a note of its own.
-        assert!(notes.add(read("download/1", "https://example.test/other.zip", "second", 400, 2)));
-        assert!(notes.add(read("main/body:3", "https://example.test", "first", 10, 1)));
-        assert!(notes.add(read("main/body:3", "https://example.test", "second", 12, 2)));
+        notes.remember_capture(&first, 1);
+        notes.remember_capture(&again, 2);
+        assert!(notes.add(quote(&first, 0)));
+        assert!(!notes.add(quote(&again, 0)), "the same place in the file read again is the same note");
+        assert!(notes.add(quote(&first, 1)), "the same text further down the file is another record");
+        assert!(!notes.add(quote(&again, 1)));
+        assert!(notes.add(page(&first)));
+        assert!(notes.add(page(&again)), "a page's own text from another capture keeps its own note");
         assert_eq!(notes.facts().len(), 4);
     }
 
