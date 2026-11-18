@@ -63,7 +63,7 @@ pub(crate) mod keys {
 const NEXT_ACTION_RULES: &str = "Advance the user's task from the current page using one operation.\nWhen a subgoal is supplied, take its next action first; it describes the current obstacle.\nUse current field values and the recent history.\nPreserve authentication unless the task requires a session change.\nWhen navigate names a page that holds the item the task names, open it rather than searching the site for that item.\nFill a search query before submitting. Clicking only focuses; fill can open an editor and type.\nDo not repeat satisfied steps. Fill required fields before submitting. An action whose\neffect is \"nothing visible changed\" did nothing: take another way, not the same action.\nWhen a control offers choices or a confirmation, use its observed behaviour to determine whether entering\na value commits it or whether selecting or confirming is needed to reach the requested state.\nIf changing a form's mode changes its fields or clears their values, set the requested mode before filling\nthe affected fields.\nIf a form asks for extra values the task does not need, change its mode before inventing those values.\nSet the filters the task asks for that this form already offers before submitting; setting one afterwards\nsubmits twice. A filter the page only shows once there are results is set there, after submitting.\nOnce the task's fields, mode and the filters offered here are set, submit if the form requires submission\nto apply them.\nA matching result alone does not prove a filter was set.\nDo not toggle a checkbox, switch or radio already in the requested state.\nElements marked offscreen can be targeted directly; do not scroll just to reach them.\npage.text is what the viewport shows; page.offscreen_text is the page's text outside it.\nA read takes in the whole page, so do not scroll through a page's text to find what a read would.\nA link's href shows where it leads; use it to tell site navigation from content links. A link marked next_page\nis the one the page itself names as its next page.\nA matching link is not an opened result.\nA list the page shows in part is not read yet: while it offers more of a list the task covers, a next page or a load\nmore, take it, not one record's own page.\nA wizard or multi-step form can keep one URL for every step, so browser history has no entry for the step before\nthis one: when the page itself offers a Back or Previous control, prefer it over the back operation to move\nwithin the form.\nWhen the task asks for an action, such as a click, and then for what that action shows, the answer is only what\nthe page shows after that action is among the recent actions; what the page already showed before it is not the\nanswer, however close it looks.";
 const TARGET_RULES: &str = "Choose the best observed target if the next operation is the one this question names.\nUse the task, field values, nearby text and recent actions. Another question chooses the operation.\nDo not choose a field that already contains the requested value. Choose only an offered element.\nDo not toggle a checkbox, switch or radio already in the requested state.\nWhile the form's mode is not the one the task needs, the control that sets the mode is the target, not the\nform's submit.\nElements marked offscreen can be targeted directly. A link's href shows where it leads, already_read marks one to a page this run\nhas read, and next_page marks the one the page itself names as its next page.\nElements carry a `context`: the card, row or section each one belongs to. When the task names one, choose\nby context; a link in one record's context opens it and shows no more of the list.";
 const DESTINATION_RULES: &str = "Another question picks the element to drag; choose the element it should be dropped onto. Prefer the drop\ntarget, drop zone, slot, list, folder, bucket or column the task names, not the element being dragged.";
-const RELEVANCE_RULES: &str = "Could the task's next few actions, or reading what it needs, act on or rely on the element in each question?\nJudge by its label, role, context and href. Site chrome, footers, ads, social links and unrelated navigation\nare not relevant.";
+const RELEVANCE_RULES: &str = "Could carrying out any part of the task or current subgoal that is still needed, or reading what it needs, act on or rely on the element in each question?\nUse recent actions to judge which task steps are already complete.\nJudge by its label, role, context and href. An already_read link leads to a page this run has read;\nconsider whether visiting it again would help the task. Site chrome, footers, ads, social links and unrelated navigation\nare not relevant.";
 
 fn untrusted(rules: &str) -> String {
     format!("{UNTRUSTED}\n{rules}")
@@ -870,15 +870,22 @@ async fn shortlist(
         "rules": *RELEVANCE,
         "task": context.task,
         "subgoal": context.subgoal,
-        "answered_in_notes": context.answered_in_notes,
-        "recent_actions": context.history.iter().map(HistoryEntry::shown).collect::<Vec<_>>(),
+        // Scrolling changes visibility, not completed task steps. Other actions can make an unchanged control
+        // no longer useful, so their history must invalidate its score before shortlist selection.
+        "recent_actions": context.history.iter()
+            .filter(|entry| !matches!(entry.operation, Some(Operation::Scroll | Operation::ScrollUp)))
+            .map(HistoryEntry::shown).collect::<Vec<_>>(),
         "page": {"url": observation.url, "title": observation.title},
     });
     // The rubric sits once in the state; repeating it in every question would pack a third as many per request.
     let questions: IndexMap<String, (Question, String)> = candidates
         .iter()
         .map(|i| {
-            let element = Value::Object(relevance_element(&controls[*i]));
+            // A scroll made thousands of unchanged links ask again. Visibility belongs in the action choice,
+            // but read state can change which links survive this shortlist.
+            let mut element = relevance_element(&controls[*i]);
+            element.remove("offscreen");
+            let element = Value::Object(element);
             let question: Question =
                 NoulQuestion::new(format!("Is this element relevant? {}", dumps(&element)), None, None).into();
             let written = question.dump_json();
@@ -1259,8 +1266,7 @@ pub fn build_request(
     if let Some(question) = step_question(&steps, PICTURED_STEP) {
         questions.insert(keys::STEP.into(), question);
     }
-    let described: HashSet<&str> = targets.values().flatten().map(|control| control.id.as_str()).collect();
-    let state = state(observation, controls, context, &described);
+    let state = state(observation, controls, context);
     let images: Images = context
         .screenshot
         .iter()
@@ -1269,15 +1275,9 @@ pub fn build_request(
         .map(|png| (screenshot_reference(png), png.clone()))
         .collect();
     let imaged = !referenced(&images, &state, &questions).is_empty();
-    if imaged && context.plan_ahead {
-        // An image puts the request in long-context mode already, so the questions asked ahead cost no mode switch and
-        // save the round trip each would otherwise take after the decision.
-        for ahead in &context.ahead {
-            if offered.contains(&ahead.operation) && controls.iter().any(|control| control.id == ahead.control) {
-                questions.insert(ahead.key(), ahead.question.clone());
-            }
-        }
-    } else if !imaged {
+    // Images still pay for every question's input. Pre-asking values for every field on a pictured page enlarged
+    // decisions even when the chosen action used none of them; ask the chosen action's follow-ups afterwards.
+    if !imaged {
         let written: usize = questions.iter().map(|(key, question)| key.len() + question.dump_json().len()).sum();
         let mut room = LONG_CONTEXT_BYTES.saturating_sub(dumps(&state).len() + written);
         let mut ahead: Vec<(usize, &Ahead)> = context
@@ -1502,7 +1502,7 @@ fn group_index(choice: &str, count: usize) -> Result<usize> {
         .ok_or_else(|| AgentError::Invalid("list index out of range".into()))
 }
 
-fn state(observation: &Observation, controls: &[Control], context: &StepContext, described: &HashSet<&str>) -> Value {
+fn state(observation: &Observation, controls: &[Control], context: &StepContext) -> Value {
     let mut state = Map::new();
     state.insert("task".into(), context.task.clone().into());
     // "Next month" and "the next Monday" are relative to today: shown only which month a date picker was on, Jev
@@ -1530,18 +1530,9 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext,
     if context.omitted_actions > 0 {
         state.insert("omitted_actions".into(), context.omitted_actions.into());
     }
-    // A target question in this request already carries each of its candidates whole, and only the target choice
-    // weighs where an element sits or what else it takes; the operation choice keeps where links lead and each
-    // element's state. Sent in both, Google Flights' controls were a third of every request.
-    let elements = controls.iter().map(|control| {
-        let mut shown = element(control);
-        if described.contains(control.id.as_str()) {
-            for key in ["context", "operations", "input_name", "autocomplete"] {
-                shown.remove(key);
-            }
-        }
-        Value::Object(shown)
-    });
+    // The operation question also needs a control's context and available actions: without them a covered click
+    // made Escape close the task's popup even though the target question chose a control inside it (#884).
+    let elements = controls.iter().map(|control| Value::Object(element(control)));
     state.insert("elements".into(), Value::Array(elements.collect()));
     if let Some(background) = context.background.as_deref().map(text::strip).filter(|b| !b.is_empty()) {
         state.insert("background".into(), background.into());
@@ -1972,21 +1963,26 @@ mod tests {
     }
 
     #[test]
-    fn test_a_target_candidate_is_described_whole_once() {
-        let carded = |i| Control { context: Some(format!("Card {i}")), ..button(i) };
+    fn test_operation_and_target_choices_both_receive_control_context_and_actions() {
+        let carded = |i| Control {
+            context: Some(format!("Card {i}")),
+            shown_by: Some("clicking Booking date".into()),
+            ..button(i)
+        };
         let controls: Vec<Control> = (1..=3).map(carded).chain([link("away")]).collect();
         let page = observation(controls.clone());
         let context = StepContext::new("t");
         let targeted = build_request(&page, &controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
         let criteria: Value = serde_json::from_str(&targeted.questions["click_target"].dump_json()).unwrap();
-        assert_eq!(criteria["criteria"]["b1"]["context"], "Card 1");
+        assert_eq!(criteria["criteria"]["b1"]["context"], "shown by clicking Booking date; Card 1");
         let shown = &targeted.state["elements"][0];
-        assert!(shown.get("context").is_none() && shown.get("operations").is_none());
+        assert_eq!(shown["context"], criteria["criteria"]["b1"]["context"]);
+        assert_eq!(shown["operations"], json!(["click"]));
         assert_eq!(targeted.state["elements"][3]["href"], "/away");
-        // Grouped, no question carries the candidates whole, so the state keeps all of each.
+        // Grouped targets retain the same facts in shared state.
         let grouped = build_request(&page, &controls, &context, &Config::default(), 2);
         assert!(!grouped.questions.contains_key("click_target"));
-        assert_eq!(grouped.state["elements"][0]["context"], "Card 1");
+        assert_eq!(grouped.state["elements"][0]["context"], shown["context"]);
         assert_eq!(grouped.state["elements"][0]["operations"], json!(["click"]));
     }
 
@@ -2014,6 +2010,9 @@ mod tests {
         let planned = build_request(&page, &controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
         let asked: Vec<_> = planned.questions.keys().filter(|key| key.starts_with(PLAN_PREFIX)).collect();
         assert_eq!(asked, ["plan:name"]);
+        let pictured = StepContext { screenshot: Some(vec![0]), ..context };
+        let planned = build_request(&page, &controls, &pictured, &Config::default(), MAX_CHOICE_OPTIONS);
+        assert!(planned.questions.contains_key("plan:name"), "images keep field planning, with values asked later");
     }
 
     #[test]
@@ -2396,6 +2395,53 @@ mod tests {
         assert!(result.target.unwrap().id.starts_with("fresh-"));
     }
 
+    #[test]
+    fn task_relevance_survives_a_scroll_but_changed_controls_are_judged_again() {
+        let config = Config { observation: ObservationLimits { group_size: 2 }, ..Config::default() };
+        let jev = Fake { options: 2, ..fake(&[("operation", "click")], "Button 0") };
+        let known = Arc::new(Known::default());
+        let mut page = observation((0..5).map(button).collect());
+        page.controls[1].role = "link".into();
+        page.controls[1].href = Some("https://example.test/result".into());
+        let mut context = StepContext::new("press button 3");
+        let trace = Trace::disabled();
+        block_on(knowing(known.clone(), decide(&jev, &page, &context, &config, None, &trace))).unwrap();
+        let before = relevance_requests(&jev).len();
+        assert!(before > 0);
+        assert!(RELEVANCE.contains("any part of the task"));
+        context.history.push(HistoryEntry::new(Some(Operation::Scroll), None, StepOutcome::Executed, true));
+        context.answered_in_notes = true;
+        page.controls.iter_mut().for_each(|control| {
+            control.offscreen = true;
+        });
+        block_on(knowing(known.clone(), decide(&jev, &page, &context, &config, None, &trace))).unwrap();
+        assert_eq!(relevance_requests(&jev).len(), before, "scrolling does not change task relevance");
+        page.controls[0].label = "Changed button".into();
+        block_on(knowing(known.clone(), decide(&jev, &page, &context, &config, None, &trace))).unwrap();
+        let requests = relevance_requests(&jev);
+        assert_eq!(requests.len(), before + 1);
+        assert_eq!(requests.last().unwrap().len(), 1, "only the changed control needs a new judgment");
+        page.controls[1].already_read = Some(true);
+        block_on(knowing(known.clone(), decide(&jev, &page, &context, &config, None, &trace))).unwrap();
+        let requests = relevance_requests(&jev);
+        assert_eq!(requests.len(), before + 2, "a newly read link needs its relevance judged again");
+        assert_eq!(requests.last().unwrap().len(), 1);
+        let question = requests.last().unwrap().values().next().unwrap().dump_json();
+        assert!(question.contains("already_read"), "shortlisting must see read state before omitting controls");
+        context.history.push(HistoryEntry::new(Some(Operation::Click), Some("Button 0"), StepOutcome::Executed, false));
+        let before_action = relevance_requests(&jev).len();
+        block_on(knowing(known.clone(), decide(&jev, &page, &context, &config, None, &trace))).unwrap();
+        assert!(relevance_requests(&jev).len() > before_action, "completed actions can change what is still useful");
+        context.subgoal = Some("Use the form's submit button to apply its values".into());
+        let before_subgoal = relevance_requests(&jev).len();
+        block_on(knowing(known, decide(&jev, &page, &context, &config, None, &trace))).unwrap();
+        assert!(relevance_requests(&jev).len() > before_subgoal, "recovery can change which controls are useful");
+        assert!(jev.states.lock().unwrap().iter().any(|state| {
+            state.get("rules").and_then(Value::as_str) == Some(RELEVANCE.as_str())
+                && state.get("subgoal").and_then(Value::as_str) == context.subgoal.as_deref()
+        }));
+    }
+
     /// A request no larger than Jev's documented limit in tokens, at 1.5 characters a token.
     fn tight() -> Config {
         let mut config = Config::default();
@@ -2594,6 +2640,16 @@ mod tests {
         context.ahead = vec![ahead("Is this irreversible?")];
         context.screenshot = Some(vec![0]);
         assert!(!asked(&context));
+        context.plan_ahead = true;
+        assert!(!asked(&context), "an image does not make speculative follow-ups free");
+        context.screenshot = None;
+        context.looks.insert(control.id.clone(), vec![0]);
+        assert!(!asked(&context), "a target card still leaves values as follow-ups");
+        context.looks.clear();
+        let mut previous = HistoryEntry::new(Some(Operation::Click), Some("button"), StepOutcome::Executed, true);
+        previous.look = Some(Look { before: vec![0], after: None });
+        context.history.push(previous);
+        assert!(!asked(&context), "a pictured history entry still leaves values as follow-ups");
     }
 
     #[test]

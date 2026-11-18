@@ -1833,6 +1833,29 @@ fn test_forbidden_edits_are_not_offered() {
     }
 }
 
+/// A Wait that saw nothing change is still offered, so a run can wait longer than one Wait lasts (#1213); a click that
+/// moved nothing is left out as before.
+#[test]
+fn test_an_idle_wait_stays_on_offer_and_an_idle_click_does_not() {
+    let page = observation(&[button("Next")]);
+    let mut state = run_state();
+    state.idle.push(super::recovery::Idle::performed(Some((Operation::Wait, None))));
+    let mut offered = page.clone();
+    let mut context = crate::policy::StepContext::new(&state.task);
+    super::recovery::leave_out_idle(&state, &mut offered, &mut context);
+    assert!(context.withheld.is_empty(), "{:?}", context.withheld);
+    assert!(context.problem.is_none(), "{:?}", context.problem);
+
+    state.idle.push(super::recovery::Idle::performed(Some((
+        Operation::Click,
+        Some(super::helpers::describe(&page.controls[0])),
+    ))));
+    let mut offered = page.clone();
+    let mut context = crate::policy::StepContext::new(&state.task);
+    super::recovery::leave_out_idle(&state, &mut offered, &mut context);
+    assert!(offered.controls.is_empty(), "{:?}", offered.controls);
+}
+
 #[tokio::test]
 async fn a_later_blank_navigation_with_the_same_fingerprint_gets_its_own_wait() {
     let loaded = at("https://shop.test/", &[button("Browse")]);
@@ -7338,6 +7361,31 @@ async fn test_uncertain_composition_support_or_coverage_is_repaired_like_a_rejec
         assert_eq!(state.recoveries, 1);
         assert!(state.composition_feedback.is_some());
     }
+}
+
+#[tokio::test]
+async fn test_rejected_winner_recovery_keeps_draft_slots_out_of_the_public_error() {
+    let page = observation(&[]);
+    let agent = agent();
+    let mut state = composition_repair_state();
+    let feedback = json!({
+        "draft_claims": [{"text": "[title] costs GBP 54.81."}],
+        "drafted_composition": [{"text": [{"Computed": {"field": "title"}}]}],
+        "rejected_checks": ["claim0/tally"],
+        "untallied_claims": [{"claim": 0, "reason": "No title could be copied from the selected record."}],
+    })
+    .to_string();
+    let reason = super::finishing::rejection_reason(&feedback, false);
+    assert!(reason.contains("[title]"));
+    state.composition_feedback = Some(feedback);
+    state.recoveries = agent.config.stall.max_recoveries;
+    let Err(Flow::Stop(stop)) = agent.recover(&mut state, &page, &reason, Status::Unverified, None).await else {
+        panic!("recovery did not stop");
+    };
+    assert_eq!(stop.status, Status::Unverified);
+    let error = stop.error.unwrap();
+    assert!(!error.contains("[title]"), "{error}");
+    assert!(error.contains("No title could be copied from the selected record."), "{error}");
 }
 
 #[tokio::test]

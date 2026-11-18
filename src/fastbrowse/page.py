@@ -139,6 +139,7 @@ class Observation(Frozen):
 
 class BlockKind(StrEnum):
     HEADING = "heading"
+    DOCUMENT_TITLE = "document_title"
     PARAGRAPH = "paragraph"
     LIST_ITEM = "list_item"
     TABLE = "table"

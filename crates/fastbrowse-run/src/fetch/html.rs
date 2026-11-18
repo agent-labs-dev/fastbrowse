@@ -190,6 +190,7 @@ const VOID: [&str; 13] =
 const SCOPES: [&str; 6] = ["caption", "html", "table", "td", "template", "th"];
 /// The elements `capture.js` lets a record's facts stand on without naming them.
 const LEAVES_OF_THEIR_OWN: [&str; 7] = ["a", "button", "img", "input", "select", "textarea", "svg"];
+const CONTROL_ROLES: [&str; 4] = ["button", "radio", "checkbox", "switch"];
 
 /// One element of the served markup, in the tree a browser builds of it.
 struct Element {
@@ -209,6 +210,10 @@ struct Element {
     navigation: bool,
     /// Never rendered: hidden itself, skipped, or inside such an element.
     hidden: bool,
+    /// An accessibility label inside an aria-hidden subtree is decorative, even if its CSS draws an icon.
+    aria_hidden: bool,
+    /// The browser reads button and choice roles as control state, not empty labeled prose.
+    control_role: bool,
     /// Inside `svg` or `math`, where a self-closing tag ends its element.
     foreign: bool,
     /// Whether it shows any text.
@@ -244,6 +249,8 @@ impl Tree {
             label: None,
             navigation: false,
             hidden: false,
+            aria_hidden: false,
+            control_role: false,
             foreign: false,
             text: false,
             start: usize::MAX,
@@ -405,6 +412,8 @@ impl Tags for Tree {
                 || SKIPPED.contains(&name)
                 || get("hidden").is_some()
                 || hides(&get("style").unwrap_or_default()),
+            aria_hidden: self.elements[parent].aria_hidden || get("aria-hidden").as_deref() == Some("true"),
+            control_role: get("role").is_some_and(|role| CONTROL_ROLES.contains(&role.as_str())),
             foreign,
             text: false,
             start: at,
@@ -674,6 +683,13 @@ pub enum FrameDocument {
     Markup(String),
 }
 
+struct TitleAdvice {
+    close: usize,
+    title: String,
+    text: String,
+    linked: bool,
+}
+
 /// The served markup as blocks. `capture.js` reads the DOM a browser built, so it sees what CSS hid and what scripts
 /// added; this sees the served markup only. It keeps the shapes the reader relies on anyway: headings with the path that names
 /// what a value under them belongs to, one block per table row under its header, and an inline value left in the block
@@ -713,6 +729,11 @@ struct Reader<'a> {
     /// Open dated elements, as tag, `datetime` and the text read inside so far. A relative date such as "3 weeks ago"
     /// holds the exact date only in this attribute, so the reader writes it after the text, as `capture.js` does.
     stamps: Vec<(String, String, String)>,
+    /// Native tooltip text can hold the full name when a listing shortens its visible label.
+    titles: Vec<TitleAdvice>,
+    ends: HashMap<usize, usize>,
+    /// Empty elements can label a separator that CSS draws but the served text does not contain.
+    empty: HashSet<usize>,
     /// The cards the first read found, by the tag token that opens each.
     records: HashMap<usize, Record>,
     /// The open card, whose whole text is one block.
@@ -730,6 +751,7 @@ struct Reader<'a> {
 
 impl Tags for Reader<'_> {
     fn start(&mut self, tag: &Tag, at: usize) {
+        self.emit_titles(at);
         // An end tag a start tag implies can close the open card.
         if self.record.as_ref().is_some_and(|record| record.close == at) {
             self.close_record();
@@ -737,10 +759,17 @@ impl Tags for Reader<'_> {
         // `<svg/>` is foreign content, where a self-closing tag ends the element: it opens nothing to skip.
         if !(tag.self_closing && &*tag.name == "svg") {
             self.open(&tag.name, &tag.attrs, at);
+            if self.skip == 0
+                && self.empty.contains(&at)
+                && let Some(label) = tag.attrs.iter().find(|attr| &*attr.name.local == "aria-label")
+            {
+                self.data(&label.value);
+            }
         }
     }
 
     fn end(&mut self, name: &str, at: usize) {
+        self.emit_titles(at);
         self.close(name);
         if self.record.as_ref().is_some_and(|record| record.close == at) {
             self.close_record();
@@ -761,6 +790,9 @@ impl Tags for Reader<'_> {
         for (_, _, text) in &mut self.stamps {
             text.push_str(data);
         }
+        for advice in &mut self.titles {
+            advice.text.push_str(data);
+        }
         if let Some((_, text)) = &mut self.link {
             text.push_str(data);
         }
@@ -769,7 +801,13 @@ impl Tags for Reader<'_> {
 }
 
 impl<'a> Reader<'a> {
-    fn new(url: &'a str, records: HashMap<usize, Record>, notes: HashSet<usize>) -> Reader<'a> {
+    fn new(
+        url: &'a str,
+        records: HashMap<usize, Record>,
+        notes: HashSet<usize>,
+        ends: HashMap<usize, usize>,
+        empty: HashSet<usize>,
+    ) -> Reader<'a> {
         Reader {
             url,
             blocks: Vec::new(),
@@ -796,6 +834,9 @@ impl<'a> Reader<'a> {
             pager_item: false,
             paging: Vec::new(),
             stamps: Vec::new(),
+            titles: Vec::new(),
+            ends,
+            empty,
             records,
             record: None,
             notes,
@@ -891,6 +932,17 @@ impl<'a> Reader<'a> {
             self.hidden.push(tag.to_string());
             self.skip += 1;
             return;
+        }
+        if !VOID.contains(&tag)
+            && let Some(title) = get("title").map(clean).filter(|title| !title.is_empty())
+            && let Some(&close) = self.ends.get(&at)
+        {
+            self.titles.push(TitleAdvice {
+                close,
+                title,
+                text: String::new(),
+                linked: tag == "a" && get("href").is_some(),
+            });
         }
         // A `time` or a custom element dates the text it shows; the `datetime` of `ins` and `del` dates an edit.
         if (tag == "time" || tag.contains('-'))
@@ -997,6 +1049,32 @@ impl<'a> Reader<'a> {
         }
         if BLOCKS.contains(&tag) {
             self.flush(None, None, false);
+        }
+    }
+
+    fn emit_titles(&mut self, at: usize) {
+        // The first pass already knows explicit and implied ends, including optional cell and list-item tags.
+        while let Some(index) = self.titles.iter().rposition(|advice| advice.close == at) {
+            let advice = self.titles.remove(index);
+            let shown = clean(&advice.text);
+            if (self.tables == 0 || self.cell.is_some()) && !shown.is_empty() && shown != advice.title {
+                self.add(&format!(" (title: {})", advice.title));
+            }
+        }
+    }
+
+    fn emit_link_titles(&mut self) {
+        // A link spanning blocks still names its destination. Keep its advice with the first label, once.
+        for index in (0..self.titles.len()).rev() {
+            let advice = &self.titles[index];
+            let shown = clean(&advice.text);
+            if !advice.linked || shown.is_empty() {
+                continue;
+            }
+            let advice = self.titles.remove(index);
+            if shown != advice.title {
+                self.add(&format!(" (title: {})", advice.title));
+            }
         }
     }
 
@@ -1170,6 +1248,7 @@ impl<'a> Reader<'a> {
     }
 
     fn close_cell(&mut self) {
+        self.emit_link_titles();
         let Some(cell) = self.cell.take() else { return };
         self.row.get_or_insert_with(Vec::new).push(clean(&cell));
         if self.cell_header && self.header_row.is_none() {
@@ -1216,6 +1295,9 @@ impl<'a> Reader<'a> {
     }
 
     fn flush(&mut self, kind: Option<BlockKind>, href: Option<String>, closing_heading: bool) {
+        self.emit_link_titles();
+        // A container spanning blocks has no single label to annotate. Never move its advice into the next block.
+        self.titles.retain(|advice| clean(&advice.text).is_empty());
         let raw = std::mem::take(&mut self.buffer);
         let links = std::mem::take(&mut self.links);
         if let Some(cell) = &mut self.cell {
@@ -1276,7 +1358,38 @@ pub fn read(html: &str, url: &str) -> (String, Vec<Found>, Vec<Control>, Vec<Fra
     // A card is told by its siblings, which come after it, so the tree is read before the text.
     let mut tree = tokenize(html, Sink::new(Tree::new(url))).into_inner();
     let notes = tree.note_references();
-    let mut reader = tokenize(html, Sink::new(Reader::new(url, tree.records(), notes))).into_inner();
+    let ends = tree
+        .elements
+        .iter()
+        .enumerate()
+        .skip(1)
+        .filter(|(index, element)| tree.leaf(*index) || (element.tag == "a" && element.href.is_some()))
+        .map(|(_, element)| (element.start, element.close))
+        .collect();
+    let empty = tree
+        .elements
+        .iter()
+        .filter(|element| {
+            // Empty wrappers are named by drawn_facts; only a leaf supplies an inline text boundary.
+            if element.text || element.hidden || element.aria_hidden || !element.children.is_empty() {
+                return false;
+            }
+            // An empty label inside a control names its action rather than a citable page fact.
+            let mut ancestor = *element;
+            loop {
+                if ancestor.control_role || LEAVES_OF_THEIR_OWN.contains(&ancestor.tag.as_str()) {
+                    return false;
+                }
+                if ancestor.parent == 0 {
+                    return true;
+                }
+                ancestor = &tree.elements[ancestor.parent];
+            }
+        })
+        .map(|element| element.start)
+        .collect();
+    let mut reader = tokenize(html, Sink::new(Reader::new(url, tree.records(), notes, ends, empty))).into_inner();
+    reader.emit_titles(usize::MAX);
     reader.close_record();
     reader.flush(None, None, false);
     (clean(&reader.title), reader.blocks, reader.controls, reader.frames)
@@ -1539,6 +1652,155 @@ mod tests {
         assert_eq!(texts, (1..=3).map(|n| format!("Quote {n}. by Author {n} (about)\nTags: a b")).collect::<Vec<_>>(),);
         assert_eq!(found.len(), 4, "{found:?}");
         assert!(records.iter().all(|b| b.heading_path == ["Quotes"] && b.href.is_none()));
+    }
+
+    #[test]
+    fn empty_inline_labels_preserve_generated_separators() {
+        let html = "<style>.separator::before { content: '\\00b7'; }</style>\
+            <ul><li><div><span>JetBlue</span><span class=separator aria-label=' '></span><span>Tap Air Portugal</span></div></li>\
+            <li><div><span>British Airways</span><span class=separator aria-label=' '></span><span>American, Iberia, Finnair</span></div></li>\
+            <li><div><span>JetBlue</span></div></li></ul>\
+            <p><span>JetBlue</span><span class=separator aria-label=' '></span><span>Tap Air Portugal</span></p>\
+            <p><span>Jet</span><span>Blue</span></p>\
+            <p><span>Jet</span><span hidden aria-label=' '></span><span>Blue</span></p>\
+            <p><span aria-label='Not a replacement'>Visible wording</span></p>\
+            <p><span aria-label='Accessible wording'></span></p>\
+            <p><span>Jet</span><span aria-hidden=true><span aria-label='Icon'></span></span><span>Blue</span></p>\
+            <table><tr><td><span>JetBlue</span><span class=separator aria-label=' '></span><span>Tap Air Portugal</span></td></tr></table>";
+        let (_, found) = blocks(html, "https://a.example/");
+        let texts: Vec<_> = found.iter().map(|block| block.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                "JetBlue Tap Air Portugal",
+                "British Airways American, Iberia, Finnair",
+                "JetBlue",
+                "JetBlue Tap Air Portugal",
+                "JetBlue",
+                "JetBlue",
+                "Visible wording",
+                "Accessible wording",
+                "JetBlue",
+                "| JetBlue Tap Air Portugal |",
+            ]
+        );
+    }
+
+    #[test]
+    fn icon_only_social_links_and_controls_do_not_add_labels_to_prose() {
+        let (title, found, controls, _) = read(
+            "<h2>Follow us</h2><nav><a href='/twitter' aria-label=Twitter></a>\
+             <a href='/github' aria-label=GitHub><svg><title>GitHub icon</title></svg></a>\
+             <button aria-label=Share></button></nav><p>After links</p>",
+            "https://a.example/",
+        );
+        assert!(title.is_empty());
+        assert_eq!(found.iter().map(|block| block.text.as_str()).collect::<Vec<_>>(), ["Follow us", "After links"]);
+        assert_eq!(
+            controls.iter().map(|control| control.label.as_str()).collect::<Vec<_>>(),
+            ["Twitter", "GitHub", "Share"]
+        );
+    }
+
+    #[test]
+    fn control_roles_match_browser_capture() {
+        let source = include_str!("../../../fastbrowse-browser/js/capture.js");
+        let array = source.split_once("const CONTROL_ROLES = ").unwrap().1.split_once(';').unwrap().0;
+        let groups: Vec<Vec<String>> = serde_json::from_str(array).unwrap();
+        let roles = groups.into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(roles, CONTROL_ROLES);
+    }
+
+    #[test]
+    fn empty_labels_inside_controls_do_not_become_prose() {
+        for control in [
+            "<button><span aria-label='Add'></span></button>",
+            "<div role='button'><span aria-label='Add'></span></div>",
+            "<div role='checkbox'><span aria-label='Add'></span></div>",
+            "<div role='radio'><span aria-label='Add'></span></div>",
+            "<div role='switch'><span aria-label='Add'></span></div>",
+            "<a href='/add'><span><span aria-label='Add'></span></span></a>",
+            "<svg><g><span aria-label='Add'></span></g></svg>",
+        ] {
+            let (_, found, _, _) = read(&format!("<p>Before</p>{control}<p>After</p>"), "https://a.example/");
+            assert_eq!(found.iter().map(|block| block.text.as_str()).collect::<Vec<_>>(), ["Before", "After"]);
+        }
+    }
+
+    #[test]
+    fn empty_wrappers_keep_one_drawn_fact_in_records() {
+        let (_, found, _, _) = read(
+            "<ul><li><h3>First</h3><span aria-label='5 stars'><i></i></span></li>\
+             <li><h3>Second</h3><span aria-label='4 stars'><i></i></span></li>\
+             <li><h3>Third</h3><span aria-label='3 stars'><i></i></span></li></ul>",
+            "https://a.example/",
+        );
+        assert_eq!(
+            found.iter().map(|block| block.text.as_str()).collect::<Vec<_>>(),
+            ["First [5 stars: no text]", "Second [4 stars: no text]", "Third [3 stars: no text]"]
+        );
+    }
+
+    #[test]
+    fn title_advice_stays_with_its_record_and_visible_text() {
+        let (_, found, _, _) = read(
+            "<ul><li><h3><a href='/first' title='The Complete First Volume'>First...</a></h3><p>GBP 54.81</p></li>\
+             <li><h3><a href='/second' title='A Different Volume'>Second...</a></h3><p>GBP 53.90</p></li>\
+             <li><h3>Third Volume</h3><p>GBP 10</p></li></ul>\
+             <table title='Table advice'><tbody title='Body advice'><tr title='Row advice'><td>a</td><td>b</tr></tbody></table>\
+             <link title='Feed advice'  href='/feed'><input type='hidden' title='Hidden input advice'>\
+             <div title='Container advice'><p>Contained text</p></div><p>After container</p>\
+             <p><a title='Outer advice'><span title='Inner advice'>Nested</span> label</a> GBP 5</p>\
+             <p>The <abbr title='World Wide Web'>WWW</abbr> reference.</p>\
+             <p><span title='Same'>Same</span><span hidden title='Hidden advice'>Hidden</span></p>",
+            "https://a.example/",
+        );
+        let records: Vec<_> = found.iter().filter(|block| block.whole_record).collect();
+        assert_eq!(records.len(), 3);
+        assert!(records[0].text.contains("First... (title: The Complete First Volume)"), "{found:?}");
+        assert!(records[0].text.contains("GBP 54.81"));
+        assert!(!records[0].text.contains("A Different Volume"));
+        assert!(records[1].text.contains("Second... (title: A Different Volume)"));
+        assert!(found.iter().any(|block| block.text.contains("WWW (title: World Wide Web)")));
+        assert!(
+            found
+                .iter()
+                .any(|block| block.text.contains("Nested (title: Inner advice) label (title: Outer advice) GBP 5"))
+        );
+        assert!(!found.iter().any(|block| block.text.contains("Feed advice")
+            || block.text.contains("Hidden input advice")
+            || block.text.contains("Container advice")
+            || block.text.contains("Table advice")
+            || block.text.contains("Body advice")
+            || block.text.contains("Row advice")));
+        assert!(!found.iter().any(|block| block.text.contains("Hidden advice") || block.text.contains("Same (title:")));
+    }
+
+    #[test]
+    fn linked_block_title_advice_stays_with_the_first_label() {
+        let (_, found) =
+            blocks("<a href='/x' title='Full title'><div>Short</div><div>Details</div></a>", "https://a.example/");
+        assert_eq!(
+            found.iter().map(|block| block.text.as_str()).collect::<Vec<_>>(),
+            ["Short (title: Full title)", "Details"]
+        );
+    }
+
+    #[test]
+    fn title_advice_uses_the_trees_implied_end_tags() {
+        let (_, found) = blocks(
+            "<ul><li title='Full first'>Short first<li>Next</ul>\
+             <table><tr><td title='Full cell'>Short cell<td>Price</table>\
+             <p title='Full paragraph'>Short paragraph<p>After paragraph",
+            "https://a.example/",
+        );
+        for expected in [
+            "Short first (title: Full first)",
+            "Short cell (title: Full cell)",
+            "Short paragraph (title: Full paragraph)",
+        ] {
+            assert!(found.iter().any(|block| block.text.contains(expected)), "{expected}: {found:?}");
+        }
     }
 
     #[test]

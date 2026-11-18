@@ -369,7 +369,7 @@ fn opt_i64(value: &Value) -> Result<Option<i64>, BrowserError> {
 
 impl CdpPage {
     /// Dispatch at most once. Returns STALE or COVERED without dispatching when guards fail. A WAIT dispatched here
-    /// has no bound but the page changing; [`CdpPage::wait`] gives it the run's remaining time.
+    /// lasts one armed watch at most; [`CdpPage::wait`] gives it the run's remaining time.
     pub async fn act(&self, action: &Action, observation: &Observation) -> Result<ActResult, BrowserError> {
         self.act_within(action, observation, f64::INFINITY).await
     }
@@ -1446,7 +1446,10 @@ impl CdpPage {
     async fn await_change(&self, seconds: f64) -> Result<Waited, BrowserError> {
         let main = self.session.active_session_id()?;
         let token = NEXT_WAIT.fetch_add(1, Ordering::Relaxed);
-        let deadline = seconds.is_finite().then(|| Instant::now() + secs(seconds.max(0.0)));
+        // A run with no time limit gives a wait no deadline. It then ends after one armed watch, so a page that never
+        // changes hands the step back as unchanged: Jev can wait again, and the stall rule counts each one.
+        let seconds = if seconds.is_finite() { seconds.max(0.0) } else { WAIT_ARM_SECONDS };
+        let deadline = Instant::now() + secs(seconds);
         let finish = self.wait_finish_js(token);
         let mut cleanup = WaitCleanup { session: self.session.clone(), finish: finish.clone(), sessions: Vec::new() };
         let dialog = self.session.wait_for_dialog();
@@ -1454,7 +1457,7 @@ impl CdpPage {
         let mut installed = HashSet::new();
         let mut first = true;
         let moved = 'wait: loop {
-            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            if Instant::now() >= deadline {
                 if first {
                     // No time was left to pass, so the page had none to change in.
                     return Ok(Waited::default());
@@ -1465,7 +1468,7 @@ impl CdpPage {
             // One evaluation the page holds past the command deadline counts as a hung page, so a long wait is armed
             // again under it. The watch stays installed between the two, so nothing that happens then is missed.
             let arm_until = Instant::now() + secs(WAIT_ARM_SECONDS);
-            let until = deadline.map_or(arm_until, |deadline| deadline.min(arm_until));
+            let until = deadline.min(arm_until);
             let mut holds = FuturesUnordered::new();
             let mut offered = HashSet::new();
             loop {

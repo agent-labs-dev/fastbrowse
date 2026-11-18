@@ -32,11 +32,19 @@ pub struct Message {
     /// JPEG or PNG bytes; clients that cannot see images must fail with `LLMError`, never drop them silently.
     #[serde(default)]
     pub images: Vec<Bytes>,
+    /// Marks the end of a prompt prefix later calls repeat, so a provider that caches only at marked points (Bedrock,
+    /// Anthropic) can cache it. A provider that caches on its own ignores the mark.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cache_through: bool,
 }
 
 impl Message {
     pub fn new(role: Role, content: impl Into<String>) -> Message {
-        Message { role, content: content.into(), images: Vec::new() }
+        Message { role, content: content.into(), images: Vec::new(), cache_through: false }
+    }
+    /// This message, marked as the end of a prefix to cache.
+    pub fn cached(self) -> Message {
+        Message { cache_through: true, ..self }
     }
     pub fn system(content: impl Into<String>) -> Message {
         Message::new(Role::System, content)
