@@ -11,6 +11,12 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A wait in a run with no time limit ends after 60 s when the page does not change, and the run is told the page did not change. Before, it waited for a change with no bound, so a page that never changed held the run forever: an official BU Bench task waited 50 minutes on a site's error popup until its browser was stopped by hand. A run that needs to wait longer can choose to wait again, and repeated waits that change nothing count toward the stall rule ([#1213](https://github.com/agent-labs-dev/fastbrowse/issues/1213)).
+
+- Reading a page whose text is one long block of many megabytes, such as a data file opened in a tab, takes seconds rather than minutes. The read used to hold the run's threads while it prepared its questions, so other runs in the same process stopped too, and their browser command deadlines did not fire ([#1252](https://github.com/agent-labs-dev/fastbrowse/issues/1252)).
+
+- Action decisions retain each control's context and available operations. Recovery after a covered click could dismiss the requested popup because only the target chooser received that information ([#884](https://github.com/agent-labs-dev/fastbrowse/issues/884)).
+
 - Browser reads retain visible CSS-generated text when a dialog hides the surrounding content from accessibility APIs ([#1276](https://github.com/agent-labs-dev/fastbrowse/issues/1276)).
 
 - A highest or lowest result names each winning record once when it appears in more than one note. The run checks tied records' identity before copying their fields, keeping distinct tied winners and all supporting citations ([#1266](https://github.com/agent-labs-dev/fastbrowse/issues/1266)).
@@ -20,7 +26,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 - Browser reads preserve text drawn by CSS before and after page elements, including separators between carrier names. HTTP reads keep the accessible labels of empty elements, so a separator supplied as a space no longer joins adjacent names ([#1267](https://github.com/agent-labs-dev/fastbrowse/issues/1267)).
 
 - Closing a run attached to your own Chrome releases its request interception and paused-target setting before it returns, and turns service workers back on for the tabs you keep, including a tab whose setup failed. Over a direct DevTools connection, your next navigation in that window could hang until the connection finished closing. The extension accepts the same release; its current store version still closes cleanly without it ([#1257](https://github.com/agent-labs-dev/fastbrowse/issues/1257)).
+
 - **A pull request that changes what the agent asks refills its own bench cassettes.** The `replay` check used to fail with a list of tasks and wait for a maintainer to dispatch a paid run, download an encrypted artifact and commit what was in it. A new `Cassette refill` workflow now reads the missed tasks from the check's result, fills only those under a small cap (`CASSETTE_REFILL_BUDGET`, 1 dollar by default), commits the cassettes to the branch as a signed commit, and posts each task's result and cost on the pull request. It runs only for branches in this repository, once per head commit. Cassettes are plain `bench/cassettes/<task>.jsonl` files, so a diff shows the questions that changed ([#1198](https://github.com/agent-labs-dev/fastbrowse/issues/1198)).
+
 - `bench fill` and `bench record` no longer record an error response from the provider, such as a 429, as an answer, which a later fill served instead of asking again. A pass that met one leaves the cassette as it was and is reported as not refilled. Their `--budget` is checked before each model request rather than only between tasks, so one task's passes can no longer spend far past it: the requests they pay for go upstream one at a time, and a response with no price stops the spending ([#1198](https://github.com/agent-labs-dev/fastbrowse/issues/1198)).
 
 - Reads preserve the headings and individual records inside inline containers, including custom elements. A page of flight results could be captured as one paragraph, leaving the answer unable to cite an individual flight and its price ([#1250](https://github.com/agent-labs-dev/fastbrowse/issues/1250)).
