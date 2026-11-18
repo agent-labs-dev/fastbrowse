@@ -11,7 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- A rewritten answer whose notes do not fit one composing request no longer ends the run with an error. Each request was told which notes the rejected draft cited, including notes only another request held, so the writer cited a note it could not quote and the run failed instead of answering. Each request now hears only of the notes it shows ([#1289](https://github.com/agent-labs-dev/fastbrowse/issues/1289)).
+- An LLM call cancelled before its reply, or answered without a cost or receipt, is charged at most what its own request could bill: its text and its output cap, at the model's dearest listed price. It was charged as if it had filled the model's whole context window, so a one-field prompt cancelled when the page redrew was recorded as $1.66 ([#1287](https://github.com/agent-labs-dev/fastbrowse/issues/1287)).
 
 - A wait in a run with no time limit ends after 60 s when the page does not change, and the run is told the page did not change. Before, it waited for a change with no bound, so a page that never changed held the run forever: an official BU Bench task waited 50 minutes on a site's error popup until its browser was stopped by hand. A run that needs to wait longer can choose to wait again, and repeated waits that change nothing count toward the stall rule ([#1213](https://github.com/agent-labs-dev/fastbrowse/issues/1213)).
 
