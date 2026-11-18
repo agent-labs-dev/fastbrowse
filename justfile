@@ -18,9 +18,10 @@ gate base="origin/main":
 gate-changed base="origin/main":
     #!/usr/bin/env bash
     set -euo pipefail
-    mapfile -t files < <({ git diff --name-only --diff-filter=d "$(git merge-base {{quote(base)}} HEAD)"; git ls-files --others --exclude-standard; } | sort -u)
+    files=()  # a read loop, not mapfile: macOS ships Bash 3.2
+    while IFS= read -r f; do files+=("$f"); done < <({ git diff --name-only --diff-filter=d "$(git merge-base {{quote(base)}} HEAD)"; git ls-files --others --exclude-standard; } | sort -u)
     py=(); typed=(); prose=(); tests=()
-    for f in "${files[@]}"; do
+    for f in ${files[@]+"${files[@]}"}; do
         case "$f" in evals/*) continue;; esac  # its own project, with its own CI job
         case "$f" in *.py) py+=("$f");; esac
         case "$f" in src/*.py|tests/*.py|benchmarks/*.py) typed+=("$f");; esac
