@@ -53,7 +53,7 @@ sig = "cce40c7f6c06848c"
 [[bindings]]
 doc = "blog/attach-to-running-chrome.md"
 target = "crates/fastbrowse-browser/src/session.rs"
-sig = "e4d218eea2fc26ef"
+sig = "8948b6bb10ec0e88"
 
 [[bindings]]
 doc = "blog/attach-to-running-chrome.md"
@@ -83,7 +83,7 @@ sig = "e555eb711d715faa"
 [[bindings]]
 doc = "blog/use-your-own-chrome.md"
 target = "crates/fastbrowse-browser/extension/background.js"
-sig = "3793a2a70ad5c406"
+sig = "6a1f144bd1e89019"
 
 [[bindings]]
 doc = "blog/use-your-own-chrome.md"

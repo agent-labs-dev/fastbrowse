@@ -523,26 +523,109 @@ async fn test_back_from_a_page_opened_in_place_of_the_start_page_opens_the_start
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_background_finalizers_finish_before_socket_stops() {
+async fn owned_frames_keep_service_worker_bypass_until_their_tab_closes() {
+    for handed_over in [false, true] {
+        let fake = FakeChrome::start().await;
+        let session = fake
+            .session(BrowserConnection {
+                allowed_origins: Some(vec!["https://example.test".into()]),
+                ..fake.connection()
+            })
+            .await;
+        for (child, parent) in [("child", "session"), ("grandchild", "child")] {
+            testing::dispatch(
+                &session,
+                "Target.attachedToTarget",
+                json!({"targetInfo": {"targetId": child, "type": "iframe"}, "sessionId": child}),
+                Some(parent),
+            );
+        }
+        testing::settle_background(&session).await;
+        if handed_over {
+            session.hand_over_active_tab();
+        }
+        session.close().await.unwrap();
+        fake.stopped().await;
+        let script = fake.script();
+        for session_id in ["session", "child", "grandchild"] {
+            assert_eq!(
+                script.requested("Network.setBypassServiceWorker", &json!({"bypass": true}), Some(session_id)),
+                1
+            );
+            let restore = script.requests.iter().position(|(method, params, sid)| {
+                method == "Network.setBypassServiceWorker"
+                    && params["bypass"] == false
+                    && sid.as_deref() == Some(session_id)
+            });
+            if handed_over {
+                let disabled = script.requests.iter().position(|(method, _, _)| method == "Fetch.disable").unwrap();
+                assert!(restore.expect("handed-over frames restored") < disabled);
+            } else if let Some(restored) = restore {
+                assert!(script.index("Target.closeTarget") < restored, "owned frame restored before its tab closed");
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_older_extension_refusing_fetch_disable_still_closes() {
     let fake = FakeChrome::start().await;
-    fake.block("Fetch.getResponseBody");
-    let session = fake.session(fake.connection()).await;
-    testing::dispatch(
-        &session,
-        "Fetch.requestPaused",
-        json!({
-            "requestId": "download",
-            "responseHeaders": [{"name": "content-disposition", "value": "attachment"}],
-            "request": {"url": "https://example.test/file"},
-        }),
-        Some("session"),
-    );
-    fake.sent("Fetch.getResponseBody").await;
+    let source = fake.session(fake.connection()).await;
+    let mut connection = fake.connection();
+    connection.cdp_url = "fastbrowse-extension:test".into();
+    let session = fake.new_session(connection, SessionOptions::default());
+    testing::open_owned_tab_with_client(&session, &source, "https://example.test/").await.unwrap();
+    session.hand_over_active_tab();
+    fake.fail("Fetch.disable", Reply::Error(-32601));
     session.close().await.unwrap();
     fake.stopped().await;
-    // Python also checks the body read was cancelled; `close` awaits every task it stops before it sends anything.
-    let script = fake.script();
-    assert!(script.index("Fetch.continueRequest") < script.index("stop"));
+    {
+        let script = fake.script();
+        assert!(script.index("Fetch.disable") < script.index("stop"));
+        assert!(script.index("Fastbrowse.keepTarget") < script.index("stop"));
+        assert!(!script.calls.iter().any(|method| method == "Target.closeTarget"));
+    }
+    source.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_background_finalizers_finish_before_socket_stops() {
+    for handed_over in [false, true] {
+        let fake = FakeChrome::start().await;
+        fake.block("Fetch.getResponseBody");
+        let session = fake.session(fake.connection()).await;
+        testing::dispatch(
+            &session,
+            "Fetch.requestPaused",
+            json!({
+                "requestId": "download",
+                "responseHeaders": [{"name": "content-disposition", "value": "attachment"}],
+                "request": {"url": "https://example.test/file"},
+            }),
+            Some("session"),
+        );
+        fake.sent("Fetch.getResponseBody").await;
+        if handed_over {
+            session.hand_over_active_tab();
+        }
+        session.close().await.unwrap();
+        fake.stopped().await;
+        // Python also checks the body read was cancelled; `close` awaits every task it stops before it sends anything.
+        let script = fake.script();
+        let release = if handed_over { "Fetch.disable" } else { "Target.closeTarget" };
+        assert!(script.index(release) < script.index("stop"));
+        if !handed_over {
+            let disable = json!({"autoAttach": false, "waitForDebuggerOnStart": false, "flatten": true});
+            let disabled = script
+                .requests
+                .iter()
+                .position(|(method, params, session)| {
+                    method == "Target.setAutoAttach" && *params == disable && session.is_none()
+                })
+                .expect("browser auto-attach disabled");
+            assert!(script.index("Target.closeTarget") < disabled);
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
