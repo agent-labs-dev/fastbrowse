@@ -165,9 +165,10 @@ state, but does not by itself prove a value was set or accepted.
 
 ## Reading and citations
 
-Browser and HTTP captures keep the document title as a citable observation labeled `Document title`. It has its
-own source span and participates in the capture hash and secret masking. It does not represent a heading in the
-page body. A title alone does not establish that a script-rendered body was read.
+Browser and HTTP captures keep the document title as a citable `document_title` block. It has its own source span
+and participates in the capture hash and secret masking. Read candidates name their source kind, so the browser
+tab title stays distinct from a heading rendered in the page body. A title alone does not establish that a
+script-rendered body was read.
 
 READ is one of Jev's operations. On a page that has changed, Jev is also asked whether it shows something the task
 asks to be told that the notes do not hold yet; when it does, and Jev picked another operation, the run reads first,
@@ -327,8 +328,10 @@ value without a matching heading, and that value contradicts a claim that the fi
 The support question distinguishes facts about a quoted subset from claims about a whole set, and what a counter
 on the page says about its source, which supports a claim that restates it, from the number of records the answer
 reports.
-Initial and repaired compositions are checked
-for both claim support and requested answer coverage in one decision batch. A claim with no cited quote or no
+Initial and repaired compositions are checked for claim support and requested answer coverage. Coverage and
+copied-text checks receive the task and answer without the action history; claim and action checks retain that
+history to judge what changed and when. A copied field may contain its complete value when that field is requested,
+such as the full date when the task asks for the date, or only the year when the task asks for its year. A claim with no cited quote or no
 support judgment is withheld and ends `unverified`. When every check is answered and Jev rejects a composed claim, the run spends an existing recovery to correct the draft or gather
 more evidence. Rejected prose is feedback, never a source fact. Code keeps each claim that passed every
 check, with its citations, word for word in the corrected draft, and the composer writes only the rest, unless the
@@ -340,8 +343,8 @@ facts and values, not the form the task asks for, such as JSON, since code write
 support and browser actions have separate checks. A whole-answer check beside coverage
 judges the claims against the steps the run carried out on the page: an answer that says something was not done, or
 already existed, when one of those steps may have done it has every claim withheld, and a run still finishing spends a
-recovery to write it again. Only that rewrite gives the composer the steps, as the run's own record and never as
-citations; on every other draft a long run's clicks would crowd out the notes it writes from. Runs with a caller-supplied output schema
+recovery to write it again. Every draft receives the steps as the run's own record; a claim about a page result still
+needs evidence from the page. Runs with a caller-supplied output schema
 spend the same recovery, and when it ends without a checked answer they retain their extracted data and end `unverified`.
 Each schema field is chosen after the answer is checked, with its claims beside the candidates, or with the claims that
 passed when a rewrite is pending: a field choice alone cannot compare records, and chose the other package where the

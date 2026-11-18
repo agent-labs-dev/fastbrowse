@@ -326,6 +326,7 @@ pub struct Observation {
 str_enum! {
     pub enum BlockKind {
         Heading = "heading",
+        DocumentTitle = "document_title",
         Paragraph = "paragraph",
         ListItem = "list_item",
         Table = "table",
@@ -424,11 +425,11 @@ impl Capture {
             source_id: "document/title".into(),
             source_url: None,
             complete_source: false,
-            kind: BlockKind::Observation,
+            kind: BlockKind::DocumentTitle,
             frame_id: None,
             start,
             end: text::len(&self.text) as i64,
-            heading_path: vec!["Document title".into()],
+            heading_path: Vec::new(),
             control_context: None,
             href: None,
             links: Vec::new(),
@@ -787,8 +788,8 @@ mod tests {
         assert_eq!(title.start, 6);
         assert_eq!(title.end - title.start, text::len(&capture.title) as i64);
         assert_eq!(capture.block_text(title), capture.title);
-        assert_eq!(title.heading_path, ["Document title"]);
-        assert_eq!(title.kind, BlockKind::Observation);
+        assert!(title.heading_path.is_empty());
+        assert_eq!(serde_json::to_value(title.kind).unwrap(), "document_title");
         assert_eq!(capture.sha256, crate::py::sha256_hex(capture.text.as_bytes()));
         capture.title.clear();
         let before = capture.clone();
