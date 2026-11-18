@@ -595,13 +595,19 @@ impl BrowserSession {
             let kept: Vec<String> = {
                 let state = self.0.state.lock().unwrap();
                 state
-                    .tabs
+                    .prepared_sessions
                     .iter()
-                    .filter(|t| !state.owned.contains(&t.target_id) || state.handed_over.contains(&t.target_id))
-                    .map(|t| t.session_id.clone())
+                    .filter(|session_id| {
+                        !state.tabs.iter().any(|tab| {
+                            tab.session_id == **session_id
+                                && state.owned.contains(&tab.target_id)
+                                && !state.handed_over.contains(&tab.target_id)
+                        })
+                    })
+                    .cloned()
                     .collect()
             };
-            // A window the user keeps, or a tab handed over to them, gets its service workers back.
+            // Failed setup has no tab yet; it also must restore the user's service workers before detaching frames.
             for session_id in kept {
                 let _ = self.bypass_service_workers(&session_id, false).await;
             }

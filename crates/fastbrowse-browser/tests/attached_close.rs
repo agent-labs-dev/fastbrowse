@@ -28,6 +28,7 @@ async fn held_disconnect(
     let address = listener.local_addr().expect("address");
     let events = Arc::new(Mutex::new(Vec::new()));
     let recorded = events.clone();
+    let commands = events.clone();
     let task = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.expect("accept");
         let client = tokio_tungstenite::accept_async(socket).await.expect("client websocket");
@@ -41,6 +42,12 @@ async fn held_disconnect(
             while let Some(Ok(message)) = from_client.next().await {
                 if matches!(message, Message::Close(_)) {
                     break;
+                }
+                if let Message::Text(text) = &message {
+                    let command: Value = serde_json::from_str(text).expect("command");
+                    if command["method"] == "Network.setBypassServiceWorker" || command["method"] == "Fetch.disable" {
+                        commands.lock().unwrap().push(command);
+                    }
                 }
                 if fail_setup && let Message::Text(text) = &message {
                     let command: Value = serde_json::from_str(text).expect("command");
@@ -188,7 +195,7 @@ async fn failed_attach_releases_interception_before_socket_disconnect() {
     let Some(connection) = chrome() else { return };
     let Some(owner) = harness().await else { return };
     owner.page.navigate(&format!("{}/signin.html", sites().main), None).await.expect("owner navigate");
-    let (url, proxy, _) = held_disconnect(connection.cdp_url.clone(), None, true).await;
+    let (url, proxy, events) = held_disconnect(connection.cdp_url.clone(), None, true).await;
     let attached = attached(connection, url).await;
     let navigated = owner.page.navigate(&format!("{}/release.html", sites().main), None).await;
     proxy.abort();
@@ -196,4 +203,13 @@ async fn failed_attach_releases_interception_before_socket_disconnect() {
     owner.close().await;
     assert!(attached.is_err(), "setup must fail after Fetch is enabled");
     navigated.expect("failed attach releases the owner's page");
+    let events = events.lock().unwrap();
+    let bypass: Vec<_> = events.iter().filter(|event| event["method"] == "Network.setBypassServiceWorker").collect();
+    assert_eq!(bypass.len(), 2, "failed attachment must restore service workers: {bypass:?}");
+    assert_eq!(bypass[0]["params"]["bypass"], true);
+    assert_eq!(bypass[1]["params"]["bypass"], false);
+    assert_eq!(bypass[0]["sessionId"], bypass[1]["sessionId"]);
+    let restored = events.iter().position(|event| *event == *bypass[1]).expect("restored");
+    let disabled = events.iter().position(|event| event["method"] == "Fetch.disable").expect("Fetch disabled");
+    assert!(restored < disabled, "service workers restored before interception is disabled");
 }
