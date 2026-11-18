@@ -522,19 +522,23 @@ impl DraftClaim {
         {
             return Err("within requires a minimum or maximum tally with a field and no count grouping".into());
         }
-        let has_numeric_slot = self
-            .cells
-            .as_deref()
-            .unwrap_or(std::slice::from_ref(&self.text))
-            .iter()
-            .flatten()
-            .any(|part| matches!(part, DraftPart::Computed(ComputedPart { field: None, .. })));
+        let has_numeric = |parts: &[DraftPart]| {
+            parts.iter().any(|part| matches!(part, DraftPart::Computed(ComputedPart { field: None, .. })))
+        };
+        let has_numeric_slot =
+            self.cells.as_deref().unwrap_or(std::slice::from_ref(&self.text)).iter().any(|parts| has_numeric(parts));
+        let compared_field = self
+            .tally
+            .as_ref()
+            .filter(|tally| matches!(tally.op, Op::Min | Op::Max) && !tally.names_record())
+            .and_then(|tally| tally.field.as_deref());
         let mut evidence_ids = self.evidence_ids;
         let mut computed = 0;
         let mut fields = Vec::new();
         // Every part a note does not write, so one repair can correct them all.
         let mut absent: Vec<String> = Vec::new();
         let mut bind = |parts: Vec<DraftPart>| -> std::result::Result<Vec<BoundPart>, String> {
+            let has_local_numeric = has_numeric(&parts);
             parts
                 .into_iter()
                 .map(|part| {
@@ -580,16 +584,19 @@ impl DraftClaim {
                             if !slot.computed {
                                 return Err("A computed slot must set computed to true".into());
                             }
-                            // A draft can put the compared field in a named slot instead of the numeric slot.
-                            // If it wrote both, they can serve different cells, so keep the explicit projection.
-                            let field = slot.field.filter(|field| {
-                                has_numeric_slot
-                                    || !self.tally.as_ref().is_some_and(|tally| {
-                                        matches!(tally.op, Op::Min | Op::Max)
-                                            && !tally.names_record()
-                                            && tally.field.as_ref() == Some(field)
-                                    })
-                            });
+                            let mut field = slot.field;
+                            if let Some(compared) = compared_field.filter(|compared| field.as_deref() == Some(*compared)) {
+                                if has_local_numeric {
+                                    return Err(format!(
+                                        "The numeric slot already states the compared field {compared:?}. Use {{\"computed\":true}} once in this claim text or cell and reserve named slots for other winner fields."
+                                    ));
+                                }
+                                // A named comparison slot can stand for the numeric result. With a numeric result in
+                                // another cell, it can instead show how each winner's source writes that value.
+                                if !has_numeric_slot {
+                                    field = None;
+                                }
+                            }
                             match &field {
                                 Some(field) if field.trim().is_empty() || fields.contains(field) => return Err("A winner field must be nonempty and occur once".into()),
                                 Some(field) => fields.push(field.clone()),
@@ -2450,6 +2457,21 @@ mod tests {
         let bound = serde_json::from_value::<DraftClaim>(draft).unwrap().bind(&[]).unwrap();
         let claim = bound.worked_fields("GBP 210", vec![], &fields);
         assert_eq!(claim.cells, Some(vec!["GBP 210".into(), "£210, GBP 210".into()]));
+    }
+
+    #[test]
+    fn compared_field_and_numeric_slot_in_one_part_list_request_a_repair() {
+        let parts = json!([{"computed":true}, {"prose":" at "}, {"computed":true,"field":"price"}]);
+        for cells in [None, Some(json!([parts]))] {
+            let draft = json!({
+                "evidence_ids": [],
+                "tally": {"op":"min","of":"offer","field":"price","written":"GBP 1"},
+                "cells": cells,
+                "text": parts
+            });
+            let result = serde_json::from_value::<DraftClaim>(draft).unwrap().bind(&[]);
+            assert!(matches!(result, Err(reason) if reason.contains("already states the compared field")));
+        }
     }
 
     #[test]
