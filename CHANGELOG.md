@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A rewritten answer whose notes are composed over several requests no longer ends the run with an error. Each request was told which notes the rejected draft cited, including notes only another request held, so the writer cited a note it could not quote and the run failed instead of answering. Each request now hears only of the notes it shows ([#1289](https://github.com/agent-labs-dev/fastbrowse/issues/1289)).
+
 - A wait in a run with no time limit ends after 60 s when the page does not change, and the run is told the page did not change. Before, it waited for a change with no bound, so a page that never changed held the run forever: an official BU Bench task waited 50 minutes on a site's error popup until its browser was stopped by hand. A run that needs to wait longer can choose to wait again, and repeated waits that change nothing count toward the stall rule ([#1213](https://github.com/agent-labs-dev/fastbrowse/issues/1213)).
 
 - Reading a page whose text is one long block of many megabytes, such as a data file opened in a tab, takes seconds rather than minutes. The read used to hold the run's threads while it prepared its questions, so other runs in the same process stopped too, and their browser command deadlines did not fire ([#1252](https://github.com/agent-labs-dev/fastbrowse/issues/1252)).
