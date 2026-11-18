@@ -1,5 +1,5 @@
 ---
-name: mergepatrol
+name: mergeloop
 description: This repo merges pull requests through MergeLoop, a label-driven merge queue. Use when merging, landing or shipping a PR, queueing or dequeueing one, reading a MergeLoop comment or label on a PR, or working the review comments on a queued PR.
 ---
 
@@ -7,11 +7,9 @@ description: This repo merges pull requests through MergeLoop, a label-driven me
 
 Pull requests in this repo land through MergeLoop's merge queue. Queue a PR with a label and let MergeLoop merge it; merging by hand or pushing to the default branch races the queue.
 
-The installed skill keeps its `mergepatrol` name and paths so existing repos still find it.
-
 ## The labels
 
-The trigger label is `label` in `.mergepatrol/mergepatrol.yml` on the default branch, `mergepatrol` when the file leaves it out. Below, `<label>` stands for it.
+The trigger label is `label` in `.mergeloop/mergeloop.yml` on the default branch, `mergeloop` when the file leaves it out. A repo set up before MergeLoop was renamed may still have its file at `.mergepatrol/mergepatrol.yml`, where the label left out is `mergepatrol`. Below, `<label>` stands for it, and "the config file" for the file.
 
 - `<label>` queues the PR: `gh pr edit <number> --add-label <label>`. Removing it leaves the queue, and cancels the PR's run.
 - `<label>:priority`, beside `<label>`, puts the PR at the front of the queue.
@@ -19,7 +17,7 @@ The trigger label is `label` in `.mergepatrol/mergepatrol.yml` on the default br
 
 ## Over MCP
 
-When the `mergeloop` MCP server (or its existing `mergepatrol` connection) is connected, use its tools instead of the labels: `queue_pull` (with `priority` for the front of the queue), `dequeue_pull`, `pull_status` and `list_queue`. They change the same labels, as the GitHub user or bot the server was connected as, so everything below still holds. `pull_status` reads where a PR is without parsing MergeLoop's comment. The server's other tools do what the MergeLoop dashboard does, such as reviewing a PR or reading why the queue ejected one.
+When the `mergeloop` MCP server is connected (an older connection may be named `mergepatrol`), use its tools instead of the labels: `queue_pull` (with `priority` for the front of the queue), `dequeue_pull`, `pull_status` and `list_queue`. They change the same labels, as the GitHub user or bot the server was connected as, so everything below still holds. `pull_status` reads where a PR is without parsing MergeLoop's comment. The server's other tools read the queue, the agent's review and the queue's history, and change a repo's MergeLoop settings. Reviews, approvals and comments happen on GitHub, with `gh`.
 
 ## With the `mergeloop` command
 
@@ -34,7 +32,7 @@ Call it as `~/.local/bin/mergeloop` when that is not on the PATH. It acts as `gh
 
 ## What the queue does
 
-MergeLoop rebases the PR onto its base branch, and may test it in a batch with other queued PRs. It resolves conflicts with an agent, runs the repo's `verify` commands, waits for the required checks, then merges with the repo's default merge method. When a required check fails, an agent commits a fix to the PR branch and the checks run again, a few times at most, unless `fix_ci` turns it off. The default branch has a queue, and so does each branch listed under `branches` in `.mergepatrol/mergepatrol.yml`: a PR, or a stack of PRs (from `gh stack`), joins the queue of the branch it merges into. A PR into any other branch, such as one stacked by hand on another PR's branch, is held. Retargeting a queued PR moves it to the back of the other branch's queue.
+MergeLoop rebases the PR onto its base branch, and may test it in a batch with other queued PRs. It resolves conflicts with an agent, runs the repo's `verify` commands, waits for the required checks, then merges with the repo's default merge method. When a required check fails, MergeLoop runs its failed GitHub Actions jobs again once, then an agent commits a fix to the PR branch and the checks run again, a few times at most, unless `fix_ci` turns it off. The default branch has a queue, and so does each branch listed under `branches` in the config file: a PR, or a stack of PRs (from `gh stack`), joins the queue of the branch it merges into. A PR into any other branch, such as one stacked by hand on another PR's branch, is held. Retargeting a queued PR moves it to the back of the other branch's queue.
 
 A PR from a fork merges only as it was when the label went on: a push to it after that takes it out of the queue, until a maintainer adds `<label>` again. It never joins a batch, gets no agent, and is ejected on a conflict or a failed check. MergeLoop can push its rebase only while the author allows edits by maintainers.
 
@@ -44,12 +42,17 @@ The rebase rewrites the PR branch, and a fix adds a commit to it. Before pushing
 
 ## Reading its status
 
-MergeLoop keeps one comment on each queued PR up to date. It says one of:
+MergeLoop keeps one comment on each queued PR up to date, from the moment it joins the queue. It says one of:
 
+- **Added to the queue**: it waits in its place.
+- **Getting ready to merge**: MergeLoop settles a conflict, waits for the checks and fixes failed ones. The comment does not change from one step to the next: `pull_status` over MCP says which step it is at.
 - **On hold**: the PR is a draft, waits for a required review, or has changes requested. MergeLoop comments the reason on the PR. It keeps its place, and runs once GitHub shows it ready.
 - **Under review**: with automatic review on, as it is by default, an agent reviews the PR before it takes its place in line. What it is sure should change it sends back to the PR's author, which is you if you built it, as review comments on their lines. The PR goes on once every review thread on it is resolved, with no human approval. It asks a human only about what the author can't settle: a call on scope or product, access, a change outside the repo. `get_agent_review` over MCP reads the review. If you built the PR, work the review as "After you queue" says, but never answer it.
 - **Ejected**: the rebase, the checks or the merge failed, and the comment says which. The trigger label is gone and `<label>:failed` is on. Fix the cause, push, then add `<label>` again.
 - **Merged**: done. The queue labels are removed.
+- **Left the queue**: the label was removed, the PR was closed, or it was merged outside MergeLoop. Nothing is queued.
+
+If the automatic review itself failed outside the pull request, its author may call the `retry_agent_review` tool once the current head is unchanged. It retries only that exact head, is bounded, and never answers findings or bypasses a human decision.
 
 ## After you queue: work the review
 
@@ -59,7 +62,7 @@ Queuing is not the end of your job. If you built the PR, stay with it until it m
 
 Every unresolved review thread on the PR, whoever started it, is one comment:
 
-- MergeLoop's review posts a thread on its line for each finding that holds the PR. "Sent back to the author" is yours to work. "For a human" is a finding it asked a human about: leave it to them, and resolve it once they have answered.
+- MergeLoop's review posts a thread on its line for each finding that holds the PR. "Sent back to the author" is yours to work. "For a human" is a finding it asked a human about, which they answer in the thread: resolving it says it is fine as it is, and a reply asks for a change, which comes back to you as a review. Never resolve or answer one yourself.
 - A thread from a human reviewer or another bot.
 
 Also count a review that requests changes, and a top-level comment that asks for one. Findings the review cleared, and its notes under the bar, need nothing from you.
@@ -91,17 +94,17 @@ A PR with no unresolved thread and nothing asked of a human goes on to the queue
 
 ### The MergeLoop review's findings
 
-- Never call `answer_agent_review` on a PR you built, and never approve your own PR with `review_pull`. That would answer your own review.
+- Never resolve a "For a human" thread, or approve your own PR. Each would answer your own review.
 - After three reviews in a row that send findings back, the next one asks a human about what is still left. Don't try to beat it with a fourth fix: mark those `needs-human`.
-- To have the reviewer settle a finding now rather than on the next push, reply to it with `ask_agent_about_review`, giving its `head_sha` and finding id. Its answer, in `questions`, ends `VERDICT: withdrawn` (the finding was wrong), `VERDICT: intended` (the code does what its author meant), or `VERDICT: stands`. Either of the first two lifts the finding.
+- To have the reviewer settle a finding now rather than on the next push, reply in its thread mentioning MergeLoop's App, as the review's summary names it (`@merge-loop` on mergeloop.ai), with why it doesn't apply. The agent reads the code again and answers in the thread, ending `VERDICT: withdrawn` (the finding was wrong), `VERDICT: intended` (the code does what its author meant), or `VERDICT: stands`. Either of the first two lifts the finding and resolves its thread.
 - A finding about what wasn't checked, such as "never run on a device" or "no tests cover this", is yours to close while you can: run it, or write the test, and say what you ran in its reply. Only when you can't, such as having no device, is it `needs-human`, and it says what a human would have to run.
 
 ### The ledger
 
-Keep one comment on the PR that lists every comment and its state, and edit it each round rather than posting a new one. It is the only top-level comment you post about the review: the replies go in the threads. Start it with `<!-- mergepatrol-review-ledger -->` so you find it again, and keep each comment's row across rounds, with the heads whose reviews raised it:
+Keep one comment on the PR that lists every comment and its state, and edit it each round rather than posting a new one. It is the only top-level comment you post about the review: the replies go in the threads. Start it with `<!-- mergeloop-review-ledger -->` so you find it again, and keep each comment's row across rounds, with the heads whose reviews raised it:
 
 ```markdown
-<!-- mergepatrol-review-ledger -->
+<!-- mergeloop-review-ledger -->
 **Review ledger** (head `def5678`)
 
 | Comment | Raised on | State | Note |
@@ -125,4 +128,4 @@ When you stop, tell the user where the PR stands: merged, ejected and why, or wh
 
 ## Settings
 
-`.mergepatrol/mergepatrol.yml` sets the label, the batch size, the agent's default model and its per-task overrides, the `verify` commands, `fix_ci`, and `review`. MergeLoop reads it from the default branch, so a change takes effect once its PR merges.
+The config file sets the label, the batch size, the agent's default model and its per-task overrides, the `verify` commands, `fix_ci`, and `review`. MergeLoop reads it from the default branch, so a change takes effect once its PR merges.
