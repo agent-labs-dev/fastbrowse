@@ -69,12 +69,14 @@ async fn generated_text_preserves_css_strings_without_decorative_noise() {
         .icon::before { content: '\e000'; }
         .counter::before { content: counter(item); }
         .decorative::before { content: '\e001' / ''; }
+        .alternative::before { content: 'Required ' / 'required field'; }
         .hidden::before { content: 'not shown'; display: none; }
         </style>
         <p><span class="prefix">fix</span></p>
         <p><span class="suffix">pre</span></p>
         <p><span class="escaped"></span></p>
         <p><span class="attribute" data-unit="kg">10</span></p>
+        <p><span class="alternative">value</span></p>
         <p><span>Jet</span><span class="icon" aria-hidden="true"></span><span>Blue</span></p>
         <p><span>Jet</span><span class="counter"></span><span>Blue</span></p>
         <p><span>Jet</span><span class="decorative"></span><span>Blue</span></p>
@@ -88,6 +90,7 @@ async fn generated_text_preserves_css_strings_without_decorative_noise() {
     assert_eq!(read.iter().filter(|text| text.as_str() == "prefix").count(), 2, "{read:?}");
     assert!(read.iter().any(|text| text == "\"quoted\"\nline\\"), "{read:?}");
     assert!(read.iter().any(|text| text == "10kg"), "{read:?}");
+    assert!(read.iter().any(|text| text == "Required value"), "{read:?}");
     assert_eq!(read.iter().filter(|text| text.as_str() == "JetBlue").count(), 5, "{read:?}");
     assert!(read.iter().any(|text| text == "Visible"), "{read:?}");
     assert!(!capture.text.contains("not shown"));

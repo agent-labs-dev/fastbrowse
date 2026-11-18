@@ -164,8 +164,13 @@
     const strings = /"((?:[^"\\]|\\.)*)"\s*/gy;
     let value = '';
     while (strings.lastIndex < content.length) {
+      const at = strings.lastIndex;
       const match = strings.exec(content);
-      if (!match) return null;
+      if (!match) {
+        if (content[at] !== '/') return null;
+        // An empty alternative explicitly marks decoration; a named alternative keeps the visible string.
+        return cssStrings(content.slice(at + 1).trim()) ? value : null;
+      }
       value += match[1].replace(/\\([\da-fA-F]{1,6}[ \t\r\n\f]?|.)/g, (_, escaped) => {
         if (!/^[\da-fA-F]/.test(escaped)) return escaped;
         const code = parseInt(escaped.trim(), 16);
@@ -178,7 +183,6 @@
   const generatedOf = e => {
     if (generated.has(e)) return generated.get(e);
     const read = pseudo => {
-      if (e.closest('[aria-hidden="true"]')) return '';
       const style = getComputedStyle(e, pseudo);
       if (style.display === 'none' || style.visibility !== 'visible') return '';
       const value = cssStrings(style.content);
@@ -186,7 +190,8 @@
       // A pseudo-element's margins separate its text visually, though neither is present in innerText.
       return `${parseFloat(style.marginInlineStart) > 0 ? ' ' : ''}${value}${parseFloat(style.marginInlineEnd) > 0 ? ' ' : ''}`;
     };
-    const found = [read('::before'), read('::after')];
+    // A known icon already has a readable glyph name in drawn(); its font character must not replace that name.
+    const found = e.closest('[aria-hidden="true"]') || iconOf(e) ? ['', ''] : [read('::before'), read('::after')];
     if (found.some(Boolean)) {
       // The generated text's host can carry the gap instead. Ordinary inline margins do not split a word.
       const style = getComputedStyle(e);
@@ -196,8 +201,22 @@
     generated.set(e, found);
     return found;
   };
+  const generatedTrees = new WeakMap();
+  const hasGenerated = e => {
+    if (generatedTrees.has(e)) return generatedTrees.get(e);
+    const found = !SKIP.has(e.tagName) && (visible(e) || getComputedStyle(e).display === 'contents') &&
+      (generatedOf(e).some(Boolean) || [...e.children].some(hasGenerated));
+    generatedTrees.set(e, found);
+    return found;
+  };
+  const rendered = new WeakMap();
   const renderedOf = e => {
+    if (rendered.has(e)) return rendered.get(e);
     let text = e.innerText ?? e.textContent ?? '';
+    if (!hasGenerated(e)) {
+      rendered.set(e, text);
+      return text;
+    }
     let cursor = 0;
     const insertions = [];
     const visit = node => {
@@ -210,15 +229,21 @@
       if (node.nodeType !== 1 || SKIP.has(node.tagName)) return;
       if (!visible(node) && getComputedStyle(node).display !== 'contents') return;
       if (node.matches(IN_PAGE) && noteReference(node)) return;
-      const [before, after] = generatedOf(node);
       const shown = clean(node.innerText ?? '');
       const at = shown ? text.indexOf(shown, cursor) : cursor;
+      // Unchanged subtrees need no second walk when their containing card and their own blocks are both read.
+      if (!hasGenerated(node)) {
+        if (at >= 0) cursor = at + shown.length;
+        return;
+      }
+      const [before, after] = generatedOf(node);
       if (before) insertions.push({ at: at < 0 ? cursor : at, value: before });
       for (const child of node.childNodes) visit(child);
       if (after) insertions.push({ at: cursor, value: after });
     };
     visit(e);
     for (const { at, value } of insertions.reverse()) text = text.slice(0, at) + value + text.slice(at);
+    rendered.set(e, text);
     return text;
   };
   const textOf = e => titled(e, clean(dated(e, unnoted(e, renderedOf(e)))));
@@ -301,6 +326,13 @@
   // Sizes, weights and effects share an icon library's prefix without naming a glyph, as does the library itself.
   const ICON_STYLE =
     /^(?:icon|tabler|solid|regular|light|thin|duotone|brands|xs|sm|lg|xl|\d+x|fw|spin|pulse|border|inverse|stack.*|pull-.*|rotate-.*|flip-.*)$/;
+  const iconOf = e => {
+    for (const token of e.classList) {
+      const glyph = ICON_CLASS.exec(token);
+      if (glyph && !ICON_STYLE.test(glyph[1])) return `[${glyph[1].replace(/-/g, ' ')} icon]`;
+    }
+    return '';
+  };
   const drawn = c => {
     for (const e of c.querySelectorAll('img,svg,i,span,[role="img"]')) {
       if (hidden(e)) continue;
@@ -310,10 +342,8 @@
         e.getAttribute('title') ||
         e.querySelector?.(':scope > title')?.textContent;
       if (named?.trim()) return `[${clean(named)}]`;
-      for (const token of e.classList) {
-        const glyph = ICON_CLASS.exec(token);
-        if (glyph && !ICON_STYLE.test(glyph[1])) return `[${glyph[1].replace(/-/g, ' ')} icon]`;
-      }
+      const icon = iconOf(e);
+      if (icon) return icon;
     }
     return '';
   };

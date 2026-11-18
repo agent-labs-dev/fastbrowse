@@ -1671,6 +1671,22 @@ mod tests {
     }
 
     #[test]
+    fn icon_only_social_links_and_controls_do_not_add_labels_to_prose() {
+        let (title, found, controls, _) = read(
+            "<h2>Follow us</h2><nav><a href='/twitter' aria-label=Twitter></a>\
+             <a href='/github' aria-label=GitHub><svg><title>GitHub icon</title></svg></a>\
+             <button aria-label=Share></button></nav><p>After links</p>",
+            "https://a.example/",
+        );
+        assert!(title.is_empty());
+        assert_eq!(found.iter().map(|block| block.text.as_str()).collect::<Vec<_>>(), ["Follow us", "After links"]);
+        assert_eq!(
+            controls.iter().map(|control| control.label.as_str()).collect::<Vec<_>>(),
+            ["Twitter", "GitHub", "Share"]
+        );
+    }
+
+    #[test]
     fn title_advice_stays_with_its_record_and_visible_text() {
         let (_, found, _, _) = read(
             "<ul><li><h3><a href='/first' title='The Complete First Volume'>First...</a></h3><p>GBP 54.81</p></li>\
