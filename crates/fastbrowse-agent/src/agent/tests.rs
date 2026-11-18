@@ -4804,6 +4804,33 @@ async fn test_the_gate_sees_a_pictured_control_it_is_asked_about() {
     assert!(questions.values().all(|q| matches!(q, Question::Noul(q) if q.instructions.contains("`looks_like`"))));
 }
 
+/// A pictured control that fills the viewport has no card beside the screenshot, which would show it again, about
+/// 2.2 MB each time it was clicked (#1301). The gate is sent no screenshot, so it still sees the card.
+#[tokio::test]
+async fn test_a_card_of_the_whole_viewport_is_left_out_beside_the_screenshot_but_shown_alone() {
+    let page = Arc::new(Screenshots(
+        Default::default(),
+        false,
+        Default::default(),
+        false,
+        None,
+        std::sync::Mutex::new(Some(Edges { left: 0.0, right: 1.0, top: 0.0, bottom: 1.0 })),
+        false,
+        false,
+    ));
+    let jev = Arc::new(Seeing { images: true, shown: 0.9, asked: Default::default(), on_evaluate: None, zoomed: None });
+    let agent = Agent::new(page, jev.clone(), Arc::new(ScriptedLLM));
+    let canvas = Control { drawn: Some(true), pictured: Some(true), ..button("canvas") };
+    let (viewport, looks) = agent.step_images(&observation(std::slice::from_ref(&canvas)), false).await.expect("seen");
+    assert_eq!((viewport.is_some(), looks.len()), (true, 0));
+    let mut state = run_state();
+    let seen = observation(std::slice::from_ref(&canvas));
+    let _ = agent.gate_irreversible(&mut state, &seen, &code_decision(Operation::Click, Some(canvas))).await;
+    let asked = jev.asked.lock().unwrap();
+    let (state, _, images) = &asked[0];
+    assert!(images.contains_key(state["looks_like"].as_str().expect("the canvas's card")));
+}
+
 #[tokio::test]
 async fn test_a_route_that_takes_no_images_is_sent_none_even_for_a_drawn_control() {
     let page = Arc::new(Screenshots(

@@ -74,7 +74,12 @@ serves the LLM and also serves Jev as the last resort; beside a direct or OpenRo
 Jev images go to OpenRouter and to TypeSafe's own API. On those routes each step's action decision is sent the viewport
 screenshot: the state names it `viewport_screenshot`, and the request carries the PNG in TypeSafe's
 `assets` map with the `TypeSafe-Danger-Zone-Images` header. A screenshot outside TypeSafe's documented
-sizes, or one taken while a secret shows as page text, is not sent. The gateway and every backup
+sizes, or one taken while a secret shows as page text, is not sent. A step's request is fitted to TypeSafe's
+32 MiB body limit by its bytes as sent, base64 pictures included, before it goes: past it, recent actions'
+cards are left out from the oldest, then targets' cards, then the screenshot, before any text or control is cut. A
+request Jev still refuses as too large is asked again without a kind of picture, never with the same ones. A
+control that fills the viewport has no card beside the screenshot, which would show it again; a question sent no
+screenshot, as the irreversible-action check is, still gets that card. The gateway and every backup
 are asked the rest of the state, without the image or its reference. The LLM's own screenshot path is separate; it is governed by the LLM route, not by
 this policy.
 

@@ -7,7 +7,7 @@ from parallax.models import Capability
 from parallax.task import task_from_record
 
 from fastbrowse_evals import hosted_api
-from fastbrowse_evals.task_specs import record, spec_for, start_url
+from fastbrowse_evals.task_specs import record, secrets_origin, spec_for, start_url
 
 
 def test_a_login_task_names_its_secret_variables_and_needs_protected_credentials() -> None:
@@ -52,3 +52,16 @@ def test_an_official_suite_task_starts_at_its_website() -> None:
     official = task.model_copy(update={"data": {"website": "https://www.example.org/"}})
     assert start_url(official) == "https://www.example.org/"
     assert start_url(task) == task.data["start_url"]
+
+
+def test_a_task_naming_no_page_starts_blank() -> None:
+    # BU Bench tasks name no website: the agent begins in a blank browser rather than the trial failing to start.
+    task = task_from_record("fastbrowse", record(spec_for("saucedemo-checkout")))
+    assert start_url(task.model_copy(update={"data": {}})) is None
+
+
+def test_a_login_is_typed_only_on_the_site_it_declares() -> None:
+    task = task_from_record("fastbrowse", record(spec_for("expandtesting-login")))
+    assert secrets_origin(task) == "https://practice.expandtesting.com"
+    with pytest.raises(ValueError, match="declares no login_origin"):
+        secrets_origin(task.model_copy(update={"data": {}}))
