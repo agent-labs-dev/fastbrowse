@@ -180,9 +180,18 @@ def positive(value: str) -> float:
 
 
 def _spent(entry: Mapping[str, Any]) -> float | None:
-    """What a task paid, a fill pass that was not kept included; a report without `spent_usd` has only what it kept."""
+    """What a task paid, a fill pass that was not kept included; a report without `spent_usd` has only what it kept.
+
+    The report comes from the job that ran the pull request's code, so a spend that is not a dollar amount (not a
+    number, not finite, or below zero) is an error, never a figure to add up: NaN would pass any budget comparison.
+    """
     spent = entry.get("spent_usd")
-    return spent if spent is not None else entry.get("recorded_cost_usd")
+    spent = spent if spent is not None else entry.get("recorded_cost_usd")
+    if spent is None:
+        return None
+    if isinstance(spent, bool) or not isinstance(spent, int | float) or not math.isfinite(spent) or spent < 0:
+        raise ValueError(f"{entry.get('task')!r} reported a spend that is not a dollar amount: {spent!r}")
+    return float(spent)
 
 
 def fill_verdict(report: Mapping[str, Any] | None, tasks: Sequence[str], budget: float, exit_code: int) -> FillVerdict:
@@ -207,10 +216,20 @@ def fill_verdict(report: Mapping[str, Any] | None, tasks: Sequence[str], budget:
             reasons.append(f"the budget stopped {entry['budget_refusals']} requests before they were sent")
         if entry.get("unpriced_exchanges"):
             reasons.append(f"{entry['unpriced_exchanges']} exchanges have no price")
-        results.append(TaskResult(task, _spent(entry), tuple(reasons)))
-    spent = sum(_spent(entry) or 0 for entry in entries.values())
-    complete = set(entries) == set(tasks)
+        try:
+            cost = _spent(entry)
+        except ValueError as error:
+            cost = None
+            reasons.append(str(error))
+        results.append(TaskResult(task, cost, tuple(reasons)))
     reasons = []
+    spent = 0.0
+    for entry in entries.values():
+        try:
+            spent += _spent(entry) or 0
+        except ValueError as error:
+            reasons.append(f"the spend is unknown: {error}")
+    complete = set(entries) == set(tasks)
     if report is None:
         reasons.append("the fill wrote no report")
     elif exit_code != 0:

@@ -167,6 +167,13 @@ def test_a_fill_pass_that_was_paid_for_but_not_kept_counts_against_the_budget() 
     assert not result.accepted and result.spent == 1.5 and "over budget" in result.reasons[0]
 
 
+@pytest.mark.parametrize("spent", [float("nan"), float("inf"), -1.0, "0", True])
+def test_a_spend_that_is_not_a_dollar_amount_rejects_the_fill(spent: Any) -> None:
+    result = verdict(entry(spent_usd=spent))
+    assert not result.accepted and not result.tasks[0].passed and result.tasks[0].cost is None
+    assert any("not a dollar amount" in reason for reason in result.reasons)
+
+
 def test_a_task_the_fill_never_reached_is_rejected() -> None:
     result = verdict(entry(), tasks=("mock-basket", "contact-form"))
     assert not result.accepted and not result.complete
