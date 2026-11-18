@@ -146,6 +146,7 @@ def test_a_clean_fill_within_budget_is_accepted() -> None:
         ({"result": {"grade": {"passed": False, "failure": "wrong total"}}}, "grade failed: wrong total"),
         ({"misses": [{"purpose": "p"}]}, "1 replay misses remained"),
         ({"upstream_errors": [429]}, "upstream refused 1 requests [429]"),
+        ({"budget_refusals": 3}, "the budget stopped 3 requests before they were sent"),
         ({"unpriced_exchanges": 2}, "2 exchanges have no price"),
     ],
 )
@@ -158,6 +159,11 @@ def test_a_task_that_fails_for_any_reason_rejects_the_fill_and_names_it(changes:
 def test_a_fill_over_budget_is_rejected_even_when_every_task_passed() -> None:
     result = verdict(entry(recorded_cost_usd=1.5))
     assert not result.accepted and result.tasks[0].passed and "over budget" in result.reasons[0]
+
+
+def test_a_fill_pass_that_was_paid_for_but_not_kept_counts_against_the_budget() -> None:
+    result = verdict(entry(recorded_cost_usd=0.25, spent_usd=1.5))
+    assert not result.accepted and result.spent == 1.5 and "over budget" in result.reasons[0]
 
 
 def test_a_task_the_fill_never_reached_is_rejected() -> None:
@@ -259,6 +265,15 @@ def test_the_job_that_runs_the_pull_requests_code_can_only_read_and_keeps_no_cre
     fill = workflow()["jobs"]["fill"]
     assert fill["permissions"] == {"contents": "read"}
     checkout = next(step for step in fill["steps"] if str(step.get("uses", "")).startswith("actions/checkout"))
+    assert checkout["with"]["persist-credentials"] is False
+
+
+@pytest.mark.parametrize("job", ["plan", "publish"])
+def test_the_jobs_that_hold_a_write_token_run_the_default_branchs_code(job: str) -> None:
+    """A dispatch from a branch checked out that branch, so its script ran with the commit token."""
+    steps = workflow()["jobs"][job]["steps"]
+    checkout = next(step for step in steps if str(step.get("uses", "")).startswith("actions/checkout"))
+    assert checkout["with"]["ref"] == "${{ github.event.repository.default_branch }}"
     assert checkout["with"]["persist-credentials"] is False
 
 

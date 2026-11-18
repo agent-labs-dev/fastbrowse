@@ -12,6 +12,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from fastbrowse.evals import bench
 from fastbrowse.evals.bench import (
     BenchTask,
     _serve,
@@ -26,11 +27,13 @@ from fastbrowse.evals.bench import (
 )
 from fastbrowse.evals.local import fixture_server
 from fastbrowse.evals.replay import (
+    BUDGET_STATUS,
     EMBEDDED_JSON,
     MISS_STATUS,
     Cassette,
     Exchange,
     Proxy,
+    Spend,
     canonical_json,
     canonical_value,
     describe_request,
@@ -234,6 +237,61 @@ def test_an_upstream_error_is_shown_to_the_agent_but_never_recorded() -> None:
         assert cassette.exchanges == [] and proxy.upstream_errors == [429]
         assert _post(base, JEV, {"q": 1}).json() == {"n": 1}
     assert [e.status for e in cassette.exchanges] == [200] and proxy.forwarded == 1
+
+
+def test_a_fill_sends_nothing_upstream_once_the_budget_is_spent() -> None:
+    """The budget was checked only between tasks, so one task's passes could spend past it."""
+    sent: list[bytes] = []
+
+    def forward(path: str, body: bytes) -> tuple[int, str, str]:
+        sent.append(body)
+        return 200, "application/json", json.dumps({"usage": {"cost": 0.6}})
+
+    spend = Spend(1.0)
+    proxy = Proxy(Cassette(task="t"), forward=forward, spend=spend)
+    with proxy as base:
+        assert _post(base, JEV, {"q": 1}).status_code == 200
+        assert _post(base, JEV, {"q": 2}).status_code == 200
+        refused = _post(base, JEV, {"q": 3})
+    assert refused.status_code == BUDGET_STATUS and "budget reached" in refused.json()["error"]["message"]
+    assert len(sent) == 2 and spend.spent == pytest.approx(1.2) and spend.reached()
+    assert proxy.budget_refusals == 1 and len(proxy.cassette.exchanges) == 2
+
+
+def test_a_fill_pass_a_provider_refused_leaves_the_cassette_as_it_was(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pass that met a 429 went on down a path the agent took because of it, so none of it is kept (#1198)."""
+    path = tmp_path / "mock-basket.jsonl"
+    Cassette(task="mock-basket", exchanges=[_exchange(JEV, {"q": 0}, '{"n": 0}')]).save(path)
+    before = path.read_bytes()
+    answers = iter(
+        [(200, "application/json", json.dumps({"usage": {"cost": 0.1}})), (429, "application/json", '{"error": 1}')]
+    )
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    monkeypatch.setattr(bench, "openrouter_forward", lambda key: lambda path, body: next(answers))
+
+    async def run(task: BenchTask, *, agent_argv: list[str], proxy: Proxy, logs: Path) -> dict[str, object]:
+        for question in ({"q": 0}, {"q": 1}, {"q": 2}):
+            proxy.answer(JEV, json.dumps(question).encode())
+        return {
+            "task": task.id,
+            "fixture_port_fallback": None,
+            "metrics": {"wall_s": 1.0, "cpu_s": 0.0, "rss_bytes": 0, "steps": 0},
+            "result": {"status": "error", "grade": {"passed": False, "failure": "refused"}},
+            "misses": [miss.to_json() for miss in proxy.misses],
+            "forwarded": proxy.forwarded,
+            "upstream_errors": proxy.upstream_errors,
+            "budget_refusals": proxy.budget_refusals,
+        }
+
+    monkeypatch.setattr(bench, "bench_task", run)
+    out = tmp_path / "fill.json"
+    assert bench.main(["fill", "--only", "mock-basket", "--cassettes", str(tmp_path), "--out", str(out)]) == 0
+    assert path.read_bytes() == before
+    [entry] = json.loads(out.read_text())["tasks"]
+    assert entry["upstream_errors"] == [429] and entry["fill_passes"] == 1
+    assert entry["recorded_cost_usd"] == 0 and entry["spent_usd"] == pytest.approx(0.1)
 
 
 def test_replay_keeps_each_sent_request_with_its_response_as_a_trace_line() -> None:

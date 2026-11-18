@@ -427,6 +427,31 @@ def response_cost(body: str) -> float | None:
 type Forward = Callable[[str, bytes], tuple[int, str, str]]
 """Send a request upstream: (path, body) to (status, content type, body)."""
 
+BUDGET_STATUS = 402
+"""The status a fill gets for a request it may no longer pay for: not one the clients retry."""
+
+
+class Spend:
+    """The dollars a record or fill may still spend, shared by every task it runs.
+
+    It is checked before each request goes upstream, not only between tasks: one task's passes can cost more than
+    the whole budget. A request's price is known only from its response, so a request already in flight when the
+    budget runs out still completes; nothing is sent after that.
+    """
+
+    def __init__(self, limit: float) -> None:
+        self.limit = limit
+        self.spent = 0.0
+        self._lock = threading.Lock()
+
+    def reached(self) -> bool:
+        with self._lock:
+            return self.spent >= self.limit
+
+    def add(self, dollars: float | None) -> None:
+        with self._lock:
+            self.spent += dollars or 0.0
+
 
 def openrouter_forward(api_key: str, *, timeout: float = 120.0) -> Forward:
     """Forward to OpenRouter as a run keyed only with OPENROUTER_API_KEY would call it.
@@ -463,8 +488,9 @@ class Proxy:
     With `forward` and not `replay` it records: every request goes upstream. With `replay` and no `forward` it
     replays, and a request it has no response for is a miss. With both it fills: what it has is served, and a miss
     is sent upstream and added to the cassette, unless upstream refused it (`upstream_errors`): an error response is
-    never recorded. Filling at zero latency records the path a run takes when every
-    answer is instant, which a live recording cannot (see `bench.py` on the plan race).
+    never recorded. With `spend`, a request is sent upstream only while the budget lasts (`budget_refusals`). Filling
+    at zero latency records the path a run takes when every answer is instant, which a live recording cannot (see
+    `bench.py` on the plan race).
     """
 
     def __init__(
@@ -474,11 +500,13 @@ class Proxy:
         forward: Forward | None = None,
         replay: bool = True,
         latency: Latency = Latency.ZERO,
+        spend: Spend | None = None,
     ) -> None:
         if forward is None and not replay:
             raise ValueError("a proxy that neither replays nor forwards has nothing to answer with")
         self.cassette = cassette
         self._forward = forward
+        self._spend = spend
         self._replay = replay
         self._latency = latency
         self._lock = threading.Lock()
@@ -494,6 +522,7 @@ class Proxy:
         self.requests = 0
         self.forwarded = 0
         self.upstream_errors: list[int] = []
+        self.budget_refusals = 0
         self._server: ThreadingHTTPServer | None = None
         self._fixture_origin: tuple[str, str] | None = None
         self._requested_origin: str | None = None
@@ -563,6 +592,12 @@ class Proxy:
         if self._forward is None:
             message = f"replay miss: no recorded response for {purpose} ({model}) on {path}"
             return MISS_STATUS, "application/json", json.dumps({"error": {"message": message}}), 0.0
+        if self._spend is not None and self._spend.reached():
+            with self._lock:
+                self.budget_refusals += 1
+            spent, limit = self._spend.spent, self._spend.limit
+            message = f"budget reached: ${spent:.4f} of ${limit:.2f} spent, so {purpose} ({model}) was not sent"
+            return BUDGET_STATUS, "application/json", json.dumps({"error": {"message": message}}), 0.0
         started = time.monotonic()
         status, content_type, text = self._forward(path, raw)
         if not 200 <= status < 300:
@@ -584,6 +619,8 @@ class Proxy:
             cost=response_cost(text),
             fixture_origin=self._requested_origin,
         )
+        if self._spend is not None:
+            self._spend.add(exchange.cost)
         with self._lock:
             self.forwarded += 1
             self.cassette.exchanges.append(exchange)

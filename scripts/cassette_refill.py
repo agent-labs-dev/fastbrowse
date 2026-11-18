@@ -165,6 +165,12 @@ def positive(value: str) -> float:
     return dollars
 
 
+def _spent(entry: Mapping[str, Any]) -> float | None:
+    """What a task paid, a fill pass that was not kept included; a report without `spent_usd` has only what it kept."""
+    spent = entry.get("spent_usd")
+    return spent if spent is not None else entry.get("recorded_cost_usd")
+
+
 def fill_verdict(report: Mapping[str, Any] | None, tasks: Sequence[str], budget: float, exit_code: int) -> FillVerdict:
     """Judge a `bench fill` run of `tasks`. It is accepted only when every task is complete, converged and graded
     passed, no exchange is unpriced, and the spend is within the budget."""
@@ -183,10 +189,12 @@ def fill_verdict(report: Mapping[str, Any] | None, tasks: Sequence[str], budget:
             reasons.append(f"{len(entry['misses'])} replay misses remained")
         if entry.get("upstream_errors"):
             reasons.append(f"upstream refused {len(entry['upstream_errors'])} requests {entry['upstream_errors']}")
+        if entry.get("budget_refusals"):
+            reasons.append(f"the budget stopped {entry['budget_refusals']} requests before they were sent")
         if entry.get("unpriced_exchanges"):
             reasons.append(f"{entry['unpriced_exchanges']} exchanges have no price")
-        results.append(TaskResult(task, entry.get("recorded_cost_usd"), tuple(reasons)))
-    spent = sum(entry.get("recorded_cost_usd") or 0 for entry in entries.values())
+        results.append(TaskResult(task, _spent(entry), tuple(reasons)))
+    spent = sum(_spent(entry) or 0 for entry in entries.values())
     complete = set(entries) == set(tasks)
     reasons = []
     if report is None:
