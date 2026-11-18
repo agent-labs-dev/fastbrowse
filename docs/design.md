@@ -340,8 +340,9 @@ support judgment is withheld and ends `unverified`. When every check is answered
 more evidence. Rejected prose is feedback, never a source fact. Code keeps each claim that passed every
 check, with its citations, word for word in the corrected draft, and the composer writes only the rest, unless the
 coverage or step check failed, which fault the claims together; a claim it
-writes again with the same text is kept once. A rewrite that retyped a passed claim could change a copied name and
-fail where the first draft had passed. A corrected draft
+writes again with the same text, tally and computed layout is kept once. Claims with different ranks
+or computed fields remain distinct even when their placeholder text is identical. A rewrite that retyped a passed
+claim could change a copied name and fail where the first draft had passed. A corrected draft
 must pass citation checks and cover every requested fact or value. If the combined answer exceeds Jev's input limit for the coverage check, individually supported claims remain available as an unverified partial answer; the result identifies the coverage limit. The coverage check judges the written
 facts and values, not the form the task asks for, such as JSON, since code writes every answer as claims; citation
 support and browser actions have separate checks. A whole-answer check beside coverage

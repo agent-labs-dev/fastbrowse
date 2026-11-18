@@ -985,6 +985,24 @@ pub(crate) struct ReviewedComposition {
     pub rejection: Option<String>,
 }
 
+fn distinct_claims(claims: impl IntoIterator<Item = BoundClaim>) -> Vec<BoundClaim> {
+    claims.into_iter().fold(Vec::<BoundClaim>::new(), |mut all, claim| {
+        // Computed fields render as identical placeholders before ranking, so text alone loses distinct records.
+        if !all.iter().any(|other| {
+            other.text == claim.text
+                && other.tally == claim.tally
+                && other.cells == claim.cells
+                && other.within == claim.within
+                && (claim.tally.is_none()
+                    || other.composition.as_ref().map(Composition::context)
+                        == claim.composition.as_ref().map(Composition::context))
+        }) {
+            all.push(claim);
+        }
+        all
+    })
+}
+
 /// `reports` is whether the task asks to be told anything: one only carried out is written up only when a step was
 /// refused, has no facts to cover, and its steps are judged on their own.
 #[allow(clippy::too_many_arguments)]
@@ -1025,12 +1043,7 @@ pub(crate) async fn compose_reviewed(
         }
         _ => (compose_part(llm, writing_task, &items, ledger).await?, true),
     };
-    let claims = kept.into_iter().chain(claims).fold(Vec::<BoundClaim>::new(), |mut all, claim| {
-        if !all.iter().any(|other| other.text == claim.text) {
-            all.push(claim);
-        }
-        all
-    });
+    let claims = distinct_claims(kept.into_iter().chain(claims));
     // A composed answer is held to what the task asks to be told as a pick is: a source part inserts its note's
     // entire text, and unchecked, a whole release record of 16 fields stood in for "httpx", and a rewrite repeated
     // "The site received the file Received stocktake.txt (34 bytes)." after that check rejected it.
@@ -3092,6 +3105,59 @@ mod tests {
         let calls = llm.calls.lock().unwrap();
         assert!(calls.len() > 2);
         assert!(calls.last().unwrap().contains("q0:"));
+    }
+
+    #[tokio::test]
+    async fn ranked_claims_with_identical_templates_survive_until_computation() {
+        struct RankedDraft;
+        impl LLMClient for RankedDraft {
+            fn generate_value<'a>(
+                &'a self,
+                purpose: LLMPurpose,
+                messages: &'a [Message],
+                schema: &'a dyn ResponseSchema,
+                ledger: Option<&'a Ledger>,
+            ) -> BoxFuture<'a, std::result::Result<Generation<Value>, LLMError>> {
+                if purpose != LLMPurpose::Compose {
+                    return READS.generate_value(purpose, messages, schema, ledger);
+                }
+                let claims: Vec<_> = (1..=3)
+                    .map(|rank| {
+                        json!({
+                            "text": [{"computed":true,"field":"name"}],
+                            "evidence_ids": [],
+                            "tally": {"op":"max","of":"product","field":"price","rank":rank,"written":"GBP 30"}
+                        })
+                    })
+                    .collect();
+                Box::pin(async move {
+                    let data = schema
+                        .validate_json(&json!({"claims":claims,"columns":null}).to_string())
+                        .map_err(LLMError::Failed)?;
+                    Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+                })
+            }
+        }
+        let notes = Notes::new([
+            fact(0, "Product GBP 30 by A".into()),
+            fact(1, "Product GBP 20 by B".into()),
+            fact(2, "Product GBP 10 by C".into()),
+        ]);
+        let jev = Tallying::new("Product", "GBP");
+        let answer =
+            compose(&jev, &RankedDraft, "Name the three most expensive products", &notes, None, &[]).await.unwrap();
+        assert!(answer.problem.is_none(), "{:?}", answer.problem);
+        let names: Vec<_> = answer.claims.iter().map(|claim| claim.text.as_str()).collect();
+        assert_eq!(names, ["A", "B", "C"]);
+    }
+
+    #[test]
+    fn retyped_claims_deduplicate_despite_changed_citations() {
+        let original: BoundClaim = Claim::new("A supported fact", vec!["e0".into(), "e1".into()]).into();
+        let retyped = Claim::new("A supported fact", vec!["e1".into(), "e0".into()]).into();
+        let kept = distinct_claims([original, retyped]);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].evidence_ids, ["e0", "e1"]);
     }
 
     #[tokio::test]
