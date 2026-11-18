@@ -986,12 +986,16 @@ pub(crate) struct ReviewedComposition {
 }
 
 fn distinct_claims(claims: impl IntoIterator<Item = BoundClaim>) -> Vec<BoundClaim> {
-    let tally_key = |tally: &Option<Tally>| {
-        tally.as_ref().map(|tally| {
+    let tally_key = |claim: &BoundClaim| {
+        claim.tally.as_ref().map(|tally| {
             let mut key = tally.clone();
             // Only an extreme's missing rank means first place; a grouped count may assert no place at all.
             if matches!(key.op, Op::Min | Op::Max) {
                 key.rank = Some(key.place());
+                // A field-only winner claim never renders its initial numeric value.
+                if claim.composition.as_ref().is_some_and(|parts| parts.numeric_context(&key.written).is_none()) {
+                    key.written.clear();
+                }
             }
             key
         })
@@ -1000,7 +1004,7 @@ fn distinct_claims(claims: impl IntoIterator<Item = BoundClaim>) -> Vec<BoundCla
         // Computed fields render as identical placeholders before ranking, so text alone loses distinct records.
         if !all.iter().any(|other| {
             other.text == claim.text
-                && tally_key(&other.tally) == tally_key(&claim.tally)
+                && tally_key(other) == tally_key(&claim)
                 && other.cells == claim.cells
                 && other.within == claim.within
                 && (claim.tally.is_none()
@@ -3176,6 +3180,23 @@ mod tests {
             let kept = distinct_claims([original, retyped]);
             let expected = if op == Op::Count { 2 } else { 1 };
             assert_eq!(kept.len(), expected, "{op:?}: only extremes have an implicit first place");
+        }
+    }
+
+    #[test]
+    fn winner_fields_deduplicate_unused_initial_values() {
+        for numeric in [false, true] {
+            let claims = ["GBP 30", "GBP 20"].map(|written| {
+                let tally = tallied("", written, Op::Max, "product", Some("price"), vec![]).tally;
+                let mut parts = vec![json!({"computed":true,"field":"name"})];
+                if numeric {
+                    parts.push(json!({"computed":true}));
+                }
+                bind_claim(&[], json!(parts), tally)
+            });
+            let kept = distinct_claims(claims);
+            assert_eq!(kept.len(), if numeric { 2 } else { 1 }, "numeric slot present: {numeric}");
+            assert_eq!(kept[0].tally.as_ref().unwrap().written, "GBP 30");
         }
     }
 
