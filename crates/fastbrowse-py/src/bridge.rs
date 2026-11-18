@@ -283,7 +283,12 @@ fn messages_json(messages: &[Message]) -> String {
         .map(|message| {
             // JPEG bytes have no UTF-8 form, so images cross as base64 and the wrapper decodes them.
             let images: Vec<Value> = message.images.iter().map(|image| json!(Base64Bytes(image.0.clone()))).collect();
-            json!({"role": message.role, "content": message.content, "images": images})
+            json!({
+                "role": message.role,
+                "content": message.content,
+                "images": images,
+                "cache_through": message.cache_through,
+            })
         })
         .collect();
     Value::Array(messages).to_string()

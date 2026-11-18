@@ -461,6 +461,47 @@
           "default": null,
           "description": "Images the call sent as Jev assets; absent for a call that sent none, and on historical receipts.",
           "title": "Images"
+        },
+        "cache_read_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Input tokens read from the provider's prompt cache; absent when it reports none, and on old receipts.",
+          "title": "Cache Read Tokens"
+        },
+        "cache_write_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Input tokens written to the provider's prompt cache; absent when it reports none, and on old receipts.",
+          "title": "Cache Write Tokens"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The model that served the call, as the provider reported it; absent on historical receipts.",
+          "title": "Model"
         }
       },
       "required": [

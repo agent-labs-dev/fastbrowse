@@ -52,7 +52,9 @@ impl Page for SearchPage {
                 };
             }
             match self.provider.search(query, seconds).await {
-                Err(failure) => SearchOutcome { cost: failure.cost, error: Some(failure.message), page_changed: false },
+                Err(failure) => {
+                    SearchOutcome { cost: *failure.cost, error: Some(failure.message), page_changed: false }
+                }
                 Ok(response) => {
                     let mut controls = Vec::new();
                     let blocks = response

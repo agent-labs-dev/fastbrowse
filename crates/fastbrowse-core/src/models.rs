@@ -546,9 +546,28 @@ pub struct CostLine {
     /// Images the call sent as Jev assets. None for a call that sent none, and on historical receipts.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lax::opt_int_ge0")]
     pub images: Option<i64>,
+    /// Input tokens the provider read from its prompt cache, included in `input_tokens`. None when the provider did not
+    /// report it, and on historical receipts.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lax::opt_int_ge0")]
+    pub cache_read_tokens: Option<i64>,
+    /// Input tokens the provider wrote to its prompt cache, included in `input_tokens`. None when the provider did not
+    /// report it, and on historical receipts.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lax::opt_int_ge0")]
+    pub cache_write_tokens: Option<i64>,
+    /// The model that served the call: the provider response's `model`, or the requested id when the response named
+    /// none; the Jev model for a Jev line. Absent on historical receipts and on lines no model served.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 impl CostLine {
+    /// The one model every line in `lines` names, or None when none names one or they name different models.
+    pub fn shared_model<'a>(lines: impl IntoIterator<Item = &'a CostLine>) -> Option<String> {
+        let mut models = lines.into_iter().filter_map(|line| line.model.as_deref());
+        let first = models.next()?;
+        models.all(|model| model == first).then(|| first.to_string())
+    }
+
     pub fn new(component: CostComponent, basis: CostBasis, dollars: Option<f64>) -> CostLine {
         CostLine {
             component,
@@ -561,6 +580,9 @@ impl CostLine {
             seconds: None,
             physical_requests: None,
             images: None,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            model: None,
         }
     }
 
@@ -597,6 +619,15 @@ impl Schema for CostLine {
                     .doc("Physical provider requests represented by this line; absent on historical receipts."),
                 Field::default("images", Ty::optional(Ty::Int.ge(0)), Value::Null).omitted_when_empty().doc(
                     "Images the call sent as Jev assets; absent for a call that sent none, and on historical receipts.",
+                ),
+                Field::default("cache_read_tokens", Ty::optional(Ty::Int.ge(0)), Value::Null).omitted_when_empty().doc(
+                    "Input tokens read from the provider's prompt cache; absent when it reports none, and on old receipts.",
+                ),
+                Field::default("cache_write_tokens", Ty::optional(Ty::Int.ge(0)), Value::Null).omitted_when_empty().doc(
+                    "Input tokens written to the provider's prompt cache; absent when it reports none, and on old receipts.",
+                ),
+                Field::default("model", Ty::optional(Ty::Str), Value::Null).omitted_when_empty().doc(
+                    "The model that served the call, as the provider reported it; absent on historical receipts.",
                 ),
             ],
         )
