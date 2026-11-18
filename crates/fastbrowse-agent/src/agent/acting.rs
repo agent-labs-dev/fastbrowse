@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::decision::{Answer, ChoiceQuestion, DecisionError, EVEN_ODDS, Images, NoulQuestion, Question};
-use fastbrowse_core::keys::{chord, role_keys};
+use fastbrowse_core::keys::role_keys;
 use fastbrowse_core::models::{CostComponent, Decider, JevPurpose, Operation, Status, StepOutcome, UNTRUSTED};
 use fastbrowse_core::navigation::task_urls;
 use fastbrowse_core::page::{Action, Control, Observation};
@@ -1096,8 +1096,8 @@ impl Agent {
         }
     }
 
-    /// A key copied from the task's words, checked by the chord grammar the browser presses by. Words that name no key,
-    /// as when the task gives none, leave the press unmade and Jev is asked again, rather than the browser refusing
+    /// A key copied from the task's words, checked by the key grammar of the page that presses it. Words that name no
+    /// key, as when the task gives none, leave the press unmade and Jev is asked again, rather than the page refusing
     /// them and ending the run (#1212).
     async fn task_key(
         &self,
@@ -1107,9 +1107,9 @@ impl Agent {
         target: &Control,
     ) -> Step<String> {
         let key = self.text_with_scope(state, observation, decision, target, true).await?;
-        match chord(&key) {
-            Ok(_) => Ok(key),
-            Err(error) => Err(Unsure::new(format!(
+        match self.page.key_error(&key) {
+            None => Ok(key),
+            Some(error) => Err(Unsure::new(format!(
                 "the task gives no key to press in {}: {error}",
                 text::repr(&describe(target))
             ))
