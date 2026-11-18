@@ -89,9 +89,10 @@ runs on that click as on any other.
 
 The relevance pass on a dense page asks whether any part of the task could use each control. It sees the task,
 page address and title, and each control's label, role, operations, context and destination. It omits action history,
-the current subgoal, whether evidence is already in the notes, and whether a control is offscreen or already read,
-so scrolling and reading reuse unchanged judgments. The action decision still sees those facts when choosing its
-next step. Changed control descriptions are judged again.
+the current subgoal, whether evidence is already in the notes, and whether a control is offscreen, so scrolling
+reuses unchanged judgments. Read state stays in each control's question because it can change whether a link is
+useful. The action decision still sees current state when choosing its next step. Changed control descriptions
+are judged again.
 
 At startup, one request asks whether the task names dates, what output it asks for, where its evidence can be
 seen and how much of a list it covers. Over HTTP it also asks whether the task needs a browser action. Each

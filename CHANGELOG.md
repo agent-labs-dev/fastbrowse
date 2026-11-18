@@ -11,7 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- Dense pages reuse Jev's judgments of which controls the task could use after scrolling or reading. A scroll used to invalidate the whole relevance pass even when every link kept its label and destination; changed controls still get judged again ([#1233](https://github.com/agent-labs-dev/fastbrowse/issues/1233)).
+- Dense pages reuse Jev's judgments of which controls the task could use after scrolling. A scroll used to invalidate the whole relevance pass even when every link kept its label and destination; changed controls and newly read links still get judged again ([#1233](https://github.com/agent-labs-dev/fastbrowse/issues/1233)).
 
 - Decisions that show pictures ask for field values only after choosing the action. They no longer pre-ask value questions for every offered field, which made decisions on pictured pages more expensive even when the action used none of those values ([#1233](https://github.com/agent-labs-dev/fastbrowse/issues/1233)).
 
