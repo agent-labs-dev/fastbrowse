@@ -32,6 +32,20 @@ TASK_ID = re.compile(r"[a-z0-9][a-z0-9-]*")
 """What a task id looks like. A misses file comes from the code of the pull request under test, so its names are
 checked before they reach a path or a command line."""
 
+CASSETTE_VERSION = 1
+"""The cassette format `fastbrowse.evals.replay` reads. The jobs that judge a fill do not build the package, so they
+keep their own copy, which a test holds equal to the package's."""
+
+EXCHANGE_FIELDS: Mapping[str, type | tuple[type, ...]] = {
+    "path": str,
+    "purpose": str,
+    "status": int,
+    "content_type": str,
+    "body": str,
+    "latency": (int, float),
+}
+"""The typed fields `Exchange.from_json` requires of a cassette line, besides `request`, which may be any JSON."""
+
 TRAILER = "Cassette-Refill"
 """The commit trailer that marks a refill commit, valued with the head commit it refilled."""
 
@@ -220,8 +234,9 @@ def fill_verdict(report: Mapping[str, Any] | None, tasks: Sequence[str], budget:
 
 def validate_cassettes(directory: Path, tasks: Sequence[str]) -> list[Path]:
     """The cassette files to commit, or an error. Only `<task>.jsonl` of a requested task is taken, each must open
-    with a cassette head line, and none may hold an exchange the provider refused. The files come from a job that ran
-    the pull request's code, so the committing job checks them itself."""
+    with the head line of this cassette version for its task, every exchange must carry the fields replay reads, and
+    none may hold an exchange the provider refused. The files come from a job that ran the pull request's code, so the
+    committing job checks them itself."""
     found = sorted(path for path in directory.iterdir() if path.name != "result.json") if directory.is_dir() else []
     if any(path.is_symlink() or not path.is_file() for path in found):
         raise ValueError("a cassette to commit is not a regular file")
@@ -231,11 +246,23 @@ def validate_cassettes(directory: Path, tasks: Sequence[str]) -> list[Path]:
     for path in found:
         with path.open(encoding="utf-8") as lines:
             head = json.loads(next(lines, "null"))
-            if not isinstance(head, dict) or "cassette" not in head or head.get("task") != path.stem:
-                raise ValueError(f"{path.name}: no cassette head line for its task")
+            if not isinstance(head, dict) or head.get("cassette") != CASSETTE_VERSION or head.get("task") != path.stem:
+                raise ValueError(f"{path.name}: no version {CASSETTE_VERSION} cassette head line for its task")
             for number, line in enumerate(lines, 2):
-                status = json.loads(line).get("status")
-                if not isinstance(status, int) or not 200 <= status < 300:
+                if not line.strip():
+                    continue
+                exchange = json.loads(line)
+                if not isinstance(exchange, dict) or "request" not in exchange:
+                    raise ValueError(f"{path.name}:{number}: not an exchange")
+                wrong = sorted(
+                    name
+                    for name, kind in EXCHANGE_FIELDS.items()
+                    if not isinstance(exchange.get(name), kind) or isinstance(exchange.get(name), bool)
+                )
+                if wrong:
+                    raise ValueError(f"{path.name}:{number}: an exchange without a valid {', '.join(wrong)}")
+                status = exchange["status"]
+                if not 200 <= status < 300:
                     raise ValueError(f"{path.name}:{number}: a recorded status of {status!r} is not an answer")
     return found
 

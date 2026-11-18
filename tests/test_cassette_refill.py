@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 import yaml
 
+from fastbrowse.evals.replay import CASSETTE_VERSION, Cassette, Exchange, request_key
 from scripts import cassette_refill as refill
 
 SHA = "a" * 40
@@ -191,8 +192,46 @@ def test_a_budget_is_finite_and_positive(value: str) -> None:
 
 
 def write_cassette(directory: Path, task: str, *statuses: int) -> None:
-    lines = [json.dumps({"cassette": 1, "task": task})] + [json.dumps({"status": status}) for status in statuses]
-    (directory / f"{task}.jsonl").write_text("\n".join(lines) + "\n")
+    """A cassette as `bench` saves it, so the check is held to what replay itself writes and reads."""
+    request = {"model": "m", "messages": []}
+    exchanges = [
+        Exchange(
+            key=request_key("/chat/completions", request),
+            path="/chat/completions",
+            purpose="plan",
+            model="m",
+            request=request,
+            status=status,
+            content_type="application/json",
+            body="{}",
+            latency=0.1,
+        )
+        for status in statuses
+    ]
+    Cassette(task=task, exchanges=exchanges).save(directory / f"{task}.jsonl")
+
+
+def test_the_committing_job_reads_the_cassette_version_replay_reads() -> None:
+    assert refill.CASSETTE_VERSION == CASSETTE_VERSION
+
+
+def test_a_cassette_of_another_version_is_never_committed(tmp_path: Path) -> None:
+    write_cassette(tmp_path, "mock-basket", 200)
+    path = tmp_path / "mock-basket.jsonl"
+    head, _, rest = path.read_text().partition("\n")
+    path.write_text(json.dumps({**json.loads(head), "cassette": CASSETTE_VERSION + 1}) + "\n" + rest)
+    with pytest.raises(ValueError, match="head line"):
+        refill.validate_cassettes(tmp_path, ["mock-basket"])
+
+
+@pytest.mark.parametrize("field", ["path", "purpose", "status", "content_type", "body", "latency", "request"])
+def test_a_cassette_with_an_exchange_replay_cannot_read_is_never_committed(tmp_path: Path, field: str) -> None:
+    write_cassette(tmp_path, "mock-basket", 200)
+    path = tmp_path / "mock-basket.jsonl"
+    head, exchange = path.read_text().splitlines()
+    path.write_text(head + "\n" + json.dumps({k: v for k, v in json.loads(exchange).items() if k != field}) + "\n")
+    with pytest.raises(ValueError, match="exchange"):
+        refill.validate_cassettes(tmp_path, ["mock-basket"])
 
 
 def test_only_the_requested_cassettes_are_committed(tmp_path: Path) -> None:
