@@ -445,10 +445,11 @@ after the deadline, unrelated page timers and the cookie-banner helper's backgro
 
 A `wait` step lasts until the page changes by itself: a change to what the settle fingerprint compares, a player
 starting, pausing, ending or muting (in the page, a granted child frame or a frame in a process of its own that an observation reads), a same-document navigation, a navigation to another document, or a dialog. It
-has no fixed bound. A run with `max_seconds` waits at most until it must stop browsing, and a run without one waits
-for the change. The wait samples the fingerprint twice a second beside the events it hears, since a script writing
+has no fixed bound. A run with `max_seconds` waits at most until it must stop browsing. A run without one waits at
+most one armed watch (`WAIT_ARM_SECONDS`, 60 s) and is then told the page did not change, so it can decide again and
+the stall rule counts a page that never moves. The wait samples the fingerprint twice a second beside the events it hears, since a script writing
 `checked` as a property raises none. A wait that ends with nothing changed is a step that changed nothing, under the one stall rule, unless
-a player's clock moved meanwhile. A cancelled wait removes what it installed in the page. A direct `Page::act` Wait has no deadline; an embedder bounds it through `Page::wait` or cancellation. Desktop waits use the
+a player's clock moved meanwhile. A cancelled wait removes what it installed in the page. A direct `Page::act` Wait has no deadline of its own, so it lasts one armed watch at most; an embedder bounds it further through `Page::wait` or cancellation. Desktop waits use the
 same run deadline while polling the window's accessibility tree for a change.
 
 An empty observation waits on loading events before action history and progress are recorded.

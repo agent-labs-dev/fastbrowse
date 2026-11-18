@@ -1050,8 +1050,9 @@ impl Agent {
                         if action.operation == Operation::Search {
                             self.search_web(state.ledger.clone(), action.text.as_deref().unwrap_or_default()).await
                         } else if action.operation == Operation::Wait {
-                            // A WAIT lasts until the page changes, which may be later than any fixed bound: a status line
-                            // rewritten every ten seconds was never seen to move. The run's own deadline is the only bound.
+                            // A WAIT lasts until the page changes, which may be later than a few seconds: a status line
+                            // rewritten every ten seconds was never seen to move. The run's own deadline bounds it, and
+                            // with no deadline the browser ends it after one armed watch.
                             let seconds = browsing_deadline(&state.ledger, state.compose)
                                 .map_or(f64::INFINITY, |until| {
                                     until.saturating_duration_since(tokio::time::Instant::now()).as_secs_f64()
