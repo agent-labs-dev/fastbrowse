@@ -182,11 +182,12 @@
   // inside its list item was taken with the item's price as the name, and asked for a description's hyperlinks, a run
   // had their texts and no address to give. Each link is kept with its block as its text and address, which code
   // places in the block's text. A footnote reference is no part of the text it marks, and a script link leads nowhere.
+  const readableLink = a => typeof a.href === 'string' && !a.href.startsWith('javascript:') && !(a.matches(IN_PAGE) && noteReference(a));
   const linksIn = elements =>
     elements
       .flatMap(e => [...(e.matches('a[href]') ? [e] : []), ...e.querySelectorAll('a[href]')])
       // An SVG link's `href` is an animated value, not an address.
-      .filter(a => typeof a.href === 'string' && !a.href.startsWith('javascript:') && !(a.matches(IN_PAGE) && noteReference(a)))
+      .filter(readableLink)
       .map(a => ({ text: textOf(a), href: a.href }))
       .filter(link => link.text);
   const controlOf = nodes => {
@@ -211,8 +212,16 @@
     return found ? registry.hoverContexts.get(found).control : null;
   };
   const push = (kind, text, extra = {}, nodes = []) => {
-    if (text)
-      blocks.push({ kind, text, heading_path: [...path], frame_path: framePath, source_path: sourcePath, control_context: controlOf(nodes), ...extra });
+    if (!text) return;
+    const first = nodes[0];
+    const link = (first?.nodeType === 1 ? first : first?.parentElement)?.closest('a[href]');
+    // A link can wrap a table or a list. Its destination belongs to each block, without flattening their records.
+    const inherited = link && readableLink(link) && nodes.every(node => node !== link && link.contains(node));
+    blocks.push({
+      kind, text, heading_path: [...path], frame_path: framePath, source_path: sourcePath,
+      control_context: controlOf(nodes), ...extra,
+      ...(inherited ? { href: hrefOf(link), links: [{ text, href: link.href }, ...(extra.links ?? [])] } : {}),
+    });
   };
 
   // A cell can say what it says with an image or an icon alone: a flag marking the winner, a tick for "yes".
@@ -464,13 +473,13 @@
     }
     if (el.tagName === 'PRE') return push('code', textOf(el), {}, [el]);
     const record = recordText(el);
-    if ((el.tagName === 'LI' && leaf(el)) || record !== null || el.matches('a[href]')) {
-      // A card or link's heading ends an earlier sibling's heading, even when read without walking it.
+    if ((el.tagName === 'LI' && leaf(el)) || record !== null) {
+      // A card's heading still ends an earlier sibling's heading, even when the card is read without walking it.
       const heading = [...el.querySelectorAll('h1,h2,h3,h4,h5,h6')].find(visible);
       if (heading) endHeading(HEADINGS[heading.tagName]);
       const links = el.matches('a[href]') ? [el] : el.querySelectorAll('a[href]');
       push(
-        el.tagName === 'LI' ? 'list_item' : record !== null ? 'record' : 'link',
+        el.tagName === 'LI' ? 'list_item' : 'record',
         record ?? textOf(el),
         {
           ...(links.length === 1 ? { href: hrefOf(links[0]) } : {}),

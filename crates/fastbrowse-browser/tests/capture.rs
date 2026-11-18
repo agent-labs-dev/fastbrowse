@@ -249,10 +249,12 @@ async fn test_link_wrapping_blocks_keeps_its_destination() {
     h.page.navigate(&sites().main, None).await.expect("navigate");
     set_body(&h.session, "<a href='/trip/1'><div>North Air</div><div>$120</div></a>").await;
     let capture = content_capture(&h.page).await;
-    assert_eq!(texts(&capture), ["North Air\n$120"]);
-    assert_eq!(capture.blocks[0].kind, BlockKind::Link);
-    assert_eq!(capture.blocks[0].href.as_deref(), Some("/trip/1"));
-    assert_eq!(capture.blocks[0].links.len(), 1);
+    assert_eq!(texts(&capture), ["North Air", "$120"]);
+    for block in &capture.blocks {
+        assert_eq!(block.href.as_deref(), Some("/trip/1"));
+        assert_eq!(block.links.len(), 1);
+        assert_eq!(block.links[0].text, text_of(&capture, block));
+    }
     set_body(
         &h.session,
         "<h2>Departures</h2><h3>Earlier</h3>\
@@ -260,7 +262,38 @@ async fn test_link_wrapping_blocks_keeps_its_destination() {
     )
     .await;
     let capture = content_capture(&h.page).await;
-    assert_eq!(path(capture.blocks.last().unwrap()), ["Departures"]);
+    assert_eq!(path(capture.blocks.last().unwrap()), ["Departures", "North Air"]);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_link_wrapping_structured_content_preserves_source_boundaries() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    for (content, kind, count) in [
+        (
+            "<table><tr><th>Airline</th><th>Price</th></tr><tr><td>North Air</td><td>$120</td></tr>\
+             <tr><td>West Air</td><td>$140</td></tr></table>",
+            BlockKind::Table,
+            2,
+        ),
+        (
+            "<ul><li><div>North Air</div><div>$120</div></li>\
+             <li><div>West Air</div><div>$140</div></li>\
+             <li><div>East Air</div><div>$160</div></li></ul>",
+            BlockKind::ListItem,
+            3,
+        ),
+    ] {
+        set_body(&h.session, &format!("<a href='/trips'>{content}</a>")).await;
+        let capture = content_capture(&h.page).await;
+        assert_eq!(capture.blocks.len(), count, "{:?}", texts(&capture));
+        assert!(capture.blocks.iter().all(|block| block.kind == kind));
+        for block in &capture.blocks {
+            assert_eq!(block.href.as_deref(), Some("/trips"));
+            assert_eq!(block.links.len(), 1);
+        }
+    }
     h.close().await;
 }
 
