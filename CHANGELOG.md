@@ -11,9 +11,13 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- Browser and HTTP reads keep a text label's native tooltip text beside the label, so a listing that shortens a title can still supply the full name of the record with the highest or lowest value. An unverified answer names a winner field it could not establish without printing its unfilled draft slot ([#1247](https://github.com/agent-labs-dev/fastbrowse/issues/1247)).
-
 - Reads preserve the headings and individual records inside inline containers, including custom elements. A page of flight results could be captured as one paragraph, leaving the answer unable to cite an individual flight and its price ([#1250](https://github.com/agent-labs-dev/fastbrowse/issues/1250)).
+
+- Comparisons use the records in the state the task asks about, including when a draft names a broader record kind. A package comparison took a pre-release from the history instead of the release the page labels latest. Winner names copied from captured headings also pass the same source rules as the copy step, so a valid name no longer leaves the answer empty. Copying a selected record's name no longer rechecks its kind and discards a name it states ([#1249](https://github.com/agent-labs-dev/fastbrowse/issues/1249), [#1248](https://github.com/agent-labs-dev/fastbrowse/issues/1248)).
+
+- Ranked answers keep each requested place until its name and value are computed. Claims with identical placeholder text used to collapse into one, leaving a top-three answer with only one item ([#1248](https://github.com/agent-labs-dev/fastbrowse/issues/1248)).
+
+- Browser and HTTP reads keep a text label's native tooltip text beside the label, so a listing that shortens a title can still supply the full name of the record with the highest or lowest value. An unverified answer names a winner field it could not establish without printing its unfilled draft slot ([#1247](https://github.com/agent-labs-dev/fastbrowse/issues/1247)).
 
 - A read distinguishes a document title from a heading in the page, so asking for an opened window's heading selects its heading rather than its tab title ([#1235](https://github.com/agent-labs-dev/fastbrowse/issues/1235)).
 - Answer checks accept a complete requested field, such as a full date, and judge the requested report separately from the action history. Calendar and cart tasks could finish their browser work but return an unverified answer after these checks rejected the requested values ([#1236](https://github.com/agent-labs-dev/fastbrowse/issues/1236), [#1237](https://github.com/agent-labs-dev/fastbrowse/issues/1237)).
