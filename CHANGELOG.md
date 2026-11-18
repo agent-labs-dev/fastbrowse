@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Comparison answers include the calculated value when asked for it alongside the winning record. The answer could name the winner while leaving the value in its formatting data ([#1304](https://github.com/agent-labs-dev/fastbrowse/issues/1304)).
+
 - Comparison answers can cite the versions and values that explain the result without a false partial-answer notice ([#1296](https://github.com/agent-labs-dev/fastbrowse/issues/1296)).
 
 - Dates that refer back to a relative month use that month's offset. The first weekday of next month could be counted in January instead, causing the run to report that a correctly selected date was still undone ([#1293](https://github.com/agent-labs-dev/fastbrowse/issues/1293)).
