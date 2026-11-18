@@ -62,8 +62,9 @@ Rules that hold across the table:
   repaired once, as everywhere.
 - **Cost comes from what the provider reports.** OpenRouter and the gateway report dollars. A call of theirs that
   reports none, or is cancelled before its reply, is charged at most what its own request could bill: its text and
-  its output cap, or the model's context window when that is smaller, at the dearest listed price. That is a true
-  upper bound. The others
+  its output cap, or the model's context window when that is smaller, at the dearest listed price. A request that
+  carries an image keeps the whole window, since an image can bill prompt tokens at a rate no listing publishes. That
+  is a true upper bound. The others
   report tokens, so their calls are recorded with tokens and an unknown cost, never zero, and `--max-dollars` stops the
   run after the first such call.
 - **A prompt is fitted to the context window the provider lists.** OpenRouter and the gateway list each model's

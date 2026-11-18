@@ -321,25 +321,23 @@ fn images(body: &Map<String, Value>) -> usize {
 }
 
 fn bound(cost: CostLine, ceiling: Ceiling, body: &Map<String, Value>) -> CostLine {
-    let tokens = ceiling.context.min(text_bytes(body).saturating_add(output_cap(body).unwrap_or(ceiling.context)));
+    // An image can bill prompt tokens beside its per-image fee, at a rate no listing publishes, so only a text request
+    // is bounded by its own bytes; one that carries an image keeps the whole window.
+    let tokens = if images(body) > 0 {
+        ceiling.context
+    } else {
+        ceiling.context.min(text_bytes(body).saturating_add(output_cap(body).unwrap_or(ceiling.context)))
+    };
     let dollars = (tokens as f64 * ceiling.per_token + ceiling.per_request + ceiling.per_image * images(body) as f64)
         * (1.0 + BYOK_FEE);
     CostLine { basis: CostBasis::Bounded, dollars: Some(dollars), ..cost }
 }
 
-/// The request's bytes besides its images, which are priced per image. Every tokenizer a routed model uses maps each
+/// The bytes of a request that carries no image. Every tokenizer a routed model uses maps each
 /// token to at least one byte of text, so the prompt holds at most this many tokens. The JSON around each message and
 /// the response schema are counted too, and they are longer than the few tokens a chat template adds for them.
 fn text_bytes(body: &Map<String, Value>) -> i64 {
-    let mut text = body.clone();
-    if let Some(Value::Array(messages)) = text.get_mut("messages") {
-        for message in messages {
-            if let Some(Value::Array(parts)) = message.get_mut("content") {
-                parts.retain(|part| part.get("type").and_then(Value::as_str) != Some("image_url"));
-            }
-        }
-    }
-    i64::try_from(Value::Object(text).to_string().len()).unwrap_or(i64::MAX)
+    i64::try_from(Value::Object(body.clone()).to_string().len()).unwrap_or(i64::MAX)
 }
 
 /// The output tokens the request let the model bill, hidden reasoning included, when it set a cap.

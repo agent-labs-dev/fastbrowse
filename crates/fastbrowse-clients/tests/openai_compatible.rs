@@ -647,6 +647,36 @@ async fn test_a_small_request_is_bounded_by_its_own_bytes_and_output_cap_not_the
     assert!(approx(result.cost.dollars.unwrap(), tokens * 0.000004 * 1.05), "{:?}", result.cost.dollars);
 }
 
+// An image can bill prompt tokens beside its per-image fee at a rate no listing publishes, so a request that carries one
+// is bounded by the whole window, plus the per-image fee, however short its text.
+#[tokio::test(start_paused = true)]
+async fn test_a_request_with_an_image_keeps_the_window_bound() {
+    let http = answering(|request| {
+        if request.url.ends_with("/endpoints") {
+            return ok(Response::json(
+                200,
+                &json!({"data": {"endpoints": [
+                    {"context_length": 1_000_000, "pricing": {"prompt": "0.000001", "completion": "0.000004", "image": "0.01"}}
+                ]}}),
+            ));
+        }
+        if request.method.as_str() == "GET" {
+            return ok(Response::new(404, ""));
+        }
+        ok(Response::json(200, &without_cost("generation-1")))
+    });
+    let llm = client(http, OPENROUTER, LLMPurpose::Start, "writer");
+    let message = Message {
+        role: Role::User,
+        content: "Count".into(),
+        images: vec![Bytes(b"\x89PNG\r\n\x1a\nimage".to_vec())],
+        cache_through: false,
+    };
+    let result = generate(&llm, LLMPurpose::Start, &[message], None).await.unwrap();
+    assert_eq!(result.cost.basis, CostBasis::Bounded);
+    assert!(approx(result.cost.dollars.unwrap(), (1_000_000.0 * 0.000004 + 0.01) * 1.05), "{:?}", result.cost.dollars);
+}
+
 #[tokio::test(start_paused = true)]
 async fn test_a_gateway_response_without_cost_or_receipt_is_bounded() {
     // The gateway's endpoints payload as it serves one: a dearer priority tier on one endpoint, a peak multiplier and
