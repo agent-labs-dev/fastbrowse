@@ -58,13 +58,16 @@ A reviewer rejects a change that breaks one.
   declared origin (`https://*.site.com` covers that site's hosts, not any host ending in the same letters). They are
   blanked from model input and redacted from text results; an address on an origin the secret was typed on keeps its
   host and port. No model screenshot or PNG step frame is taken while a resolved secret shows as page text, checked
-  against the page as it is when the image is taken. Live frames and recordings are held back around secret typing.
+  against the page as it is when the image is taken (the recorded action may be what put it there). Live JPEG frames
+  and recordings are held back before secret typing and while observations reveal a resolved secret; recordings keep
+  their last clean frame.
 - **Code owns authorization.** Jev classifies clicks, form-submitting Enter and dialog acceptance; code refuses an
   irreversible one unless the run is authorized and Jev judges the task asked for it. Only code-selected pagination
   skips classification.
-- **One stall rule.** A step that changes nothing, a read that adds nothing, a refused DONE, or a return to a seen
-  page state with nothing read since is no progress; `unchanged_actions` of them in a row ask Jev again without the
-  stalled action. Rewriting a field's current value never counts as progress.
+- **One stall rule.** A step that changes nothing, a read that adds nothing, a refused DONE, a return to a seen page
+  state with nothing read since, and any return after the first since the last new evidence are each no progress;
+  `unchanged_actions` of them in a row ask Jev again without the stalled action. An unseen page state or new evidence
+  renews that budget. Rewriting a field's current value never counts as progress.
 
 ## Prompts and models
 
@@ -72,13 +75,15 @@ A prompt is code and a prompt change is a behaviour change: iterate it against t
 test any instruction the behaviour depends on. One call does one job and states everything the next step needs.
 An LLM's output is a proposal: code checks a schema or citation against quotes or page state, trusts it only where
 it can prove it complete, and reports a partial result as partial. Every call leaves a ledger receipt (purpose,
-tokens, dollars), and the budget is checked before the call that would break it.
+tokens, dollars), and the budget is checked before the call that would break it; a change to the calls a run makes is
+measured by calls per purpose, not wall clock. A rule that overrides a model is stated to that model.
 
 ## Evals
 
 Agent changes are iterated against the `dev` suite only, with `core` run before and after a round. Read
 [docs/agents/evals.md](docs/agents/evals.md) before changing agent behaviour or a task, or spending on a paid run,
-and [docs/agents/publish-evals.md](docs/agents/publish-evals.md) before staging or publishing a result.
+and [docs/agents/publish-evals.md](docs/agents/publish-evals.md) before staging or publishing a result, or changing
+the candidate schema that `evals/` and the site share.
 
 - A verdict on an agent's answer comes from the LLM judge alone (`fastbrowse.evals.judge.Claim`); no grader matches
   answer text. `tests/evals/test_no_answer_matching.py` enforces it.
@@ -106,8 +111,8 @@ and [docs/agents/publish-evals.md](docs/agents/publish-evals.md) before staging 
 | Changing a crate, entry point, client SDK or a Rust-to-Python type | [docs/agents/architecture.md](docs/agents/architecture.md) |
 | The browser layer; Jev assumptions | [docs/design.md](docs/design.md), [docs/jev.md](docs/jev.md) |
 | Issues, triage labels, glossary and ADRs | [issue-tracker](docs/agents/issue-tracker.md), [triage-labels](docs/agents/triage-labels.md), [domain](docs/agents/domain.md) |
-| Fixing a reported bug or landing someone's code (credit them) | [docs/agents/credits.md](docs/agents/credits.md) |
-| Writing or fixing a post in `blog/` | [docs/agents/blog.md](docs/agents/blog.md) |
+| Fixing a reported bug, building a requested feature or landing someone's code (credit them) | [docs/agents/credits.md](docs/agents/credits.md) |
+| Writing a post in `blog/`, or a change that fails `drift check` | [docs/agents/blog.md](docs/agents/blog.md) |
 | Releasing (only when the maintainer says to); the AUR package | [release](docs/agents/release.md), [aur](docs/agents/aur.md) |
 | Merging a PR | the `mergeloop` skill |
 
