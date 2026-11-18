@@ -87,10 +87,10 @@ runs on that click as on any other.
 
 ## One request a step
 
-The relevance pass on a dense page asks whether any part of the task or current subgoal could use each control.
-It sees the task, recovery subgoal, page address and title, and each control's label, role, operations, context and
-destination. It omits action history, whether evidence is already in the notes, and whether a control is offscreen,
-so scrolling reuses unchanged judgments. Read state stays in each control's question because it can change
+The relevance pass on a dense page asks whether any still-needed part of the task or current subgoal could use each control.
+It sees the task, recovery subgoal, recent actions, page address and title, and each control's label, role,
+operations, context and destination. It omits scroll actions, whether evidence is already in the notes, and whether
+a control is offscreen, so scrolling reuses unchanged judgments. Read state stays in each control's question because it can change
 whether a link is useful. The action decision still sees current state when choosing its next step. Changed control descriptions
 and changed recovery subgoals are judged again.
 
