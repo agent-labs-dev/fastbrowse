@@ -164,7 +164,13 @@ impl DecisionClient for LlmDecisionClient {
     }
 
     fn profile(&self) -> DecisionProfile {
-        DecisionProfile { dollars_per_input_token: None, images: true, thresholds: None, ..DecisionProfile::jev() }
+        DecisionProfile {
+            max_questions: Some(MAX_QUESTIONS),
+            dollars_per_input_token: None,
+            images: true,
+            thresholds: None,
+            ..DecisionProfile::jev()
+        }
     }
 
     /// `generate_value` reserves an LLM call for each request it sends, repairs included.
@@ -178,6 +184,11 @@ impl DecisionClient for LlmDecisionClient {
 /// messages, so the state stays a cached prefix; only a wire that renders the schema first (Anthropic's) loses that.
 /// The most enum values one schema may hold across all its properties (OpenAI Structured Outputs).
 const SCHEMA_ENUM_VALUES: usize = 1000;
+
+/// The most questions one call may ask. OpenAI Structured Outputs allow 5000 object properties in a schema; the
+/// envelope holds `answers`, and a question takes at most five (a box and its four edges), so the batcher splits a
+/// larger form across calls.
+const MAX_QUESTIONS: usize = (5000 - 1) / 5;
 
 struct Picks {
     questions: IndexMap<String, Question>,
