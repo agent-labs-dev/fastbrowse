@@ -481,16 +481,19 @@ impl Agent {
             let given = state::with_inputs(task, &options.inputs);
             // The known pages are asked beside the first page's open, observation and decision, and taken before the
             // run first reads for, builds or acts on a decision, or proposes a route (`known_pages_arrived`). Awaited
-            // here, the text LLM's answer held every run's first step, for about a second and up to 3.4 s. A capped run
-            // still waits: a call checks the cap against the receipts already recorded, and this one's comes later.
+            // here, the text LLM's answer held every run's first step, for about a second and up to 3.4 s. A run with a
+            // dollar cap still waits: a call checks that cap against the receipts already recorded, and this one's comes
+            // later. Call caps need no wait, since reserving counts the call.
             let asked =
-                (!ledger.capped()).then(|| tokio::runtime::Handle::try_current().ok()).flatten().map(|runtime| {
-                    let (llm, given, start, ledger) =
-                        (self.llm.clone(), given.clone(), start.map(String::from), ledger.clone());
-                    state::KnownAsked::new(runtime.spawn(async move {
-                        crate::start::known_pages(&*llm, &given, start.as_deref(), Some(&ledger)).await
-                    }))
-                });
+                ledger.limits.max_dollars.is_none().then(|| tokio::runtime::Handle::try_current().ok()).flatten().map(
+                    |runtime| {
+                        let (llm, given, start, ledger) =
+                            (self.llm.clone(), given.clone(), start.map(String::from), ledger.clone());
+                        state::KnownAsked::new(runtime.spawn(async move {
+                            crate::start::known_pages(&*llm, &given, start.as_deref(), Some(&ledger)).await
+                        }))
+                    },
+                );
             let (judgments, known) = if asked.is_some() {
                 // Polled once, the request reserves its call and leaves now, as it did when it was awaited here: a
                 // current-thread runtime would otherwise first poll it when the run waits on I/O.

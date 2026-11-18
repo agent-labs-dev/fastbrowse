@@ -1491,19 +1491,7 @@ async fn review_composition(
                     as fastbrowse_core::BoxFuture<'_, Result<Option<crate::batches::Answered>>>
             })
             .collect();
-        // Each capped pass prices itself against receipts already recorded, so its sibling must finish first.
-        let answers = if ledger.is_some_and(Ledger::capped) {
-            async {
-                let mut batches = Vec::new();
-                for request in requests {
-                    batches.push(request.await?);
-                }
-                Ok(batches)
-            }
-            .await
-        } else {
-            crate::support::try_join_all(requests).await
-        };
+        let answers = crate::support::try_join_reserving(ledger, requests).await;
         match answers {
             Ok(batches) => {
                 let all = batches.into_iter().flatten().reduce(|mut all, batch| {
