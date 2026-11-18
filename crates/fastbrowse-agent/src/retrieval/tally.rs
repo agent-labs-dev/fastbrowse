@@ -1774,17 +1774,27 @@ pub(super) async fn winner_fields(
         let Some(groups) = read_groups(llm, field, &tally.of, &records, &found, ledger).await? else {
             return Ok(Err(Unworked::Notes { reason: unread_field(field, &tally.of, &found), notes: ids.clone() }));
         };
+        // A record's name alone need not answer the whole task. This checks its requested field;
+        // review_claims checks the assembled claim against the task with asks_check and coverage_question (#1268).
         let mut questions = IndexMap::new();
         for (group, (written, members)) in groups.values().enumerate() {
             for record in members {
                 questions.insert(format!("field{group}/r{record}"), Question::Noul(NoulQuestion::new(
-                    format!("{UNTRUSTED} Doing `task`, does this copied text give the complete, unambiguous {} of exactly this record, without another record's value or an unrelated field? The record includes its captured headings as well as its quotes. A heading that names the record can state its requested field even when the quote states only a different field. Copied text: {}. Record: {}", text::repr(field), text::repr(written), dumps(&found[*record].note)),
+                    format!("{UNTRUSTED} Code selected this record by comparing {} across {}. Judge only whether the copied text states this record's requested field; whether that field alone answers task is checked separately. Does this copied text give the complete, unambiguous {} of exactly this record, without another record's value or an unrelated field? The record includes its captured headings as well as its quotes. A heading that names the record can state its requested field even when the quote states only a different field. Copied text: {}. Record: {}", text::repr(tally.field.as_deref().expect("a worked numeric extreme has a field")), text::repr(&tally.of), text::repr(field), text::repr(written), dumps(&found[*record].note)),
                     Some("The copied text is exactly this record's requested field."),
                     Some("It is missing, ambiguous, incomplete, another field, or another record's value."),
                 )));
             }
         }
-        let Some(answers) = ask(jev, &json!({"task":task,"field":field}), &questions, tokens, ledger).await? else {
+        let Some(answers) = ask(
+            jev,
+            &json!({"task":task,"field":field,"record_kind":tally.of,"compared_field":tally.field}),
+            &questions,
+            tokens,
+            ledger,
+        )
+        .await?
+        else {
             return Ok(Err(Unworked::Unjudged));
         };
         for key in questions.keys() {
@@ -2385,7 +2395,10 @@ mod tests {
                 .iter()
                 .map(|(key, question)| {
                     let Question::Noul(question) = question else { panic!("field support only") };
-                    assert!(question.instructions.contains("Doing `task`, does this copied text"));
+                    assert!(question.instructions.contains("Code selected this record by comparing"));
+                    assert!(question.instructions.contains(state["record_kind"].as_str().unwrap()));
+                    assert!(question.instructions.contains(state["compared_field"].as_str().unwrap()));
+                    assert!(question.instructions.contains("whether that field alone answers task is checked separately"));
                     assert!(question.instructions.contains("exactly this record"));
                     assert!(question.instructions.contains("The record includes its captured headings as well as its quotes"));
                     assert!(question.instructions.contains("A heading that names the record can state its requested field even when the quote states only a different field"));
