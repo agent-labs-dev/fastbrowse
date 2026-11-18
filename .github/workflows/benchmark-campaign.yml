@@ -326,6 +326,11 @@ jobs:
           need FASTBROWSE_OPENROUTER_API_KEY "$FASTBROWSE_OPENROUTER_API_KEY"
           need PARALLAX_JUDGE_API_KEY "$PARALLAX_JUDGE_API_KEY"
           need PARALLAX_JUDGE_BASE_URL "$PARALLAX_JUDGE_BASE_URL"
+          # Claude Opus never judges: it costs many times our chosen judge, so a run that needs a comparison judges
+          # every arm, ours and other products', with the panel in PARALLAX_JUDGE_MODELS instead.
+          case ",$PARALLAX_JUDGE_MODELS," in
+            *,anthropic/claude-opus*) echo "::error::Claude Opus is not allowed as a judge: $PARALLAX_JUDGE_MODELS"; exit 1 ;;
+          esac
           need PARALLAX_JUDGE_MODELS "$PARALLAX_JUDGE_MODELS"
           need LANGFUSE_PUBLIC_KEY "$LANGFUSE_PUBLIC_KEY"
           need LANGFUSE_SECRET_KEY "$LANGFUSE_SECRET_KEY"
