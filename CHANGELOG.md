@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A step on a page with pictured controls stays under Jev's 32 MiB request limit. Each click on a canvas that filled the viewport kept a viewport-sized card, and thirteen of them took every request on a Google Maps Street View page over the limit. Each refused request was resent with the same pictures, so one decision took about two minutes. A control that fills the viewport now has no card. A request is fitted to the limit before it is sent, leaving out the oldest cards first. A refused request is asked again with fewer pictures ([#1301](https://github.com/agent-labs-dev/fastbrowse/issues/1301)).
+
 - Comparison answers can cite the versions and values that explain the result without a false partial-answer notice ([#1296](https://github.com/agent-labs-dev/fastbrowse/issues/1296)).
 
 - Dates that refer back to a relative month use that month's offset. The first weekday of next month could be counted in January instead, causing the run to report that a correctly selected date was still undone ([#1293](https://github.com/agent-labs-dev/fastbrowse/issues/1293)).
