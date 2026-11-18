@@ -11,6 +11,15 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Browser reads retain visible CSS-generated text when a dialog hides the surrounding content from accessibility APIs ([#1276](https://github.com/agent-labs-dev/fastbrowse/issues/1276)).
+
+- A highest or lowest result names each winning record once when it appears in more than one note. The run checks tied records' identity before copying their fields, keeping distinct tied winners and all supporting citations ([#1266](https://github.com/agent-labs-dev/fastbrowse/issues/1266)).
+
+- Comparison answers check a selected record's name with its record kind and compared field in view. A valid package name could be rejected as an incomplete answer to the whole comparison, leaving only partial evidence ([#1268](https://github.com/agent-labs-dev/fastbrowse/issues/1268)).
+
+- Browser reads preserve text drawn by CSS before and after page elements, including separators between carrier names. HTTP reads keep the accessible labels of empty elements, so a separator supplied as a space no longer joins adjacent names ([#1267](https://github.com/agent-labs-dev/fastbrowse/issues/1267)).
+
+- Closing a run attached to your own Chrome releases its request interception and paused-target setting before it returns, and turns service workers back on for the tabs you keep, including a tab whose setup failed. Over a direct DevTools connection, your next navigation in that window could hang until the connection finished closing. The extension accepts the same release; its current store version still closes cleanly without it ([#1257](https://github.com/agent-labs-dev/fastbrowse/issues/1257)).
 - **A pull request that changes what the agent asks refills its own bench cassettes.** The `replay` check used to fail with a list of tasks and wait for a maintainer to dispatch a paid run, download an encrypted artifact and commit what was in it. A new `Cassette refill` workflow now reads the missed tasks from the check's result, fills only those under a small cap (`CASSETTE_REFILL_BUDGET`, 1 dollar by default), commits the cassettes to the branch as a signed commit, and posts each task's result and cost on the pull request. It runs only for branches in this repository, once per head commit. Cassettes are plain `bench/cassettes/<task>.jsonl` files, so a diff shows the questions that changed ([#1198](https://github.com/agent-labs-dev/fastbrowse/issues/1198)).
 - `bench fill` and `bench record` no longer record an error response from the provider, such as a 429, as an answer, which a later fill served instead of asking again. A pass that met one leaves the cassette as it was and is reported as not refilled. Their `--budget` is checked before each model request rather than only between tasks, so one task's passes can no longer spend far past it: the requests they pay for go upstream one at a time, and a response with no price stops the spending ([#1198](https://github.com/agent-labs-dev/fastbrowse/issues/1198)).
 
