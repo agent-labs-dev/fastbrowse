@@ -1004,6 +1004,8 @@ pub(crate) struct ReviewedComposition {
     pub rejection: Option<String>,
 }
 
+// A retyped duplicate makes its own winner-field extraction, which can fail or differ; deduplicate before
+// computation so an extra model call cannot discard or contradict the retained claim.
 fn distinct_claims(claims: impl IntoIterator<Item = BoundClaim>) -> Vec<BoundClaim> {
     let tally_key = |claim: &BoundClaim| {
         claim.tally.as_ref().map(|tally| {
