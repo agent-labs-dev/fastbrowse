@@ -500,7 +500,7 @@ fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], gr
             (
                 key,
                 json!(format!(
-                    "{value} is its {field}: the note gives one {of} with its {field}, or the {field} of one."
+                    "{value} is its {field}: the note gives one {of} with its {field}, or the {field} of one, stated as that record's own {field}, not as a value of one entry the record holds, such as one item of a list it contains."
                 )),
             )
         })
@@ -511,8 +511,13 @@ fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], gr
     // took them in (table-total-due 0 of 6, stretch-books-nonfiction-five-star 2 of 6). With it, replayed on the
     // recorded questions, those score 0.07 and 0.21 on average and every member still 0.96 or more.
     criteria.insert(NO_RECORD.into(), json!(format!(
-        "The note is not one whole {of} and does not give the {field} of one. A name, label, heading, link or unrelated field alone is not a whole record. Several records, and a value stated across records such as a total or a starting price, are not one record. A note whose source_kind is heading or link and gives no quoted field value is a fragment naming the record, not a record with a missing field. A whole record that the note shows is outside {of}, in a group, place or state other than the one {of} names, is not one either."
+        "The note is not one whole {of} and does not give the {field} of one. A name, label, heading, link or unrelated field alone is not a whole record. Several records, and a value stated across records such as a total or a starting price, are not one record. A note whose source_kind is heading or link and gives no quoted field value is a fragment naming the record, not a record with a missing field. A whole record that the note shows is outside {of}, in a group, place or state other than the one {of} names, is not one either. A note giving one entry the {of} holds, such as one item of a list it contains, is not one, and that entry's values are not the {field} of the {of}."
     )));
+    // A record is not the entries it holds: asked whether a row of a package's release history gave the package's
+    // "latest release date", Jev said yes to rows from 2023 (0.77) and to a pre-release (0.7), and the maximum chose
+    // the pre-release over the package's stated release. Told that an entry's values are its own, replayed 3x each,
+    // those rows fell to no record at 0.6 and 0.75, the stated "Released:" dates stayed members, and 16 recorded
+    // book and phone questions kept their choices.
     // A heading or link names its record and is never the whole of it, so it cannot be one shown missing the field:
     // offered that, Jev split 51 to 49 on whether the heading "Clerkenwell Coffee" was a shop with no price, and a
     // correct cheapest shop was rejected for it.
@@ -1590,6 +1595,42 @@ pub(super) async fn work_selected_with_slots(
     Ok(worked)
 }
 
+/// Why no winner field was copied, for the composer and the navigator: the records' own text, so a field named as the
+/// record's kind ("the phone of each phone") can be renamed, and a value the text cuts short can be read in full.
+fn unread_field(field: &str, of: &str, found: &[Candidate]) -> String {
+    let quotes: Vec<String> = found.iter().map(|record| text::repr(&record.quote)).collect();
+    format!(
+        "No {field} could be copied from the selected {of}, whose text is {}. {FIELD_HELP}",
+        quotes.join("; "),
+        field = text::repr(field),
+        of = text::repr(of),
+    )
+}
+
+/// Why a copied winner field was rejected: the copied text beside the record's own text, so the navigator can see a
+/// value cut short, such as a listing's "The Sandman, Vol. 2: ...", and read the page that states it whole (#1232).
+fn incomplete_field(field: &str, of: &str, written: &str, found: &[Candidate], key: &str) -> String {
+    let record = key.rsplit_once("/r").and_then(|(_, index)| index.parse::<usize>().ok()).and_then(|i| found.get(i));
+    let quote = record.map_or_else(String::new, |record| format!(", whose text is {}", text::repr(&record.quote)));
+    format!(
+        "The copied {} {} is not the complete, unambiguous {} of the selected {}{quote}. {FIELD_HELP}",
+        text::repr(field),
+        text::repr(written),
+        text::repr(field),
+        text::repr(of),
+    )
+}
+
+/// What a draft or a run can do about a winner field that could not be copied.
+const FIELD_HELP: &str = "Name a winner field as something each record states about itself, such as its name or title, never the kind of record the tally counts. When the record's text cuts that value short or leaves it out, read a page that states it in full, such as the record's own page, before answering again.";
+
+/// The copied text a field question asked about.
+fn written_of<'a>(groups: &'a Groups, key: &str) -> &'a str {
+    let group =
+        key.strip_prefix("field").and_then(|rest| rest.split_once('/')).and_then(|(g, _)| g.parse::<usize>().ok());
+    group.and_then(|g| groups.values().nth(g)).map_or("", |(written, _)| written.as_str())
+}
+
 /// Winner fields are read only after numeric selection, so copying a name never asks a model to rank records.
 ///
 /// The check sees the task, which says what the field means on these pages: asked "which shop sells the Burr Grinder
@@ -1633,10 +1674,7 @@ pub(super) async fn winner_fields(
     let mut result = HashMap::new();
     for field in fields {
         let Some(groups) = read_groups(llm, field, &tally.of, &records, &found, ledger).await? else {
-            return Ok(Err(Unworked::Notes {
-                reason: format!("The selected records do not state an unambiguous {}.", text::repr(field)),
-                notes: ids.clone(),
-            }));
+            return Ok(Err(Unworked::Notes { reason: unread_field(field, &tally.of, &found), notes: ids.clone() }));
         };
         let mut questions = IndexMap::new();
         for (group, (written, members)) in groups.values().enumerate() {
@@ -1656,10 +1694,7 @@ pub(super) async fn winner_fields(
                 Some(Answer::Noul(value)) if (0.0..=1.0).contains(&value.probability) && value.probability > 0.5 => {}
                 Some(Answer::Noul(value)) if (0.0..=1.0).contains(&value.probability) => {
                     return Ok(Err(Unworked::Notes {
-                        reason: format!(
-                            "The copied {} is not an unambiguous field of the selected record.",
-                            text::repr(field)
-                        ),
+                        reason: incomplete_field(field, &tally.of, written_of(&groups, key), &found, key),
                         notes: ids.clone(),
                     }));
                 }
@@ -1822,6 +1857,29 @@ mod tests {
             no_record.contains("A whole record that the note shows is outside 'row in the second table', in a group, place or state other than the one 'row in the second table' names, is not one either."),
             "{no_record}"
         );
+    }
+
+    /// A row of a package's release history was taken as the package's "latest release date", and the maximum chose a
+    /// pre-release over the package's stated release: an entry a record holds is asked as its own, not the record.
+    #[test]
+    fn an_entry_a_record_holds_is_not_the_record() {
+        let tally = Tally {
+            op: Op::Max,
+            of: "PyPI package".into(),
+            field: Some("latest release date".into()),
+            rank: None,
+            by: None,
+            group: None,
+            written: "May 14, 2026".into(),
+        };
+        let row = json!({"quote": "0.24.1\n\nMay 19, 2023", "headings": ["httpx 0.28.1", "Release history"]});
+        let Question::Choice(question) = field_question(&tally, &row, &["May 19, 2023".into()], false) else {
+            panic!()
+        };
+        let no_record = question.criteria[NO_RECORD].as_str().unwrap();
+        assert!(no_record.contains("A note giving one entry the 'PyPI package' holds"), "{no_record}");
+        let value = question.criteria["n0"].as_str().unwrap();
+        assert!(value.contains("not as a value of one entry the record holds"), "{value}");
     }
 
     /// A shop's name heading beside its price line was judged a shop with no price 51 to 49, and the correct cheapest
@@ -2295,22 +2353,41 @@ mod tests {
                 .is_err()
             );
         }
+        let rejected = winner_fields(
+            &FieldSupport(false),
+            &ReadsGroups(&[("r0", Some("£210")), ("r1", Some("£210"))]),
+            "Which shop is cheaper? Tell me its name.",
+            &tally,
+            done,
+            &fields,
+            &notes,
+            &tokens,
+            None,
+        )
+        .await
+        .unwrap();
+        // #1232: told only that the copied field was not unambiguous, the navigator answered done again over a listing
+        // title cut short; the reason shows what was copied, from which text, and where the whole value is read.
+        let Err(Unworked::Notes { reason, .. }) = rejected else { panic!("{rejected:?}") };
         assert!(
-            winner_fields(
-                &FieldSupport(false),
-                &ReadsGroups(&[("r0", Some("£210")), ("r1", Some("£210"))]),
-                "Which shop is cheaper? Tell me its name.",
-                &tally,
-                done,
-                &fields,
-                &notes,
-                &tokens,
-                None
-            )
-            .await
-            .unwrap()
-            .is_err()
+            reason.contains("'£210'") && reason.contains("whose text is") && reason.contains(FIELD_HELP),
+            "{reason}"
         );
+        let unread = winner_fields(
+            &FieldSupport(true),
+            &ReadsGroups(&[("r0", None), ("r1", Some("Winner B"))]),
+            "Which shop is cheaper? Tell me its name.",
+            &tally,
+            done,
+            &fields,
+            &notes,
+            &tokens,
+            None,
+        )
+        .await
+        .unwrap();
+        let Err(Unworked::Notes { reason, .. }) = unread else { panic!("{unread:?}") };
+        assert!(reason.starts_with("No 'name' could be copied from the selected 'record', whose text is"), "{reason}");
     }
 
     struct ReadsGroups<'a>(&'a [(&'a str, Option<&'a str>)]);
