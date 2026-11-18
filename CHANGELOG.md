@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Closing a run attached to your own Chrome releases its request interception and paused-target setting before it returns, and turns service workers back on for the tabs you keep, including a tab whose setup failed. Over a direct DevTools connection, your next navigation in that window could hang until the connection finished closing. The extension accepts the same release; its current store version still closes cleanly without it ([#1257](https://github.com/agent-labs-dev/fastbrowse/issues/1257)).
+
 - Reads preserve the headings and individual records inside inline containers, including custom elements. A page of flight results could be captured as one paragraph, leaving the answer unable to cite an individual flight and its price ([#1250](https://github.com/agent-labs-dev/fastbrowse/issues/1250)).
 
 - Comparisons use the records in the state the task asks about, including when a draft names a broader record kind. A package comparison took a pre-release from the history instead of the release the page labels latest. Winner names copied from captured headings also pass the same source rules as the copy step, so a valid name no longer leaves the answer empty. Copying a selected record's name no longer rechecks its kind and discards a name it states ([#1249](https://github.com/agent-labs-dev/fastbrowse/issues/1249), [#1248](https://github.com/agent-labs-dev/fastbrowse/issues/1248)).
