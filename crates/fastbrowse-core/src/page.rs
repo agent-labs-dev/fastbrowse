@@ -356,6 +356,10 @@ impl SourceField {
     }
 }
 
+/// How the `source_id` of a block holding a downloaded file's text begins. Every capture taken after a download carries
+/// the file, so a quote from it is the file's, wherever the page around it puts it.
+pub const DOWNLOAD_SOURCE: &str = "download/";
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Block {

@@ -4,7 +4,7 @@ use std::fmt;
 
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 
-use crate::page::{BlockKind, Capture};
+use crate::page::{BlockKind, Capture, DOWNLOAD_SOURCE};
 
 /// Everything but ASCII letters, digits and `_.~`. `-`, `,` and `&` are text-directive syntax, so they are encoded
 /// too, along with everything else a URL fragment might reinterpret.
@@ -71,7 +71,7 @@ pub fn table_blocks(capture: &Capture) -> Vec<TableBlock> {
     let mut previous: Option<usize> = None;
     for (index, block) in capture.blocks.iter().enumerate() {
         // A downloaded CSV is the file's own text, not a capture's markdown, so its pipes are the file's.
-        if block.kind != BlockKind::Table || block.source_id.starts_with("download/") {
+        if block.kind != BlockKind::Table || block.source_id.starts_with(DOWNLOAD_SOURCE) {
             continue;
         }
         // A cell's own pipes are escaped, so a line opening with a pipe is always the start of a row.

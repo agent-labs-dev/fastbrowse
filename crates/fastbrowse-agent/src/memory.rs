@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use fastbrowse_core::citations::{TableBlock, table_blocks};
 use fastbrowse_core::models::{Evidence, FactReader};
-use fastbrowse_core::page::{BlockKind, Capture, SourceField};
+use fastbrowse_core::page::{BlockKind, Capture, DOWNLOAD_SOURCE, SourceField};
 use fastbrowse_core::py::datetime::DateTime;
 use fastbrowse_core::py::dump::Dump;
 use fastbrowse_core::py::json::{dumped_len, dumps, write_string};
@@ -228,6 +228,13 @@ fn digest16(text: &str) -> String {
 pub fn evidence_id(evidence: &Evidence) -> String {
     // Equal text on different pages must not inherit the first page's citation or record identity.
     let address = digest16(&address(&evidence.url));
+    // A downloaded file is in every capture taken after it, at offsets the page around it moves. Keyed by the capture,
+    // each read of any page stored the whole file again as a new note: ten reads of one page kept ten copies of a
+    // 23 MB file, and composing the answer sent them all (#1299). The file, its block and the text quoted from it name the same
+    // span on every read, which then stands as of its latest read, as a page's own span does.
+    if evidence.source_id.starts_with(DOWNLOAD_SOURCE) {
+        return format!("{}:{}:{address}", evidence.source_id, digest16(&evidence.quote));
+    }
     let mut identity = format!("{}:{}:{}:{address}", evidence.capture_sha256, evidence.start, evidence.end);
     if let Some(control) = &evidence.control_context {
         // Equal captions on different controls must not inherit one another's structural association.
@@ -1045,6 +1052,37 @@ mod tests {
         // An earlier capture added after a later one does not move the span back.
         assert!(!notes.add(read(&first)));
         assert_eq!(notes.steps_taken(notes.facts()[0].evidence.as_ref().unwrap()), Some(3));
+    }
+
+    /// A downloaded file is in every capture after it, at offsets the page around it moves: each read of the page
+    /// quotes it again from a new capture. Those reads are one note, standing as of the latest, where a page's own text
+    /// read from two different captures stays two.
+    #[test]
+    fn a_downloaded_file_read_from_each_later_capture_is_one_note() {
+        let file = "Date,Price Quartile1\n20120103,9.01";
+        let read = |source: &str, url: &str, sha: &str, start: i64, minute| {
+            let quote = Evidence {
+                source_id: source.into(),
+                url: url.into(),
+                capture_sha256: sha.into(),
+                captured_at: DateTime::new(2026, 1, 1, 0, minute, 0).utc(),
+                quote: file.into(),
+                end: start + text::len(file) as i64,
+                ..span(sha, start, 0)
+            };
+            Fact::read(file, quote, FactReader::JevChoice)
+        };
+        let zip = "https://example.test/data.zip";
+        let mut notes = Notes::default();
+        assert!(notes.add(read("download/0", zip, "first", 120, 1)));
+        assert!(!notes.add(read("download/0", zip, "second", 180, 2)));
+        assert_eq!(notes.facts().len(), 1);
+        assert_eq!(notes.facts()[0].evidence.as_ref().unwrap().capture_sha256, "second");
+        // Another file, or the page's own text, is a note of its own.
+        assert!(notes.add(read("download/1", "https://example.test/other.zip", "second", 400, 2)));
+        assert!(notes.add(read("main/body:3", "https://example.test", "first", 10, 1)));
+        assert!(notes.add(read("main/body:3", "https://example.test", "second", 12, 2)));
+        assert_eq!(notes.facts().len(), 4);
     }
 
     #[test]
