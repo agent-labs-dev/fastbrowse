@@ -461,8 +461,12 @@
     return data.length ? data.map(row => of([row], true)) : [of([], true)];
   };
 
-  function flush(run) {
-    if (!run.length) return;
+  function flush(run, before, after, container) {
+    if (!run.length) {
+      const text = clean(before + after);
+      if (text) push('paragraph', text, {}, [container]);
+      return;
+    }
     const elements = run.filter(n => n.nodeType === 1);
     const owner = run[0].parentNode;
     const whole = owner?.nodeType === 1 && owner.hasAttribute('title') && [...owner.childNodes].every(node =>
@@ -470,7 +474,7 @@
       (node.nodeType === 1 && !FRAMES.has(node.tagName) && (hidden(node) || SKIP.has(node.tagName))),
     );
     let text = whole ? textOf(owner) :
-      clean(run.map(n => (n.nodeType === 3 ? n.textContent : titled(n, dated(n, unnoted(n, renderedOf(n)))))).join(''));
+      clean(before + run.map(n => (n.nodeType === 3 ? n.textContent : titled(n, dated(n, unnoted(n, renderedOf(n)))))).join('') + after);
     // A host's own text read in its shadow root is a block apart from its row, which may have read it without it.
     // A frame's nodes come from another realm, so the root is told by its node type rather than `instanceof`.
     const host = run[0].parentNode?.nodeType === 11 ? run[0].parentNode.host : null;
@@ -546,6 +550,13 @@
 
   function walk(el) {
     const run = [];
+    const generated = el.nodeType === 1 ? generatedOf(el) : ['', ''];
+    let before = generated[0];
+    // Descending preserves child blocks, but the owner's generated text still surrounds those blocks.
+    const flushRun = last => {
+      flush(run, before, last ? generated[1] : '', el);
+      before = '';
+    };
     for (const node of el.childNodes) {
       if (node.nodeType === 3) {
         run.push(node);
@@ -553,7 +564,7 @@
       }
       if (node.nodeType !== 1 || hidden(node)) continue;
       if (FRAMES.has(node.tagName)) {
-        flush(run);
+        flushRun(false);
         enter(node, path);
         continue;
       }
@@ -562,10 +573,10 @@
         run.push(node);
         continue;
       }
-      flush(run);
+      flushRun(false);
       block(node);
     }
-    flush(run);
+    flushRun(true);
   }
 
   function endHeading(level) {

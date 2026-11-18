@@ -146,6 +146,23 @@ async fn annotations_follow_generated_suffixes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn descended_containers_keep_their_generated_boundaries() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<style>.notice::before { content: 'Notice'; } .notice::after { content: 'End'; }</style>
+        <div class="notice"><p>Details</p></div>
+        <p class="notice">Details</p>
+        <p class="notice" title="Advice">Details</p>"#,
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    assert_eq!(texts(&capture), ["Notice", "Details", "End", "NoticeDetailsEnd", "NoticeDetailsEnd (title: Advice)"]);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn title_advice_stays_with_its_record_and_visible_text() {
     let Some(h) = harness().await else { return };
     h.goto("/token.html").await;

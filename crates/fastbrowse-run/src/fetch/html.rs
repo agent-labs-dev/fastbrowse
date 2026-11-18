@@ -211,8 +211,8 @@ struct Element {
     hidden: bool,
     /// An accessibility label inside an aria-hidden subtree is decorative, even if its CSS draws an icon.
     aria_hidden: bool,
-    /// The browser also treats an explicitly button-role element as a control.
-    button_role: bool,
+    /// The browser reads button and choice roles as control state, not empty labeled prose.
+    control_role: bool,
     /// Inside `svg` or `math`, where a self-closing tag ends its element.
     foreign: bool,
     /// Whether it shows any text.
@@ -249,7 +249,7 @@ impl Tree {
             navigation: false,
             hidden: false,
             aria_hidden: false,
-            button_role: false,
+            control_role: false,
             foreign: false,
             text: false,
             start: usize::MAX,
@@ -412,7 +412,7 @@ impl Tags for Tree {
                 || get("hidden").is_some()
                 || hides(&get("style").unwrap_or_default()),
             aria_hidden: self.elements[parent].aria_hidden || get("aria-hidden").as_deref() == Some("true"),
-            button_role: get("role").as_deref() == Some("button"),
+            control_role: matches!(get("role").as_deref(), Some("button" | "checkbox" | "radio" | "switch")),
             foreign,
             text: false,
             start: at,
@@ -1376,7 +1376,7 @@ pub fn read(html: &str, url: &str) -> (String, Vec<Found>, Vec<Control>, Vec<Fra
             // An empty label inside a control names its action rather than a citable page fact.
             let mut ancestor = *element;
             loop {
-                if ancestor.button_role || LEAVES_OF_THEIR_OWN.contains(&ancestor.tag.as_str()) {
+                if ancestor.control_role || LEAVES_OF_THEIR_OWN.contains(&ancestor.tag.as_str()) {
                     return false;
                 }
                 if ancestor.parent == 0 {
@@ -1706,6 +1706,9 @@ mod tests {
         for control in [
             "<button><span aria-label='Add'></span></button>",
             "<div role='button'><span aria-label='Add'></span></div>",
+            "<div role='checkbox'><span aria-label='Add'></span></div>",
+            "<div role='radio'><span aria-label='Add'></span></div>",
+            "<div role='switch'><span aria-label='Add'></span></div>",
             "<a href='/add'><span><span aria-label='Add'></span></span></a>",
             "<svg><g><span aria-label='Add'></span></g></svg>",
         ] {
