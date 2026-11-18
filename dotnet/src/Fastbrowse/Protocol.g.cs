@@ -326,6 +326,12 @@ public sealed record CostLine
     /// </summary>
     [JsonPropertyName("cache_write_tokens")]
     public long? CacheWriteTokens { get; init; }
+
+    /// <summary>
+    /// The model that served the call, as the provider reported it; absent on historical receipts.
+    /// </summary>
+    [JsonPropertyName("model")]
+    public string? Model { get; init; }
 }
 
 /// <summary>

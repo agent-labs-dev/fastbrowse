@@ -996,6 +996,7 @@ pub fn merged_cost(lines: &[CostLine]) -> CostLine {
         images: lines.iter().filter_map(|line| line.images).reduce(|a, b| a + b),
         cache_read_tokens: known_total(lines.iter().map(|line| line.cache_read_tokens)),
         cache_write_tokens: known_total(lines.iter().map(|line| line.cache_write_tokens)),
+        model: CostLine::shared_model(lines),
     }
 }
 
@@ -1171,6 +1172,7 @@ pub fn reported_cost(
             images: None,
             cache_read_tokens: None,
             cache_write_tokens: None,
+            model: None,
         }),
         _ => Ok(estimated_cost(price, input_tokens, output_tokens)),
     }
@@ -1191,6 +1193,7 @@ pub fn estimated_cost(price: Option<f64>, input_tokens: i64, output_tokens: i64)
         images: None,
         cache_read_tokens: None,
         cache_write_tokens: None,
+        model: None,
     }
 }
 

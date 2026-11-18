@@ -17,6 +17,7 @@ fn reply(content: Value, stop_reason: &str) -> Step {
         200,
         &json!({
             "id": "msg_1",
+            "model": "claude-haiku-5-5-20260101",
             "type": "message",
             "role": "assistant",
             "content": content,
@@ -53,6 +54,7 @@ async fn test_a_generation_is_a_messages_request_with_structured_output() {
     let result = result.unwrap();
     assert_eq!(result.data["answer"], "ok");
     assert_eq!((result.cost.cache_read_tokens, result.cost.cache_write_tokens), (Some(4), None));
+    assert_eq!(result.cost.model.as_deref(), Some("claude-haiku-5-5-20260101"), "the dated build that answered");
     let request = &seen[0];
     assert_eq!(request.url, "https://api.anthropic.com/v1/messages");
     assert_eq!(request.header("x-api-key"), Some("anthropic-secret"));

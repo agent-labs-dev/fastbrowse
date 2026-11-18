@@ -192,18 +192,22 @@ def _reachable(url: str, wait: float) -> None:
 
 
 def _pypi(name: str, version: str, wait: float) -> dict:
-    """PyPI's record of one release. A version published a moment ago can be missing; `wait` seconds are given to it."""
+    """PyPI's record of one release with its source distribution. PyPI lists a release from its first uploaded file
+    and serves its JSON from a cache, so a version published a moment ago can be missing or list only its wheels;
+    `wait` seconds are given to the sdist."""
     deadline = time.monotonic() + wait
     while True:
         try:
             with urllib.request.urlopen(f"https://pypi.org/pypi/{name}/{version}/json", timeout=30) as response:
-                return json.load(response)
+                record = json.load(response)
+            if any(file["packagetype"] == "sdist" for file in record["urls"]) or time.monotonic() >= deadline:
+                return record
         except urllib.error.HTTPError as error:
             if error.code != 404:
                 raise
             if time.monotonic() >= deadline:
                 raise SystemExit(f"{name} {version} is not on PyPI") from error
-            time.sleep(10)
+        time.sleep(10)
 
 
 def _source_sum(record: dict) -> str:

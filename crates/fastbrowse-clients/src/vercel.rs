@@ -19,6 +19,7 @@ use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{
     DecisionClient, DecisionError, DecisionProfile, Evaluation, JEV_DOLLARS_PER_INPUT_TOKEN, Question,
 };
+use fastbrowse_core::models::CostLine;
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 use tokio::time::Instant;
@@ -103,7 +104,7 @@ impl VercelGatewayJevClient {
                 model: MODEL.to_string(),
                 answers: parse_answers(payload.get("answers"), questions, true, Some(confidence))?,
                 input_tokens: tokens,
-                cost: timed(cost, &sent, started),
+                cost: timed(CostLine { model: Some(MODEL.to_string()), ..cost }, &sent, started),
             })
         })();
         parsed.map_err(|detail| invalid_response(&response, "Invalid gateway response", &detail))

@@ -15,6 +15,7 @@
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{DecisionClient, DecisionError, DecisionProfile, Evaluation, Question};
+use fastbrowse_core::models::CostLine;
 use fastbrowse_core::py::json::dumps;
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
@@ -201,11 +202,11 @@ impl OpenAIDecisionsClient {
             let answers = system_one_answers(payload.get("answers"))?;
             Ok(Evaluation {
                 requests: sent.requests,
-                model,
+                model: model.clone(),
                 answers: parse_answers(Some(&answers), questions, false, None)?,
                 input_tokens: tokens,
                 // Cached input is billed at a discount the response does not state, so the call is estimated at list price.
-                cost: timed(estimated_cost(price, tokens, 0), &sent, started),
+                cost: timed(CostLine { model: Some(model), ..estimated_cost(price, tokens, 0) }, &sent, started),
             })
         })();
         parsed.map_err(|detail| invalid_response(&response, "Invalid decisions response", &detail))

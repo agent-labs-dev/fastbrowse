@@ -270,6 +270,10 @@ export interface CostLine {
    * Input tokens written to the provider's prompt cache; absent when it reports none, and on old receipts.
    */
   cache_write_tokens?: number | null;
+  /**
+   * The model that served the call, as the provider reported it; absent on historical receipts.
+   */
+  model?: string | null;
 }
 export interface Citation {
   /**

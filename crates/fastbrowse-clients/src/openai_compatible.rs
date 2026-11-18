@@ -178,6 +178,7 @@ fn cost(payload: &Map<String, Value>, purpose: LLMPurpose) -> CostLine {
             images: None,
             cache_read_tokens: cache_tokens(usage, "cached_tokens")?,
             cache_write_tokens: cache_tokens(usage, "cache_write_tokens")?,
+            model: payload.get("model").and_then(Value::as_str).filter(|model| !model.is_empty()).map(str::to_string),
         })
     };
     read().unwrap_or_else(|_| unknown(purpose))
@@ -217,6 +218,7 @@ fn total_cost(costs: &[CostLine], purpose: LLMPurpose) -> CostLine {
         images: None,
         cache_read_tokens: known_total(costs.iter().map(|line| line.cache_read_tokens)),
         cache_write_tokens: known_total(costs.iter().map(|line| line.cache_write_tokens)),
+        model: CostLine::shared_model(costs),
     }
 }
 
@@ -469,13 +471,18 @@ impl Billing<'_> {
     fn charge_unanswered(&mut self, usage: &Usage) -> usize {
         let offset = self.costs.len();
         let usage = usage.snapshot();
-        self.costs.extend((0..usage.unaccounted_requests).map(|_| unknown(self.purpose)));
+        let requested = self.model.clone();
+        self.costs.extend(
+            (0..usage.unaccounted_requests)
+                .map(|_| CostLine { model: Some(requested.clone()), ..unknown(self.purpose) }),
+        );
         let answered = usage.requests - usage.unaccounted_requests;
         if answered > 0 {
             // Rejected responses can cost nothing while still consuming physical provider requests.
             self.costs.push(CostLine {
                 purpose: Some(self.purpose),
                 physical_requests: Some(answered),
+                model: Some(self.model.clone()),
                 ..CostLine::new(CostComponent::Llm, CostBasis::Metered, Some(0.0))
             });
         }
@@ -660,7 +667,11 @@ impl OpenAICompatibleLLM {
         purpose: LLMPurpose,
         body: &Map<String, Value>,
     ) -> CostLine {
-        let cost = self.receipt_cost(payload, purpose).await;
+        let mut cost = self.receipt_cost(payload, purpose).await;
+        if cost.model.is_none() {
+            // The response named no model, so the one asked for is the best record of what served it.
+            cost.model = body.get("model").and_then(Value::as_str).map(str::to_string);
+        }
         if cost.dollars.is_some() { cost } else { self.bounded(cost, body).await }
     }
 

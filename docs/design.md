@@ -394,6 +394,10 @@ cancellation keep the same attribution. LLM lines retain their separate `purpose
 directly through a decision client without an agent purpose omit `decision_purpose`; older receipts
 remain readable. Purpose labels group calls without changing their charges.
 
+Every cost line may carry the `model` that served it: the provider response's `model` for an LLM line (the requested
+id when the response names none), and the Jev model for a Jev line. Lines merged from calls to different models omit it,
+and older receipts remain readable.
+
 Cancellation returns a receipt of reported steps, cost lines and finished recordings after cleanup. Protocol 2
 keeps error code `-32002` and adds the optional `error.data` receipt; other errors omit it. Rust returns
 `RunError::Cancelled(receipt)`. A cancelled cloud start keeps known charges as `unsettled`, or an `unknown`

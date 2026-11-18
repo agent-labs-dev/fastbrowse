@@ -489,6 +489,19 @@
           "default": null,
           "description": "Input tokens written to the provider's prompt cache; absent when it reports none, and on old receipts.",
           "title": "Cache Write Tokens"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The model that served the call, as the provider reported it; absent on historical receipts.",
+          "title": "Model"
         }
       },
       "required": [
