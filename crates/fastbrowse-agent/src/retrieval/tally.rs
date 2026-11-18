@@ -31,7 +31,7 @@ use crate::error::{AgentError, Result};
 use crate::memory::{Notes, address, fact_id};
 use crate::pyre::{Pat, digit};
 use crate::support::generate;
-use crate::support::try_join_all;
+use crate::support::try_join_reserving;
 use fastbrowse_core::py::text::is_word;
 
 /// What the support check is shown in place of the value, which it is not asked to judge.
@@ -431,7 +431,7 @@ async fn by_page(
             Box::pin(ask(jev, &states[page], questions, tokens, ledger))
         })
         .collect();
-    let answered = try_join_all(asked).await?.into_iter().flatten().reduce(|mut all, answers| {
+    let answered = try_join_reserving(ledger, asked).await?.into_iter().flatten().reduce(|mut all, answers| {
         all.extend(answers);
         all
     });
@@ -3001,6 +3001,78 @@ mod tests {
             let result = read_groups(&llm, "author", "quote", &[0], &found, Some(&capped)).await;
             assert!(matches!(result, Err(AgentError::Budget(_))));
             assert_eq!(capped.state().lines.len(), 1, "the over-budget receipt remains reportable");
+        }
+    }
+
+    /// Each page's pass reserves against the receipts recorded so far, so under a dollar cap two pages asked side by
+    /// side would both pass the check before either is billed.
+    #[tokio::test]
+    async fn capped_pages_are_asked_one_after_another() {
+        use fastbrowse_core::decision::{DecisionError, DecisionProfile, Evaluation, NoulAnswer};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
+
+        #[derive(Default)]
+        struct Overlap {
+            active: AtomicBool,
+            overlapped: AtomicBool,
+            asked: AtomicUsize,
+        }
+        impl DecisionClient for Overlap {
+            fn evaluate<'a>(
+                &'a self,
+                _state: &'a serde_json::Value,
+                questions: &'a IndexMap<String, Question>,
+            ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
+                Box::pin(async move {
+                    if self.active.swap(true, SeqCst) {
+                        self.overlapped.store(true, SeqCst);
+                    }
+                    tokio::task::yield_now().await;
+                    self.asked.fetch_add(1, SeqCst);
+                    self.active.store(false, SeqCst);
+                    let answers = questions
+                        .keys()
+                        .map(|key| {
+                            (key.clone(), Answer::Noul(NoulAnswer { kind: Default::default(), probability: 1.0 }))
+                        })
+                        .collect();
+                    Ok(Evaluation {
+                        model: "test".into(),
+                        answers,
+                        input_tokens: 1,
+                        cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                        requests: 1,
+                    })
+                })
+            }
+            fn profile(&self) -> DecisionProfile {
+                DecisionProfile::jev()
+            }
+        }
+
+        let states: HashMap<String, serde_json::Value> =
+            ["p1", "p2"].into_iter().map(|page| (page.to_string(), json!({"page": page}))).collect();
+        let questions = || -> IndexMap<String, (String, Question)> {
+            ["p1", "p2"]
+                .into_iter()
+                .map(|page| {
+                    let question = Question::Noul(NoulQuestion::new(format!("On {page}?"), None, None));
+                    (format!("q-{page}"), (page.to_string(), question))
+                })
+                .collect()
+        };
+        let tokens = DecisionProfile::jev().fit(None).tokens;
+        for (limits, overlaps) in [
+            (fastbrowse_core::models::Limits::default(), true),
+            (fastbrowse_core::models::Limits { max_jev_calls: Some(100), ..Default::default() }, true),
+            (fastbrowse_core::models::Limits { max_dollars: Some(100.0), ..Default::default() }, false),
+        ] {
+            let jev = Overlap::default();
+            let ledger = Ledger::new(limits);
+            let (answered, _) = by_page(&jev, &states, questions(), &tokens, Some(&ledger)).await.unwrap();
+            assert_eq!(answered.unwrap().len(), 2);
+            assert_eq!(jev.asked.load(SeqCst), 2);
+            assert_eq!(jev.overlapped.load(SeqCst), overlaps, "only a dollar cap makes pages wait");
         }
     }
 
