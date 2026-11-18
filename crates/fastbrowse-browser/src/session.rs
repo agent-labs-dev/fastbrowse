@@ -293,6 +293,8 @@ pub(crate) struct State {
     /// Insertion ordered: `tabs()` lists them in this order, and a closed active tab with neither
     /// an opener nor an earlier active tab still open hands over to the first.
     pub(crate) tabs: Vec<TabState>,
+    /// Setup can fail after enabling interception but before the tab is registered, so teardown tracks it first.
+    pub(crate) prepared_sessions: HashSet<String>,
     /// Tab target ids, least recently active first: where a closed active tab with no opener hands over to.
     pub(crate) activated: Vec<String>,
     pub(crate) owned: HashSet<String>,
@@ -556,11 +558,11 @@ impl BrowserSession {
 
     /// Stop background work, release paused requests, stop casts, close owned tabs, close the socket.
     pub async fn close(&self) -> Result<(), BrowserError> {
-        let (background, delivery, paused) = {
+        let (background, delivery) = {
             let mut state = self.0.state.lock().unwrap();
             state.closing = true;
             let delivery = state.delivery.take();
-            (std::mem::take(&mut state.background), delivery, std::mem::take(&mut state.paused))
+            (std::mem::take(&mut state.background), delivery)
         };
         for task in &background {
             task.abort();
@@ -585,12 +587,6 @@ impl BrowserSession {
             state.frame_scheduled = false;
             state.pending_frame = None;
         }
-        // Download finalizers still need the socket to release intercepted requests; a stopped one is released here.
-        if let Some(client) = self.client_opt() {
-            for (request_id, session_id) in paused {
-                let _ = client.send("Fetch.continueRequest", json!({"requestId": request_id}), Some(&session_id)).await;
-            }
-        }
         let cast = self.0.state.lock().unwrap().screencast_session_id.take();
         if let Some(cast) = cast {
             self.screencast_command("Page.stopScreencast", json!({}), Some(&cast)).await;
@@ -599,16 +595,24 @@ impl BrowserSession {
             let kept: Vec<String> = {
                 let state = self.0.state.lock().unwrap();
                 state
-                    .tabs
+                    .prepared_sessions
                     .iter()
-                    .filter(|t| !state.owned.contains(&t.target_id) || state.handed_over.contains(&t.target_id))
-                    .map(|t| t.session_id.clone())
+                    .filter(|session_id| {
+                        let root = state.root_session(session_id);
+                        !state.tabs.iter().any(|tab| {
+                            tab.session_id == root
+                                && state.owned.contains(&tab.target_id)
+                                && !state.handed_over.contains(&tab.target_id)
+                        })
+                    })
+                    .cloned()
                     .collect()
             };
-            // A window the user keeps, or a tab handed over to them, gets its service workers back.
-            for session_id in kept {
-                let _ = self.bypass_service_workers(&session_id, false).await;
-            }
+            // Failed setup has no tab yet; it also must restore the user's service workers before detaching frames.
+            futures_util::future::join_all(kept.iter().map(|session_id| async move {
+                let _ = self.bypass_service_workers(session_id, false).await;
+            }))
+            .await;
         }
         let (owned, handed_over): (Vec<String>, Vec<String>) = {
             let state = self.0.state.lock().unwrap();
@@ -617,6 +621,7 @@ impl BrowserSession {
                 state.owned.intersection(&state.handed_over).cloned().collect(),
             )
         };
+        // Removing a scope gate before closing an owned tab could let its pending navigation escape the grant.
         for target_id in owned {
             // Best-effort teardown; the browser may already be gone.
             let _ = self.send("Target.closeTarget", json!({"targetId": target_id}), None).await;
@@ -627,6 +632,29 @@ impl BrowserSession {
                 let _ = self.send("Fastbrowse.keepTarget", json!({"targetId": target_id}), None).await;
             }
         }
+        // Socket close is queued: Fetch can pause the owner's next navigation after our handlers stop. Disable
+        // interception itself, including requests not yet reported, before returning the window to its owner.
+        let sessions = std::mem::take(&mut self.0.state.lock().unwrap().prepared_sessions);
+        futures_util::future::join_all(sessions.iter().map(|session_id| async move {
+            let _ = self.send("Fetch.disable", json!({}), Some(session_id)).await;
+            // Detaching auto-attached frames and workers also releases ones whose setup was cancelled while paused.
+            let _ = self
+                .send(
+                    "Target.setAutoAttach",
+                    json!({"autoAttach": false, "waitForDebuggerOnStart": false, "flatten": true}),
+                    Some(session_id),
+                )
+                .await;
+        }))
+        .await;
+        let _ = self
+            .send(
+                "Target.setAutoAttach",
+                json!({"autoAttach": false, "waitForDebuggerOnStart": false, "flatten": true}),
+                None,
+            )
+            .await;
+        self.0.state.lock().unwrap().paused.clear();
         let client = self.0.client.lock().unwrap().take();
         if let Some(client) = client {
             client.close();
@@ -1296,6 +1324,7 @@ impl BrowserSession {
         // A new popup has no renderer until it resumes, so renderer setup waits forever if it precedes this. Fetch
         // and service-worker bypass are enabled first so the initial request meets the scope gate and its response
         // can be captured.
+        self.0.state.lock().unwrap().prepared_sessions.insert(session_id.to_owned());
         self.send("Fetch.enable", json!({"patterns": patterns}), s).await?;
         if scoped {
             self.bypass_service_workers(session_id, true).await?;
@@ -1456,20 +1485,21 @@ impl State {
         recent.or_else(|| self.tabs.first().map(|t| &t.target_id)).cloned().unwrap_or_default()
     }
 
+    fn root_session(&self, session_id: &str) -> String {
+        let mut session_id = session_id.to_owned();
+        let mut seen = HashSet::new();
+        while let Some(parent) = self.frame_parents.get(&session_id) {
+            if !seen.insert(session_id.clone()) {
+                break;
+            }
+            session_id.clone_from(parent);
+        }
+        session_id
+    }
+
     fn frame_sessions_of_active(&self) -> Vec<(String, String)> {
         let Ok(active) = self.active_session_id() else { return vec![] };
-        let belongs = |session_id: &str| {
-            let mut session_id = session_id.to_owned();
-            let mut seen = HashSet::new();
-            while let Some(parent) = self.frame_parents.get(&session_id) {
-                if !seen.insert(session_id.clone()) {
-                    break;
-                }
-                session_id.clone_from(parent);
-            }
-            session_id == active
-        };
-        self.frame_sessions.iter().filter(|(_, sid)| belongs(sid)).cloned().collect()
+        self.frame_sessions.iter().filter(|(_, sid)| self.root_session(sid) == active).cloned().collect()
     }
 
     fn pending_dialog(&self) -> Option<(String, Dialog)> {
@@ -1683,6 +1713,7 @@ impl Shared {
             "Target.detachedFromTarget" => {
                 let child = str_of(&params["sessionId"]);
                 let mut state = self.state.lock().unwrap();
+                state.prepared_sessions.remove(&child);
                 state.frame_parents.remove(&child);
                 state.frame_sessions.retain(|(_, sid)| *sid != child);
                 // A target that went away answers nothing more.

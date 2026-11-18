@@ -38,7 +38,9 @@ pub const MIN_EXTENSION_VERSION: &str = "0.1.1";
 
 /// Methods a run sends best-effort, which an older copy lacks and the run still works without. Each is logged as a
 /// warning when the extension does not relay it, never a reason to refuse the run before it starts.
-pub const BEST_EFFORT: [&str; 1] = [
+pub const BEST_EFFORT: [&str; 2] = [
+    // Older Store copies release interception when closing the run detaches chrome.debugger instead.
+    "Fetch.disable",
     // Only adds the chooser a page opens from a script: the session sends it and runs on when it is refused.
     "Page.setInterceptFileChooserDialog",
 ];
