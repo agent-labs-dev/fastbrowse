@@ -306,6 +306,25 @@ impl Composition {
         }
     }
 
+    fn computed_slots(&self, value: &str) -> Value {
+        let slots = |parts: &[BoundPart]| {
+            let mut offset = 0;
+            let mut slots = Vec::new();
+            for part in parts {
+                if let BoundPart::Computed { field } = part {
+                    slots.push(json!({"offset": offset, "field": field}));
+                }
+                offset += Self::render(std::slice::from_ref(part), value, &HashMap::new()).len();
+            }
+            slots
+        };
+        // Source and prose partitions can render identically; only computed positions change the later substitution.
+        match &self.cells {
+            Some(cells) => json!({"cells": cells.iter().map(|cell| slots(cell)).collect::<Vec<_>>()}),
+            None => json!({"text": slots(&self.text)}),
+        }
+    }
+
     /// The typed slot supplies its byte range, so identical source digits cannot be mistaken for the value to replace.
     fn numeric_context(&self, value: &str) -> Option<(String, std::ops::Range<usize>)> {
         let parts = match &self.cells {
@@ -1008,8 +1027,14 @@ fn distinct_claims(claims: impl IntoIterator<Item = BoundClaim>) -> Vec<BoundCla
                 && other.cells == claim.cells
                 && other.within == claim.within
                 && (claim.tally.is_none()
-                    || other.composition.as_ref().map(Composition::context)
-                        == claim.composition.as_ref().map(Composition::context))
+                    || other
+                        .composition
+                        .as_ref()
+                        .map(|parts| parts.computed_slots(&other.tally.as_ref().unwrap().written))
+                        == claim
+                            .composition
+                            .as_ref()
+                            .map(|parts| parts.computed_slots(&claim.tally.as_ref().unwrap().written)))
         }) {
             all.push(claim);
         }
@@ -3181,6 +3206,25 @@ mod tests {
             let expected = if op == Op::Count { 2 } else { 1 };
             assert_eq!(kept.len(), expected, "{op:?}: only extremes have an implicit first place");
         }
+    }
+
+    #[test]
+    fn repeated_tallies_compare_computed_slots_instead_of_text_partitions() {
+        let notes = Notes::new([fact(0, "Winner: ".into())]);
+        let items = initial_items(&notes, false);
+        let tally = tallied("", "30", Op::Max, "product", Some("price"), vec![]).tally;
+        let copied =
+            bind_claim(&items, json!([{"note":"e0","quoted":false},{"computed":true,"field":"name"}]), tally.clone());
+        let prose = bind_claim(
+            &items,
+            json!([{"prose":"Winner"},{"prose":": "},{"computed":true,"field":"name"}]),
+            tally.clone(),
+        );
+        assert_eq!(distinct_claims([copied, prose]).len(), 1);
+        let before = bind_claim(&[], json!([{"computed":true,"field":"name"},{"prose":"[name]"}]), tally.clone());
+        let after = bind_claim(&[], json!([{"prose":"[name]"},{"computed":true,"field":"name"}]), tally);
+        assert_eq!(before.text, after.text);
+        assert_eq!(distinct_claims([before, after]).len(), 2);
     }
 
     #[test]
