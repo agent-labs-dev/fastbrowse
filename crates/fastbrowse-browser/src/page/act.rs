@@ -16,7 +16,8 @@ use tokio::time::{Instant, sleep, timeout};
 
 use super::scripts::{
     ACTIVATION_KEY_JS, BLUR_JS, COVER_JS, DEEP_HIT_JS, GUARD_HOLDS_JS, HANDED_FOCUS_JS, HIT_TEST_JS,
-    LEAVE_SUGGESTING_FIELD_JS, OBSTRUCTIONS, OWNED_JS, PRESENTED_JS, SELECT_TEXT_JS, SUGGESTS_JS, UNCOVER_JS, py_float,
+    LEAVE_SUGGESTING_FIELD_JS, OBSTRUCTIONS, OWNED_JS, PRESENTED_JS, SELECT_TEXT_JS, SUGGESTS_JS, TOP_RECT_JS,
+    UNCOVER_JS, py_float,
 };
 use super::{BackTarget, CdpPage, Target, truthy, value_str};
 use crate::cdp::{CDP_REPLY_SECONDS, secs};
@@ -2031,8 +2032,9 @@ impl CdpPage {
 
     /// Dispatch a complete path on one target, retaining every point the model supplied.
     async fn drag_path(&self, target: &Target, path: &DragPath) -> Result<Outcome, BrowserError> {
+        // No scroll: the path was drawn against the target where the screenshot showed it, which `reveal` settled.
         let (_, guard, point, _, _, _, connected) =
-            self.before_action(Some(target), true, false, false, true, false).await?;
+            self.before_action(Some(target), true, false, false, false, false).await?;
         if guard != target.3 || !connected || matches!(point, Point::Gone | Point::Unsettled) {
             return Ok((StepOutcome::Stale, Some("drag target disconnected".into()), None));
         }
@@ -2113,11 +2115,16 @@ impl CdpPage {
             && self.drag_box(target).await? == Some(target_box))
     }
 
-    /// The target's visible box in the top viewport's CSS pixels, mapped out of any same-origin frames it sits in: left,
-    /// top, width, height.
+    /// The part of the target in view, in the top viewport's CSS pixels: left, top, width, height. It is the box the
+    /// drag path was drawn against, which `CdpPage::edges` measured from the same screenshot's viewport.
     async fn drag_box(&self, target: &Target) -> Result<Option<DragBox>, BrowserError> {
         let script = format!(
-            "(() => {{ const e = window.__fastbrowse?.nodes.get({}); if (!e?.isConnected || !e.checkVisibility({{checkOpacity:true,checkVisibilityCSS:true}})) return null; const r = e.getBoundingClientRect(); let [x, y, w, h] = [r.x, r.y, r.width, r.height]; for (let view = e.ownerDocument.defaultView; view !== window; ) {{ const f = view.frameElement; if (!f) return null; const b = f.getBoundingClientRect(), pad = getComputedStyle(f), sx = b.width / f.offsetWidth, sy = b.height / f.offsetHeight; x = b.x + (f.clientLeft + parseFloat(pad.paddingLeft) + x) * sx; y = b.y + (f.clientTop + parseFloat(pad.paddingTop) + y) * sy; w *= sx; h *= sy; view = f.ownerDocument.defaultView; }} if (!(w > 0 && h > 0 && x + w > 0 && y + h > 0 && x < innerWidth && y < innerHeight)) return null; return [x, y, w, h]; }})()",
+            "(() => {{ const e = window.__fastbrowse?.nodes.get({}); \
+             if (!e?.isConnected || !e.checkVisibility({{checkOpacity:true,checkVisibilityCSS:true}})) return null; \
+             const r = ({TOP_RECT_JS})(e); if (!r) return null; \
+             const left = Math.max(r.left, 0), top = Math.max(r.top, 0); \
+             const right = Math.min(r.right, innerWidth), bottom = Math.min(r.bottom, innerHeight); \
+             return right > left && bottom > top ? [left, top, right - left, bottom - top] : null; }})()",
             target.2
         );
         Ok(serde_json::from_value(self.evaluate(&target.0, &script).await?).ok().flatten())

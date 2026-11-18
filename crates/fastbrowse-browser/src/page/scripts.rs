@@ -42,6 +42,18 @@ pub const SELECT_TEXT_JS: &str = concat!(
     "selection.removeAllRanges(); selection.addRange(range); } ",
 );
 
+/// An element's box in the top viewport's CSS pixels, mapped out of the same-origin frames it sits in: a frame's
+/// document starts inside its border and padding, as Puppeteer's frame offset also counts. Null inside a frame of
+/// another origin, whose element this document cannot reach.
+pub const TOP_RECT_JS: &str = concat!(
+    "(e => { const r = e.getBoundingClientRect(); let [x, y, w, h] = [r.x, r.y, r.width, r.height]; ",
+    "for (let view = e.ownerDocument.defaultView; view !== window; ) { const f = view.frameElement; if (!f) return null; ",
+    "const b = f.getBoundingClientRect(), pad = getComputedStyle(f), sx = b.width / f.offsetWidth, ",
+    "sy = b.height / f.offsetHeight; x = b.x + (f.clientLeft + parseFloat(pad.paddingLeft) + x) * sx; ",
+    "y = b.y + (f.clientTop + parseFloat(pad.paddingTop) + y) * sy; w *= sx; h *= sy; view = f.ownerDocument.defaultView; } ",
+    "return {left: x, top: y, right: x + w, bottom: y + h}; })",
+);
+
 pub const HIT_TEST_JS: &str = concat!(
     "((id, scroll = true) => { const e = window.__fastbrowse?.nodes.get(id); ",
     "if (!e?.isConnected || e.matches(':disabled') || e.closest('[aria-disabled=\"true\"],[inert]') || ",

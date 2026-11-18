@@ -1927,6 +1927,10 @@ impl Page for CdpPage {
         Box::pin(async move { seam(CdpPage::edges(self, id).await) })
     }
 
+    fn reveal<'a>(&'a self, id: &'a str) -> BoxFuture<'a, PageResult<()>> {
+        Box::pin(async move { seam(CdpPage::reveal(self, id).await) })
+    }
+
     fn withhold_frames(&self, withheld: bool) {
         CdpPage::withhold_frames(self, withheld);
     }

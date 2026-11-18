@@ -68,6 +68,9 @@ fn moved(why: &str) -> ActResult {
 impl Agent {
     /// Ask the screenshot-seeing model for the complete geometry of a same-control drag.
     pub(super) async fn drag_path(&self, state: &mut RunState, target: &Control) -> Step<DragPath> {
+        // The path is drawn against the box the screenshot shows, so the target is scrolled to where the drag will find
+        // it first: the drag itself then scrolls nothing.
+        self.page.reveal(&target.id).await?;
         let Some(png) = self.screenshots().await?.into_iter().next() else {
             return Err(Stop::new(Status::NeedsInput, "a screenshot is required to draw the drag path").into());
         };

@@ -755,6 +755,12 @@ pub trait Page: Send + Sync {
         Box::pin(async { Ok(None) })
     }
 
+    /// Scroll control `id` of the last observation into view if it is not already in full view, as an action on it
+    /// would, so a screenshot taken next shows the box the action will use. A page with no viewport does nothing.
+    fn reveal<'a>(&'a self, _id: &'a str) -> BoxFuture<'a, PageResult<()>> {
+        Box::pin(async { Ok(()) })
+    }
+
     /// Hold back live and recorded frames while the page may show a secret, which pixels cannot mask.
     fn withhold_frames(&self, withheld: bool);
 
