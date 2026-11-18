@@ -11,11 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- Comparison answers can cite the versions and values that explain the result without a false partial-answer notice ([#1296](https://github.com/agent-labs-dev/fastbrowse/issues/1296)).
-
-- Dates that refer back to a relative month use that month's offset. The first weekday of next month could be counted in January instead, causing the run to report that a correctly selected date was still undone ([#1293](https://github.com/agent-labs-dev/fastbrowse/issues/1293)).
-
-- When a highest or lowest result uses the compared field as its numeric answer, it states the shared value once and retains each tied winner ([#1292](https://github.com/agent-labs-dev/fastbrowse/issues/1292)).
+- A rewritten answer whose notes do not fit one composing request no longer ends the run with an error. Each request was told which notes the rejected draft cited, including notes only another request held, so the writer cited a note it could not quote and the run failed instead of answering. Each request now hears only of the notes it shows ([#1289](https://github.com/agent-labs-dev/fastbrowse/issues/1289)).
 
 - A wait in a run with no time limit ends after 60 s when the page does not change, and the run is told the page did not change. Before, it waited for a change with no bound, so a page that never changed held the run forever: an official BU Bench task waited 50 minutes on a site's error popup until its browser was stopped by hand. A run that needs to wait longer can choose to wait again, and repeated waits that change nothing count toward the stall rule ([#1213](https://github.com/agent-labs-dev/fastbrowse/issues/1213)).
 
