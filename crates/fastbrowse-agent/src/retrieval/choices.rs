@@ -21,6 +21,7 @@ use super::text::{Page, SpanKind, cells, slice, spans};
 use crate::batches::evaluate_batches;
 use crate::error::Result;
 use crate::memory::{Fact, fact_id, unique};
+use crate::pyre::byte_offsets;
 
 // Long passages crowd out other relevance questions, so score bounded windows of neighboring blocks.
 const FOCUS_WINDOW_CHARS: i64 = 1500;
@@ -45,6 +46,7 @@ fn iter_read_candidates(page: &Page<'_>, blocks: &[&Block], limit: Option<usize>
     let mut candidates = Vec::new();
     for block in blocks {
         let value = page.slice(block.start, block.end);
+        let bytes = byte_offsets(value);
         // A downloaded CSV's row is a table block with no cells to split.
         let found = match cells(value) {
             // A textless link's or an image's metadata quotes the item it sits in, to say which one it is. That quote
@@ -72,7 +74,7 @@ fn iter_read_candidates(page: &Page<'_>, blocks: &[&Block], limit: Option<usize>
             let quote_start = if matches!(block.kind, BlockKind::Table | BlockKind::Record) { 0 } else { start };
             candidates.push(Candidate {
                 id: format!("c{}", candidates.len()),
-                value: ScalarValue::Str(slice(value, start, end).to_string()),
+                value: ScalarValue::Str(slice(value, &bytes, start, end).to_string()),
                 evidence: evidence(page, block, block.start + quote_start as i64, block.start + end as i64),
                 context: context(value, start, end, block),
             });
@@ -254,15 +256,17 @@ async fn focus<'a>(
     let mut questions: IndexMap<String, Question> = IndexMap::new();
     for (i, blocks) in windows.iter().enumerate() {
         let joined = passage(page, blocks, "\n");
-        let length = text::len(&joined);
         // A block longer than a window is asked about in pieces: a passage scored on its opening alone could hide the
-        // current version below an outdated one.
+        // current version below an outdated one. The pieces are cut from one index of the passage, built once: indexing
+        // it again for each piece made a page of one long block quadratic, and a 23 MB block held the run's threads
+        // for fifteen minutes (#1252).
+        let bytes = byte_offsets(&joined);
         let step = FOCUS_WINDOW_CHARS as usize;
-        for (j, piece) in (0..length).step_by(step).enumerate() {
+        for (j, piece) in (0..bytes.len() - 1).step_by(step).enumerate() {
             questions.insert(
                 format!("w{i}.{j}"),
                 NoulQuestion::new(
-                    format!("Does this passage bear on the task? {}", slice(&joined, piece, piece + step)),
+                    format!("Does this passage bear on the task? {}", slice(&joined, &bytes, piece, piece + step)),
                     None,
                     None,
                 )
@@ -300,6 +304,12 @@ async fn focus<'a>(
     let max_options = jev.profile().max_choice_options;
     let fits = |shown: usize| {
         let blocks = passages(shown);
+        // The request quotes these passages whole, and no question leaves more room than none, so passages longer than
+        // that cannot fit whatever candidates they hold. Building those candidates first copied a passage into each
+        // candidate's context: a 23 MB block took longer than a command's deadline to be found too large (#1252).
+        if text::len(&passage(page, &blocks, "\n...\n")) as i64 > tokens.input_chars(&[] as &[&str]) {
+            return false;
+        }
         let candidates = iter_read_candidates(page, &blocks, Some(max_options - 1));
         let (state, questions) = read_request(page, task, date, &candidates, Some(&blocks), false);
         candidates.len() <= max_options - 2 && read_fits(&state, &questions, tokens)
@@ -588,6 +598,73 @@ mod tests {
         let parts = [passage("0.2", 1400), passage("0.5", 1400), passage("0.3", 1400)];
         let parts: Vec<_> = parts.iter().map(|part| (BlockKind::Paragraph, part.as_str())).collect();
         assert_eq!(focused(&capture(&parts), &TokenBudget::default()), ["s1", "s2", "s0"]);
+    }
+
+    /// Records the passages it is asked about, and finds none relevant.
+    #[derive(Default)]
+    struct Recorder(std::sync::Mutex<Vec<String>>);
+
+    impl DecisionClient for Recorder {
+        fn profile(&self) -> DecisionProfile {
+            DecisionProfile::jev()
+        }
+
+        fn evaluate<'a>(
+            &'a self,
+            _: &'a Value,
+            questions: &'a IndexMap<String, Question>,
+        ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
+            let mut answers = IndexMap::new();
+            for (key, question) in questions {
+                let Question::Noul(question) = question else { panic!("a yes/no question") };
+                let passage = question.instructions.split_once("task? ").unwrap().1;
+                self.0.lock().unwrap().push(passage.to_string());
+                answers.insert(key.clone(), Answer::Noul(NoulAnswer { kind: NoulTag, probability: 0.1 }));
+            }
+            Box::pin(async move {
+                Ok(Evaluation {
+                    model: "test".into(),
+                    answers,
+                    input_tokens: 1,
+                    cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                    requests: 1,
+                })
+            })
+        }
+    }
+
+    #[test]
+    fn a_block_longer_than_a_window_is_asked_about_in_pieces_of_a_window_of_characters() {
+        let block = "é".repeat(FOCUS_WINDOW_CHARS as usize * 2 + 7);
+        let captured = capture(&[(BlockKind::Paragraph, block.as_str())]);
+        let jev = Recorder::default();
+        block_on(focus(&jev, &Page::new(&captured), "Find", "", &TokenBudget::default(), None, &Trace::disabled()))
+            .unwrap();
+        let mut asked = jev.0.into_inner().unwrap();
+        asked.sort_by_key(|piece| std::cmp::Reverse(piece.chars().count()));
+        let lengths: Vec<usize> = asked.iter().map(|piece| piece.chars().count()).collect();
+        let window = FOCUS_WINDOW_CHARS as usize;
+        assert_eq!(lengths, [window, window, 7]);
+        assert_eq!(asked.concat(), block);
+    }
+
+    #[test]
+    fn a_passage_longer_than_any_request_is_not_offered() {
+        let room = TokenBudget::default().input_chars(&[] as &[&str]) as usize;
+        let block = "word ".repeat(room / 5 + 1);
+        let captured = capture(&[(BlockKind::Paragraph, block.as_str())]);
+        let page = Page::new(&captured);
+        let (kept, candidates, _, lost) = block_on(focus(
+            &Judge { focus: Some(0.9), choice: ABSENT },
+            &page,
+            "Find",
+            "",
+            &TokenBudget::default(),
+            None,
+            &Trace::disabled(),
+        ))
+        .unwrap();
+        assert!(kept.is_empty() && candidates.is_empty() && !lost);
     }
 
     #[test]
