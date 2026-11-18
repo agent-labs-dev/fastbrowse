@@ -1775,6 +1775,29 @@ async fn test_a_wait_on_a_still_page_ends_with_the_run_budget_and_leaves_no_watc
     h.close().await;
 }
 
+// A run with no time limit gives its wait no deadline. On a page that never changes the wait must still hand the
+// step back, or the run never returns (#1213).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_wait_with_no_deadline_on_a_still_page_ends_unchanged() {
+    let Some(h) = harness().await else { return };
+    h.goto("").await;
+    let before = h.observe().await;
+    let result = tokio::time::timeout(
+        Duration::from_secs(90),
+        h.page.wait(&Action::new(Operation::Wait), &before, f64::INFINITY),
+    )
+    .await
+    .expect("a wait with no deadline never ended on a still page")
+    .expect("wait");
+    assert_eq!(
+        (result.outcome, result.detail.as_deref()),
+        (StepOutcome::Executed, Some("the page did not change")),
+        "{result:?}"
+    );
+    assert_eq!(wait_watches(&h).await, json!(0));
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_cancelled_wait_removes_its_watch() {
     // The run's deadline drops the step's future; the watch it installed must not sample the page on every mutation.
