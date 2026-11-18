@@ -15,6 +15,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Reading a page whose text is one long block of many megabytes, such as a data file opened in a tab, takes seconds rather than minutes. The read used to hold the run's threads while it prepared its questions, so other runs in the same process stopped too, and their browser command deadlines did not fire ([#1252](https://github.com/agent-labs-dev/fastbrowse/issues/1252)).
 
+- Action decisions retain each control's context and available operations. Recovery after a covered click could dismiss the requested popup because only the target chooser received that information ([#884](https://github.com/agent-labs-dev/fastbrowse/issues/884)).
+
 - Browser reads retain visible CSS-generated text when a dialog hides the surrounding content from accessibility APIs ([#1276](https://github.com/agent-labs-dev/fastbrowse/issues/1276)).
 
 - A highest or lowest result names each winning record once when it appears in more than one note. The run checks tied records' identity before copying their fields, keeping distinct tied winners and all supporting citations ([#1266](https://github.com/agent-labs-dev/fastbrowse/issues/1266)).
