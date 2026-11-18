@@ -742,6 +742,10 @@ async fn a_date_the_task_names_reaches_each_step_worked_out() {
     let log: Arc<Mutex<Vec<Value>>> = Arc::default();
     play(&case, Some(log.clone())).await;
     let log = log.lock().unwrap();
+    let extraction = log.iter().find(|call| call["llm"]["schema_name"] == "TaskDates").unwrap();
+    let prompt = extraction["llm"]["messages"].as_str().unwrap();
+    assert!(prompt.contains("Use month only for a named or numbered calendar month."), "{prompt}");
+    assert!(prompt.contains("copy the referenced offset into months_from_now and leave month null"), "{prompt}");
     let steps: Vec<Value> = log
         .iter()
         .filter(|call| call["jev"]["questions"].as_str().is_some_and(|q| q.contains("\"operation\":")))
