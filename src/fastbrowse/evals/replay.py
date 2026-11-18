@@ -435,22 +435,27 @@ class Spend:
     """The dollars a record or fill may still spend, shared by every task it runs.
 
     It is checked before each request goes upstream, not only between tasks: one task's passes can cost more than
-    the whole budget. A request's price is known only from its response, so a request already in flight when the
-    budget runs out still completes; nothing is sent after that.
+    the whole budget. A request's price is known only from its response, so the requests it pays for go upstream
+    one at a time (`turn`), each checked against the price of every one before it; concurrent checks would each
+    pass on a total that left out the others in flight. One response without a price ends the spending, since the
+    total is then unknown.
     """
 
     def __init__(self, limit: float) -> None:
         self.limit = limit
         self.spent = 0.0
-        self._lock = threading.Lock()
+        self.unpriced = False
+        self.turn = threading.Lock()
+        """Held from the check before a paid request until its price is added."""
 
     def reached(self) -> bool:
-        with self._lock:
-            return self.spent >= self.limit
+        return self.unpriced or self.spent >= self.limit
 
     def add(self, dollars: float | None) -> None:
-        with self._lock:
-            self.spent += dollars or 0.0
+        if dollars is None:
+            self.unpriced = True
+        else:
+            self.spent += dollars
 
 
 def openrouter_forward(api_key: str, *, timeout: float = 120.0) -> Forward:
@@ -592,14 +597,20 @@ class Proxy:
         if self._forward is None:
             message = f"replay miss: no recorded response for {purpose} ({model}) on {path}"
             return MISS_STATUS, "application/json", json.dumps({"error": {"message": message}}), 0.0
-        if self._spend is not None and self._spend.reached():
-            with self._lock:
-                self.budget_refusals += 1
-            spent, limit = self._spend.spent, self._spend.limit
-            message = f"budget reached: ${spent:.4f} of ${limit:.2f} spent, so {purpose} ({model}) was not sent"
-            return BUDGET_STATUS, "application/json", json.dumps({"error": {"message": message}}), 0.0
-        started = time.monotonic()
-        status, content_type, text = self._forward(path, raw)
+        spend = self._spend
+        with spend.turn if spend is not None else contextlib.nullcontext():
+            if spend is not None and spend.reached():
+                with self._lock:
+                    self.budget_refusals += 1
+                why = "a response had no price" if spend.unpriced else f"${spend.spent:.4f} of ${spend.limit:.2f} spent"
+                message = f"budget reached: {why}, so {purpose} ({model}) was not sent"
+                return BUDGET_STATUS, "application/json", json.dumps({"error": {"message": message}}), 0.0
+            started = time.monotonic()
+            status, content_type, text = self._forward(path, raw)
+            latency = time.monotonic() - started
+            cost = response_cost(text)
+            if spend is not None and 200 <= status < 300:
+                spend.add(cost)
         if not 200 <= status < 300:
             # A provider's refusal (a 429, a 5xx) says nothing about what the model answers. Kept, a later replay
             # would serve it as the answer and never ask again (#1198); the agent still sees it, as it would live.
@@ -615,12 +626,10 @@ class Proxy:
             status=status,
             content_type=content_type,
             body=text,
-            latency=time.monotonic() - started,
-            cost=response_cost(text),
+            latency=latency,
+            cost=cost,
             fixture_origin=self._requested_origin,
         )
-        if self._spend is not None:
-            self._spend.add(exchange.cost)
         with self._lock:
             self.forwarded += 1
             self.cassette.exchanges.append(exchange)

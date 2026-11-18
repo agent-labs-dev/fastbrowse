@@ -5,7 +5,9 @@ import hashlib
 import json
 import re
 import socket
+import threading
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
@@ -292,6 +294,43 @@ def test_a_fill_pass_a_provider_refused_leaves_the_cassette_as_it_was(
     [entry] = json.loads(out.read_text())["tasks"]
     assert entry["upstream_errors"] == [429] and entry["fill_passes"] == 1
     assert entry["recorded_cost_usd"] == 0 and entry["spent_usd"] == pytest.approx(0.1)
+
+
+def test_concurrent_requests_under_a_budget_go_upstream_one_at_a_time() -> None:
+    """Checked side by side, two $0.60 requests each passed a $0.50 budget before either was priced."""
+    inside = threading.Semaphore(0)
+    release = threading.Event()
+
+    def forward(path: str, body: bytes) -> tuple[int, str, str]:
+        inside.release()
+        release.wait(5)
+        return 200, "application/json", json.dumps({"usage": {"cost": 0.6}})
+
+    spend = Spend(0.5)
+    proxy = Proxy(Cassette(task="t"), forward=forward, spend=spend)
+    with proxy as base, ThreadPoolExecutor(2) as pool:
+        first = pool.submit(_post, base, JEV, {"q": 1})
+        assert inside.acquire(timeout=5)
+        second = pool.submit(_post, base, JEV, {"q": 2})
+        assert not inside.acquire(timeout=0.2), "the second request went upstream before the first was priced"
+        release.set()
+        assert first.result().status_code == 200 and second.result().status_code == BUDGET_STATUS
+    assert spend.spent == pytest.approx(0.6) and proxy.forwarded == 1
+
+
+def test_a_response_without_a_price_ends_the_spending() -> None:
+    sent: list[bytes] = []
+
+    def forward(path: str, body: bytes) -> tuple[int, str, str]:
+        sent.append(body)
+        return 200, "application/json", "{}"
+
+    proxy = Proxy(Cassette(task="t"), forward=forward, spend=Spend(1.0))
+    with proxy as base:
+        assert _post(base, JEV, {"q": 1}).status_code == 200
+        refused = _post(base, JEV, {"q": 2})
+    assert refused.status_code == BUDGET_STATUS and "no price" in refused.json()["error"]["message"]
+    assert len(sent) == 1
 
 
 def test_replay_keeps_each_sent_request_with_its_response_as_a_trace_line() -> None:

@@ -17,7 +17,8 @@ name: Cassette refill
 #   - at most one refill per head commit (claimed in a pull request comment before any spend), none for a refill commit,
 #     and none for a head the check was not run on. A commit that changes the head starts a new check and a new refill.
 #   - the spend is capped by the repository variable CASSETTE_REFILL_BUDGET (default 1 dollar), checked before each
-#     model request is sent; a request's price is known only from its response, so one already in flight can pass it.
+#     model request is sent. Paid requests go one at a time, since a price is known only from its response, so only
+#     the last one can pass the cap; a response with no price stops the spending.
 #
 # `workflow_dispatch` (or a call from another workflow here) reruns it by hand for a pull request (`retry` lifts only the one-refill-per-head guard).
 # Repository configuration: secrets OPENROUTER_API_KEY and AUR_SYNC_TOKEN (a token with contents and pull request
