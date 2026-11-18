@@ -30,6 +30,57 @@ async fn document_title_is_citable_without_a_body_heading() {
 
 // -- test_capture.py: capture blocks preserve the records a reader needs to cite together -----------------------
 
+#[tokio::test(flavor = "multi_thread")]
+async fn title_advice_stays_with_its_record_and_visible_text() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<ul>
+        <li><h3>First...: <a href="/first" title="The Complete First Volume">First...</a></h3><p>GBP 54.81</p></li>
+        <li><h3><a href="/second" title="A Different Volume">Second...</a></h3><p>GBP 53.90</p></li>
+        <li><h3>Third Volume</h3><p>GBP 10</p></li>
+        </ul>
+        <p><a title="Outer advice"><span title="Inner advice">Nested</span> label</a> GBP 5</p>
+        <p><a title="Outer repeated"><span title="Inner repeated">First</span> Volume</a> <b title="Sibling repeated">Volume</b></p>
+        <p>Volume 2: <a title="Volume 2: The Full Name">Volume 2</a></p>
+        <p title="Full block label">Short block...</p>
+        <p>The <abbr title="World Wide Web">WWW</abbr> reference.</p>
+        <table><tr><th>Name</th><th>Price</th></tr><tr><td><span title="Full Table Name">Short</span></td><td>GBP 10</td></tr></table>
+        <p><span title="Same">Same</span><span hidden title="Hidden advice">Hidden</span></p>"#,
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    let records: Vec<_> = capture.blocks.iter().filter(|block| block.kind == BlockKind::ListItem).collect();
+    assert_eq!(records.len(), 3);
+    let first = text_of(&capture, records[0]);
+    assert!(first.contains("First... (title: The Complete First Volume)"), "{first}");
+    assert!(first.contains("First...: First... (title: The Complete First Volume)"), "{first}");
+    assert!(first.contains("GBP 54.81"));
+    assert!(!first.contains("A Different Volume"));
+    let second = text_of(&capture, records[1]);
+    assert!(second.contains("Second... (title: A Different Volume)"), "{second}");
+    assert!(capture.text.contains("WWW (title: World Wide Web)"), "{}", capture.text);
+    assert!(capture.text.contains("Short (title: Full Table Name)"));
+    assert!(
+        capture.text.contains("Nested (title: Inner advice) label (title: Outer advice) GBP 5"),
+        "{}",
+        capture.text
+    );
+    assert!(
+        capture
+            .text
+            .contains("First (title: Inner repeated) Volume (title: Outer repeated) Volume (title: Sibling repeated)"),
+        "{}",
+        capture.text
+    );
+    assert!(capture.text.contains("Volume 2: Volume 2 (title: Volume 2: The Full Name)"), "{}", capture.text);
+    assert!(capture.text.contains("Short block... (title: Full block label)"), "{}", capture.text);
+    assert!(!capture.text.contains("Hidden advice"));
+    assert!(!capture.text.contains("Same (title: Same)"));
+    h.close().await;
+}
+
 /// This binary registers no PDF helper, as a Rust program that never calls `run_if_requested` does not. The PDF is
 /// still kept, and the run is told its text went unread instead of seeing a file that seems to hold nothing.
 #[tokio::test(flavor = "multi_thread")]

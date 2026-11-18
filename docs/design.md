@@ -170,6 +170,10 @@ and participates in the capture hash and secret masking. Read candidates name th
 tab title stays distinct from a heading rendered in the page body. A title alone does not establish that a
 script-rendered body was read.
 
+Browser and HTTP captures keep a text label's `title` advice beside it as `(title: ...)`, within the
+same record or table cell. The advice supplements the label rather than replacing it, so a shortened listing
+name can retain its full native tooltip text as citable evidence.
+
 READ is one of Jev's operations. On a page that has changed, Jev is also asked whether it shows something the task
 asks to be told that the notes do not hold yet; when it does, and Jev picked another operation, the run reads first,
 because an order total is gone once the order is placed. The step state's `page_facts` tell Jev when a page was read

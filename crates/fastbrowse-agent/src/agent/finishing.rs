@@ -368,7 +368,7 @@ impl Agent {
             && !repeated
             && let Some(rejection) = rejection
         {
-            let reason = rejection_reason(&rejection);
+            let reason = rejection_reason(&rejection, false);
             if let Some(answer) = &answered
                 && !answer.claims.is_empty()
             {
@@ -565,8 +565,8 @@ pub(super) const REFUSED: &str = "A step the task asks for was not carried out b
 
 /// What the navigator is told about a rejected draft, and what the run's error says if recovery runs out: which
 /// claim failed which check, so it can look for the evidence that is missing rather than propose done again (#810).
-fn rejection_reason(rejection: &str) -> String {
-    let failed = rejected_parts(rejection);
+pub(super) fn rejection_reason(rejection: &str, published: bool) -> String {
+    let failed = rejected_parts(rejection, published);
     if failed.is_empty() {
         return "The composed answer was rejected against its source quotes or requested coverage. Correct the answer or gather the evidence it needs.".into();
     }
@@ -579,7 +579,10 @@ fn rejection_reason(rejection: &str) -> String {
     // for four others; shown that draft, it chose the next method (#897).
     let feedback: Value = serde_json::from_str(rejection).unwrap_or_default();
     let coverage = feedback["rejected_checks"].as_array().is_some_and(|checks| checks.iter().any(|c| c == "coverage"));
-    if coverage && let Some(claims) = drafted(rejection).filter(|claims| !claims.is_empty()) {
+    if !published
+        && coverage
+        && let Some(claims) = drafted(rejection).filter(|claims| !claims.is_empty())
+    {
         reason += "\nThe rejected answer:";
         if let Some(columns) = feedback["columns"].as_array().filter(|columns| !columns.is_empty()) {
             let names: Vec<&str> = columns.iter().filter_map(Value::as_str).collect();
@@ -596,7 +599,7 @@ fn rejection_reason(rejection: &str) -> String {
 /// task and withheld one claim was told "Partial evidence only. Remaining coverage is omitted", a notice for a run that
 /// stopped before reading everything, and nothing said which claim was missing (#892).
 fn withheld(rejection: &str, held: ComposedAnswer) -> ComposedAnswer {
-    let failed = rejected_parts(rejection);
+    let failed = rejected_parts(rejection, true);
     let notice = if failed.is_empty() {
         "This answer leaves out what did not pass its checks. Each claim below passed them.".to_string()
     } else {
@@ -609,7 +612,7 @@ fn withheld(rejection: &str, held: ComposedAnswer) -> ComposedAnswer {
 }
 
 /// Which claim of a rejected draft failed which check, one sentence part each.
-fn rejected_parts(rejection: &str) -> Vec<String> {
+fn rejected_parts(rejection: &str, published: bool) -> Vec<String> {
     let feedback: Value = serde_json::from_str(rejection).unwrap_or_default();
     let claim = |index: &Value| {
         let text = index.as_u64().and_then(|index| feedback["draft_claims"].get(index as usize)?["text"].as_str());
@@ -629,7 +632,26 @@ fn rejected_parts(rejection: &str) -> Vec<String> {
             }
             continue;
         };
-        let claim = claim(&index.into());
+        let claim = if published {
+            let composition = &feedback["drafted_composition"][index as usize];
+            let fields: Vec<_> = composition["text"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .chain(composition["cells"].as_array().into_iter().flatten().filter_map(Value::as_array).flatten())
+                .filter_map(|part| part["Computed"]["field"].as_str())
+                .map(text::repr)
+                .collect();
+            // Failed field slots are draft notation, not source text. Publishing the draft in the notice left
+            // "[title]" beside a price even though that claim had been withheld from the answer (#1247).
+            if !fields.is_empty() {
+                format!("the claim using the selected record's {}", fields.join(", "))
+            } else {
+                claim(&index.into())
+            }
+        } else {
+            claim(&index.into())
+        };
         match part {
             "tally" => {
                 let untallied =
@@ -686,12 +708,46 @@ mod tests {
     use super::rejection_reason;
 
     #[test]
+    fn withheld_winner_fields_do_not_publish_unfilled_drafts() {
+        let feedback = json!({
+            "draft_claims": [{"text": "[title] is the most expensive at GBP 54.81."}],
+            "drafted_composition": [{"text": [
+                {"Computed": {"field": "title"}},
+                {"Prose": " is the most expensive at "},
+                {"Computed": {"field": null}},
+            ], "cells": null}],
+            "rejected_checks": ["claim0/tally"],
+            "untallied_claims": [{"claim": 0, "reason": "No title could be copied from the selected record."}],
+        });
+        let held = crate::retrieval::ComposedAnswer {
+            answer: "There are 13 matching records.".into(),
+            linked_answer: "There are 13 matching records.".into(),
+            claims: Vec::new(),
+            citations: Vec::new(),
+            problem: None,
+        };
+        let answer = super::withheld(&feedback.to_string(), held);
+        assert!(!answer.answer.contains("[title]"), "{}", answer.answer);
+        assert!(!answer.linked_answer.contains("[title]"), "{}", answer.linked_answer);
+        assert!(answer.answer.contains("No title could be copied from the selected record."));
+        assert!(answer.answer.contains("There are 13 matching records."));
+        assert!(rejection_reason(&feedback.to_string(), false).contains("[title]"));
+        assert!(!rejection_reason(&feedback.to_string(), true).contains("[title]"));
+        let mut incomplete = feedback;
+        incomplete["untallied_claims"][0]["reason"] = json!("Only 1 of 50 pages was read.");
+        incomplete["rejected_checks"] = json!(["claim0/tally", "claim0/cell0", "claim0/support"]);
+        let notice = super::rejected_parts(&incomplete.to_string(), true).join("; ");
+        assert!(notice.contains("Only 1 of 50 pages was read."), "{notice}");
+        assert!(!notice.contains("[title]"), "{notice}");
+    }
+
+    #[test]
     fn coverage_feedback_shows_the_navigator_the_rejected_answer() {
         let feedback = json!({
             "draft_claims": [{"text": "Two matching records were found.", "evidence_ids": ["e0"]}],
             "rejected_checks": ["coverage"],
         });
-        let reason = rejection_reason(&feedback.to_string());
+        let reason = rejection_reason(&feedback.to_string(), false);
         assert!(reason.contains("Two matching records were found."), "{reason}");
     }
 
@@ -709,7 +765,7 @@ mod tests {
             "tally_reasons": {"claim3/states": "it states something besides its total"},
             "untallied_claims": [{"claim": 0, "reason": "No note read is one 'quote by Albert Einstein'."}],
         });
-        let reason = rejection_reason(&feedback.to_string());
+        let reason = rejection_reason(&feedback.to_string(), false);
         for part in [
             "'The cheapest is X at £10.69.' does not follow from the notes it cites",
             "'There are 9 quotes by Albert Einstein.': No note read is one 'quote by Albert Einstein'.",
@@ -737,7 +793,7 @@ mod tests {
             })
             .to_string()
         };
-        let reason = rejection_reason(&draft(json!(["coverage"])));
+        let reason = rejection_reason(&draft(json!(["coverage"])), false);
         assert!(
             reason.ends_with(
                 "\nThe rejected answer:\nShipping method | Price | Grand Total\n- UPS Saver | $32.61 | $174.69\n- DHL Express | $28.40 | not shown for this method"
@@ -745,6 +801,6 @@ mod tests {
             "{reason}"
         );
         // A claim its own check rejected is named already; the draft is shown only for what no one claim is to blame.
-        assert!(!rejection_reason(&draft(json!(["claim1"]))).contains("The rejected answer"));
+        assert!(!rejection_reason(&draft(json!(["claim1"])), false).contains("The rejected answer"));
     }
 }

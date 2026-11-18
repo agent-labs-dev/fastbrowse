@@ -7341,6 +7341,31 @@ async fn test_uncertain_composition_support_or_coverage_is_repaired_like_a_rejec
 }
 
 #[tokio::test]
+async fn test_rejected_winner_recovery_keeps_draft_slots_out_of_the_public_error() {
+    let page = observation(&[]);
+    let agent = agent();
+    let mut state = composition_repair_state();
+    let feedback = json!({
+        "draft_claims": [{"text": "[title] costs GBP 54.81."}],
+        "drafted_composition": [{"text": [{"Computed": {"field": "title"}}]}],
+        "rejected_checks": ["claim0/tally"],
+        "untallied_claims": [{"claim": 0, "reason": "No title could be copied from the selected record."}],
+    })
+    .to_string();
+    let reason = super::finishing::rejection_reason(&feedback, false);
+    assert!(reason.contains("[title]"));
+    state.composition_feedback = Some(feedback);
+    state.recoveries = agent.config.stall.max_recoveries;
+    let Err(Flow::Stop(stop)) = agent.recover(&mut state, &page, &reason, Status::Unverified, None).await else {
+        panic!("recovery did not stop");
+    };
+    assert_eq!(stop.status, Status::Unverified);
+    let error = stop.error.unwrap();
+    assert!(!error.contains("[title]"), "{error}");
+    assert!(error.contains("No title could be copied from the selected record."), "{error}");
+}
+
+#[tokio::test]
 async fn test_rejected_composition_exhausts_the_existing_recovery_budget() {
     let page = observation(&[]);
     let agent = Agent::new(

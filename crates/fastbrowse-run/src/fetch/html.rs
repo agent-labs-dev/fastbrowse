@@ -674,6 +674,12 @@ pub enum FrameDocument {
     Markup(String),
 }
 
+struct TitleAdvice {
+    close: usize,
+    title: String,
+    text: String,
+}
+
 /// The served markup as blocks. `capture.js` reads the DOM a browser built, so it sees what CSS hid and what scripts
 /// added; this sees the served markup only. It keeps the shapes the reader relies on anyway: headings with the path that names
 /// what a value under them belongs to, one block per table row under its header, and an inline value left in the block
@@ -713,6 +719,9 @@ struct Reader<'a> {
     /// Open dated elements, as tag, `datetime` and the text read inside so far. A relative date such as "3 weeks ago"
     /// holds the exact date only in this attribute, so the reader writes it after the text, as `capture.js` does.
     stamps: Vec<(String, String, String)>,
+    /// Native tooltip text can hold the full name when a listing shortens its visible label.
+    titles: Vec<TitleAdvice>,
+    ends: HashMap<usize, usize>,
     /// The cards the first read found, by the tag token that opens each.
     records: HashMap<usize, Record>,
     /// The open card, whose whole text is one block.
@@ -730,6 +739,7 @@ struct Reader<'a> {
 
 impl Tags for Reader<'_> {
     fn start(&mut self, tag: &Tag, at: usize) {
+        self.emit_titles(at);
         // An end tag a start tag implies can close the open card.
         if self.record.as_ref().is_some_and(|record| record.close == at) {
             self.close_record();
@@ -741,6 +751,7 @@ impl Tags for Reader<'_> {
     }
 
     fn end(&mut self, name: &str, at: usize) {
+        self.emit_titles(at);
         self.close(name);
         if self.record.as_ref().is_some_and(|record| record.close == at) {
             self.close_record();
@@ -761,6 +772,9 @@ impl Tags for Reader<'_> {
         for (_, _, text) in &mut self.stamps {
             text.push_str(data);
         }
+        for advice in &mut self.titles {
+            advice.text.push_str(data);
+        }
         if let Some((_, text)) = &mut self.link {
             text.push_str(data);
         }
@@ -769,7 +783,12 @@ impl Tags for Reader<'_> {
 }
 
 impl<'a> Reader<'a> {
-    fn new(url: &'a str, records: HashMap<usize, Record>, notes: HashSet<usize>) -> Reader<'a> {
+    fn new(
+        url: &'a str,
+        records: HashMap<usize, Record>,
+        notes: HashSet<usize>,
+        ends: HashMap<usize, usize>,
+    ) -> Reader<'a> {
         Reader {
             url,
             blocks: Vec::new(),
@@ -796,6 +815,8 @@ impl<'a> Reader<'a> {
             pager_item: false,
             paging: Vec::new(),
             stamps: Vec::new(),
+            titles: Vec::new(),
+            ends,
             records,
             record: None,
             notes,
@@ -891,6 +912,12 @@ impl<'a> Reader<'a> {
             self.hidden.push(tag.to_string());
             self.skip += 1;
             return;
+        }
+        if !VOID.contains(&tag)
+            && let Some(title) = get("title").map(clean).filter(|title| !title.is_empty())
+            && let Some(&close) = self.ends.get(&at)
+        {
+            self.titles.push(TitleAdvice { close, title, text: String::new() });
         }
         // A `time` or a custom element dates the text it shows; the `datetime` of `ins` and `del` dates an edit.
         if (tag == "time" || tag.contains('-'))
@@ -997,6 +1024,17 @@ impl<'a> Reader<'a> {
         }
         if BLOCKS.contains(&tag) {
             self.flush(None, None, false);
+        }
+    }
+
+    fn emit_titles(&mut self, at: usize) {
+        // The first pass already knows explicit and implied ends, including optional cell and list-item tags.
+        while let Some(index) = self.titles.iter().rposition(|advice| advice.close == at) {
+            let advice = self.titles.remove(index);
+            let shown = clean(&advice.text);
+            if (self.tables == 0 || self.cell.is_some()) && !shown.is_empty() && shown != advice.title {
+                self.add(&format!(" (title: {})", advice.title));
+            }
         }
     }
 
@@ -1216,6 +1254,8 @@ impl<'a> Reader<'a> {
     }
 
     fn flush(&mut self, kind: Option<BlockKind>, href: Option<String>, closing_heading: bool) {
+        // A container spanning blocks has no single label to annotate. Never move its advice into the next block.
+        self.titles.retain(|advice| clean(&advice.text).is_empty());
         let raw = std::mem::take(&mut self.buffer);
         let links = std::mem::take(&mut self.links);
         if let Some(cell) = &mut self.cell {
@@ -1276,7 +1316,16 @@ pub fn read(html: &str, url: &str) -> (String, Vec<Found>, Vec<Control>, Vec<Fra
     // A card is told by its siblings, which come after it, so the tree is read before the text.
     let mut tree = tokenize(html, Sink::new(Tree::new(url))).into_inner();
     let notes = tree.note_references();
-    let mut reader = tokenize(html, Sink::new(Reader::new(url, tree.records(), notes))).into_inner();
+    let ends = tree
+        .elements
+        .iter()
+        .enumerate()
+        .skip(1)
+        .filter(|(index, _)| tree.leaf(*index))
+        .map(|(_, element)| (element.start, element.close))
+        .collect();
+    let mut reader = tokenize(html, Sink::new(Reader::new(url, tree.records(), notes, ends))).into_inner();
+    reader.emit_titles(usize::MAX);
     reader.close_record();
     reader.flush(None, None, false);
     (clean(&reader.title), reader.blocks, reader.controls, reader.frames)
@@ -1539,6 +1588,58 @@ mod tests {
         assert_eq!(texts, (1..=3).map(|n| format!("Quote {n}. by Author {n} (about)\nTags: a b")).collect::<Vec<_>>(),);
         assert_eq!(found.len(), 4, "{found:?}");
         assert!(records.iter().all(|b| b.heading_path == ["Quotes"] && b.href.is_none()));
+    }
+
+    #[test]
+    fn title_advice_stays_with_its_record_and_visible_text() {
+        let (_, found, _, _) = read(
+            "<ul><li><h3><a href='/first' title='The Complete First Volume'>First...</a></h3><p>GBP 54.81</p></li>\
+             <li><h3><a href='/second' title='A Different Volume'>Second...</a></h3><p>GBP 53.90</p></li>\
+             <li><h3>Third Volume</h3><p>GBP 10</p></li></ul>\
+             <table title='Table advice'><tbody title='Body advice'><tr title='Row advice'><td>a</td><td>b</tr></tbody></table>\
+             <link title='Feed advice'  href='/feed'><input type='hidden' title='Hidden input advice'>\
+             <div title='Container advice'><p>Contained text</p></div><p>After container</p>\
+             <p><a title='Outer advice'><span title='Inner advice'>Nested</span> label</a> GBP 5</p>\
+             <p>The <abbr title='World Wide Web'>WWW</abbr> reference.</p>\
+             <p><span title='Same'>Same</span><span hidden title='Hidden advice'>Hidden</span></p>",
+            "https://a.example/",
+        );
+        let records: Vec<_> = found.iter().filter(|block| block.whole_record).collect();
+        assert_eq!(records.len(), 3);
+        assert!(records[0].text.contains("First... (title: The Complete First Volume)"), "{found:?}");
+        assert!(records[0].text.contains("GBP 54.81"));
+        assert!(!records[0].text.contains("A Different Volume"));
+        assert!(records[1].text.contains("Second... (title: A Different Volume)"));
+        assert!(found.iter().any(|block| block.text.contains("WWW (title: World Wide Web)")));
+        assert!(
+            found
+                .iter()
+                .any(|block| block.text.contains("Nested (title: Inner advice) label (title: Outer advice) GBP 5"))
+        );
+        assert!(!found.iter().any(|block| block.text.contains("Feed advice")
+            || block.text.contains("Hidden input advice")
+            || block.text.contains("Container advice")
+            || block.text.contains("Table advice")
+            || block.text.contains("Body advice")
+            || block.text.contains("Row advice")));
+        assert!(!found.iter().any(|block| block.text.contains("Hidden advice") || block.text.contains("Same (title:")));
+    }
+
+    #[test]
+    fn title_advice_uses_the_trees_implied_end_tags() {
+        let (_, found) = blocks(
+            "<ul><li title='Full first'>Short first<li>Next</ul>\
+             <table><tr><td title='Full cell'>Short cell<td>Price</table>\
+             <p title='Full paragraph'>Short paragraph<p>After paragraph",
+            "https://a.example/",
+        );
+        for expected in [
+            "Short first (title: Full first)",
+            "Short cell (title: Full cell)",
+            "Short paragraph (title: Full paragraph)",
+        ] {
+            assert!(found.iter().any(|block| block.text.contains(expected)), "{expected}: {found:?}");
+        }
     }
 
     #[test]
