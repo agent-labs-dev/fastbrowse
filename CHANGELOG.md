@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Browser and HTTP reads keep a text label's native tooltip text beside the label, so a listing that shortens a title can still supply the full name of the record with the highest or lowest value. An unverified answer names a winner field it could not establish without printing its unfilled draft slot ([#1247](https://github.com/agent-labs-dev/fastbrowse/issues/1247)).
+
 - Reads preserve the headings and individual records inside inline containers, including custom elements. A page of flight results could be captured as one paragraph, leaving the answer unable to cite an individual flight and its price ([#1250](https://github.com/agent-labs-dev/fastbrowse/issues/1250)).
 
 - A read distinguishes a document title from a heading in the page, so asking for an opened window's heading selects its heading rather than its tab title ([#1235](https://github.com/agent-labs-dev/fastbrowse/issues/1235)).
