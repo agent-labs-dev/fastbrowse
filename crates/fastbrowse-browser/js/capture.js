@@ -126,7 +126,36 @@
     }
     return text;
   };
-  const textOf = e => clean(dated(e, unnoted(e, e.innerText ?? e.textContent ?? '')));
+  // A listing may shorten its link text while its native tooltip gives the full name. Keep the advice beside
+  // the visible wording, rather than replacing it: a title can explain a label without being that label.
+  const titled = (e, text) => {
+    const insertions = [];
+    const ancestors = [];
+    let cursor = 0;
+    for (const node of [...(e.hasAttribute('title') ? [e] : []), ...e.querySelectorAll('[title]')]) {
+      if (!visible(node) || SKIP.has(node.tagName)) continue;
+      const reference = node.closest(IN_PAGE);
+      if (reference && noteReference(reference)) continue;
+      const title = clean(node.getAttribute('title') || '');
+      const shown = shownOf(node);
+      if (!title || !shown || title === shown) continue;
+      while (ancestors.length && !ancestors.at(-1).node.contains(node)) {
+        cursor = Math.max(cursor, ancestors.pop().end);
+      }
+      const at = text.indexOf(shown, cursor);
+      if (at >= 0) {
+        insertions.push({ at: at + shown.length, advice: ` (title: ${title})` });
+        cursor = at;
+        ancestors.push({ node, end: at + shown.length });
+      }
+    }
+    // Offsets refer to the unchanged label, so an ancestor's advice cannot move a descendant past its own text.
+    for (const { at, advice } of insertions.sort((a, b) => b.at - a.at)) {
+      text = text.slice(0, at) + advice + text.slice(at);
+    }
+    return text;
+  };
+  const textOf = e => titled(e, clean(dated(e, unnoted(e, e.innerText ?? e.textContent ?? ''))));
   const isBlock = e => {
     const display = getComputedStyle(e).display;
     return !(display.startsWith('inline') || display === 'contents') || e.tagName === 'BR';
@@ -281,7 +310,7 @@
   function flush(run) {
     if (!run.length) return;
     const elements = run.filter(n => n.nodeType === 1);
-    let text = clean(run.map(n => (n.nodeType === 3 ? n.textContent : dated(n, unnoted(n, n.innerText ?? '')))).join(''));
+    let text = clean(run.map(n => (n.nodeType === 3 ? n.textContent : titled(n, dated(n, unnoted(n, n.innerText ?? ''))))).join(''));
     // A host's own text read in its shadow root is a block apart from its row, which may have read it without it.
     // A frame's nodes come from another realm, so the root is told by its node type rather than `instanceof`.
     const host = run[0].parentNode?.nodeType === 11 ? run[0].parentNode.host : null;

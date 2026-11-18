@@ -566,7 +566,7 @@ pub(super) const REFUSED: &str = "A step the task asks for was not carried out b
 /// What the navigator is told about a rejected draft, and what the run's error says if recovery runs out: which
 /// claim failed which check, so it can look for the evidence that is missing rather than propose done again (#810).
 fn rejection_reason(rejection: &str) -> String {
-    let failed = rejected_parts(rejection);
+    let failed = rejected_parts(rejection, false);
     if failed.is_empty() {
         return "The composed answer was rejected against its source quotes or requested coverage. Correct the answer or gather the evidence it needs.".into();
     }
@@ -596,7 +596,7 @@ fn rejection_reason(rejection: &str) -> String {
 /// task and withheld one claim was told "Partial evidence only. Remaining coverage is omitted", a notice for a run that
 /// stopped before reading everything, and nothing said which claim was missing (#892).
 fn withheld(rejection: &str, held: ComposedAnswer) -> ComposedAnswer {
-    let failed = rejected_parts(rejection);
+    let failed = rejected_parts(rejection, true);
     let notice = if failed.is_empty() {
         "This answer leaves out what did not pass its checks. Each claim below passed them.".to_string()
     } else {
@@ -609,7 +609,7 @@ fn withheld(rejection: &str, held: ComposedAnswer) -> ComposedAnswer {
 }
 
 /// Which claim of a rejected draft failed which check, one sentence part each.
-fn rejected_parts(rejection: &str) -> Vec<String> {
+fn rejected_parts(rejection: &str, published: bool) -> Vec<String> {
     let feedback: Value = serde_json::from_str(rejection).unwrap_or_default();
     let claim = |index: &Value| {
         let text = index.as_u64().and_then(|index| feedback["draft_claims"].get(index as usize)?["text"].as_str());
@@ -629,7 +629,26 @@ fn rejected_parts(rejection: &str) -> Vec<String> {
             }
             continue;
         };
-        let claim = claim(&index.into());
+        let claim = if published {
+            let composition = &feedback["drafted_composition"][index as usize];
+            let fields: Vec<_> = composition["text"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .chain(composition["cells"].as_array().into_iter().flatten().filter_map(Value::as_array).flatten())
+                .filter_map(|part| part["Computed"]["field"].as_str())
+                .map(text::repr)
+                .collect();
+            // Failed field slots are draft notation, not source text. Publishing the draft in the notice left
+            // "[title]" beside a price even though that claim had been withheld from the answer (#1247).
+            if !fields.is_empty() {
+                format!("the claim using the selected record's {}", fields.join(", "))
+            } else {
+                claim(&index.into())
+            }
+        } else {
+            claim(&index.into())
+        };
         match part {
             "tally" => {
                 let untallied =
@@ -684,6 +703,39 @@ mod tests {
     use serde_json::json;
 
     use super::rejection_reason;
+
+    #[test]
+    fn withheld_winner_fields_do_not_publish_unfilled_drafts() {
+        let feedback = json!({
+            "draft_claims": [{"text": "[title] is the most expensive at GBP 54.81."}],
+            "drafted_composition": [{"text": [
+                {"Computed": {"field": "title"}},
+                {"Prose": " is the most expensive at "},
+                {"Computed": {"field": null}},
+            ], "cells": null}],
+            "rejected_checks": ["claim0/tally"],
+            "untallied_claims": [{"claim": 0, "reason": "No title could be copied from the selected record."}],
+        });
+        let held = crate::retrieval::ComposedAnswer {
+            answer: "There are 13 matching records.".into(),
+            linked_answer: "There are 13 matching records.".into(),
+            claims: Vec::new(),
+            citations: Vec::new(),
+            problem: None,
+        };
+        let answer = super::withheld(&feedback.to_string(), held);
+        assert!(!answer.answer.contains("[title]"), "{}", answer.answer);
+        assert!(!answer.linked_answer.contains("[title]"), "{}", answer.linked_answer);
+        assert!(answer.answer.contains("No title could be copied from the selected record."));
+        assert!(answer.answer.contains("There are 13 matching records."));
+        assert!(rejection_reason(&feedback.to_string()).contains("[title]"));
+        let mut incomplete = feedback;
+        incomplete["untallied_claims"][0]["reason"] = json!("Only 1 of 50 pages was read.");
+        incomplete["rejected_checks"] = json!(["claim0/tally", "claim0/cell0", "claim0/support"]);
+        let notice = super::rejected_parts(&incomplete.to_string(), true).join("; ");
+        assert!(notice.contains("Only 1 of 50 pages was read."), "{notice}");
+        assert!(!notice.contains("[title]"), "{notice}");
+    }
 
     #[test]
     fn coverage_feedback_shows_the_navigator_the_rejected_answer() {

@@ -674,6 +674,13 @@ pub enum FrameDocument {
     Markup(String),
 }
 
+struct TitleAdvice {
+    tag: String,
+    nested: usize,
+    title: String,
+    text: String,
+}
+
 /// The served markup as blocks. `capture.js` reads the DOM a browser built, so it sees what CSS hid and what scripts
 /// added; this sees the served markup only. It keeps the shapes the reader relies on anyway: headings with the path that names
 /// what a value under them belongs to, one block per table row under its header, and an inline value left in the block
@@ -713,6 +720,8 @@ struct Reader<'a> {
     /// Open dated elements, as tag, `datetime` and the text read inside so far. A relative date such as "3 weeks ago"
     /// holds the exact date only in this attribute, so the reader writes it after the text, as `capture.js` does.
     stamps: Vec<(String, String, String)>,
+    /// Native tooltip text can hold the full name when a listing shortens its visible label.
+    titles: Vec<TitleAdvice>,
     /// The cards the first read found, by the tag token that opens each.
     records: HashMap<usize, Record>,
     /// The open card, whose whole text is one block.
@@ -761,6 +770,9 @@ impl Tags for Reader<'_> {
         for (_, _, text) in &mut self.stamps {
             text.push_str(data);
         }
+        for advice in &mut self.titles {
+            advice.text.push_str(data);
+        }
         if let Some((_, text)) = &mut self.link {
             text.push_str(data);
         }
@@ -796,6 +808,7 @@ impl<'a> Reader<'a> {
             pager_item: false,
             paging: Vec::new(),
             stamps: Vec::new(),
+            titles: Vec::new(),
             records,
             record: None,
             notes,
@@ -857,6 +870,9 @@ impl<'a> Reader<'a> {
 
     fn open(&mut self, tag: &str, attrs: &[Attribute], at: usize) {
         let get = |name: &str| attrs.iter().find(|a| &*a.name.local == name).map(|a| &*a.value);
+        for advice in self.titles.iter_mut().filter(|advice| advice.tag == tag) {
+            advice.nested += 1;
+        }
         // Counted before any early return, as `end` sees the closing tag of every element, hidden or not.
         if let Some((open, nested)) = self.paging.last_mut()
             && open == tag
@@ -891,6 +907,11 @@ impl<'a> Reader<'a> {
             self.hidden.push(tag.to_string());
             self.skip += 1;
             return;
+        }
+        if !VOID.contains(&tag)
+            && let Some(title) = get("title").map(clean).filter(|title| !title.is_empty())
+        {
+            self.titles.push(TitleAdvice { tag: tag.into(), nested: 0, title, text: String::new() });
         }
         // A `time` or a custom element dates the text it shows; the `datetime` of `ins` and `del` dates an edit.
         if (tag == "time" || tag.contains('-'))
@@ -1001,6 +1022,11 @@ impl<'a> Reader<'a> {
     }
 
     fn close(&mut self, tag: &str) {
+        let closing_title = self.titles.iter().position(|advice| advice.tag == tag && advice.nested == 0);
+        let advice = closing_title.map(|index| self.titles.remove(index));
+        for advice in self.titles.iter_mut().filter(|advice| advice.tag == tag) {
+            advice.nested = advice.nested.saturating_sub(1);
+        }
         if tag == "li" {
             self.pager_item = false;
         }
@@ -1035,6 +1061,13 @@ impl<'a> Reader<'a> {
         if tag == "title" {
             self.in_title = false;
             return;
+        }
+        if let Some(advice) = advice
+            && (self.tables == 0 || self.cell.is_some())
+            && !clean(&advice.text).is_empty()
+            && clean(&advice.text) != advice.title
+        {
+            self.add(&format!(" (title: {})", advice.title));
         }
         if tag == "a"
             && let Some((href, text)) = self.link.take()
@@ -1216,6 +1249,8 @@ impl<'a> Reader<'a> {
     }
 
     fn flush(&mut self, kind: Option<BlockKind>, href: Option<String>, closing_heading: bool) {
+        // A container spanning blocks has no single label to annotate. Never move its advice into the next block.
+        self.titles.retain(|advice| clean(&advice.text).is_empty());
         let raw = std::mem::take(&mut self.buffer);
         let links = std::mem::take(&mut self.links);
         if let Some(cell) = &mut self.cell {
@@ -1539,6 +1574,41 @@ mod tests {
         assert_eq!(texts, (1..=3).map(|n| format!("Quote {n}. by Author {n} (about)\nTags: a b")).collect::<Vec<_>>(),);
         assert_eq!(found.len(), 4, "{found:?}");
         assert!(records.iter().all(|b| b.heading_path == ["Quotes"] && b.href.is_none()));
+    }
+
+    #[test]
+    fn title_advice_stays_with_its_record_and_visible_text() {
+        let (_, found, _, _) = read(
+            "<ul><li><h3><a href='/first' title='The Complete First Volume'>First...</a></h3><p>GBP 54.81</p></li>\
+             <li><h3><a href='/second' title='A Different Volume'>Second...</a></h3><p>GBP 53.90</p></li>\
+             <li><h3>Third Volume</h3><p>GBP 10</p></li></ul>\
+             <table title='Table advice'><tbody title='Body advice'><tr title='Row advice'><td>a</td><td>b</td></tr></tbody></table>\
+             <link title='Feed advice'  href='/feed'><input type='hidden' title='Hidden input advice'>\
+             <div title='Container advice'><p>Contained text</p></div><p>After container</p>\
+             <p><a title='Outer advice'><span title='Inner advice'>Nested</span> label</a> GBP 5</p>\
+             <p>The <abbr title='World Wide Web'>WWW</abbr> reference.</p>\
+             <p><span title='Same'>Same</span><span hidden title='Hidden advice'>Hidden</span></p>",
+            "https://a.example/",
+        );
+        let records: Vec<_> = found.iter().filter(|block| block.whole_record).collect();
+        assert_eq!(records.len(), 3);
+        assert!(records[0].text.contains("First... (title: The Complete First Volume)"), "{found:?}");
+        assert!(records[0].text.contains("GBP 54.81"));
+        assert!(!records[0].text.contains("A Different Volume"));
+        assert!(records[1].text.contains("Second... (title: A Different Volume)"));
+        assert!(found.iter().any(|block| block.text.contains("WWW (title: World Wide Web)")));
+        assert!(
+            found
+                .iter()
+                .any(|block| block.text.contains("Nested (title: Inner advice) label (title: Outer advice) GBP 5"))
+        );
+        assert!(!found.iter().any(|block| block.text.contains("Feed advice")
+            || block.text.contains("Hidden input advice")
+            || block.text.contains("Container advice")
+            || block.text.contains("Table advice")
+            || block.text.contains("Body advice")
+            || block.text.contains("Row advice")));
+        assert!(!found.iter().any(|block| block.text.contains("Hidden advice") || block.text.contains("Same (title:")));
     }
 
     #[test]
