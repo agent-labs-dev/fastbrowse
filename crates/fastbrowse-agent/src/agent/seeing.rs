@@ -381,6 +381,11 @@ pub(super) fn place_card(viewport: &[u8], edges: &Edges) -> Option<Vec<u8>> {
     cut(&rgba(viewport)?, edges, false)
 }
 
+/// Whether a control's box covers the whole viewport, so its card is the viewport with no outline inside it.
+pub(super) fn covers_viewport(edges: &Edges) -> bool {
+    edges.left <= 0.0 && edges.top <= 0.0 && edges.right >= 1.0 && edges.bottom >= 1.0
+}
+
 fn rgba(png: &[u8]) -> Option<image::RgbaImage> {
     Some(image::load_from_memory_with_format(png, image::ImageFormat::Png).ok()?.to_rgba8())
 }
