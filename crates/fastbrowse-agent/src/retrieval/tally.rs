@@ -500,7 +500,7 @@ fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], gr
             (
                 key,
                 json!(format!(
-                    "{value} is its {field}: the note gives one {of} with its {field}, or the {field} of one."
+                    "{value} is its {field}: the note gives one {of} with its {field}, or the {field} of one, stated as that record's own {field}, not as a value of one entry the record holds, such as one item of a list it contains."
                 )),
             )
         })
@@ -511,8 +511,13 @@ fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], gr
     // took them in (table-total-due 0 of 6, stretch-books-nonfiction-five-star 2 of 6). With it, replayed on the
     // recorded questions, those score 0.07 and 0.21 on average and every member still 0.96 or more.
     criteria.insert(NO_RECORD.into(), json!(format!(
-        "The note is not one whole {of} and does not give the {field} of one. A name, label, heading, link or unrelated field alone is not a whole record. Several records, and a value stated across records such as a total or a starting price, are not one record. A note whose source_kind is heading or link and gives no quoted field value is a fragment naming the record, not a record with a missing field. A whole record that the note shows is outside {of}, in a group, place or state other than the one {of} names, is not one either."
+        "The note is not one whole {of} and does not give the {field} of one. A name, label, heading, link or unrelated field alone is not a whole record. Several records, and a value stated across records such as a total or a starting price, are not one record. A note whose source_kind is heading or link and gives no quoted field value is a fragment naming the record, not a record with a missing field. A whole record that the note shows is outside {of}, in a group, place or state other than the one {of} names, is not one either. A note giving one entry the {of} holds, such as one item of a list it contains, is not one, and that entry's values are not the {field} of the {of}."
     )));
+    // A record is not the entries it holds: asked whether a row of a package's release history gave the package's
+    // "latest release date", Jev said yes to rows from 2023 (0.77) and to a pre-release (0.7), and the maximum chose
+    // the pre-release over the package's stated release. Told that an entry's values are its own, replayed 3x each,
+    // those rows fell to no record at 0.6 and 0.75, the stated "Released:" dates stayed members, and 16 recorded
+    // book and phone questions kept their choices.
     // A heading or link names its record and is never the whole of it, so it cannot be one shown missing the field:
     // offered that, Jev split 51 to 49 on whether the heading "Clerkenwell Coffee" was a shop with no price, and a
     // correct cheapest shop was rejected for it.
@@ -1852,6 +1857,29 @@ mod tests {
             no_record.contains("A whole record that the note shows is outside 'row in the second table', in a group, place or state other than the one 'row in the second table' names, is not one either."),
             "{no_record}"
         );
+    }
+
+    /// A row of a package's release history was taken as the package's "latest release date", and the maximum chose a
+    /// pre-release over the package's stated release: an entry a record holds is asked as its own, not the record.
+    #[test]
+    fn an_entry_a_record_holds_is_not_the_record() {
+        let tally = Tally {
+            op: Op::Max,
+            of: "PyPI package".into(),
+            field: Some("latest release date".into()),
+            rank: None,
+            by: None,
+            group: None,
+            written: "May 14, 2026".into(),
+        };
+        let row = json!({"quote": "0.24.1\n\nMay 19, 2023", "headings": ["httpx 0.28.1", "Release history"]});
+        let Question::Choice(question) = field_question(&tally, &row, &["May 19, 2023".into()], false) else {
+            panic!()
+        };
+        let no_record = question.criteria[NO_RECORD].as_str().unwrap();
+        assert!(no_record.contains("A note giving one entry the 'PyPI package' holds"), "{no_record}");
+        let value = question.criteria["n0"].as_str().unwrap();
+        assert!(value.contains("not as a value of one entry the record holds"), "{value}");
     }
 
     /// A shop's name heading beside its price line was judged a shop with no price 51 to 49, and the correct cheapest
