@@ -11,7 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- A highest or lowest result states the shared comparison value once when records tie, while retaining each winning record ([#1292](https://github.com/agent-labs-dev/fastbrowse/issues/1292)).
+- When a highest or lowest result uses the compared field as its numeric answer, it states the shared value once and retains each tied winner ([#1292](https://github.com/agent-labs-dev/fastbrowse/issues/1292)).
 
 - A wait in a run with no time limit ends after 60 s when the page does not change, and the run is told the page did not change. Before, it waited for a change with no bound, so a page that never changed held the run forever: an official BU Bench task waited 50 minutes on a site's error popup until its browser was stopped by hand. A run that needs to wait longer can choose to wait again, and repeated waits that change nothing count toward the stall rule ([#1213](https://github.com/agent-labs-dev/fastbrowse/issues/1213)).
 

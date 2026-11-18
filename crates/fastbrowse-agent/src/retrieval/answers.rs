@@ -522,6 +522,13 @@ impl DraftClaim {
         {
             return Err("within requires a minimum or maximum tally with a field and no count grouping".into());
         }
+        let has_numeric_slot = self
+            .cells
+            .as_deref()
+            .unwrap_or(std::slice::from_ref(&self.text))
+            .iter()
+            .flatten()
+            .any(|part| matches!(part, DraftPart::Computed(ComputedPart { field: None, .. })));
         let mut evidence_ids = self.evidence_ids;
         let mut computed = 0;
         let mut fields = Vec::new();
@@ -573,13 +580,15 @@ impl DraftClaim {
                             if !slot.computed {
                                 return Err("A computed slot must set computed to true".into());
                             }
-                            // Tied records share the compared value. Projecting it from each winner repeats that value.
+                            // A draft can put the compared field in a named slot instead of the numeric slot.
+                            // If it wrote both, they can serve different cells, so keep the explicit projection.
                             let field = slot.field.filter(|field| {
-                                !self.tally.as_ref().is_some_and(|tally| {
-                                    matches!(tally.op, Op::Min | Op::Max)
-                                        && !tally.names_record()
-                                        && tally.field.as_ref() == Some(field)
-                                })
+                                has_numeric_slot
+                                    || !self.tally.as_ref().is_some_and(|tally| {
+                                        matches!(tally.op, Op::Min | Op::Max)
+                                            && !tally.names_record()
+                                            && tally.field.as_ref() == Some(field)
+                                    })
                             });
                             match &field {
                                 Some(field) if field.trim().is_empty() || fields.contains(field) => return Err("A winner field must be nonempty and occur once".into()),
@@ -2427,6 +2436,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn explicit_numeric_slot_can_accompany_the_compared_fields_source_projection() {
+        let draft = json!({
+            "evidence_ids": [],
+            "tally": {"op":"min","of":"offer","field":"price","written":"GBP 1"},
+            "cells": [[{"computed":true}], [{"computed":true,"field":"price"}]],
+            "text": []
+        });
+        let fields = HashMap::from([("price".to_string(), "£210, GBP 210".to_string())]);
+        let bound = serde_json::from_value::<DraftClaim>(draft).unwrap().bind(&[]).unwrap();
+        let claim = bound.worked_fields("GBP 210", vec![], &fields);
+        assert_eq!(claim.cells, Some(vec!["GBP 210".into(), "£210, GBP 210".into()]));
     }
 
     #[test]
