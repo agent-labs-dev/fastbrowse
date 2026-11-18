@@ -1833,6 +1833,29 @@ fn test_forbidden_edits_are_not_offered() {
     }
 }
 
+/// A Wait that saw nothing change is still offered, so a run can wait longer than one Wait lasts (#1213); a click that
+/// moved nothing is left out as before.
+#[test]
+fn test_an_idle_wait_stays_on_offer_and_an_idle_click_does_not() {
+    let page = observation(&[button("Next")]);
+    let mut state = run_state();
+    state.idle.push(super::recovery::Idle::performed(Some((Operation::Wait, None))));
+    let mut offered = page.clone();
+    let mut context = crate::policy::StepContext::new(&state.task);
+    super::recovery::leave_out_idle(&state, &mut offered, &mut context);
+    assert!(context.withheld.is_empty(), "{:?}", context.withheld);
+    assert!(context.problem.is_none(), "{:?}", context.problem);
+
+    state.idle.push(super::recovery::Idle::performed(Some((
+        Operation::Click,
+        Some(super::helpers::describe(&page.controls[0])),
+    ))));
+    let mut offered = page.clone();
+    let mut context = crate::policy::StepContext::new(&state.task);
+    super::recovery::leave_out_idle(&state, &mut offered, &mut context);
+    assert!(offered.controls.is_empty(), "{:?}", offered.controls);
+}
+
 #[tokio::test]
 async fn a_later_blank_navigation_with_the_same_fingerprint_gets_its_own_wait() {
     let loaded = at("https://shop.test/", &[button("Browse")]);

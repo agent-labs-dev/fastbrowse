@@ -522,12 +522,23 @@ impl DraftClaim {
         {
             return Err("within requires a minimum or maximum tally with a field and no count grouping".into());
         }
+        let has_numeric = |parts: &[DraftPart]| {
+            parts.iter().any(|part| matches!(part, DraftPart::Computed(ComputedPart { field: None, .. })))
+        };
+        let has_numeric_slot =
+            self.cells.as_deref().unwrap_or(std::slice::from_ref(&self.text)).iter().any(|parts| has_numeric(parts));
+        let compared_field = self
+            .tally
+            .as_ref()
+            .filter(|tally| matches!(tally.op, Op::Min | Op::Max) && !tally.names_record())
+            .and_then(|tally| tally.field.as_deref());
         let mut evidence_ids = self.evidence_ids;
         let mut computed = 0;
         let mut fields = Vec::new();
         // Every part a note does not write, so one repair can correct them all.
         let mut absent: Vec<String> = Vec::new();
         let mut bind = |parts: Vec<DraftPart>| -> std::result::Result<Vec<BoundPart>, String> {
+            let has_local_numeric = has_numeric(&parts);
             parts
                 .into_iter()
                 .map(|part| {
@@ -573,12 +584,25 @@ impl DraftClaim {
                             if !slot.computed {
                                 return Err("A computed slot must set computed to true".into());
                             }
-                            match &slot.field {
+                            let mut field = slot.field;
+                            if let Some(compared) = compared_field.filter(|compared| field.as_deref() == Some(*compared)) {
+                                if has_local_numeric {
+                                    return Err(format!(
+                                        "The numeric slot already states the compared field {compared:?}. Use {{\"computed\":true}} once in this claim text or cell and reserve named slots for other winner fields."
+                                    ));
+                                }
+                                // A named comparison slot can stand for the numeric result. With a numeric result in
+                                // another cell, it can instead show how each winner's source writes that value.
+                                if !has_numeric_slot {
+                                    field = None;
+                                }
+                            }
+                            match &field {
                                 Some(field) if field.trim().is_empty() || fields.contains(field) => return Err("A winner field must be nonempty and occur once".into()),
                                 Some(field) => fields.push(field.clone()),
                                 None => computed += 1,
                             }
-                            BoundPart::Computed { field: slot.field }
+                            BoundPart::Computed { field }
                         }
                     })
                 })
@@ -2194,20 +2218,20 @@ fn exact_question(task: &str, claims: &[Claim], notes: &Notes) -> Question {
     ))
 }
 
-/// Whether each text a composed answer copies from the page is only what the task asks to be told. Only its source
+/// Whether each text a composed answer copies from the page is relevant to the requested answer. Only its source
 /// parts copy page text, so only they are judged: asked about whole claims, the exact question rejected the writer's
 /// own wording, "The most expensive product is \"Drum Roaster\" at GBP 210.00." at 0.44, as text beside the value.
 fn copied_question(task: &str, copied: &[Value]) -> Question {
     Question::Noul(NoulQuestion::new(
         format!(
-            "{UNTRUSTED} A written answer copies these texts from the page. Is every copied text free of page information the task neither asks for nor names, such as an unrelated field, an identifier or another record? A requested field may include its complete value, such as a full date when the task asks for the date. When only part of a value is requested, such as its year, copy only that part. Text that repeats the task's own words, such as the name of what it asks about, and a sentence stating only an asked value, carry nothing beyond it.{} The rest of the answer is checked separately. Each copied text includes the claim it contributes to, as context for the role of that text in the answer. The claim is an array of parts: prose is the writer's wording, copied is page text, and computed is a slot code fills with a worked result. A table claim gives each cell as its own array under cells. Judge only the copied text, not the rest of the claim. Task: {} Copied: {}",
+            "{UNTRUSTED} A written answer copies these texts from the page. Does every copied text play a direct role in answering the task? Text may identify the records being compared and give the values on which the comparison depends, including the values of records that did not win. Reject unrelated fields or records. A requested field may include its complete value, such as a full date when the task asks for the date. When only part of a value is requested, such as its year, copy only that part. Text that repeats the task's own words, such as the name of what it asks about, and a sentence stating only an asked value, carry nothing beyond it.{} The rest of the answer is checked separately. Each copied text includes the claim it contributes to, as context for the role of that text in the answer. The claim is an array of parts: prose is the writer's wording, copied is page text, and computed is a slot code fills with a worked result. A table claim gives each cell as its own array under cells. Judge only the copied text, not the rest of the claim. Task: {} Copied: {}",
             element_rule(copied),
             dumps(&json!(task)),
             dumps(&json!(copied))
         ),
-        Some("No copied text carries information the task neither asks for nor names."),
+        Some("Every copied text directly answers the task or explains the stated comparison."),
         Some(
-            "A copied text carries information the task neither asks for nor names, or more than the part it asks for.",
+            "A copied text is unrelated to the answer or comparison, or includes more than the requested part of a value.",
         ),
     ))
 }
@@ -2392,6 +2416,61 @@ mod tests {
             assert_eq!(claim.evidence_ids, ["winner"]);
             let (repacked, _) = bound.repack(0, &mut IndexMap::new());
             assert!(repacked.text.contains("name"), "kept claims retain field-slot metadata");
+        }
+    }
+
+    #[test]
+    fn compared_field_uses_the_extreme_value_in_prose_and_tables() {
+        for op in ["min", "max"] {
+            let tally = json!({"op":op,"of":"offer","field":"price","written":"GBP 1"});
+            let name = json!({"computed":true,"field":"name"});
+            let price = json!({"computed":true,"field":"price"});
+            let fields = HashMap::from([
+                ("name".to_string(), "Offer A, Offer B".to_string()),
+                ("price".to_string(), "GBP 210, GBP 210".to_string()),
+            ]);
+            for cells in [None, Some(json!([[name], [price]]))] {
+                let draft = json!({
+                    "evidence_ids": [], "tally": tally, "cells": cells,
+                    "text": [name, {"prose":" at "}, price]
+                });
+                let bound = serde_json::from_value::<DraftClaim>(draft).unwrap().bind(&[]).unwrap();
+                let claim = bound.worked_fields("GBP 210", vec!["winner".into()], &fields);
+                assert_eq!(claim.text.matches("GBP 210").count(), 1);
+                assert!(claim.text.contains("Offer A, Offer B"));
+                if cells.is_some() {
+                    assert_eq!(claim.cells, Some(vec!["Offer A, Offer B".into(), "GBP 210".into()]));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_numeric_slot_can_accompany_the_compared_fields_source_projection() {
+        let draft = json!({
+            "evidence_ids": [],
+            "tally": {"op":"min","of":"offer","field":"price","written":"GBP 1"},
+            "cells": [[{"computed":true}], [{"computed":true,"field":"price"}]],
+            "text": []
+        });
+        let fields = HashMap::from([("price".to_string(), "£210, GBP 210".to_string())]);
+        let bound = serde_json::from_value::<DraftClaim>(draft).unwrap().bind(&[]).unwrap();
+        let claim = bound.worked_fields("GBP 210", vec![], &fields);
+        assert_eq!(claim.cells, Some(vec!["GBP 210".into(), "£210, GBP 210".into()]));
+    }
+
+    #[test]
+    fn compared_field_and_numeric_slot_in_one_part_list_request_a_repair() {
+        let parts = json!([{"computed":true}, {"prose":" at "}, {"computed":true,"field":"price"}]);
+        for cells in [None, Some(json!([parts]))] {
+            let draft = json!({
+                "evidence_ids": [],
+                "tally": {"op":"min","of":"offer","field":"price","written":"GBP 1"},
+                "cells": cells,
+                "text": parts
+            });
+            let result = serde_json::from_value::<DraftClaim>(draft).unwrap().bind(&[]);
+            assert!(matches!(result, Err(reason) if reason.contains("already states the compared field")));
         }
     }
 
@@ -4571,6 +4650,18 @@ mod tests {
             panic!("exactness is yes-or-no")
         };
         assert!(question.instructions.contains("A requested field may include its complete value"));
+    }
+
+    #[test]
+    fn copied_answers_allow_the_values_that_explain_comparisons() {
+        let Question::Noul(question) = copied_question("Which route is faster?", &[json!({"text": "18 minutes"})])
+        else {
+            panic!("copy scope is yes-or-no")
+        };
+        assert!(question.instructions.contains("identify the records being compared"));
+        assert!(question.instructions.contains("give the values on which the comparison depends"));
+        assert!(question.instructions.contains("including the values of records that did not win"));
+        assert!(question.instructions.contains("Reject unrelated fields or records."));
     }
 
     #[tokio::test]

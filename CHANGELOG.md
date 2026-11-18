@@ -11,6 +11,18 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Comparison answers can cite the versions and values that explain the result without a false partial-answer notice ([#1296](https://github.com/agent-labs-dev/fastbrowse/issues/1296)).
+
+- Dates that refer back to a relative month use that month's offset. The first weekday of next month could be counted in January instead, causing the run to report that a correctly selected date was still undone ([#1293](https://github.com/agent-labs-dev/fastbrowse/issues/1293)).
+
+- When a highest or lowest result uses the compared field as its numeric answer, it states the shared value once and retains each tied winner ([#1292](https://github.com/agent-labs-dev/fastbrowse/issues/1292)).
+
+- A wait in a run with no time limit ends after 60 s when the page does not change, and the run is told the page did not change. Before, it waited for a change with no bound, so a page that never changed held the run forever: an official BU Bench task waited 50 minutes on a site's error popup until its browser was stopped by hand. A run that needs to wait longer can choose to wait again, and repeated waits that change nothing count toward the stall rule ([#1213](https://github.com/agent-labs-dev/fastbrowse/issues/1213)).
+
+- Reading a page whose text is one long block of many megabytes, such as a data file opened in a tab, takes seconds rather than minutes. The read used to hold the run's threads while it prepared its questions, so other runs in the same process stopped too, and their browser command deadlines did not fire ([#1252](https://github.com/agent-labs-dev/fastbrowse/issues/1252)).
+
+- Action decisions retain each control's context and available operations. Recovery after a covered click could dismiss the requested popup because only the target chooser received that information ([#884](https://github.com/agent-labs-dev/fastbrowse/issues/884)).
+
 - Browser reads retain visible CSS-generated text when a dialog hides the surrounding content from accessibility APIs ([#1276](https://github.com/agent-labs-dev/fastbrowse/issues/1276)).
 
 - A highest or lowest result names each winning record once when it appears in more than one note. The run checks tied records' identity before copying their fields, keeping distinct tied winners and all supporting citations ([#1266](https://github.com/agent-labs-dev/fastbrowse/issues/1266)).
