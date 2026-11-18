@@ -381,11 +381,9 @@ pub(super) fn place_card(viewport: &[u8], edges: &Edges) -> Option<Vec<u8>> {
     cut(&rgba(viewport)?, edges, false)
 }
 
-/// Whether `card` is all of `viewport`, the PNG it was cut from: a card is cut within its viewport, so one the same
-/// size is the whole of it.
-pub(super) fn whole_viewport(viewport: &[u8], card: &[u8]) -> bool {
-    let size = |png: &[u8]| png.get(16..24).map(<[u8]>::to_vec);
-    size(card).is_some() && size(card) == size(viewport)
+/// Whether a control's box covers the whole viewport, so its card is the viewport with no outline inside it.
+pub(super) fn covers_viewport(edges: &Edges) -> bool {
+    edges.left <= 0.0 && edges.top <= 0.0 && edges.right >= 1.0 && edges.bottom >= 1.0
 }
 
 fn rgba(png: &[u8]) -> Option<image::RgbaImage> {
