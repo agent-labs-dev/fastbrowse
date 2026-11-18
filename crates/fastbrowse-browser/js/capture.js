@@ -129,28 +129,31 @@
   // A listing may shorten its link text while its native tooltip gives the full name. Keep the advice beside
   // the visible wording, rather than replacing it: a title can explain a label without being that label.
   const titled = (e, text) => {
+    if (!e.hasAttribute('title') && !e.querySelector('[title]')) return text;
     const insertions = [];
-    const ancestors = [];
     let cursor = 0;
-    for (const node of [...(e.hasAttribute('title') ? [e] : []), ...e.querySelectorAll('[title]')]) {
-      if (!visible(node) || SKIP.has(node.tagName)) continue;
+    const visit = (node, depth) => {
+      if (node.nodeType === 3) {
+        const shown = clean(node.textContent ?? '');
+        const at = shown ? text.indexOf(shown, cursor) : -1;
+        if (at >= 0) cursor = at + shown.length;
+        return;
+      }
+      if (node.nodeType !== 1 || SKIP.has(node.tagName)) return;
+      if (!visible(node) && getComputedStyle(node).display !== 'contents') return;
       const reference = node.closest(IN_PAGE);
-      if (reference && noteReference(reference)) continue;
+      if (reference && noteReference(reference)) return;
+      const start = cursor;
+      for (const child of node.childNodes) visit(child, depth + 1);
       const title = clean(node.getAttribute('title') || '');
       const shown = shownOf(node);
-      if (!title || !shown || title === shown) continue;
-      while (ancestors.length && !ancestors.at(-1).node.contains(node)) {
-        cursor = Math.max(cursor, ancestors.pop().end);
+      if (title && shown && title !== shown && cursor > start) {
+        insertions.push({ at: cursor, depth, advice: ` (title: ${title})` });
       }
-      const at = text.indexOf(shown, cursor);
-      if (at >= 0) {
-        insertions.push({ at: at + shown.length, advice: ` (title: ${title})` });
-        cursor = at;
-        ancestors.push({ node, end: at + shown.length });
-      }
-    }
-    // Offsets refer to the unchanged label, so an ancestor's advice cannot move a descendant past its own text.
-    for (const { at, advice } of insertions.sort((a, b) => b.at - a.at)) {
+    };
+    visit(e, 0);
+    // Every visible text node advances the offset, including an earlier copy of a later label (#1247).
+    for (const { at, advice } of insertions.sort((a, b) => b.at - a.at || a.depth - b.depth)) {
       text = text.slice(0, at) + advice + text.slice(at);
     }
     return text;
@@ -310,7 +313,13 @@
   function flush(run) {
     if (!run.length) return;
     const elements = run.filter(n => n.nodeType === 1);
-    let text = clean(run.map(n => (n.nodeType === 3 ? n.textContent : titled(n, dated(n, unnoted(n, n.innerText ?? ''))))).join(''));
+    const owner = run[0].parentNode;
+    const whole = owner?.nodeType === 1 && owner.hasAttribute('title') && [...owner.childNodes].every(node =>
+      run.includes(node) || (node.nodeType !== 1 && node.nodeType !== 3) ||
+      (node.nodeType === 1 && !FRAMES.has(node.tagName) && (hidden(node) || SKIP.has(node.tagName))),
+    );
+    let text = whole ? textOf(owner) :
+      clean(run.map(n => (n.nodeType === 3 ? n.textContent : titled(n, dated(n, unnoted(n, n.innerText ?? ''))))).join(''));
     // A host's own text read in its shadow root is a block apart from its row, which may have read it without it.
     // A frame's nodes come from another realm, so the root is told by its node type rather than `instanceof`.
     const host = run[0].parentNode?.nodeType === 11 ? run[0].parentNode.host : null;

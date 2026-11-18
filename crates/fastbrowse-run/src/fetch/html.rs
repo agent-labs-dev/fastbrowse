@@ -675,8 +675,7 @@ pub enum FrameDocument {
 }
 
 struct TitleAdvice {
-    tag: String,
-    nested: usize,
+    close: usize,
     title: String,
     text: String,
 }
@@ -722,6 +721,7 @@ struct Reader<'a> {
     stamps: Vec<(String, String, String)>,
     /// Native tooltip text can hold the full name when a listing shortens its visible label.
     titles: Vec<TitleAdvice>,
+    ends: HashMap<usize, usize>,
     /// The cards the first read found, by the tag token that opens each.
     records: HashMap<usize, Record>,
     /// The open card, whose whole text is one block.
@@ -739,6 +739,7 @@ struct Reader<'a> {
 
 impl Tags for Reader<'_> {
     fn start(&mut self, tag: &Tag, at: usize) {
+        self.emit_titles(at);
         // An end tag a start tag implies can close the open card.
         if self.record.as_ref().is_some_and(|record| record.close == at) {
             self.close_record();
@@ -750,6 +751,7 @@ impl Tags for Reader<'_> {
     }
 
     fn end(&mut self, name: &str, at: usize) {
+        self.emit_titles(at);
         self.close(name);
         if self.record.as_ref().is_some_and(|record| record.close == at) {
             self.close_record();
@@ -781,7 +783,12 @@ impl Tags for Reader<'_> {
 }
 
 impl<'a> Reader<'a> {
-    fn new(url: &'a str, records: HashMap<usize, Record>, notes: HashSet<usize>) -> Reader<'a> {
+    fn new(
+        url: &'a str,
+        records: HashMap<usize, Record>,
+        notes: HashSet<usize>,
+        ends: HashMap<usize, usize>,
+    ) -> Reader<'a> {
         Reader {
             url,
             blocks: Vec::new(),
@@ -809,6 +816,7 @@ impl<'a> Reader<'a> {
             paging: Vec::new(),
             stamps: Vec::new(),
             titles: Vec::new(),
+            ends,
             records,
             record: None,
             notes,
@@ -870,9 +878,6 @@ impl<'a> Reader<'a> {
 
     fn open(&mut self, tag: &str, attrs: &[Attribute], at: usize) {
         let get = |name: &str| attrs.iter().find(|a| &*a.name.local == name).map(|a| &*a.value);
-        for advice in self.titles.iter_mut().filter(|advice| advice.tag == tag) {
-            advice.nested += 1;
-        }
         // Counted before any early return, as `end` sees the closing tag of every element, hidden or not.
         if let Some((open, nested)) = self.paging.last_mut()
             && open == tag
@@ -910,8 +915,9 @@ impl<'a> Reader<'a> {
         }
         if !VOID.contains(&tag)
             && let Some(title) = get("title").map(clean).filter(|title| !title.is_empty())
+            && let Some(&close) = self.ends.get(&at)
         {
-            self.titles.push(TitleAdvice { tag: tag.into(), nested: 0, title, text: String::new() });
+            self.titles.push(TitleAdvice { close, title, text: String::new() });
         }
         // A `time` or a custom element dates the text it shows; the `datetime` of `ins` and `del` dates an edit.
         if (tag == "time" || tag.contains('-'))
@@ -1021,12 +1027,18 @@ impl<'a> Reader<'a> {
         }
     }
 
-    fn close(&mut self, tag: &str) {
-        let closing_title = self.titles.iter().position(|advice| advice.tag == tag && advice.nested == 0);
-        let advice = closing_title.map(|index| self.titles.remove(index));
-        for advice in self.titles.iter_mut().filter(|advice| advice.tag == tag) {
-            advice.nested = advice.nested.saturating_sub(1);
+    fn emit_titles(&mut self, at: usize) {
+        // The first pass already knows explicit and implied ends, including optional cell and list-item tags.
+        while let Some(index) = self.titles.iter().rposition(|advice| advice.close == at) {
+            let advice = self.titles.remove(index);
+            let shown = clean(&advice.text);
+            if (self.tables == 0 || self.cell.is_some()) && !shown.is_empty() && shown != advice.title {
+                self.add(&format!(" (title: {})", advice.title));
+            }
         }
+    }
+
+    fn close(&mut self, tag: &str) {
         if tag == "li" {
             self.pager_item = false;
         }
@@ -1061,13 +1073,6 @@ impl<'a> Reader<'a> {
         if tag == "title" {
             self.in_title = false;
             return;
-        }
-        if let Some(advice) = advice
-            && (self.tables == 0 || self.cell.is_some())
-            && !clean(&advice.text).is_empty()
-            && clean(&advice.text) != advice.title
-        {
-            self.add(&format!(" (title: {})", advice.title));
         }
         if tag == "a"
             && let Some((href, text)) = self.link.take()
@@ -1311,7 +1316,16 @@ pub fn read(html: &str, url: &str) -> (String, Vec<Found>, Vec<Control>, Vec<Fra
     // A card is told by its siblings, which come after it, so the tree is read before the text.
     let mut tree = tokenize(html, Sink::new(Tree::new(url))).into_inner();
     let notes = tree.note_references();
-    let mut reader = tokenize(html, Sink::new(Reader::new(url, tree.records(), notes))).into_inner();
+    let ends = tree
+        .elements
+        .iter()
+        .enumerate()
+        .skip(1)
+        .filter(|(index, _)| tree.leaf(*index))
+        .map(|(_, element)| (element.start, element.close))
+        .collect();
+    let mut reader = tokenize(html, Sink::new(Reader::new(url, tree.records(), notes, ends))).into_inner();
+    reader.emit_titles(usize::MAX);
     reader.close_record();
     reader.flush(None, None, false);
     (clean(&reader.title), reader.blocks, reader.controls, reader.frames)
@@ -1582,7 +1596,7 @@ mod tests {
             "<ul><li><h3><a href='/first' title='The Complete First Volume'>First...</a></h3><p>GBP 54.81</p></li>\
              <li><h3><a href='/second' title='A Different Volume'>Second...</a></h3><p>GBP 53.90</p></li>\
              <li><h3>Third Volume</h3><p>GBP 10</p></li></ul>\
-             <table title='Table advice'><tbody title='Body advice'><tr title='Row advice'><td>a</td><td>b</td></tr></tbody></table>\
+             <table title='Table advice'><tbody title='Body advice'><tr title='Row advice'><td>a</td><td>b</tr></tbody></table>\
              <link title='Feed advice'  href='/feed'><input type='hidden' title='Hidden input advice'>\
              <div title='Container advice'><p>Contained text</p></div><p>After container</p>\
              <p><a title='Outer advice'><span title='Inner advice'>Nested</span> label</a> GBP 5</p>\
@@ -1609,6 +1623,23 @@ mod tests {
             || block.text.contains("Body advice")
             || block.text.contains("Row advice")));
         assert!(!found.iter().any(|block| block.text.contains("Hidden advice") || block.text.contains("Same (title:")));
+    }
+
+    #[test]
+    fn title_advice_uses_the_trees_implied_end_tags() {
+        let (_, found) = blocks(
+            "<ul><li title='Full first'>Short first<li>Next</ul>\
+             <table><tr><td title='Full cell'>Short cell<td>Price</table>\
+             <p title='Full paragraph'>Short paragraph<p>After paragraph",
+            "https://a.example/",
+        );
+        for expected in [
+            "Short first (title: Full first)",
+            "Short cell (title: Full cell)",
+            "Short paragraph (title: Full paragraph)",
+        ] {
+            assert!(found.iter().any(|block| block.text.contains(expected)), "{expected}: {found:?}");
+        }
     }
 
     #[test]

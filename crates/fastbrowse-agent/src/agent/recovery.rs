@@ -274,6 +274,14 @@ impl Agent {
                 } else {
                     reason
                 };
+                // Recovery needs the draft, but the caller must not receive its unfilled field notation (#1247).
+                let reason = if gives_up_as == Status::Unverified
+                    && let Some(rejection) = &state.composition_feedback
+                {
+                    self.redact(&super::finishing::rejection_reason(rejection, true))
+                } else {
+                    reason
+                };
                 let reason = match unfilled.as_slice() {
                     [] => reason,
                     [only] => format!("{} needs a value the task does not give: {reason}", text::repr(only)),
