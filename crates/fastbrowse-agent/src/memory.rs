@@ -277,6 +277,9 @@ struct SourceBlock {
 #[derive(Clone, Default)]
 pub struct Notes {
     facts: IndexMap<String, Fact>,
+    /// A quote of a downloaded file read again joins the note an earlier read made: the id that read gave it, by which
+    /// the facts read beside it name it as their basis, maps to the note that holds it.
+    joined: HashMap<String, String>,
     /// The facts standing as the task's answer: a later read or a reopened count takes one out, and it stays as history.
     answering: IndexSet<String>,
     retired: HashSet<String>,
@@ -509,10 +512,21 @@ impl Notes {
         self.retired.retain(|key| facts.contains_key(key));
     }
 
+    /// The note `id` names: itself, or the note a fact of that id joined.
+    fn resolve<'a>(&'a self, id: &'a str) -> &'a str {
+        self.joined.get(id).map_or(id, String::as_str)
+    }
+
     /// Whether a new span was added.
-    pub fn add(&mut self, fact: Fact) -> bool {
+    pub fn add(&mut self, mut fact: Fact) -> bool {
+        // A grouped answer names the facts read beside it by the ids this capture gave them, and one of those may have
+        // joined an earlier note; resolved here, it cites that note rather than an id no note has.
+        fact.basis = unique(fact.basis.iter().map(|id| self.resolve(id).to_string()));
         let own = fact_id(&fact);
         let key = self.same_file_span(&fact).unwrap_or_else(|| own.clone());
+        if key != own {
+            self.joined.insert(own.clone(), key.clone());
+        }
         self.retired.remove(&key);
         if fact.answers {
             self.answering.insert(key.clone());
@@ -689,7 +703,7 @@ impl Notes {
     /// An id no fact has is kept, after the known ones: dropping it would pass a claim whose citation the claim check
     /// must see fail.
     pub fn expand_evidence_ids<'a>(&self, keys: impl IntoIterator<Item = &'a str>) -> Vec<String> {
-        let cited: IndexSet<&str> = keys.into_iter().collect();
+        let cited: IndexSet<&str> = keys.into_iter().map(|key| self.resolve(key)).collect();
         let mut pending: Vec<&str> = cited.iter().copied().collect();
         let mut seen: HashSet<&str> = HashSet::new();
         while let Some(key) = pending.pop() {
@@ -697,7 +711,7 @@ impl Notes {
                 continue;
             }
             if let Some(fact) = self.facts.get(key) {
-                pending.extend(fact.basis.iter().map(String::as_str));
+                pending.extend(fact.basis.iter().map(|source| self.resolve(source)));
             }
         }
         let mut expanded: Vec<String> = self.facts.keys().filter(|key| seen.contains(key.as_str())).cloned().collect();
@@ -1135,6 +1149,14 @@ mod tests {
         assert!(notes.add(page(&first)));
         assert!(notes.add(page(&again)), "a page's own text from another capture keeps its own note");
         assert_eq!(notes.facts().len(), 4);
+        // A grouped answer from the second read names its rows by that read's ids, which joined the first read's notes.
+        let rows = [fact_id(&quote(&again, 0)), fact_id(&quote(&again, 1))];
+        let grouped =
+            Fact { answers: true, text: "two rows".into(), evidence: None, basis: rows.to_vec(), ..page(&again) };
+        assert!(notes.add(grouped));
+        let kept = [fact_id(&quote(&first, 0)), fact_id(&quote(&first, 1))];
+        assert_eq!(notes.supporting_evidence().len(), 2, "the answer cites both rows it was read from");
+        assert!(kept.iter().all(|key| notes.expand_evidence_ids(rows.iter().map(String::as_str)).contains(key)));
     }
 
     #[test]
