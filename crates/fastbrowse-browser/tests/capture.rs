@@ -163,6 +163,62 @@ async fn descended_containers_keep_their_generated_boundaries() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn generated_text_attachment_matrix() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate("about:blank", None).await.expect("navigate");
+    let style =
+        "<style>.suffix::after{content:'fix'}.notice::before{content:'Notice'}.notice::after{content:'End'}</style>";
+    let cases: &[(&str, &str, &[&str])] = &[
+        ("leaf", "<span class=suffix>pre</span>", &["prefix"]),
+        ("inline run", "<p><span>pre</span><span class=suffix></span></p>", &["prefix"]),
+        ("walked container", "<div class=notice><p>Details</p></div>", &["Notice", "Details", "End"]),
+        ("owner boundary", "<p class=notice>Details</p>", &["NoticeDetailsEnd"]),
+        ("title", "<p><span class=suffix title=Full>pre</span></p>", &["prefix (title: Full)"]),
+        ("date", "<p><time class=suffix datetime=2026-12-16>pre</time></p>", &["prefix (2026-12-16)"]),
+        ("table cell", "<table><tr><td class=suffix>pre</td></tr></table>", &["| prefix |"]),
+        ("shadow host", "<div id=host class=notice></div>", &["Notice", "Details", "End"]),
+        ("slotted host", "<div id=host class=notice><p>Details</p></div>", &["Notice", "Details", "End"]),
+        ("frame", "<iframe srcdoc='<p class=suffix>pre</p>'></iframe>", &["prefix"]),
+    ];
+    for (name, body, expected) in cases {
+        set_body(&h.session, &format!("{style}{body}")).await;
+        if *name == "shadow host" {
+            eval_active(
+                &h.session,
+                "document.querySelector('#host').attachShadow({mode:'open'}).innerHTML='<p>Details</p>'",
+            )
+            .await;
+        }
+        if *name == "slotted host" {
+            eval_active(
+                &h.session,
+                "document.querySelector('#host').attachShadow({mode:'open'}).innerHTML='<slot></slot>'",
+            )
+            .await;
+        }
+        if *name == "frame" {
+            let session = &h.session;
+            wait_until(
+                || async move {
+                    eval_active(
+                        session,
+                        "Boolean(document.querySelector('iframe')?.contentDocument?.querySelector('p'))",
+                    )
+                    .await
+                        == true
+                },
+                5.0,
+            )
+            .await;
+            eval_active(&h.session, "document.querySelector('iframe').contentDocument.head.innerHTML=\"<style>.suffix::after{content:'fix'}</style>\"").await;
+        }
+        let capture = content_capture(&h.page).await;
+        assert_eq!(texts(&capture), *expected, "{name}");
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn title_advice_stays_with_its_record_and_visible_text() {
     let Some(h) = harness().await else { return };
     h.goto("/token.html").await;

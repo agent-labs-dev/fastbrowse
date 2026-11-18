@@ -190,6 +190,7 @@ const VOID: [&str; 13] =
 const SCOPES: [&str; 6] = ["caption", "html", "table", "td", "template", "th"];
 /// The elements `capture.js` lets a record's facts stand on without naming them.
 const LEAVES_OF_THEIR_OWN: [&str; 7] = ["a", "button", "img", "input", "select", "textarea", "svg"];
+const CONTROL_ROLES: [&str; 4] = ["button", "radio", "checkbox", "switch"];
 
 /// One element of the served markup, in the tree a browser builds of it.
 struct Element {
@@ -412,7 +413,7 @@ impl Tags for Tree {
                 || get("hidden").is_some()
                 || hides(&get("style").unwrap_or_default()),
             aria_hidden: self.elements[parent].aria_hidden || get("aria-hidden").as_deref() == Some("true"),
-            control_role: matches!(get("role").as_deref(), Some("button" | "checkbox" | "radio" | "switch")),
+            control_role: get("role").is_some_and(|role| CONTROL_ROLES.contains(&role.as_str())),
             foreign,
             text: false,
             start: at,
@@ -1699,6 +1700,15 @@ mod tests {
             controls.iter().map(|control| control.label.as_str()).collect::<Vec<_>>(),
             ["Twitter", "GitHub", "Share"]
         );
+    }
+
+    #[test]
+    fn control_roles_match_browser_capture() {
+        let source = include_str!("../../../fastbrowse-browser/js/capture.js");
+        let array = source.split_once("const CONTROL_ROLES = ").unwrap().1.split_once(';').unwrap().0;
+        let groups: Vec<Vec<String>> = serde_json::from_str(array).unwrap();
+        let roles = groups.into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(roles, CONTROL_ROLES);
     }
 
     #[test]

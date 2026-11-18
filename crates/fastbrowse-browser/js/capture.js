@@ -8,6 +8,8 @@
 ((allowedOrigins = null) => {
   if (!document.body) return null;
   const HEADINGS = { H1: 1, H2: 2, H3: 3, H4: 4, H5: 5, H6: 6 };
+  const CONTROL_ROLES = [["button"], ["radio", "checkbox", "switch"]];
+  const roleSelector = roles => roles.map(role => `[role="${role}"]`).join(',');
   const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'CANVAS', 'IFRAME']);
   const blocks = [];
   let path = [];
@@ -550,14 +552,15 @@
 
   function walk(el) {
     const run = [];
-    const generated = el.nodeType === 1 ? generatedOf(el) : ['', ''];
+    const generated = el.nodeType === 1 ? generatedOf(el) : el.host ? generatedOf(el.host) : ['', ''];
     let before = generated[0];
     // Descending preserves child blocks, but the owner's generated text still surrounds those blocks.
     const flushRun = last => {
       flush(run, before, last ? generated[1] : '', el);
       before = '';
     };
-    for (const node of el.childNodes) {
+    const assigned = el.localName === 'slot' ? el.assignedNodes({ flatten: true }) : [];
+    for (const node of assigned.length ? assigned : el.childNodes) {
       if (node.nodeType === 3) {
         run.push(node);
         continue;
@@ -569,6 +572,19 @@
         continue;
       }
       if (SKIP.has(node.tagName)) continue;
+      // A slot's assigned content is rendered in this shadow tree, not among the slot's DOM children.
+      if (node.localName === 'slot' && node.assignedNodes({ flatten: true }).length) {
+        flushRun(false);
+        walk(node);
+        continue;
+      }
+      // A host's generated text surrounds its shadow content, so read both together at the host's position.
+      if (node.shadowRoot && generatedOf(node).some(Boolean)) {
+        flushRun(false);
+        enteredShadows.add(node);
+        scope(node.shadowRoot, framePath, `${sourcePath}/shadow:${identity(node)}`, path);
+        continue;
+      }
       if (!node.matches('nav,[role="navigation"]') && !hasBlockFlow(node) && recordText(node) === null) {
         run.push(node);
         continue;
@@ -647,6 +663,7 @@
   // frame shows, answered with the page's heading over the frame instead.
   const FRAMES = new Set(['IFRAME', 'FRAME']);
   const entered = new WeakSet();
+  const enteredShadows = new WeakSet();
   function enter(e, headings) {
     entered.add(e);
     let inner = null;
@@ -672,7 +689,7 @@
     walk(root);
     path = [...headings];
     headingLevels = [];
-    for (const e of [...root.querySelectorAll('input,select,textarea,button,[role="button"]')].filter(visible)) {
+    for (const e of [...root.querySelectorAll(`input,select,textarea,button,${roleSelector(CONTROL_ROLES[0])}`)].filter(visible)) {
       // Placeholders suggest input; they do not label a value or prove an empty named field.
       if (CONTROLS.has(e.tagName) && !e.labels?.length && !e.hasAttribute('aria-label') && !e.hasAttribute('aria-labelledby')) continue;
       const name = nameOf(e) || clean(e.innerText ?? '');
@@ -683,7 +700,7 @@
     // Which option is chosen is element state no text node carries, and a page often shows what follows from it in
     // place: a checkout re-rendered one order total per shipping method, and the read could not say which method the
     // total it quoted was for. A choice a kit hides is shown by its label, so either being visible counts.
-    const CHOICES = 'input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"],[role="switch"]';
+    const CHOICES = `input[type="radio"],input[type="checkbox"],${roleSelector(CONTROL_ROLES[1])}`;
     for (const e of root.querySelectorAll(CHOICES)) {
       const native = e.tagName === 'INPUT';
       if (!(native ? e.checked : e.getAttribute('aria-checked') === 'true')) continue;
@@ -774,7 +791,10 @@
       push('observation', `Observed viewport: Horizontal overflow: ${doc.scrollWidth > doc.clientWidth ? 'yes' : 'no'}`);
     }
     for (const e of root.querySelectorAll('*')) {
-      if (e.shadowRoot) scope(e.shadowRoot, frame, `${source}/shadow:${identity(e)}`);
+      if (e.shadowRoot && !enteredShadows.has(e)) {
+        enteredShadows.add(e);
+        scope(e.shadowRoot, frame, `${source}/shadow:${identity(e)}`);
+      }
       // A frame the walk never reached (hidden, or inside a record or table read as one block) is still read.
       if (FRAMES.has(e.tagName) && !entered.has(e)) enter(e, []);
     }
