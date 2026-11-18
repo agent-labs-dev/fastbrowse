@@ -4,7 +4,7 @@
     "version": "0.1.1",
     "snapshot": "published/0.1.1",
     "needs": "0.1.1",
-    "missing": [],
+    "missing": ["Fetch.disable"],
     "blocking": [],
     "issue": "https://github.com/agent-labs-dev/fastbrowse/issues/1063"
   }

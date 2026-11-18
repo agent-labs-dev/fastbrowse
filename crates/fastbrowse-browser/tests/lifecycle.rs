@@ -523,6 +523,27 @@ async fn test_back_from_a_page_opened_in_place_of_the_start_page_opens_the_start
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn an_older_extension_refusing_fetch_disable_still_closes() {
+    let fake = FakeChrome::start().await;
+    let source = fake.session(fake.connection()).await;
+    let mut connection = fake.connection();
+    connection.cdp_url = "fastbrowse-extension:test".into();
+    let session = fake.new_session(connection, SessionOptions::default());
+    testing::open_owned_tab_with_client(&session, &source, "https://example.test/").await.unwrap();
+    session.hand_over_active_tab();
+    fake.fail("Fetch.disable", Reply::Error(-32601));
+    session.close().await.unwrap();
+    fake.stopped().await;
+    {
+        let script = fake.script();
+        assert!(script.index("Fetch.disable") < script.index("stop"));
+        assert!(script.index("Fastbrowse.keepTarget") < script.index("stop"));
+        assert!(!script.calls.iter().any(|method| method == "Target.closeTarget"));
+    }
+    source.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_background_finalizers_finish_before_socket_stops() {
     for handed_over in [false, true] {
         let fake = FakeChrome::start().await;
