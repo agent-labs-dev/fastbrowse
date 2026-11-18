@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Comparisons use the records in the state the task asks about, including when a draft names a broader record kind. A package comparison took a pre-release from the history instead of the release the page labels latest. Winner names copied from captured headings also pass the same source rules as the copy step, so a valid name no longer leaves the answer empty. Copying a selected record's name no longer rechecks its kind and discards a name it states ([#1249](https://github.com/agent-labs-dev/fastbrowse/issues/1249), [#1248](https://github.com/agent-labs-dev/fastbrowse/issues/1248)).
+
 - A read distinguishes a document title from a heading in the page, so asking for an opened window's heading selects its heading rather than its tab title ([#1235](https://github.com/agent-labs-dev/fastbrowse/issues/1235)).
 - Answer checks accept a complete requested field, such as a full date, and judge the requested report separately from the action history. Calendar and cart tasks could finish their browser work but return an unverified answer after these checks rejected the requested values ([#1236](https://github.com/agent-labs-dev/fastbrowse/issues/1236), [#1237](https://github.com/agent-labs-dev/fastbrowse/issues/1237)).
 

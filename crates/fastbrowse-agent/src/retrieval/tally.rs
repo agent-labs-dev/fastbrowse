@@ -488,6 +488,7 @@ const NO_VALUE: &str = "none";
 const NO_RECORD: &str = "no_record";
 
 /// Qualification and the field are one decision: independent questions can admit an unrelated date, then reject it.
+/// A draft can name a broader kind than the task asks for, so membership also applies the task's own scope.
 fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], grouped: bool) -> Question {
     let of = text::repr(&tally.of);
     let field = text::repr(tally.field.as_deref().unwrap_or("value"));
@@ -526,7 +527,7 @@ fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], gr
     }
     Question::Choice(ChoiceQuestion::new(
         format!(
-            "{UNTRUSTED}\nDoes this note give exactly one whole {of}, or its {field}? If it does, which quoted value is that record's {field}? source_kind is the captured block type. When it is heading or link, the quote is that heading or link, not the whole record it names. A field absent from a heading or link is not thereby absent from its record. whole_record true proves that this quote contains all text rendered for one repeated item; without that proof the quote may still describe a whole record. Absence from a fragment does not prove absence from its record. Note: {}",
+            "{UNTRUSTED}\nDoes this note give exactly one whole {of}, or its {field}? If it does, which quoted value is that record's {field}? Judge the record against the scope of task as well as its kind. When task names a state that the page labels, use that label to distinguish qualifying records from records labelled as other states. A value on a differently labelled record does not make it the record in the requested state. source_kind is the captured block type. When it is heading or link, the quote is that heading or link, not the whole record it names. A field absent from a heading or link is not thereby absent from its record. whole_record true proves that this quote contains all text rendered for one repeated item; without that proof the quote may still describe a whole record. Absence from a fragment does not prove absence from its record. Note: {}",
             dumps(note)
         ),
         criteria,
@@ -594,7 +595,9 @@ impl Schema for RecordGroups {
     }
 }
 
-const GROUPS_INSTRUCTIONS: &str = "# Groups\nEach record below is one note a browser agent read, listed by its id. For every record, copy the value of the field named from the record's quote or a captured heading, exactly as the source writes it, or give null when neither states one. Code groups and counts the records by these values, so give each record's own value as written, never one taken from another record, corrected or shortened.\n\n# Trust\n";
+// Membership was already judged: asked to copy a selected phone's name, the copier returned null because its quote
+// named the model without repeating its brand. Copying the field must not discard that established membership.
+const GROUPS_INSTRUCTIONS: &str = "# Groups\nEach record below is one note a browser agent read, listed by its id. The records have already been selected as the kind named in the field request; do not check their kind again. For every record, copy the value of the field named from the record's quote or a captured heading, exactly as the source writes it, or give null when neither states one. Code groups and counts the records by these values, so give each record's own value as written, never one taken from another record, corrected or shortened.\n\n# Trust\n";
 
 /// A record's captured heading can name the owner whose value its quote holds. A page address and generated
 /// metadata are not source wording, and joining separate source spans would invent a value neither states.
@@ -1636,6 +1639,7 @@ fn written_of<'a>(groups: &'a Groups, key: &str) -> &'a str {
 /// The check sees the task, which says what the field means on these pages: asked "which shop sells the Burr Grinder
 /// cheaper, and tell me its name", a shop's page headed "Clerkenwell Coffee" scored 0.37 to 0.57 as that record's
 /// `shop` without it and 0.69 to 0.80 with it, while another shop's name and the price stayed at 0.03 or below.
+/// A field copied from a captured heading is checked against that heading too: a date quote alone need not name its owner.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn winner_fields(
     jev: &dyn DecisionClient,
@@ -1680,7 +1684,7 @@ pub(super) async fn winner_fields(
         for (group, (written, members)) in groups.values().enumerate() {
             for record in members {
                 questions.insert(format!("field{group}/r{record}"), Question::Noul(NoulQuestion::new(
-                    format!("{UNTRUSTED} Doing `task`, does this copied text give the complete, unambiguous {} of exactly this record, without another record's value or an unrelated field? Copied text: {}. Record: {}", text::repr(field), text::repr(written), dumps(&found[*record].note)),
+                    format!("{UNTRUSTED} Doing `task`, does this copied text give the complete, unambiguous {} of exactly this record, without another record's value or an unrelated field? The record includes its captured headings as well as its quotes. A heading that names the record can state its requested field even when the quote states only a different field. Copied text: {}. Record: {}", text::repr(field), text::repr(written), dumps(&found[*record].note)),
                     Some("The copied text is exactly this record's requested field."),
                     Some("It is missing, ambiguous, incomplete, another field, or another record's value."),
                 )));
@@ -1880,6 +1884,28 @@ mod tests {
         assert!(no_record.contains("A note giving one entry the 'PyPI package' holds"), "{no_record}");
         let value = question.criteria["n0"].as_str().unwrap();
         assert!(value.contains("not as a value of one entry the record holds"), "{value}");
+    }
+
+    #[test]
+    fn a_broad_record_kind_still_qualifies_against_the_tasks_scope() {
+        let tally = Tally {
+            op: Op::Max,
+            of: "package release".into(),
+            field: Some("release date".into()),
+            rank: None,
+            by: None,
+            group: None,
+            written: "May 14, 2026".into(),
+        };
+        let note =
+            json!({"quote": "Pre-release 1.0.dev6 Aug 31, 2026", "headings": ["httpx 0.28.1", "Release history"]});
+        for grouped in [false, true] {
+            let Question::Choice(question) = field_question(&tally, &note, &["Aug 31, 2026".into()], grouped) else {
+                panic!()
+            };
+            assert!(question.instructions.contains("Judge the record against the scope of task as well as its kind"));
+            assert!(question.instructions.contains("When task names a state that the page labels"));
+        }
     }
 
     /// A shop's name heading beside its price line was judged a shop with no price 51 to 49, and the correct cheapest
@@ -2264,6 +2290,8 @@ mod tests {
                     let Question::Noul(question) = question else { panic!("field support only") };
                     assert!(question.instructions.contains("Doing `task`, does this copied text"));
                     assert!(question.instructions.contains("exactly this record"));
+                    assert!(question.instructions.contains("The record includes its captured headings as well as its quotes"));
+                    assert!(question.instructions.contains("A heading that names the record can state its requested field even when the quote states only a different field"));
                     (
                         key.clone(),
                         Answer::Noul(NoulAnswer {
@@ -2391,6 +2419,12 @@ mod tests {
     }
 
     struct ReadsGroups<'a>(&'a [(&'a str, Option<&'a str>)]);
+
+    #[test]
+    fn copying_a_selected_records_name_does_not_recheck_its_kind() {
+        let messages = groups_messages("name", "Samsung phone", &["r0: Galaxy S20+ - $550.00".into()]);
+        assert!(messages[0].content.contains("The records have already been selected as the kind named in the field request; do not check their kind again."));
+    }
 
     #[tokio::test]
     async fn winner_fields_can_copy_the_selected_records_captured_heading() {
