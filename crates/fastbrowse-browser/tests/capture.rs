@@ -263,6 +263,10 @@ async fn test_link_wrapping_blocks_keeps_its_destination() {
     .await;
     let capture = content_capture(&h.page).await;
     assert_eq!(path(capture.blocks.last().unwrap()), ["Departures", "North Air"]);
+    set_body(&h.session, "<a href='/x' title='Full title'><div>Short</div><div>Details</div></a>").await;
+    let capture = content_capture(&h.page).await;
+    assert_eq!(texts(&capture), ["Short (title: Full title)", "Details"]);
+    assert_eq!(capture.blocks[0].links[0].text, "Short (title: Full title)");
     h.close().await;
 }
 

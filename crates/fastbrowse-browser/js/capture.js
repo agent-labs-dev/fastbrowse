@@ -211,12 +211,18 @@
     }
     return found ? registry.hoverContexts.get(found).control : null;
   };
+  const linkTitles = new WeakSet();
   const push = (kind, text, extra = {}, nodes = []) => {
     if (!text) return;
     const first = nodes[0];
     const link = (first?.nodeType === 1 ? first : first?.parentElement)?.closest('a[href]');
     // A link can wrap a table or a list. Its destination belongs to each block, without flattening their records.
     const inherited = link && readableLink(link) && nodes.every(node => node !== link && link.contains(node));
+    const title = inherited && !linkTitles.has(link) ? clean(link.getAttribute('title') || '') : '';
+    if (title && title !== shownOf(link)) {
+      text = `${text} (title: ${title})`;
+      linkTitles.add(link);
+    }
     blocks.push({
       kind, text, heading_path: [...path], frame_path: framePath, source_path: sourcePath,
       control_context: controlOf(nodes), ...extra,

@@ -678,6 +678,7 @@ struct TitleAdvice {
     close: usize,
     title: String,
     text: String,
+    linked: bool,
 }
 
 /// The served markup as blocks. `capture.js` reads the DOM a browser built, so it sees what CSS hid and what scripts
@@ -917,7 +918,12 @@ impl<'a> Reader<'a> {
             && let Some(title) = get("title").map(clean).filter(|title| !title.is_empty())
             && let Some(&close) = self.ends.get(&at)
         {
-            self.titles.push(TitleAdvice { close, title, text: String::new() });
+            self.titles.push(TitleAdvice {
+                close,
+                title,
+                text: String::new(),
+                linked: tag == "a" && get("href").is_some(),
+            });
         }
         // A `time` or a custom element dates the text it shows; the `datetime` of `ins` and `del` dates an edit.
         if (tag == "time" || tag.contains('-'))
@@ -1033,6 +1039,21 @@ impl<'a> Reader<'a> {
             let advice = self.titles.remove(index);
             let shown = clean(&advice.text);
             if (self.tables == 0 || self.cell.is_some()) && !shown.is_empty() && shown != advice.title {
+                self.add(&format!(" (title: {})", advice.title));
+            }
+        }
+    }
+
+    fn emit_link_titles(&mut self) {
+        // A link spanning blocks still names its destination. Keep its advice with the first label, once.
+        for index in (0..self.titles.len()).rev() {
+            let advice = &self.titles[index];
+            let shown = clean(&advice.text);
+            if !advice.linked || shown.is_empty() {
+                continue;
+            }
+            let advice = self.titles.remove(index);
+            if shown != advice.title {
                 self.add(&format!(" (title: {})", advice.title));
             }
         }
@@ -1208,6 +1229,7 @@ impl<'a> Reader<'a> {
     }
 
     fn close_cell(&mut self) {
+        self.emit_link_titles();
         let Some(cell) = self.cell.take() else { return };
         self.row.get_or_insert_with(Vec::new).push(clean(&cell));
         if self.cell_header && self.header_row.is_none() {
@@ -1254,6 +1276,7 @@ impl<'a> Reader<'a> {
     }
 
     fn flush(&mut self, kind: Option<BlockKind>, href: Option<String>, closing_heading: bool) {
+        self.emit_link_titles();
         // A container spanning blocks has no single label to annotate. Never move its advice into the next block.
         self.titles.retain(|advice| clean(&advice.text).is_empty());
         let raw = std::mem::take(&mut self.buffer);
@@ -1321,7 +1344,7 @@ pub fn read(html: &str, url: &str) -> (String, Vec<Found>, Vec<Control>, Vec<Fra
         .iter()
         .enumerate()
         .skip(1)
-        .filter(|(index, _)| tree.leaf(*index))
+        .filter(|(index, element)| tree.leaf(*index) || (element.tag == "a" && element.href.is_some()))
         .map(|(_, element)| (element.start, element.close))
         .collect();
     let mut reader = tokenize(html, Sink::new(Reader::new(url, tree.records(), notes, ends))).into_inner();
@@ -1623,6 +1646,16 @@ mod tests {
             || block.text.contains("Body advice")
             || block.text.contains("Row advice")));
         assert!(!found.iter().any(|block| block.text.contains("Hidden advice") || block.text.contains("Same (title:")));
+    }
+
+    #[test]
+    fn linked_block_title_advice_stays_with_the_first_label() {
+        let (_, found) =
+            blocks("<a href='/x' title='Full title'><div>Short</div><div>Details</div></a>", "https://a.example/");
+        assert_eq!(
+            found.iter().map(|block| block.text.as_str()).collect::<Vec<_>>(),
+            ["Short (title: Full title)", "Details"]
+        );
     }
 
     #[test]

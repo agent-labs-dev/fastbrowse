@@ -205,7 +205,8 @@ delimited data keeps its whitespace. Browser captures of a JSON document are sti
 
 Browser captures follow block structure inside inline containers, including custom elements and elements with
 `display: contents`, so nested headings and repeated records keep their own source spans. Adjacent inline prose
-stays in one block.
+stays in one block. A link enclosing multiple blocks keeps its destination on each block and its native title
+advice beside the first label.
 
 Browser and HTTP heading paths follow heading ranks. A heading inside a repeated record ends earlier headings
 of the same or deeper rank, without naming later records. Headings hidden by the capture do not change that
