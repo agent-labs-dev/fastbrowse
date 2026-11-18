@@ -640,6 +640,10 @@ an explicit notice that their contents were not read. Nested archives are not ex
 The configured `max_download_bytes` also bounds aggregate decompressed container bytes and extracted output; a
 document exceeding it is reported unread, rather than returning truncated text.
 
+Every capture taken after a download carries the file's text, at offsets the page around it moves. A quote from the
+file is one note however many reads take it: the file, its block and the quoted text identify it, not the capture, and
+it stands as of its latest read.
+
 The cloud browser ignores `Browser.setDownloadBehavior(deny)`, so bytes come from response interception, never from the remote filesystem. Host-path `DOM.setFileInputFiles` is only valid for a browser on the same machine.
 
 ### Foreground and background
