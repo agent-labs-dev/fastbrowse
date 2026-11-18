@@ -986,11 +986,21 @@ pub(crate) struct ReviewedComposition {
 }
 
 fn distinct_claims(claims: impl IntoIterator<Item = BoundClaim>) -> Vec<BoundClaim> {
+    let tally_key = |tally: &Option<Tally>| {
+        tally.as_ref().map(|tally| {
+            let mut key = tally.clone();
+            // Only an extreme's missing rank means first place; a grouped count may assert no place at all.
+            if matches!(key.op, Op::Min | Op::Max) {
+                key.rank = Some(key.place());
+            }
+            key
+        })
+    };
     claims.into_iter().fold(Vec::<BoundClaim>::new(), |mut all, claim| {
         // Computed fields render as identical placeholders before ranking, so text alone loses distinct records.
         if !all.iter().any(|other| {
             other.text == claim.text
-                && other.tally == claim.tally
+                && tally_key(&other.tally) == tally_key(&claim.tally)
                 && other.cells == claim.cells
                 && other.within == claim.within
                 && (claim.tally.is_none()
@@ -3149,6 +3159,24 @@ mod tests {
         assert!(answer.problem.is_none(), "{:?}", answer.problem);
         let names: Vec<_> = answer.claims.iter().map(|claim| claim.text.as_str()).collect();
         assert_eq!(names, ["A", "B", "C"]);
+    }
+
+    #[test]
+    fn extreme_claims_deduplicate_default_and_explicit_first_places() {
+        for op in [Op::Min, Op::Max, Op::Count] {
+            let mut original: BoundClaim = tallied("Same claim", "10", op, "product", Some("price"), vec![]).into();
+            if op == Op::Count {
+                let tally = original.claim.tally.as_mut().unwrap();
+                tally.field = None;
+                tally.by = Some("author".into());
+                tally.group = Some("A".into());
+            }
+            let mut retyped = original.clone();
+            retyped.claim.tally.as_mut().unwrap().rank = Some(1);
+            let kept = distinct_claims([original, retyped]);
+            let expected = if op == Op::Count { 2 } else { 1 };
+            assert_eq!(kept.len(), expected, "{op:?}: only extremes have an implicit first place");
+        }
     }
 
     #[test]
