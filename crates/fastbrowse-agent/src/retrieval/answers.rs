@@ -976,7 +976,7 @@ fn pack_compositions(task: &str, claims: &[BoundClaim], limit: usize) -> Option<
 /// every note, which is the longest: a request's own names only the notes it shows.
 async fn compose_packed(
     llm: &dyn LLMClient,
-    writing: &dyn Fn(&[ComposeItem]) -> String,
+    writing: &(dyn Fn(&[ComposeItem]) -> String + Sync),
     items: Vec<ComposeItem>,
     limit: usize,
     ledger: Option<&Ledger>,
