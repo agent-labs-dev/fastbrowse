@@ -12,7 +12,9 @@ use std::sync::{Arc, Mutex};
 
 use common::{Model, Script, Step, answering, reply, result_model, text};
 use fastbrowse_clients::http::{Http, Response, TransportError};
-use fastbrowse_clients::openai_compatible::{LLMOptions, OpenAICompatibleLLM, openrouter_routing_for};
+use fastbrowse_clients::openai_compatible::{
+    LLMOptions, OpenAICompatibleLLM, ROUTED_OUTPUT_TOKENS, openrouter_routing_for,
+};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, Role};
 use fastbrowse_core::models::{Bytes, CostBasis, LLMPurpose, Limits};
@@ -615,6 +617,34 @@ async fn test_a_response_without_cost_or_receipt_is_bounded() {
     assert_eq!(result.cost.basis, CostBasis::Bounded);
     assert!(approx(result.cost.dollars.unwrap(), 2000.0 * 0.000004 * 1.05));
     assert_eq!(result.cost.input_tokens, 7);
+}
+
+// A request far smaller than its model's window is bounded by what it sent: a cancelled one-field prompt to a model
+// with a large window was charged as if it had filled that window.
+#[tokio::test(start_paused = true)]
+async fn test_a_small_request_is_bounded_by_its_own_bytes_and_output_cap_not_the_window() {
+    let sent = std::sync::Arc::new(std::sync::Mutex::new(0usize));
+    let seen = sent.clone();
+    let http = answering(move |request| {
+        if request.url.ends_with("/endpoints") {
+            return ok(Response::json(
+                200,
+                &json!({"data": {"endpoints": [
+                    {"context_length": 1_000_000, "pricing": {"prompt": "0.000001", "completion": "0.000004"}}
+                ]}}),
+            ));
+        }
+        if request.method.as_str() == "GET" {
+            return ok(Response::new(404, ""));
+        }
+        *seen.lock().unwrap() = request.body.len();
+        ok(Response::json(200, &without_cost("generation-1")))
+    });
+    let llm = client(http, OPENROUTER, LLMPurpose::Start, "writer");
+    let result = generate(&llm, LLMPurpose::Start, &[], None).await.unwrap();
+    let tokens = *sent.lock().unwrap() as f64 + ROUTED_OUTPUT_TOKENS as f64;
+    assert_eq!(result.cost.basis, CostBasis::Bounded);
+    assert!(approx(result.cost.dollars.unwrap(), tokens * 0.000004 * 1.05), "{:?}", result.cost.dollars);
 }
 
 #[tokio::test(start_paused = true)]
