@@ -331,13 +331,18 @@ async fn distinct_winners(
         ));
     }
     let Some(answers) = ask(jev, &json!({"task": task, "of": of}), &questions, tokens, ledger).await? else {
-        return Ok(None);
+        return Ok(Some(records));
     };
     let mut roots: Vec<usize> = (0..records.len()).collect();
     for record in 1..records.len() {
         let mut repeated = None;
+        let mut contradictory = false;
         for (key, question) in questions.iter().filter(|(key, _)| key.starts_with(&format!("w{record}c"))) {
-            let Some(Answer::Choice(answer)) = answers.get(key) else { return Ok(None) };
+            let Some(answer) = answers.get(key) else {
+                contradictory = true;
+                continue;
+            };
+            let Answer::Choice(answer) = answer else { return Ok(None) };
             let Question::Choice(question) = question else { unreachable!() };
             if !question.criteria.contains_key(&answer.choice) {
                 return Ok(None);
@@ -350,11 +355,12 @@ async fn distinct_winners(
             };
             let root = roots[other];
             if repeated.is_some_and(|previous| previous != root) {
-                return Ok(None);
+                contradictory = true;
             }
             repeated = Some(root);
         }
-        roots[record] = repeated.unwrap_or(record);
+        // Conflicting matches do not establish identity, so this winner keeps its own fields.
+        roots[record] = if contradictory { record } else { repeated.unwrap_or(record) };
     }
     let mut merged: IndexMap<usize, Vec<String>> = IndexMap::new();
     for (record, ids) in records.into_iter().enumerate() {
@@ -1737,7 +1743,13 @@ pub(super) async fn winner_fields(
         return Ok(Err(Unworked::Unjudged));
     };
     let mut found = Vec::new();
-    for record in &records {
+    // Identity changes the output slots, not the source records given to the field copier.
+    let representatives: Option<Vec<_>> = records
+        .iter()
+        .map(|record| worked.winner_records.iter().position(|original| original.first() == record.first()))
+        .collect();
+    let Some(representatives) = representatives else { return Ok(Err(Unworked::Unjudged)) };
+    for record in &worked.winner_records {
         let parts: Option<Vec<_>> =
             record.iter().map(|id| candidates.iter().find(|candidate| &candidate.id == id)).collect();
         let Some(parts) = parts else {
@@ -1788,7 +1800,7 @@ pub(super) async fn winner_fields(
             }
         }
         // Every field follows the same winner order, including repeated values, so tied names and other fields stay aligned.
-        let values: Option<Vec<&str>> = records
+        let values: Option<Vec<&str>> = representatives
             .iter()
             .map(|record| {
                 groups.values().find(|(_, members)| members.contains(record)).map(|(written, _)| written.as_str())
@@ -2399,6 +2411,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn large_winner_ties_fit_batches_and_keep_conflicting_matches_separate() {
+        struct BoundedIdentity {
+            mode: &'static str,
+            questions: std::sync::atomic::AtomicUsize,
+        }
+        impl DecisionClient for BoundedIdentity {
+            fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+                let mut profile = FirstField.profile();
+                profile.max_choice_options = 4;
+                profile.max_questions = Some(2);
+                profile
+            }
+            fn evaluate<'a>(
+                &'a self,
+                state: &'a serde_json::Value,
+                questions: &'a IndexMap<String, Question>,
+            ) -> BoxFuture<
+                'a,
+                std::result::Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>,
+            > {
+                use fastbrowse_core::decision::{ChoiceAnswer, ChoiceTag, Evaluation};
+                assert!(questions.len() <= 2);
+                self.questions.fetch_add(questions.len(), std::sync::atomic::Ordering::Relaxed);
+                let written: Vec<_> = questions.values().map(Dump::dump_json).collect();
+                let tokens = self.profile().fit(None).tokens;
+                assert!(dumps(state).chars().count() as i64 <= tokens.input_chars(&written));
+                assert!(
+                    written.iter().map(|q| q.chars().count()).sum::<usize>() as f64 / tokens.chars_per_token
+                        <= tokens.batch_tokens as f64
+                );
+                let answers = questions
+                    .iter()
+                    .filter(|_| self.mode != "missing")
+                    .map(|(key, question)| {
+                        let Question::Choice(choice) = question else { panic!("identity asks choices") };
+                        assert!(choice.criteria.len() <= 4);
+                        let selected = if self.mode == "invalid" {
+                            "invalid".into()
+                        } else if self.mode == "conflicting" && key.starts_with("w29c") {
+                            choice.criteria.keys().find(|key| key.starts_with('m')).unwrap().clone()
+                        } else {
+                            NO_VALUE.into()
+                        };
+                        (
+                            key.clone(),
+                            Answer::Choice(ChoiceAnswer {
+                                kind: ChoiceTag,
+                                probabilities: IndexMap::from([(selected.clone(), 1.0)]),
+                                choice: selected,
+                                confidence: 1.0,
+                            }),
+                        )
+                    })
+                    .collect();
+                Box::pin(async move {
+                    Ok(Evaluation {
+                        model: "fixture".into(),
+                        answers,
+                        input_tokens: 1,
+                        cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                        requests: 1,
+                    })
+                })
+            }
+        }
+        let notes = amount_notes(&["$0.00"; 30]);
+        let found = candidates_from(&notes, false);
+        let records: Vec<_> = found.iter().map(|note| vec![note.id.clone()]).collect();
+        for mode in ["distinct", "conflicting", "missing", "invalid"] {
+            let jev = BoundedIdentity { mode, questions: std::sync::atomic::AtomicUsize::new(0) };
+            let result = distinct_winners(
+                &jev,
+                "Name the cheapest products",
+                "product",
+                records.clone(),
+                &found,
+                &jev.profile().fit(None).tokens,
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(result, (mode != "invalid").then(|| records.clone()));
+            assert_eq!(jev.questions.load(std::sync::atomic::Ordering::Relaxed), 155);
+        }
+    }
+
+    #[tokio::test]
     async fn literal_winner_notes_of_one_record_fill_one_slot() {
         use crate::memory::Fact;
         use fastbrowse_core::models::FactReader;
@@ -2433,6 +2532,23 @@ mod tests {
             }
         }
 
+        struct OriginalReads<'a> {
+            reads: ReadsGroups<'a>,
+            request: std::sync::Mutex<String>,
+        }
+        impl LLMClient for OriginalReads<'_> {
+            fn generate_value<'a>(
+                &'a self,
+                purpose: LLMPurpose,
+                messages: &'a [Message],
+                schema: &'a dyn ResponseSchema,
+                ledger: Option<&'a Ledger>,
+            ) -> BoxFuture<'a, std::result::Result<Generation<serde_json::Value>, LLMError>> {
+                *self.request.lock().unwrap() = serde_json::to_string(messages).unwrap();
+                self.reads.generate_value(purpose, messages, schema, ledger)
+            }
+        }
+        let mut original_requests = HashMap::new();
         for (separate_pages, same) in [(false, true), (true, true), (false, false), (true, false)] {
             let facts: Vec<_> = ["Winner A £210", "Winner A costs £210", "The price of Winner A is £210"]
                 .iter()
@@ -2479,11 +2595,11 @@ mod tests {
             let expected = if same { vec![ids.clone()] } else { ids.iter().map(|id| vec![id.clone()]).collect() };
             assert_eq!(done.winner_records.len(), 3);
             assert_eq!(done.evidence_ids, ids);
-            let reads: Vec<_> =
-                ["r0", "r1", "r2"].into_iter().take(expected.len()).map(|id| (id, Some("Winner A"))).collect();
+            let reads: Vec<_> = ["r0", "r1", "r2"].into_iter().map(|id| (id, Some("Winner A"))).collect();
+            let copier = OriginalReads { reads: ReadsGroups(&reads), request: std::sync::Mutex::new(String::new()) };
             let fields = winner_fields(
                 &jev,
-                &ReadsGroups(&reads),
+                &copier,
                 "Which shop is cheaper? Tell me its name.",
                 &tally,
                 done,
@@ -2496,6 +2612,10 @@ mod tests {
             .unwrap()
             .unwrap();
             assert_eq!(fields["name"], vec!["Winner A"; expected.len()].join(", "));
+            let request = copier.request.into_inner().unwrap();
+            if let Some(original) = original_requests.insert(separate_pages, request.clone()) {
+                assert_eq!(request, original, "identity must leave the original extraction request unchanged");
+            }
             assert_eq!(jev.identities.load(std::sync::atomic::Ordering::Relaxed), 1);
         }
     }
