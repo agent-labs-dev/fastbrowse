@@ -122,6 +122,24 @@ async fn generated_blocks_preserve_line_boundaries() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn annotations_follow_generated_suffixes() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<style>.suffix::after { content: 'fix'; }</style>
+        <p><span class="suffix" title="Full">pre</span></p>
+        <p><time class="suffix" datetime="2026-12-16">pre</time></p>"#,
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    let read = texts(&capture);
+    assert!(read.iter().any(|text| text == "prefix (title: Full)"), "{read:?}");
+    assert!(read.iter().any(|text| text == "prefix (2026-12-16)"), "{read:?}");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn title_advice_stays_with_its_record_and_visible_text() {
     let Some(h) = harness().await else { return };
     h.goto("/token.html").await;

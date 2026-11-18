@@ -55,7 +55,7 @@
   const stampOf = e => (datable(e) && visible(e) ? (e.getAttribute('datetime') ?? '').trim() : '');
   // A host that draws its text in its own shadow root, as GitHub's relative-time does, has an empty innerText.
   const shownOf = e => {
-    const own = clean(e.innerText ?? '');
+    const own = clean(renderedOf(e));
     if (own || !e.shadowRoot) return own;
     const parts = [...e.shadowRoot.childNodes].map(n =>
       n.nodeType === 3 ? n.textContent : n.nodeType === 1 && !SKIP.has(n.tagName) ? (n.innerText ?? '') : '',
@@ -144,7 +144,16 @@
       const reference = node.closest(IN_PAGE);
       if (reference && noteReference(reference)) return;
       const start = cursor;
+      const advance = value => {
+        const shown = clean(value);
+        const at = shown ? text.indexOf(shown, cursor) : -1;
+        if (at >= 0) cursor = at + shown.length;
+      };
+      // Advice follows the complete rendered label, including text drawn after its last DOM text node.
+      const [before, after] = generatedOf(node);
+      advance(before);
       for (const child of node.childNodes) visit(child, depth + 1);
+      advance(after);
       const title = clean(node.getAttribute('title') || '');
       const shown = shownOf(node);
       if (title && shown && title !== shown && cursor > start) {

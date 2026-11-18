@@ -1365,7 +1365,8 @@ pub fn read(html: &str, url: &str) -> (String, Vec<Found>, Vec<Control>, Vec<Fra
         .elements
         .iter()
         .filter(|element| {
-            if element.text || element.hidden || element.aria_hidden {
+            // Empty wrappers are named by drawn_facts; only a leaf supplies an inline text boundary.
+            if element.text || element.hidden || element.aria_hidden || !element.children.is_empty() {
                 return false;
             }
             // An empty label inside a control names its action rather than a citable page fact.
@@ -1706,6 +1707,20 @@ mod tests {
             let (_, found, _, _) = read(&format!("<p>Before</p>{control}<p>After</p>"), "https://a.example/");
             assert_eq!(found.iter().map(|block| block.text.as_str()).collect::<Vec<_>>(), ["Before", "After"]);
         }
+    }
+
+    #[test]
+    fn empty_wrappers_keep_one_drawn_fact_in_records() {
+        let (_, found, _, _) = read(
+            "<ul><li><h3>First</h3><span aria-label='5 stars'><i></i></span></li>\
+             <li><h3>Second</h3><span aria-label='4 stars'><i></i></span></li>\
+             <li><h3>Third</h3><span aria-label='3 stars'><i></i></span></li></ul>",
+            "https://a.example/",
+        );
+        assert_eq!(
+            found.iter().map(|block| block.text.as_str()).collect::<Vec<_>>(),
+            ["First [5 stars: no text]", "Second [4 stars: no text]", "Third [3 stars: no text]"]
+        );
     }
 
     #[test]
