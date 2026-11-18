@@ -12,8 +12,8 @@ use std::sync::LazyLock;
 use fastbrowse_clients::validation::jev_purpose;
 use fastbrowse_core::config::Config;
 use fastbrowse_core::decision::{
-    Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, EVEN_ODDS, Evaluation, Images, NoulQuestion,
-    Question, referenced,
+    Answer, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, EVEN_ODDS, Evaluation, Images,
+    JEV_REQUEST_BYTES, NoulQuestion, Question, asset_bytes, referenced,
 };
 use fastbrowse_core::effects::leavable;
 use fastbrowse_core::keys::role_keys;
@@ -630,6 +630,13 @@ pub async fn decide(
     let mut trimmed = false;
     loop {
         let request = build_request(&observation, &controls, &context, config, options);
+        // Pictures are given up before text: a body over Jev's limit is refused whatever its controls, so cutting
+        // them first resent the same pictures and was refused again (#1301). The oldest card goes first, one at a
+        // time, until the body fits.
+        if request_bytes(&request) > JEV_REQUEST_BYTES && shows_pictures(&context) {
+            drop_a_picture(context.to_mut());
+            continue;
+        }
         if fits(&request, config) {
             match evaluate(jev, &request, &controls, reduction, ledger).await {
                 Ok(mut decision) => {
@@ -639,6 +646,13 @@ pub async fn decide(
                         decision.offered = controls;
                     }
                     return Ok(decision);
+                }
+                // Jev counts a picture again for each place it is used, and as it decodes it rather than as it was
+                // sent, so a body that fits can still be refused. Its pictures are the part a text cut cannot shrink:
+                // the cards go, then the screenshot, before any text or control.
+                Err(AgentError::Jev(DecisionError::InputTooLarge(_))) if shows_pictures(&context) => {
+                    drop_pictures(context.to_mut());
+                    continue;
                 }
                 Err(AgentError::Jev(DecisionError::InputTooLarge(_))) => {}
                 Err(error) => return Err(error),
@@ -1319,6 +1333,42 @@ const LONG_CONTEXT_BYTES: usize = 32_000;
 pub fn fits(request: &Request, config: &Config) -> bool {
     let written: Vec<String> = request.questions.values().map(Dump::dump_json).collect();
     text::len(&dumps(&request.state)) as i64 <= config.tokens.input_chars(&written)
+}
+
+/// The bytes the request's body takes as the Jev client sends it: its state and questions as JSON, and each picture
+/// they refer to as a base64 asset.
+fn request_bytes(request: &Request) -> usize {
+    let questions = serde_json::to_string(&request.questions).map_or(0, |written| written.len());
+    let pictures = referenced(&request.images, &request.state, &request.questions);
+    request.state.to_string().len() + questions + pictures.iter().map(|(key, png)| asset_bytes(key, png)).sum::<usize>()
+}
+
+fn shows_pictures(context: &StepContext) -> bool {
+    context.screenshot.is_some()
+        || !context.looks.is_empty()
+        || context.history.iter().any(|entry| entry.look.is_some())
+}
+
+/// Leaves out the picture a decision needs least: a recent action's card from the oldest, then a target's card, then
+/// the screenshot.
+fn drop_a_picture(context: &mut StepContext) {
+    if let Some(entry) = context.history.iter_mut().find(|entry| entry.look.is_some()) {
+        entry.look = None;
+    } else if context.looks.pop().is_none() {
+        context.screenshot = None;
+    }
+}
+
+/// Leaves out a kind of picture, in the order of `drop_a_picture`: every recent action's card, then every target's
+/// card, then the screenshot.
+fn drop_pictures(context: &mut StepContext) {
+    if context.history.iter().any(|entry| entry.look.is_some()) {
+        context.history.iter_mut().for_each(|entry| entry.look = None);
+    } else if !context.looks.is_empty() {
+        context.looks.clear();
+    } else {
+        context.screenshot = None;
+    }
 }
 
 async fn evaluate(
@@ -2440,6 +2490,92 @@ mod tests {
             state.get("rules").and_then(Value::as_str) == Some(RELEVANCE.as_str())
                 && state.get("subgoal").and_then(Value::as_str) == context.subgoal.as_deref()
         }));
+    }
+
+    /// A recent action's card for each of `count` clicks, each `bytes` long and told apart by its first byte.
+    fn carded_history(count: u8, bytes: usize) -> Vec<HistoryEntry> {
+        (0..count)
+            .map(|i| {
+                let mut entry = HistoryEntry::new(Some(Operation::Click), Some("canvas"), StepOutcome::Executed, false);
+                let mut card = vec![0u8; bytes];
+                card[0] = i;
+                entry.look = Some(Look { before: card, after: None });
+                entry
+            })
+            .collect()
+    }
+
+    /// Sixteen viewport-sized cards are about 47 MiB as base64, past Jev's 32 MiB body limit: the oldest are left out
+    /// before the request is sent, the newest and the screenshot kept, and one request is asked (#1301).
+    #[test]
+    fn test_a_step_with_more_cards_than_the_body_takes_leaves_out_the_oldest() {
+        let jev = fake(&[("operation", "click")], "");
+        let mut context = StepContext::new("press button 1");
+        context.screenshot = Some(vec![7u8; 1024 * 1024]);
+        context.history = carded_history(16, 2_200_000);
+        let page = observation((0..3).map(button).collect());
+        block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
+        let states = jev.states.lock().unwrap();
+        let carded: Vec<bool> = states[0]["recent_actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry.get("looks_like").is_some())
+            .collect();
+        let kept = carded.iter().filter(|carded| **carded).count();
+        assert!((1..16).contains(&kept), "{carded:?}");
+        assert!(carded[16 - kept..].iter().all(|carded| *carded), "the newest cards are kept: {carded:?}");
+        assert!(states[0].get("viewport_screenshot").is_some());
+        let pictures = 1024 * 1024 + kept * 2_200_000;
+        assert!(pictures.div_ceil(3) * 4 <= JEV_REQUEST_BYTES, "{kept} cards do not fit");
+    }
+
+    /// Refuses as too large any request that carries more than one picture, as Jev refuses a body past its limit.
+    struct Refusing {
+        inner: Fake,
+        pictures: Mutex<Vec<usize>>,
+    }
+
+    impl DecisionClient for Refusing {
+        fn profile(&self) -> DecisionProfile {
+            self.inner.profile()
+        }
+
+        fn evaluate_images<'a>(
+            &'a self,
+            state: &'a Value,
+            questions: &'a IndexMap<String, Question>,
+            images: &'a Images,
+        ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
+            let sent = referenced(images, state, questions).len();
+            self.pictures.lock().unwrap().push(sent);
+            if sent > 1 {
+                return Box::pin(async { Err(DecisionError::InputTooLarge("over the body limit".into())) });
+            }
+            self.inner.evaluate(state, questions)
+        }
+
+        fn evaluate<'a>(
+            &'a self,
+            state: &'a Value,
+            questions: &'a IndexMap<String, Question>,
+        ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
+            self.inner.evaluate(state, questions)
+        }
+    }
+
+    /// A step Jev refuses as too large is asked again with fewer pictures, never with the same ones: the cards go
+    /// before any text or control is cut. Sent the same pictures each time, one step was refused 28 times (#1301).
+    #[test]
+    fn test_a_step_refused_as_too_large_is_never_resent_with_the_same_pictures() {
+        let jev = Refusing { inner: fake(&[("operation", "click")], ""), pictures: Mutex::new(Vec::new()) };
+        let mut context = StepContext::new("press button 1");
+        context.screenshot = Some(vec![7u8; 1000]);
+        context.history = carded_history(3, 1000);
+        let page = observation((0..3).map(button).collect());
+        let decision = block_on(decide(&jev, &page, &context, &Config::default(), None, &Trace::disabled())).unwrap();
+        assert_eq!(*jev.pictures.lock().unwrap(), vec![4, 1]);
+        assert_eq!(decision.reduction, Reduction::None, "no text or control was cut for the pictures");
     }
 
     /// A request no larger than Jev's documented limit in tokens, at 1.5 characters a token.

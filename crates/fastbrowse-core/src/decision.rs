@@ -40,6 +40,18 @@ pub static NO_IMAGES: std::sync::LazyLock<Images> = std::sync::LazyLock::new(Ima
 /// The longest side of a Jev image, in pixels.
 pub const JEV_IMAGE_SIDE: u32 = 1568;
 
+/// TypeSafe's limit on a request body: the JSON, its base64 image text and their framing together, in bytes. A body
+/// past it is refused with 413 and answers nothing, so a request is fitted to it before it is sent.
+pub const JEV_REQUEST_BYTES: usize = 32 * 1024 * 1024;
+
+/// The bytes an image adds to a request body sent as JSON: its reference, the asset object around it, and its PNG in
+/// base64, which is four characters for every three bytes.
+pub fn asset_bytes(reference: &str, png: &[u8]) -> usize {
+    let framing = serde_json::json!({reference: {"type": "image", "format": "png", "data_base64": ""}}).to_string();
+    // The braces of the map holding the assets are counted once per body, so each asset adds a comma in their place.
+    framing.len() - 1 + png.len().div_ceil(3) * 4
+}
+
 /// Whether TypeSafe takes `png` as a Jev image: a PNG 280 to 1568 pixels a side and 78,400 to 2,458,624 in all, of at
 /// most 16 MiB. An image outside these is refused with the whole request, never resized.
 pub fn jev_takes_png(png: &[u8]) -> bool {
