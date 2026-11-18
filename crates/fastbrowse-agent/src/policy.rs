@@ -1266,8 +1266,7 @@ pub fn build_request(
     if let Some(question) = step_question(&steps, PICTURED_STEP) {
         questions.insert(keys::STEP.into(), question);
     }
-    let described: HashSet<&str> = targets.values().flatten().map(|control| control.id.as_str()).collect();
-    let state = state(observation, controls, context, &described);
+    let state = state(observation, controls, context);
     let images: Images = context
         .screenshot
         .iter()
@@ -1503,7 +1502,7 @@ fn group_index(choice: &str, count: usize) -> Result<usize> {
         .ok_or_else(|| AgentError::Invalid("list index out of range".into()))
 }
 
-fn state(observation: &Observation, controls: &[Control], context: &StepContext, described: &HashSet<&str>) -> Value {
+fn state(observation: &Observation, controls: &[Control], context: &StepContext) -> Value {
     let mut state = Map::new();
     state.insert("task".into(), context.task.clone().into());
     // "Next month" and "the next Monday" are relative to today: shown only which month a date picker was on, Jev
@@ -1531,18 +1530,9 @@ fn state(observation: &Observation, controls: &[Control], context: &StepContext,
     if context.omitted_actions > 0 {
         state.insert("omitted_actions".into(), context.omitted_actions.into());
     }
-    // A target question in this request already carries each of its candidates whole, and only the target choice
-    // weighs where an element sits or what else it takes; the operation choice keeps where links lead and each
-    // element's state. Sent in both, Google Flights' controls were a third of every request.
-    let elements = controls.iter().map(|control| {
-        let mut shown = element(control);
-        if described.contains(control.id.as_str()) {
-            for key in ["context", "operations", "input_name", "autocomplete"] {
-                shown.remove(key);
-            }
-        }
-        Value::Object(shown)
-    });
+    // The operation question also needs a control's context and available actions: without them a covered click
+    // made Escape close the task's popup even though the target question chose a control inside it (#884).
+    let elements = controls.iter().map(|control| Value::Object(element(control)));
     state.insert("elements".into(), Value::Array(elements.collect()));
     if let Some(background) = context.background.as_deref().map(text::strip).filter(|b| !b.is_empty()) {
         state.insert("background".into(), background.into());
@@ -1973,21 +1963,26 @@ mod tests {
     }
 
     #[test]
-    fn test_a_target_candidate_is_described_whole_once() {
-        let carded = |i| Control { context: Some(format!("Card {i}")), ..button(i) };
+    fn test_operation_and_target_choices_both_receive_control_context_and_actions() {
+        let carded = |i| Control {
+            context: Some(format!("Card {i}")),
+            shown_by: Some("clicking Booking date".into()),
+            ..button(i)
+        };
         let controls: Vec<Control> = (1..=3).map(carded).chain([link("away")]).collect();
         let page = observation(controls.clone());
         let context = StepContext::new("t");
         let targeted = build_request(&page, &controls, &context, &Config::default(), MAX_CHOICE_OPTIONS);
         let criteria: Value = serde_json::from_str(&targeted.questions["click_target"].dump_json()).unwrap();
-        assert_eq!(criteria["criteria"]["b1"]["context"], "Card 1");
+        assert_eq!(criteria["criteria"]["b1"]["context"], "shown by clicking Booking date; Card 1");
         let shown = &targeted.state["elements"][0];
-        assert!(shown.get("context").is_none() && shown.get("operations").is_none());
+        assert_eq!(shown["context"], criteria["criteria"]["b1"]["context"]);
+        assert_eq!(shown["operations"], json!(["click"]));
         assert_eq!(targeted.state["elements"][3]["href"], "/away");
-        // Grouped, no question carries the candidates whole, so the state keeps all of each.
+        // Grouped targets retain the same facts in shared state.
         let grouped = build_request(&page, &controls, &context, &Config::default(), 2);
         assert!(!grouped.questions.contains_key("click_target"));
-        assert_eq!(grouped.state["elements"][0]["context"], "Card 1");
+        assert_eq!(grouped.state["elements"][0]["context"], shown["context"]);
         assert_eq!(grouped.state["elements"][0]["operations"], json!(["click"]));
     }
 
