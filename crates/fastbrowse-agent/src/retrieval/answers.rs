@@ -1672,7 +1672,7 @@ async fn review_composition(
         } else if !coverage {
             Some("The answer does not establish every requested fact or value.".into())
         } else if !only_asked {
-            Some("The answer copies page information outside the scope of the requested answer.".into())
+            Some("The answer copies page information the task neither asks for nor names.".into())
         } else {
             None
         }
