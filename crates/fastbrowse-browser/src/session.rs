@@ -598,8 +598,9 @@ impl BrowserSession {
                     .prepared_sessions
                     .iter()
                     .filter(|session_id| {
+                        let root = state.root_session(session_id);
                         !state.tabs.iter().any(|tab| {
-                            tab.session_id == **session_id
+                            tab.session_id == root
                                 && state.owned.contains(&tab.target_id)
                                 && !state.handed_over.contains(&tab.target_id)
                         })
@@ -608,9 +609,10 @@ impl BrowserSession {
                     .collect()
             };
             // Failed setup has no tab yet; it also must restore the user's service workers before detaching frames.
-            for session_id in kept {
-                let _ = self.bypass_service_workers(&session_id, false).await;
-            }
+            futures_util::future::join_all(kept.iter().map(|session_id| async move {
+                let _ = self.bypass_service_workers(session_id, false).await;
+            }))
+            .await;
         }
         let (owned, handed_over): (Vec<String>, Vec<String>) = {
             let state = self.0.state.lock().unwrap();
@@ -1483,20 +1485,21 @@ impl State {
         recent.or_else(|| self.tabs.first().map(|t| &t.target_id)).cloned().unwrap_or_default()
     }
 
+    fn root_session(&self, session_id: &str) -> String {
+        let mut session_id = session_id.to_owned();
+        let mut seen = HashSet::new();
+        while let Some(parent) = self.frame_parents.get(&session_id) {
+            if !seen.insert(session_id.clone()) {
+                break;
+            }
+            session_id.clone_from(parent);
+        }
+        session_id
+    }
+
     fn frame_sessions_of_active(&self) -> Vec<(String, String)> {
         let Ok(active) = self.active_session_id() else { return vec![] };
-        let belongs = |session_id: &str| {
-            let mut session_id = session_id.to_owned();
-            let mut seen = HashSet::new();
-            while let Some(parent) = self.frame_parents.get(&session_id) {
-                if !seen.insert(session_id.clone()) {
-                    break;
-                }
-                session_id.clone_from(parent);
-            }
-            session_id == active
-        };
-        self.frame_sessions.iter().filter(|(_, sid)| belongs(sid)).cloned().collect()
+        self.frame_sessions.iter().filter(|(_, sid)| self.root_session(sid) == active).cloned().collect()
     }
 
     fn pending_dialog(&self) -> Option<(String, Dialog)> {
