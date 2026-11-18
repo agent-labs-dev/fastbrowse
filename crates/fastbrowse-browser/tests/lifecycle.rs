@@ -542,7 +542,7 @@ async fn test_background_finalizers_finish_before_socket_stops() {
     fake.stopped().await;
     // Python also checks the body read was cancelled; `close` awaits every task it stops before it sends anything.
     let script = fake.script();
-    assert!(script.index("Fetch.continueRequest") < script.index("stop"));
+    assert!(script.index("Fetch.disable") < script.index("stop"));
 }
 
 #[tokio::test(flavor = "multi_thread")]

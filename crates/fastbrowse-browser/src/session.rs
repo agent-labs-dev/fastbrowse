@@ -556,11 +556,11 @@ impl BrowserSession {
 
     /// Stop background work, release paused requests, stop casts, close owned tabs, close the socket.
     pub async fn close(&self) -> Result<(), BrowserError> {
-        let (background, delivery, paused) = {
+        let (background, delivery) = {
             let mut state = self.0.state.lock().unwrap();
             state.closing = true;
             let delivery = state.delivery.take();
-            (std::mem::take(&mut state.background), delivery, std::mem::take(&mut state.paused))
+            (std::mem::take(&mut state.background), delivery)
         };
         for task in &background {
             task.abort();
@@ -585,12 +585,6 @@ impl BrowserSession {
             state.frame_scheduled = false;
             state.pending_frame = None;
         }
-        // Download finalizers still need the socket to release intercepted requests; a stopped one is released here.
-        if let Some(client) = self.client_opt() {
-            for (request_id, session_id) in paused {
-                let _ = client.send("Fetch.continueRequest", json!({"requestId": request_id}), Some(&session_id)).await;
-            }
-        }
         let cast = self.0.state.lock().unwrap().screencast_session_id.take();
         if let Some(cast) = cast {
             self.screencast_command("Page.stopScreencast", json!({}), Some(&cast)).await;
@@ -610,6 +604,31 @@ impl BrowserSession {
                 let _ = self.bypass_service_workers(&session_id, false).await;
             }
         }
+        // Socket close is queued: Fetch can pause the owner's next navigation after our handlers stop. Disable
+        // interception itself, including requests not yet reported, before returning the window to its owner.
+        let sessions: Vec<String> = {
+            let state = self.0.state.lock().unwrap();
+            state.tabs.iter().map(|tab| tab.session_id.clone()).collect()
+        };
+        for session_id in &sessions {
+            let _ = self.send("Fetch.disable", json!({}), Some(session_id)).await;
+            // Detaching auto-attached frames and workers also releases ones whose setup was cancelled while paused.
+            let _ = self
+                .send(
+                    "Target.setAutoAttach",
+                    json!({"autoAttach": false, "waitForDebuggerOnStart": false, "flatten": true}),
+                    Some(session_id),
+                )
+                .await;
+        }
+        let _ = self
+            .send(
+                "Target.setAutoAttach",
+                json!({"autoAttach": false, "waitForDebuggerOnStart": false, "flatten": true}),
+                None,
+            )
+            .await;
+        self.0.state.lock().unwrap().paused.clear();
         let (owned, handed_over): (Vec<String>, Vec<String>) = {
             let state = self.0.state.lock().unwrap();
             (
