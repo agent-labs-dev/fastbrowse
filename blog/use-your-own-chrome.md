@@ -20,7 +20,7 @@ export OPENROUTER_API_KEY=...
 fastbrowse extension install
 ```
 
-`fastbrowse extension install` registers fastbrowse with every Chromium browser it finds for your user, then prints the store link. It writes a small launcher and a native-messaging manifest into your user folders, and needs no admin rights. Run it again if you move or reinstall fastbrowse.
+`fastbrowse extension install` registers fastbrowse with every Chromium browser it finds for your user, then prints the store link. It writes a small launcher and a native-messaging manifest into your user folders, and needs no admin rights. The launcher runs the fastbrowse you ran `install` from and falls back to another fastbrowse on your `PATH` if that one is removed, so deleting a project venv or upgrading leaves the extension working. Run it again if you install fastbrowse somewhere new.
 
 Next, add the extension from the [Chrome Web Store](https://chromewebstore.google.com/detail/fastbrowse/ghodfgfhbfaghhfdabopagbfopdjgpop), then restart Chrome or turn the extension off and on at `chrome://extensions` so it connects. The first task below is the check: with no browser connected, the run ends `unavailable`. Open fastbrowse from Chrome's Extensions menu to see active runs and their **Stop** buttons.
 
