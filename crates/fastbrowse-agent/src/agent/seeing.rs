@@ -367,7 +367,7 @@ const OUTLINE: image::Rgba<u8> = image::Rgba([255, 0, 255, 255]);
 /// Each card cut out of `viewport`, a PNG, as a PNG Jev takes, with the card outlined in `OUTLINE` just outside its
 /// edges. A card shorter or narrower than Jev's smallest image is widened about its centre, within the viewport, so
 /// neighbouring icon buttons are cut alike: three of an editor's toolbar buttons came out as one image, and only the
-/// outline says which each is. One Jev would refuse, or one that is the whole viewport, is left out.
+/// outline says which each is. One Jev would refuse is left out.
 pub(super) fn cards(viewport: &[u8], edges: &IndexMap<String, Edges>) -> IndexMap<String, Vec<u8>> {
     let Some(image) = rgba(viewport) else { return IndexMap::new() };
     edges.iter().filter_map(|(id, edges)| Some((id.clone(), cut(&image, edges, true)?))).collect()
@@ -379,6 +379,13 @@ pub(super) fn cards(viewport: &[u8], edges: &IndexMap<String, Edges>) -> IndexMa
 /// card unmarked, at 0.9.
 pub(super) fn place_card(viewport: &[u8], edges: &Edges) -> Option<Vec<u8>> {
     cut(&rgba(viewport)?, edges, false)
+}
+
+/// Whether `card` is all of `viewport`, the PNG it was cut from: a card is cut within its viewport, so one the same
+/// size is the whole of it.
+pub(super) fn whole_viewport(viewport: &[u8], card: &[u8]) -> bool {
+    let size = |png: &[u8]| png.get(16..24).map(<[u8]>::to_vec);
+    size(card).is_some() && size(card) == size(viewport)
 }
 
 fn rgba(png: &[u8]) -> Option<image::RgbaImage> {
@@ -394,12 +401,6 @@ fn cut(image: &image::RgbaImage, edges: &Edges, outlined: bool) -> Option<Vec<u8
     };
     let (x, width) = span(edges.left, edges.right, image.width());
     let (y, height) = span(edges.top, edges.bottom, image.height());
-    // A card cut to the whole viewport is the viewport screenshot again, with its outline outside the picture, so it
-    // tells no element apart. Each click on a Street View canvas kept one such card of about 2.2 MB, and thirteen of
-    // them took the step's request over Jev's body limit (#1301).
-    if (x, y, width, height) == (0, 0, image.width(), image.height()) {
-        return None;
-    }
     let mut card = image::imageops::crop_imm(image, x, y, width, height).to_image();
     if outlined {
         outline(&mut card, edges, (x, y), (image.width(), image.height()));
