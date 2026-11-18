@@ -25,10 +25,11 @@ pub(crate) fn evidence(page: &Page<'_>, block: &Block, start: i64, end: i64) -> 
             && text::strip(page.slice(block.start, start)).is_empty()
             && text::strip(page.slice(end, block.end)).is_empty(),
         control_context: block.control_context.clone(),
-        rendered_text: !capture
-            .blocks
-            .iter()
-            .any(|item| item.kind == BlockKind::Observation && item.start < end && item.end > start),
+        rendered_text: !capture.blocks.iter().any(|item| {
+            matches!(item.kind, BlockKind::Observation | BlockKind::DocumentTitle)
+                && item.start < end
+                && item.end > start
+        }),
         heading_path: block.heading_path.clone(),
         // Set when the run ends and keeps the captures it cites.
         capture_artifact: None,
@@ -45,7 +46,7 @@ pub fn page_quotes(capture: &Capture) -> Vec<Evidence> {
         // A typed observation is a description code wrote, not words the page showed, and a download the session
         // kept is an earlier file appended after the page, not the page itself.
         .filter(|block| {
-            block.kind != BlockKind::Observation
+            !matches!(block.kind, BlockKind::Observation | BlockKind::DocumentTitle)
                 && block.source_url.is_none()
                 && !text::strip(page.slice(block.start, block.end)).is_empty()
         })

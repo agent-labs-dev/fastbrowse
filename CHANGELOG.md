@@ -11,6 +11,9 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A read distinguishes a document title from a heading in the page, so asking for an opened window's heading selects its heading rather than its tab title ([#1235](https://github.com/agent-labs-dev/fastbrowse/issues/1235)).
+- Answer checks accept a complete requested field, such as a full date, and judge the requested report separately from the action history. Calendar and cart tasks could finish their browser work but return an unverified answer after these checks rejected the requested values ([#1236](https://github.com/agent-labs-dev/fastbrowse/issues/1236), [#1237](https://github.com/agent-labs-dev/fastbrowse/issues/1237)).
+
 - Dense pages reuse Jev's judgments of which controls the task could use after scrolling. A scroll used to invalidate the whole relevance pass even when every link kept its label and destination; changed controls and newly read links still get judged again ([#1233](https://github.com/agent-labs-dev/fastbrowse/issues/1233)).
 
 - Decisions that show pictures ask for field values only after choosing the action. They no longer pre-ask value questions for every offered field, which made decisions on pictured pages more expensive even when the action used none of those values ([#1233](https://github.com/agent-labs-dev/fastbrowse/issues/1233)).

@@ -868,3 +868,30 @@ def test_capture_field_spans_cross_the_python_model_boundary() -> None:
     legacy = capture.model_dump()
     legacy["blocks"][0].pop("fields")
     assert Capture.model_validate(legacy).blocks[0].fields == ()
+
+
+def test_capture_document_title_kind_crosses_the_python_model_boundary() -> None:
+    from fastbrowse.page import BlockKind, Capture
+
+    title = "Service documentation"
+    capture = Capture.model_validate(
+        {
+            "url": "https://docs.test/",
+            "title": title,
+            "captured_at": 0,
+            "sha256": "title-capture",
+            "text": title,
+            "blocks": [
+                {
+                    "source_id": "document/title",
+                    "kind": "document_title",
+                    "frame_id": None,
+                    "start": 0,
+                    "end": len(title),
+                }
+            ],
+        }
+    )
+    assert capture.blocks[0].kind is BlockKind.DOCUMENT_TITLE
+    assert capture.blocks[0].heading_path == ()
+    assert Capture.model_validate_json(capture.model_dump_json()).blocks == capture.blocks

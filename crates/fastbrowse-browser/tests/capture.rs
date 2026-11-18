@@ -17,8 +17,8 @@ async fn document_title_is_citable_without_a_body_heading() {
         let capture = h.page.capture().await.expect("capture");
         let title = capture.blocks.iter().find(|block| block.source_id == "document/title").expect("title evidence");
         assert_eq!(capture.block_text(title), "東京 reference");
-        assert_eq!(title.kind, BlockKind::Observation);
-        assert_eq!(title.heading_path, ["Document title"]);
+        assert_eq!(title.kind, BlockKind::DocumentTitle);
+        assert!(title.heading_path.is_empty());
         assert!(!capture.blocks.iter().any(|block| block.kind == BlockKind::Heading));
         assert_eq!(capture.sha256, fastbrowse_core::py::sha256_hex(capture.text.as_bytes()));
     }

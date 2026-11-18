@@ -481,6 +481,7 @@ impl BoundClaim {
                 superseded: None,
                 page: None,
                 headings: Vec::new(),
+                source_kind: None,
                 links: Vec::new(),
                 after_step: None,
                 fields: Vec::new(),
@@ -704,6 +705,8 @@ struct ComposeItem {
     /// The headings a read note sits under: a form's heading inside a frame reads as any other line without the frame's
     /// title above it, and a rewrite then cited the title as the form's heading.
     headings: Vec<String>,
+    #[serde(default)]
+    source_kind: Option<BlockKind>,
     /// The links inside a read note's quote: a link's text does not say where it leads, and asked for a description's
     /// hyperlinks with their hrefs, the composer had the texts alone and wrote each href as not captured.
     links: Vec<Link>,
@@ -722,6 +725,9 @@ impl ComposeItem {
         } else {
             json!({"text": text})
         };
+        if let Some(kind) = self.source_kind {
+            note["source_kind"] = json!(kind);
+        }
         if !self.quotable {
             note["source_binding"] = false.into();
         } else if !self.fields.is_empty() {
@@ -1419,7 +1425,8 @@ async fn review_composition(
             questions.insert(key, Question::Noul(question));
         }
     }
-    let mut state = json!({"task": task, "pages_read": pages_read(notes)});
+    let report_state = json!({"task": task, "pages_read": pages_read(notes)});
+    let mut state = report_state.clone();
     // A claim may state what the run typed, such as the postcode a site rejected, which no page quote holds: without
     // the steps, a claim stating it was judged unsupported (1 replay of 10). The steps go in the shared state, once
     // per batch, and only while they fit beside every question; else a claim is judged on its quotes alone.
@@ -1444,17 +1451,71 @@ async fn review_composition(
     }
     // A known citation can still be attached to another record's value, so Jev judges the original quotes after
     // every packing round has finished, rather than the intermediate prose those rounds wrote.
-    let too_large = |question: &Question| state_chars > tokens.input_chars(&[question.dump_json()]);
+    let report_chars = text::len(&dumps(&report_state)) as i64;
+    let too_large = |key: &str, question: &Question| {
+        let chars = if matches!(key, "coverage" | "exact") { report_chars } else { state_chars };
+        chars > tokens.input_chars(&[question.dump_json()])
+    };
     let whole = ["coverage", "actions", "exact"];
-    let oversized_claim = questions.iter().any(|(key, question)| !whole.contains(&key.as_str()) && too_large(question));
-    let oversized_coverage = ["coverage", "exact"].iter().any(|key| questions.get(*key).is_some_and(too_large));
-    let oversized_actions = questions.get("actions").is_some_and(too_large);
+    let oversized_claim =
+        questions.iter().any(|(key, question)| !whole.contains(&key.as_str()) && too_large(key, question));
+    let oversized_coverage =
+        ["coverage", "exact"].iter().any(|key| questions.get(*key).is_some_and(|question| too_large(key, question)));
+    let oversized_actions = questions.get("actions").is_some_and(|question| too_large("actions", question));
     let oversized = oversized_claim || oversized_coverage || oversized_actions || oversized_tally;
     let (answered, failure) = if questions.is_empty() {
         (None, None)
     } else {
-        match evaluate_batches(JevPurpose::Verify, jev, &state, &questions, &tokens, ledger, false).await {
-            Ok(answered) => (answered, None),
+        // Report checks judge what was asked to be told, not the steps taken to get it. Showing the login and cart
+        // actions beside those questions rejected the cart's name and quantity even when every claim held (#1237).
+        let mut checks = questions.clone();
+        let reports: IndexMap<_, _> = if state.get("steps").is_some() {
+            ["coverage", "exact"]
+                .into_iter()
+                .filter_map(|key| checks.shift_remove(key).map(|q| (key.to_string(), q)))
+                .collect()
+        } else {
+            IndexMap::new()
+        };
+        let mut groups = Vec::new();
+        if !checks.is_empty() {
+            groups.push((&state, &checks));
+        }
+        if !reports.is_empty() {
+            groups.push((&report_state, &reports));
+        }
+        let requests: Vec<_> = groups
+            .into_iter()
+            .map(|(state, questions)| {
+                Box::pin(evaluate_batches(JevPurpose::Verify, jev, state, questions, &tokens, ledger, false))
+                    as fastbrowse_core::BoxFuture<'_, Result<Option<crate::batches::Answered>>>
+            })
+            .collect();
+        // Each capped pass prices itself against receipts already recorded, so its sibling must finish first.
+        let answers = if ledger.is_some_and(Ledger::capped) {
+            async {
+                let mut batches = Vec::new();
+                for request in requests {
+                    batches.push(request.await?);
+                }
+                Ok(batches)
+            }
+            .await
+        } else {
+            crate::support::try_join_all(requests).await
+        };
+        match answers {
+            Ok(batches) => {
+                let all = batches.into_iter().flatten().reduce(|mut all, batch| {
+                    all.answers.extend(batch.answers);
+                    all.cost.extend(batch.cost);
+                    all.input_tokens += batch.input_tokens;
+                    all.requests += batch.requests;
+                    all.known += batch.known;
+                    all
+                });
+                (all, None)
+            }
             Err(AgentError::Jev(error)) => (None, Some(format!("Jev could not judge composed claims: {error}"))),
             Err(error) => return Err(error),
         }
@@ -1991,6 +2052,7 @@ fn initial_items(notes: &Notes, steps: bool) -> Vec<ComposeItem> {
                 superseded,
                 page: fact_page(fact),
                 headings: fact.evidence.as_ref().map(|evidence| evidence.heading_path.clone()).unwrap_or_default(),
+                source_kind: fact.evidence.as_ref().and_then(|evidence| notes.source_kind(evidence)),
                 links: fact.evidence.as_ref().map(|evidence| evidence.links.clone()).unwrap_or_default(),
                 after_step: fact.evidence.as_ref().filter(|_| steps).and_then(|evidence| notes.steps_taken(evidence)),
                 fields: fact
@@ -2092,7 +2154,7 @@ fn exact_question(task: &str, claims: &[Claim], notes: &Notes) -> Question {
 fn copied_question(task: &str, copied: &[Value]) -> Question {
     Question::Noul(NoulQuestion::new(
         format!(
-            "{UNTRUSTED} A written answer copies these texts from the page. Is every copied text free of page information the task neither asks for nor names, such as another field's value, an identifier, another record, or a whole date where the task asks for one part of it? Text that repeats the task's own words, such as the name of what it asks about, and a sentence stating only an asked value, carry nothing beyond it.{} The rest of the answer is checked separately. Each copied text includes the claim it contributes to, as context for the role of that text in the answer. The claim is an array of parts: prose is the writer's wording, copied is page text, and computed is a slot code fills with a worked result. A table claim gives each cell as its own array under cells. Judge only the copied text, not the rest of the claim. Task: {} Copied: {}",
+            "{UNTRUSTED} A written answer copies these texts from the page. Is every copied text free of page information the task neither asks for nor names, such as an unrelated field, an identifier or another record? A requested field may include its complete value, such as a full date when the task asks for the date. When only part of a value is requested, such as its year, copy only that part. Text that repeats the task's own words, such as the name of what it asks about, and a sentence stating only an asked value, carry nothing beyond it.{} The rest of the answer is checked separately. Each copied text includes the claim it contributes to, as context for the role of that text in the answer. The claim is an array of parts: prose is the writer's wording, copied is page text, and computed is a slot code fills with a worked result. A table claim gives each cell as its own array under cells. Judge only the copied text, not the rest of the claim. Task: {} Copied: {}",
             element_rule(copied),
             dumps(&json!(task)),
             dumps(&json!(copied))
@@ -2321,6 +2383,7 @@ mod tests {
             superseded: None,
             page: None,
             headings: vec![],
+            source_kind: None,
             links: vec![],
             after_step: None,
             fields: Vec::new(),
@@ -2702,6 +2765,7 @@ mod tests {
                         superseded: Some(false),
                         page: None,
                         headings: vec![],
+                        source_kind: None,
                         links: vec![],
                         after_step: None,
                         fields: Vec::new(),
@@ -4260,6 +4324,121 @@ mod tests {
                 problem.map(|_| true),
                 "{found:?}"
             );
+        }
+    }
+
+    #[test]
+    fn composer_keeps_a_document_titles_source_kind() {
+        let mut capture = crate::retrieval::testing::capture(&[(BlockKind::Heading, "Account settings")]);
+        capture.title = "Service documentation".into();
+        let capture = capture.with_document_title();
+        let page = crate::retrieval::text::Page::new(&capture);
+        let block = capture.blocks.last().unwrap();
+        let evidence = crate::retrieval::chunks::evidence(&page, block, block.start, block.end);
+        let mut notes = Notes::new([Fact::read(&evidence.quote, evidence.clone(), FactReader::JevChoice)]);
+        notes.remember_capture(&capture, 0);
+        let items = initial_items(&notes, false);
+        let written = items[0].written();
+        let (_, text) = written.split_once(": ").unwrap();
+        let shown: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(shown["source_kind"], "document_title");
+        let field = crate::retrieval::fields::ScalarField::new(crate::retrieval::fields::Annotation::Str);
+        let candidates = crate::retrieval::fields::field_candidates_from_notes(&notes, &field, None).unwrap();
+        assert_eq!(candidates[0].context, "(document title) Service documentation");
+    }
+
+    #[tokio::test]
+    async fn capped_report_checks_wait_for_each_others_receipts() {
+        struct Sequential {
+            inner: Support,
+            active: std::sync::atomic::AtomicBool,
+        }
+        impl DecisionClient for Sequential {
+            fn evaluate<'a>(
+                &'a self,
+                state: &'a Value,
+                questions: &'a IndexMap<String, Question>,
+            ) -> BoxFuture<
+                'a,
+                std::result::Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>,
+            > {
+                Box::pin(async move {
+                    use std::sync::atomic::Ordering::SeqCst;
+                    assert!(!self.active.swap(true, SeqCst), "capped groups must wait for the previous receipt");
+                    tokio::task::yield_now().await;
+                    let answer = self.inner.evaluate(state, questions).await;
+                    self.active.store(false, SeqCst);
+                    answer
+                })
+            }
+            fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+                self.inner.profile()
+            }
+        }
+        let notes = Notes::new([fact(0, "Record A".into())]);
+        let items = initial_items(&notes, true);
+        let bound = bind_claim(&items, json!([{"note": "e0", "quoted": true, "part": null}]), None);
+        let steps = [json!({"operation": "click", "target": "Open cart", "outcome": "executed"})];
+        let jev = Sequential { inner: Support::new(true), active: false.into() };
+        let ledger = Ledger::new(fastbrowse_core::models::Limits { max_dollars: Some(100.0), ..Default::default() });
+        review_composition(
+            &jev,
+            &READS,
+            "Open the cart and tell me what is in it",
+            None,
+            vec![bound],
+            &notes,
+            Some(&ledger),
+            true,
+            true,
+            &steps,
+        )
+        .await
+        .unwrap();
+        assert!(jev.inner.asked.lock().unwrap().len() >= 2);
+    }
+
+    #[test]
+    fn copied_answers_allow_complete_requested_fields() {
+        let Question::Noul(question) = copied_question("Tell me the date", &[json!({"text": "12/04/2026"})]) else {
+            panic!("exactness is yes-or-no")
+        };
+        assert!(question.instructions.contains("A requested field may include its complete value"));
+    }
+
+    #[tokio::test]
+    async fn report_checks_do_not_receive_action_history() {
+        let notes = Notes::new([fact(0, "Record A".into())]);
+        let items = initial_items(&notes, true);
+        let bound = bind_claim(&items, json!([{"note": "e0", "quoted": true, "part": null}]), None);
+        let steps = [json!({"operation": "click", "target": "Open cart", "outcome": "executed", "page_changed": true})];
+        let jev = Support::new(true);
+        review_composition(
+            &jev,
+            &READS,
+            "Open the cart and tell me what is in it",
+            None,
+            vec![bound],
+            &notes,
+            None,
+            true,
+            true,
+            &steps,
+        )
+        .await
+        .unwrap();
+        let asked = jev.asked.lock().unwrap();
+        let states = jev.states.lock().unwrap();
+        assert!(asked.iter().any(|questions| questions.contains_key("coverage")));
+        assert!(asked.iter().any(|questions| questions.contains_key("exact")));
+        assert!(asked.iter().any(|questions| questions.contains_key("claim0")));
+        for (questions, state) in asked.iter().zip(states.iter()) {
+            if questions.contains_key("coverage") || questions.contains_key("exact") {
+                assert!(state.get("steps").is_none(), "Report-only checks must not judge the action history: {state}");
+            }
+            if questions.contains_key("claim0") {
+                assert_eq!(state["steps"], json!(steps));
+            }
         }
     }
 
