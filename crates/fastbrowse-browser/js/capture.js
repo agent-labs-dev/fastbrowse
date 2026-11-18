@@ -8,6 +8,8 @@
 ((allowedOrigins = null) => {
   if (!document.body) return null;
   const HEADINGS = { H1: 1, H2: 2, H3: 3, H4: 4, H5: 5, H6: 6 };
+  const CONTROL_ROLES = [["button"], ["radio", "checkbox", "switch"]];
+  const roleSelector = roles => roles.map(role => `[role="${role}"]`).join(',');
   const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'CANVAS', 'IFRAME']);
   const blocks = [];
   let path = [];
@@ -55,7 +57,7 @@
   const stampOf = e => (datable(e) && visible(e) ? (e.getAttribute('datetime') ?? '').trim() : '');
   // A host that draws its text in its own shadow root, as GitHub's relative-time does, has an empty innerText.
   const shownOf = e => {
-    const own = clean(e.innerText ?? '');
+    const own = clean(renderedOf(e));
     if (own || !e.shadowRoot) return own;
     const parts = [...e.shadowRoot.childNodes].map(n =>
       n.nodeType === 3 ? n.textContent : n.nodeType === 1 && !SKIP.has(n.tagName) ? (n.innerText ?? '') : '',
@@ -144,7 +146,16 @@
       const reference = node.closest(IN_PAGE);
       if (reference && noteReference(reference)) return;
       const start = cursor;
+      const advance = value => {
+        const shown = clean(value);
+        const at = shown ? text.indexOf(shown, cursor) : -1;
+        if (at >= 0) cursor = at + shown.length;
+      };
+      // Advice follows the complete rendered label, including text drawn after its last DOM text node.
+      const [before, after] = generatedOf(node);
+      advance(before);
       for (const child of node.childNodes) visit(child, depth + 1);
+      advance(after);
       const title = clean(node.getAttribute('title') || '');
       const shown = shownOf(node);
       if (title && shown && title !== shown && cursor > start) {
@@ -158,7 +169,118 @@
     }
     return text;
   };
-  const textOf = e => titled(e, clean(dated(e, unnoted(e, e.innerText ?? e.textContent ?? ''))));
+  // innerText omits generated content, so a separator drawn between two names disappears (#1267).
+  // CSSOM serializes strings with CSS escapes, not JSON escapes. Counters and images are not resolved text.
+  const cssStrings = content => {
+    const strings = /"((?:[^"\\]|\\.)*)"\s*/gy;
+    let value = '';
+    while (strings.lastIndex < content.length) {
+      const at = strings.lastIndex;
+      const match = strings.exec(content);
+      if (!match) {
+        // An empty alternative explicitly marks decoration; a named alternative keeps the visible string.
+        if (content[at] === '/') return cssStrings(content.slice(at + 1).trim()) ? value : null;
+        const token = /[-\w]+/y;
+        token.lastIndex = at;
+        if (!token.exec(content)) return null;
+        let end = token.lastIndex;
+        if (content[end] === '(') {
+          // CSS functions may contain quoted URLs and nested functions; their arguments are not rendered strings.
+          let depth = 0;
+          let quote = '';
+          do {
+            const char = content[end++];
+            if (char === '\\') end++;
+            else if (quote) {
+              if (char === quote) quote = '';
+            } else if (char === '"' || char === "'") quote = char;
+            else if (char === '(') depth++;
+            else if (char === ')') depth--;
+          } while (end < content.length && (depth || quote));
+          if (depth || quote) return null;
+        }
+        while (/\s/.test(content[end] ?? '') && end < content.length) end++;
+        strings.lastIndex = end;
+        continue;
+      }
+      value += match[1].replace(/\\([\da-fA-F]{1,6}[ \t\r\n\f]?|.)/g, (_, escaped) => {
+        if (!/^[\da-fA-F]/.test(escaped)) return escaped;
+        const code = parseInt(escaped.trim(), 16);
+        return String.fromCodePoint(code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff) ? 0xfffd : code);
+      });
+    }
+    return value;
+  };
+  const generated = new WeakMap();
+  const generatedOf = e => {
+    if (generated.has(e)) return generated.get(e);
+    const read = pseudo => {
+      const style = getComputedStyle(e, pseudo);
+      if (style.display === 'none' || style.visibility !== 'visible') return '';
+      const value = cssStrings(style.content);
+      if (!value) return '';
+      // A generated block starts and ends a line even when it has no margins.
+      if (!(style.display.startsWith('inline') || style.display === 'contents')) return `\n${value}\n`;
+      // A pseudo-element's margins separate its text visually, though neither is present in innerText.
+      return `${parseFloat(style.marginInlineStart) > 0 ? ' ' : ''}${value}${parseFloat(style.marginInlineEnd) > 0 ? ' ' : ''}`;
+    };
+    // A known icon already has a readable glyph name in drawn(); its font character must not replace that name.
+    const found = e.closest('[aria-hidden="true"]') || iconOf(e) ? ['', ''] : [read('::before'), read('::after')];
+    if (found.some(Boolean)) {
+      // The generated text's host can carry the gap instead. Ordinary inline margins do not split a word.
+      const style = getComputedStyle(e);
+      if (parseFloat(style.marginInlineStart) > 0) found[0] = ` ${found[0]}`;
+      if (parseFloat(style.marginInlineEnd) > 0) found[1] += ' ';
+    }
+    generated.set(e, found);
+    return found;
+  };
+  const generatedTrees = new WeakMap();
+  const hasGenerated = e => {
+    if (generatedTrees.has(e)) return generatedTrees.get(e);
+    const found = !SKIP.has(e.tagName) && (visible(e) || getComputedStyle(e).display === 'contents') &&
+      (generatedOf(e).some(Boolean) || [...e.children].some(hasGenerated));
+    generatedTrees.set(e, found);
+    return found;
+  };
+  const rendered = new WeakMap();
+  const renderedOf = e => {
+    if (rendered.has(e)) return rendered.get(e);
+    let text = e.innerText ?? e.textContent ?? '';
+    if (!hasGenerated(e)) {
+      rendered.set(e, text);
+      return text;
+    }
+    let cursor = 0;
+    const insertions = [];
+    const visit = node => {
+      if (node.nodeType === 3) {
+        const shown = clean(node.textContent ?? '');
+        const at = shown ? text.indexOf(shown, cursor) : -1;
+        if (at >= 0) cursor = at + shown.length;
+        return;
+      }
+      if (node.nodeType !== 1 || SKIP.has(node.tagName)) return;
+      if (!visible(node) && getComputedStyle(node).display !== 'contents') return;
+      if (node.matches(IN_PAGE) && noteReference(node)) return;
+      const shown = clean(node.innerText ?? '');
+      const at = shown ? text.indexOf(shown, cursor) : cursor;
+      // Unchanged subtrees need no second walk when their containing card and their own blocks are both read.
+      if (!hasGenerated(node)) {
+        if (at >= 0) cursor = at + shown.length;
+        return;
+      }
+      const [before, after] = generatedOf(node);
+      if (before) insertions.push({ at: at < 0 ? cursor : at, value: before });
+      for (const child of node.childNodes) visit(child);
+      if (after) insertions.push({ at: cursor, value: after });
+    };
+    visit(e);
+    for (const { at, value } of insertions.reverse()) text = text.slice(0, at) + value + text.slice(at);
+    rendered.set(e, text);
+    return text;
+  };
+  const textOf = e => titled(e, clean(dated(e, unnoted(e, renderedOf(e)))));
   const isBlock = e => {
     const display = getComputedStyle(e).display;
     return !(display.startsWith('inline') || display === 'contents') || e.tagName === 'BR';
@@ -238,6 +360,13 @@
   // Sizes, weights and effects share an icon library's prefix without naming a glyph, as does the library itself.
   const ICON_STYLE =
     /^(?:icon|tabler|solid|regular|light|thin|duotone|brands|xs|sm|lg|xl|\d+x|fw|spin|pulse|border|inverse|stack.*|pull-.*|rotate-.*|flip-.*)$/;
+  const iconOf = e => {
+    for (const token of e.classList) {
+      const glyph = ICON_CLASS.exec(token);
+      if (glyph && !ICON_STYLE.test(glyph[1])) return `[${glyph[1].replace(/-/g, ' ')} icon]`;
+    }
+    return '';
+  };
   const drawn = c => {
     for (const e of c.querySelectorAll('img,svg,i,span,[role="img"]')) {
       if (hidden(e)) continue;
@@ -247,10 +376,8 @@
         e.getAttribute('title') ||
         e.querySelector?.(':scope > title')?.textContent;
       if (named?.trim()) return `[${clean(named)}]`;
-      for (const token of e.classList) {
-        const glyph = ICON_CLASS.exec(token);
-        if (glyph && !ICON_STYLE.test(glyph[1])) return `[${glyph[1].replace(/-/g, ' ')} icon]`;
-      }
+      const icon = iconOf(e);
+      if (icon) return icon;
     }
     return '';
   };
@@ -336,8 +463,12 @@
     return data.length ? data.map(row => of([row], true)) : [of([], true)];
   };
 
-  function flush(run) {
-    if (!run.length) return;
+  function flush(run, before, after, container) {
+    if (!run.length) {
+      const text = clean(before + after);
+      if (text) push('paragraph', text, {}, [container]);
+      return;
+    }
     const elements = run.filter(n => n.nodeType === 1);
     const owner = run[0].parentNode;
     const whole = owner?.nodeType === 1 && owner.hasAttribute('title') && [...owner.childNodes].every(node =>
@@ -345,7 +476,7 @@
       (node.nodeType === 1 && !FRAMES.has(node.tagName) && (hidden(node) || SKIP.has(node.tagName))),
     );
     let text = whole ? textOf(owner) :
-      clean(run.map(n => (n.nodeType === 3 ? n.textContent : titled(n, dated(n, unnoted(n, n.innerText ?? ''))))).join(''));
+      clean(before + run.map(n => (n.nodeType === 3 ? n.textContent : titled(n, dated(n, unnoted(n, renderedOf(n)))))).join('') + after);
     // A host's own text read in its shadow root is a block apart from its row, which may have read it without it.
     // A frame's nodes come from another realm, so the root is told by its node type rather than `instanceof`.
     const host = run[0].parentNode?.nodeType === 11 ? run[0].parentNode.host : null;
@@ -421,26 +552,47 @@
 
   function walk(el) {
     const run = [];
-    for (const node of el.childNodes) {
+    const generated = el.nodeType === 1 ? generatedOf(el) : el.host ? generatedOf(el.host) : ['', ''];
+    let before = generated[0];
+    // Descending preserves child blocks, but the owner's generated text still surrounds those blocks.
+    const flushRun = last => {
+      flush(run, before, last ? generated[1] : '', el);
+      before = '';
+    };
+    const assigned = el.localName === 'slot' ? el.assignedNodes({ flatten: true }) : [];
+    for (const node of assigned.length ? assigned : el.childNodes) {
       if (node.nodeType === 3) {
         run.push(node);
         continue;
       }
       if (node.nodeType !== 1 || hidden(node)) continue;
       if (FRAMES.has(node.tagName)) {
-        flush(run);
+        flushRun(false);
         enter(node, path);
         continue;
       }
       if (SKIP.has(node.tagName)) continue;
+      // A slot's assigned content is rendered in this shadow tree, not among the slot's DOM children.
+      if (node.localName === 'slot' && node.assignedNodes({ flatten: true }).length) {
+        flushRun(false);
+        walk(node);
+        continue;
+      }
+      // A host's generated text surrounds its shadow content, so read both together at the host's position.
+      if (node.shadowRoot && generatedOf(node).some(Boolean)) {
+        flushRun(false);
+        enteredShadows.add(node);
+        scope(node.shadowRoot, framePath, `${sourcePath}/shadow:${identity(node)}`, path);
+        continue;
+      }
       if (!node.matches('nav,[role="navigation"]') && !hasBlockFlow(node) && recordText(node) === null) {
         run.push(node);
         continue;
       }
-      flush(run);
+      flushRun(false);
       block(node);
     }
-    flush(run);
+    flushRun(true);
   }
 
   function endHeading(level) {
@@ -511,6 +663,7 @@
   // frame shows, answered with the page's heading over the frame instead.
   const FRAMES = new Set(['IFRAME', 'FRAME']);
   const entered = new WeakSet();
+  const enteredShadows = new WeakSet();
   function enter(e, headings) {
     entered.add(e);
     let inner = null;
@@ -536,7 +689,7 @@
     walk(root);
     path = [...headings];
     headingLevels = [];
-    for (const e of [...root.querySelectorAll('input,select,textarea,button,[role="button"]')].filter(visible)) {
+    for (const e of [...root.querySelectorAll(`input,select,textarea,button,${roleSelector(CONTROL_ROLES[0])}`)].filter(visible)) {
       // Placeholders suggest input; they do not label a value or prove an empty named field.
       if (CONTROLS.has(e.tagName) && !e.labels?.length && !e.hasAttribute('aria-label') && !e.hasAttribute('aria-labelledby')) continue;
       const name = nameOf(e) || clean(e.innerText ?? '');
@@ -547,7 +700,7 @@
     // Which option is chosen is element state no text node carries, and a page often shows what follows from it in
     // place: a checkout re-rendered one order total per shipping method, and the read could not say which method the
     // total it quoted was for. A choice a kit hides is shown by its label, so either being visible counts.
-    const CHOICES = 'input[type="radio"],input[type="checkbox"],[role="radio"],[role="checkbox"],[role="switch"]';
+    const CHOICES = `input[type="radio"],input[type="checkbox"],${roleSelector(CONTROL_ROLES[1])}`;
     for (const e of root.querySelectorAll(CHOICES)) {
       const native = e.tagName === 'INPUT';
       if (!(native ? e.checked : e.getAttribute('aria-checked') === 'true')) continue;
@@ -638,7 +791,10 @@
       push('observation', `Observed viewport: Horizontal overflow: ${doc.scrollWidth > doc.clientWidth ? 'yes' : 'no'}`);
     }
     for (const e of root.querySelectorAll('*')) {
-      if (e.shadowRoot) scope(e.shadowRoot, frame, `${source}/shadow:${identity(e)}`);
+      if (e.shadowRoot && !enteredShadows.has(e)) {
+        enteredShadows.add(e);
+        scope(e.shadowRoot, frame, `${source}/shadow:${identity(e)}`);
+      }
       // A frame the walk never reached (hidden, or inside a record or table read as one block) is still read.
       if (FRAMES.has(e.tagName) && !entered.has(e)) enter(e, []);
     }

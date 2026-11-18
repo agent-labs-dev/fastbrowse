@@ -190,6 +190,7 @@ const VOID: [&str; 13] =
 const SCOPES: [&str; 6] = ["caption", "html", "table", "td", "template", "th"];
 /// The elements `capture.js` lets a record's facts stand on without naming them.
 const LEAVES_OF_THEIR_OWN: [&str; 7] = ["a", "button", "img", "input", "select", "textarea", "svg"];
+const CONTROL_ROLES: [&str; 4] = ["button", "radio", "checkbox", "switch"];
 
 /// One element of the served markup, in the tree a browser builds of it.
 struct Element {
@@ -209,6 +210,10 @@ struct Element {
     navigation: bool,
     /// Never rendered: hidden itself, skipped, or inside such an element.
     hidden: bool,
+    /// An accessibility label inside an aria-hidden subtree is decorative, even if its CSS draws an icon.
+    aria_hidden: bool,
+    /// The browser reads button and choice roles as control state, not empty labeled prose.
+    control_role: bool,
     /// Inside `svg` or `math`, where a self-closing tag ends its element.
     foreign: bool,
     /// Whether it shows any text.
@@ -244,6 +249,8 @@ impl Tree {
             label: None,
             navigation: false,
             hidden: false,
+            aria_hidden: false,
+            control_role: false,
             foreign: false,
             text: false,
             start: usize::MAX,
@@ -405,6 +412,8 @@ impl Tags for Tree {
                 || SKIPPED.contains(&name)
                 || get("hidden").is_some()
                 || hides(&get("style").unwrap_or_default()),
+            aria_hidden: self.elements[parent].aria_hidden || get("aria-hidden").as_deref() == Some("true"),
+            control_role: get("role").is_some_and(|role| CONTROL_ROLES.contains(&role.as_str())),
             foreign,
             text: false,
             start: at,
@@ -723,6 +732,8 @@ struct Reader<'a> {
     /// Native tooltip text can hold the full name when a listing shortens its visible label.
     titles: Vec<TitleAdvice>,
     ends: HashMap<usize, usize>,
+    /// Empty elements can label a separator that CSS draws but the served text does not contain.
+    empty: HashSet<usize>,
     /// The cards the first read found, by the tag token that opens each.
     records: HashMap<usize, Record>,
     /// The open card, whose whole text is one block.
@@ -748,6 +759,12 @@ impl Tags for Reader<'_> {
         // `<svg/>` is foreign content, where a self-closing tag ends the element: it opens nothing to skip.
         if !(tag.self_closing && &*tag.name == "svg") {
             self.open(&tag.name, &tag.attrs, at);
+            if self.skip == 0
+                && self.empty.contains(&at)
+                && let Some(label) = tag.attrs.iter().find(|attr| &*attr.name.local == "aria-label")
+            {
+                self.data(&label.value);
+            }
         }
     }
 
@@ -789,6 +806,7 @@ impl<'a> Reader<'a> {
         records: HashMap<usize, Record>,
         notes: HashSet<usize>,
         ends: HashMap<usize, usize>,
+        empty: HashSet<usize>,
     ) -> Reader<'a> {
         Reader {
             url,
@@ -818,6 +836,7 @@ impl<'a> Reader<'a> {
             stamps: Vec::new(),
             titles: Vec::new(),
             ends,
+            empty,
             records,
             record: None,
             notes,
@@ -1347,7 +1366,29 @@ pub fn read(html: &str, url: &str) -> (String, Vec<Found>, Vec<Control>, Vec<Fra
         .filter(|(index, element)| tree.leaf(*index) || (element.tag == "a" && element.href.is_some()))
         .map(|(_, element)| (element.start, element.close))
         .collect();
-    let mut reader = tokenize(html, Sink::new(Reader::new(url, tree.records(), notes, ends))).into_inner();
+    let empty = tree
+        .elements
+        .iter()
+        .filter(|element| {
+            // Empty wrappers are named by drawn_facts; only a leaf supplies an inline text boundary.
+            if element.text || element.hidden || element.aria_hidden || !element.children.is_empty() {
+                return false;
+            }
+            // An empty label inside a control names its action rather than a citable page fact.
+            let mut ancestor = *element;
+            loop {
+                if ancestor.control_role || LEAVES_OF_THEIR_OWN.contains(&ancestor.tag.as_str()) {
+                    return false;
+                }
+                if ancestor.parent == 0 {
+                    return true;
+                }
+                ancestor = &tree.elements[ancestor.parent];
+            }
+        })
+        .map(|element| element.start)
+        .collect();
+    let mut reader = tokenize(html, Sink::new(Reader::new(url, tree.records(), notes, ends, empty))).into_inner();
     reader.emit_titles(usize::MAX);
     reader.close_record();
     reader.flush(None, None, false);
@@ -1611,6 +1652,93 @@ mod tests {
         assert_eq!(texts, (1..=3).map(|n| format!("Quote {n}. by Author {n} (about)\nTags: a b")).collect::<Vec<_>>(),);
         assert_eq!(found.len(), 4, "{found:?}");
         assert!(records.iter().all(|b| b.heading_path == ["Quotes"] && b.href.is_none()));
+    }
+
+    #[test]
+    fn empty_inline_labels_preserve_generated_separators() {
+        let html = "<style>.separator::before { content: '\\00b7'; }</style>\
+            <ul><li><div><span>JetBlue</span><span class=separator aria-label=' '></span><span>Tap Air Portugal</span></div></li>\
+            <li><div><span>British Airways</span><span class=separator aria-label=' '></span><span>American, Iberia, Finnair</span></div></li>\
+            <li><div><span>JetBlue</span></div></li></ul>\
+            <p><span>JetBlue</span><span class=separator aria-label=' '></span><span>Tap Air Portugal</span></p>\
+            <p><span>Jet</span><span>Blue</span></p>\
+            <p><span>Jet</span><span hidden aria-label=' '></span><span>Blue</span></p>\
+            <p><span aria-label='Not a replacement'>Visible wording</span></p>\
+            <p><span aria-label='Accessible wording'></span></p>\
+            <p><span>Jet</span><span aria-hidden=true><span aria-label='Icon'></span></span><span>Blue</span></p>\
+            <table><tr><td><span>JetBlue</span><span class=separator aria-label=' '></span><span>Tap Air Portugal</span></td></tr></table>";
+        let (_, found) = blocks(html, "https://a.example/");
+        let texts: Vec<_> = found.iter().map(|block| block.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                "JetBlue Tap Air Portugal",
+                "British Airways American, Iberia, Finnair",
+                "JetBlue",
+                "JetBlue Tap Air Portugal",
+                "JetBlue",
+                "JetBlue",
+                "Visible wording",
+                "Accessible wording",
+                "JetBlue",
+                "| JetBlue Tap Air Portugal |",
+            ]
+        );
+    }
+
+    #[test]
+    fn icon_only_social_links_and_controls_do_not_add_labels_to_prose() {
+        let (title, found, controls, _) = read(
+            "<h2>Follow us</h2><nav><a href='/twitter' aria-label=Twitter></a>\
+             <a href='/github' aria-label=GitHub><svg><title>GitHub icon</title></svg></a>\
+             <button aria-label=Share></button></nav><p>After links</p>",
+            "https://a.example/",
+        );
+        assert!(title.is_empty());
+        assert_eq!(found.iter().map(|block| block.text.as_str()).collect::<Vec<_>>(), ["Follow us", "After links"]);
+        assert_eq!(
+            controls.iter().map(|control| control.label.as_str()).collect::<Vec<_>>(),
+            ["Twitter", "GitHub", "Share"]
+        );
+    }
+
+    #[test]
+    fn control_roles_match_browser_capture() {
+        let source = include_str!("../../../fastbrowse-browser/js/capture.js");
+        let array = source.split_once("const CONTROL_ROLES = ").unwrap().1.split_once(';').unwrap().0;
+        let groups: Vec<Vec<String>> = serde_json::from_str(array).unwrap();
+        let roles = groups.into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(roles, CONTROL_ROLES);
+    }
+
+    #[test]
+    fn empty_labels_inside_controls_do_not_become_prose() {
+        for control in [
+            "<button><span aria-label='Add'></span></button>",
+            "<div role='button'><span aria-label='Add'></span></div>",
+            "<div role='checkbox'><span aria-label='Add'></span></div>",
+            "<div role='radio'><span aria-label='Add'></span></div>",
+            "<div role='switch'><span aria-label='Add'></span></div>",
+            "<a href='/add'><span><span aria-label='Add'></span></span></a>",
+            "<svg><g><span aria-label='Add'></span></g></svg>",
+        ] {
+            let (_, found, _, _) = read(&format!("<p>Before</p>{control}<p>After</p>"), "https://a.example/");
+            assert_eq!(found.iter().map(|block| block.text.as_str()).collect::<Vec<_>>(), ["Before", "After"]);
+        }
+    }
+
+    #[test]
+    fn empty_wrappers_keep_one_drawn_fact_in_records() {
+        let (_, found, _, _) = read(
+            "<ul><li><h3>First</h3><span aria-label='5 stars'><i></i></span></li>\
+             <li><h3>Second</h3><span aria-label='4 stars'><i></i></span></li>\
+             <li><h3>Third</h3><span aria-label='3 stars'><i></i></span></li></ul>",
+            "https://a.example/",
+        );
+        assert_eq!(
+            found.iter().map(|block| block.text.as_str()).collect::<Vec<_>>(),
+            ["First [5 stars: no text]", "Second [4 stars: no text]", "Third [3 stars: no text]"]
+        );
     }
 
     #[test]

@@ -31,6 +31,194 @@ async fn document_title_is_citable_without_a_body_heading() {
 // -- test_capture.py: capture blocks preserve the records a reader needs to cite together -----------------------
 
 #[tokio::test(flavor = "multi_thread")]
+async fn generated_separators_preserve_inline_boundaries() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<style>.separator { margin: 0 4px; } .separator::before { content: '\00b7'; }</style>
+        <ul><li><div><span>JetBlue</span><span class="separator" aria-label=" "></span><span>Tap Air Portugal</span></div></li>
+        <li><div><span>British Airways</span><span class="separator" aria-label=" "></span><span>American, Iberia, Finnair</span></div></li>
+        <li><div><span>JetBlue</span></div></li></ul>
+        <p><span>JetBlue</span><span class="separator" aria-label=" "></span><span>Tap Air Portugal</span></p>
+        <p><span>Jet</span><span>Blue</span></p>
+        <p><span>Jet</span><span hidden aria-label=" "></span><span>Blue</span></p>
+        <table><tr><td><span>JetBlue</span><span class="separator" aria-label=" "></span><span>Tap Air Portugal</span></td></tr></table>"#,
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    assert!(capture.text.contains("JetBlue \u{b7} Tap Air Portugal"), "{}", capture.text);
+    assert!(!capture.text.contains("JetBlueTap Air Portugal"), "{}", capture.text);
+    assert!(capture.text.contains("British Airways \u{b7} American, Iberia, Finnair"), "{}", capture.text);
+    assert!(capture.text.contains("| JetBlue \u{b7} Tap Air Portugal |"), "{}", capture.text);
+    assert_eq!(texts(&capture).iter().filter(|text| **text == "JetBlue").count(), 3);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn generated_text_preserves_css_strings_without_decorative_noise() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<style>
+        .prefix::before { content: 'pre'; }
+        .suffix::after { content: 'fix'; }
+        .escaped::before { content: '\22 quoted\22 \a line\\'; }
+        .attribute::after { content: attr(data-unit); }
+        .icon::before { content: '\e000'; }
+        .counter::before { content: counter(item); }
+        .decorative::before { content: '\e001' / ''; }
+        .alternative::before { content: 'Required ' / 'required field'; }
+        .mixed::before { content: 'Chapter ' counter(chapter) ' topic '; }
+        .image::before { content: 'New ' url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>'); }
+        .hidden::before { content: 'not shown'; display: none; }
+        </style>
+        <p><span class="prefix">fix</span></p>
+        <p><span class="suffix">pre</span></p>
+        <p><span class="escaped"></span></p>
+        <p><span class="attribute" data-unit="kg">10</span></p>
+        <p><span class="alternative">value</span></p>
+        <p><span class="mixed">value</span></p>
+        <p><span class="image">value</span></p>
+        <p><span>Jet</span><span class="icon" aria-hidden="true"></span><span>Blue</span></p>
+        <p><span>Jet</span><span class="counter"></span><span>Blue</span></p>
+        <p><span>Jet</span><span class="decorative"></span><span>Blue</span></p>
+        <p><span>Jet</span><span class="hidden"></span><span>Blue</span></p>
+        <p><span style="margin-inline: 4px">J</span>etBlue</p>
+        <p><span class="prefix" hidden>not shown</span>Visible</p>"#,
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    let read = texts(&capture);
+    assert_eq!(read.iter().filter(|text| text.as_str() == "prefix").count(), 2, "{read:?}");
+    assert!(read.iter().any(|text| text == "\"quoted\"\nline\\"), "{read:?}");
+    assert!(read.iter().any(|text| text == "10kg"), "{read:?}");
+    assert!(read.iter().any(|text| text == "Required value"), "{read:?}");
+    assert!(read.iter().any(|text| text == "Chapter topic value"), "{read:?}");
+    assert!(read.iter().any(|text| text == "New value"), "{read:?}");
+    assert_eq!(read.iter().filter(|text| text.as_str() == "JetBlue").count(), 5, "{read:?}");
+    assert!(read.iter().any(|text| text == "Visible"), "{read:?}");
+    assert!(!capture.text.contains("not shown"));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn generated_blocks_preserve_line_boundaries() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<style>
+        .before::before { content: 'Note'; display: block; }
+        .after::after { content: 'End'; display: block; }
+        .inline::before { content: 'pre'; display: inline-block; }
+        </style>
+        <p><span class="before">Details</span></p>
+        <p><span class="after">Details</span></p>
+        <p><span class="inline">fix</span></p>"#,
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    let read = texts(&capture);
+    assert!(read.iter().any(|text| text == "Note\nDetails"), "{read:?}");
+    assert!(read.iter().any(|text| text == "Details\nEnd"), "{read:?}");
+    assert!(read.iter().any(|text| text == "prefix"), "{read:?}");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn annotations_follow_generated_suffixes() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<style>.suffix::after { content: 'fix'; }</style>
+        <p><span class="suffix" title="Full">pre</span></p>
+        <p><time class="suffix" datetime="2026-12-16">pre</time></p>"#,
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    let read = texts(&capture);
+    assert!(read.iter().any(|text| text == "prefix (title: Full)"), "{read:?}");
+    assert!(read.iter().any(|text| text == "prefix (2026-12-16)"), "{read:?}");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn descended_containers_keep_their_generated_boundaries() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<style>.notice::before { content: 'Notice'; } .notice::after { content: 'End'; }</style>
+        <div class="notice"><p>Details</p></div>
+        <p class="notice">Details</p>
+        <p class="notice" title="Advice">Details</p>"#,
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    assert_eq!(texts(&capture), ["Notice", "Details", "End", "NoticeDetailsEnd", "NoticeDetailsEnd (title: Advice)"]);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn generated_text_attachment_matrix() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate("about:blank", None).await.expect("navigate");
+    let style =
+        "<style>.suffix::after{content:'fix'}.notice::before{content:'Notice'}.notice::after{content:'End'}</style>";
+    let cases: &[(&str, &str, &[&str])] = &[
+        ("leaf", "<span class=suffix>pre</span>", &["prefix"]),
+        ("inline run", "<p><span>pre</span><span class=suffix></span></p>", &["prefix"]),
+        ("walked container", "<div class=notice><p>Details</p></div>", &["Notice", "Details", "End"]),
+        ("owner boundary", "<p class=notice>Details</p>", &["NoticeDetailsEnd"]),
+        ("title", "<p><span class=suffix title=Full>pre</span></p>", &["prefix (title: Full)"]),
+        ("date", "<p><time class=suffix datetime=2026-12-16>pre</time></p>", &["prefix (2026-12-16)"]),
+        ("table cell", "<table><tr><td class=suffix>pre</td></tr></table>", &["| prefix |"]),
+        ("shadow host", "<div id=host class=notice></div>", &["Notice", "Details", "End"]),
+        ("slotted host", "<div id=host class=notice><p>Details</p></div>", &["Notice", "Details", "End"]),
+        ("frame", "<iframe srcdoc='<p class=suffix>pre</p>'></iframe>", &["prefix"]),
+    ];
+    for (name, body, expected) in cases {
+        set_body(&h.session, &format!("{style}{body}")).await;
+        if *name == "shadow host" {
+            eval_active(
+                &h.session,
+                "document.querySelector('#host').attachShadow({mode:'open'}).innerHTML='<p>Details</p>'",
+            )
+            .await;
+        }
+        if *name == "slotted host" {
+            eval_active(
+                &h.session,
+                "document.querySelector('#host').attachShadow({mode:'open'}).innerHTML='<slot></slot>'",
+            )
+            .await;
+        }
+        if *name == "frame" {
+            let session = &h.session;
+            wait_until(
+                || async move {
+                    eval_active(
+                        session,
+                        "Boolean(document.querySelector('iframe')?.contentDocument?.querySelector('p'))",
+                    )
+                    .await
+                        == true
+                },
+                5.0,
+            )
+            .await;
+            eval_active(&h.session, "document.querySelector('iframe').contentDocument.head.innerHTML=\"<style>.suffix::after{content:'fix'}</style>\"").await;
+        }
+        let capture = content_capture(&h.page).await;
+        assert_eq!(texts(&capture), *expected, "{name}");
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn title_advice_stays_with_its_record_and_visible_text() {
     let Some(h) = harness().await else { return };
     h.goto("/token.html").await;

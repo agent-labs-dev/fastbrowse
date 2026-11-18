@@ -15,6 +15,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 - Comparison answers check a selected record's name with its record kind and compared field in view. A valid package name could be rejected as an incomplete answer to the whole comparison, leaving only partial evidence ([#1268](https://github.com/agent-labs-dev/fastbrowse/issues/1268)).
 
+- Browser reads preserve text drawn by CSS before and after page elements, including separators between carrier names. HTTP reads keep the accessible labels of empty elements, so a separator supplied as a space no longer joins adjacent names ([#1267](https://github.com/agent-labs-dev/fastbrowse/issues/1267)).
+
 - Closing a run attached to your own Chrome releases its request interception and paused-target setting before it returns, and turns service workers back on for the tabs you keep, including a tab whose setup failed. Over a direct DevTools connection, your next navigation in that window could hang until the connection finished closing. The extension accepts the same release; its current store version still closes cleanly without it ([#1257](https://github.com/agent-labs-dev/fastbrowse/issues/1257)).
 
 - Reads preserve the headings and individual records inside inline containers, including custom elements. A page of flight results could be captured as one paragraph, leaving the answer unable to cite an individual flight and its price ([#1250](https://github.com/agent-labs-dev/fastbrowse/issues/1250)).
