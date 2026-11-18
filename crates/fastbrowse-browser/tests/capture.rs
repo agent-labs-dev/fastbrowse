@@ -56,6 +56,29 @@ async fn generated_separators_preserve_inline_boundaries() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn generated_text_survives_accessibility_hidden_ancestors() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<style>.separator::before { content: ' / '; } .suffix::after { content: ' end'; }</style>
+        <main><ul><li><span>Alpha</span><span class="separator"></span><span>Beta</span></li></ul>
+        <p><span>Gamma</span><span class="separator"></span><span>Delta</span></p>
+        <p class="suffix">Text</p></main>"#,
+    )
+    .await;
+    for hidden in [true, false, true, false] {
+        eval_active(&h.session, &format!("document.querySelector('main').setAttribute('aria-hidden', '{hidden}')"))
+            .await;
+        let capture = content_capture(&h.page).await;
+        for expected in ["Alpha / Beta", "Gamma / Delta", "Text end"] {
+            assert!(capture.text.contains(expected), "aria-hidden={hidden}: {}", capture.text);
+        }
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn generated_text_preserves_css_strings_without_decorative_noise() {
     let Some(h) = harness().await else { return };
     h.goto("/token.html").await;
