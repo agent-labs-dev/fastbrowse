@@ -85,9 +85,11 @@ pub const HIT_TEST_JS: &str = concat!(
     "if (node === e ? !owns(e) && !labels.some(owns) : !node.contains(hit)) return 'covered'; ",
     "if (doc === document) break; ",
     "node = view.frameElement; if (!node) return null; ",
-    "const frame = node.getBoundingClientRect(); ",
-    "x = frame.x + (node.clientLeft + x) * frame.width / node.offsetWidth; ",
-    "y = frame.y + (node.clientTop + y) * frame.height / node.offsetHeight; doc = node.ownerDocument; } ",
+    // A frame's document starts inside its border and padding, as Puppeteer's frame offset also counts.
+    "const frame = node.getBoundingClientRect(), pad = getComputedStyle(node); ",
+    "x = frame.x + (node.clientLeft + parseFloat(pad.paddingLeft) + x) * frame.width / node.offsetWidth; ",
+    "y = frame.y + (node.clientTop + parseFloat(pad.paddingTop) + y) * frame.height / node.offsetHeight; ",
+    "doc = node.ownerDocument; } ",
     "return [x, y]; }; ",
     "for (const r of rects) { for (const [fx, fy] of [[.5, .5], [.25, .25], [.75, .25], [.25, .75], [.75, .75]]) { ",
     "const point = hitAt(r.left + (r.right - r.left) * fx, r.top + (r.bottom - r.top) * fy); ",
@@ -239,9 +241,10 @@ pub static COVER_JS: LazyLock<String> = LazyLock::new(|| {
         "if (r.width * r.height >= view.innerWidth * view.innerHeight / 2) return 'other'; band = true; } ",
         "return band ? 'band' : 'other'; } ",
         "if (doc === document) return 'none'; node = view.frameElement; if (!node) return 'none'; ",
-        "const frame = node.getBoundingClientRect(); ",
-        "x = frame.x + (node.clientLeft + x) * frame.width / node.offsetWidth; ",
-        "y = frame.y + (node.clientTop + y) * frame.height / node.offsetHeight; doc = node.ownerDocument; } })",
+        "const frame = node.getBoundingClientRect(), pad = getComputedStyle(node); ",
+        "x = frame.x + (node.clientLeft + parseFloat(pad.paddingLeft) + x) * frame.width / node.offsetWidth; ",
+        "y = frame.y + (node.clientTop + parseFloat(pad.paddingTop) + y) * frame.height / node.offsetHeight; ",
+        "doc = node.ownerDocument; } })",
     ]
     .concat()
 });

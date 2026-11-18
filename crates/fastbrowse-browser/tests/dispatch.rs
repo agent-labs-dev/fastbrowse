@@ -64,7 +64,8 @@ async fn test_click_uses_an_exposed_point_but_never_passes_through_a_cover() {
             if nested == "iframe" {
                 eval_active(
                     &h.page,
-                    "document.body.innerHTML = '<iframe width=700 height=300 src=/dispatch.html></iframe>'",
+                    // Padded, since a frame's document starts inside its padding as well as its border.
+                    "document.body.innerHTML = '<iframe width=700 height=300 style=padding:30px src=/dispatch.html></iframe>'",
                 )
                 .await;
                 observe_until(&h.page, "One way").await;
@@ -617,8 +618,8 @@ async fn test_a_same_control_drag_dispatches_every_supplied_point_with_held_butt
 
     assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
     assert_eq!(eval_active(&h.page, "result.dataset.drawn").await, json!("5:plain"));
-    assert_eq!(eval_active(&h.page, "window.moveButtons").await, json!([1, 1, 1]));
-    assert_eq!(eval_active(&h.page, "window.captureDuringMove").await, json!([true, true, true]));
+    assert_eq!(eval_active(&h.page, "window.moveButtons").await, json!([1, 1, 1, 1]));
+    assert_eq!(eval_active(&h.page, "window.captureDuringMove").await, json!([true, true, true, true]));
     h.close().await;
 }
 
@@ -649,7 +650,7 @@ async fn test_a_same_control_drag_keeps_shift_on_each_pointer_event() {
 
     assert_eq!(result.outcome, StepOutcome::Executed, "{result:?}");
     assert_eq!(eval_active(&h.page, "result.dataset.drawn").await, json!("5:shift"));
-    assert_eq!(eval_active(&h.page, "window.shiftEvents").await, json!([true, true, true, true, true]));
+    assert_eq!(eval_active(&h.page, "window.shiftEvents").await, json!([true, true, true, true, true, true]));
     h.close().await;
 }
 

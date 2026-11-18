@@ -2025,7 +2025,10 @@
       const inner = childDocument(frame);
       if (!inner || !granted(inner)) continue;
       const f = boxOf(frame);
-      read(inner, dx + f.left + nativeProperty(frame, 'clientLeft'), dy + f.top + nativeProperty(frame, 'clientTop'));
+      // The child document starts inside the frame's border and padding.
+      const left = nativeProperty(frame, 'clientLeft') + parseFloat(styleProperty(frame, 'paddingLeft'));
+      const top = nativeProperty(frame, 'clientTop') + parseFloat(styleProperty(frame, 'paddingTop'));
+      read(inner, dx + f.left + left, dy + f.top + top);
     }
   };
   // Size, the cheapest test, goes first.

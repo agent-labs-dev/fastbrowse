@@ -363,7 +363,7 @@ struct Held {
 }
 
 impl Held {
-    /// The drag lets go itself from here.
+    /// The drag has let go itself.
     fn done(&mut self) {
         self.armed = false;
     }
@@ -1997,8 +1997,8 @@ impl CdpPage {
                 let (_, _, landed, _, _, _, _) =
                     self.before_action(Some(&drop), true, false, false, false, false).await?;
                 if !matches!(landed, Point::At(..)) {
-                    held.done();
                     self.cancel_drag(session_id, (start_x, start_y), 0).await?;
+                    held.done();
                     return Ok((StepOutcome::Stale, Some("drop target changed during the drag".into()), None));
                 }
             }
@@ -2018,14 +2018,14 @@ impl CdpPage {
             let (_, _, landed, _, _, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
             let Point::At(x, y) = landed else { break };
             if (x, y) == at {
-                held.done();
                 self.release(session_id, at.0, at.1, 0).await?;
+                held.done();
                 return Ok((StepOutcome::Executed, None, None));
             }
             at = (x, y);
         }
-        held.done();
         self.cancel_drag(session_id, (start_x, start_y), 0).await?;
+        held.done();
         Ok((StepOutcome::Stale, Some("drop target changed during the drag".into()), None))
     }
 
@@ -2084,23 +2084,18 @@ impl CdpPage {
         });
         self.input(self.session.send("Input.dispatchMouseEvent", press_event, Some(session_id))).await?;
         let mut held = self.held(session_id, press, modifiers);
-        for &(x, y) in &points[1..points.len() - 1] {
+        // The pointer moves to the release point too, so a surface that strokes on pointer moves draws the last leg.
+        for &(x, y) in &points[1..] {
             sleep(secs(DRAG_STEP_SECONDS)).await;
             self.drag_move(session_id, x, y, modifiers).await?;
             if !self.drag_target_unchanged(target, target_box).await? {
-                held.done();
                 self.cancel_drag(session_id, press, modifiers).await?;
+                held.done();
                 return Ok((StepOutcome::Stale, Some("drag target changed during the drag".into()), None));
             }
         }
-        sleep(secs(DRAG_STEP_SECONDS)).await;
-        if !self.drag_target_unchanged(target, target_box).await? {
-            held.done();
-            self.cancel_drag(session_id, press, modifiers).await?;
-            return Ok((StepOutcome::Stale, Some("drag target changed before release".into()), None));
-        }
-        held.done();
         self.release(session_id, release.0, release.1, modifiers).await?;
+        held.done();
         Ok((StepOutcome::Executed, None, None))
     }
 
@@ -2118,10 +2113,11 @@ impl CdpPage {
             && self.drag_box(target).await? == Some(target_box))
     }
 
-    /// The target's visible box in viewport CSS pixels: left, top, width, height.
+    /// The target's visible box in the top viewport's CSS pixels, mapped out of any same-origin frames it sits in: left,
+    /// top, width, height.
     async fn drag_box(&self, target: &Target) -> Result<Option<DragBox>, BrowserError> {
         let script = format!(
-            "(() => {{ const e = window.__fastbrowse?.nodes.get({}); if (!e?.isConnected || !e.checkVisibility({{checkOpacity:true,checkVisibilityCSS:true}})) return null; const r = e.getBoundingClientRect(); if (!(r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0 && r.left < innerWidth && r.top < innerHeight)) return null; return [r.x, r.y, r.width, r.height]; }})()",
+            "(() => {{ const e = window.__fastbrowse?.nodes.get({}); if (!e?.isConnected || !e.checkVisibility({{checkOpacity:true,checkVisibilityCSS:true}})) return null; const r = e.getBoundingClientRect(); let [x, y, w, h] = [r.x, r.y, r.width, r.height]; for (let view = e.ownerDocument.defaultView; view !== window; ) {{ const f = view.frameElement; if (!f) return null; const b = f.getBoundingClientRect(), pad = getComputedStyle(f), sx = b.width / f.offsetWidth, sy = b.height / f.offsetHeight; x = b.x + (f.clientLeft + parseFloat(pad.paddingLeft) + x) * sx; y = b.y + (f.clientTop + parseFloat(pad.paddingTop) + y) * sy; w *= sx; h *= sy; view = f.ownerDocument.defaultView; }} if (!(w > 0 && h > 0 && x + w > 0 && y + h > 0 && x < innerWidth && y < innerHeight)) return null; return [x, y, w, h]; }})()",
             target.2
         );
         Ok(serde_json::from_value(self.evaluate(&target.0, &script).await?).ok().flatten())

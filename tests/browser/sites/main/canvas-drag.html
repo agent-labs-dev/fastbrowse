@@ -52,7 +52,6 @@
     if (!drawing) return;
     drawing = false;
     window.shiftEvents.push(event.shiftKey);
-    points.push(local(event));
     render();
     result.dataset.drawn = `${points.length}:${shifted ? 'shift' : 'plain'}`;
     result.textContent = `Drawn ${points.length} points${shifted ? ' with Shift' : ''}.`;

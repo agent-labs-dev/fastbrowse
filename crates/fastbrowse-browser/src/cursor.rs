@@ -52,10 +52,8 @@ impl PageCursor {
     /// Glide to a point in the active page's viewport and wait until it has landed.
     pub async fn glide(&self, x: f64, y: f64) {
         let from = self.last.lock().unwrap().replace((x, y));
-        if from == Some((x, y)) {
-            return;
-        }
-        let ms = from.map_or(0.0, |(fx, fy)| glide_ms((x - fx).hypot(y - fy)));
+        // An unchanged point is still sent, with no travel: a navigation since may have taken the cursor out of the page.
+        let ms = from.filter(|&at| at != (x, y)).map_or(0.0, |(fx, fy)| glide_ms((x - fx).hypot(y - fy)));
         let from = from.map_or(Value::Null, |(fx, fy)| json!([fx, fy]));
         let wait = Duration::from_secs_f64(ms / 1000.0) + CALL_SLACK;
         self.call(&format!("glide({x}, {y}, {ms}, {from})"), true, wait).await;
