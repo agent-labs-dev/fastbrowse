@@ -19,7 +19,7 @@ use serde_json::{Map, Value, json};
 use super::finishing::UNREPORTED;
 use super::helpers::{decision_label, describe, doing, drew_something, netloc_of, path_of, scheme_of};
 use super::recovery::{Idle, leave_out_idle, uncover, withheld};
-use super::seeing::cards;
+use super::seeing::{cards, whole_viewport};
 use super::state::{
     FailureCause, Flow, OutputIntent, RunState, SiteFailure, Step, Stop, Unsure, Written, read_key, tab_key,
 };
@@ -1722,8 +1722,14 @@ impl Agent {
             return Ok((None, IndexMap::new()));
         }
         let Some(png) = self.viewport().await? else { return Ok((None, IndexMap::new())) };
-        let looks =
+        let mut looks =
             if pictured.is_empty() { IndexMap::new() } else { cards(&png, &self.page.pictures(&pictured).await?) };
+        // A card cut to the whole viewport is the screenshot sent beside it again, its outline outside the picture.
+        // Each click on a Street View canvas kept one in its history, about 2.2 MB, and thirteen took the step's
+        // request over Jev's body limit (#1301). A question sent no screenshot, as the gate is, still gets the card.
+        if pixels {
+            looks.retain(|_, card| !whole_viewport(&png, card));
+        }
         Ok((pixels.then_some(png), looks))
     }
 
