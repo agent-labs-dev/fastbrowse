@@ -176,9 +176,30 @@
       const at = strings.lastIndex;
       const match = strings.exec(content);
       if (!match) {
-        if (content[at] !== '/') return null;
         // An empty alternative explicitly marks decoration; a named alternative keeps the visible string.
-        return cssStrings(content.slice(at + 1).trim()) ? value : null;
+        if (content[at] === '/') return cssStrings(content.slice(at + 1).trim()) ? value : null;
+        const token = /[-\w]+/y;
+        token.lastIndex = at;
+        if (!token.exec(content)) return null;
+        let end = token.lastIndex;
+        if (content[end] === '(') {
+          // CSS functions may contain quoted URLs and nested functions; their arguments are not rendered strings.
+          let depth = 0;
+          let quote = '';
+          do {
+            const char = content[end++];
+            if (char === '\\') end++;
+            else if (quote) {
+              if (char === quote) quote = '';
+            } else if (char === '"' || char === "'") quote = char;
+            else if (char === '(') depth++;
+            else if (char === ')') depth--;
+          } while (end < content.length && (depth || quote));
+          if (depth || quote) return null;
+        }
+        while (/\s/.test(content[end] ?? '') && end < content.length) end++;
+        strings.lastIndex = end;
+        continue;
       }
       value += match[1].replace(/\\([\da-fA-F]{1,6}[ \t\r\n\f]?|.)/g, (_, escaped) => {
         if (!/^[\da-fA-F]/.test(escaped)) return escaped;

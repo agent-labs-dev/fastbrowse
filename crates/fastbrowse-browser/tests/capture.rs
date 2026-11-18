@@ -70,6 +70,8 @@ async fn generated_text_preserves_css_strings_without_decorative_noise() {
         .counter::before { content: counter(item); }
         .decorative::before { content: '\e001' / ''; }
         .alternative::before { content: 'Required ' / 'required field'; }
+        .mixed::before { content: 'Chapter ' counter(chapter) ' topic '; }
+        .image::before { content: 'New ' url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>'); }
         .hidden::before { content: 'not shown'; display: none; }
         </style>
         <p><span class="prefix">fix</span></p>
@@ -77,6 +79,8 @@ async fn generated_text_preserves_css_strings_without_decorative_noise() {
         <p><span class="escaped"></span></p>
         <p><span class="attribute" data-unit="kg">10</span></p>
         <p><span class="alternative">value</span></p>
+        <p><span class="mixed">value</span></p>
+        <p><span class="image">value</span></p>
         <p><span>Jet</span><span class="icon" aria-hidden="true"></span><span>Blue</span></p>
         <p><span>Jet</span><span class="counter"></span><span>Blue</span></p>
         <p><span>Jet</span><span class="decorative"></span><span>Blue</span></p>
@@ -91,6 +95,8 @@ async fn generated_text_preserves_css_strings_without_decorative_noise() {
     assert!(read.iter().any(|text| text == "\"quoted\"\nline\\"), "{read:?}");
     assert!(read.iter().any(|text| text == "10kg"), "{read:?}");
     assert!(read.iter().any(|text| text == "Required value"), "{read:?}");
+    assert!(read.iter().any(|text| text == "Chapter topic value"), "{read:?}");
+    assert!(read.iter().any(|text| text == "New value"), "{read:?}");
     assert_eq!(read.iter().filter(|text| text.as_str() == "JetBlue").count(), 5, "{read:?}");
     assert!(read.iter().any(|text| text == "Visible"), "{read:?}");
     assert!(!capture.text.contains("not shown"));
