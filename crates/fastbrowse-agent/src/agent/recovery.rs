@@ -123,7 +123,9 @@ fn unfilled<'a>(observation: &'a Observation, state: &RunState) -> Vec<&'a str> 
 /// Leave the actions that moved nothing out of an ask on `offered`. Each is named with what is true of it: the last
 /// action may well have changed the page, as a Close that returns to a state already seen does.
 pub(super) fn leave_out_idle(state: &RunState, offered: &mut Observation, context: &mut StepContext) {
-    for idle in &state.idle {
+    // Waiting again is how a run waits longer than one Wait lasts, so a Wait that saw nothing change stays on offer and
+    // only the stall rule counts it: a page that changes after a minute is not a page the run must stop waiting on.
+    for idle in state.idle.iter().filter(|idle| idle.action != Some((Operation::Wait, None))) {
         let problem = context.problem.take().unwrap_or_default();
         withhold(offered, context, &problem, idle);
     }
