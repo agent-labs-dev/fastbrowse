@@ -98,6 +98,30 @@ async fn generated_text_preserves_css_strings_without_decorative_noise() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn generated_blocks_preserve_line_boundaries() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<style>
+        .before::before { content: 'Note'; display: block; }
+        .after::after { content: 'End'; display: block; }
+        .inline::before { content: 'pre'; display: inline-block; }
+        </style>
+        <p><span class="before">Details</span></p>
+        <p><span class="after">Details</span></p>
+        <p><span class="inline">fix</span></p>"#,
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    let read = texts(&capture);
+    assert!(read.iter().any(|text| text == "Note\nDetails"), "{read:?}");
+    assert!(read.iter().any(|text| text == "Details\nEnd"), "{read:?}");
+    assert!(read.iter().any(|text| text == "prefix"), "{read:?}");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn title_advice_stays_with_its_record_and_visible_text() {
     let Some(h) = harness().await else { return };
     h.goto("/token.html").await;

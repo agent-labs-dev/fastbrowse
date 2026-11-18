@@ -187,6 +187,8 @@
       if (style.display === 'none' || style.visibility !== 'visible') return '';
       const value = cssStrings(style.content);
       if (!value) return '';
+      // A generated block starts and ends a line even when it has no margins.
+      if (!(style.display.startsWith('inline') || style.display === 'contents')) return `\n${value}\n`;
       // A pseudo-element's margins separate its text visually, though neither is present in innerText.
       return `${parseFloat(style.marginInlineStart) > 0 ? ' ' : ''}${value}${parseFloat(style.marginInlineEnd) > 0 ? ' ' : ''}`;
     };
