@@ -4761,6 +4761,12 @@ fn test_a_card_is_cut_from_the_viewport_at_least_as_large_as_jev_takes() {
     assert_eq!(bold.get_pixel(11, 20).0, [255, 0, 255, 255]);
     assert_eq!(bold.get_pixel(30, 20).0, [0, 0, 0, 255]);
     assert_eq!(bold.get_pixel(30, 7).0, [255, 0, 255, 255]);
+    // A control that fills the viewport gets no card: it would be the screenshot again, its outline outside it.
+    let canvas = super::seeing::cards(
+        &viewport,
+        &IndexMap::from([("canvas".to_string(), Edges { left: 0.0, right: 1.0, top: 0.0, bottom: 1.0 })]),
+    );
+    assert!(canvas.is_empty(), "{:?}", canvas.keys());
     // A screenshot that is not a PNG yields no card.
     assert!(
         super::seeing::cards(
