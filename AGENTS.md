@@ -111,9 +111,6 @@ Jev judges whether changed prose is true to the diff and whether the changelog m
 Its doubts are warnings, never a block. It runs on `pull_request_target` from the base branch's code, so a
 change to the script takes effect once it is on `main`.
 
-Entire links each commit made in an agent session to that session, locally only;
-[docs/agents/entire.md](docs/agents/entire.md) has the commands and why uploads are off.
-
 ## Evals
 
 Unit tests cannot tell you whether the agent still browses well; the suites can. **Agent changes are iterated

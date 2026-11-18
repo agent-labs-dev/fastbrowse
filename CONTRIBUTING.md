@@ -22,10 +22,6 @@ uv sync --all-extras
 uv run pre-commit install
 ```
 
-`uv run pre-commit install` rewrites `.git/hooks`, including the hooks Entire installs when you capture agent
-sessions: run `entire enable` after it if you use Entire ([docs/agents/entire.md](docs/agents/entire.md) has the
-commands).
-
 The pre-commit type check skips staged changes unrelated to Python. Python edits, deletions and typing
 configuration changes still check the whole project without syncing its environment.
 `uv run pre-commit run ty --all-files` checks it regardless of the staged changes.
