@@ -226,7 +226,7 @@
     };
     // A known icon already has a readable glyph name in drawn(); its font character must not replace that name.
     // A modal hides its background from accessibility APIs without hiding its rendered text (#1276).
-    const found = iconOf(e) ? ['', ''] : [read('::before'), read('::after')];
+    const found = e.getAttribute('aria-hidden') === 'true' || iconOf(e) ? ['', ''] : [read('::before'), read('::after')];
     if (found.some(Boolean)) {
       // The generated text's host can carry the gap instead. Ordinary inline margins do not split a word.
       const style = getComputedStyle(e);
