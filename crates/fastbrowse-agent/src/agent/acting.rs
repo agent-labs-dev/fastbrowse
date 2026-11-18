@@ -408,15 +408,25 @@ impl Agent {
                 Ok(Action { target_id: Some(target.id.clone()), text: Some(chord), ..Action::new(Operation::Press) })
             }
             Operation::Drag => {
-                let Some(destination) = &decision.destination else {
-                    return Err(Stop::new(Status::NeedsInput, "the page offers no drop target for the drag").into());
-                };
+                let target = require(target)?;
                 self.gate_irreversible(state, observation, decision).await?;
-                Ok(Action {
-                    target_id: Some(require(target)?.id.clone()),
-                    destination_id: Some(destination.id.clone()),
-                    ..Action::new(Operation::Drag)
-                })
+                if target.drawn == Some(true) {
+                    let drag_path = self.drag_path(state, target).await?;
+                    Ok(Action {
+                        target_id: Some(target.id.clone()),
+                        drag_path: Some(drag_path),
+                        ..Action::new(Operation::Drag)
+                    })
+                } else {
+                    let Some(destination) = &decision.destination else {
+                        return Err(Stop::new(Status::NeedsInput, "the page offers no drop target for the drag").into());
+                    };
+                    Ok(Action {
+                        target_id: Some(target.id.clone()),
+                        destination_id: Some(destination.id.clone()),
+                        ..Action::new(Operation::Drag)
+                    })
+                }
             }
             Operation::Fill => {
                 let target = require(target)?;

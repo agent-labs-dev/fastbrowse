@@ -163,6 +163,19 @@ action runs. A replacement field is not retried. Page change and blur handlers r
 field is left; their observed effects reach the next decision. A focus change counts as a changed page
 state, but does not by itself prove a value was set or accepted.
 
+## Dragging
+
+Drag has two forms. A draggable control can be dragged onto a destination chosen by Jev. A drawn surface, such
+as a canvas, offers Drag as a same-control gesture.
+Jev chooses the operation and target first. A non-drawn target then gets the destination choice. For a drawn target,
+the screenshot-seeing model receives the task, current screenshot and target box and returns a `DragPath`: press,
+every supplied movement point, release and optional Shift, all normalized to the target box.
+
+The browser resolves those points against the live visible target, rejects non-finite or out-of-bounds coordinates,
+rechecks freshness before press and during movement, and sends real `mousePressed`, every supplied `mouseMoved` with
+the button held, and `mouseReleased` events. It does not interpolate, simplify, cap or repair the path. Stale geometry
+cancels before release. Direct CDP and extension routes use the same dispatch.
+
 ## Reading and citations
 
 Browser and HTTP captures keep the document title as a citable `document_title` block. It has its own source span
@@ -540,62 +553,31 @@ To regenerate the schema, run `FASTBROWSE_UPDATE_GOLDEN=1 cargo test -p fastbrow
 
 ## Cursor feedback
 
-The run shows where the agent is about to act, through the Cua Driver's synthetic cursor on X11 or deskpilot's
-agent cursor on Hyprland, whenever its tab is on screen: by default it is drawn wherever it can be placed, `--cursor` (`run_task(cursor=True)`) also brings the
-window to the front so it always can be, and `--no-cursor` (`cursor=False`) turns it off. A plain `--headed` run
-works in a background tab behind `about:blank`, so the default draws nothing there; nothing of the run is on
-screen to mark. The click itself is still sent over CDP, so the overlay cannot change what an action did and is never
-retried. The page hook is in `CdpPage.act`, where the hit-tested point is known; a secret's field is never
-marked. MP4 recordings draw a timed cursor at those points, with a glide between actions and a pulse on clicks.
-The recording uses ffprobe to read its frame dimensions. If that fails, it omits the cursor with a warning.
-`browser/cursor.py` owns one `cua-driver mcp` child per run, speaking JSON-RPC over stdio, and stops it
-when the run ends, including on cancellation. The driver's `move_cursor` is sent in `window` scope only, so the
-real pointer and focus never move.
+The run shows where the agent acts with a cursor the page draws itself (`js/cursor.js`): ember focus brackets
+around a dot, with a fastbrowse tag. It glides along a shallow arc to each action point, the brackets close in as it
+lands, a ring goes out on each press, and a drag carries it along the drag's own path while the button is held. It
+never moves the user's pointer or changes focus, and the input is still sent over CDP, so the drawing cannot change
+what an action did.
 
-The page point becomes a screen point from what the page reports: `screenX/Y`, `outerWidth/Height`,
-`innerWidth/Height` and the zoom from `Page.getLayoutMetrics`. The top inset is `outerHeight - innerHeight * zoom`.
-The cursor is drawn only when exactly one driver window matches the page's reported frame (which also shows the
-two share a scale, so a scaled display is skipped), that window is in front of every other, the tab is visible and
-the point is inside the viewport. Otherwise it is hidden. Once drawn it stays for the whole run, with the driver's
-idle fade off: a navigation, a scroll or a point outside the viewport leaves it at its last position, and a watcher
-hides it as soon as the tab stops showing, the frame can no longer be placed, or another window comes in front. Any
-driver failure turns the feature off for the run.
+It is drawn wherever someone can see the page: the user's own Chrome through the extension, a headed or attached
+local browser, a cloud browser's live view, a host's live frames, or a `--record` video, which films it with the
+page. A headless run nobody watches draws nothing. `--cursor` (`cursor=True`) draws it in every run and
+`--no-cursor` (`cursor=False`) never.
 
-On a Wayland session the cursor is drawn only under Hyprland, through `deskpilot mcp` (`FASTBROWSE_DESKPILOT` or
-`deskpilot` on `PATH`), since `cua-driver` lists no windows there. Chrome on native Wayland cannot know where its
-window is, so the window is the one listed by deskpilot's `windows` with the browser's pid and the page's
-`outerWidth x outerHeight`, and the point is sent to `move` in that window's pixels. Nothing is drawn when no window
-or more than one matches, the window is on a workspace no monitor shows, or any other window on screen overlaps it:
-Hyprland gives no stacking order, so an overlap cannot be shown to be behind. `move` reports the global point it
-drew at, and a point other than the window's position plus the one sent turns the feature off, since deskpilot
-scales a point by its latest shot of that window when it holds one. deskpilot has no session or hide: its arrow
-fades after eight idle seconds, so an arrow drawn just before another window covers the browser can stay that long.
-`take_pointer`, `show` and `focus` are never sent, so the user's pointer and focus stay where they are.
+`cursor.rs` evaluates the script in an isolated world of the tab's top document (`Page.createIsolatedWorld`), so page
+scripts can neither see nor call it, and the extension relays the same three commands, so both browser routes share
+it. The first call in a document installs it; a navigation destroys the world, and the next action draws it again
+from the last point the run sent. Every call is bounded and quiet on failure: a document that refuses the script only
+misses its drawing. The glide is paced to a travel speed, not a duration: as long as its distance needs at
+`GLIDE_PX_PER_S`, between `GLIDE_MS` and `GLIDE_MAX_MS`, so a sweep across the page and a hop between neighbours
+cross at the same pace. The action waits for the glide to land before its input is sent.
 
-The driver answers `move_cursor` only once its glide has landed, and at its own pace a glide across the screen takes
-one to three seconds, longer than the half second between quick clicks: each glide was cut off by the next, so the
-arrow landed on nothing, and a glide past the two-second call bound turned the feature off. The run asks
-`set_agent_cursor_motion` for fixed timing with a glide paced between 550 and 2,200 ms, and waits up to six
-seconds for the move itself. The outer deadline also allows two seconds each for refreshing the session,
-finding its window, restoring visibility and updating the pace. Shorter glides land sooner but cross the
-screen in a few frames.
-
-The glide a move is drawn with is paced to a travel speed, not to a duration: it takes as long as its distance
-needs at `GLIDE_PX_PER_S`, between `GLIDE_MS` and `GLIDE_MAX_MS`. One fixed duration made a sweep across the page
-the same length as a hop between neighbours, so the long move crossed four or five times faster and could not be
-followed. The floor is the value tuned to land the arrow on every click, and the cap keeps one sweep from holding
-up the step behind it. On the measured replay a sweep peaked at 1,350-2,400px/s and now peaks near 750px/s.
-`glide_duration_ms` is only the glide length under `timing: fixed`; every other timing keeps the style's own curve
-and ignores the number, so the run asks for `fixed` when it sets a glide and again when it re-paces one. The paced
-value is sent with `set_agent_cursor_motion` only when it changes, and a driver without that tool keeps the glide
-it was started with.
-
-Limits: Linux only, on X11 or Hyprland; other Wayland compositors, macOS and Windows are not verified. X11
-needs `cua-driver` 0.28.3 or newer with the session cursor tools, and Hyprland needs deskpilot with its plugin
-loaded. Cloud and headless browsers are skipped. The desktop cursor has no
-click pulse through `move_cursor`; recordings add one in the video. A docked DevTools panel or a pinch zoom hides
-the desktop cursor, and a window partly covered by another counts as covered. CDP screenshots do not show the
-desktop cursor.
+The cursor draws into a closed shadow root on one host element marked `data-fastbrowse-cursor`, `aria-hidden` and
+`pointer-events: none`, in the top layer as a manual popover, so it shows above dialogs and fullscreen elements and
+is never hit by the run's own hit tests. It never reaches what the agent reads: the host holds no text, the snapshot
+skips it, and a screenshot for the model takes it out of the page first. While it is out, the session withholds
+frames as it does for a secret, so the live view and the recording hold their last frame rather than show the page
+without it.
 
 ## Browser capabilities over plain CDP
 

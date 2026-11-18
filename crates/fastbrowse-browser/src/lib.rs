@@ -6,14 +6,12 @@
 
 pub mod adapters;
 pub mod cdp;
-#[cfg(feature = "cursor")]
 pub mod cursor;
 pub mod error;
 pub mod extension;
 pub mod helper;
 pub mod page;
 mod pdf;
-pub mod pointer;
 #[cfg(feature = "recording")]
 pub mod recording;
 pub mod session;

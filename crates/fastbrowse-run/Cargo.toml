@@ -9,8 +9,8 @@ description = "fastbrowse's run_task: one task end to end, from the browser and 
 
 [dependencies]
 fastbrowse-agent = { workspace = true }
-# `record` films the tab through ffmpeg and `cursor` draws through the Cua Driver: child processes, no extra crates.
-fastbrowse-browser = { workspace = true, features = ["recording", "cursor"] }
+# `record` films the tab through ffmpeg, a child process, no extra crates.
+fastbrowse-browser = { workspace = true, features = ["recording"] }
 fastbrowse-clients = { workspace = true }
 fastbrowse-core = { workspace = true }
 # The WHATWG Encoding Standard's decoders, by the labels a response or a document names.

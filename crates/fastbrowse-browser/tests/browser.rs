@@ -2535,16 +2535,47 @@ async fn test_the_viewport_a_measurement_read_is_not_asked_for_again() {
     assert!(width > 0.0 && height > 0.0, "{wheel:?}");
     assert_eq!(viewport_reads(&sent), 0, "{:?}", sent.lock().unwrap().iter().map(|(m, _)| m).collect::<Vec<_>>());
 
-    // Pointer marks need the viewport too, and a recording run has them on: the same measurement answers.
-    let marks = Arc::new(Mutex::new(vec![]));
-    let marked = CdpPage::new(h.session.clone(), Config::default()).with_pointer_marks(marks.clone());
+    // A page that draws the cursor glides it to the click's point and presses there, measured once.
+    let marked = CdpPage::new(h.session.clone(), Config::default()).with_cursor();
     h.goto("/").await;
     let obs = marked.observe().await.expect("observe");
     sent.lock().unwrap().clear();
     let clicked = act(&marked, click(find(&obs, "Sign in")), &obs).await;
     assert_eq!(clicked.outcome, StepOutcome::Executed);
     assert_eq!(viewport_reads(&sent), 0, "a click re-read the viewport");
-    assert_eq!(marks.lock().unwrap().len(), 1, "the click left no pointer mark");
+    let drawn: Vec<String> = sent
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(m, p)| m == "Runtime.evaluate" && p["contextId"].is_number())
+        .filter_map(|(_, p)| p["expression"].as_str().and_then(|e| e.rsplit(").").next()).map(str::to_owned))
+        .collect();
+    assert!(
+        drawn.iter().any(|m| m.starts_with("glide(")) && drawn.iter().any(|m| m.starts_with("press(")),
+        "{drawn:?}"
+    );
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_the_cursor_is_drawn_in_the_page_but_not_in_the_models_screenshot() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    let drawn = CdpPage::new(h.session.clone(), Config::default()).with_cursor();
+    h.goto("/").await;
+    let before = drawn.observe().await.expect("observe");
+    let plain = h.page.screenshot().await.expect("screenshot");
+    let hovered = act(&drawn, hover(find(&before, "Sign in")), &before).await;
+    assert_eq!(hovered.outcome, StepOutcome::Executed);
+    // The other page draws no cursor of its own, so its capture is what a watcher of the tab sees.
+    let watched = h.page.screenshot().await.expect("screenshot");
+    assert_ne!(watched, plain, "the cursor was not drawn");
+    let for_model = drawn.screenshot().await.expect("screenshot");
+    assert_ne!(for_model, watched, "the model's screenshot showed the cursor");
+    assert_eq!(h.page.screenshot().await.expect("screenshot"), watched, "the cursor was not put back");
+    let after = drawn.observe().await.expect("observe");
+    let names = |obs: &Observation| obs.controls.iter().map(|c| c.label.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&after), names(&before), "the cursor reached the snapshot");
     h.close().await;
 }
 

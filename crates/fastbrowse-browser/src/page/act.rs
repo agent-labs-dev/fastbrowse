@@ -3,10 +3,11 @@
 use std::collections::HashSet;
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use data_encoding::BASE64;
 use fastbrowse_core::models::{Attachment, Operation, StepFailure, StepOutcome};
-use fastbrowse_core::page::{ActResult, Action, NATIVE_DATE_INPUT_TYPES, Observation};
+use fastbrowse_core::page::{ActResult, Action, DragPath, NATIVE_DATE_INPUT_TYPES, Observation};
 use futures_util::StreamExt;
 use futures_util::future::BoxFuture;
 use futures_util::stream::FuturesUnordered;
@@ -348,6 +349,39 @@ enum Cover {
 const INPUT_REPLY_SECONDS: f64 = 10.0;
 
 type Outcome = (StepOutcome, Option<String>, Option<StepFailure>);
+/// A box in viewport CSS pixels: left, top, width, height.
+type DragBox = (f64, f64, f64, f64);
+
+/// A pressed left button. A drag that ends any way but its own release or cancel, on an error or a cancelled run,
+/// lets go where it pressed, or Chrome keeps the button down and the run's next input lands as part of the stale drag.
+struct Held {
+    session: BrowserSession,
+    session_id: String,
+    at: (f64, f64),
+    modifiers: i64,
+    armed: bool,
+}
+
+impl Held {
+    /// The drag lets go itself from here.
+    fn done(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else { return };
+        let (session, session_id) = (self.session.clone(), self.session_id.clone());
+        let params = json!({"type": "mouseReleased", "x": self.at.0, "y": self.at.1, "button": "left", "clickCount": 1, "buttons": 0, "modifiers": self.modifiers});
+        runtime.spawn(async move {
+            let _ = session.send("Input.dispatchMouseEvent", params, Some(&session_id)).await;
+        });
+    }
+}
 
 fn bad(shape: &str) -> BrowserError {
     BrowserError::Failed(format!("page script returned an unexpected {shape}"))
@@ -527,13 +561,11 @@ impl CdpPage {
             }
         }
 
-        // The live marker carries coordinates, never a field value. Recording marks below still exclude secrets.
-        #[cfg(feature = "cursor")]
+        // The cursor carries coordinates, never a field value, and a secret's frames are withheld from every watcher.
         if let (Some(cursor), Point::At(x, y), Some(target)) = (&self.cursor, point, &target)
             && target.0 == active
         {
-            cursor.follow(self.cursor_geometry(target.0.clone(), observation.document_key.clone()), (x, y));
-            cursor.settled().await;
+            cursor.glide(x, y).await;
             // The glide gives the page time to change. Never deliver a click using its earlier measurement.
             let hit_test = action.operation.is_targeted() && action.operation != Operation::Blur;
             let fresh = self.before_action(Some(target), hit_test, false, false, true, false).await?;
@@ -549,31 +581,9 @@ impl CdpPage {
             }
             (before_fingerprint, _, point, announced, opens, address, _) = fresh;
             drawn = false;
-        }
-        self.state.lock().unwrap().mark_index = None;
-        if !action.secret
-            && let (Some(marks), Point::At(x, y)) = (&self.pointer_marks, point)
-            && target.as_ref().is_some_and(|target| target.0 == active)
-            && matches!(action.operation, Operation::Click | Operation::Fill | Operation::Hover | Operation::Drag)
-            && let Ok((width, height)) = self.viewport(&active).await
-            && width.is_finite()
-            && height.is_finite()
-            && width > 0.0
-            && height > 0.0
-        {
-            let mut marks = marks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            self.state.lock().unwrap().mark_index = Some(marks.len());
-            marks.push(crate::pointer::PointerMark {
-                at: std::time::Instant::now(),
-                x,
-                y,
-                operation: action.operation,
-                // Set by `note_press` when a press is sent: a click, a fill's click and a drag's press do; a hover,
-                // and an action that stops before its press, do not.
-                pressed: false,
-                width,
-                height,
-            });
+            if action.operation == Operation::Click {
+                cursor.press(x, y).await;
+            }
         }
         let popups = self.session.popups();
         // A dialog blocks the page, and an observation taken under it reads no document, so the mark taken before the
@@ -729,74 +739,6 @@ impl CdpPage {
         begun.is_some_and(|begun| self.session.input_navigations() > begun)
     }
 
-    /// Where the active page's viewport sits in its window, as the page itself reports it, and whether that page is
-    /// still the tab and document the action point was taken from.
-    #[cfg(feature = "cursor")]
-    pub(crate) fn cursor_geometry(
-        &self,
-        expected_session: String,
-        expected_document: String,
-    ) -> crate::cursor::GeometryFn {
-        use crate::cursor::Geometry;
-        let session = self.session.clone();
-        let pid = self.cursor_pid.clone();
-        std::sync::Arc::new(move || {
-            let session = session.clone();
-            let pid = pid.clone();
-            let (expected_session, expected_document) = (expected_session.clone(), expected_document.clone());
-            Box::pin(async move {
-                let session_id = session.active_session_id().ok()?;
-                let known = *pid.lock().unwrap();
-                let browser_pid = match known {
-                    Some(known) => known,
-                    None => {
-                        let processes = session.send("SystemInfo.getProcessInfo", json!({}), None).await.ok()?;
-                        let found = processes["processInfo"]
-                            .as_array()?
-                            .iter()
-                            .find(|p| p["type"] == "browser")
-                            .and_then(|p| p["id"].as_i64())?;
-                        *pid.lock().unwrap() = Some(found);
-                        found
-                    }
-                };
-                let evaluate = session.send(
-                    "Runtime.evaluate",
-                    json!({"expression": super::scripts::GEOMETRY_JS, "returnByValue": true, "awaitPromise": true}),
-                    Some(&session_id),
-                );
-                let metrics = session.send("Page.getLayoutMetrics", json!({}), Some(&session_id));
-                // A navigating click destroys its old context; skip the drawing without disabling later feedback.
-                let (reading, metrics) = tokio::try_join!(evaluate, metrics).ok()?;
-                if reading.get("exceptionDetails").is_some() {
-                    return None;
-                }
-                let reading = reading["result"]["value"].as_array()?.clone();
-                if session.active_session_id().ok()? != session_id || reading.len() != 9 {
-                    return None;
-                }
-                let same_page =
-                    session_id == expected_session && reading[8].as_str() == Some(expected_document.as_str());
-                // CSS pixels in the page, device-independent pixels in the window: their ratio is the page zoom.
-                let css_width = metrics["cssLayoutViewport"]["clientWidth"].as_f64().filter(|w| *w != 0.0)?;
-                let number = |i: usize| reading[i].as_f64();
-                Some(Geometry {
-                    browser_pid: Some(browser_pid),
-                    screen_x: number(0)?,
-                    screen_y: number(1)?,
-                    outer_width: number(2)?,
-                    outer_height: number(3)?,
-                    inner_width: number(4)?,
-                    inner_height: number(5)?,
-                    pinch_scale: number(6)?,
-                    visible: reading[7].as_bool()?,
-                    zoom: metrics["layoutViewport"]["clientWidth"].as_f64()? / css_width,
-                    same_page,
-                })
-            })
-        })
-    }
-
     async fn dispatch(
         &self,
         action: &Action,
@@ -848,7 +790,9 @@ impl CdpPage {
             Operation::Select => self.select(target, text, point).await,
             Operation::Enter => self.key(target, Key::Enter, point).await,
             Operation::Press => self.key(target, Key::chord(text)?, point).await,
-            Operation::Drag => self.drag(target, point, action.destination_id.as_deref()).await,
+            Operation::Drag => {
+                self.drag(target, point, action.destination_id.as_deref(), action.drag_path.as_ref()).await
+            }
             Operation::Escape => self.key(None, Key::Escape, Point::Gone).await,
             Operation::Scroll | Operation::ScrollUp => {
                 self.scroll(action.operation, target).await?;
@@ -1862,18 +1806,6 @@ impl CdpPage {
         self.input(self.session.send("Input.dispatchMouseEvent", params, Some(session_id))).await
     }
 
-    /// The running action is about to press the mouse at `(x, y)`: the recording rings that mark, from now and there,
-    /// not from where and when the action was first marked, before the target stabilized.
-    fn note_press(&self, x: f64, y: f64) {
-        let Some(marks) = &self.pointer_marks else { return };
-        let index = self.state.lock().unwrap().mark_index;
-        if let Some(index) = index
-            && let Some(mark) = marks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_mut(index)
-        {
-            (mark.at, mark.x, mark.y, mark.pressed) = (std::time::Instant::now(), x, y, true);
-        }
-    }
-
     async fn click_point(
         &self,
         target: &Target,
@@ -1890,7 +1822,6 @@ impl CdpPage {
             let params = json!({"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1});
             self.input(self.session.send("Input.dispatchMouseEvent", params, Some(&target.0)))
         };
-        self.note_press(x, y);
         tokio::try_join!(mouse("mousePressed"), mouse("mouseReleased"))?;
         self.session.choosers_pinned().await;
         Ok((StepOutcome::Executed, None, None))
@@ -1971,10 +1902,21 @@ impl CdpPage {
         target: Option<&Target>,
         point: Point,
         destination_id: Option<&str>,
+        drag_path: Option<&DragPath>,
     ) -> Result<Outcome, BrowserError> {
         let Some(target) = target else {
             return Ok((StepOutcome::Failed, Some("drag requires a source".into()), Some(StepFailure::MissingTarget)));
         };
+        if let Some(path) = drag_path {
+            if destination_id.is_some() {
+                return Ok((
+                    StepOutcome::Failed,
+                    Some("a same-control drag cannot have a drop target".into()),
+                    Some(StepFailure::BrowserError),
+                ));
+            }
+            return self.drag_path(target, path).await;
+        }
         let Some(destination_id) = destination_id else {
             return Ok((
                 StepOutcome::Failed,
@@ -2025,23 +1967,38 @@ impl CdpPage {
             return Ok((StepOutcome::Stale, Some("drop target changed before pointer press".into()), None));
         };
         let session_id = target.0.as_str();
+        let mut points = Vec::with_capacity(DRAG_STEPS as usize + 2);
+        points.push((start_x, start_y));
+        for step in 1..=DRAG_STEPS {
+            let fraction = f64::from(step) / f64::from(DRAG_STEPS);
+            points.push((start_x + (end_x - start_x) * fraction, start_y + (end_y - start_y) * fraction));
+        }
+        points.extend(std::iter::repeat_n((end_x, end_y), 5));
+        let duration = Duration::from_secs_f64(DRAG_STEP_SECONDS * f64::from(DRAG_STEPS + 5));
+        self.trace_action_cursor(&points, duration).await;
         let press = json!({"type": "mousePressed", "x": start_x, "y": start_y, "button": "left", "clickCount": 1, "buttons": 1});
-        self.note_press(start_x, start_y);
         self.input(self.session.send("Input.dispatchMouseEvent", press, Some(session_id))).await?;
+        let mut held = self.held(session_id, (start_x, start_y), 0);
         // A press with no travel is a click; the drag starts on the first move that clears Chrome's threshold.
         sleep(secs(DRAG_STEP_SECONDS)).await;
         // A drag handler can repurpose or cover the destination once the gesture starts, and again as the pointer
         // arrives, so the drop is made only on the control that was checked; any other change cancels the drag.
         for step in 1..=DRAG_STEPS {
             let fraction = f64::from(step) / f64::from(DRAG_STEPS);
-            self.drag_move(session_id, start_x + (end_x - start_x) * fraction, start_y + (end_y - start_y) * fraction)
-                .await?;
+            self.drag_move(
+                session_id,
+                start_x + (end_x - start_x) * fraction,
+                start_y + (end_y - start_y) * fraction,
+                0,
+            )
+            .await?;
             sleep(secs(DRAG_STEP_SECONDS)).await;
             if step == 1 {
                 let (_, _, landed, _, _, _, _) =
                     self.before_action(Some(&drop), true, false, false, false, false).await?;
                 if !matches!(landed, Point::At(..)) {
-                    self.cancel_drag(session_id, (start_x, start_y)).await?;
+                    held.done();
+                    self.cancel_drag(session_id, (start_x, start_y), 0).await?;
                     return Ok((StepOutcome::Stale, Some("drop target changed during the drag".into()), None));
                 }
             }
@@ -2055,39 +2012,147 @@ impl CdpPage {
             // up to date before the hit test, or a control that slid back under the pointer since the last move would
             // pass the check while the drop went to the one hovered before it.
             for _ in 0..2 {
-                self.drag_move(session_id, at.0, at.1).await?;
+                self.drag_move(session_id, at.0, at.1, 0).await?;
                 sleep(secs(DRAG_STEP_SECONDS)).await;
             }
             let (_, _, landed, _, _, _, _) = self.before_action(Some(&drop), true, false, false, false, false).await?;
             let Point::At(x, y) = landed else { break };
             if (x, y) == at {
-                self.release(session_id, at.0, at.1).await?;
+                held.done();
+                self.release(session_id, at.0, at.1, 0).await?;
                 return Ok((StepOutcome::Executed, None, None));
             }
             at = (x, y);
         }
-        self.cancel_drag(session_id, (start_x, start_y)).await?;
+        held.done();
+        self.cancel_drag(session_id, (start_x, start_y), 0).await?;
         Ok((StepOutcome::Stale, Some("drop target changed during the drag".into()), None))
+    }
+
+    /// Dispatch a complete path on one target, retaining every point the model supplied.
+    async fn drag_path(&self, target: &Target, path: &DragPath) -> Result<Outcome, BrowserError> {
+        let (_, guard, point, _, _, _, connected) =
+            self.before_action(Some(target), true, false, false, true, false).await?;
+        if guard != target.3 || !connected || matches!(point, Point::Gone | Point::Unsettled) {
+            return Ok((StepOutcome::Stale, Some("drag target disconnected".into()), None));
+        }
+        if matches!(point, Point::Covered) {
+            return Ok((StepOutcome::Covered, Some(self.covered_detail(target).await), None));
+        }
+        let Some(target_box) = self.drag_box(target).await? else {
+            return Ok((StepOutcome::Stale, Some("drag target is not visible".into()), None));
+        };
+        if path.points.is_empty() {
+            return Ok((
+                StepOutcome::Failed,
+                Some("drag path requires at least one movement point".into()),
+                Some(StepFailure::BrowserError),
+            ));
+        }
+        let mut points = Vec::with_capacity(path.points.len() + 2);
+        for point in std::iter::once(&path.press).chain(&path.points).chain(std::iter::once(&path.release)) {
+            // A range test is false for NaN and both infinities, so it also rejects a non-finite coordinate.
+            if !(0.0..=1.0).contains(&point.x) || !(0.0..=1.0).contains(&point.y) {
+                return Ok((
+                    StepOutcome::Failed,
+                    Some("drag path coordinates must be finite and within the target box".into()),
+                    Some(StepFailure::BrowserError),
+                ));
+            }
+            points.push((target_box.0 + point.x * target_box.2, target_box.1 + point.y * target_box.3));
+        }
+        let (press, release) = (points[0], points[points.len() - 1]);
+        let modifiers = if path.shift { 8 } else { 0 };
+        let duration = Duration::from_secs_f64(DRAG_STEP_SECONDS * (path.points.len() as f64 + 1.0));
+        let session_id = target.0.as_str();
+        // The glide to the press point gives the page time to change, so the target is checked again after it.
+        if let Some(cursor) = &self.cursor {
+            cursor.glide(press.0, press.1).await;
+        }
+        if !self.drag_target_unchanged(target, target_box).await? {
+            return Ok((StepOutcome::Stale, Some("drag target changed before pointer press".into()), None));
+        }
+        self.trace_action_cursor(&points, duration).await;
+        let press_event = json!({
+            "type": "mousePressed",
+            "x": press.0,
+            "y": press.1,
+            "button": "left",
+            "clickCount": 1,
+            "buttons": 1,
+            "modifiers": modifiers,
+        });
+        self.input(self.session.send("Input.dispatchMouseEvent", press_event, Some(session_id))).await?;
+        let mut held = self.held(session_id, press, modifiers);
+        for &(x, y) in &points[1..points.len() - 1] {
+            sleep(secs(DRAG_STEP_SECONDS)).await;
+            self.drag_move(session_id, x, y, modifiers).await?;
+            if !self.drag_target_unchanged(target, target_box).await? {
+                held.done();
+                self.cancel_drag(session_id, press, modifiers).await?;
+                return Ok((StepOutcome::Stale, Some("drag target changed during the drag".into()), None));
+            }
+        }
+        sleep(secs(DRAG_STEP_SECONDS)).await;
+        if !self.drag_target_unchanged(target, target_box).await? {
+            held.done();
+            self.cancel_drag(session_id, press, modifiers).await?;
+            return Ok((StepOutcome::Stale, Some("drag target changed before release".into()), None));
+        }
+        held.done();
+        self.release(session_id, release.0, release.1, modifiers).await?;
+        Ok((StepOutcome::Executed, None, None))
+    }
+
+    fn held(&self, session_id: &str, at: (f64, f64), modifiers: i64) -> Held {
+        Held { session: self.session.clone(), session_id: session_id.to_owned(), at, modifiers, armed: true }
+    }
+
+    /// Whether a same-control drag's target is still the checked control, topmost under its point, in the same box.
+    async fn drag_target_unchanged(&self, target: &Target, target_box: DragBox) -> Result<bool, BrowserError> {
+        let (_, guard, point, _, _, _, connected) =
+            self.before_action(Some(target), true, false, false, false, false).await?;
+        Ok(guard == target.3
+            && connected
+            && matches!(point, Point::At(..))
+            && self.drag_box(target).await? == Some(target_box))
+    }
+
+    /// The target's visible box in viewport CSS pixels: left, top, width, height.
+    async fn drag_box(&self, target: &Target) -> Result<Option<DragBox>, BrowserError> {
+        let script = format!(
+            "(() => {{ const e = window.__fastbrowse?.nodes.get({}); if (!e?.isConnected || !e.checkVisibility({{checkOpacity:true,checkVisibilityCSS:true}})) return null; const r = e.getBoundingClientRect(); if (!(r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0 && r.left < innerWidth && r.top < innerHeight)) return null; return [r.x, r.y, r.width, r.height]; }})()",
+            target.2
+        );
+        Ok(serde_json::from_value(self.evaluate(&target.0, &script).await?).ok().flatten())
+    }
+
+    /// Carry the in-page cursor along a drag's path, from its press point, while the input is sent.
+    async fn trace_action_cursor(&self, points: &[(f64, f64)], duration: Duration) {
+        if let Some(cursor) = &self.cursor {
+            cursor.trace(points, duration).await;
+        }
     }
 
     /// Abandon a drag in progress without dropping it anywhere.
     ///
     /// Chrome cancels a native drag outright, so no drop event fires; a page's own pointer drag has no such cancel, and
     /// Escape before letting go where the card was picked up is the convention those libraries honour.
-    async fn cancel_drag(&self, session_id: &str, start: (f64, f64)) -> Result<(), BrowserError> {
-        self.drag_move(session_id, start.0, start.1).await?;
+    async fn cancel_drag(&self, session_id: &str, start: (f64, f64), modifiers: i64) -> Result<(), BrowserError> {
+        self.drag_move(session_id, start.0, start.1, modifiers).await?;
         self.input(self.session.send("Input.cancelDragging", json!({}), Some(session_id))).await?;
         self.key(None, Key::Escape, Point::Gone).await?;
-        self.release(session_id, start.0, start.1).await
+        self.release(session_id, start.0, start.1, modifiers).await
     }
 
-    async fn drag_move(&self, session_id: &str, x: f64, y: f64) -> Result<(), BrowserError> {
-        let params = json!({"type": "mouseMoved", "x": x, "y": y, "button": "left", "buttons": 1});
+    async fn drag_move(&self, session_id: &str, x: f64, y: f64, modifiers: i64) -> Result<(), BrowserError> {
+        let params =
+            json!({"type": "mouseMoved", "x": x, "y": y, "button": "left", "buttons": 1, "modifiers": modifiers});
         self.input(self.session.send("Input.dispatchMouseEvent", params, Some(session_id))).await
     }
 
-    async fn release(&self, session_id: &str, x: f64, y: f64) -> Result<(), BrowserError> {
-        let params = json!({"type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1, "buttons": 0});
+    async fn release(&self, session_id: &str, x: f64, y: f64, modifiers: i64) -> Result<(), BrowserError> {
+        let params = json!({"type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1, "buttons": 0, "modifiers": modifiers});
         self.input(self.session.send("Input.dispatchMouseEvent", params, Some(session_id))).await
     }
 

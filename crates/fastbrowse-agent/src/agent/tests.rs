@@ -231,6 +231,20 @@ fn button(label: &str) -> Control {
     Control::new(&label.to_lowercase(), "button", label, [Operation::Click])
 }
 
+#[test]
+fn a_drawn_drag_target_needs_no_destination_question() {
+    let mut surface = Control::new("pad", "canvas", "Drawing pad", [Operation::Drag]);
+    surface.drawn = Some(true);
+    let drop_zone = button("Drop zone");
+    let observation = observation(&[surface, drop_zone]);
+    let context = crate::policy::StepContext::new("draw a line on the drawing pad");
+    let request = crate::policy::build_request(&observation, &observation.controls, &context, &Default::default(), 64);
+
+    assert!(request.questions.contains_key("drag_target"));
+    assert!(!request.questions.contains_key(crate::policy::keys::DRAG_DESTINATION));
+    assert!(request.destinations.iter().any(|control| control.label == "Drop zone"));
+}
+
 pub(super) fn code_decision(operation: Operation, target: Option<Control>) -> Decision {
     Decision {
         replayed: false,

@@ -18,7 +18,7 @@ mod mcp;
 pub mod tree;
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -32,6 +32,16 @@ use fastbrowse_core::safety::origin_of;
 
 pub use mcp::{Deskpilot, ToolError, View};
 use tree::{Element, Window};
+
+/// Deskpilot agents started by this process, numbered so no two share an agent.
+static DESKPILOT_AGENTS: AtomicU32 = AtomicU32::new(0);
+
+/// A deskpilot agent name of this process's own. deskpilot keeps one cursor and one hidden workspace per agent, so
+/// each run's deskpilot gets its own name and two runs in one process never share them. deskpilot takes an agent name
+/// of up to 32 letters, digits, `-`, `_` or `.`: "fastbrowse-", a u32 process id and a u32 count fit it.
+fn deskpilot_agent() -> String {
+    format!("fastbrowse-{}-{}", std::process::id(), DESKPILOT_AGENTS.fetch_add(1, Ordering::Relaxed))
+}
 
 /// How long an action's effect is waited for before it is reported as having changed nothing.
 const SETTLE_SECONDS: f64 = 0.5;
@@ -109,7 +119,7 @@ fn read_window(value: &Value) -> Option<Window> {
 /// Starts `program mcp` as a deskpilot agent of the run's own: two runs in one `fastbrowse serve` never share a hidden
 /// workspace or a cursor.
 pub async fn connect(program: &str, view: View) -> Result<Arc<Deskpilot>, OpenError> {
-    let agent = fastbrowse_browser::cursor::deskpilot_agent();
+    let agent = deskpilot_agent();
     let client = Deskpilot::start(program, &agent, view)
         .await
         .map_err(|error| OpenError::Unavailable(error.message().into()))?;

@@ -123,12 +123,6 @@ pub const ACTIVATION_KEY_JS: &str = concat!(
     "return null; })",
 );
 
-pub const GEOMETRY_JS: &str = concat!(
-    "[window.screenX, window.screenY, window.outerWidth, window.outerHeight, window.innerWidth, window.innerHeight, ",
-    "window.visualViewport ? window.visualViewport.scale : 1, document.visibilityState === 'visible', ",
-    "String(performance.timeOrigin)]",
-);
-
 /// Resolves once the page has drawn a frame, or after 100ms where a hidden page never draws one. A guard resumed
 /// inside an animation callback can miss other callbacks in that same frame, so it resolves in the next task, where
 /// a combined frame wait and hit test sees their DOM changes too.
