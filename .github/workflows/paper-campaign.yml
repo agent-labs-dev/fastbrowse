@@ -36,7 +36,7 @@ on:
         description: The judge panel (OpenRouter ids, comma separated), independent of every arm
         required: true
         type: string
-        default: openai/gpt-6.1-terra
+        default: deepseek/deepseek-v4.1-flash-1017
       repeat:
         description: Runs per task
         required: true
