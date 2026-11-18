@@ -1590,6 +1590,42 @@ pub(super) async fn work_selected_with_slots(
     Ok(worked)
 }
 
+/// Why no winner field was copied, for the composer and the navigator: the records' own text, so a field named as the
+/// record's kind ("the phone of each phone") can be renamed, and a value the text cuts short can be read in full.
+fn unread_field(field: &str, of: &str, found: &[Candidate]) -> String {
+    let quotes: Vec<String> = found.iter().map(|record| text::repr(&record.quote)).collect();
+    format!(
+        "No {field} could be copied from the selected {of}, whose text is {}. {FIELD_HELP}",
+        quotes.join("; "),
+        field = text::repr(field),
+        of = text::repr(of),
+    )
+}
+
+/// Why a copied winner field was rejected: the copied text beside the record's own text, so the navigator can see a
+/// value cut short, such as a listing's "The Sandman, Vol. 2: ...", and read the page that states it whole (#1232).
+fn incomplete_field(field: &str, of: &str, written: &str, found: &[Candidate], key: &str) -> String {
+    let record = key.rsplit_once("/r").and_then(|(_, index)| index.parse::<usize>().ok()).and_then(|i| found.get(i));
+    let quote = record.map_or_else(String::new, |record| format!(", whose text is {}", text::repr(&record.quote)));
+    format!(
+        "The copied {} {} is not the complete, unambiguous {} of the selected {}{quote}. {FIELD_HELP}",
+        text::repr(field),
+        text::repr(written),
+        text::repr(field),
+        text::repr(of),
+    )
+}
+
+/// What a draft or a run can do about a winner field that could not be copied.
+const FIELD_HELP: &str = "Name a winner field as something each record states about itself, such as its name or title, never the kind of record the tally counts. When the record's text cuts that value short or leaves it out, read a page that states it in full, such as the record's own page, before answering again.";
+
+/// The copied text a field question asked about.
+fn written_of<'a>(groups: &'a Groups, key: &str) -> &'a str {
+    let group =
+        key.strip_prefix("field").and_then(|rest| rest.split_once('/')).and_then(|(g, _)| g.parse::<usize>().ok());
+    group.and_then(|g| groups.values().nth(g)).map_or("", |(written, _)| written.as_str())
+}
+
 /// Winner fields are read only after numeric selection, so copying a name never asks a model to rank records.
 ///
 /// The check sees the task, which says what the field means on these pages: asked "which shop sells the Burr Grinder
@@ -1633,10 +1669,7 @@ pub(super) async fn winner_fields(
     let mut result = HashMap::new();
     for field in fields {
         let Some(groups) = read_groups(llm, field, &tally.of, &records, &found, ledger).await? else {
-            return Ok(Err(Unworked::Notes {
-                reason: format!("The selected records do not state an unambiguous {}.", text::repr(field)),
-                notes: ids.clone(),
-            }));
+            return Ok(Err(Unworked::Notes { reason: unread_field(field, &tally.of, &found), notes: ids.clone() }));
         };
         let mut questions = IndexMap::new();
         for (group, (written, members)) in groups.values().enumerate() {
@@ -1656,10 +1689,7 @@ pub(super) async fn winner_fields(
                 Some(Answer::Noul(value)) if (0.0..=1.0).contains(&value.probability) && value.probability > 0.5 => {}
                 Some(Answer::Noul(value)) if (0.0..=1.0).contains(&value.probability) => {
                     return Ok(Err(Unworked::Notes {
-                        reason: format!(
-                            "The copied {} is not an unambiguous field of the selected record.",
-                            text::repr(field)
-                        ),
+                        reason: incomplete_field(field, &tally.of, written_of(&groups, key), &found, key),
                         notes: ids.clone(),
                     }));
                 }
@@ -2295,22 +2325,41 @@ mod tests {
                 .is_err()
             );
         }
+        let rejected = winner_fields(
+            &FieldSupport(false),
+            &ReadsGroups(&[("r0", Some("£210")), ("r1", Some("£210"))]),
+            "Which shop is cheaper? Tell me its name.",
+            &tally,
+            done,
+            &fields,
+            &notes,
+            &tokens,
+            None,
+        )
+        .await
+        .unwrap();
+        // #1232: told only that the copied field was not unambiguous, the navigator answered done again over a listing
+        // title cut short; the reason shows what was copied, from which text, and where the whole value is read.
+        let Err(Unworked::Notes { reason, .. }) = rejected else { panic!("{rejected:?}") };
         assert!(
-            winner_fields(
-                &FieldSupport(false),
-                &ReadsGroups(&[("r0", Some("£210")), ("r1", Some("£210"))]),
-                "Which shop is cheaper? Tell me its name.",
-                &tally,
-                done,
-                &fields,
-                &notes,
-                &tokens,
-                None
-            )
-            .await
-            .unwrap()
-            .is_err()
+            reason.contains("'£210'") && reason.contains("whose text is") && reason.contains(FIELD_HELP),
+            "{reason}"
         );
+        let unread = winner_fields(
+            &FieldSupport(true),
+            &ReadsGroups(&[("r0", None), ("r1", Some("Winner B"))]),
+            "Which shop is cheaper? Tell me its name.",
+            &tally,
+            done,
+            &fields,
+            &notes,
+            &tokens,
+            None,
+        )
+        .await
+        .unwrap();
+        let Err(Unworked::Notes { reason, .. }) = unread else { panic!("{unread:?}") };
+        assert!(reason.starts_with("No 'name' could be copied from the selected 'record', whose text is"), "{reason}");
     }
 
     struct ReadsGroups<'a>(&'a [(&'a str, Option<&'a str>)]);
