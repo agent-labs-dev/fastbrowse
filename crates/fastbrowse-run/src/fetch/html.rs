@@ -1365,10 +1365,20 @@ pub fn read(html: &str, url: &str) -> (String, Vec<Found>, Vec<Control>, Vec<Fra
         .elements
         .iter()
         .filter(|element| {
-            !element.text
-                && !element.hidden
-                && !element.aria_hidden
-                && !LEAVES_OF_THEIR_OWN.contains(&element.tag.as_str())
+            if element.text || element.hidden || element.aria_hidden {
+                return false;
+            }
+            // An empty label inside a control names its action rather than a citable page fact.
+            let mut ancestor = *element;
+            loop {
+                if LEAVES_OF_THEIR_OWN.contains(&ancestor.tag.as_str()) {
+                    return false;
+                }
+                if ancestor.parent == 0 {
+                    return true;
+                }
+                ancestor = &tree.elements[ancestor.parent];
+            }
         })
         .map(|element| element.start)
         .collect();
@@ -1684,6 +1694,18 @@ mod tests {
             controls.iter().map(|control| control.label.as_str()).collect::<Vec<_>>(),
             ["Twitter", "GitHub", "Share"]
         );
+    }
+
+    #[test]
+    fn empty_labels_inside_controls_do_not_become_prose() {
+        for control in [
+            "<button><span aria-label='Add'></span></button>",
+            "<a href='/add'><span><span aria-label='Add'></span></span></a>",
+            "<svg><g><span aria-label='Add'></span></g></svg>",
+        ] {
+            let (_, found, _, _) = read(&format!("<p>Before</p>{control}<p>After</p>"), "https://a.example/");
+            assert_eq!(found.iter().map(|block| block.text.as_str()).collect::<Vec<_>>(), ["Before", "After"]);
+        }
     }
 
     #[test]
