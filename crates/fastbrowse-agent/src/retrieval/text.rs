@@ -39,9 +39,9 @@ impl<'a> Page<'a> {
     }
 }
 
-/// `text[start:end]` by code points, clamped as a slice is.
-pub(crate) fn slice(text: &str, start: usize, end: usize) -> &str {
-    let bytes = byte_offsets(text);
+/// `text[start:end]` by code points, clamped as a slice is. `bytes` is the text's `byte_offsets`, built once by the
+/// caller: building it again for each slice of a long text makes cutting it into many slices quadratic (#1252).
+pub(crate) fn slice<'t>(text: &'t str, bytes: &[usize], start: usize, end: usize) -> &'t str {
     let count = bytes.len() - 1;
     let (start, end) = (start.min(count), end.min(count));
     if start >= end { "" } else { &text[bytes[start]..bytes[end]] }
@@ -277,6 +277,16 @@ mod tests {
         assert_eq!(cut.len(), 7);
         assert_eq!(pieces[4], (5, Some((1, 2))));
         assert_eq!(pieces[6], (8, None));
+    }
+
+    #[test]
+    fn slice_cuts_code_points_and_clamps_as_python_does() {
+        let text = "aé€😀b";
+        let bytes = byte_offsets(text);
+        assert_eq!(slice(text, &bytes, 1, 4), "é€😀");
+        assert_eq!(slice(text, &bytes, 3, 99), "😀b");
+        assert_eq!(slice(text, &bytes, 4, 2), "");
+        assert_eq!(slice("", &byte_offsets(""), 0, 5), "");
     }
 
     #[test]
