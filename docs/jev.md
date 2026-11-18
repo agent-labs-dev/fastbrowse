@@ -87,6 +87,13 @@ runs on that click as on any other.
 
 ## One request a step
 
+The relevance pass on a dense page asks whether any still-needed part of the task or current subgoal could use each control.
+It sees the task, recovery subgoal, recent actions, page address and title, and each control's label, role,
+operations, context and destination. It omits scroll actions, whether evidence is already in the notes, and whether
+a control is offscreen, so scrolling reuses unchanged judgments. Read state stays in each control's question because it can change
+whether a link is useful. The action decision still sees current state when choosing its next step. Changed control descriptions
+and changed recovery subgoals are judged again.
+
 At startup, one request asks whether the task names dates, what output it asks for, where its evidence can be
 seen and how much of a list it covers. Over HTTP it also asks whether the task needs a browser action. Each
 question reads the task alone. Output judgments are kept until needed; date extraction still runs only when
@@ -107,11 +114,12 @@ submit or save is sent through the action and authorization checks before the br
 
 With `Config(plan_ahead=True)` the request also asks, for each offered field, whether the task needs it filled on
 this page besides the next action. When the chosen action is a fill, code fills the other fields of the chosen field's
-form that Jev judges more likely than not, in page order, each with its value answered ahead and without a decision of its own. Before each it observes
+form that Jev judges more likely than not, in page order, without another action decision. A field's value comes
+from its ahead answer when present, otherwise a follow-up asks for it. Before each it observes
 the page again and returns to deciding when the address, the document or the field is gone, a dialog opened, or the
 value before it was unsure. Presses are never planned: a press changes the page in ways seen only after it, and two
-controls that do the same job would both be judged needed. A request with a screenshot then carries every question
-asked ahead too, since the image already put it in long-context mode.
+controls that do the same job would both be judged needed. On requests with a viewport, a pictured control or a
+pictured history entry, values stay follow-ups for the fields Jev chooses. Images do not make unused questions free.
 
 ## Provider failover
 
