@@ -2218,20 +2218,20 @@ fn exact_question(task: &str, claims: &[Claim], notes: &Notes) -> Question {
     ))
 }
 
-/// Whether each text a composed answer copies from the page is only what the task asks to be told. Only its source
+/// Whether each text a composed answer copies from the page is relevant to the requested answer. Only its source
 /// parts copy page text, so only they are judged: asked about whole claims, the exact question rejected the writer's
 /// own wording, "The most expensive product is \"Drum Roaster\" at GBP 210.00." at 0.44, as text beside the value.
 fn copied_question(task: &str, copied: &[Value]) -> Question {
     Question::Noul(NoulQuestion::new(
         format!(
-            "{UNTRUSTED} A written answer copies these texts from the page. Is every copied text free of page information the task neither asks for nor names, such as an unrelated field, an identifier or another record? A requested field may include its complete value, such as a full date when the task asks for the date. When only part of a value is requested, such as its year, copy only that part. Text that repeats the task's own words, such as the name of what it asks about, and a sentence stating only an asked value, carry nothing beyond it.{} The rest of the answer is checked separately. Each copied text includes the claim it contributes to, as context for the role of that text in the answer. The claim is an array of parts: prose is the writer's wording, copied is page text, and computed is a slot code fills with a worked result. A table claim gives each cell as its own array under cells. Judge only the copied text, not the rest of the claim. Task: {} Copied: {}",
+            "{UNTRUSTED} A written answer copies these texts from the page. Does every copied text play a direct role in answering the task? Text may identify the records being compared and give the values on which the comparison depends, including the values of records that did not win. Reject unrelated fields or records. A requested field may include its complete value, such as a full date when the task asks for the date. When only part of a value is requested, such as its year, copy only that part. Text that repeats the task's own words, such as the name of what it asks about, and a sentence stating only an asked value, carry nothing beyond it.{} The rest of the answer is checked separately. Each copied text includes the claim it contributes to, as context for the role of that text in the answer. The claim is an array of parts: prose is the writer's wording, copied is page text, and computed is a slot code fills with a worked result. A table claim gives each cell as its own array under cells. Judge only the copied text, not the rest of the claim. Task: {} Copied: {}",
             element_rule(copied),
             dumps(&json!(task)),
             dumps(&json!(copied))
         ),
-        Some("No copied text carries information the task neither asks for nor names."),
+        Some("Every copied text directly answers the task or explains the stated comparison."),
         Some(
-            "A copied text carries information the task neither asks for nor names, or more than the part it asks for.",
+            "A copied text is unrelated to the answer or comparison, or includes more than the requested part of a value.",
         ),
     ))
 }
@@ -4650,6 +4650,18 @@ mod tests {
             panic!("exactness is yes-or-no")
         };
         assert!(question.instructions.contains("A requested field may include its complete value"));
+    }
+
+    #[test]
+    fn copied_answers_allow_the_values_that_explain_comparisons() {
+        let Question::Noul(question) = copied_question("Which route is faster?", &[json!({"text": "18 minutes"})])
+        else {
+            panic!("copy scope is yes-or-no")
+        };
+        assert!(question.instructions.contains("identify the records being compared"));
+        assert!(question.instructions.contains("give the values on which the comparison depends"));
+        assert!(question.instructions.contains("including the values of records that did not win"));
+        assert!(question.instructions.contains("Reject unrelated fields or records."));
     }
 
     #[tokio::test]
