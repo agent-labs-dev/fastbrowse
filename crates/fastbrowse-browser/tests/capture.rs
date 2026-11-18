@@ -195,6 +195,76 @@ async fn test_quote_cards_are_whole_records_with_local_titles() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_inline_container_preserves_nested_record_boundaries() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    for display in ["inline", "contents", "inline-block"] {
+        set_body(&h.session, &format!("<app-root style='display:{display}'>Pending</app-root>")).await;
+        assert_eq!(texts(&content_capture(&h.page).await), ["Pending"]);
+        eval_active(
+            &h.session,
+            &format!(
+                "document.querySelector('app-root').innerHTML = {}",
+                common::js(
+                    "<h1>Departures</h1><ul>\
+                 <li class='trip'><div>North Air</div><div>$120</div></li>\
+                 <li class='trip'><div>West Air</div><div>$140</div></li>\
+                 <li class='trip'><div>East Air</div><div>$160</div></li>\
+                 </ul><p>Prices include <strong>taxes</strong>.</p>"
+                )
+            ),
+        )
+        .await;
+        let capture = content_capture(&h.page).await;
+        let records: Vec<_> = capture.blocks.iter().filter(|block| block.whole_record).collect();
+        assert_eq!(records.len(), 3, "{display}: {:?}", texts(&capture));
+        for (block, expected) in records.iter().zip(["North Air\n$120", "West Air\n$140", "East Air\n$160"]) {
+            assert_eq!(text_of(&capture, block), expected, "{display}");
+            assert_eq!(path(block), ["Departures"], "{display}");
+        }
+        assert_eq!(texts(&capture).last().unwrap(), "Prices include taxes.");
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_inline_line_breaks_keep_labels_with_values() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    set_body(
+        &h.session,
+        "<p>Address: <strong>1 Main St<br>Springfield</strong></p>\
+         <ul><li>Price <span>$5<br>incl. tax</span></li></ul>",
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    assert_eq!(texts(&capture), ["Address: 1 Main St\nSpringfield", "Price $5\nincl. tax"]);
+    assert_eq!(capture.blocks[1].kind, BlockKind::ListItem);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_link_wrapping_blocks_keeps_its_destination() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    set_body(&h.session, "<a href='/trip/1'><div>North Air</div><div>$120</div></a>").await;
+    let capture = content_capture(&h.page).await;
+    assert_eq!(texts(&capture), ["North Air\n$120"]);
+    assert_eq!(capture.blocks[0].kind, BlockKind::Link);
+    assert_eq!(capture.blocks[0].href.as_deref(), Some("/trip/1"));
+    assert_eq!(capture.blocks[0].links.len(), 1);
+    set_body(
+        &h.session,
+        "<h2>Departures</h2><h3>Earlier</h3>\
+         <a href='/trip/1' style='display:block'><h3>North Air</h3><p>$120</p></a><p>After</p>",
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    assert_eq!(path(capture.blocks.last().unwrap()), ["Departures"]);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_each_table_row_repeats_its_header() {
     let Some(h) = harness().await else { return };
     h.page.navigate(&sites().main, None).await.expect("navigate");

@@ -163,6 +163,17 @@
     const display = getComputedStyle(e).display;
     return !(display.startsWith('inline') || display === 'contents') || e.tagName === 'BR';
   };
+  // An inline custom element can wrap an entire page of blocks. Reading its innerText as inline prose loses
+  // every record and heading inside it, so the walk must reach its rendered block descendants too.
+  const blockFlows = new WeakMap();
+  const hasBlockFlow = e => {
+    if (blockFlows.has(e)) return blockFlows.get(e);
+    const block = isBlock(e) || [...e.children].some(
+      child => child.tagName !== 'BR' && !SKIP.has(child.tagName) && !hidden(child) && hasBlockFlow(child),
+    );
+    blockFlows.set(e, block);
+    return block;
+  };
   const hrefOf = a => {
     const u = new URL(a.href, location.href);
     return u.origin === location.origin ? u.pathname + u.search : u.href;
@@ -407,7 +418,7 @@
         continue;
       }
       if (SKIP.has(node.tagName)) continue;
-      if (!node.matches('nav,[role="navigation"]') && !isBlock(node) && recordText(node) === null) {
+      if (!node.matches('nav,[role="navigation"]') && !hasBlockFlow(node) && recordText(node) === null) {
         run.push(node);
         continue;
       }
@@ -453,13 +464,13 @@
     }
     if (el.tagName === 'PRE') return push('code', textOf(el), {}, [el]);
     const record = recordText(el);
-    if ((el.tagName === 'LI' && leaf(el)) || record !== null) {
-      // A card's heading still ends an earlier sibling's heading, even when the card is read without walking it.
+    if ((el.tagName === 'LI' && leaf(el)) || record !== null || el.matches('a[href]')) {
+      // A card or link's heading ends an earlier sibling's heading, even when read without walking it.
       const heading = [...el.querySelectorAll('h1,h2,h3,h4,h5,h6')].find(visible);
       if (heading) endHeading(HEADINGS[heading.tagName]);
       const links = el.matches('a[href]') ? [el] : el.querySelectorAll('a[href]');
       push(
-        el.tagName === 'LI' ? 'list_item' : 'record',
+        el.tagName === 'LI' ? 'list_item' : record !== null ? 'record' : 'link',
         record ?? textOf(el),
         {
           ...(links.length === 1 ? { href: hrefOf(links[0]) } : {}),

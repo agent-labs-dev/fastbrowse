@@ -203,6 +203,10 @@ A string reads as its decoded text, a number as written, and repeated keys keep 
 entirely valid JSON, and other `text/*` responses, are read as one quoted text block. Neither is parsed as HTML, and
 delimited data keeps its whitespace. Browser captures of a JSON document are still read as one code block.
 
+Browser captures follow block structure inside inline containers, including custom elements and elements with
+`display: contents`, so nested headings and repeated records keep their own source spans. Adjacent inline prose
+stays in one block.
+
 Browser and HTTP heading paths follow heading ranks. A heading inside a repeated record ends earlier headings
 of the same or deeper rank, without naming later records. Headings hidden by the capture do not change that
 context; HTTP sees hidden attributes and inline styles, but does not apply stylesheets.
