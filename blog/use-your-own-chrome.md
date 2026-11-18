@@ -3,9 +3,9 @@ title: Run a browser agent in your own signed-in Chrome
 description: "Install the fastbrowse extension, check it is connected, run a read-only task with --extension, and stop it. What the run can reach and what Chrome shows."
 topic: Browsers and logins
 published: 2026-11-12
-updated: 2026-11-16
+updated: 2026-11-18
 verifiedAgainst: v0.11.0
-verifiedOn: 2026-11-16
+verifiedOn: 2026-11-18
 ---
 
 A fresh browser has none of your sign-ins. The fastbrowse extension lets a run work in the Chrome you already use, where you are signed in. The run opens tabs of its own in that browser; it does not use the tabs you already have open. No Browser Use key is involved: the run uses your own browser and your own model key.
