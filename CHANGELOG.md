@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Reads preserve the headings and individual records inside inline containers, including custom elements. A page of flight results could be captured as one paragraph, leaving the answer unable to cite an individual flight and its price ([#1250](https://github.com/agent-labs-dev/fastbrowse/issues/1250)).
+
 - Comparisons use the records in the state the task asks about, including when a draft names a broader record kind. A package comparison took a pre-release from the history instead of the release the page labels latest. Winner names copied from captured headings also pass the same source rules as the copy step, so a valid name no longer leaves the answer empty. Copying a selected record's name no longer rechecks its kind and discards a name it states ([#1249](https://github.com/agent-labs-dev/fastbrowse/issues/1249), [#1248](https://github.com/agent-labs-dev/fastbrowse/issues/1248)).
 
 - Ranked answers keep each requested place until its name and value are computed. Claims with identical placeholder text used to collapse into one, leaving a top-three answer with only one item ([#1248](https://github.com/agent-labs-dev/fastbrowse/issues/1248)).

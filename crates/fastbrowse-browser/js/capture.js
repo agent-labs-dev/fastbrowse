@@ -163,6 +163,17 @@
     const display = getComputedStyle(e).display;
     return !(display.startsWith('inline') || display === 'contents') || e.tagName === 'BR';
   };
+  // An inline custom element can wrap an entire page of blocks. Reading its innerText as inline prose loses
+  // every record and heading inside it, so the walk must reach its rendered block descendants too.
+  const blockFlows = new WeakMap();
+  const hasBlockFlow = e => {
+    if (blockFlows.has(e)) return blockFlows.get(e);
+    const block = isBlock(e) || [...e.children].some(
+      child => child.tagName !== 'BR' && !SKIP.has(child.tagName) && !hidden(child) && hasBlockFlow(child),
+    );
+    blockFlows.set(e, block);
+    return block;
+  };
   const hrefOf = a => {
     const u = new URL(a.href, location.href);
     return u.origin === location.origin ? u.pathname + u.search : u.href;
@@ -171,11 +182,12 @@
   // inside its list item was taken with the item's price as the name, and asked for a description's hyperlinks, a run
   // had their texts and no address to give. Each link is kept with its block as its text and address, which code
   // places in the block's text. A footnote reference is no part of the text it marks, and a script link leads nowhere.
+  const readableLink = a => typeof a.href === 'string' && !a.href.startsWith('javascript:') && !(a.matches(IN_PAGE) && noteReference(a));
   const linksIn = elements =>
     elements
       .flatMap(e => [...(e.matches('a[href]') ? [e] : []), ...e.querySelectorAll('a[href]')])
       // An SVG link's `href` is an animated value, not an address.
-      .filter(a => typeof a.href === 'string' && !a.href.startsWith('javascript:') && !(a.matches(IN_PAGE) && noteReference(a)))
+      .filter(readableLink)
       .map(a => ({ text: textOf(a), href: a.href }))
       .filter(link => link.text);
   const controlOf = nodes => {
@@ -199,9 +211,23 @@
     }
     return found ? registry.hoverContexts.get(found).control : null;
   };
+  const linkTitles = new WeakSet();
   const push = (kind, text, extra = {}, nodes = []) => {
-    if (text)
-      blocks.push({ kind, text, heading_path: [...path], frame_path: framePath, source_path: sourcePath, control_context: controlOf(nodes), ...extra });
+    if (!text) return;
+    const first = nodes[0];
+    const link = (first?.nodeType === 1 ? first : first?.parentElement)?.closest('a[href]');
+    // A link can wrap a table or a list. Its destination belongs to each block, without flattening their records.
+    const inherited = link && readableLink(link) && nodes.every(node => node !== link && link.contains(node));
+    const title = inherited && !linkTitles.has(link) ? clean(link.getAttribute('title') || '') : '';
+    if (title && title !== shownOf(link)) {
+      text = `${text} (title: ${title})`;
+      linkTitles.add(link);
+    }
+    blocks.push({
+      kind, text, heading_path: [...path], frame_path: framePath, source_path: sourcePath,
+      control_context: controlOf(nodes), ...extra,
+      ...(inherited ? { href: hrefOf(link), links: [{ text, href: link.href }, ...(extra.links ?? [])] } : {}),
+    });
   };
 
   // A cell can say what it says with an image or an icon alone: a flag marking the winner, a tick for "yes".
@@ -407,7 +433,7 @@
         continue;
       }
       if (SKIP.has(node.tagName)) continue;
-      if (!node.matches('nav,[role="navigation"]') && !isBlock(node) && recordText(node) === null) {
+      if (!node.matches('nav,[role="navigation"]') && !hasBlockFlow(node) && recordText(node) === null) {
         run.push(node);
         continue;
       }
