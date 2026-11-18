@@ -56,6 +56,29 @@ async fn generated_separators_preserve_inline_boundaries() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn generated_text_survives_accessibility_hidden_ancestors() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<style>.separator::before { content: ' / '; } .suffix::after { content: ' end'; }</style>
+        <main><ul><li><span>Alpha</span><span class="separator"></span><span>Beta</span></li></ul>
+        <p><span>Gamma</span><span class="separator" aria-hidden="true"></span><span>Delta</span></p>
+        <p class="suffix">Text</p></main>"#,
+    )
+    .await;
+    for hidden in [true, false, true, false] {
+        eval_active(&h.session, &format!("document.querySelector('main').setAttribute('aria-hidden', '{hidden}')"))
+            .await;
+        let capture = content_capture(&h.page).await;
+        for expected in ["Alpha / Beta", "Gamma / Delta", "Text end"] {
+            assert!(capture.text.contains(expected), "aria-hidden={hidden}: {}", capture.text);
+        }
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn generated_text_preserves_css_strings_without_decorative_noise() {
     let Some(h) = harness().await else { return };
     h.goto("/token.html").await;
@@ -66,7 +89,7 @@ async fn generated_text_preserves_css_strings_without_decorative_noise() {
         .suffix::after { content: 'fix'; }
         .escaped::before { content: '\22 quoted\22 \a line\\'; }
         .attribute::after { content: attr(data-unit); }
-        .icon::before { content: '\e000'; }
+        .icon-check::before { content: '\e000'; }
         .counter::before { content: counter(item); }
         .decorative::before { content: '\e001' / ''; }
         .alternative::before { content: 'Required ' / 'required field'; }
@@ -81,7 +104,7 @@ async fn generated_text_preserves_css_strings_without_decorative_noise() {
         <p><span class="alternative">value</span></p>
         <p><span class="mixed">value</span></p>
         <p><span class="image">value</span></p>
-        <p><span>Jet</span><span class="icon" aria-hidden="true"></span><span>Blue</span></p>
+        <p><span>Jet</span><span class="icon-check" aria-hidden="true"></span><span>Blue</span></p>
         <p><span>Jet</span><span class="counter"></span><span>Blue</span></p>
         <p><span>Jet</span><span class="decorative"></span><span>Blue</span></p>
         <p><span>Jet</span><span class="hidden"></span><span>Blue</span></p>

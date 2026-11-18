@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- Browser reads retain visible CSS-generated text when a dialog hides the surrounding content from accessibility APIs ([#1276](https://github.com/agent-labs-dev/fastbrowse/issues/1276)).
+
 - A highest or lowest result names each winning record once when it appears in more than one note. The run checks tied records' identity before copying their fields, keeping distinct tied winners and all supporting citations ([#1266](https://github.com/agent-labs-dev/fastbrowse/issues/1266)).
 
 - Comparison answers check a selected record's name with its record kind and compared field in view. A valid package name could be rejected as an incomplete answer to the whole comparison, leaving only partial evidence ([#1268](https://github.com/agent-labs-dev/fastbrowse/issues/1268)).

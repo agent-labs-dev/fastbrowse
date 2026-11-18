@@ -225,7 +225,8 @@
       return `${parseFloat(style.marginInlineStart) > 0 ? ' ' : ''}${value}${parseFloat(style.marginInlineEnd) > 0 ? ' ' : ''}`;
     };
     // A known icon already has a readable glyph name in drawn(); its font character must not replace that name.
-    const found = e.closest('[aria-hidden="true"]') || iconOf(e) ? ['', ''] : [read('::before'), read('::after')];
+    // A modal hides its background from accessibility APIs without hiding its rendered text (#1276).
+    const found = iconOf(e) ? ['', ''] : [read('::before'), read('::after')];
     if (found.some(Boolean)) {
       // The generated text's host can carry the gap instead. Ordinary inline margins do not split a word.
       const style = getComputedStyle(e);
