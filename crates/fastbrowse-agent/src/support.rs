@@ -28,14 +28,14 @@ where
     Ok(Generation { data, cost: generated.cost })
 }
 
-/// `try_join_all` for passes that each reserve against the ledger. Under a cap a pass is checked against the receipts
-/// recorded when it reserves, so passes sent side by side would each pass before any records: they run one after
-/// another instead, each seeing the spend before it.
+/// `try_join_all` for passes that each reserve against the ledger. A dollar cap is checked against the receipts
+/// recorded when a pass reserves, so passes sent side by side would each pass before any records: under one they run
+/// one after another, each seeing the spend before it. Call caps need no wait, since reserving counts the calls.
 pub(crate) async fn try_join_reserving<'a, T, E>(
     ledger: Option<&Ledger>,
     futures: Vec<BoxFuture<'a, Result<T, E>>>,
 ) -> Result<Vec<T>, E> {
-    if !ledger.is_some_and(Ledger::capped) {
+    if !ledger.is_some_and(|ledger| ledger.limits.max_dollars.is_some()) {
         return try_join_all(futures).await;
     }
     let mut results = Vec::with_capacity(futures.len());

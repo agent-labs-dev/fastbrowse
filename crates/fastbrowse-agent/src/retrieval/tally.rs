@@ -3064,6 +3064,7 @@ mod tests {
         let tokens = DecisionProfile::jev().fit(None).tokens;
         for (limits, overlaps) in [
             (fastbrowse_core::models::Limits::default(), true),
+            (fastbrowse_core::models::Limits { max_jev_calls: Some(100), ..Default::default() }, true),
             (fastbrowse_core::models::Limits { max_dollars: Some(100.0), ..Default::default() }, false),
         ] {
             let jev = Overlap::default();
@@ -3071,7 +3072,7 @@ mod tests {
             let (answered, _) = by_page(&jev, &states, questions(), &tokens, Some(&ledger)).await.unwrap();
             assert_eq!(answered.unwrap().len(), 2);
             assert_eq!(jev.asked.load(SeqCst), 2);
-            assert_eq!(jev.overlapped.load(SeqCst), overlaps, "an uncapped run asks its pages together");
+            assert_eq!(jev.overlapped.load(SeqCst), overlaps, "only a dollar cap makes pages wait");
         }
     }
 
