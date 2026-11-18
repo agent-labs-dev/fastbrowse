@@ -306,6 +306,25 @@ impl Composition {
         }
     }
 
+    fn computed_slots(&self, value: &str) -> Value {
+        let slots = |parts: &[BoundPart]| {
+            let mut offset = 0;
+            let mut slots = Vec::new();
+            for part in parts {
+                if let BoundPart::Computed { field } = part {
+                    slots.push(json!({"offset": offset, "field": field}));
+                }
+                offset += Self::render(std::slice::from_ref(part), value, &HashMap::new()).len();
+            }
+            slots
+        };
+        // Source and prose partitions can render identically; only computed positions change the later substitution.
+        match &self.cells {
+            Some(cells) => json!({"cells": cells.iter().map(|cell| slots(cell)).collect::<Vec<_>>()}),
+            None => json!({"text": slots(&self.text)}),
+        }
+    }
+
     /// The typed slot supplies its byte range, so identical source digits cannot be mistaken for the value to replace.
     fn numeric_context(&self, value: &str) -> Option<(String, std::ops::Range<usize>)> {
         let parts = match &self.cells {
@@ -985,6 +1004,50 @@ pub(crate) struct ReviewedComposition {
     pub rejection: Option<String>,
 }
 
+// A retyped duplicate makes its own winner-field extraction, which can fail or differ; deduplicate before
+// computation so an extra model call cannot discard or contradict the retained claim.
+fn distinct_claims(claims: impl IntoIterator<Item = BoundClaim>) -> Vec<BoundClaim> {
+    let tally_key = |claim: &BoundClaim| {
+        claim.tally.as_ref().map(|tally| {
+            let mut key = tally.clone();
+            // Counts use record membership rather than a numeric field.
+            if key.op == Op::Count {
+                key.field = None;
+            }
+            // Only an extreme's missing rank means first place; a grouped count may assert no place at all.
+            if matches!(key.op, Op::Min | Op::Max) {
+                key.rank = Some(key.place());
+                // A field-only winner claim never renders its initial numeric value.
+                if claim.composition.as_ref().is_some_and(|parts| parts.numeric_context(&key.written).is_none()) {
+                    key.written.clear();
+                }
+            }
+            key
+        })
+    };
+    claims.into_iter().fold(Vec::<BoundClaim>::new(), |mut all, claim| {
+        // Computed fields render as identical placeholders before ranking, so text alone loses distinct records.
+        if !all.iter().any(|other| {
+            other.text == claim.text
+                && tally_key(other) == tally_key(&claim)
+                && other.cells == claim.cells
+                && other.within == claim.within
+                && (claim.tally.is_none()
+                    || other
+                        .composition
+                        .as_ref()
+                        .map(|parts| parts.computed_slots(&other.tally.as_ref().unwrap().written))
+                        == claim
+                            .composition
+                            .as_ref()
+                            .map(|parts| parts.computed_slots(&claim.tally.as_ref().unwrap().written)))
+        }) {
+            all.push(claim);
+        }
+        all
+    })
+}
+
 /// `reports` is whether the task asks to be told anything: one only carried out is written up only when a step was
 /// refused, has no facts to cover, and its steps are judged on their own.
 #[allow(clippy::too_many_arguments)]
@@ -1025,12 +1088,7 @@ pub(crate) async fn compose_reviewed(
         }
         _ => (compose_part(llm, writing_task, &items, ledger).await?, true),
     };
-    let claims = kept.into_iter().chain(claims).fold(Vec::<BoundClaim>::new(), |mut all, claim| {
-        if !all.iter().any(|other| other.text == claim.text) {
-            all.push(claim);
-        }
-        all
-    });
+    let claims = distinct_claims(kept.into_iter().chain(claims));
     // A composed answer is held to what the task asks to be told as a pick is: a source part inserts its note's
     // entire text, and unchecked, a whole release record of 16 fields stood in for "httpx", and a rewrite repeated
     // "The site received the file Received stocktake.txt (34 bytes)." after that check rejected it.
@@ -3092,6 +3150,127 @@ mod tests {
         let calls = llm.calls.lock().unwrap();
         assert!(calls.len() > 2);
         assert!(calls.last().unwrap().contains("q0:"));
+    }
+
+    #[tokio::test]
+    async fn ranked_claims_with_identical_templates_survive_until_computation() {
+        struct RankedDraft;
+        impl LLMClient for RankedDraft {
+            fn generate_value<'a>(
+                &'a self,
+                purpose: LLMPurpose,
+                messages: &'a [Message],
+                schema: &'a dyn ResponseSchema,
+                ledger: Option<&'a Ledger>,
+            ) -> BoxFuture<'a, std::result::Result<Generation<Value>, LLMError>> {
+                if purpose != LLMPurpose::Compose {
+                    return READS.generate_value(purpose, messages, schema, ledger);
+                }
+                let claims: Vec<_> = (1..=3)
+                    .map(|rank| {
+                        json!({
+                            "text": [{"computed":true,"field":"name"}],
+                            "evidence_ids": [],
+                            "tally": {"op":"max","of":"product","field":"price","rank":rank,"written":"GBP 30"}
+                        })
+                    })
+                    .collect();
+                Box::pin(async move {
+                    let data = schema
+                        .validate_json(&json!({"claims":claims,"columns":null}).to_string())
+                        .map_err(LLMError::Failed)?;
+                    Ok(Generation { data, cost: CostLine::new(CostComponent::Llm, CostBasis::Estimated, Some(0.0)) })
+                })
+            }
+        }
+        let notes = Notes::new([
+            fact(0, "Product GBP 30 by A".into()),
+            fact(1, "Product GBP 20 by B".into()),
+            fact(2, "Product GBP 10 by C".into()),
+        ]);
+        let jev = Tallying::new("Product", "GBP");
+        let answer =
+            compose(&jev, &RankedDraft, "Name the three most expensive products", &notes, None, &[]).await.unwrap();
+        assert!(answer.problem.is_none(), "{:?}", answer.problem);
+        let names: Vec<_> = answer.claims.iter().map(|claim| claim.text.as_str()).collect();
+        assert_eq!(names, ["A", "B", "C"]);
+    }
+
+    #[test]
+    fn repeated_counts_ignore_fields_but_keep_invalid_ranks() {
+        for op in [Op::Count, Op::Sum] {
+            let field = (op == Op::Sum).then_some("price");
+            let original: BoundClaim = tallied("There are 10 products.", "10", op, "product", field, vec![]).into();
+            let mut with_field = original.clone();
+            with_field.claim.tally.as_mut().unwrap().field = Some("quantity".into());
+            assert_eq!(distinct_claims([original.clone(), with_field]).len(), if op == Op::Count { 1 } else { 2 });
+            let mut ranked = original.clone();
+            ranked.claim.tally.as_mut().unwrap().rank = Some(1);
+            assert_eq!(distinct_claims([original, ranked]).len(), 2, "invalid ranks must still reach draft validation");
+        }
+    }
+
+    #[test]
+    fn extreme_claims_deduplicate_default_and_explicit_first_places() {
+        for op in [Op::Min, Op::Max, Op::Count] {
+            let mut original: BoundClaim = tallied("Same claim", "10", op, "product", Some("price"), vec![]).into();
+            if op == Op::Count {
+                let tally = original.claim.tally.as_mut().unwrap();
+                tally.field = None;
+                tally.by = Some("author".into());
+                tally.group = Some("A".into());
+            }
+            let mut retyped = original.clone();
+            retyped.claim.tally.as_mut().unwrap().rank = Some(1);
+            let kept = distinct_claims([original, retyped]);
+            let expected = if op == Op::Count { 2 } else { 1 };
+            assert_eq!(kept.len(), expected, "{op:?}: only extremes have an implicit first place");
+        }
+    }
+
+    #[test]
+    fn repeated_tallies_compare_computed_slots_instead_of_text_partitions() {
+        let notes = Notes::new([fact(0, "Winner: ".into())]);
+        let items = initial_items(&notes, false);
+        let tally = tallied("", "30", Op::Max, "product", Some("price"), vec![]).tally;
+        let copied =
+            bind_claim(&items, json!([{"note":"e0","quoted":false},{"computed":true,"field":"name"}]), tally.clone());
+        let prose = bind_claim(
+            &items,
+            json!([{"prose":"Winner"},{"prose":": "},{"computed":true,"field":"name"}]),
+            tally.clone(),
+        );
+        assert_eq!(distinct_claims([copied, prose]).len(), 1);
+        let before = bind_claim(&[], json!([{"computed":true,"field":"name"},{"prose":"[name]"}]), tally.clone());
+        let after = bind_claim(&[], json!([{"prose":"[name]"},{"computed":true,"field":"name"}]), tally);
+        assert_eq!(before.text, after.text);
+        assert_eq!(distinct_claims([before, after]).len(), 2);
+    }
+
+    #[test]
+    fn winner_fields_deduplicate_unused_initial_values() {
+        for numeric in [false, true] {
+            let claims = ["GBP 30", "GBP 20"].map(|written| {
+                let tally = tallied("", written, Op::Max, "product", Some("price"), vec![]).tally;
+                let mut parts = vec![json!({"computed":true,"field":"name"})];
+                if numeric {
+                    parts.push(json!({"computed":true}));
+                }
+                bind_claim(&[], json!(parts), tally)
+            });
+            let kept = distinct_claims(claims);
+            assert_eq!(kept.len(), if numeric { 2 } else { 1 }, "numeric slot present: {numeric}");
+            assert_eq!(kept[0].tally.as_ref().unwrap().written, "GBP 30");
+        }
+    }
+
+    #[test]
+    fn retyped_claims_deduplicate_despite_changed_citations() {
+        let original: BoundClaim = Claim::new("A supported fact", vec!["e0".into(), "e1".into()]).into();
+        let retyped = Claim::new("A supported fact", vec!["e1".into(), "e0".into()]).into();
+        let kept = distinct_claims([original, retyped]);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].evidence_ids, ["e0", "e1"]);
     }
 
     #[tokio::test]
