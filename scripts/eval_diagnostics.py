@@ -278,7 +278,7 @@ def main() -> int:
         "identity": identity(),
         "approved_budget_usd": dollars,
         "tasks": tasks,
-        "budget_semantics": "existing bench fill checks between tasks, not a per-call ceiling",
+        "budget_semantics": "bench fill checks before each request, so the last one sent can pass it",
         "unresolved_budget_hold_usd": dollars,
     }
     write(out / "fill.receipt.json", receipt)

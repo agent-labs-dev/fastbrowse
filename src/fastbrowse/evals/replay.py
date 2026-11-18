@@ -438,7 +438,8 @@ class Spend:
     the whole budget. A request's price is known only from its response, so the requests it pays for go upstream
     one at a time (`turn`), each checked against the price of every one before it; concurrent checks would each
     pass on a total that left out the others in flight. One response without a price ends the spending, since the
-    total is then unknown.
+    total is then unknown. The limit is where spending stops, not a ceiling no request can cross: the provider takes
+    no price cap per request, so the last one sent can take the total past it, by that one request's price.
     """
 
     def __init__(self, limit: float) -> None:
