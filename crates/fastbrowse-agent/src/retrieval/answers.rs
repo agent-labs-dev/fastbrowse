@@ -573,12 +573,20 @@ impl DraftClaim {
                             if !slot.computed {
                                 return Err("A computed slot must set computed to true".into());
                             }
-                            match &slot.field {
+                            // Tied records share the compared value. Projecting it from each winner repeats that value.
+                            let field = slot.field.filter(|field| {
+                                !self.tally.as_ref().is_some_and(|tally| {
+                                    matches!(tally.op, Op::Min | Op::Max)
+                                        && !tally.names_record()
+                                        && tally.field.as_ref() == Some(field)
+                                })
+                            });
+                            match &field {
                                 Some(field) if field.trim().is_empty() || fields.contains(field) => return Err("A winner field must be nonempty and occur once".into()),
                                 Some(field) => fields.push(field.clone()),
                                 None => computed += 1,
                             }
-                            BoundPart::Computed { field: slot.field }
+                            BoundPart::Computed { field }
                         }
                     })
                 })
@@ -2392,6 +2400,32 @@ mod tests {
             assert_eq!(claim.evidence_ids, ["winner"]);
             let (repacked, _) = bound.repack(0, &mut IndexMap::new());
             assert!(repacked.text.contains("name"), "kept claims retain field-slot metadata");
+        }
+    }
+
+    #[test]
+    fn compared_field_uses_the_extreme_value_in_prose_and_tables() {
+        for op in ["min", "max"] {
+            let tally = json!({"op":op,"of":"offer","field":"price","written":"GBP 1"});
+            let name = json!({"computed":true,"field":"name"});
+            let price = json!({"computed":true,"field":"price"});
+            let fields = HashMap::from([
+                ("name".to_string(), "Offer A, Offer B".to_string()),
+                ("price".to_string(), "GBP 210, GBP 210".to_string()),
+            ]);
+            for cells in [None, Some(json!([[name], [price]]))] {
+                let draft = json!({
+                    "evidence_ids": [], "tally": tally, "cells": cells,
+                    "text": [name, {"prose":" at "}, price]
+                });
+                let bound = serde_json::from_value::<DraftClaim>(draft).unwrap().bind(&[]).unwrap();
+                let claim = bound.worked_fields("GBP 210", vec!["winner".into()], &fields);
+                assert_eq!(claim.text.matches("GBP 210").count(), 1);
+                assert!(claim.text.contains("Offer A, Offer B"));
+                if cells.is_some() {
+                    assert_eq!(claim.cells, Some(vec!["Offer A, Offer B".into(), "GBP 210".into()]));
+                }
+            }
         }
     }
 
