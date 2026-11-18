@@ -342,7 +342,8 @@ check, with its citations, word for word in the corrected draft, and the compose
 coverage or step check failed, which fault the claims together; a claim it
 writes again with the same text, tally meaning and computed layout is kept once. Claims with different ranks
 or computed fields remain distinct even when their placeholder text is identical. An omitted rank and rank 1
-mean the same first minimum or maximum; a grouped count without a rank makes no ranking assertion. A field-only
+mean the same first minimum or maximum; a grouped count without a rank makes no ranking assertion. A count
+ignores its unused numeric field when detecting repeats. A field-only
 winner claim ignores its unused initial number when detecting repeats. Computed layout compares slot positions
 and field names, regardless of how identical surrounding text was split into source and prose parts. A rewrite that retyped a passed
 claim could change a copied name and fail where the first draft had passed. A corrected draft

@@ -1010,6 +1010,10 @@ fn distinct_claims(claims: impl IntoIterator<Item = BoundClaim>) -> Vec<BoundCla
     let tally_key = |claim: &BoundClaim| {
         claim.tally.as_ref().map(|tally| {
             let mut key = tally.clone();
+            // Counts use record membership rather than a numeric field.
+            if key.op == Op::Count {
+                key.field = None;
+            }
             // Only an extreme's missing rank means first place; a grouped count may assert no place at all.
             if matches!(key.op, Op::Min | Op::Max) {
                 key.rank = Some(key.place());
@@ -3190,6 +3194,20 @@ mod tests {
         assert!(answer.problem.is_none(), "{:?}", answer.problem);
         let names: Vec<_> = answer.claims.iter().map(|claim| claim.text.as_str()).collect();
         assert_eq!(names, ["A", "B", "C"]);
+    }
+
+    #[test]
+    fn repeated_counts_ignore_fields_but_keep_invalid_ranks() {
+        for op in [Op::Count, Op::Sum] {
+            let field = (op == Op::Sum).then_some("price");
+            let original: BoundClaim = tallied("There are 10 products.", "10", op, "product", field, vec![]).into();
+            let mut with_field = original.clone();
+            with_field.claim.tally.as_mut().unwrap().field = Some("quantity".into());
+            assert_eq!(distinct_claims([original.clone(), with_field]).len(), if op == Op::Count { 1 } else { 2 });
+            let mut ranked = original.clone();
+            ranked.claim.tally.as_mut().unwrap().rank = Some(1);
+            assert_eq!(distinct_claims([original, ranked]).len(), 2, "invalid ranks must still reach draft validation");
+        }
     }
 
     #[test]
