@@ -321,10 +321,28 @@ fn images(body: &Map<String, Value>) -> usize {
 }
 
 fn bound(cost: CostLine, ceiling: Ceiling, body: &Map<String, Value>) -> CostLine {
-    let dollars =
-        (ceiling.context as f64 * ceiling.per_token + ceiling.per_request + ceiling.per_image * images(body) as f64)
-            * (1.0 + BYOK_FEE);
+    // An image can bill prompt tokens beside its per-image fee, at a rate no listing publishes, so only a text request
+    // is bounded by its own bytes; one that carries an image keeps the whole window.
+    let tokens = if images(body) > 0 {
+        ceiling.context
+    } else {
+        ceiling.context.min(text_bytes(body).saturating_add(output_cap(body).unwrap_or(ceiling.context)))
+    };
+    let dollars = (tokens as f64 * ceiling.per_token + ceiling.per_request + ceiling.per_image * images(body) as f64)
+        * (1.0 + BYOK_FEE);
     CostLine { basis: CostBasis::Bounded, dollars: Some(dollars), ..cost }
+}
+
+/// The bytes of a request that carries no image. Every tokenizer a routed model uses maps each
+/// token to at least one byte of text, so the prompt holds at most this many tokens. The JSON around each message and
+/// the response schema are counted too, and they are longer than the few tokens a chat template adds for them.
+fn text_bytes(body: &Map<String, Value>) -> i64 {
+    i64::try_from(Value::Object(body.clone()).to_string().len()).unwrap_or(i64::MAX)
+}
+
+/// The output tokens the request let the model bill, hidden reasoning included, when it set a cap.
+fn output_cap(body: &Map<String, Value>) -> Option<i64> {
+    ["max_tokens", "max_completion_tokens"].iter().find_map(|key| body.get(*key).and_then(Value::as_i64))
 }
 
 /// How much hidden reasoning a model may spend before it answers, in OpenRouter's normalized terms.
@@ -458,7 +476,8 @@ struct Billing<'a> {
     llm: &'a OpenAICompatibleLLM,
     ledger: Option<&'a Ledger>,
     model: String,
-    body_images: usize,
+    /// The body of the attempt in flight, which bounds what it can bill if it is dropped.
+    sent: Option<Map<String, Value>>,
     costs: Vec<CostLine>,
     purpose: LLMPurpose,
     /// The attempt in flight, whose requests are unaccounted until it returns.
@@ -503,7 +522,7 @@ impl Drop for Billing<'_> {
             if let Some(ceiling) = cached {
                 for line in &mut self.costs[offset..] {
                     if line.dollars.is_none() {
-                        *line = bound(line.clone(), ceiling, &json_images(self.body_images));
+                        *line = bound(line.clone(), ceiling, self.sent.as_ref().unwrap_or(&Map::new()));
                     }
                 }
             }
@@ -513,14 +532,6 @@ impl Drop for Billing<'_> {
             ledger.state().lines.extend(std::mem::take(&mut self.costs));
         }
     }
-}
-
-/// A body holding `count` images, for bounding a request whose body is gone.
-fn json_images(count: usize) -> Map<String, Value> {
-    let part = json!({"type": "image_url"});
-    let mut body = Map::new();
-    body.insert("messages".into(), json!([{"content": vec![part; count]}]));
-    body
 }
 
 impl OpenAICompatibleLLM {
@@ -704,7 +715,8 @@ impl OpenAICompatibleLLM {
     ///
     /// A request that timed out, or a response without usage whose receipt never came, stopped every run with a dollar
     /// cap although it had spent a fraction of a cent. No call can bill more tokens than its context window holds,
-    /// prompt and output together, so that window at the highest price is a true ceiling. OpenRouter and the Vercel AI Gateway both list each
+    /// prompt and output together, nor more than its prompt's bytes and its output cap, so the smaller of the two at
+    /// the highest price is a true ceiling. OpenRouter and the Vercel AI Gateway both list each
     /// model's endpoints with their windows and prices.
     async fn bounded(&self, cost: CostLine, body: &Map<String, Value>) -> CostLine {
         let Some(model) = body.get("model").and_then(Value::as_str) else { return cost };
@@ -823,7 +835,7 @@ impl OpenAICompatibleLLM {
             llm: self,
             ledger,
             model: model.to_string(),
-            body_images: images(&body),
+            sent: None,
             costs: Vec::new(),
             purpose,
             in_flight: None,
@@ -858,6 +870,7 @@ impl OpenAICompatibleLLM {
             }
             let usage = Usage::default();
             billing.in_flight = Some(usage.clone());
+            billing.sent = Some(body.clone());
             let sent = Value::Object(body.clone());
             let payload = match self.request(&sent, ledger, &usage).await {
                 Ok(payload) => payload,
