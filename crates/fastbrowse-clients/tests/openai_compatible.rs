@@ -178,6 +178,24 @@ async fn test_unknown_price_retains_all_token_counts() {
 }
 
 #[tokio::test]
+async fn test_a_priced_response_names_the_model_that_served_it_on_the_cost_line() {
+    let llm_for = |script: &Script| client(script.http(), "https://llm.test", LLMPurpose::Start, "requested");
+    let usage = json!({"prompt_tokens": 7, "completion_tokens": 2, "cost": 0.01});
+
+    let served = Script::new([reply(
+        200,
+        json!({"model": "provider/served-build", "choices": [{"message": {"content": r#"{"count":0}"#}}], "usage": usage}),
+    )]);
+    let result = generate(&llm_for(&served), LLMPurpose::Start, &[], None).await.unwrap();
+    assert_eq!((result.cost.basis, result.cost.model.as_deref()), (CostBasis::Metered, Some("provider/served-build")));
+
+    // A response that names no model falls back to the one asked for.
+    let silent = Script::new([completion(json!(r#"{"count":0}"#), usage)]);
+    let result = generate(&llm_for(&silent), LLMPurpose::Start, &[], None).await.unwrap();
+    assert_eq!(result.cost.model.as_deref(), Some("requested"));
+}
+
+#[tokio::test]
 async fn test_exactly_one_retry_then_llm_error() {
     let key = "sk-secret-key";
     // A rejected property is named in the error's path, and the model can name one after anything it read.

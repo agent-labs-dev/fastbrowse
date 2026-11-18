@@ -284,6 +284,8 @@ class CostLine(Frozen):
     """Input tokens read from the provider's prompt cache; absent when it reports none, and on old receipts."""
     cache_write_tokens: int | None = Field(default=None, ge=0, exclude_if=lambda tokens: tokens is None)
     """Input tokens written to the provider's prompt cache; absent when it reports none, and on old receipts."""
+    model: str | None = Field(default=None, exclude_if=lambda model: model is None)
+    """The model that served the call, as the provider reported it; absent on historical receipts."""
 
     @property
     def label(self) -> str:

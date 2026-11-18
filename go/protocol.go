@@ -179,6 +179,8 @@ type CostLine struct {
 	CacheReadTokens *int64 `json:"cache_read_tokens,omitempty"`
 	// Input tokens written to the provider's prompt cache; absent when it reports none, and on old receipts.
 	CacheWriteTokens *int64 `json:"cache_write_tokens,omitempty"`
+	// The model that served the call, as the provider reported it; absent on historical receipts.
+	Model *string `json:"model,omitempty"`
 }
 
 // Who chose a step: Jev, a rule in code, or a saved recipe action confirmed by Jev.

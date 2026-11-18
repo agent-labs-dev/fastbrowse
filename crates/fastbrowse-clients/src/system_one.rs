@@ -176,12 +176,12 @@ impl SystemOneClient {
             };
             Ok(Evaluation {
                 requests: sent.requests,
-                model,
+                model: model.clone(),
                 answers: parse_answers(payload.get("answers"), questions, false, None)?,
                 input_tokens: tokens,
                 // Counted before `timed`, so each resent request is charged the images it carried too.
                 cost: timed(
-                    CostLine { images: (!images.is_empty()).then(|| images.len() as i64), ..cost },
+                    CostLine { images: (!images.is_empty()).then(|| images.len() as i64), model: Some(model), ..cost },
                     &sent,
                     started,
                 ),
