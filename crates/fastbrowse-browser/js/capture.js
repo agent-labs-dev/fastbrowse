@@ -158,7 +158,70 @@
     }
     return text;
   };
-  const textOf = e => titled(e, clean(dated(e, unnoted(e, e.innerText ?? e.textContent ?? ''))));
+  // innerText omits generated content, so a separator drawn between two names disappears (#1267).
+  // CSSOM serializes strings with CSS escapes, not JSON escapes. Counters and images are not resolved text.
+  const cssStrings = content => {
+    const strings = /"((?:[^"\\]|\\.)*)"\s*/gy;
+    let value = '';
+    while (strings.lastIndex < content.length) {
+      const match = strings.exec(content);
+      if (!match) return null;
+      value += match[1].replace(/\\([\da-fA-F]{1,6}[ \t\r\n\f]?|.)/g, (_, escaped) => {
+        if (!/^[\da-fA-F]/.test(escaped)) return escaped;
+        const code = parseInt(escaped.trim(), 16);
+        return String.fromCodePoint(code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff) ? 0xfffd : code);
+      });
+    }
+    return value;
+  };
+  const generated = new WeakMap();
+  const generatedOf = e => {
+    if (generated.has(e)) return generated.get(e);
+    const read = pseudo => {
+      if (e.closest('[aria-hidden="true"]')) return '';
+      const style = getComputedStyle(e, pseudo);
+      if (style.display === 'none' || style.visibility !== 'visible') return '';
+      const value = cssStrings(style.content);
+      if (!value) return '';
+      // A pseudo-element's margins separate its text visually, though neither is present in innerText.
+      return `${parseFloat(style.marginInlineStart) > 0 ? ' ' : ''}${value}${parseFloat(style.marginInlineEnd) > 0 ? ' ' : ''}`;
+    };
+    const found = [read('::before'), read('::after')];
+    if (found.some(Boolean)) {
+      // The generated text's host can carry the gap instead. Ordinary inline margins do not split a word.
+      const style = getComputedStyle(e);
+      if (parseFloat(style.marginInlineStart) > 0) found[0] = ` ${found[0]}`;
+      if (parseFloat(style.marginInlineEnd) > 0) found[1] += ' ';
+    }
+    generated.set(e, found);
+    return found;
+  };
+  const renderedOf = e => {
+    let text = e.innerText ?? e.textContent ?? '';
+    let cursor = 0;
+    const insertions = [];
+    const visit = node => {
+      if (node.nodeType === 3) {
+        const shown = clean(node.textContent ?? '');
+        const at = shown ? text.indexOf(shown, cursor) : -1;
+        if (at >= 0) cursor = at + shown.length;
+        return;
+      }
+      if (node.nodeType !== 1 || SKIP.has(node.tagName)) return;
+      if (!visible(node) && getComputedStyle(node).display !== 'contents') return;
+      if (node.matches(IN_PAGE) && noteReference(node)) return;
+      const [before, after] = generatedOf(node);
+      const shown = clean(node.innerText ?? '');
+      const at = shown ? text.indexOf(shown, cursor) : cursor;
+      if (before) insertions.push({ at: at < 0 ? cursor : at, value: before });
+      for (const child of node.childNodes) visit(child);
+      if (after) insertions.push({ at: cursor, value: after });
+    };
+    visit(e);
+    for (const { at, value } of insertions.reverse()) text = text.slice(0, at) + value + text.slice(at);
+    return text;
+  };
+  const textOf = e => titled(e, clean(dated(e, unnoted(e, renderedOf(e)))));
   const isBlock = e => {
     const display = getComputedStyle(e).display;
     return !(display.startsWith('inline') || display === 'contents') || e.tagName === 'BR';
@@ -345,7 +408,7 @@
       (node.nodeType === 1 && !FRAMES.has(node.tagName) && (hidden(node) || SKIP.has(node.tagName))),
     );
     let text = whole ? textOf(owner) :
-      clean(run.map(n => (n.nodeType === 3 ? n.textContent : titled(n, dated(n, unnoted(n, n.innerText ?? ''))))).join(''));
+      clean(run.map(n => (n.nodeType === 3 ? n.textContent : titled(n, dated(n, unnoted(n, renderedOf(n)))))).join(''));
     // A host's own text read in its shadow root is a block apart from its row, which may have read it without it.
     // A frame's nodes come from another realm, so the root is told by its node type rather than `instanceof`.
     const host = run[0].parentNode?.nodeType === 11 ? run[0].parentNode.host : null;

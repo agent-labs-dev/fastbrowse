@@ -209,6 +209,8 @@ struct Element {
     navigation: bool,
     /// Never rendered: hidden itself, skipped, or inside such an element.
     hidden: bool,
+    /// An accessibility label inside an aria-hidden subtree is decorative, even if its CSS draws an icon.
+    aria_hidden: bool,
     /// Inside `svg` or `math`, where a self-closing tag ends its element.
     foreign: bool,
     /// Whether it shows any text.
@@ -244,6 +246,7 @@ impl Tree {
             label: None,
             navigation: false,
             hidden: false,
+            aria_hidden: false,
             foreign: false,
             text: false,
             start: usize::MAX,
@@ -405,6 +408,7 @@ impl Tags for Tree {
                 || SKIPPED.contains(&name)
                 || get("hidden").is_some()
                 || hides(&get("style").unwrap_or_default()),
+            aria_hidden: self.elements[parent].aria_hidden || get("aria-hidden").as_deref() == Some("true"),
             foreign,
             text: false,
             start: at,
@@ -723,6 +727,8 @@ struct Reader<'a> {
     /// Native tooltip text can hold the full name when a listing shortens its visible label.
     titles: Vec<TitleAdvice>,
     ends: HashMap<usize, usize>,
+    /// Empty elements can label a separator that CSS draws but the served text does not contain.
+    empty: HashSet<usize>,
     /// The cards the first read found, by the tag token that opens each.
     records: HashMap<usize, Record>,
     /// The open card, whose whole text is one block.
@@ -748,6 +754,12 @@ impl Tags for Reader<'_> {
         // `<svg/>` is foreign content, where a self-closing tag ends the element: it opens nothing to skip.
         if !(tag.self_closing && &*tag.name == "svg") {
             self.open(&tag.name, &tag.attrs, at);
+            if self.skip == 0
+                && self.empty.contains(&at)
+                && let Some(label) = tag.attrs.iter().find(|attr| &*attr.name.local == "aria-label")
+            {
+                self.data(&label.value);
+            }
         }
     }
 
@@ -789,6 +801,7 @@ impl<'a> Reader<'a> {
         records: HashMap<usize, Record>,
         notes: HashSet<usize>,
         ends: HashMap<usize, usize>,
+        empty: HashSet<usize>,
     ) -> Reader<'a> {
         Reader {
             url,
@@ -818,6 +831,7 @@ impl<'a> Reader<'a> {
             stamps: Vec::new(),
             titles: Vec::new(),
             ends,
+            empty,
             records,
             record: None,
             notes,
@@ -1347,7 +1361,18 @@ pub fn read(html: &str, url: &str) -> (String, Vec<Found>, Vec<Control>, Vec<Fra
         .filter(|(index, element)| tree.leaf(*index) || (element.tag == "a" && element.href.is_some()))
         .map(|(_, element)| (element.start, element.close))
         .collect();
-    let mut reader = tokenize(html, Sink::new(Reader::new(url, tree.records(), notes, ends))).into_inner();
+    let empty = tree
+        .elements
+        .iter()
+        .filter(|element| {
+            !element.text
+                && !element.hidden
+                && !element.aria_hidden
+                && !LEAVES_OF_THEIR_OWN.contains(&element.tag.as_str())
+        })
+        .map(|element| element.start)
+        .collect();
+    let mut reader = tokenize(html, Sink::new(Reader::new(url, tree.records(), notes, ends, empty))).into_inner();
     reader.emit_titles(usize::MAX);
     reader.close_record();
     reader.flush(None, None, false);
@@ -1611,6 +1636,38 @@ mod tests {
         assert_eq!(texts, (1..=3).map(|n| format!("Quote {n}. by Author {n} (about)\nTags: a b")).collect::<Vec<_>>(),);
         assert_eq!(found.len(), 4, "{found:?}");
         assert!(records.iter().all(|b| b.heading_path == ["Quotes"] && b.href.is_none()));
+    }
+
+    #[test]
+    fn empty_inline_labels_preserve_generated_separators() {
+        let html = "<style>.separator::before { content: '\\00b7'; }</style>\
+            <ul><li><div><span>JetBlue</span><span class=separator aria-label=' '></span><span>Tap Air Portugal</span></div></li>\
+            <li><div><span>British Airways</span><span class=separator aria-label=' '></span><span>American, Iberia, Finnair</span></div></li>\
+            <li><div><span>JetBlue</span></div></li></ul>\
+            <p><span>JetBlue</span><span class=separator aria-label=' '></span><span>Tap Air Portugal</span></p>\
+            <p><span>Jet</span><span>Blue</span></p>\
+            <p><span>Jet</span><span hidden aria-label=' '></span><span>Blue</span></p>\
+            <p><span aria-label='Not a replacement'>Visible wording</span></p>\
+            <p><span aria-label='Accessible wording'></span></p>\
+            <p><span>Jet</span><span aria-hidden=true><span aria-label='Icon'></span></span><span>Blue</span></p>\
+            <table><tr><td><span>JetBlue</span><span class=separator aria-label=' '></span><span>Tap Air Portugal</span></td></tr></table>";
+        let (_, found) = blocks(html, "https://a.example/");
+        let texts: Vec<_> = found.iter().map(|block| block.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                "JetBlue Tap Air Portugal",
+                "British Airways American, Iberia, Finnair",
+                "JetBlue",
+                "JetBlue Tap Air Portugal",
+                "JetBlue",
+                "JetBlue",
+                "Visible wording",
+                "Accessible wording",
+                "JetBlue",
+                "| JetBlue Tap Air Portugal |",
+            ]
+        );
     }
 
     #[test]

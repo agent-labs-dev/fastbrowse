@@ -31,6 +31,70 @@ async fn document_title_is_citable_without_a_body_heading() {
 // -- test_capture.py: capture blocks preserve the records a reader needs to cite together -----------------------
 
 #[tokio::test(flavor = "multi_thread")]
+async fn generated_separators_preserve_inline_boundaries() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<style>.separator { margin: 0 4px; } .separator::before { content: '\00b7'; }</style>
+        <ul><li><div><span>JetBlue</span><span class="separator" aria-label=" "></span><span>Tap Air Portugal</span></div></li>
+        <li><div><span>British Airways</span><span class="separator" aria-label=" "></span><span>American, Iberia, Finnair</span></div></li>
+        <li><div><span>JetBlue</span></div></li></ul>
+        <p><span>JetBlue</span><span class="separator" aria-label=" "></span><span>Tap Air Portugal</span></p>
+        <p><span>Jet</span><span>Blue</span></p>
+        <p><span>Jet</span><span hidden aria-label=" "></span><span>Blue</span></p>
+        <table><tr><td><span>JetBlue</span><span class="separator" aria-label=" "></span><span>Tap Air Portugal</span></td></tr></table>"#,
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    assert!(capture.text.contains("JetBlue \u{b7} Tap Air Portugal"), "{}", capture.text);
+    assert!(!capture.text.contains("JetBlueTap Air Portugal"), "{}", capture.text);
+    assert!(capture.text.contains("British Airways \u{b7} American, Iberia, Finnair"), "{}", capture.text);
+    assert!(capture.text.contains("| JetBlue \u{b7} Tap Air Portugal |"), "{}", capture.text);
+    assert_eq!(texts(&capture).iter().filter(|text| **text == "JetBlue").count(), 3);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn generated_text_preserves_css_strings_without_decorative_noise() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<style>
+        .prefix::before { content: 'pre'; }
+        .suffix::after { content: 'fix'; }
+        .escaped::before { content: '\22 quoted\22 \a line\\'; }
+        .attribute::after { content: attr(data-unit); }
+        .icon::before { content: '\e000'; }
+        .counter::before { content: counter(item); }
+        .decorative::before { content: '\e001' / ''; }
+        .hidden::before { content: 'not shown'; display: none; }
+        </style>
+        <p><span class="prefix">fix</span></p>
+        <p><span class="suffix">pre</span></p>
+        <p><span class="escaped"></span></p>
+        <p><span class="attribute" data-unit="kg">10</span></p>
+        <p><span>Jet</span><span class="icon" aria-hidden="true"></span><span>Blue</span></p>
+        <p><span>Jet</span><span class="counter"></span><span>Blue</span></p>
+        <p><span>Jet</span><span class="decorative"></span><span>Blue</span></p>
+        <p><span>Jet</span><span class="hidden"></span><span>Blue</span></p>
+        <p><span style="margin-inline: 4px">J</span>etBlue</p>
+        <p><span class="prefix" hidden>not shown</span>Visible</p>"#,
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    let read = texts(&capture);
+    assert_eq!(read.iter().filter(|text| text.as_str() == "prefix").count(), 2, "{read:?}");
+    assert!(read.iter().any(|text| text == "\"quoted\"\nline\\"), "{read:?}");
+    assert!(read.iter().any(|text| text == "10kg"), "{read:?}");
+    assert_eq!(read.iter().filter(|text| text.as_str() == "JetBlue").count(), 5, "{read:?}");
+    assert!(read.iter().any(|text| text == "Visible"), "{read:?}");
+    assert!(!capture.text.contains("not shown"));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn title_advice_stays_with_its_record_and_visible_text() {
     let Some(h) = harness().await else { return };
     h.goto("/token.html").await;
