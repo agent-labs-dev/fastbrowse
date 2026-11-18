@@ -417,7 +417,7 @@ requires-dist = [
     { name = "fastbrowse", extras = ["eval-data"], directory = "../" },
     { name = "httpx" },
     { name = "langfuse", specifier = ">=5.0.4,<6" },
-    { name = "parallax-evals", extras = ["browser"], specifier = "==2.0.0.dev45" },
+    { name = "parallax-evals", extras = ["browser"], specifier = "==2.0.0.dev48" },
     { name = "pydantic", specifier = ">=2.12" },
 ]
 
@@ -791,7 +791,7 @@ wheels = [
 
 [[package]]
 name = "parallax-evals"
-version = "2.0.0.dev45"
+version = "2.0.0.dev48"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "croniter" },
@@ -807,9 +807,9 @@ dependencies = [
     { name = "tzdata" },
     { name = "uvicorn" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b8/50/43a2f3f5c138be18be4482130db605624089020a0eb140cb3f56f82c4f21/parallax_evals-2.0.0.dev45.tar.gz", hash = "sha256:b1737ee8e9d9e81c9f6405759b56b011d64800701f6bb3428f0f76ca3f2db667", size = 1053463, upload-time = "2026-11-17T17:56:05.118Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/96/38/8c1a0dd4f4cf5c0d6eece17a129ca0bb92bf9ddf9a403004c409a0b7cd45/parallax_evals-2.0.0.dev48.tar.gz", hash = "sha256:2ed3aeee422733d546abdf58169d9a636f62a026945d269ebb092008cb18d2b5", size = 1058438, upload-time = "2026-11-18T00:00:32.155Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d9/05/bf8d19062aa7ff37d48ffbeb986064f89cc73892e3c64e25673b502f77bb/parallax_evals-2.0.0.dev45-py3-none-any.whl", hash = "sha256:8bc307d84060d2610d29d947fb10a205eb8b8bb098c8744b7237f8cfdc93264c", size = 1141840, upload-time = "2026-11-17T17:56:03.33Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/ce/58c3e94ab98fd42c25b0efd52a9d9d13a52208d1c3257832dcb59672d586/parallax_evals-2.0.0.dev48-py3-none-any.whl", hash = "sha256:f85b79db43c8722e856c92e7253ddc10eeb80fe581ddf2ac33b9eaabb5b516bc", size = 1144496, upload-time = "2026-11-18T00:00:29.977Z" },
 ]
 
 [package.optional-dependencies]
