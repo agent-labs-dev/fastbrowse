@@ -9,6 +9,18 @@
   const delta = mode.endsWith('-delta');
   const reuse = delta || mode.endsWith('-reuse');
   if (reuse) mode = mode.slice(0, -6);
+  const POINTER = ['click', 'mousedown', 'pointerdown', 'mouseup', 'pointerup'];
+  // Whether `read`, this document's `getEventListeners` (`listeners` below), finds a pointer listener on `e`.
+  const hears = (read, e) => {
+    let listeners = null;
+    try {
+      listeners = read?.(e);
+    } catch {}
+    return Boolean(listeners) && POINTER.some(type => Array.isArray(listeners[type]) && listeners[type].length);
+  };
+  // A parent document's look asks this one, a frame inside it, about this document's elements (`readerOf` below). It
+  // returns before anything else here runs, and hands out only that answer, never the function.
+  if (mode === 'reader') return 'listeners' in own ? (own.reader ||= e => hears(own.listeners, e)) : null;
   // Reading a cross-origin frame's document can throw.
   const childDocument = frame => {
     try {
@@ -331,17 +343,24 @@
   }
   if ((mode === 'snapshot' || mode === 'glance') && !('listeners' in own))
     throw new Error(own.unread);
-  const POINTER = ['click', 'mousedown', 'pointerdown', 'mouseup', 'pointerup'];
   let listenerStates = new Map();
+  // The function answers only for elements of the realm it was read in, and a same-origin frame's document has a realm
+  // of its own: read from the parent, a frame's listened span was no control (#1312). So a frame's elements are asked of
+  // that document's own function, through its `reader` mode, which throws `own.unread` there until it has read its own.
+  const readers = new Map([[document, e => hears(own.listeners, e)]]);
+  const readerOf = doc => {
+    if (!readers.has(doc)) {
+      const reader = doc.defaultView?.__fastbrowseScripts?.[own.key]?.('reader');
+      if (typeof reader !== 'function') throw new Error(own.unread);
+      readers.set(doc, reader);
+    }
+    return readers.get(doc);
+  };
   // The root element and the body hear clicks on the whole page, as the document does, so neither counts.
   const listened = e => {
-    if (!own.listeners || e === e.ownerDocument.documentElement || e === e.ownerDocument.body) return false;
+    if (e === e.ownerDocument.documentElement || e === e.ownerDocument.body) return false;
     if (listenerStates?.has(e)) return listenerStates.get(e);
-    let listeners = null;
-    try {
-      listeners = own.listeners(e);
-    } catch {}
-    const value = Boolean(listeners) && POINTER.some(type => Array.isArray(listeners[type]) && listeners[type].length);
+    const value = readerOf(e.ownerDocument)(e);
     listenerStates?.set(e, value);
     return value;
   };

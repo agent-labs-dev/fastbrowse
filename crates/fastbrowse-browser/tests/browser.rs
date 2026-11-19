@@ -1292,6 +1292,30 @@ async fn test_an_element_with_only_a_script_click_listener_is_offered() {
     h.close().await;
 }
 
+/// A same-origin frame's elements belong to the frame's own script realm, and Chrome's `getEventListeners` reports
+/// only the listeners of the realm it was read in, so a span the frame's script listens on was never offered (#1312).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_an_element_with_only_a_script_click_listener_in_a_frame_is_offered() {
+    let _turn = turn().await;
+    let Some(h) = harness().await else { return };
+    h.goto("/listened-frame.html").await;
+    let obs = h.observe().await;
+    let labels: Vec<&str> = obs.controls.iter().map(|c| c.label.as_str()).collect();
+    for label in ["Remove Combat", "Delegated row", "Dropped listener", "Shadow action"] {
+        assert!(labels.contains(&label), "{label:?} not offered in {labels:?}");
+    }
+    assert_eq!(act(&h.page, click(find(&obs, "Remove Combat")), &obs).await.outcome, StepOutcome::Executed);
+    let frame = "document.querySelector('iframe').contentWindow";
+    assert_eq!(
+        eval_active(&h, &format!("{frame}.document.getElementById('status').textContent")).await,
+        "Nothing chosen"
+    );
+    eval_active(&h, &format!("{frame}.dropListener()")).await;
+    let labels: Vec<String> = h.observe().await.controls.into_iter().map(|c| c.label).collect();
+    assert!(!labels.iter().any(|l| l == "Dropped listener"), "{labels:?}");
+    h.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_a_table_cell_drawn_with_an_icon_is_not_read_as_blank() {
     let _turn = turn().await;
