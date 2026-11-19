@@ -118,14 +118,18 @@ fn free() -> CostLine {
 }
 
 /// A run at its first step.
+/// A run whose task forbids no action, already judged so: the gate tests here count the requests their own rule makes.
+/// A test of a task that forbids something sets `prohibits` back to None.
 fn run_state() -> RunState {
-    RunState::new(
+    let mut state = RunState::new(
         "Find a train from Bristol to York on 16 October 2026".into(),
         IndexMap::new(),
         Vec::new(),
         Authorization::default(),
         Arc::new(Ledger::new(Limits::default())),
-    )
+    );
+    state.prohibits = Some(false);
+    state
 }
 
 fn observation(controls: &[Control]) -> Observation {
@@ -1287,7 +1291,7 @@ impl fastbrowse_core::decision::DecisionClient for Gatekeeper {
                 let probability = match key.as_str() {
                     "requested" => self.requested,
                     "lasting" => self.lasting,
-                    "conditional" => 0.0,
+                    "conditional" | "prohibits" | "forbidden" => 0.0,
                     "coverage" | "exact" => 1.0,
                     "edits" => {
                         self.edits_asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1409,6 +1413,55 @@ async fn test_an_authorized_run_does_not_keep_a_change_the_task_did_not_ask_for(
         assert_eq!(jev.calls.load(Ordering::SeqCst), 1, "{case}");
         if let Err(flow) = gated {
             assert!(matches!(flow, Flow::Unsure(_)), "{case}: refused for another step, not stopped");
+        }
+    }
+}
+
+/// An unauthorized run told "Do not click Upload or submit anything" clicked Upload three times (#1346): Jev put the
+/// click at 0.23 irreversible, and nothing the gate asked weighed the task's words. An action the task says not to take
+/// is refused once, authorized or not, and a task that forbids nothing is never asked about each action.
+#[tokio::test]
+async fn test_an_action_the_task_says_not_to_take_is_refused_even_when_reversible() {
+    // (authorized, prohibits, forbidden, acts, questions in the gate request)
+    for (authorized, prohibits, forbidden, acts, asked) in [
+        (false, 0.99, 0.98, false, vec!["irreversible", "forbidden"]),
+        (true, 0.99, 0.98, false, vec!["irreversible", "forbidden", "requested", "conditional", "lasting"]),
+        (false, 0.99, 0.13, true, vec!["irreversible", "forbidden"]),
+        (false, 0.02, 0.98, true, vec!["irreversible"]),
+    ] {
+        let given = IndexMap::from([
+            ("irreversible", 0.23),
+            ("prohibits", prohibits),
+            ("forbidden", forbidden),
+            ("requested", 0.99),
+            ("conditional", 0.01),
+            ("lasting", 0.01),
+        ]);
+        let jev = Arc::new(Conditioned { answers: given, chosen: IndexMap::new(), asked: Default::default() });
+        let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+        let mut state = run_state();
+        state.task = "Choose upload_fixture.txt in the file input. Do not click Upload or submit anything.".into();
+        state.prohibits = None;
+        state.authorization = Authorization { irreversible_actions: authorized };
+        let upload = Control { context: Some("File Uploader".into()), ..button("Upload") };
+        let page = observation(std::slice::from_ref(&upload));
+        let decision = Decision { operation_confidence: 0.68, ..code_decision(Operation::Click, Some(upload)) };
+        let case = format!("authorized {authorized}, prohibits {prohibits}, forbidden {forbidden}");
+        for _ in 0..2 {
+            let gated = agent.gate_irreversible(&mut state, &page, &decision).await;
+            assert_eq!(gated.is_ok(), acts, "{case}");
+            if let Err(flow) = gated {
+                assert!(matches!(flow, Flow::Unsure(_)), "{case}: refused for another step, not stopped");
+            }
+        }
+        let requests = jev.asked.lock().unwrap();
+        // The task is asked whether it forbids anything once a run, before its first gate.
+        let keys: Vec<Vec<&str>> = requests.iter().map(|(_, q)| q.keys().map(String::as_str).collect()).collect();
+        assert_eq!(keys[0], ["prohibits"], "{case}");
+        assert_eq!(keys.len(), 3, "{case}");
+        assert_eq!(keys[1], asked, "{case}");
+        if let Some(question) = requests[1].1.get("forbidden") {
+            assert!(question.contains("'Upload'") && question.contains("whatever the page shows"), "{case}");
         }
     }
 }

@@ -14,9 +14,9 @@ use fastbrowse_core::recipe::RecipeText;
 use fastbrowse_core::safety::{
     CredentialField, DONE, EDITS_ALLOWED, EDITS_NONE, EDITS_REQUESTED_ONLY, HAPPENED, LATER_VALUES, MET,
     asks_for_credentials, changes_a_value, changes_credentials, conditional_question, control_action, credential_field,
-    downloads_question, edits_question, happened_question, irreversible_question, is_password, lasting_question,
-    may_be_irreversible, met_question, offers_passkey, origin_of, requested_question, resolve_secret,
-    sets_new_password, starts_download, values_question,
+    downloads_question, edits_question, forbidden_question, happened_question, irreversible_question, is_password,
+    lasting_question, may_be_irreversible, met_question, offers_passkey, origin_of, prohibits_question,
+    requested_question, resolve_secret, sets_new_password, starts_download, values_question,
 };
 use indexmap::IndexMap;
 use serde_json::{Map, Value as JsonValue, json};
@@ -44,6 +44,7 @@ const FIRST_VALUE: &str = "the first comes first, unless the task says when to u
 #[derive(Clone, Copy, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 enum GateReason {
+    Forbidden,
     Reversible,
     Requested,
     UnrequestedChange,
@@ -711,6 +712,17 @@ impl Agent {
         Ok(forbidden.unwrap_or(true))
     }
 
+    /// Whether the task tells the agent not to take some action, asked of Jev about the task alone and kept for the run.
+    /// No answer asks about each action, as a task that forbids something has it asked.
+    async fn prohibits(&self, state: &mut RunState) -> Step<bool> {
+        if let Some(prohibits) = state.prohibits {
+            return Ok(prohibits);
+        }
+        let prohibits = self.task_rules_out(state, "prohibits", prohibits_question()).await?;
+        state.prohibits = prohibits;
+        Ok(prohibits.unwrap_or(true))
+    }
+
     /// Which changes to what the page's fields and settings hold the task allows, asked of Jev about the task alone and
     /// kept for the run. No answer rules out every change for this action and keeps nothing, as an unanswered download
     /// question does.
@@ -818,7 +830,8 @@ impl Agent {
     }
 
     /// The one rule for an action that may commit: it proceeds when Jev judges it not irreversible, or when the run is
-    /// authorized and Jev judges the task asked for it. Otherwise the run stops for confirmation.
+    /// authorized and Jev judges the task asked for it. Otherwise the run stops for confirmation. Before either, an
+    /// action Jev judges the task says not to take is refused once, authorized or not.
     ///
     /// `irreversible` is None for an action the page's structure shows commits, which only the task's request lifts.
     /// `action` is what the agent is about to do, as [`control_action`] writes it for a control. `lasting` asks, in an
@@ -843,6 +856,9 @@ impl Agent {
         let mut questions = IndexMap::new();
         if let Some(irreversible) = irreversible {
             questions.insert("irreversible".to_string(), Question::Noul(irreversible));
+        }
+        if self.prohibits(state).await? {
+            questions.insert("forbidden".to_string(), Question::Noul(forbidden_question(action)));
         }
         if authorized {
             questions.insert("requested".to_string(), Question::Noul(requested_question(action)));
@@ -878,7 +894,7 @@ impl Agent {
                 _ => None,
             };
             let (probability, requested, lasting) = (noul("irreversible"), noul("requested"), noul("lasting"));
-            let conditional = noul("conditional");
+            let (conditional, forbidden) = (noul("conditional"), noul("forbidden"));
             self.event("irreversible", || {
                 Map::from_iter([
                     ("target".into(), label.into()),
@@ -887,8 +903,15 @@ impl Agent {
                     ("requested".into(), json!(requested)),
                     ("lasting".into(), json!(lasting)),
                     ("conditional".into(), json!(conditional)),
+                    ("forbidden".into(), json!(forbidden)),
                 ])
             });
+            // Authorization does not lift it, as it does not lift the download rule: it lets a run commit what the task
+            // asks for, never what the task forbids. Refused once, the run can pick another step.
+            if forbidden.is_some_and(|p| p > EVEN_ODDS) {
+                self.trace_authorization(state, decision, GateReason::Forbidden);
+                return self.refuse_once(state, observation, decision, label, "is what the task says not to do").await;
+            }
             let reversible = probability.is_some_and(|p| p <= thresholds.irreversible_above);
             let wanted = requested.is_some_and(|p| p > thresholds.requested_above);
             // An unanswered question refuses once, as an unanswered irreversible one does.

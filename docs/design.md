@@ -55,13 +55,16 @@ recent actions, and can only refuse: the action proceeds only on a yes, and any 
 so the run can read the page or finish.
 Repeated refusals spend recoveries and end the run `stuck`, never by committing.
 
-Two rules come from the task itself, judged once per run by Jev from the task text and kept for the run.
+Rules also come from the task itself, judged once per run by Jev from the task text and kept for the run.
 When the task rules out downloading, a control the page says downloads a file is refused. When the task
 rules out changing anything, a fill, a select or a click on a setting control (a checkbox, radio, switch,
 option, or any control that reports a checked state) is refused, and from then on those operations are no
 longer offered. Typing into a search box is exempt, since searching is how a read-only task finds things.
-Authorization does not lift either rule: it lets a run commit what the task asks for, never what the task
-forbids.
+When the task tells the agent not to take some action ("do not click Upload"), every action the gate asks about
+is also asked about in the same request, against the task and the action alone: one the task says not to take,
+whatever the page shows, is refused once. Whether the task forbids anything is judged first, so a task that forbids
+nothing adds no question to its gates. Authorization does not lift any of these rules: it lets a run commit what
+the task asks for, never what the task forbids.
 
 Unmarked password fields leave the current-or-replacement role to Jev using the task and page context.
 Field count and order do not establish that role. An explicit `current-password` marker identifies an
