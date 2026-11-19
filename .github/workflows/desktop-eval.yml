@@ -53,6 +53,10 @@ jobs:
       INPUT_MODEL: ${{ inputs.model }}
       LABEL: ${{ github.event.label.name }}
       UV_PYTHON: "3.13"
+      LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
+      LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+      LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+      PARALLAX_LANGFUSE_PROJECT: fastbrowse-evals
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -90,10 +94,6 @@ jobs:
           PARALLAX_JUDGE_API_KEY: ${{ secrets.OPENROUTER_JUDGE_API_KEY }}
           PARALLAX_JUDGE_BASE_URL: ${{ vars.PARALLAX_JUDGE_BASE_URL }}
           PARALLAX_JUDGE_MODELS: ${{ vars.PARALLAX_JUDGE_MODELS }}
-          LANGFUSE_BASE_URL: https://us.cloud.langfuse.com
-          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
-          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
-          PARALLAX_LANGFUSE_PROJECT: fastbrowse-evals
           REPEATS: ${{ inputs.repeats || '2' }}
           BUDGET: ${{ inputs.budget || '5' }}
           RESERVE: ${{ inputs.reserve || '1' }}
@@ -103,14 +103,16 @@ jobs:
             --tasks tasks --out "$GITHUB_WORKSPACE/runs" --videos "$GITHUB_WORKSPACE/videos"
             --note "desktop $HARNESS ${GITHUB_SHA::8}")
           test -z "$MODEL" || args+=(--model "$MODEL")
-          uv run --no-sync parallax run files-desktop-report-cross-app "${args[@]}"
+          set -o pipefail
+          uv run --no-sync parallax run files-desktop-report-cross-app "${args[@]}" 2>&1 | tee "$RUNNER_TEMP/run.log"
       - name: Report
         if: ${{ !cancelled() }}
         continue-on-error: true
         run: |
           cd evals
-          run_id="$(basename "$(find "$GITHUB_WORKSPACE/runs" -mindepth 1 -maxdepth 1 -type d | head -n 1)")"
-          uv run --no-sync parallax report "$run_id" | tee -a "$GITHUB_STEP_SUMMARY"
+          # The run directory is deleted once uploaded, so the report is read back from Langfuse by experiment name.
+          name="$(grep -A1 '^runs: ' "$RUNNER_TEMP/run.log" | tail -n 1 | sed 's/^ *//')"
+          uv run --no-sync parallax report "$name" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
         with:
