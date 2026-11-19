@@ -1819,19 +1819,34 @@ impl CdpPage {
                 }
                 mark
             };
-            let worlds = self.session.main_worlds(session_id);
-            if worlds.is_empty() {
-                self.session.send("Runtime.evaluate", mark(None), Some(session_id)).await?;
+            // A look that first touches a frame's document makes Chrome create that frame's page world, and reports it
+            // before the look's own answer, so a look still unread after its marks has met a world it can mark now.
+            // Worlds are marked once each, and a round that finds no new world ends the retries.
+            let mut marked = std::collections::HashSet::new();
+            loop {
+                let worlds: Vec<String> =
+                    self.session.main_worlds(session_id).into_iter().filter(|world| !marked.contains(world)).collect();
+                if worlds.is_empty() {
+                    if !marked.is_empty() {
+                        break;
+                    }
+                    self.session.send("Runtime.evaluate", mark(None), Some(session_id)).await?;
+                    marked.insert(String::new());
+                }
+                // Sent together, so a page of many frames waits one round trip, not one per frame. A frame can go away
+                // between the event and its call, which leaves it nothing to read.
+                futures_util::future::join_all(
+                    worlds.iter().map(|world| {
+                        self.session.send("Runtime.evaluate", mark(Some(world.clone())), Some(session_id))
+                    }),
+                )
+                .await;
+                marked.extend(worlds);
+                out = self.session.send("Runtime.evaluate", params.clone(), Some(session_id)).await?;
+                if !out.get("exceptionDetails").is_some_and(|details| details.to_string().contains(LISTENERS_UNREAD)) {
+                    break;
+                }
             }
-            // Sent together, so a page of many frames waits one round trip, not one per frame. A frame can go away
-            // between the event and its call, which leaves it nothing to read.
-            futures_util::future::join_all(
-                worlds
-                    .into_iter()
-                    .map(|world| self.session.send("Runtime.evaluate", mark(Some(world)), Some(session_id))),
-            )
-            .await;
-            out = self.session.send("Runtime.evaluate", params, Some(session_id)).await?;
         }
         if out.get("exceptionDetails").is_some() {
             return Err(BrowserError::Script);
