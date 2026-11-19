@@ -8263,6 +8263,25 @@ async fn test_schema_output_on_a_whole_list_opens_the_next_page_instead() {
     assert!(state.pager_followed.contains("https://list.test/page/2/"));
 }
 
+/// A filtered list that states its own total answers a count from one passage; Jev's read picked it and Jev chose
+/// done, and code still opened the list's next pages (#1331).
+#[tokio::test]
+async fn test_done_on_a_list_whose_read_gave_the_answer_in_one_passage_finishes_there() {
+    let browser = Arc::new(HungPage::new(0));
+    let agent = pager_agent(browser);
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    read_one(&mut state, &first, Extent::EveryPage);
+    let captured = Capture { url: first.url.clone(), ..capture(&[(BlockKind::Paragraph, "59 results")]) };
+    state.notes.add(Fact::read("59 results", block_evidence(&captured, "s0"), FactReader::JevChoice).answering());
+    state.note_pager_pages(&first);
+
+    assert_eq!(state.unread_pager_page(), None);
+    // The stub Jev has no answer for what follows the walk; only the step that opened a page matters here.
+    let _ = agent.finish(&mut state, &first, None, None).await;
+    assert!(state.steps.iter().all(|step| step.operation != Operation::Navigate), "{:?}", state.steps);
+}
+
 #[tokio::test]
 async fn test_done_on_a_record_page_after_leaving_the_list_returns_to_its_unread_next_page() {
     let browser = Arc::new(HungPage::new(0));

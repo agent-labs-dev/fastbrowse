@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- A count over a whole list that the list states itself ends on the page that states it. A filtered GitHub issue list showing "59 results" was read as the answer and the run chose to finish, but it still opened the list's next two pages and cited each page's navigation ([#1331](https://github.com/agent-labs-dev/fastbrowse/issues/1331)).
+
 - A field the task does not give a value for word for word is written knowing what the field is: its label, the section it sits in and its name. An unlabelled search box read only as `textbox`, so a research run typed its whole cited answer into a site's search box and submitted it; told the field sat under Advanced Search and was named `q`, the writer wrote a search query ([#1339](https://github.com/agent-labs-dev/fastbrowse/issues/1339)).
 
 - A `--record` clip (and live frames) now stop at the last clean frame once a secret is typed and stay stopped for the rest of the run. A page that echoed the secret on the next page, such as a form's result, was recorded in clear: a reading of the page text that came back clean released the hold, and frames arrived before the next reading. Closes #1347.
