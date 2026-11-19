@@ -550,10 +550,6 @@ impl CdpPage {
             (before_fingerprint, _, point, announced, opens, address, _) = fresh;
             drawn = false;
         }
-        // Before any keystroke of the action, whatever its operation.
-        if action.secret {
-            self.session.seal_frames();
-        }
         self.state.lock().unwrap().mark_index = None;
         if !action.secret
             && let (Some(marks), Point::At(x, y)) = (&self.pointer_marks, point)
@@ -1285,6 +1281,9 @@ impl CdpPage {
                 return Ok(refusal);
             }
             if secret {
+                // Sealed before the renderer can insert, and not earlier: a fill refused before this point typed
+                // nothing, so no frame of it can show the secret.
+                self.session.seal_frames();
                 // A secret must be checked and inserted in one renderer task: CDP insertText would leave a
                 // navigation/focus race between checking the origin and dispatching the secret to the page.
                 let script = format!(
