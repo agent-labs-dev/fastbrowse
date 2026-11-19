@@ -173,10 +173,12 @@ impl DeskpilotPage {
         (!self.withheld.load(Ordering::SeqCst)).then_some(png)
     }
 
-    /// Tells the film where `operation` lands: window pixels in a window `width` by `height`.
+    /// Tells the film where `operation` lands: window pixels in a window `width` by `height`. Only a click is drawn
+    /// as a press: deskpilot fills, hovers and selects through the element, not a press at this point.
     fn point(&self, operation: Operation, (x, y, width, height): (f64, f64, f64, f64)) {
         if let Some(film) = &self.film {
-            film.point(PointerMark { at: Instant::now(), x, y, operation, width, height });
+            let pressed = matches!(operation, Operation::Click);
+            film.point(PointerMark { at: Instant::now(), x, y, operation, pressed, width, height });
         }
     }
 

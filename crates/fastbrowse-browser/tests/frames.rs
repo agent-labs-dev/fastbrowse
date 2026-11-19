@@ -439,6 +439,7 @@ async fn test_a_fed_recording_writes_both_videos_with_the_cursor_and_the_drawn_c
         x: 160.0,
         y: 120.0,
         operation: Operation::Click,
+        pressed: true,
         width: 320.0,
         height: 240.0,
     });
