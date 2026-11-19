@@ -11,6 +11,8 @@ description = "fastbrowse's types: the models, the protocol, configuration, orig
 # WHATWG URL parsing, with UTS #46 host processing through its `idna` dependency: the parser Chrome uses.
 url = "2.5.8"
 percent-encoding = "2.3.2"
+# The Public Suffix List, compiled in: which registrable domain, and so which site, an address belongs to.
+psl = "2.1.258"
 indexmap = { version = "2.14.2", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 # Insertion order: pydantic writes fields in declaration order, and a request body must match Python's byte for byte.

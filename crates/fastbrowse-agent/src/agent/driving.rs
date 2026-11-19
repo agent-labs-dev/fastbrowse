@@ -182,7 +182,7 @@ impl Agent {
                     }
                     let mut offered = observation.clone();
                     leave_out_idle(state, &mut offered, &mut context);
-                    state.mark_read_links(&mut offered);
+                    state.mark_links(&mut offered);
                     state.mark_shown(&mut offered);
                     // The next saved step, when its page and control are certain, is the one control Jev is offered:
                     // Jev still judges the page, and may read or stop instead, but has no target to choose and no

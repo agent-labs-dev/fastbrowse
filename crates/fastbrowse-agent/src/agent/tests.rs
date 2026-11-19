@@ -400,7 +400,7 @@ async fn test_a_link_that_redirected_still_leads_to_the_page_it_read() {
     agent().note_effect(&mut state, &product);
     state.mark_read(&product);
     let mut results = results;
-    state.mark_read_links(&mut results);
+    state.mark_links(&mut results);
     assert_eq!(results.controls[0].already_read, Some(true));
 }
 
@@ -7811,12 +7811,44 @@ fn a_link_to_a_page_already_read_is_marked_on_the_link_so_links_sharing_its_labe
         "https://quotes.test/page/2/",
         &[about("a", "/author/Albert-Einstein/"), about("b", "/author/Jane-Austen/")],
     );
-    state.mark_read_links(&mut page);
+    state.mark_links(&mut page);
     let marks: Vec<_> = page.controls.iter().map(|control| control.already_read).collect();
     assert_eq!(marks, [Some(true), None]);
     assert_eq!(crate::policy::element(&page.controls[0])["already_read"], json!(true));
     assert!(crate::policy::element(&page.controls[1]).get("already_read").is_none());
     assert!(Agent::page_facts(&state, &page).iter().all(|fact| !fact.contains("already read")));
+}
+
+/// Asked to check a page on a Pages preview, a run followed the page's store button to another site and ended blocked at
+/// that site's security check: each link showed its href, but nothing said which ones left the site the browser opened
+/// for the task (#1137). Site is the registrable domain, so a sibling preview on the same public suffix is another
+/// site, and another host of the opened domain is not.
+#[test]
+fn a_link_to_another_site_than_the_one_the_run_opened_is_marked_on_the_link() {
+    let link =
+        |id: &str, href: &str| Control { href: Some(href.into()), ..Control::new(id, "link", id, [Operation::Click]) };
+    let links = || {
+        [
+            link("section", "#credits"),
+            link("changelog", "/changelog"),
+            link("store", "https://www.curseforge.com/wow/addons/skillup"),
+            link("sibling", "https://other.pages.dev/"),
+            link("docs", "https://docs.skillup.pages.dev/guide"),
+        ]
+    };
+    let mut state = run_state();
+    state.caller_start = Some("https://skillup.pages.dev/".into());
+    state.start_landing_url = Some("https://skillup.pages.dev/".into());
+    let mut page = at("https://skillup.pages.dev/", &links());
+    state.mark_links(&mut page);
+    let marks: Vec<_> = page.controls.iter().map(|control| control.other_site).collect();
+    assert_eq!(marks, [None, None, Some(true), Some(true), None]);
+    assert_eq!(crate::policy::element(&page.controls[2])["other_site"], json!(true));
+    assert!(crate::policy::element(&page.controls[1]).get("other_site").is_none());
+    // A run the caller gave no start has no site of its own to leave.
+    let mut page = at("https://skillup.pages.dev/", &links());
+    run_state().mark_links(&mut page);
+    assert!(page.controls.iter().all(|control| control.other_site.is_none()));
 }
 
 /// A known page is read under the address the run built for it, while the site links to it by an address that
@@ -7833,14 +7865,14 @@ async fn a_link_that_landed_on_a_page_already_read_is_marked_read() {
     let mut state = run_state();
     state.mark_read(&author);
     let mut before = quotes.clone();
-    state.mark_read_links(&mut before);
+    state.mark_links(&mut before);
     assert_eq!(before.controls[0].already_read, None, "no landing observed yet");
     state.acted_from = Some(quotes.clone());
     state.followed = Some("https://quotes.test/author/J-K-Rowling".into());
     state.history.push(executed(Some(Operation::Click), Some("(about)"), true));
     agent().note_effect(&mut state, &author);
     let mut after = quotes;
-    state.mark_read_links(&mut after);
+    state.mark_links(&mut after);
     assert_eq!(after.controls[0].already_read, Some(true));
 }
 
