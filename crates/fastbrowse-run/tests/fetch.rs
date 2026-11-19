@@ -707,8 +707,8 @@ async fn a_fetched_document_title_is_citable_separately_from_its_heading() {
             .expect("fetched");
     let title = capture.blocks.iter().find(|block| block.source_id == "document/title").expect("title evidence");
     assert_eq!(capture.block_text(title), "東京 reference");
-    assert_eq!(title.kind, fastbrowse_core::page::BlockKind::Observation);
-    assert_eq!(title.heading_path, ["Document title"]);
+    assert_eq!(title.kind, fastbrowse_core::page::BlockKind::DocumentTitle);
+    assert!(title.heading_path.is_empty());
     assert!(capture.blocks.iter().any(|block| block.kind == fastbrowse_core::page::BlockKind::Heading
         && capture.block_text(block) == "Account settings"));
     assert_eq!(capture.sha256, sha256_hex(capture.text.as_bytes()));

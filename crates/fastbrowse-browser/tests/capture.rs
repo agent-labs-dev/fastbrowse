@@ -17,8 +17,8 @@ async fn document_title_is_citable_without_a_body_heading() {
         let capture = h.page.capture().await.expect("capture");
         let title = capture.blocks.iter().find(|block| block.source_id == "document/title").expect("title evidence");
         assert_eq!(capture.block_text(title), "東京 reference");
-        assert_eq!(title.kind, BlockKind::Observation);
-        assert_eq!(title.heading_path, ["Document title"]);
+        assert_eq!(title.kind, BlockKind::DocumentTitle);
+        assert!(title.heading_path.is_empty());
         assert!(!capture.blocks.iter().any(|block| block.kind == BlockKind::Heading));
         assert_eq!(capture.sha256, fastbrowse_core::py::sha256_hex(capture.text.as_bytes()));
     }
@@ -29,6 +29,268 @@ async fn document_title_is_citable_without_a_body_heading() {
 }
 
 // -- test_capture.py: capture blocks preserve the records a reader needs to cite together -----------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn generated_separators_preserve_inline_boundaries() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<style>.separator { margin: 0 4px; } .separator::before { content: '\00b7'; }</style>
+        <ul><li><div><span>JetBlue</span><span class="separator" aria-label=" "></span><span>Tap Air Portugal</span></div></li>
+        <li><div><span>British Airways</span><span class="separator" aria-label=" "></span><span>American, Iberia, Finnair</span></div></li>
+        <li><div><span>JetBlue</span></div></li></ul>
+        <p><span>JetBlue</span><span class="separator" aria-label=" "></span><span>Tap Air Portugal</span></p>
+        <p><span>Jet</span><span>Blue</span></p>
+        <p><span>Jet</span><span hidden aria-label=" "></span><span>Blue</span></p>
+        <table><tr><td><span>JetBlue</span><span class="separator" aria-label=" "></span><span>Tap Air Portugal</span></td></tr></table>"#,
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    assert!(capture.text.contains("JetBlue \u{b7} Tap Air Portugal"), "{}", capture.text);
+    assert!(!capture.text.contains("JetBlueTap Air Portugal"), "{}", capture.text);
+    assert!(capture.text.contains("British Airways \u{b7} American, Iberia, Finnair"), "{}", capture.text);
+    assert!(capture.text.contains("| JetBlue \u{b7} Tap Air Portugal |"), "{}", capture.text);
+    assert_eq!(texts(&capture).iter().filter(|text| **text == "JetBlue").count(), 3);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn generated_text_survives_accessibility_hidden_ancestors() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<style>.separator::before { content: ' / '; } .suffix::after { content: ' end'; }</style>
+        <main><ul><li><span>Alpha</span><span class="separator"></span><span>Beta</span></li></ul>
+        <p><span>Gamma</span><span class="separator"></span><span>Delta</span></p>
+        <p class="suffix">Text</p></main>"#,
+    )
+    .await;
+    for hidden in [true, false, true, false] {
+        eval_active(&h.session, &format!("document.querySelector('main').setAttribute('aria-hidden', '{hidden}')"))
+            .await;
+        let capture = content_capture(&h.page).await;
+        for expected in ["Alpha / Beta", "Gamma / Delta", "Text end"] {
+            assert!(capture.text.contains(expected), "aria-hidden={hidden}: {}", capture.text);
+        }
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn generated_text_preserves_css_strings_without_decorative_noise() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<style>
+        .prefix::before { content: 'pre'; }
+        .suffix::after { content: 'fix'; }
+        .escaped::before { content: '\22 quoted\22 \a line\\'; }
+        .attribute::after { content: attr(data-unit); }
+        .icon::before { content: '\e000'; }
+        .counter::before { content: counter(item); }
+        .decorative::before { content: '\e001' / ''; }
+        .alternative::before { content: 'Required ' / 'required field'; }
+        .mixed::before { content: 'Chapter ' counter(chapter) ' topic '; }
+        .image::before { content: 'New ' url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>'); }
+        .hidden::before { content: 'not shown'; display: none; }
+        </style>
+        <p><span class="prefix">fix</span></p>
+        <p><span class="suffix">pre</span></p>
+        <p><span class="escaped"></span></p>
+        <p><span class="attribute" data-unit="kg">10</span></p>
+        <p><span class="alternative">value</span></p>
+        <p><span class="mixed">value</span></p>
+        <p><span class="image">value</span></p>
+        <p><span>Jet</span><span class="icon" aria-hidden="true"></span><span>Blue</span></p>
+        <p><span>Jet</span><span class="counter"></span><span>Blue</span></p>
+        <p><span>Jet</span><span class="decorative"></span><span>Blue</span></p>
+        <p><span>Jet</span><span class="hidden"></span><span>Blue</span></p>
+        <p><span style="margin-inline: 4px">J</span>etBlue</p>
+        <p><span class="prefix" hidden>not shown</span>Visible</p>"#,
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    let read = texts(&capture);
+    assert_eq!(read.iter().filter(|text| text.as_str() == "prefix").count(), 2, "{read:?}");
+    assert!(read.iter().any(|text| text == "\"quoted\"\nline\\"), "{read:?}");
+    assert!(read.iter().any(|text| text == "10kg"), "{read:?}");
+    assert!(read.iter().any(|text| text == "Required value"), "{read:?}");
+    assert!(read.iter().any(|text| text == "Chapter topic value"), "{read:?}");
+    assert!(read.iter().any(|text| text == "New value"), "{read:?}");
+    assert_eq!(read.iter().filter(|text| text.as_str() == "JetBlue").count(), 5, "{read:?}");
+    assert!(read.iter().any(|text| text == "Visible"), "{read:?}");
+    assert!(!capture.text.contains("not shown"));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn generated_blocks_preserve_line_boundaries() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<style>
+        .before::before { content: 'Note'; display: block; }
+        .after::after { content: 'End'; display: block; }
+        .inline::before { content: 'pre'; display: inline-block; }
+        </style>
+        <p><span class="before">Details</span></p>
+        <p><span class="after">Details</span></p>
+        <p><span class="inline">fix</span></p>"#,
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    let read = texts(&capture);
+    assert!(read.iter().any(|text| text == "Note\nDetails"), "{read:?}");
+    assert!(read.iter().any(|text| text == "Details\nEnd"), "{read:?}");
+    assert!(read.iter().any(|text| text == "prefix"), "{read:?}");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn annotations_follow_generated_suffixes() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<style>.suffix::after { content: 'fix'; }</style>
+        <p><span class="suffix" title="Full">pre</span></p>
+        <p><time class="suffix" datetime="2026-12-16">pre</time></p>"#,
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    let read = texts(&capture);
+    assert!(read.iter().any(|text| text == "prefix (title: Full)"), "{read:?}");
+    assert!(read.iter().any(|text| text == "prefix (2026-12-16)"), "{read:?}");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn descended_containers_keep_their_generated_boundaries() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<style>.notice::before { content: 'Notice'; } .notice::after { content: 'End'; }</style>
+        <div class="notice"><p>Details</p></div>
+        <p class="notice">Details</p>
+        <p class="notice" title="Advice">Details</p>"#,
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    assert_eq!(texts(&capture), ["Notice", "Details", "End", "NoticeDetailsEnd", "NoticeDetailsEnd (title: Advice)"]);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn generated_text_attachment_matrix() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate("about:blank", None).await.expect("navigate");
+    let style =
+        "<style>.suffix::after{content:'fix'}.notice::before{content:'Notice'}.notice::after{content:'End'}</style>";
+    let cases: &[(&str, &str, &[&str])] = &[
+        ("leaf", "<span class=suffix>pre</span>", &["prefix"]),
+        ("inline run", "<p><span>pre</span><span class=suffix></span></p>", &["prefix"]),
+        ("walked container", "<div class=notice><p>Details</p></div>", &["Notice", "Details", "End"]),
+        ("owner boundary", "<p class=notice>Details</p>", &["NoticeDetailsEnd"]),
+        ("title", "<p><span class=suffix title=Full>pre</span></p>", &["prefix (title: Full)"]),
+        ("date", "<p><time class=suffix datetime=2026-12-16>pre</time></p>", &["prefix (2026-12-16)"]),
+        ("table cell", "<table><tr><td class=suffix>pre</td></tr></table>", &["| prefix |"]),
+        ("shadow host", "<div id=host class=notice></div>", &["Notice", "Details", "End"]),
+        ("slotted host", "<div id=host class=notice><p>Details</p></div>", &["Notice", "Details", "End"]),
+        ("frame", "<iframe srcdoc='<p class=suffix>pre</p>'></iframe>", &["prefix"]),
+    ];
+    for (name, body, expected) in cases {
+        set_body(&h.session, &format!("{style}{body}")).await;
+        if *name == "shadow host" {
+            eval_active(
+                &h.session,
+                "document.querySelector('#host').attachShadow({mode:'open'}).innerHTML='<p>Details</p>'",
+            )
+            .await;
+        }
+        if *name == "slotted host" {
+            eval_active(
+                &h.session,
+                "document.querySelector('#host').attachShadow({mode:'open'}).innerHTML='<slot></slot>'",
+            )
+            .await;
+        }
+        if *name == "frame" {
+            let session = &h.session;
+            wait_until(
+                || async move {
+                    eval_active(
+                        session,
+                        "Boolean(document.querySelector('iframe')?.contentDocument?.querySelector('p'))",
+                    )
+                    .await
+                        == true
+                },
+                5.0,
+            )
+            .await;
+            eval_active(&h.session, "document.querySelector('iframe').contentDocument.head.innerHTML=\"<style>.suffix::after{content:'fix'}</style>\"").await;
+        }
+        let capture = content_capture(&h.page).await;
+        assert_eq!(texts(&capture), *expected, "{name}");
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn title_advice_stays_with_its_record_and_visible_text() {
+    let Some(h) = harness().await else { return };
+    h.goto("/token.html").await;
+    set_body(
+        &h.session,
+        r#"<ul>
+        <li><h3>First...: <a href="/first" title="The Complete First Volume">First...</a></h3><p>GBP 54.81</p></li>
+        <li><h3><a href="/second" title="A Different Volume">Second...</a></h3><p>GBP 53.90</p></li>
+        <li><h3>Third Volume</h3><p>GBP 10</p></li>
+        </ul>
+        <p><a title="Outer advice"><span title="Inner advice">Nested</span> label</a> GBP 5</p>
+        <p><a title="Outer repeated"><span title="Inner repeated">First</span> Volume</a> <b title="Sibling repeated">Volume</b></p>
+        <p>Volume 2: <a title="Volume 2: The Full Name">Volume 2</a></p>
+        <p title="Full block label">Short block...</p>
+        <p>The <abbr title="World Wide Web">WWW</abbr> reference.</p>
+        <table><tr><th>Name</th><th>Price</th></tr><tr><td><span title="Full Table Name">Short</span></td><td>GBP 10</td></tr></table>
+        <p><span title="Same">Same</span><span hidden title="Hidden advice">Hidden</span></p>"#,
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    let records: Vec<_> = capture.blocks.iter().filter(|block| block.kind == BlockKind::ListItem).collect();
+    assert_eq!(records.len(), 3);
+    let first = text_of(&capture, records[0]);
+    assert!(first.contains("First... (title: The Complete First Volume)"), "{first}");
+    assert!(first.contains("First...: First... (title: The Complete First Volume)"), "{first}");
+    assert!(first.contains("GBP 54.81"));
+    assert!(!first.contains("A Different Volume"));
+    let second = text_of(&capture, records[1]);
+    assert!(second.contains("Second... (title: A Different Volume)"), "{second}");
+    assert!(capture.text.contains("WWW (title: World Wide Web)"), "{}", capture.text);
+    assert!(capture.text.contains("Short (title: Full Table Name)"));
+    assert!(
+        capture.text.contains("Nested (title: Inner advice) label (title: Outer advice) GBP 5"),
+        "{}",
+        capture.text
+    );
+    assert!(
+        capture
+            .text
+            .contains("First (title: Inner repeated) Volume (title: Outer repeated) Volume (title: Sibling repeated)"),
+        "{}",
+        capture.text
+    );
+    assert!(capture.text.contains("Volume 2: Volume 2 (title: Volume 2: The Full Name)"), "{}", capture.text);
+    assert!(capture.text.contains("Short block... (title: Full block label)"), "{}", capture.text);
+    assert!(!capture.text.contains("Hidden advice"));
+    assert!(!capture.text.contains("Same (title: Same)"));
+    h.close().await;
+}
 
 /// This binary registers no PDF helper, as a Rust program that never calls `run_if_requested` does not. The PDF is
 /// still kept, and the run is told its text went unread instead of seeing a file that seems to hold nothing.
@@ -140,6 +402,113 @@ async fn test_quote_cards_are_whole_records_with_local_titles() {
         ["A standalone first paragraph.", "A standalone second paragraph."]
     );
     assert!(standalone.iter().all(|b| b.kind == BlockKind::Paragraph));
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_inline_container_preserves_nested_record_boundaries() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    for display in ["inline", "contents", "inline-block"] {
+        set_body(&h.session, &format!("<app-root style='display:{display}'>Pending</app-root>")).await;
+        assert_eq!(texts(&content_capture(&h.page).await), ["Pending"]);
+        eval_active(
+            &h.session,
+            &format!(
+                "document.querySelector('app-root').innerHTML = {}",
+                common::js(
+                    "<h1>Departures</h1><ul>\
+                 <li class='trip'><div>North Air</div><div>$120</div></li>\
+                 <li class='trip'><div>West Air</div><div>$140</div></li>\
+                 <li class='trip'><div>East Air</div><div>$160</div></li>\
+                 </ul><p>Prices include <strong>taxes</strong>.</p>"
+                )
+            ),
+        )
+        .await;
+        let capture = content_capture(&h.page).await;
+        let records: Vec<_> = capture.blocks.iter().filter(|block| block.whole_record).collect();
+        assert_eq!(records.len(), 3, "{display}: {:?}", texts(&capture));
+        for (block, expected) in records.iter().zip(["North Air\n$120", "West Air\n$140", "East Air\n$160"]) {
+            assert_eq!(text_of(&capture, block), expected, "{display}");
+            assert_eq!(path(block), ["Departures"], "{display}");
+        }
+        assert_eq!(texts(&capture).last().unwrap(), "Prices include taxes.");
+    }
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_inline_line_breaks_keep_labels_with_values() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    set_body(
+        &h.session,
+        "<p>Address: <strong>1 Main St<br>Springfield</strong></p>\
+         <ul><li>Price <span>$5<br>incl. tax</span></li></ul>",
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    assert_eq!(texts(&capture), ["Address: 1 Main St\nSpringfield", "Price $5\nincl. tax"]);
+    assert_eq!(capture.blocks[1].kind, BlockKind::ListItem);
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_link_wrapping_blocks_keeps_its_destination() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    set_body(&h.session, "<a href='/trip/1'><div>North Air</div><div>$120</div></a>").await;
+    let capture = content_capture(&h.page).await;
+    assert_eq!(texts(&capture), ["North Air", "$120"]);
+    for block in &capture.blocks {
+        assert_eq!(block.href.as_deref(), Some("/trip/1"));
+        assert_eq!(block.links.len(), 1);
+        assert_eq!(block.links[0].text, text_of(&capture, block));
+    }
+    set_body(
+        &h.session,
+        "<h2>Departures</h2><h3>Earlier</h3>\
+         <a href='/trip/1' style='display:block'><h3>North Air</h3><p>$120</p></a><p>After</p>",
+    )
+    .await;
+    let capture = content_capture(&h.page).await;
+    assert_eq!(path(capture.blocks.last().unwrap()), ["Departures", "North Air"]);
+    set_body(&h.session, "<a href='/x' title='Full title'><div>Short</div><div>Details</div></a>").await;
+    let capture = content_capture(&h.page).await;
+    assert_eq!(texts(&capture), ["Short (title: Full title)", "Details"]);
+    assert_eq!(capture.blocks[0].links[0].text, "Short (title: Full title)");
+    h.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_link_wrapping_structured_content_preserves_source_boundaries() {
+    let Some(h) = harness().await else { return };
+    h.page.navigate(&sites().main, None).await.expect("navigate");
+    for (content, kind, count) in [
+        (
+            "<table><tr><th>Airline</th><th>Price</th></tr><tr><td>North Air</td><td>$120</td></tr>\
+             <tr><td>West Air</td><td>$140</td></tr></table>",
+            BlockKind::Table,
+            2,
+        ),
+        (
+            "<ul><li><div>North Air</div><div>$120</div></li>\
+             <li><div>West Air</div><div>$140</div></li>\
+             <li><div>East Air</div><div>$160</div></li></ul>",
+            BlockKind::ListItem,
+            3,
+        ),
+    ] {
+        set_body(&h.session, &format!("<a href='/trips'>{content}</a>")).await;
+        let capture = content_capture(&h.page).await;
+        assert_eq!(capture.blocks.len(), count, "{:?}", texts(&capture));
+        assert!(capture.blocks.iter().all(|block| block.kind == kind));
+        for block in &capture.blocks {
+            assert_eq!(block.href.as_deref(), Some("/trips"));
+            assert_eq!(block.links.len(), 1);
+        }
+    }
     h.close().await;
 }
 

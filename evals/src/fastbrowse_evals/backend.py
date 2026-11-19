@@ -16,14 +16,14 @@ import httpx
 from fastbrowse.evals import harness
 from fastbrowse.models import Authorization, Citation, Limits, RunResult, Status
 from fastbrowse.run import run_task
-from fastbrowse.safety import ScopedSecrets, origin_of
+from fastbrowse.safety import ScopedSecrets
 from fastbrowse.telemetry import traced
 from parallax.harnesses.browser import BrowserHarness
 from parallax.harnesses.browser.cloud import Browser, cloud_browser
 from parallax.models import Capability, CostSource, HarnessInfo, HarnessKind, Isolation, Task, TurnInput
 
 from fastbrowse_evals.evidence import result_answer, step_action
-from fastbrowse_evals.task_specs import answer_model, start_url
+from fastbrowse_evals.task_specs import answer_model, secrets_origin, start_url
 
 PROVIDER_KEYS = ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "EXA_API_KEY")
 """The provider keys a fastbrowse arm is given: Jev, its LLM and optional web search use these.
@@ -118,7 +118,7 @@ class FastbrowseHarness(BrowserHarness):
         start = start_url(task)
         # The runner made the trial INVALID before this point if any of these variables is unset.
         values = {alias: os.environ[env_name] for alias, env_name in task.secrets.items()}
-        secrets = ScopedSecrets(values, origin_of(start)) if values else None
+        secrets = ScopedSecrets(values, secrets_origin(task)) if values else None
         authorization = Authorization(irreversible_actions=task.meta.authorizes)
         async with httpx.AsyncClient() as http, self.browser(http) as browser:
             self._browser = browser
@@ -270,21 +270,25 @@ def _run_result(
         component = line.component.value
         if component not in {"llm", "jev"}:
             continue
-        label = line.label
-        model = label.partition(":")[2] or label
+        # A campaign measures any fastbrowse_ref, and builds before the served model was recorded have no `model`.
         usage.append(
             {
-                "model": model,
+                "model": getattr(line, "model", None),
                 "component": component,
                 "input": line.input_tokens,
                 "output": line.output_tokens,
                 "requests": line.physical_requests or 0,
                 # A campaign measures any fastbrowse_ref, and builds before 0.11.2 have no image count on a cost line.
                 "images": getattr(line, "images", None) or 0,
+                # Builds before 0.11.3 report no prompt-cache counts.
+                "cache_read": getattr(line, "cache_read_tokens", None) or 0,
+                "cache_write": getattr(line, "cache_write_tokens", None) or 0,
                 "cost_usd": line.dollars,
                 "source": "harness",
             }
         )
+    # The models that served the run, once each in the order they first appeared.
+    actual_models = list(dict.fromkeys(entry["model"] for entry in usage if entry["model"]))
     pages, seen_at = read_pages(events)
     steps = []
     for step in output.steps:
@@ -311,5 +315,5 @@ def _run_result(
         "cost_lines": lines,
         "usage": usage,
         "latency_ms": latency_ms,
-        "actual_model": None,
+        "actual_models": actual_models,
     }

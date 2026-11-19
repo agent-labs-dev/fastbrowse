@@ -14,7 +14,7 @@ use fastbrowse_clients::validation::{Lines, Paid, RETRY_DELAYS_SECONDS, jev_spen
 use fastbrowse_clients::vercel::{GATEWAY_URL, VercelGatewayJevClient};
 use fastbrowse_core::decision::{
     Answer, BoxQuestion, ChoiceAnswer, ChoiceQuestion, DecisionClient, DecisionError, Evaluation, Images,
-    JEV_DOLLARS_PER_INPUT_TOKEN, JEV_MODEL, NoulAnswer, NoulQuestion, Question, ScoreQuestion,
+    JEV_DOLLARS_PER_INPUT_TOKEN, JEV_MODEL, JEV_REQUEST_BYTES, NoulAnswer, NoulQuestion, Question, ScoreQuestion,
 };
 use fastbrowse_core::models::{CostBasis, CostComponent, Limits};
 use fastbrowse_core::telemetry::Ledger;
@@ -145,6 +145,33 @@ async fn test_only_a_route_that_takes_images_is_sent_them() {
         assert!(matches!(result.answers["q"], Answer::Noul(_)));
         assert_eq!(result.cost.images, sent.then_some(1), "{route}: the cost line counts the images sent");
     }
+}
+
+/// A body past TypeSafe's 32 MiB limit is refused before it is sent: Jev answers it 413 whatever is resent, so a step
+/// that uploaded it each time spent about 4.5 s a try on a refusal (#1301). One just under the limit is sent.
+#[tokio::test]
+async fn test_a_body_past_jevs_limit_is_refused_before_it_is_sent() {
+    let sent = Arc::new(AtomicUsize::new(0));
+    let counted = sent.clone();
+    let http = answering(move |_| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        let response = Response::json(
+            200,
+            &json!({"answers": {"q": {"type": "noul", "noul": 0.5}}, "usage": {"input_tokens": 1}}),
+        );
+        Box::pin(async move { Ok(response) })
+    });
+    let client = SystemOneClient::new("openrouter-key", http, OPENROUTER_URL, OPENROUTER_MODEL).images();
+    let state = json!({"page": "text", "viewport_screenshot": "shot-1"});
+    let asked = questions([("q", noul("Is it?"))]);
+    // Three bytes make four base64 characters, so this picture alone is a byte past the limit as base64.
+    let over = Images::from([("shot-1".to_string(), vec![0u8; JEV_REQUEST_BYTES / 4 * 3 + 1])]);
+    let error = client.evaluate_images(&state, &asked, &over).await.unwrap_err();
+    assert!(matches!(error, DecisionError::InputTooLarge(_)), "{error}");
+    assert_eq!(sent.load(Ordering::SeqCst), 0, "a body over the limit is never sent");
+    let under = Images::from([("shot-1".to_string(), vec![0u8; JEV_REQUEST_BYTES / 4 * 3 - 3000])]);
+    client.evaluate_images(&state, &asked, &under).await.unwrap();
+    assert_eq!(sent.load(Ordering::SeqCst), 1);
 }
 
 /// An option's picture reaches Jev where it is, and only the images a request refers to are sent: TypeSafe refuses an

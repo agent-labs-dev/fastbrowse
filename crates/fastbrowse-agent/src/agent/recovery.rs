@@ -123,7 +123,9 @@ fn unfilled<'a>(observation: &'a Observation, state: &RunState) -> Vec<&'a str> 
 /// Leave the actions that moved nothing out of an ask on `offered`. Each is named with what is true of it: the last
 /// action may well have changed the page, as a Close that returns to a state already seen does.
 pub(super) fn leave_out_idle(state: &RunState, offered: &mut Observation, context: &mut StepContext) {
-    for idle in &state.idle {
+    // Waiting again is how a run waits longer than one Wait lasts, so a Wait that saw nothing change stays on offer and
+    // only the stall rule counts it: a page that changes after a minute is not a page the run must stop waiting on.
+    for idle in state.idle.iter().filter(|idle| idle.action != Some((Operation::Wait, None))) {
         let problem = context.problem.take().unwrap_or_default();
         withhold(offered, context, &problem, idle);
     }
@@ -271,6 +273,14 @@ impl Agent {
                 // from a stall on a page it could read: a caller otherwise retries the same task on a page it cannot read.
                 let reason = if status == Status::Stuck && observation.visual_content && !state.notes.answered() {
                     format!("{reason} {DRAWN_UNREAD}")
+                } else {
+                    reason
+                };
+                // Recovery needs the draft, but the caller must not receive its unfilled field notation (#1247).
+                let reason = if gives_up_as == Status::Unverified
+                    && let Some(rejection) = &state.composition_feedback
+                {
+                    self.redact(&super::finishing::rejection_reason(rejection, true))
                 } else {
                     reason
                 };

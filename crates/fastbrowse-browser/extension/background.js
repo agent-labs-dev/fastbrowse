@@ -157,6 +157,7 @@ const ops = {
     ownedTab(conn, tabId);
     if (!(await allowedMethods()).has(method)) throw new Error(`${method} is not relayed by the fastbrowse extension`);
     if (method === 'Fetch.enable' && !sessionId) fetchParams.set(tabId, params);
+    if (method === 'Fetch.disable' && !sessionId) fetchParams.delete(tabId);
     const target = sessionId ? { tabId, sessionId } : { tabId };
     return (await chrome.debugger.sendCommand(target, method, params || {})) ?? {};
   },

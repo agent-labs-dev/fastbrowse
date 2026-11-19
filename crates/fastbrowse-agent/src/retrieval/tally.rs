@@ -31,7 +31,7 @@ use crate::error::{AgentError, Result};
 use crate::memory::{Notes, address, fact_id};
 use crate::pyre::{Pat, digit};
 use crate::support::generate;
-use crate::support::try_join_all;
+use crate::support::try_join_reserving;
 use fastbrowse_core::py::text::is_word;
 
 /// What the support check is shown in place of the value, which it is not asked to judge.
@@ -289,6 +289,86 @@ impl Distinct {
     }
 }
 
+/// A page can repeat one record in several blocks, and two searches can list the same record. Only selected ties
+/// need this identity check: equal values select winners but do not prove that their records are the same.
+async fn distinct_winners(
+    jev: &dyn DecisionClient,
+    task: &str,
+    of: &str,
+    records: Vec<Vec<String>>,
+    found: &[Candidate],
+    tokens: &TokenBudget,
+    ledger: Option<&Ledger>,
+) -> Result<Option<Vec<Vec<String>>>> {
+    if records.len() < 2 {
+        return Ok(Some(records));
+    }
+    let candidates: Option<Vec<Candidate>> = records
+        .iter()
+        .map(|ids| {
+            let parts: Option<Vec<_>> = ids.iter().map(|id| found.iter().find(|note| &note.id == id)).collect();
+            let parts = parts?;
+            Some(Candidate {
+                note: json!({"quotes": parts.iter().map(|part| &part.note).collect::<Vec<_>>()}),
+                ..(*parts.first()?).clone()
+            })
+        })
+        .collect();
+    let Some(candidates) = candidates else { return Ok(None) };
+    let mut questions = IndexMap::new();
+    for (record, candidate) in candidates.iter().enumerate().skip(1) {
+        let offered: Vec<_> = (0..record).collect();
+        let question = format!(
+            "{UNTRUSTED}\nThese notes were selected by code at the same numeric value. One record can appear in several blocks of a page or on several pages that list it. Which of these notes holds the record this one gives? The kind of record is named by `of`. Judge whether the notes identify the same individual instance of that kind, not whether they describe similar records or share a name or field value. Different identifying details mean different records. Use each record's source context, including the page and captured headings, to distinguish its identity from the context in which it is listed. Choose none unless the notes identify the same instance. Note: {}",
+            dumps(&candidate.note)
+        );
+        questions.extend(same_record(
+            &format!("w{record}"),
+            &question,
+            &offered,
+            &candidates,
+            jev.profile().max_choice_options,
+        ));
+    }
+    let Some(answers) = ask(jev, &json!({"task": task, "of": of}), &questions, tokens, ledger).await? else {
+        return Ok(Some(records));
+    };
+    let mut roots: Vec<usize> = (0..records.len()).collect();
+    for record in 1..records.len() {
+        let mut repeated = None;
+        let mut contradictory = false;
+        for (key, question) in questions.iter().filter(|(key, _)| key.starts_with(&format!("w{record}c"))) {
+            let Some(answer) = answers.get(key) else {
+                contradictory = true;
+                continue;
+            };
+            let Answer::Choice(answer) = answer else { return Ok(None) };
+            let Question::Choice(question) = question else { unreachable!() };
+            if !question.criteria.contains_key(&answer.choice) {
+                return Ok(None);
+            }
+            if answer.choice == NO_VALUE {
+                continue;
+            }
+            let Some(other) = answer.choice.strip_prefix('m').and_then(|n| n.parse::<usize>().ok()) else {
+                return Ok(None);
+            };
+            let root = roots[other];
+            if repeated.is_some_and(|previous| previous != root) {
+                contradictory = true;
+            }
+            repeated = Some(root);
+        }
+        // Conflicting matches do not establish identity, so this winner keeps its own fields.
+        roots[record] = if contradictory { record } else { repeated.unwrap_or(record) };
+    }
+    let mut merged: IndexMap<usize, Vec<String>> = IndexMap::new();
+    for (record, ids) in records.into_iter().enumerate() {
+        merged.entry(roots[record]).or_default().extend(ids);
+    }
+    Ok(Some(merged.into_values().collect()))
+}
+
 /// `records` less each one Jev said repeats another, or None when Jev left one of those questions unanswered.
 fn distinct(
     index: usize,
@@ -431,7 +511,7 @@ async fn by_page(
             Box::pin(ask(jev, &states[page], questions, tokens, ledger))
         })
         .collect();
-    let answered = try_join_all(asked).await?.into_iter().flatten().reduce(|mut all, answers| {
+    let answered = try_join_reserving(ledger, asked).await?.into_iter().flatten().reduce(|mut all, answers| {
         all.extend(answers);
         all
     });
@@ -488,6 +568,7 @@ const NO_VALUE: &str = "none";
 const NO_RECORD: &str = "no_record";
 
 /// Qualification and the field are one decision: independent questions can admit an unrelated date, then reject it.
+/// A draft can name a broader kind than the task asks for, so membership also applies the task's own scope.
 fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], grouped: bool) -> Question {
     let of = text::repr(&tally.of);
     let field = text::repr(tally.field.as_deref().unwrap_or("value"));
@@ -500,7 +581,7 @@ fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], gr
             (
                 key,
                 json!(format!(
-                    "{value} is its {field}: the note gives one {of} with its {field}, or the {field} of one."
+                    "{value} is its {field}: the note gives one {of} with its {field}, or the {field} of one, stated as that record's own {field}, not as a value of one entry the record holds, such as one item of a list it contains."
                 )),
             )
         })
@@ -511,8 +592,13 @@ fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], gr
     // took them in (table-total-due 0 of 6, stretch-books-nonfiction-five-star 2 of 6). With it, replayed on the
     // recorded questions, those score 0.07 and 0.21 on average and every member still 0.96 or more.
     criteria.insert(NO_RECORD.into(), json!(format!(
-        "The note is not one whole {of} and does not give the {field} of one. A name, label, heading, link or unrelated field alone is not a whole record. Several records, and a value stated across records such as a total or a starting price, are not one record. A note whose source_kind is heading or link and gives no quoted field value is a fragment naming the record, not a record with a missing field. A whole record that the note shows is outside {of}, in a group, place or state other than the one {of} names, is not one either."
+        "The note is not one whole {of} and does not give the {field} of one. A name, label, heading, link or unrelated field alone is not a whole record. Several records, and a value stated across records such as a total or a starting price, are not one record. A note whose source_kind is heading or link and gives no quoted field value is a fragment naming the record, not a record with a missing field. A whole record that the note shows is outside {of}, in a group, place or state other than the one {of} names, is not one either. A note giving one entry the {of} holds, such as one item of a list it contains, is not one, and that entry's values are not the {field} of the {of}."
     )));
+    // A record is not the entries it holds: asked whether a row of a package's release history gave the package's
+    // "latest release date", Jev said yes to rows from 2023 (0.77) and to a pre-release (0.7), and the maximum chose
+    // the pre-release over the package's stated release. Told that an entry's values are its own, replayed 3x each,
+    // those rows fell to no record at 0.6 and 0.75, the stated "Released:" dates stayed members, and 16 recorded
+    // book and phone questions kept their choices.
     // A heading or link names its record and is never the whole of it, so it cannot be one shown missing the field:
     // offered that, Jev split 51 to 49 on whether the heading "Clerkenwell Coffee" was a shop with no price, and a
     // correct cheapest shop was rejected for it.
@@ -521,7 +607,7 @@ fn field_question(tally: &Tally, note: &serde_json::Value, offers: &[String], gr
     }
     Question::Choice(ChoiceQuestion::new(
         format!(
-            "{UNTRUSTED}\nDoes this note give exactly one whole {of}, or its {field}? If it does, which quoted value is that record's {field}? source_kind is the captured block type. When it is heading or link, the quote is that heading or link, not the whole record it names. A field absent from a heading or link is not thereby absent from its record. whole_record true proves that this quote contains all text rendered for one repeated item; without that proof the quote may still describe a whole record. Absence from a fragment does not prove absence from its record. Note: {}",
+            "{UNTRUSTED}\nDoes this note give exactly one whole {of}, or its {field}? If it does, which quoted value is that record's {field}? Judge the record against the scope of task as well as its kind. When task names a state that the page labels, use that label to distinguish qualifying records from records labelled as other states. A value on a differently labelled record does not make it the record in the requested state. source_kind is the captured block type. When it is heading or link, the quote is that heading or link, not the whole record it names. A field absent from a heading or link is not thereby absent from its record. whole_record true proves that this quote contains all text rendered for one repeated item; without that proof the quote may still describe a whole record. Absence from a fragment does not prove absence from its record. Note: {}",
             dumps(note)
         ),
         criteria,
@@ -589,7 +675,9 @@ impl Schema for RecordGroups {
     }
 }
 
-const GROUPS_INSTRUCTIONS: &str = "# Groups\nEach record below is one note a browser agent read, listed by its id. For every record, copy the value of the field named from the record's quote or a captured heading, exactly as the source writes it, or give null when neither states one. Code groups and counts the records by these values, so give each record's own value as written, never one taken from another record, corrected or shortened.\n\n# Trust\n";
+// Membership was already judged: asked to copy a selected phone's name, the copier returned null because its quote
+// named the model without repeating its brand. Copying the field must not discard that established membership.
+const GROUPS_INSTRUCTIONS: &str = "# Groups\nEach record below is one note a browser agent read, listed by its id. The records have already been selected as the kind named in the field request; do not check their kind again. For every record, copy the value of the field named from the record's quote or a captured heading, exactly as the source writes it, or give null when neither states one. Code groups and counts the records by these values, so give each record's own value as written, never one taken from another record, corrected or shortened.\n\n# Trust\n";
 
 /// A record's captured heading can name the owner whose value its quote holds. A page address and generated
 /// metadata are not source wording, and joining separate source spans would invent a value neither states.
@@ -1590,11 +1678,48 @@ pub(super) async fn work_selected_with_slots(
     Ok(worked)
 }
 
+/// Why no winner field was copied, for the composer and the navigator: the records' own text, so a field named as the
+/// record's kind ("the phone of each phone") can be renamed, and a value the text cuts short can be read in full.
+fn unread_field(field: &str, of: &str, found: &[Candidate]) -> String {
+    let quotes: Vec<String> = found.iter().map(|record| text::repr(&record.quote)).collect();
+    format!(
+        "No {field} could be copied from the selected {of}, whose text is {}. {FIELD_HELP}",
+        quotes.join("; "),
+        field = text::repr(field),
+        of = text::repr(of),
+    )
+}
+
+/// Why a copied winner field was rejected: the copied text beside the record's own text, so the navigator can see a
+/// value cut short, such as a listing's "The Sandman, Vol. 2: ...", and read the page that states it whole (#1232).
+fn incomplete_field(field: &str, of: &str, written: &str, found: &[Candidate], key: &str) -> String {
+    let record = key.rsplit_once("/r").and_then(|(_, index)| index.parse::<usize>().ok()).and_then(|i| found.get(i));
+    let quote = record.map_or_else(String::new, |record| format!(", whose text is {}", text::repr(&record.quote)));
+    format!(
+        "The copied {} {} is not the complete, unambiguous {} of the selected {}{quote}. {FIELD_HELP}",
+        text::repr(field),
+        text::repr(written),
+        text::repr(field),
+        text::repr(of),
+    )
+}
+
+/// What a draft or a run can do about a winner field that could not be copied.
+const FIELD_HELP: &str = "Name a winner field as something each record states about itself, such as its name or title, never the kind of record the tally counts. When the record's text cuts that value short or leaves it out, read a page that states it in full, such as the record's own page, before answering again.";
+
+/// The copied text a field question asked about.
+fn written_of<'a>(groups: &'a Groups, key: &str) -> &'a str {
+    let group =
+        key.strip_prefix("field").and_then(|rest| rest.split_once('/')).and_then(|(g, _)| g.parse::<usize>().ok());
+    group.and_then(|g| groups.values().nth(g)).map_or("", |(written, _)| written.as_str())
+}
+
 /// Winner fields are read only after numeric selection, so copying a name never asks a model to rank records.
 ///
 /// The check sees the task, which says what the field means on these pages: asked "which shop sells the Burr Grinder
 /// cheaper, and tell me its name", a shop's page headed "Clerkenwell Coffee" scored 0.37 to 0.57 as that record's
 /// `shop` without it and 0.69 to 0.80 with it, while another shop's name and the price stayed at 0.03 or below.
+/// A field copied from a captured heading is checked against that heading too: a date quote alone need not name its owner.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn winner_fields(
     jev: &dyn DecisionClient,
@@ -1607,9 +1732,23 @@ pub(super) async fn winner_fields(
     tokens: &TokenBudget,
     ledger: Option<&Ledger>,
 ) -> Result<std::result::Result<HashMap<String, String>, Unworked>> {
+    if fields.is_empty() {
+        return Ok(Ok(HashMap::new()));
+    }
     let candidates = candidates_from(notes, false);
     let ids = worked.winner_ids.as_ref().unwrap_or(&worked.evidence_ids);
+    let Some(records) =
+        distinct_winners(jev, task, &tally.of, worked.winner_records.clone(), &candidates, tokens, ledger).await?
+    else {
+        return Ok(Err(Unworked::Unjudged));
+    };
     let mut found = Vec::new();
+    // Identity changes the output slots, not the source records given to the field copier.
+    let representatives: Option<Vec<_>> = records
+        .iter()
+        .map(|record| worked.winner_records.iter().position(|original| original.first() == record.first()))
+        .collect();
+    let Some(representatives) = representatives else { return Ok(Err(Unworked::Unjudged)) };
     for record in &worked.winner_records {
         let parts: Option<Vec<_>> =
             record.iter().map(|id| candidates.iter().find(|candidate| &candidate.id == id)).collect();
@@ -1633,22 +1772,29 @@ pub(super) async fn winner_fields(
     let mut result = HashMap::new();
     for field in fields {
         let Some(groups) = read_groups(llm, field, &tally.of, &records, &found, ledger).await? else {
-            return Ok(Err(Unworked::Notes {
-                reason: format!("The selected records do not state an unambiguous {}.", text::repr(field)),
-                notes: ids.clone(),
-            }));
+            return Ok(Err(Unworked::Notes { reason: unread_field(field, &tally.of, &found), notes: ids.clone() }));
         };
+        // A record's name alone need not answer the whole task. This checks its requested field;
+        // review_claims checks the assembled claim against the task with asks_check and coverage_question (#1268).
         let mut questions = IndexMap::new();
         for (group, (written, members)) in groups.values().enumerate() {
             for record in members {
                 questions.insert(format!("field{group}/r{record}"), Question::Noul(NoulQuestion::new(
-                    format!("{UNTRUSTED} Doing `task`, does this copied text give the complete, unambiguous {} of exactly this record, without another record's value or an unrelated field? Copied text: {}. Record: {}", text::repr(field), text::repr(written), dumps(&found[*record].note)),
+                    format!("{UNTRUSTED} Code selected this record by comparing {} across {}. Judge only whether the copied text states this record's requested field; whether that field alone answers task is checked separately. Does this copied text give the complete, unambiguous {} of exactly this record, without another record's value or an unrelated field? The record includes its captured headings as well as its quotes. A heading that names the record can state its requested field even when the quote states only a different field. Copied text: {}. Record: {}", text::repr(tally.field.as_deref().expect("a worked numeric extreme has a field")), text::repr(&tally.of), text::repr(field), text::repr(written), dumps(&found[*record].note)),
                     Some("The copied text is exactly this record's requested field."),
                     Some("It is missing, ambiguous, incomplete, another field, or another record's value."),
                 )));
             }
         }
-        let Some(answers) = ask(jev, &json!({"task":task,"field":field}), &questions, tokens, ledger).await? else {
+        let Some(answers) = ask(
+            jev,
+            &json!({"task":task,"field":field,"record_kind":tally.of,"compared_field":tally.field}),
+            &questions,
+            tokens,
+            ledger,
+        )
+        .await?
+        else {
             return Ok(Err(Unworked::Unjudged));
         };
         for key in questions.keys() {
@@ -1656,10 +1802,7 @@ pub(super) async fn winner_fields(
                 Some(Answer::Noul(value)) if (0.0..=1.0).contains(&value.probability) && value.probability > 0.5 => {}
                 Some(Answer::Noul(value)) if (0.0..=1.0).contains(&value.probability) => {
                     return Ok(Err(Unworked::Notes {
-                        reason: format!(
-                            "The copied {} is not an unambiguous field of the selected record.",
-                            text::repr(field)
-                        ),
+                        reason: incomplete_field(field, &tally.of, written_of(&groups, key), &found, key),
                         notes: ids.clone(),
                     }));
                 }
@@ -1667,7 +1810,7 @@ pub(super) async fn winner_fields(
             }
         }
         // Every field follows the same winner order, including repeated values, so tied names and other fields stay aligned.
-        let values: Option<Vec<&str>> = records
+        let values: Option<Vec<&str>> = representatives
             .iter()
             .map(|record| {
                 groups.values().find(|(_, members)| members.contains(record)).map(|(written, _)| written.as_str())
@@ -1822,6 +1965,51 @@ mod tests {
             no_record.contains("A whole record that the note shows is outside 'row in the second table', in a group, place or state other than the one 'row in the second table' names, is not one either."),
             "{no_record}"
         );
+    }
+
+    /// A row of a package's release history was taken as the package's "latest release date", and the maximum chose a
+    /// pre-release over the package's stated release: an entry a record holds is asked as its own, not the record.
+    #[test]
+    fn an_entry_a_record_holds_is_not_the_record() {
+        let tally = Tally {
+            op: Op::Max,
+            of: "PyPI package".into(),
+            field: Some("latest release date".into()),
+            rank: None,
+            by: None,
+            group: None,
+            written: "May 14, 2026".into(),
+        };
+        let row = json!({"quote": "0.24.1\n\nMay 19, 2023", "headings": ["httpx 0.28.1", "Release history"]});
+        let Question::Choice(question) = field_question(&tally, &row, &["May 19, 2023".into()], false) else {
+            panic!()
+        };
+        let no_record = question.criteria[NO_RECORD].as_str().unwrap();
+        assert!(no_record.contains("A note giving one entry the 'PyPI package' holds"), "{no_record}");
+        let value = question.criteria["n0"].as_str().unwrap();
+        assert!(value.contains("not as a value of one entry the record holds"), "{value}");
+    }
+
+    #[test]
+    fn a_broad_record_kind_still_qualifies_against_the_tasks_scope() {
+        let tally = Tally {
+            op: Op::Max,
+            of: "package release".into(),
+            field: Some("release date".into()),
+            rank: None,
+            by: None,
+            group: None,
+            written: "May 14, 2026".into(),
+        };
+        let note =
+            json!({"quote": "Pre-release 1.0.dev6 Aug 31, 2026", "headings": ["httpx 0.28.1", "Release history"]});
+        for grouped in [false, true] {
+            let Question::Choice(question) = field_question(&tally, &note, &["Aug 31, 2026".into()], grouped) else {
+                panic!()
+            };
+            assert!(question.instructions.contains("Judge the record against the scope of task as well as its kind"));
+            assert!(question.instructions.contains("When task names a state that the page labels"));
+        }
     }
 
     /// A shop's name heading beside its price line was judged a shop with no price 51 to 49, and the correct cheapest
@@ -2200,12 +2388,20 @@ mod tests {
             use fastbrowse_core::decision::{Evaluation, NoulAnswer};
             // The task says what the field means on these pages; without it a shop's page heading was a coin flip.
             assert_eq!(state["task"], "Which shop is cheaper? Tell me its name.", "{state}");
+            if questions.keys().all(|key| key.starts_with('w')) {
+                return FirstField.evaluate(state, questions);
+            }
             let answers = questions
                 .iter()
                 .map(|(key, question)| {
                     let Question::Noul(question) = question else { panic!("field support only") };
-                    assert!(question.instructions.contains("Doing `task`, does this copied text"));
+                    assert!(question.instructions.contains("Code selected this record by comparing"));
+                    assert!(question.instructions.contains(state["record_kind"].as_str().unwrap()));
+                    assert!(question.instructions.contains(state["compared_field"].as_str().unwrap()));
+                    assert!(question.instructions.contains("whether that field alone answers task is checked separately"));
                     assert!(question.instructions.contains("exactly this record"));
+                    assert!(question.instructions.contains("The record includes its captured headings as well as its quotes"));
+                    assert!(question.instructions.contains("A heading that names the record can state its requested field even when the quote states only a different field"));
                     (
                         key.clone(),
                         Answer::Noul(NoulAnswer {
@@ -2224,6 +2420,216 @@ mod tests {
                     requests: 1,
                 })
             })
+        }
+    }
+
+    #[tokio::test]
+    async fn large_winner_ties_fit_batches_and_keep_conflicting_matches_separate() {
+        struct BoundedIdentity {
+            mode: &'static str,
+            questions: std::sync::atomic::AtomicUsize,
+        }
+        impl DecisionClient for BoundedIdentity {
+            fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+                let mut profile = FirstField.profile();
+                profile.max_choice_options = 4;
+                profile.max_questions = Some(2);
+                profile
+            }
+            fn evaluate<'a>(
+                &'a self,
+                state: &'a serde_json::Value,
+                questions: &'a IndexMap<String, Question>,
+            ) -> BoxFuture<
+                'a,
+                std::result::Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>,
+            > {
+                use fastbrowse_core::decision::{ChoiceAnswer, ChoiceTag, Evaluation};
+                assert!(questions.len() <= 2);
+                self.questions.fetch_add(questions.len(), std::sync::atomic::Ordering::Relaxed);
+                let written: Vec<_> = questions.values().map(Dump::dump_json).collect();
+                let tokens = self.profile().fit(None).tokens;
+                assert!(dumps(state).chars().count() as i64 <= tokens.input_chars(&written));
+                assert!(
+                    written.iter().map(|q| q.chars().count()).sum::<usize>() as f64 / tokens.chars_per_token
+                        <= tokens.batch_tokens as f64
+                );
+                let answers = questions
+                    .iter()
+                    .filter(|_| self.mode != "missing")
+                    .map(|(key, question)| {
+                        let Question::Choice(choice) = question else { panic!("identity asks choices") };
+                        assert!(choice.criteria.len() <= 4);
+                        let selected = if self.mode == "invalid" {
+                            "invalid".into()
+                        } else if self.mode == "conflicting" && key.starts_with("w29c") {
+                            choice.criteria.keys().find(|key| key.starts_with('m')).unwrap().clone()
+                        } else {
+                            NO_VALUE.into()
+                        };
+                        (
+                            key.clone(),
+                            Answer::Choice(ChoiceAnswer {
+                                kind: ChoiceTag,
+                                probabilities: IndexMap::from([(selected.clone(), 1.0)]),
+                                choice: selected,
+                                confidence: 1.0,
+                            }),
+                        )
+                    })
+                    .collect();
+                Box::pin(async move {
+                    Ok(Evaluation {
+                        model: "fixture".into(),
+                        answers,
+                        input_tokens: 1,
+                        cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                        requests: 1,
+                    })
+                })
+            }
+        }
+        let notes = amount_notes(&["$0.00"; 30]);
+        let found = candidates_from(&notes, false);
+        let records: Vec<_> = found.iter().map(|note| vec![note.id.clone()]).collect();
+        for mode in ["distinct", "conflicting", "missing", "invalid"] {
+            let jev = BoundedIdentity { mode, questions: std::sync::atomic::AtomicUsize::new(0) };
+            let result = distinct_winners(
+                &jev,
+                "Name the cheapest products",
+                "product",
+                records.clone(),
+                &found,
+                &jev.profile().fit(None).tokens,
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(result, (mode != "invalid").then(|| records.clone()));
+            assert_eq!(jev.questions.load(std::sync::atomic::Ordering::Relaxed), 155);
+        }
+    }
+
+    #[tokio::test]
+    async fn literal_winner_notes_of_one_record_fill_one_slot() {
+        use crate::memory::Fact;
+        use fastbrowse_core::models::FactReader;
+
+        struct WinnerSupport {
+            same: bool,
+            identities: std::sync::atomic::AtomicUsize,
+        }
+        impl DecisionClient for WinnerSupport {
+            fn profile(&self) -> fastbrowse_core::decision::DecisionProfile {
+                FirstField.profile()
+            }
+            fn evaluate<'a>(
+                &'a self,
+                state: &'a serde_json::Value,
+                questions: &'a IndexMap<String, Question>,
+            ) -> BoxFuture<
+                'a,
+                std::result::Result<fastbrowse_core::decision::Evaluation, fastbrowse_core::decision::DecisionError>,
+            > {
+                Box::pin(async move {
+                    if questions.keys().all(|key| key.starts_with('w')) {
+                        self.identities.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        assert_eq!(state["of"], "record");
+                        PypiPages { same: self.same }.evaluate(state, questions).await
+                    } else if questions.keys().all(|key| key.starts_with("field")) {
+                        FieldSupport(true).evaluate(state, questions).await
+                    } else {
+                        FirstField.evaluate(state, questions).await
+                    }
+                })
+            }
+        }
+
+        struct OriginalReads<'a> {
+            reads: ReadsGroups<'a>,
+            request: std::sync::Mutex<String>,
+        }
+        impl LLMClient for OriginalReads<'_> {
+            fn generate_value<'a>(
+                &'a self,
+                purpose: LLMPurpose,
+                messages: &'a [Message],
+                schema: &'a dyn ResponseSchema,
+                ledger: Option<&'a Ledger>,
+            ) -> BoxFuture<'a, std::result::Result<Generation<serde_json::Value>, LLMError>> {
+                *self.request.lock().unwrap() = serde_json::to_string(messages).unwrap();
+                self.reads.generate_value(purpose, messages, schema, ledger)
+            }
+        }
+        let mut original_requests = HashMap::new();
+        for (separate_pages, same) in [(false, true), (true, true), (false, false), (true, false)] {
+            let facts: Vec<_> = ["Winner A £210", "Winner A costs £210", "The price of Winner A is £210"]
+                .iter()
+                .enumerate()
+                .map(|(index, quote)| {
+                    let page = if separate_pages { index } else { 0 };
+                    let quote = if !separate_pages && index == 1 { "Winner A £210" } else { quote };
+                    let start = index * 100;
+                    let evidence = serde_json::from_value(json!({
+                        "source_id": format!("s{index}"), "url": format!("https://example.test/records?page={page}"),
+                        "frame_id": null, "captured_at": "2026-01-01T00:00:00Z", "capture_sha256": "sha",
+                        "start": start, "end": start + quote.len(), "quote": quote
+                    }))
+                    .unwrap();
+                    Fact::read(quote, evidence, FactReader::JevChoice)
+                })
+                .collect();
+            let ids: Vec<_> = facts.iter().map(fact_id).collect();
+            let notes = Notes::new(facts);
+            let tally = Tally {
+                op: Op::Max,
+                of: "record".into(),
+                field: Some("price".into()),
+                rank: None,
+                by: None,
+                group: None,
+                written: "£210".into(),
+            };
+            let tokens = FirstField.profile().fit(None).tokens;
+            let jev = WinnerSupport { same, identities: std::sync::atomic::AtomicUsize::new(0) };
+            let worked = work(
+                &jev,
+                &ReadsGroups(&[]),
+                "Which shop is cheaper? Tell me its name.",
+                &[(0, &tally, "£210", &[])],
+                &notes,
+                &tokens,
+                None,
+            )
+            .await
+            .unwrap();
+            let done = worked[&0].as_ref().unwrap();
+            assert_eq!(jev.identities.load(std::sync::atomic::Ordering::Relaxed), 0);
+            let expected = if same { vec![ids.clone()] } else { ids.iter().map(|id| vec![id.clone()]).collect() };
+            assert_eq!(done.winner_records.len(), 3);
+            assert_eq!(done.evidence_ids, ids);
+            let reads: Vec<_> = ["r0", "r1", "r2"].into_iter().map(|id| (id, Some("Winner A"))).collect();
+            let copier = OriginalReads { reads: ReadsGroups(&reads), request: std::sync::Mutex::new(String::new()) };
+            let fields = winner_fields(
+                &jev,
+                &copier,
+                "Which shop is cheaper? Tell me its name.",
+                &tally,
+                done,
+                &["name".into()],
+                &notes,
+                &tokens,
+                None,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(fields["name"], vec!["Winner A"; expected.len()].join(", "));
+            let request = copier.request.into_inner().unwrap();
+            if let Some(original) = original_requests.insert(separate_pages, request.clone()) {
+                assert_eq!(request, original, "identity must leave the original extraction request unchanged");
+            }
+            assert_eq!(jev.identities.load(std::sync::atomic::Ordering::Relaxed), 1);
         }
     }
 
@@ -2295,25 +2701,50 @@ mod tests {
                 .is_err()
             );
         }
+        let rejected = winner_fields(
+            &FieldSupport(false),
+            &ReadsGroups(&[("r0", Some("£210")), ("r1", Some("£210"))]),
+            "Which shop is cheaper? Tell me its name.",
+            &tally,
+            done,
+            &fields,
+            &notes,
+            &tokens,
+            None,
+        )
+        .await
+        .unwrap();
+        // #1232: told only that the copied field was not unambiguous, the navigator answered done again over a listing
+        // title cut short; the reason shows what was copied, from which text, and where the whole value is read.
+        let Err(Unworked::Notes { reason, .. }) = rejected else { panic!("{rejected:?}") };
         assert!(
-            winner_fields(
-                &FieldSupport(false),
-                &ReadsGroups(&[("r0", Some("£210")), ("r1", Some("£210"))]),
-                "Which shop is cheaper? Tell me its name.",
-                &tally,
-                done,
-                &fields,
-                &notes,
-                &tokens,
-                None
-            )
-            .await
-            .unwrap()
-            .is_err()
+            reason.contains("'£210'") && reason.contains("whose text is") && reason.contains(FIELD_HELP),
+            "{reason}"
         );
+        let unread = winner_fields(
+            &FieldSupport(true),
+            &ReadsGroups(&[("r0", None), ("r1", Some("Winner B"))]),
+            "Which shop is cheaper? Tell me its name.",
+            &tally,
+            done,
+            &fields,
+            &notes,
+            &tokens,
+            None,
+        )
+        .await
+        .unwrap();
+        let Err(Unworked::Notes { reason, .. }) = unread else { panic!("{unread:?}") };
+        assert!(reason.starts_with("No 'name' could be copied from the selected 'record', whose text is"), "{reason}");
     }
 
     struct ReadsGroups<'a>(&'a [(&'a str, Option<&'a str>)]);
+
+    #[test]
+    fn copying_a_selected_records_name_does_not_recheck_its_kind() {
+        let messages = groups_messages("name", "Samsung phone", &["r0: Galaxy S20+ - $550.00".into()]);
+        assert!(messages[0].content.contains("The records have already been selected as the kind named in the field request; do not check their kind again."));
+    }
 
     #[tokio::test]
     async fn winner_fields_can_copy_the_selected_records_captured_heading() {
@@ -2482,6 +2913,16 @@ mod tests {
                 .map(|(key, question)| {
                     let Question::Choice(choice) = question else { panic!("a comparison asks choices") };
                     let selected = if choice.instructions.contains("Which of these notes holds the record") {
+                        if key.starts_with('w') {
+                            assert!(choice.instructions.contains("The kind of record is named by `of`"));
+                            assert!(choice.instructions.contains("same individual instance"));
+                            assert!(
+                                choice.instructions.contains("Different identifying details mean different records")
+                            );
+                            assert!(
+                                choice.instructions.contains("Choose none unless the notes identify the same instance")
+                            );
+                        }
                         let first = choice.criteria.keys().find(|key| key.starts_with('m')).cloned();
                         if self.same { first.expect("the release line is offered") } else { NO_VALUE.into() }
                     } else if choice.instructions.contains("maintainers") {
@@ -2924,6 +3365,78 @@ mod tests {
             let result = read_groups(&llm, "author", "quote", &[0], &found, Some(&capped)).await;
             assert!(matches!(result, Err(AgentError::Budget(_))));
             assert_eq!(capped.state().lines.len(), 1, "the over-budget receipt remains reportable");
+        }
+    }
+
+    /// Each page's pass reserves against the receipts recorded so far, so under a dollar cap two pages asked side by
+    /// side would both pass the check before either is billed.
+    #[tokio::test]
+    async fn capped_pages_are_asked_one_after_another() {
+        use fastbrowse_core::decision::{DecisionError, DecisionProfile, Evaluation, NoulAnswer};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
+
+        #[derive(Default)]
+        struct Overlap {
+            active: AtomicBool,
+            overlapped: AtomicBool,
+            asked: AtomicUsize,
+        }
+        impl DecisionClient for Overlap {
+            fn evaluate<'a>(
+                &'a self,
+                _state: &'a serde_json::Value,
+                questions: &'a IndexMap<String, Question>,
+            ) -> BoxFuture<'a, std::result::Result<Evaluation, DecisionError>> {
+                Box::pin(async move {
+                    if self.active.swap(true, SeqCst) {
+                        self.overlapped.store(true, SeqCst);
+                    }
+                    tokio::task::yield_now().await;
+                    self.asked.fetch_add(1, SeqCst);
+                    self.active.store(false, SeqCst);
+                    let answers = questions
+                        .keys()
+                        .map(|key| {
+                            (key.clone(), Answer::Noul(NoulAnswer { kind: Default::default(), probability: 1.0 }))
+                        })
+                        .collect();
+                    Ok(Evaluation {
+                        model: "test".into(),
+                        answers,
+                        input_tokens: 1,
+                        cost: CostLine::new(CostComponent::Jev, CostBasis::Estimated, Some(0.0)),
+                        requests: 1,
+                    })
+                })
+            }
+            fn profile(&self) -> DecisionProfile {
+                DecisionProfile::jev()
+            }
+        }
+
+        let states: HashMap<String, serde_json::Value> =
+            ["p1", "p2"].into_iter().map(|page| (page.to_string(), json!({"page": page}))).collect();
+        let questions = || -> IndexMap<String, (String, Question)> {
+            ["p1", "p2"]
+                .into_iter()
+                .map(|page| {
+                    let question = Question::Noul(NoulQuestion::new(format!("On {page}?"), None, None));
+                    (format!("q-{page}"), (page.to_string(), question))
+                })
+                .collect()
+        };
+        let tokens = DecisionProfile::jev().fit(None).tokens;
+        for (limits, overlaps) in [
+            (fastbrowse_core::models::Limits::default(), true),
+            (fastbrowse_core::models::Limits { max_jev_calls: Some(100), ..Default::default() }, true),
+            (fastbrowse_core::models::Limits { max_dollars: Some(100.0), ..Default::default() }, false),
+        ] {
+            let jev = Overlap::default();
+            let ledger = Ledger::new(limits);
+            let (answered, _) = by_page(&jev, &states, questions(), &tokens, Some(&ledger)).await.unwrap();
+            assert_eq!(answered.unwrap().len(), 2);
+            assert_eq!(jev.asked.load(SeqCst), 2);
+            assert_eq!(jev.overlapped.load(SeqCst), overlaps, "only a dollar cap makes pages wait");
         }
     }
 

@@ -4,8 +4,8 @@
 
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::decision::{
-    DecisionClient, DecisionError, DecisionProfile, Evaluation, Images, NO_IMAGES, Question, questions_without_images,
-    referenced, without_images,
+    DecisionClient, DecisionError, DecisionProfile, Evaluation, Images, JEV_REQUEST_BYTES, NO_IMAGES, Question,
+    questions_without_images, referenced, without_images,
 };
 use fastbrowse_core::models::CostLine;
 use fastbrowse_core::py::base64;
@@ -143,6 +143,15 @@ impl SystemOneClient {
             body["assets"] = Value::Object(assets);
             headers.push(IMAGES_HEADER);
         }
+        // A body past TypeSafe's limit is refused with 413 whatever is resent, so it is refused here, before a
+        // round trip that uploads it: a page whose cards outgrew it sent each step's decision 28 times (#1301).
+        let bytes = serde_json::to_vec(&body).map_or(0, |bytes| bytes.len());
+        if bytes > JEV_REQUEST_BYTES {
+            return Err(DecisionError::InputTooLarge(format!(
+                "Jev input too large; the request body is {bytes} bytes, over the limit of {JEV_REQUEST_BYTES}"
+            ))
+            .into());
+        }
         let url = format!("{}{}", self.base_url, self.path);
         let price = self.profile.dollars_per_input_token;
         let image_context = (!images.is_empty()).then_some(self.profile.max_total_tokens);
@@ -176,12 +185,12 @@ impl SystemOneClient {
             };
             Ok(Evaluation {
                 requests: sent.requests,
-                model,
+                model: model.clone(),
                 answers: parse_answers(payload.get("answers"), questions, false, None)?,
                 input_tokens: tokens,
                 // Counted before `timed`, so each resent request is charged the images it carried too.
                 cost: timed(
-                    CostLine { images: (!images.is_empty()).then(|| images.len() as i64), ..cost },
+                    CostLine { images: (!images.is_empty()).then(|| images.len() as i64), model: Some(model), ..cost },
                     &sent,
                     started,
                 ),

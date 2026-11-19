@@ -59,9 +59,8 @@ ENDING_FRAME_SECONDS = 6.0
 crates/fastbrowse-agent/src/agent/mod.rs, which a test keeps equal to this."""
 
 RUN_SECONDS = TASK_SECONDS - ENDING_FRAME_SECONDS
-"""The run's own `max_seconds`. A run with none lets a Wait wait for the page to change with no bound, so a static page
-the model chose to wait on hung a harness until its client timeout. The product stops itself at this limit as
-`budget_exceeded` with its evidence, and its ending frame fits before `TASK_SECONDS`."""
+"""The run's own `max_seconds`, so the product stops itself at this limit as `budget_exceeded` with its evidence, and
+its ending frame fits before `TASK_SECONDS`."""
 
 MOCK_LIMITS = Limits(max_steps=40, max_seconds=RUN_SECONDS)
 """A mock task signs in, walks to a page and acts, which is more steps than the local suite's single form needs."""

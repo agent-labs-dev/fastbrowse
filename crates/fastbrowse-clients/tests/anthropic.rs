@@ -17,6 +17,7 @@ fn reply(content: Value, stop_reason: &str) -> Step {
         200,
         &json!({
             "id": "msg_1",
+            "model": "claude-haiku-5-5-20260101",
             "type": "message",
             "role": "assistant",
             "content": content,
@@ -45,10 +46,15 @@ const PNG: &[u8] = b"\x89PNG\r\n\x1a\nrest";
 
 #[tokio::test]
 async fn test_a_generation_is_a_messages_request_with_structured_output() {
-    let messages =
-        [Message::system("Plan."), Message { images: vec![Bytes(PNG.to_vec())], ..Message::user("What is shown?") }];
+    let messages = [
+        Message::system("Plan."),
+        Message { images: vec![Bytes(PNG.to_vec())], ..Message::user("What is shown?") }.cached(),
+    ];
     let (seen, result) = generate(&ENV, &messages, vec![answer(r#"{"answer":"ok"}"#)]).await;
-    assert_eq!(result.unwrap().data["answer"], "ok");
+    let result = result.unwrap();
+    assert_eq!(result.data["answer"], "ok");
+    assert_eq!((result.cost.cache_read_tokens, result.cost.cache_write_tokens), (Some(4), None));
+    assert_eq!(result.cost.model.as_deref(), Some("claude-haiku-5-5-20260101"), "the dated build that answered");
     let request = &seen[0];
     assert_eq!(request.url, "https://api.anthropic.com/v1/messages");
     assert_eq!(request.header("x-api-key"), Some("anthropic-secret"));
@@ -62,7 +68,7 @@ async fn test_a_generation_is_a_messages_request_with_structured_output() {
         sent["messages"],
         json!([{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgpyZXN0"}},
-            {"type": "text", "text": "What is shown?"},
+            {"type": "text", "text": "What is shown?", "cache_control": {"type": "ephemeral"}},
         ]}])
     );
     let format = &sent["output_config"]["format"];

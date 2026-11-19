@@ -749,6 +749,8 @@ impl Settings {
             strict: if self.llm_strict_set { self.llm_strict } else { preset.strict },
             output_format: preset.output_format,
             auth_header: preset.auth_header,
+            // A provider reached directly caches without a mark, and a strict one refuses a field it does not know.
+            cache_breakpoints: false,
             extra_body: self.extra_body()?,
         };
         OpenAICompatibleLLM::new(key, http.clone(), &base_url, self.preset_models(&preset)?, options)

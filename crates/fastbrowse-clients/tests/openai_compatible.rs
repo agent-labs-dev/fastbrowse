@@ -12,7 +12,9 @@ use std::sync::{Arc, Mutex};
 
 use common::{Model, Script, Step, answering, reply, result_model, text};
 use fastbrowse_clients::http::{Http, Response, TransportError};
-use fastbrowse_clients::openai_compatible::{LLMOptions, OpenAICompatibleLLM, openrouter_routing_for};
+use fastbrowse_clients::openai_compatible::{
+    LLMOptions, OpenAICompatibleLLM, ROUTED_OUTPUT_TOKENS, openrouter_routing_for,
+};
 use fastbrowse_core::BoxFuture;
 use fastbrowse_core::llm::{Generation, LLMClient, LLMError, Message, Role};
 use fastbrowse_core::models::{Bytes, CostBasis, LLMPurpose, Limits};
@@ -86,6 +88,28 @@ fn approx(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1e-12 + 1e-6 * b.abs()
 }
 
+/// A cached message ends in a breakpoint, which Bedrock needs before it caches anything, and the cache counts a
+/// provider reports are summed over the calls a repair makes.
+#[tokio::test]
+async fn test_a_cached_prefix_is_marked_and_its_cache_tokens_are_counted() {
+    let cached = json!({"prompt_tokens": 20, "completion_tokens": 5, "cost": 0.001,
+                        "prompt_tokens_details": {"cached_tokens": 12, "cache_write_tokens": 0}});
+    let written = json!({"prompt_tokens": 20, "completion_tokens": 5, "cost": 0.001,
+                         "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 12}});
+    let script =
+        Script::new([completion(json!(r#"{"count":"wrong"}"#), written), completion(json!(r#"{"count":3}"#), cached)]);
+    let llm = client(script.http(), "https://llm.test/v1/", LLMPurpose::Start, "reader");
+    let messages = [Message::user("State").cached(), Message::user("Count")];
+    let result = generate(&llm, LLMPurpose::Start, &messages, None).await.unwrap();
+    assert_eq!((result.cost.cache_read_tokens, result.cost.cache_write_tokens), (Some(12), Some(12)));
+    let body = &script.bodies()[0];
+    assert_eq!(
+        body["messages"][0],
+        json!({"role": "user", "content": [{"type": "text", "text": "State", "cache_control": {"type": "ephemeral"}}]})
+    );
+    assert_eq!(body["messages"][1], json!({"role": "user", "content": "Count"}));
+}
+
 #[tokio::test]
 async fn test_schema_repair_keeps_images_and_accounts_for_both_calls() {
     let png = b"\x89PNG\r\n\x1a\nimage".to_vec();
@@ -96,8 +120,12 @@ async fn test_schema_repair_keeps_images_and_accounts_for_both_calls() {
         completion(json!(r#"{"count":3}"#), usage),
     ]);
     let llm = client(script.http(), "https://llm.test/v1/", LLMPurpose::Start, "reader");
-    let message =
-        Message { role: Role::User, content: "Count".into(), images: vec![Bytes(png.clone()), Bytes(jpeg.clone())] };
+    let message = Message {
+        role: Role::User,
+        content: "Count".into(),
+        images: vec![Bytes(png.clone()), Bytes(jpeg.clone())],
+        cache_through: false,
+    };
     let result = generate(&llm, LLMPurpose::Start, &[message], None).await.unwrap();
     assert_eq!(result.data["count"], 3);
     assert_eq!(result.cost.basis, CostBasis::Metered);
@@ -152,6 +180,24 @@ async fn test_unknown_price_retains_all_token_counts() {
 }
 
 #[tokio::test]
+async fn test_a_priced_response_names_the_model_that_served_it_on_the_cost_line() {
+    let llm_for = |script: &Script| client(script.http(), "https://llm.test", LLMPurpose::Start, "requested");
+    let usage = json!({"prompt_tokens": 7, "completion_tokens": 2, "cost": 0.01});
+
+    let served = Script::new([reply(
+        200,
+        json!({"model": "provider/served-build", "choices": [{"message": {"content": r#"{"count":0}"#}}], "usage": usage}),
+    )]);
+    let result = generate(&llm_for(&served), LLMPurpose::Start, &[], None).await.unwrap();
+    assert_eq!((result.cost.basis, result.cost.model.as_deref()), (CostBasis::Metered, Some("provider/served-build")));
+
+    // A response that names no model falls back to the one asked for.
+    let silent = Script::new([completion(json!(r#"{"count":0}"#), usage)]);
+    let result = generate(&llm_for(&silent), LLMPurpose::Start, &[], None).await.unwrap();
+    assert_eq!(result.cost.model.as_deref(), Some("requested"));
+}
+
+#[tokio::test]
 async fn test_exactly_one_retry_then_llm_error() {
     let key = "sk-secret-key";
     // A rejected property is named in the error's path, and the model can name one after anything it read.
@@ -168,7 +214,12 @@ async fn test_exactly_one_retry_then_llm_error() {
 async fn test_invalid_image_is_not_silently_dropped() {
     let script = Script::new([]);
     let llm = client(script.http(), "https://llm.test", LLMPurpose::Start, "planner");
-    let message = Message { role: Role::User, content: "See image".into(), images: vec![Bytes(b"GIF89a".to_vec())] };
+    let message = Message {
+        role: Role::User,
+        content: "See image".into(),
+        images: vec![Bytes(b"GIF89a".to_vec())],
+        cache_through: false,
+    };
     let error = generate(&llm, LLMPurpose::Start, &[message], None).await.unwrap_err();
     assert!(error.to_string().contains("PNG and JPEG"));
     assert!(script.requests().is_empty(), "an unsupported image must fail before sending");
@@ -485,8 +536,12 @@ async fn test_requests_without_a_response_are_bounded_so_a_capped_run_can_go_on(
         }
         Box::pin(async { Err(TransportError::Timeout("ReadTimeout")) })
     });
-    let image =
-        Message { role: Role::User, content: "Write".into(), images: vec![Bytes(b"\x89PNG\r\n\x1a\n0".to_vec())] };
+    let image = Message {
+        role: Role::User,
+        content: "Write".into(),
+        images: vec![Bytes(b"\x89PNG\r\n\x1a\n0".to_vec())],
+        cache_through: false,
+    };
     let ledger = capped(Some(28.0));
     let llm = client(http, OPENROUTER, LLMPurpose::Start, "writer");
     let error = generate(&llm, LLMPurpose::Start, &[image], Some(&ledger)).await.unwrap_err();
@@ -562,6 +617,64 @@ async fn test_a_response_without_cost_or_receipt_is_bounded() {
     assert_eq!(result.cost.basis, CostBasis::Bounded);
     assert!(approx(result.cost.dollars.unwrap(), 2000.0 * 0.000004 * 1.05));
     assert_eq!(result.cost.input_tokens, 7);
+}
+
+// A request far smaller than its model's window is bounded by what it sent: a cancelled one-field prompt to a model
+// with a large window was charged as if it had filled that window.
+#[tokio::test(start_paused = true)]
+async fn test_a_small_request_is_bounded_by_its_own_bytes_and_output_cap_not_the_window() {
+    let sent = std::sync::Arc::new(std::sync::Mutex::new(0usize));
+    let seen = sent.clone();
+    let http = answering(move |request| {
+        if request.url.ends_with("/endpoints") {
+            return ok(Response::json(
+                200,
+                &json!({"data": {"endpoints": [
+                    {"context_length": 1_000_000, "pricing": {"prompt": "0.000001", "completion": "0.000004"}}
+                ]}}),
+            ));
+        }
+        if request.method.as_str() == "GET" {
+            return ok(Response::new(404, ""));
+        }
+        *seen.lock().unwrap() = request.body.len();
+        ok(Response::json(200, &without_cost("generation-1")))
+    });
+    let llm = client(http, OPENROUTER, LLMPurpose::Start, "writer");
+    let result = generate(&llm, LLMPurpose::Start, &[], None).await.unwrap();
+    let tokens = *sent.lock().unwrap() as f64 + ROUTED_OUTPUT_TOKENS as f64;
+    assert_eq!(result.cost.basis, CostBasis::Bounded);
+    assert!(approx(result.cost.dollars.unwrap(), tokens * 0.000004 * 1.05), "{:?}", result.cost.dollars);
+}
+
+// An image can bill prompt tokens beside its per-image fee at a rate no listing publishes, so a request that carries one
+// is bounded by the whole window, plus the per-image fee, however short its text.
+#[tokio::test(start_paused = true)]
+async fn test_a_request_with_an_image_keeps_the_window_bound() {
+    let http = answering(|request| {
+        if request.url.ends_with("/endpoints") {
+            return ok(Response::json(
+                200,
+                &json!({"data": {"endpoints": [
+                    {"context_length": 1_000_000, "pricing": {"prompt": "0.000001", "completion": "0.000004", "image": "0.01"}}
+                ]}}),
+            ));
+        }
+        if request.method.as_str() == "GET" {
+            return ok(Response::new(404, ""));
+        }
+        ok(Response::json(200, &without_cost("generation-1")))
+    });
+    let llm = client(http, OPENROUTER, LLMPurpose::Start, "writer");
+    let message = Message {
+        role: Role::User,
+        content: "Count".into(),
+        images: vec![Bytes(b"\x89PNG\r\n\x1a\nimage".to_vec())],
+        cache_through: false,
+    };
+    let result = generate(&llm, LLMPurpose::Start, &[message], None).await.unwrap();
+    assert_eq!(result.cost.basis, CostBasis::Bounded);
+    assert!(approx(result.cost.dollars.unwrap(), (1_000_000.0 * 0.000004 + 0.01) * 1.05), "{:?}", result.cost.dollars);
 }
 
 #[tokio::test(start_paused = true)]
@@ -752,7 +865,7 @@ async fn test_an_optional_object_goes_out_as_nullable_leaves_and_comes_back_whol
         "field__span__last": null, "field__prefix": null});
     let script = Script::new([completion(json!(reply.to_string()), json!({}))]);
     let llm = client(script.http(), "https://llm.test/v1/", LLMPurpose::Start, "deepseek/deepseek-v4.1-flash-1017");
-    let message = Message { role: Role::User, content: "Read".into(), images: vec![] };
+    let message = Message { role: Role::User, content: "Read".into(), images: vec![], cache_through: false };
     let result = llm.generate_value(LLMPurpose::Start, &[message], &Model(claim), None).await.unwrap();
     assert_eq!(result.data, json!({"cite": {"first": "main/:5", "last": "main/:6"}, "field": null}));
     let body = &script.bodies()[0];
@@ -791,7 +904,7 @@ async fn test_optional_object_aliases_do_not_overwrite_literal_property_names() 
     let reply = json!({"a__b__1": "nested value", "a__b": "literal value"});
     let script = Script::new([completion(json!(reply.to_string()), json!({}))]);
     let llm = client(script.http(), "https://llm.test/v1/", LLMPurpose::Start, "deepseek/deepseek-v4.1-flash-1017");
-    let message = Message { role: Role::User, content: "Read".into(), images: vec![] };
+    let message = Message { role: Role::User, content: "Read".into(), images: vec![], cache_through: false };
     let result = llm.generate_value(LLMPurpose::Start, &[message], &Model(model), None).await.unwrap();
     assert_eq!(result.data, json!({"a": {"b": "nested value"}, "a__b": "literal value"}));
     let body = &script.bodies()[0];
@@ -820,7 +933,7 @@ async fn test_a_half_answered_optional_object_comes_back_as_none_rather_than_fai
     let llm =
         OpenAICompatibleLLM::new("key", script.traced(&trace), "https://llm.test/v1/", models, LLMOptions::default())
             .unwrap();
-    let message = Message { role: Role::User, content: "Read".into(), images: vec![] };
+    let message = Message { role: Role::User, content: "Read".into(), images: vec![], cache_through: false };
     let result = llm.generate_value(LLMPurpose::Start, &[message], &Model(claim), None).await.unwrap();
     assert_eq!(result.data, json!({"cite": null, "field": null}));
     assert_eq!(script.requests().len(), 1);

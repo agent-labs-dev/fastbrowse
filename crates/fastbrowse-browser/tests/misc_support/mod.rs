@@ -37,7 +37,7 @@ pub fn texts(capture: &Capture) -> Vec<String> {
 /// These checks cover rendered content; DOM observations have their own browser regressions.
 pub async fn content_capture(page: &CdpPage) -> Capture {
     let mut capture = page.capture().await.expect("capture");
-    capture.blocks.retain(|b| b.kind != BlockKind::Observation);
+    capture.blocks.retain(|b| !matches!(b.kind, BlockKind::Observation | BlockKind::DocumentTitle));
     capture
 }
 

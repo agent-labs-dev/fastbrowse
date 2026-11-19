@@ -5,8 +5,8 @@ publication result. Do not run a paid campaign while iterating on code.
 
 ## Time limit
 
-Every run an eval harness starts sets `max_seconds`. Without it a Wait on a page that never changes waits for ever,
-and the run ends only when the harness gives up. The fixture bench and runner derive the run's limit from their one
+Every run an eval harness starts sets `max_seconds`. Without it nothing bounds the run's length: a Wait on a page
+that never changes ends after one 60 s watch, but the run may wait again, and only the stall rule stops it. The fixture bench and runner derive the run's limit from their one
 client timeout (`TASK_SECONDS` in `src/fastbrowse/evals/runner.py`), less the agent's ending-frame allowance, so
 the agent stops itself as `budget_exceeded` with its evidence before the client's backstop fires.
 

@@ -707,12 +707,11 @@ mod tests {
         assert!(validate_hello(&hello).unwrap_err().to_string().contains("relay protocol"));
     }
 
-    /// The Store's 0.1.0 package lacks only this one of the methods a run sends, and the session already runs on when
-    /// it is refused, so a copy without it must still drive a task.
+    /// Store copies can lack optional commands until their next upload, so none may block a run's handshake.
     #[test]
     fn a_copy_that_lacks_only_a_best_effort_method_still_runs() {
         let mut relayed = allowed_methods();
-        relayed.retain(|method| method != "Page.setInterceptFileChooserDialog");
+        relayed.retain(|method| !super::super::protocol::BEST_EFFORT.contains(&method.as_str()));
         assert!(missing_methods(&json!({"methods": relayed})).is_empty());
         assert!(validate_hello(&json!({"protocol": PROTOCOL, "methods": relayed})).is_ok());
     }

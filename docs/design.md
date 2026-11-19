@@ -2,7 +2,7 @@
 
 fastbrowse splits a browser agent into three owners:
 
-- **Jev decides, reads and finishes.** A batched request chooses an operation and its possible targets from indexed controls. On a page denser than the step's control budget, a batched relevance check keeps the controls the task can use rather than the first ones in document order. A page too dense even on screen offers the controls that fit and scrolls for the rest rather than ending the run. Large target sets use a second choice within the selected group. Jev also checks sign-in and bot walls on fresh pages, picks what a page says from its quoted spans, and ends the run by choosing DONE.
+- **Jev decides, reads and finishes.** A batched request chooses an operation and its possible targets from indexed controls. Its shared state retains each control's context and available operations, so the operation choice can tell which open widget the task needs. On a page denser than the step's control budget, a batched relevance check keeps the controls the task can use rather than the first ones in document order. A page too dense even on screen offers the controls that fit and scrolls for the rest rather than ending the run. Large target sets use a second choice within the selected group. Jev also checks sign-in and bot walls on fresh pages, picks what a page says from its quoted spans, and ends the run by choosing DONE.
 - **An LLM helps where nothing can be copied.** With no start page given, it proposes the first address from the task. When Jev says a field takes a value the task asks for without stating it word for word, such as a search query, it writes that value from the task and the field's label, never from the page. When Jev says an answer has to be put together from more than one fact, it writes that answer from the notes. A run given a start page whose values and answers Jev can quote calls no LLM.
 - **Code owns the gates.** Freshness and hit-tests before every input, no automatic retry of a mutation, authorization for irreversible actions, secret resolution and redaction, and budgets. Code does not second-guess a DONE: the run ends `complete` with what Jev read, and a requested record that cannot be filled, a composed claim still unsupported after recovery, an answer its composer says leaves a requested value unestablished, or a requested step the page shows the site does not allow ends `unverified`. Once the run has acted, Jev's finish check answers whether every step the task asks for was carried out: `done`, `undone` (the run recovers), or `refused` (the run reads, answers and ends `unverified`).
 
@@ -165,9 +165,14 @@ state, but does not by itself prove a value was set or accepted.
 
 ## Reading and citations
 
-Browser and HTTP captures keep the document title as a citable observation labeled `Document title`. It has its
-own source span and participates in the capture hash and secret masking. It does not represent a heading in the
-page body. A title alone does not establish that a script-rendered body was read.
+Browser and HTTP captures keep the document title as a citable `document_title` block. It has its own source span
+and participates in the capture hash and secret masking. Read candidates name their source kind, so the browser
+tab title stays distinct from a heading rendered in the page body. A title alone does not establish that a
+script-rendered body was read.
+
+Browser and HTTP captures keep a text label's `title` advice beside it as `(title: ...)`, within the
+same record or table cell. The advice supplements the label rather than replacing it, so a shortened listing
+name can retain its full native tooltip text as citable evidence.
 
 READ is one of Jev's operations. On a page that has changed, Jev is also asked whether it shows something the task
 asks to be told that the notes do not hold yet; when it does, and Jev picked another operation, the run reads first,
@@ -197,6 +202,13 @@ string, number, `true`, `false` and `null` is its own block under the path of ke
 A string reads as its decoded text, a number as written, and repeated keys keep every value. A response that is not
 entirely valid JSON, and other `text/*` responses, are read as one quoted text block. Neither is parsed as HTML, and
 delimited data keeps its whitespace. Browser captures of a JSON document are still read as one code block.
+
+Browser captures follow block structure inside inline containers, including custom elements and elements with
+`display: contents`, so nested headings and repeated records keep their own source spans. Adjacent inline prose
+stays in one block. A link enclosing multiple blocks keeps its destination on each block and its native title
+advice beside the first label. CSS-generated text remains readable when an ancestor's
+`aria-hidden` removes a dialog's background from accessibility APIs while it remains rendered. Generated text
+on an element marked `aria-hidden` itself stays excluded, preserving decorative icon handling.
 
 Browser and HTTP heading paths follow heading ranks. A heading inside a repeated record ends earlier headings
 of the same or deeper rank, without naming later records. Headings hidden by the capture do not change that
@@ -284,17 +296,18 @@ one field of a record, that code finds in the note's text exactly as written. Co
 quotation delimiters when requested; prose parts, objects like the others so the composer does not write connecting
 wording as a source part, keep explanatory wording separate. A tally has a computed numeric part or
 requested winner-field parts, which code fills without replacing matching text inside a source part. A numeric slot retains its exact position in its prose or table cell, so unit and sign checks see the surrounding text without confusing an identical source number with the slot. Packed compositions expose their original
-sources separately, and kept claims retain these parts through a rewrite. Split notes cannot be selected as whole
-sources. The delivered claims keep the same text, cells, tally and evidence id fields.
+sources separately, and kept claims retain these parts through a rewrite. A rewrite's feedback names a rejected
+draft's notes by the labels each request shows, and leaves out the notes another request holds. Split notes cannot be
+selected as whole sources. The delivered claims keep the same text, cells, tally and evidence id fields.
 For a comparison restricted to each group's minimum or maximum, the composer also names a private selection:
 the grouping field, the inner field and its extreme. Group names must copy an exact span from the record's quote
 or, for captured page text, its own captured heading path. Code selects each group's tied extremes before applying
 the outer comparison. The claim cites every qualifying record used in the selection; record association checks see
 only the outer winners. This selection survives packing and rewrites without adding fields to delivered claims.
-An extreme can supply both its numeric result and requested fields from its winning records. Typed computed slots name those fields. Code selects the rank and every tied winner first, then copies each requested field only from those records and their associated source notes. Literal-copy checks accept wording from a record's quote or captured heading, never its address or generated metadata. Field-support checks reject a missing, ambiguous or unrelated value. A name and price can therefore share a prose claim or occupy separate table cells without the composer choosing the winning record.
+An extreme can supply both its numeric result and requested fields from its winning records. If a draft uses a slot named for the compared field as its numeric result, that slot gives the shared value once, including when records tie. A prose claim or table cell uses one slot for the comparison. Separate cells can show the computed result and the value as each winner writes it. Other typed computed slots name the fields to copy from each winner. Code selects the rank and every tied winner first, then copies each requested field only from those records and their associated source notes. Literal-copy checks accept wording from a record's quote or captured heading, never its address or generated metadata. Field-support checks use those same sources and reject a missing, ambiguous or unrelated value. A name and price can therefore share a prose claim or occupy separate table cells without the composer choosing the winning record.
 A count, total, minimum or maximum, or a place after one such as the second cheapest, is never written or judged as a number. The response schema requires a field for sums, minima and maxima; only counts may omit it. The composer marks it as a tally with
 the kind of record and the field, and Jev answers one question per note read: for a count, whether it holds exactly one
-such record, and for a total or extreme, whether it holds one with its field, then which number in it is the field. A date, ISO or a day, month name and year, is offered whole with its year beside it, and its day and month are not offered alone, since neither orders anything; code orders dates for an extreme and never adds them. A
+such record, and for a total or extreme, whether it holds one with its field, then which number in it is the field. For a total or extreme, membership uses the task's scope as well as the draft's record kind, with the page's labels identifying the requested state. A date, ISO or a day, month name and year, is offered whole with its year beside it, and its day and month are not offered alone, since neither orders anything; code orders dates for an extreme and never adds them. A
 record's name, heading or a link to it holds no value, so it is not counted as a record without one. Code counts, adds
 or compares, writes the value into the claim and cites every record it rests on. For a count per group, such as quotes
 per author, the composer names only the group its claim counts: the run's LLM copies each record's group from its
@@ -327,21 +340,28 @@ value without a matching heading, and that value contradicts a claim that the fi
 The support question distinguishes facts about a quoted subset from claims about a whole set, and what a counter
 on the page says about its source, which supports a claim that restates it, from the number of records the answer
 reports.
-Initial and repaired compositions are checked
-for both claim support and requested answer coverage in one decision batch. A claim with no cited quote or no
+Initial and repaired compositions are checked for claim support and requested answer coverage. Coverage and
+copied-text checks receive the task and answer without the action history; claim and action checks retain that
+history to judge what changed and when. A copied field may contain its complete value when that field is requested,
+such as the full date when the task asks for the date, or only the year when the task asks for its year. A claim with no cited quote or no
 support judgment is withheld and ends `unverified`. When every check is answered and Jev rejects a composed claim, the run spends an existing recovery to correct the draft or gather
 more evidence. Rejected prose is feedback, never a source fact. Code keeps each claim that passed every
 check, with its citations, word for word in the corrected draft, and the composer writes only the rest, unless the
 coverage or step check failed, which fault the claims together; a claim it
-writes again with the same text is kept once. A rewrite that retyped a passed claim could change a copied name and
-fail where the first draft had passed. A corrected draft
+writes again with the same text, tally meaning and computed layout is kept once. Claims with different ranks
+or computed fields remain distinct even when their placeholder text is identical. An omitted rank and rank 1
+mean the same first minimum or maximum; a grouped count without a rank makes no ranking assertion. A count
+ignores its unused numeric field when detecting repeats. A field-only
+winner claim ignores its unused initial number when detecting repeats. Computed layout compares slot positions
+and field names, regardless of how identical surrounding text was split into source and prose parts. A rewrite that retyped a passed
+claim could change a copied name and fail where the first draft had passed. A corrected draft
 must pass citation checks and cover every requested fact or value. If the combined answer exceeds Jev's input limit for the coverage check, individually supported claims remain available as an unverified partial answer; the result identifies the coverage limit. The coverage check judges the written
 facts and values, not the form the task asks for, such as JSON, since code writes every answer as claims; citation
 support and browser actions have separate checks. A whole-answer check beside coverage
 judges the claims against the steps the run carried out on the page: an answer that says something was not done, or
 already existed, when one of those steps may have done it has every claim withheld, and a run still finishing spends a
-recovery to write it again. Only that rewrite gives the composer the steps, as the run's own record and never as
-citations; on every other draft a long run's clicks would crowd out the notes it writes from. Runs with a caller-supplied output schema
+recovery to write it again. Every draft receives the steps as the run's own record; a claim about a page result still
+needs evidence from the page. Runs with a caller-supplied output schema
 spend the same recovery, and when it ends without a checked answer they retain their extracted data and end `unverified`.
 Each schema field is chosen after the answer is checked, with its claims beside the candidates, or with the claims that
 passed when a rewrite is pending: a field choice alone cannot compare records, and chose the other package where the
@@ -394,6 +414,10 @@ cancellation keep the same attribution. LLM lines retain their separate `purpose
 directly through a decision client without an agent purpose omit `decision_purpose`; older receipts
 remain readable. Purpose labels group calls without changing their charges.
 
+Every cost line may carry the `model` that served it: the provider response's `model` for an LLM line (the requested
+id when the response names none), and the Jev model for a Jev line. Lines merged from calls to different models omit it,
+and older receipts remain readable.
+
 Cancellation returns a receipt of reported steps, cost lines and finished recordings after cleanup. Protocol 2
 keeps error code `-32002` and adds the optional `error.data` receipt; other errors omit it. Rust returns
 `RunError::Cancelled(receipt)`. A cancelled cloud start keeps known charges as `unsettled`, or an `unknown`
@@ -422,10 +446,11 @@ after the deadline, unrelated page timers and the cookie-banner helper's backgro
 
 A `wait` step lasts until the page changes by itself: a change to what the settle fingerprint compares, a player
 starting, pausing, ending or muting (in the page, a granted child frame or a frame in a process of its own that an observation reads), a same-document navigation, a navigation to another document, or a dialog. It
-has no fixed bound. A run with `max_seconds` waits at most until it must stop browsing, and a run without one waits
-for the change. The wait samples the fingerprint twice a second beside the events it hears, since a script writing
+has no fixed bound. A run with `max_seconds` waits at most until it must stop browsing. A run without one waits at
+most one armed watch (`WAIT_ARM_SECONDS`, 60 s) and is then told the page did not change, so it can decide again and
+the stall rule counts a page that never moves. The wait samples the fingerprint twice a second beside the events it hears, since a script writing
 `checked` as a property raises none. A wait that ends with nothing changed is a step that changed nothing, under the one stall rule, unless
-a player's clock moved meanwhile. A cancelled wait removes what it installed in the page. A direct `Page::act` Wait has no deadline; an embedder bounds it through `Page::wait` or cancellation. Desktop waits use the
+a player's clock moved meanwhile. A cancelled wait removes what it installed in the page. A direct `Page::act` Wait has no deadline of its own, so it lasts one armed watch at most; an embedder bounds it further through `Page::wait` or cancellation. Desktop waits use the
 same run deadline while polling the window's accessibility tree for a change.
 
 An empty observation waits on loading events before action history and progress are recorded.
@@ -615,6 +640,10 @@ as UTF-8 text; XLSX, DOCX and PDF members use their document readers. Other or i
 an explicit notice that their contents were not read. Nested archives are not expanded. Generic or missing MIME types use the download filename to select these readers.
 The configured `max_download_bytes` also bounds aggregate decompressed container bytes and extracted output; a
 document exceeding it is reported unread, rather than returning truncated text.
+
+Every capture taken after a download carries the file's text, at offsets the page around it moves. A quote from the
+file is one note however many reads take it: a read that quotes the same place in the same file with the same text
+joins the note an earlier read made. Equal text at two places in one file stays two notes.
 
 The cloud browser ignores `Browser.setDownloadBehavior(deny)`, so bytes come from response interception, never from the remote filesystem. Host-path `DOM.setFileInputFiles` is only valid for a browser on the same machine.
 

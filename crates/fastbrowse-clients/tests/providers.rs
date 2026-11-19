@@ -23,7 +23,8 @@ fn completion(content: &str, finish_reason: &str) -> Step {
 async fn generate(env: &[(&str, &str)], replies: Vec<Step>) -> (Vec<Request>, Generation<Value>) {
     let script = Script::new(replies);
     let llm = settings(env).llm(&script.http()).unwrap();
-    let result = llm.generate_value(LLMPurpose::Start, &[Message::user("?")], &answer_model(), None).await.unwrap();
+    let messages = [Message::user("?").cached()];
+    let result = llm.generate_value(LLMPurpose::Start, &messages, &answer_model(), None).await.unwrap();
     (script.requests(), result)
 }
 
@@ -151,6 +152,8 @@ async fn test_each_hosted_preset_sends_its_own_key_to_its_own_host_only() {
         for cap in ["max_tokens", "max_completion_tokens"] {
             assert!(sent.get(cap).is_none(), "{} sent {cap}", case.provider);
         }
+        // A provider reached directly caches without a mark and may refuse one.
+        assert_eq!(sent["messages"][0], json!({"role": "user", "content": "?"}), "{}", case.provider);
         // OpenRouter's fields and the reasoning effort go nowhere they were not asked for.
         for absent in ["provider", "reasoning", "reasoning_effort"] {
             assert!(sent.get(absent).is_none(), "{} sent {absent}", case.provider);

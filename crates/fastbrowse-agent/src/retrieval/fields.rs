@@ -288,6 +288,9 @@ fn marks(block: &Block) -> String {
     if block.kind == BlockKind::Heading {
         marks.push("heading".to_string());
     }
+    if block.kind == BlockKind::DocumentTitle {
+        marks.push("document title".to_string());
+    }
     // The headings a value sits under tell apart equal values of different records, as a JSON document's key path
     // tells its `name` from a release's (#1069); a note's candidate carries them the same way (`quote_context`).
     if !block.heading_path.is_empty() {
@@ -382,8 +385,11 @@ pub(crate) fn tuple_repr(values: &[String]) -> String {
 
 /// `_quote_context`: what tells one note's scalar apart from another: the record it was quoted from, which the bare
 /// number does not.
-fn quote_context(evidence: &Evidence) -> String {
+fn quote_context(evidence: &Evidence, source_kind: Option<BlockKind>) -> String {
     let mut marks = Vec::new();
+    if source_kind == Some(BlockKind::DocumentTitle) {
+        marks.push("document title".into());
+    }
     if !evidence.heading_path.is_empty() {
         marks.push(format!("headings {}", tuple_repr(&evidence.heading_path)));
     }
@@ -424,7 +430,7 @@ pub fn field_candidates_from_notes(
                     links: Link::within(&evidence.links, start, end),
                     ..evidence.clone()
                 },
-                context: quote_context(evidence),
+                context: quote_context(evidence, notes.source_kind(evidence)),
             });
         }
     }
