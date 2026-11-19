@@ -59,8 +59,9 @@ A reviewer rejects a change that breaks one.
   blanked from model input and redacted from text results; an address on an origin the secret was typed on keeps its
   host and port. No model screenshot or PNG step frame is taken while a resolved secret shows as page text, checked
   against the page as it is when the image is taken (the recorded action may be what put it there). Live JPEG frames
-  and recordings are held back before secret typing and while observations reveal a resolved secret; recordings keep
-  their last clean frame.
+  and recordings are held back from the first secret keystroke to the end of the run, whatever a reading says: pixels
+  cannot be checked at the moment a frame arrives, and a page can echo the value after the reading that last found it
+  clean. They are also held while observations reveal a resolved secret. Recordings keep their last clean frame.
 - **Code owns authorization.** Jev classifies clicks, form-submitting Enter and dialog acceptance; code refuses an
   irreversible one unless the run is authorized and Jev judges the task asked for it. Only code-selected pagination
   skips classification.

@@ -834,6 +834,9 @@ impl CdpPage {
             }
             Operation::Fill => {
                 let secret_origin = action.secret_origin.as_deref();
+                if action.secret {
+                    self.session.seal_frames();
+                }
                 let filled =
                     self.until_dialog(self.fill(target, text, point, action.secret, secret_origin, drawn)).await;
                 match filled {
