@@ -326,6 +326,8 @@ pub(crate) struct RunState {
     pub surface_judged: Option<((String, String), f64)>,
     /// The source of the latest navigation, scoped to the destination that followed it.
     pub navigation_from: Option<((String, String), Observation)>,
+    /// The action that made the latest navigation, as "click 'Learn more'".
+    pub navigated_by: Option<String>,
     /// Jev's sign-in readings stay with the document they described, not with every later route.
     pub login_readings: HashMap<(String, String), f64>,
     /// Each page state reached, with `evidence_reads` when it was last on screen: going back to one with nothing read
@@ -769,6 +771,7 @@ impl RunState {
             last_page: None,
             surface_judged: None,
             navigation_from: None,
+            navigated_by: None,
             ..self
         }
     }
@@ -816,6 +819,7 @@ impl RunState {
             last_page: None,
             surface_judged: None,
             navigation_from: None,
+            navigated_by: None,
             login_readings: HashMap::new(),
             reached: HashMap::new(),
             shown: HashMap::new(),

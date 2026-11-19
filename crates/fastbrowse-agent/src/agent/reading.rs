@@ -51,6 +51,7 @@ impl Agent {
             Some(&ledger),
             &self.trace,
             shows,
+            self.reached_by(state, observation).as_deref(),
         )
         .await?;
         Ok(self.end_read(state, capture, observation, tries, known, read))
@@ -74,8 +75,18 @@ impl Agent {
         let tries = state.begin_read(observation);
         let known = read_sources(&state.notes);
         let (task, dates, ledger) = (self.model_task(state), state.dates.clone(), state.ledger.clone());
-        let tokens = &self.config.tokens;
-        let reading = read_page(&*self.jev, &capture, &task, &dates, tokens, Some(&ledger), &self.trace, shows);
+        let (tokens, reached_by) = (&self.config.tokens, self.reached_by(state, observation));
+        let reading = read_page(
+            &*self.jev,
+            &capture,
+            &task,
+            &dates,
+            tokens,
+            Some(&ledger),
+            &self.trace,
+            shows,
+            reached_by.as_deref(),
+        );
         let (read, done) = tokio::join!(self.trace.phase("read", reading), work(state));
         self.end_read(state, capture, observation, tries, known, read?);
         Ok(Some(done))

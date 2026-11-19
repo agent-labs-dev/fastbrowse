@@ -146,6 +146,7 @@ fn read_request(
     candidates: &[Candidate],
     blocks: Option<&[&Block]>,
     shows: bool,
+    reached_by: Option<&str>,
 ) -> (Value, IndexMap<String, Question>) {
     let groups = read_groups(candidates);
     let mut criteria: IndexMap<String, Value> = IndexMap::new();
@@ -211,7 +212,11 @@ fn read_request(
         shown.insert("focused".into(), true.into());
     }
     shown.insert("inaccessible_frames".into(), capture.inaccessible_frames.into());
-    (json!({"date": date, "page": Value::Object(shown)}), questions)
+    let mut state = json!({"date": date, "page": Value::Object(shown)});
+    if let Some(reached_by) = reached_by {
+        state["page_reached_by"] = reached_by.into();
+    }
+    (state, questions)
 }
 
 /// The text of `blocks` joined by `separator`, each block led by the headings it sits under where the text before it
@@ -324,7 +329,7 @@ async fn focus<'a>(
             return false;
         }
         let candidates = iter_read_candidates(page, &blocks, Some(max_options - 1));
-        let (state, questions) = read_request(page, task, date, &candidates, Some(&blocks), false);
+        let (state, questions) = read_request(page, task, date, &candidates, Some(&blocks), false, None);
         candidates.len() <= max_options - 2 && read_fits(&state, &questions, tokens)
     };
     let (mut shown, mut high) = (0, ranked.len());
@@ -395,6 +400,11 @@ pub(crate) fn whole_page_facts(capture: &Capture) -> Vec<Fact> {
 /// Jev is told the capture date and the dates the task names, worked out from it, as a step is: asked whether "30/01/2027"
 /// answers "the last Saturday of the month after next" without them, it could not tell, and a run that had set that
 /// date read the page as holding nothing for the task.
+///
+/// `reached_by` is the action that led the run to this page and the page it was taken on. Asked for the title of the
+/// page "Learn more" leads to, Jev read the help page it reached as a list of reserved domains and picked a heading in
+/// it, at most 0.37 to the document title, in four of four replays; told the page was reached by clicking "Learn
+/// more" on the start page, it picked the title in every replay (#1174).
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn read_page(
     jev: &dyn DecisionClient,
@@ -405,12 +415,13 @@ pub(crate) async fn read_page(
     ledger: Option<&Ledger>,
     trace: &Trace,
     shows: bool,
+    reached_by: Option<&str>,
 ) -> Result<PageRead> {
     let page = Page::new(capture);
     let blocks: Vec<&Block> = capture.blocks.iter().collect();
     let mut candidates = page_read_candidates(&page, &blocks, jev.profile().max_choice_options);
     let date = crate::dates::dated(capture.captured_at, dates);
-    let (mut state, mut asked) = read_request(&page, task, &date, &candidates, None, shows);
+    let (mut state, mut asked) = read_request(&page, task, &date, &candidates, None, shows, reached_by);
     // Passages Jev never judged are missing from those it chooses among, so an absent from them is not the page's.
     let mut lost = false;
     if candidates.is_empty() || !read_fits(&state, &asked, tokens) {
@@ -424,7 +435,7 @@ pub(crate) async fn read_page(
         } else {
             lost = unjudged;
             candidates = narrowed;
-            (state, asked) = read_request(&page, task, &date, &candidates, Some(&kept), shows);
+            (state, asked) = read_request(&page, task, &date, &candidates, Some(&kept), shows, reached_by);
         }
     }
     if let Some(ledger) = ledger {
@@ -553,7 +564,7 @@ mod tests {
         assert!(title.context.starts_with("(document title)"));
         assert!(!title.evidence.rendered_text);
         let (_, questions) =
-            read_request(&Page::new(&captured), "Tell me the heading", "2026-11-17", &candidates, None, false);
+            read_request(&Page::new(&captured), "Tell me the heading", "2026-11-17", &candidates, None, false, None);
         let Question::Choice(question) = &questions[CHOICE] else { panic!("a choice") };
         assert_eq!(question.criteria[&title.id]["source_kind"], "document_title");
         assert!(question.instructions.contains("A request for a heading needs a heading"));
@@ -756,6 +767,7 @@ mod tests {
                 None,
                 &Trace::disabled(),
                 false,
+                None,
             ))
             .unwrap();
             assert_eq!(read.compose, choice == SYNTHESIS);
@@ -823,6 +835,7 @@ mod tests {
             None,
             &Trace::disabled(),
             false,
+            None,
         ))
         .unwrap()
     }
@@ -858,6 +871,7 @@ mod tests {
             None,
             &Trace::disabled(),
             true,
+            None,
         ))
         .unwrap();
         assert!(!read.finished, "a read that must take something cannot end on an option it was not offered");
@@ -912,7 +926,7 @@ mod tests {
             })
             .collect();
         let (state, questions) =
-            read_request(&page, "Find the second avatar name", "2026-09-26 (Saturday)", &candidates, None, false);
+            read_request(&page, "Find the second avatar name", "2026-09-26 (Saturday)", &candidates, None, false, None);
         assert_eq!(state["date"], "2026-09-26 (Saturday)", "a read is told the dates a step is");
         let Question::Choice(question) = &questions[CHOICE] else { panic!("a choice") };
         let expected: Vec<Value> = ["1 of 2", "2 of 2"]

@@ -3147,6 +3147,63 @@ async fn test_a_field_already_holding_the_lines_still_offers_items_set_out_as_li
     );
 }
 
+/// Records each request's state and composes every read.
+#[derive(Default)]
+struct ReadsRecorded(Mutex<Vec<serde_json::Value>>);
+
+impl DecisionClient for ReadsRecorded {
+    fn evaluate<'a>(
+        &'a self,
+        state: &'a serde_json::Value,
+        questions: &'a IndexMap<String, Question>,
+    ) -> BoxFuture<'a, Result<Evaluation, DecisionError>> {
+        self.0.lock().unwrap().push(state.clone());
+        let answers = questions
+            .iter()
+            .map(|(key, question)| {
+                let answer = match question {
+                    Question::Choice(_) => Answer::Choice(ChoiceAnswer {
+                        kind: Default::default(),
+                        choice: "synthesis".into(),
+                        probabilities: IndexMap::from([("synthesis".to_string(), 1.0)]),
+                        confidence: 1.0,
+                    }),
+                    _ => Answer::Noul(NoulAnswer { kind: Default::default(), probability: 0.5 }),
+                };
+                (key.clone(), answer)
+            })
+            .collect();
+        Box::pin(
+            async move { Ok(Evaluation { model: "jev".into(), answers, input_tokens: 0, cost: free(), requests: 1 }) },
+        )
+    }
+
+    fn profile(&self) -> DecisionProfile {
+        DecisionProfile::jev()
+    }
+}
+
+/// Asked for the title of the page "Learn more" leads to, Jev read the help page the run reached as a list of reserved
+/// domains and picked a heading in it (#1174): the read was shown the page alone. A read of a page the run navigated to
+/// is told the action that led there and the page it was taken on.
+#[tokio::test]
+async fn test_a_read_is_told_how_the_run_reached_the_page() {
+    let jev = Arc::new(ReadsRecorded::default());
+    let agent = Agent::new(Arc::new(NoPage), jev.clone(), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    let help = at("https://www.iana.org/help/example-domains", &[]);
+    let page = capture(&[(BlockKind::Paragraph, "Example Domains")]);
+    agent.read(&mut state, page.clone(), &help, true).await.unwrap();
+    state.history.push(executed(Some(Operation::Click), Some("Learn more"), true));
+    state.acted_from = Some(at("https://example.com/", &[]));
+    agent.note_effect(&mut state, &help);
+    state.read_documents.clear();
+    agent.read(&mut state, page, &help, true).await.unwrap();
+    let reads = jev.0.lock().unwrap();
+    assert_eq!(reads[0].get("page_reached_by"), None, "a page the run did not navigate to");
+    assert_eq!(reads.last().unwrap()["page_reached_by"], "click 'Learn more' on https://example.com/");
+}
+
 #[tokio::test]
 async fn test_only_new_read_evidence_renews_recovery_without_an_explicit_read_step() {
     let field = "Capacity: 12";

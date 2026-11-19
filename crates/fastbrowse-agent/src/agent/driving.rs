@@ -1516,6 +1516,13 @@ impl Agent {
             && state.history.last().is_some_and(|last| last.operation != Some(Operation::SwitchTab))
         {
             state.navigation_from = Some((landed.clone(), before.clone()));
+            state.navigated_by = state.history.last().and_then(|last| {
+                let operation = last.operation?;
+                Some(match &last.target {
+                    Some(target) => format!("{operation} {}", text::repr(target)),
+                    None => operation.to_string(),
+                })
+            });
         }
         if let Some(href) = state.followed.take()
             && landed != read_key(&before)
