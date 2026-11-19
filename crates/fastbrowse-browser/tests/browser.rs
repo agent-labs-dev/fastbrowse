@@ -2137,6 +2137,37 @@ async fn test_a_background_run_opens_a_new_tab_link_behind_the_current_tab() {
     assert_eq!(created, vec![&json!({"url": "about:blank", "background": true}); 2]);
 }
 
+/// A link that asks before it leaves the site opens its tab once the run answers the question, without waiting on the
+/// page while the question holds it.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_a_background_run_opens_a_new_tab_link_once_its_confirm_is_answered() {
+    let _turn = turn().await;
+    let Some(chrome_connection) = chrome().cloned() else { return };
+    let background = BrowserConnection { foreground: false, ..chrome_connection };
+    let Some(h) = proxied(background, recording(Arc::default())).await else { return };
+    h.goto("/").await;
+    eval_active(
+        &h,
+        "document.body.insertAdjacentHTML('beforeend', '<a href=\"/popup.html\" target=\"_blank\" \
+         onclick=\"confirm(\\'Leave?\\')\">Leaving link</a>')",
+    )
+    .await;
+    let obs = h.observe().await;
+    let clicked = timeout(Duration::from_secs(10), act(&h.page, click(find(&obs, "Leaving link")), &obs)).await;
+    assert_eq!(clicked.expect("in time").outcome, StepOutcome::Executed);
+    let asked = h.observe().await;
+    assert!(asked.dialog.as_ref().is_some_and(|d| d.message == "Leave?"));
+    let accept = Action { accept_dialog: Some(true), ..Action::new(Operation::Dialog) };
+    let result = timeout(Duration::from_secs(10), act(&h.page, accept, &asked)).await.expect("in time");
+    assert!(
+        result.outcome == StepOutcome::Executed && result.detail.as_deref() == Some("opened a new tab, now active"),
+        "{result:?}"
+    );
+    find(&h.observe().await, "Popup button");
+    assert!(h.session.popups().is_empty(), "the page opened a tab of its own");
+    h.close().await;
+}
+
 /// A native dialog holds its renderer, so setup sent to a page behind one, focus emulation included, waits
 /// for the answer. The run must still be able to answer it, and setup must then finish rather than hang.
 #[tokio::test(flavor = "multi_thread")]

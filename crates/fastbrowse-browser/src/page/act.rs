@@ -587,12 +587,22 @@ impl CdpPage {
         } else {
             self.dispatch(action, target.as_ref(), point, drawn).await
         };
-        // A dialog the click opened holds the page's renderer, and the listener has then not run.
-        let held = match (&target, holding) {
-            (Some(target), true) if self.session.pending_dialog().is_none() => {
-                self.evaluate(&target.0, RELEASE_NEW_TAB_JS).await.ok().and_then(|url| url.as_str().map(str::to_owned))
-            }
+        // A dialog the click's own handler opened holds the page's renderer, and the listener runs only once it is
+        // answered, so the address is read after the dialog step instead.
+        let holder = match (&target, holding) {
+            (Some(target), true) => Some(target.0.clone()),
+            _ if action.operation == Operation::Dialog => self.state.lock().unwrap().held_link.take(),
             _ => None,
+        };
+        let held = match holder {
+            Some(holder) if self.session.pending_dialog().is_some() => {
+                self.state.lock().unwrap().held_link = Some(holder);
+                None
+            }
+            Some(holder) => {
+                self.evaluate(&holder, RELEASE_NEW_TAB_JS).await.ok().and_then(|url| url.as_str().map(str::to_owned))
+            }
+            None => None,
         };
         let (outcome, mut detail, failure) = dispatched?;
         if outcome == StepOutcome::Executed
