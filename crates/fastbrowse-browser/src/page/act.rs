@@ -612,7 +612,7 @@ impl CdpPage {
             if self.session.grant().is_some_and(|grant| !grant.allows(&url)) {
                 return Err(BrowserError::OriginNotAllowed);
             }
-            self.session.open_owned_tab("about:blank").await?;
+            self.session.open_owned_tab_from("about:blank", Some(self.session.active_target_id())).await?;
             match self.navigate(&url, None).await {
                 Err(error @ (BrowserError::OriginNotAllowed | BrowserError::PageUnresponsive(_))) => return Err(error),
                 Err(error) if error.is_unavailable() => return Err(error),

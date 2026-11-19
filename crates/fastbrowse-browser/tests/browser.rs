@@ -2118,6 +2118,7 @@ async fn test_a_background_run_opens_a_new_tab_link_behind_the_current_tab() {
     )
     .await;
     let opener = active(&h);
+    let opener_target = h.session.active_target_id();
     let obs = h.observe().await;
     let handled = act(&h.page, click(find(&obs, "Handled link")), &obs).await;
     assert_eq!(handled.outcome, StepOutcome::Executed);
@@ -2128,6 +2129,8 @@ async fn test_a_background_run_opens_a_new_tab_link_behind_the_current_tab() {
         "{result:?}"
     );
     assert_ne!(active(&h), opener);
+    let tab = h.session.tabs().into_iter().find(|t| t.active).expect("active tab");
+    assert_eq!(tab.opener_id, Some(opener_target), "the new tab is the clicked page's, as a tab it opened would be");
     find(&h.observe().await, "Popup button");
     assert!(h.session.popups().is_empty(), "the page opened a tab of its own");
     h.close().await;
