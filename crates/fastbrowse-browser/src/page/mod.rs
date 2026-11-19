@@ -362,6 +362,8 @@ pub(crate) struct PageState {
     /// same address: a dialog a page opened as it loaded after a navigation is not the action's, and accepting it
     /// moved nothing.
     pub(crate) marked: Option<(u32, String)>,
+    /// Where the running action's pointer mark sits in the recording's marks, until a press is sent at it.
+    pub(crate) mark_index: Option<usize>,
     pub(crate) back_to: HashMap<String, String>,
     /// Child frame session -> when its last read missed the full deadline.
     pub(crate) unanswered: HashMap<String, Instant>,
