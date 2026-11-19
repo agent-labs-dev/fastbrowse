@@ -199,9 +199,14 @@ impl DeskpilotPage {
         ) else {
             return Err(BrowserError::ScreenshotsUnavailable("deskpilot described its shot without a file".into()));
         };
-        let png = tokio::fs::read(&path)
-            .await
-            .map_err(|error| BrowserError::ScreenshotsUnavailable(format!("reading deskpilot's shot: {error}")))?;
+        let png = match tokio::fs::read(&path).await {
+            Ok(png) => png,
+            Err(error) => {
+                // A shot that cannot be read may still be on disk: it is never left behind.
+                let _ = tokio::fs::remove_file(&path).await;
+                return Err(BrowserError::ScreenshotsUnavailable(format!("reading deskpilot's shot: {error}")));
+            }
+        };
         Ok((Shot { id, width, height }, png, path))
     }
 
