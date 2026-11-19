@@ -519,6 +519,8 @@ impl CdpPage {
                 x,
                 y,
                 operation: action.operation,
+                // With a point, a click, a fill (its pointer route) and a drag all send mousePressed there.
+                pressed: matches!(action.operation, Operation::Click | Operation::Fill | Operation::Drag),
                 width,
                 height,
             });

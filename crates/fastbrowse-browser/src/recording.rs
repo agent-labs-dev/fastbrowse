@@ -584,7 +584,7 @@ fn filter_chain(captions: bool, cursor: bool, style: &str) -> String {
 }
 
 /// The cursor as an ASS overlay: an arrow that glides into each action point in the 400 ms before the action, stays
-/// there until the next one, and a ring that swells and fades on each click. Points are CSS pixels, scaled to the frame.
+/// there until the next one, and a ring that swells and fades on each press of the mouse. Points are CSS pixels, scaled to the frame.
 fn cursor_ass(marks: &[PointerMark], origin: Instant, until: Instant, width: u32, height: u32) -> String {
     let mut out = format!(
         "[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,1,0,7,0,0,0,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
@@ -618,12 +618,15 @@ fn cursor_ass(marks: &[PointerMark], origin: Instant, until: Instant, width: u32
             ass_time(start),
             ass_time(end)
         ));
-        if mark.operation == Operation::Click {
-            out.push_str(&format!(
-                "Dialogue: 1,{},{},Default,,0,0,0,,{{\\pos({x},{y})\\an5\\p1\\bord3\\1a&HFF&\\3c&H3052C5&\\fscx100\\fscy100\\t(0,400,\\fscx400\\fscy400\\3a&HFF&)}}m -6 0 b -6 -3 -3 -6 0 -6 b 3 -6 6 -3 6 0 b 6 3 3 6 0 6 b -3 6 -6 3 -6 0{{\\p0}}\n",
-                ass_time(at),
-                ass_time((at + 0.4).min(until))
-            ));
+        if mark.pressed {
+            // A white halo under a red ring that swells to a wide circle and stays solid before it fades.
+            for (layer, border, colour) in [(1, 9, "FFFFFF"), (2, 5, "3052C5")] {
+                out.push_str(&format!(
+                    "Dialogue: {layer},{},{},Default,,0,0,0,,{{\\pos({x},{y})\\an5\\p1\\bord{border}\\1a&HFF&\\3c&H{colour}&\\fscx100\\fscy100\\t(0,500,\\fscx800\\fscy800)\\t(350,600,\\3a&HFF&)}}m -6 0 b -6 -3 -3 -6 0 -6 b 3 -6 6 -3 6 0 b 6 3 3 6 0 6 b -3 6 -6 3 -6 0{{\\p0}}\n",
+                    ass_time(at),
+                    ass_time((at + 0.6).min(until))
+                ));
+            }
         }
     }
     out
@@ -701,6 +704,7 @@ mod tests {
                 x: 50.0,
                 y: 25.0,
                 operation: Operation::Click,
+                pressed: true,
                 width: 100.0,
                 height: 50.0,
             },
@@ -709,6 +713,7 @@ mod tests {
                 x: 25.0,
                 y: 25.0,
                 operation: Operation::Hover,
+                pressed: false,
                 width: 50.0,
                 height: 50.0,
             },
@@ -720,9 +725,30 @@ mod tests {
         // The arrow stays where it clicked until the glide to the next point begins, and the last one stays put.
         assert!(ass.contains("Dialogue: 2,0:00:01.00,0:00:01.60"));
         assert!(ass.contains("Dialogue: 2,0:00:01.60,0:00:03.00"));
-        // Only the click pulses.
-        assert!(ass.contains("Dialogue: 1,0:00:01.00,0:00:01.40"));
+        // Only a press rings, and the ring is a white halo under a red one.
+        assert!(ass.contains("Dialogue: 1,0:00:01.00,0:00:01.60"));
+        assert!(ass.contains("Dialogue: 2,0:00:01.00,0:00:01.60"));
         assert_eq!(ass.matches("Dialogue: 1,").count(), 1);
+    }
+
+    #[test]
+    fn every_pressing_mark_rings_and_a_hover_does_not() {
+        let origin = Instant::now();
+        let mark = |operation, pressed, secs| PointerMark {
+            at: origin + std::time::Duration::from_secs(secs),
+            x: 10.0,
+            y: 10.0,
+            operation,
+            pressed,
+            width: 100.0,
+            height: 100.0,
+        };
+        let marks = [mark(Operation::Fill, true, 1), mark(Operation::Drag, true, 2), mark(Operation::Hover, false, 3)];
+        let ass = cursor_ass(&marks, origin, origin + std::time::Duration::from_secs(4), 100, 100);
+        assert!(ass.contains("Dialogue: 1,0:00:01.00,"));
+        assert!(ass.contains("Dialogue: 1,0:00:02.00,"));
+        assert!(!ass.contains("Dialogue: 1,0:00:03.00,"));
+        assert_eq!(ass.matches("Dialogue: 1,").count(), 2);
     }
 
     #[test]
