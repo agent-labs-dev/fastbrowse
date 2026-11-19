@@ -1970,13 +1970,14 @@ mod tests {
     }
 
     /// A sum over "row in the second table" took in rows of the first table, which held the same rows: asked whether
-    /// a first-table row was one, Jev split about 50 to 50, and the total came to $352 instead of $251.
+    /// a first-table row was one, Jev split about 50 to 50, and the total came to $352 instead of $251. The scope the
+    /// draft states in its own field reaches membership as the kind does.
     #[test]
     fn a_record_outside_the_tallys_scope_is_no_record() {
         let tally = Tally {
             op: Op::Sum,
-            of: "row in the second table".into(),
-            scope: None,
+            of: "row".into(),
+            scope: Some("in the second table".into()),
             field: Some("Due".into()),
             rank: None,
             by: None,
@@ -1990,6 +1991,8 @@ mod tests {
             no_record.contains("A whole record that the note shows is outside 'row in the second table', in a group, place or state other than the one 'row in the second table' names, is not one either."),
             "{no_record}"
         );
+        let Question::Noul(member) = member_question(&tally, &row, None) else { panic!("membership is yes-or-no") };
+        assert!(member.instructions.contains("exactly one whole 'row in the second table'"), "{}", member.instructions);
     }
 
     /// A row of a package's release history was taken as the package's "latest release date", and the maximum chose a
