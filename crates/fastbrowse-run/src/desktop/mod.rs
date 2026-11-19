@@ -81,6 +81,9 @@ pub struct DeskpilotPage {
     observed: Mutex<Option<Element>>,
     /// Set while the window may show a resolved secret, which a frame cannot mask: no frame is filmed then.
     withheld: AtomicBool,
+    /// The shot taken after the latest action, held until the next observation shows no secret: the action may be
+    /// what put one on screen, and only that reading can tell.
+    pending: Mutex<Option<Vec<u8>>>,
 }
 
 fn unavailable(error: ToolError) -> BrowserError {
@@ -139,29 +142,37 @@ impl DeskpilotPage {
             film: None,
             observed: Mutex::new(None),
             withheld: AtomicBool::new(false),
+            pending: Mutex::new(None),
         })
     }
 
     /// Films the window to `film` from now on, starting with the window as the app opened it.
     pub async fn filmed(mut self, film: Arc<dyn Film>) -> Self {
         self.film = Some(film);
-        self.frame().await;
-        self
-    }
-
-    /// One frame of the window for the film, unless frames are withheld. A shot that fails costs the video a frame,
-    /// never the run a step.
-    async fn frame(&self) {
-        let Some(film) = &self.film else { return };
-        if self.withheld.load(Ordering::SeqCst) {
-            return;
-        }
-        if let Ok((_, png)) = self.shoot().await
-            // Withheld while the shot was taken: the action that put a secret there may have just finished.
-            && !self.withheld.load(Ordering::SeqCst)
+        // No secret has been typed before the app opens, so its first frame is filmed at once.
+        if let Some(png) = self.frame().await
+            && let Some(film) = &self.film
         {
             film.frame(png);
         }
+        self
+    }
+
+    /// Takes a frame after an action, for the next observation to film or drop.
+    async fn frame_after_action(&self) {
+        let png = self.frame().await;
+        *self.pending.lock().unwrap() = png;
+    }
+
+    /// One frame of the window for a filmed page, unless frames are withheld. A shot that fails costs the video a
+    /// frame, never the run a step.
+    async fn frame(&self) -> Option<Vec<u8>> {
+        if self.film.is_none() || self.withheld.load(Ordering::SeqCst) {
+            return None;
+        }
+        let (_, png) = self.shoot().await.ok()?;
+        // Withheld while the shot was taken: a secret fill may have just begun.
+        (!self.withheld.load(Ordering::SeqCst)).then_some(png)
     }
 
     /// Tells the film where `operation` lands: window pixels in a window `width` by `height`.
@@ -501,7 +512,7 @@ impl DeskpilotPage {
         }
         let sent = self.dispatch(action, observation).await;
         let measured = self.measured(sent, observation, seconds).await;
-        self.frame().await;
+        self.frame_after_action().await;
         measured
     }
 }
@@ -602,14 +613,19 @@ impl Page for DeskpilotPage {
             self.point(Operation::Click, (x * shot.width, y * shot.height, shot.width, shot.height));
             let sent = self.tool("click", point).await.map(|()| None);
             let measured = self.measured(sent, &before, SETTLE_SECONDS).await;
-            self.frame().await;
+            self.frame_after_action().await;
             measured
         })
     }
 
     /// Holds back the film's frames while the window may show a secret; the recording keeps its last clean frame.
+    /// Each observation says whether it shows one, which films or drops the frame taken after the action before it.
     fn withhold_frames(&self, withheld: bool) {
         self.withheld.store(withheld, Ordering::SeqCst);
+        let pending = self.pending.lock().unwrap().take();
+        if let (false, Some(png), Some(film)) = (withheld, pending, &self.film) {
+            film.frame(png);
+        }
     }
 
     fn address(&self) -> BoxFuture<'_, PageResult<String>> {

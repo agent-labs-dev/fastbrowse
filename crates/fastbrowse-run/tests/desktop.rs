@@ -224,6 +224,9 @@ async fn a_filmed_desktop_run_frames_its_window_on_launch_and_after_each_action(
         DeskpilotPage::open(program.to_str().unwrap(), &command(), View::Hidden).await.unwrap().filmed(film).await;
     let before = page.observe().await.unwrap();
     page.wait(&Action::new(Operation::Wait), &before, 0.0).await.unwrap();
+    // The frame after an action waits for the next observation, as the agent reads it, to show no secret.
+    assert_eq!(*frames.frames.lock().unwrap(), [b"launched".to_vec()]);
+    page.withhold_frames(false);
     assert_eq!(*frames.frames.lock().unwrap(), [b"launched".to_vec(), b"waited".to_vec()]);
     let shots: Vec<Value> = requests(&program)
         .into_iter()
@@ -243,6 +246,7 @@ async fn a_filmed_desktop_run_takes_no_frame_while_frames_are_withheld() {
     // As the agent does before typing a secret: the window may show it next, and a frame cannot be masked.
     page.withhold_frames(true);
     page.wait(&Action::new(Operation::Wait), &before, 0.0).await.unwrap();
+    page.withhold_frames(false);
     assert_eq!(*frames.frames.lock().unwrap(), [b"launched".to_vec()]);
     let shots = requests(&program).iter().filter(|r| r.pointer("/params/name") == Some(&json!("shot"))).count();
     assert_eq!(shots, 1);
@@ -286,5 +290,21 @@ async fn a_filmed_click_marks_its_element_centre_for_the_recording_cursor() {
     let points = kept.points.lock().unwrap();
     let points: Vec<_> = points.iter().map(|m| (m.operation, m.x, m.y, m.width, m.height)).collect();
     assert_eq!(points, [(Operation::Click, 140.0, 50.0, 800.0, 600.0)]);
+    page.withhold_frames(false);
     assert_eq!(*kept.frames.lock().unwrap(), [b"launched".to_vec(), b"clicked".to_vec()]);
+}
+
+#[tokio::test]
+async fn a_frame_after_an_action_that_reveals_a_secret_is_never_filmed() {
+    let program = filmed("revealed");
+    let (film, frames) = frames();
+    let page =
+        DeskpilotPage::open(program.to_str().unwrap(), &command(), View::Hidden).await.unwrap().filmed(film).await;
+    let before = page.observe().await.unwrap();
+    page.wait(&Action::new(Operation::Wait), &before, 0.0).await.unwrap();
+    // The next observation shows a resolved secret the action put on screen: the shot taken after it is dropped,
+    // and a later clean reading does not bring it back.
+    page.withhold_frames(true);
+    page.withhold_frames(false);
+    assert_eq!(*frames.frames.lock().unwrap(), [b"launched".to_vec()]);
 }
