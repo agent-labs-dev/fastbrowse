@@ -39,7 +39,7 @@ from fastbrowse_evals.evidence import result_answer, step_action
 RELEASE = "v0.11.2"
 INSTALL = (
     "curl -fsSL https://github.com/agent-labs-dev/fastbrowse/releases/download/"
-    f"{RELEASE}/fastbrowse-rust-linux-x64.tar.gz | tar -xz -C /usr/local/bin fastbrowse"
+    f"{RELEASE}/fastbrowse-rust-linux-x64.tar.gz | tar -xz --strip-components=1 -C /usr/local/bin fastbrowse/fastbrowse"
 )
 TRACE = "fastbrowse-trace.jsonl"
 

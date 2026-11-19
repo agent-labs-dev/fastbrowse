@@ -17,7 +17,8 @@ kind = "open"
 capabilities = ["mcp", "workspace", "desktop"]
 pins_model = true
 cost_source = "metered"
-install = "npm i -g @anthropic-ai/claude-code"
+# The Arch image's npm skips the package's postinstall, which fetches the native binary, so it is run by hand.
+install = "npm i -g @anthropic-ai/claude-code && node \"$(npm root -g)/@anthropic-ai/claude-code/install.cjs\""
 version_cmd = ["claude", "--version"]
 web_disabled_by = "flag"
 source_url = "https://github.com/anthropics/claude-code"
