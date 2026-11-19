@@ -7093,7 +7093,7 @@ async fn test_rejected_composition_returns_to_existing_recovery_without_withhold
     let original_facts = state.notes.facts().len();
     let result = agent.finish(&mut state, &page, None, None).await.unwrap();
     assert!(result.is_none(), "a rejected composition should return to recovery before finalization");
-    assert_eq!(state.recoveries, 1);
+    assert_eq!(state.rewrites, 1);
     assert_eq!(state.notes.facts().len(), original_facts);
     assert_eq!(state.picked.as_ref().unwrap().1.operation, Operation::Done);
 }
@@ -7359,7 +7359,7 @@ async fn test_composition_repair_cannot_finish_by_dropping_a_requested_value() {
     assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none());
     let result = agent.finish(&mut state, &page, None, None).await;
     assert!(matches!(result, Err(Flow::Stop(stop)) if stop.status == Status::Unverified));
-    assert_eq!(state.recoveries, 2);
+    assert_eq!(state.rewrites, 2);
     assert!(state.composition_feedback.as_deref().unwrap().contains("coverage"));
 }
 
@@ -7397,7 +7397,7 @@ async fn test_uncertain_composition_support_or_coverage_is_repaired_like_a_rejec
         let mut state = composition_repair_state();
         let result = agent.finish(&mut state, &page, None, None).await.unwrap();
         assert!(result.is_none(), "support {support}, coverage {coverage} should be repaired");
-        assert_eq!(state.recoveries, 1);
+        assert_eq!(state.rewrites, 1);
         assert!(state.composition_feedback.is_some());
     }
 }
@@ -7427,8 +7427,26 @@ async fn test_rejected_winner_recovery_keeps_draft_slots_out_of_the_public_error
     assert!(error.contains("No title could be copied from the selected record."), "{error}");
 }
 
+/// A Books run whose draft swapped two prices ended unverified though the check named both corrections: the rewrite
+/// spent the stall budget, which recovering from a stall on the way to the notes had already used (#1176). A rewrite
+/// has a budget of its own, and a run with no stall recovery left still writes the draft again and finishes.
 #[tokio::test]
-async fn test_rejected_composition_exhausts_the_existing_recovery_budget() {
+async fn test_a_rejected_draft_is_rewritten_after_the_stall_budget_is_spent() {
+    let page = observation(&[]);
+    let llm = Arc::new(RepairComposer(Default::default()));
+    let agent = Agent::new(Arc::new(FinishPage(page.clone())), repair_jev(vec![(0.0, 1.0), (1.0, 1.0)]), llm.clone());
+    let mut state = composition_repair_state();
+    state.recoveries = agent.config.stall.max_recoveries;
+    assert!(agent.finish(&mut state, &page, None, None).await.unwrap().is_none(), "the draft is written again");
+    assert_eq!((state.recoveries, state.rewrites), (agent.config.stall.max_recoveries, 1));
+    let result = agent.finish(&mut state, &page, None, None).await.unwrap().expect("a result");
+    assert_eq!(result.status, Status::Complete, "{:?}", result.error);
+    assert_eq!(llm.0.lock().unwrap().len(), 2);
+}
+
+/// Rewrites are bounded by their own budget: a run whose every draft is rejected ends unverified once it is spent.
+#[tokio::test]
+async fn test_rejected_composition_exhausts_the_rewrite_budget() {
     let page = observation(&[]);
     let agent = Agent::new(
         Arc::new(FinishPage(page.clone())),
@@ -7436,10 +7454,10 @@ async fn test_rejected_composition_exhausts_the_existing_recovery_budget() {
         Arc::new(WrongRecord),
     );
     let mut state = composition_repair_state();
-    state.recoveries = agent.config.stall.max_recoveries;
+    state.rewrites = agent.config.stall.max_recoveries;
     let result = agent.finish(&mut state, &page, None, None).await;
     assert!(matches!(result, Err(Flow::Stop(stop)) if stop.status == Status::Unverified));
-    assert_eq!(state.recoveries, agent.config.stall.max_recoveries + 1);
+    assert_eq!((state.recoveries, state.rewrites), (0, agent.config.stall.max_recoveries + 1));
 }
 
 #[tokio::test]
@@ -7550,7 +7568,7 @@ async fn test_rejected_composition_preserves_the_callers_schema_result() {
     let schema = crate::verification::RecordSchema::from_output(model);
     // A rejected draft is written again with a schema too, and a rewrite rejected as well still returns its result.
     assert!(agent.finish(&mut state, &observation(&[]), Some(&schema), None).await.unwrap().is_none());
-    assert_eq!(state.recoveries, 1);
+    assert_eq!(state.rewrites, 1);
     let flow = agent.finish(&mut state, &observation(&[]), Some(&schema), None).await.expect_err("recovery spent");
     let ledger = state.ledger.clone();
     let result = agent.stopped(flow, Some(&mut state), &ledger).await;

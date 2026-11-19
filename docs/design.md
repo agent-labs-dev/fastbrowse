@@ -273,7 +273,9 @@ writes page text. A span Jev picks becomes a fact, and identical values from the
 with all their source contexts. When Jev says the answer must be composed, every nonempty source block is kept as a fact and the
 answer is composed when the run tries to finish, with recovery for a rejected draft. The recovery decision is told
 which claim failed which check, and a draft rejected for leaving out something the task asks for is shown to it whole,
-since no one claim is to blame and only the draft says what it lacks.
+since no one claim is to blame and only the draft says what it lacks. Rewrites of a rejected draft have a budget of
+their own, the size of `max_recoveries`, that stall recoveries do not spend and progress does not renew; past it the
+run ends `unverified`.
 
 A fresh read, including source quotes kept for synthesis, retires earlier facts from the same address when their
 quotes are no longer shown. The facts stay as history. Quotes still shown and evidence from other addresses remain.

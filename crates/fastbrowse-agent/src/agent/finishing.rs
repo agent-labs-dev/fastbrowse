@@ -383,7 +383,7 @@ impl Agent {
             // Filled from the claims that passed, so a stop before the rewrite keeps no value the answer did not give.
             let passed = answered.as_ref().filter(|answer| !answer.claims.is_empty());
             state.schema_partial = self.schema_fields(state, output_schema, passed).await?;
-            self.recover(state, observation, &reason, Status::Unverified, None).await?;
+            self.rewrite(state, observation, &reason).await?;
             return Ok(None);
         }
         // A task that wants to be told something is not done on facts none of which answers it: such a run ended

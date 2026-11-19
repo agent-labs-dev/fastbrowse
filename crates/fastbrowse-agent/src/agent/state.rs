@@ -315,6 +315,9 @@ pub(crate) struct RunState {
     /// its fields new.
     pub written: HashMap<String, Written>,
     pub recoveries: i64,
+    /// Rewrites of a rejected answer draft, counted apart from `recoveries` and never renewed by progress: a stall
+    /// on the way to the notes left a Books run no rewrite, and a draft that swapped two prices ended unverified (#1176).
+    pub rewrites: i64,
     pub blank_opening_checked: bool,
     /// Blank states waited out during this loading episode, cleared once a readable page appears.
     pub blank_waited: HashSet<(String, String)>,
@@ -810,6 +813,7 @@ impl RunState {
             unchanged: 0,
             written: HashMap::new(),
             recoveries: 0,
+            rewrites: 0,
             blank_opening_checked: false,
             blank_waited: HashSet::new(),
             hung_page_reopened: false,
