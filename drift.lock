@@ -8,12 +8,12 @@ sig = "528aa1ccd4742d0e"
 [[bindings]]
 doc = "blog/agent-actions-need-confirmation.md"
 target = "crates/fastbrowse-cli/src/cli.rs"
-sig = "b4142043ada7d306"
+sig = "86b51c987f39f0b5"
 
 [[bindings]]
 doc = "blog/agent-actions-need-confirmation.md"
 target = "crates/fastbrowse-cli/src/mcp/mod.rs"
-sig = "16299bcc19b0f868"
+sig = "0b8636a01d265bb0"
 
 [[bindings]]
 doc = "blog/agent-actions-need-confirmation.md"
@@ -28,7 +28,7 @@ sig = "e9f9130a415ed07d"
 [[bindings]]
 doc = "blog/agent-credentials-scoped.md"
 target = "crates/fastbrowse-cli/src/cli.rs"
-sig = "b4142043ada7d306"
+sig = "86b51c987f39f0b5"
 
 [[bindings]]
 doc = "blog/agent-skills-browser.md"
@@ -58,7 +58,7 @@ sig = "dcf6d66ec5043a86"
 [[bindings]]
 doc = "blog/attach-to-running-chrome.md"
 target = "crates/fastbrowse-cli/src/cli.rs"
-sig = "b4142043ada7d306"
+sig = "86b51c987f39f0b5"
 
 [[bindings]]
 doc = "blog/attach-to-running-chrome.md"
@@ -68,7 +68,7 @@ sig = "cc339d1204da6c05"
 [[bindings]]
 doc = "blog/browser-automation-cost-per-run.md"
 target = "crates/fastbrowse-cli/src/cli.rs"
-sig = "b4142043ada7d306"
+sig = "86b51c987f39f0b5"
 
 [[bindings]]
 doc = "blog/browser-automation-cost-per-run.md"
@@ -78,7 +78,7 @@ sig = "cce40c7f6c06848c"
 [[bindings]]
 doc = "blog/mcp-browser-tool.md"
 target = "crates/fastbrowse-cli/src/mcp/mod.rs"
-sig = "16299bcc19b0f868"
+sig = "0b8636a01d265bb0"
 
 [[bindings]]
 doc = "blog/use-your-own-chrome.md"
@@ -88,7 +88,7 @@ sig = "6a1f144bd1e89019"
 [[bindings]]
 doc = "blog/use-your-own-chrome.md"
 target = "crates/fastbrowse-cli/src/cli.rs"
-sig = "b4142043ada7d306"
+sig = "86b51c987f39f0b5"
 
 [[bindings]]
 doc = "blog/use-your-own-chrome.md"
@@ -98,7 +98,7 @@ sig = "1e4c0058e1c4543e"
 [[bindings]]
 doc = "blog/verify-browser-agent-results.md"
 target = "crates/fastbrowse-cli/src/cli.rs"
-sig = "b4142043ada7d306"
+sig = "86b51c987f39f0b5"
 
 [[bindings]]
 doc = "blog/verify-browser-agent-results.md"
