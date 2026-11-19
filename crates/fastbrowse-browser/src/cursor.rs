@@ -458,6 +458,8 @@ impl Backend {
 struct Inner {
     driver: Driver,
     deskpilot: bool,
+    /// The deskpilot program and agent this cursor is drawn by, which a recording films the page's window with.
+    film: Option<(PathBuf, String)>,
     session: String,
     disabled: AtomicBool,
     /// Whether the driver takes `set_agent_cursor_motion`, so the glide can be re-paced per move.
@@ -478,11 +480,12 @@ pub struct CursorFeedback {
 }
 
 impl CursorFeedback {
-    fn new(driver: Driver, deskpilot: bool, session: String, motion: bool) -> Self {
+    fn new(driver: Driver, deskpilot: Option<(PathBuf, String)>, session: String, motion: bool) -> Self {
         let tasks = Tasks { generation: 0, pending: None, watching: None };
         let inner = Inner {
             driver,
-            deskpilot,
+            deskpilot: deskpilot.is_some(),
+            film: deskpilot,
             session,
             disabled: AtomicBool::new(false),
             motion,
@@ -493,6 +496,17 @@ impl CursorFeedback {
             tasks: StdMutex::new(tasks),
         };
         Self { inner: Arc::new(inner) }
+    }
+
+    /// What films the page's window with deskpilot's agent cursor in it: the window the page sits in, when this cursor
+    /// is deskpilot's and the page can be placed in exactly one window that is on screen and uncovered.
+    pub async fn film(&self, geometry: &GeometryFn) -> Option<crate::recording::Film> {
+        let (program, agent) = self.inner.film.clone()?;
+        let reading = geometry().await?;
+        let listed = self.inner.driver.tool("windows", json!({})).await.ok()?;
+        let windows: Vec<HyprWindow> = listed.get("result")?.as_array()?.iter().filter_map(hypr_window).collect();
+        let window = hyprland_window(&windows, &reading)?;
+        Some(crate::recording::Film { program, window: window.address.clone(), agent: Some(agent) })
     }
 
     pub fn running(&self) -> bool {
@@ -969,7 +983,12 @@ async fn open(backend: &Backend) -> Option<CursorFeedback> {
         }
     };
     match opened {
-        Ok((session, motion)) => Some(CursorFeedback::new(guard.take(), deskpilot, session, motion)),
+        Ok((session, motion)) => Some(CursorFeedback::new(
+            guard.take(),
+            agent.map(|agent| (backend.binary().to_owned(), agent)),
+            session,
+            motion,
+        )),
         Err(failure) => {
             log_warning(&format!("cursor feedback unavailable ({failure:?}); running without it"));
             guard.take().close().await;

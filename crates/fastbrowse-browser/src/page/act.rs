@@ -695,6 +695,15 @@ impl CdpPage {
         })
     }
 
+    /// What films this page's browser window with deskpilot's agent cursor, or None where there is no deskpilot cursor
+    /// or the window cannot be placed.
+    #[cfg(feature = "cursor")]
+    pub async fn film(&self) -> Option<crate::recording::Film> {
+        let cursor = self.cursor.as_ref()?;
+        let active = self.session.active_session_id().ok()?;
+        cursor.film(&self.cursor_geometry(active, String::new())).await
+    }
+
     async fn dispatch(
         &self,
         action: &Action,

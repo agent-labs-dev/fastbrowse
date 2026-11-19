@@ -11,7 +11,7 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
-- A `--record` clip draws the click ring for every action that presses the mouse: fills and drags as well as clicks. A step that stops before its press draws none ([#1350](https://github.com/agent-labs-dev/fastbrowse/issues/1350)).
+- A `--record` clip of a visible browser on Hyprland with deskpilot's cursor films the browser's window through `deskpilot record`, so the real agent cursor deskpilot draws is in the clip and nothing is painted over it. Every other recording, a cloud or headless browser included, keeps only the click ring, drawn for every action that presses the mouse (fills and drags as well as clicks; a step that stops before its press draws none), and no longer paints a cursor marker ([#1350](https://github.com/agent-labs-dev/fastbrowse/issues/1350)).
 
 - A downloaded file read again from a later page is one note. Each read after a download stored the whole file as another note, so composing the answer sent every copy: one sec.gov task stored a 23 MB file ten times and spent $30.90 composing ([#1299](https://github.com/agent-labs-dev/fastbrowse/issues/1299)).
 
