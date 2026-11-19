@@ -686,10 +686,13 @@ impl RunState {
     /// Nor does a list whose read gave the answer in one passage leave pages to read: Jev's read chooses between a
     /// passage that alone answers the task and an answer composed across pages, and a count of a filtered GitHub issue
     /// list it answered from "59 results" opened pages 2 and 3 after Jev chose done, citing each page's chrome (#1331).
+    /// Only that pick counts: an answer to compose, a screenshot reading among them, judged nothing about the rest of
+    /// the list, and taking it as the whole ended a cheapest-across-both-pages task on page 1.
     pub fn unread_list_pages(&self) -> impl Iterator<Item = &String> {
         let list: Vec<String> =
             self.pager_start.iter().chain(&self.pager_pages).map(|page| crate::memory::address(page)).collect();
-        let noted = !self.notes.answered()
+        let picked = self.notes.answered() && !self.compose;
+        let noted = !picked
             && self.notes.facts().iter().any(|fact| {
                 fact.evidence.as_ref().is_some_and(|evidence| list.contains(&crate::memory::address(&evidence.url)))
             });

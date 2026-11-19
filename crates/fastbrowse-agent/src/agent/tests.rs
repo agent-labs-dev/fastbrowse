@@ -8267,19 +8267,40 @@ async fn test_schema_output_on_a_whole_list_opens_the_next_page_instead() {
 /// done, and code still opened the list's next pages (#1331).
 #[tokio::test]
 async fn test_done_on_a_list_whose_read_gave_the_answer_in_one_passage_finishes_there() {
-    let browser = Arc::new(HungPage::new(0));
-    let agent = pager_agent(browser);
-    let mut state = run_state();
     let first = paged("https://list.test/", "/page/2/");
+    let jev = Arc::new(DoneCheckJev::new(Default::default(), 1.0, "done"));
+    let agent = Agent::new(Arc::new(FinishPage(first.clone())), jev, Arc::new(ScriptedLLM));
+    let mut state = run_state();
     read_one(&mut state, &first, Extent::EveryPage);
     let captured = Capture { url: first.url.clone(), ..capture(&[(BlockKind::Paragraph, "59 results")]) };
     state.notes.add(Fact::read("59 results", block_evidence(&captured, "s0"), FactReader::JevChoice).answering());
     state.note_pager_pages(&first);
 
     assert_eq!(state.unread_pager_page(), None);
-    // The stub Jev has no answer for what follows the walk; only the step that opened a page matters here.
-    let _ = agent.finish(&mut state, &first, None, None).await;
+    let finished = agent.finish(&mut state, &first, None, None).await.expect("the run ends");
     assert!(state.steps.iter().all(|step| step.operation != Operation::Navigate), "{:?}", state.steps);
+    let result = finished.expect("the run ends on page 1");
+    assert_eq!(result.status, Status::Complete, "{:?}", result.error);
+}
+
+/// A screenshot reading answers only what one viewport shows: it judged nothing about the list's other pages, so a
+/// whole-list task read from page 1's pixels still opens page 2.
+#[tokio::test]
+async fn test_done_on_a_list_page_read_from_its_screenshot_opens_the_next_page() {
+    let browser = Arc::new(HungPage::new(0));
+    let agent = pager_agent(browser);
+    let mut state = run_state();
+    let first = paged("https://list.test/", "/page/2/");
+    read_one(&mut state, &first, Extent::EveryPage);
+    state.notes.add_image_read("Cheapest: GBP 4.60", &first.url, first.captured_at, b"page-one-png");
+    state.compose = true;
+    state.note_pager_pages(&first);
+
+    let finished = agent.finish(&mut state, &first, None, None).await.expect("the run goes on");
+    assert!(finished.is_none(), "a whole-list task finished from page 1's screenshot with page 2 unread");
+    let step = state.steps.last().expect("a step opened the next page");
+    assert_eq!((step.operation, step.outcome), (Operation::Navigate, StepOutcome::Executed));
+    assert!(state.pager_followed.contains("https://list.test/page/2/"));
 }
 
 #[tokio::test]
