@@ -47,7 +47,10 @@ const POPUP_SECONDS: f64 = 1.2;
 /// The listener sits on the window, after the page's own handlers: a handler that cancels the click keeps it
 /// cancelled, one that stops it propagating leaves it to Chrome, and the link is checked again as the click left it.
 /// It handles only the next trusted click, the one the run dispatches, so a step that never reads it back leaves
-/// later clicks alone. `releaseNewTab` removes it and answers the address held, if any.
+/// later clicks alone. `releaseNewTab` removes it and answers the address held, if any. A link in a frame that may not
+/// open a popup (a sandbox without `allow-popups` on it or an ancestor, or an opaque origin) or in one whose sandbox
+/// cannot be read (a cross-origin ancestor) is left to Chrome, which refuses or inherits it as that frame requires: a
+/// tab created for it would carry none of those limits.
 const HOLD_NEW_TAB_JS: &str = "(id => { \
     const r = window.__fastbrowse; \
     const e = r?.nodes.get(id); \
@@ -59,8 +62,18 @@ const HOLD_NEW_TAB_JS: &str = "(id => { \
             && ['http:', 'https:'].includes(link.protocol); \
     }; \
     if (!link || !opens()) return false; \
-    r.releaseNewTab?.(); \
     const view = link.ownerDocument.defaultView; \
+    const popups = () => { \
+        if (view.origin === 'null') return false; \
+        for (let w = view; w !== w.top; w = w.parent) { \
+            let frame = null; \
+            try { frame = w.frameElement; } catch (_) {} \
+            if (!frame || (frame.sandbox && !frame.sandbox.contains('allow-popups'))) return false; \
+        } \
+        return true; \
+    }; \
+    if (!popups()) return false; \
+    r.releaseNewTab?.(); \
     let url = null; \
     const answer = () => { view.removeEventListener('click', listener); \
         if (r.releaseNewTab === answer) delete r.releaseNewTab; return url; }; \
