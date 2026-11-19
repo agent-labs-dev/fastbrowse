@@ -505,6 +505,7 @@ export interface RunParams {
   extension?: boolean;
   extension_browser?: string | null;
   desktop?: string | null;
+  desktop_apps?: string[];
 }
 export interface SecretRef {
   name: string;

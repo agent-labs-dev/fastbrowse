@@ -1281,6 +1281,9 @@ impl CdpPage {
                 return Ok(refusal);
             }
             if secret {
+                // Sealed before the renderer can insert, and not earlier: a fill refused before this point typed
+                // nothing, so no frame of it can show the secret.
+                self.session.seal_frames();
                 // A secret must be checked and inserted in one renderer task: CDP insertText would leave a
                 // navigation/focus race between checking the origin and dispatching the secret to the page.
                 let script = format!(

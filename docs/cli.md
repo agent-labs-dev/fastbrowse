@@ -23,7 +23,7 @@ beside `status` and `cost_complete` false when a call reported no cost.
 | `--cloud` | run in a Browser Use Cloud browser instead, which needs `BROWSER_USE_API_KEY` |
 | `--cloud-profile ID` | with `--cloud`, run on a signed-in Browser Use Cloud profile |
 | `--fetch` | read pages over HTTP with no browser, for a task that only reads |
-| `--desktop APP` | start a Linux desktop app and drive it instead of a browser, through [deskpilot](https://github.com/cjber/deskpilot); see [Desktop apps](#desktop-apps) |
+| `--desktop APP` | start a Linux desktop app and drive it instead of a browser, through [deskpilot](https://github.com/cjber/deskpilot); repeat it for each app to start in one run; see [Desktop apps](#desktop-apps) |
 | `--browser` | start a cloud browser from the first step, rather than reading over HTTP until the task needs one; extension runs already start in Chrome |
 | `--viewport WIDTHxHEIGHT` | with `--cloud`, the screen size requested from the cloud Chrome; does not emulate mobile, touch, device scale or user agent. Refused without `--cloud` |
 | `--attach` | with the extension, drive the window you have open instead of a tab of its own |
@@ -37,7 +37,7 @@ beside `status` and `cost_complete` false when a call reported no cost.
 | `--downloads DIR` | keep downloaded files |
 | `--json` | print the full result |
 | `--trace FILE` | append each model call with its full request and reply, read and check, and with `--extension` every message to and from the extension (image data left out), to `FILE` as JSON lines (`-` for stderr); `FASTBROWSE_TRACE` does the same for `serve` and MCP. The requests carry page text, so treat a trace as you would the pages |
-| `--record FILE` | save a captioned MP4 of the run, and the same video without captions beside it with `.plain` before the extension (`run.mp4` and `run.plain.mp4`); needs `ffmpeg`. It shows what the pages showed, so watch it before sharing |
+| `--record FILE` | save a captioned MP4 of the run, and the same video without captions beside it with `.plain` before the extension (`run.mp4` and `run.plain.mp4`); needs `ffmpeg`. It shows what the pages showed, so watch it before sharing. A `--desktop` run is filmed from its window; `--fetch` starts no browser, so it cannot be combined with `--record` |
 | `--recipe FILE` | replay a [recipe](design.md#recipes): offer Jev each saved action alone where its page and control match, and reuse saved values |
 | `--input NAME=VALUE` | a named value the task refers to ("the person named in input person"), typed into a field by name; a recipe saved with it types the next run's value (repeatable) |
 | `--file PATH` | a local file the run may attach to a file input on the page, offered under its file name, so a task can say "upload shrike_lid.stl"; the file is read when the run starts and sent to the page as bytes, also to a browser on another machine (repeatable) |
@@ -231,8 +231,8 @@ its sessions: close the app, or restart it without the flag, when you are done.
 `--desktop APP` starts a native Wayland app on a Hyprland desktop and runs the task in its window, through
 [deskpilot](https://github.com/cjber/deskpilot). `APP` is the command line that starts the app, split into words as a
 POSIX shell splits them, with no shell running it. The run starts it with deskpilot's `launch` as a deskpilot agent of
-its own, so the window opens on that agent's hidden workspace, and the app closes when the run ends. A window that is
-already open is not driven: deskpilot sends input in the background only to an app its agent launched. It needs a
+its own, so the window opens on that agent's hidden workspace. When the run ends, however it ends, fastbrowse asks
+deskpilot to stop its agent, which closes every app the run launched. A window that is already open is not driven: deskpilot sends input in the background only to an app its agent launched. It needs a
 deskpilot with `launch` ([cjber/deskpilot#86](https://github.com/cjber/deskpilot/pull/86)); with an older one the run
 ends `unavailable`. Jev picks each action from the window's accessibility tree, and deskpilot clicks and types in the
 background, so the pointer and keyboard focus stay where you left them:
@@ -241,6 +241,20 @@ background, so the pointer and keyboard focus stay where you left them:
 fastbrowse --desktop gnome-text-editor "Write 'hello' in a new document."
 ```
 
+Repeat `--desktop` for each app to start in one run, in the order given. The run starts in the first app's window.
+Every window on the run's hidden workspace is a tab, as a browser run's tabs are: the apps' main windows, and the
+dialogs and windows they open later. The run moves between them as it moves between browser tabs, reading another
+window without focusing it or bringing it on screen. A window an action opens becomes the one the run reads, and when
+the window it reads closes, it goes back to the one it read before:
+
+```sh
+fastbrowse --desktop "gnome-text-editor -s" --desktop gnome-calculator \
+  "Work out 17 times 23 in the calculator and write the result in a new document."
+```
+
+The run cannot close a window itself: deskpilot has no action that closes one window, so the apps stay open until
+the run ends.
+
 An app that runs as one instance, such as one you already have open, may hand its new window to that copy, so
 `launch` sees no window of its own and the run ends with deskpilot's error. Pass the app's flag for a separate
 instance when it has one.
@@ -248,12 +262,19 @@ instance when it has one.
 A password field is never read, and `--secret NAME=ENV_VAR@desktop://<class>` types a secret only into the window of
 that app class. `--authorize` and the step and spend ceilings work as for a browser. An open combo box's list and a
 popup menu's entries are controls like any other, and the run clicks the item it wants. Choosing a combo box's option
-by name uses the keyboard: a list the click opened is closed again and the arrow keys move the choice. The run stays in the one
-window: a dialog the app opens as a window of its own is out of its reach. Recipes, `--start` and every browser
-option are refused. Set `FASTBROWSE_DESKPILOT` to run a `deskpilot` that is not on `PATH`. Set `FASTBROWSE_DESKTOP_SHOWN=1` to act on the window
-in view instead, where deskpilot draws the run's agent cursor at each action: for recording a run on a desktop of its
-own, such as deskpilot's nested Hyprland (`scripts/nested.py` there), since it takes the view and keyboard focus of
-whatever desktop it runs on.
+by name uses the keyboard: a list the click opened is closed again and the arrow keys move the choice. Recipes,
+`--start` and every browser option are refused, `--cursor` among them: a desktop run never brings its window to the
+front, so it draws its cursor in the recording, or on screen with `FASTBROWSE_DESKTOP_SHOWN=1`, described below. Two
+windows with the same title, such as an app an earlier run left open, can stop deskpilot from telling them apart;
+that read fails with deskpilot's message, and closing the other window fixes it. Set `FASTBROWSE_DESKPILOT` to run a `deskpilot` that is not on `PATH`.
+
+`--record FILE` films the window from deskpilot's shots, which it takes of the hidden window without bringing it on
+screen: one when the app opens and one after each action settles, held until the next, so the video keeps the run's
+real timing. It captions each step, draws the cursor gliding to each click, fill, hover and choice, and ends on the
+run's answer. No frame is filmed while the window may show a resolved secret, and the video keeps its last clean
+frame. Set `FASTBROWSE_DESKTOP_SHOWN=1` to act on the window in view instead, where deskpilot draws its own agent
+cursor at each action on screen: for watching a run on a desktop of its own, such as deskpilot's nested Hyprland
+(`scripts/nested.py` there), since it takes the view and keyboard focus of whatever desktop it runs on.
 
 ## Models
 
@@ -292,7 +313,7 @@ The exit code is the status. Only `complete` exits 0; configuration refusals exi
 | Status | Exit | Meaning |
 |:--|--:|:--|
 | `complete` | 0 | Jev judged the task done |
-| `unverified` | 10 | Jev finished, but the requested data could not be filled from the page or the site refused a requested step |
+| `unverified` | 10 | Jev finished, but the requested data could not be filled from the page, nothing read answers the task's question, or the site refused a requested step |
 | `needs_confirmation` | 3 | stopped before an irreversible action; re-run with `--authorize` |
 | `needs_login` | 4 | a sign-in wall that no `--secret` covers |
 | `blocked` | 6 | a bot check (a CAPTCHA) that did not clear; not a sign-in, so no secret passes it |

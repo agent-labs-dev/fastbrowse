@@ -81,3 +81,11 @@ automatically a local file the user can open.
 For the CLI, pass each file the page needs as `--file PATH` and name it in the task by its file name ("upload
 shrike_lid.stl"). A path in the task text alone gives the run nothing to attach. The MCP `browse` tool cannot
 attach files.
+
+## Desktop apps
+
+On Linux with Hyprland and [deskpilot](https://github.com/cjber/deskpilot), `--desktop APP` starts a native app and
+runs the task in its window instead of a browser, without moving the user's pointer or focus. Repeat it for each
+app to start in one run (`--desktop "gnome-text-editor -s" --desktop gnome-calculator`); each window the apps open
+is a tab the run can move between. The run closes every app it started when it ends. A desktop run refuses
+`--start`, recipes and the browser options, `--cursor` included; `--record FILE` films its windows.

@@ -72,7 +72,9 @@ options:
   --save-recipe FILE    save the steps of a completed run as recipe JSON
   --record FILE         save a captioned video of the run, ending on its
                         answer, and an uncaptioned copy beside it with .plain
-                        before the extension, e.g. run.plain.mp4 (needs ffmpeg)
+                        before the extension, e.g. run.plain.mp4 (needs
+                        ffmpeg); a --desktop run is filmed from its window,
+                        and --fetch, which starts no browser, cannot record
   --fetch               never start a browser: a step that needs one ends the
                         run blocked
   --browser             start a browser from the first step, rather than reading
@@ -86,8 +88,9 @@ options:
                         (implies --extension)
   --desktop APP         start the native desktop app APP (a command line) and
                         drive it instead of a browser, through deskpilot on
-                        Hyprland, without moving your pointer or focus; it
-                        closes when the run ends
+                        Hyprland, without moving your pointer or focus;
+                        repeat it to start several apps, each window a tab;
+                        they close when the run ends
   --trace FILE          append the run's trace to FILE as JSON lines, or - for
                         stderr: every model call with its purpose and timing,
                         which reader answered each read and why, and every

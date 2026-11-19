@@ -542,7 +542,7 @@ impl RunState {
             notes.add(fact);
         }
         if let Extent::Pages(Some(_)) = self.extent {
-            notes.retain(|fact| {
+            notes.retain(|_, fact| {
                 fact.evidence.as_ref().is_none_or(|evidence| {
                     !self.pager_ordinals.contains_key(&crate::memory::address(&evidence.url))
                         || self.in_range(&evidence.url)

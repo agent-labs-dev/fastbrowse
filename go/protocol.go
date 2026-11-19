@@ -441,6 +441,7 @@ type RunParams struct {
 	Extension           bool              `json:"extension,omitempty"`
 	ExtensionBrowser    *string           `json:"extension_browser,omitempty"`
 	Desktop             *string           `json:"desktop,omitempty"`
+	DesktopApps         []string          `json:"desktop_apps,omitempty"`
 }
 
 type RunResult struct {

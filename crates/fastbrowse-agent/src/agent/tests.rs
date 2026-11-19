@@ -1260,7 +1260,8 @@ async fn test_a_secret_in_a_step_or_trace_event_is_redacted_on_the_way_out() {
 
 // -- The one rule for an action that may commit ------------------------------------------------------------------
 
-/// A Jev that answers `irreversible` and `requested` as given, finds no condition in the task, and counts its calls.
+/// A Jev that answers `irreversible` and `requested` as given, finds no condition in the task, judges a drafted answer
+/// to cover the task as asked, and counts its calls.
 struct Gatekeeper {
     irreversible: f64,
     requested: f64,
@@ -1287,6 +1288,7 @@ impl fastbrowse_core::decision::DecisionClient for Gatekeeper {
                     "requested" => self.requested,
                     "lasting" => self.lasting,
                     "conditional" => 0.0,
+                    "coverage" | "exact" => 1.0,
                     "edits" => {
                         self.edits_asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                         let answer = ChoiceAnswer {
@@ -4113,7 +4115,7 @@ async fn test_text_and_image_cannot_finish_without_text_evidence() {
     state.recoveries = agent.config.stall.max_recoveries;
     let result = agent.finish(&mut state, &observation(&[]), None, None).await;
     assert!(
-        matches!(result, Err(Flow::Stop(stop)) if stop.status == Status::Stuck && stop.error.as_deref().is_some_and(|error| error.contains("Nothing read so far answers")))
+        matches!(result, Err(Flow::Stop(stop)) if stop.status == Status::Unverified && stop.error.as_deref().is_some_and(|error| error.contains("Nothing read so far answers")))
     );
 }
 
@@ -6703,6 +6705,16 @@ async fn test_the_llm_image_reader_withholds_a_screenshot_while_a_secret_shows()
 }
 
 #[tokio::test]
+async fn test_no_step_frame_is_taken_after_a_secret_is_typed_whatever_a_reading_shows() {
+    let jev =
+        Arc::new(Seeing { images: false, shown: 0.9, asked: Default::default(), on_evaluate: None, zoomed: None });
+    let agent = Agent::new(Arc::new(Screenshots::default()), jev, Arc::new(EmptyImageLLM::default()));
+    assert!(agent.frame().await.expect("frame").is_some());
+    agent.seen().secret_typed = true;
+    assert!(agent.frame().await.expect("frame").is_none());
+}
+
+#[tokio::test]
 async fn test_the_llm_image_reader_checks_for_a_secret_with_a_fresh_glance() {
     let llm = Arc::new(EmptyImageLLM::default());
     let jev =
@@ -8131,7 +8143,9 @@ fn read_one(state: &mut RunState, page: &Observation, extent: Extent) {
     state.output_intent = super::state::OutputIntent::Text;
     state.extent = extent;
     let captured = Capture { url: page.url.clone(), ..capture(&[(BlockKind::Paragraph, "A quote by the author.")]) };
-    state.notes.add(Fact::read("A quote by the author.", block_evidence(&captured, "s0"), FactReader::JevChoice));
+    state
+        .notes
+        .add(Fact::read("A quote by the author.", block_evidence(&captured, "s0"), FactReader::JevChoice).answering());
     state.mark_read(page);
 }
 
@@ -10052,4 +10066,52 @@ async fn test_a_decision_the_page_redrew_under_sends_no_new_request() {
     // The refused request is an expected discard, not a failure: nothing reaches the host's events or the trace.
     assert!(events.lock().unwrap().is_empty());
     assert_eq!(trace.events(), Vec::<serde_json::Value>::new());
+}
+
+/// #1343: a read that joins the same words read twice into one answering fact gives that fact no quote of its own, and
+/// a task carried out answered with nothing once that fact was dropped from what it read after its last step.
+#[test]
+fn a_carried_out_task_answers_with_a_fact_drawn_from_quotes_read_after_its_last_step() {
+    let mut state = run_state();
+    state.history.push(executed(Some(Operation::Fill), Some("textbox"), true));
+    let mut page = capture(&[(BlockKind::Paragraph, "hello"), (BlockKind::Paragraph, "hello")]);
+    page.url = "desktop://org.gnome.texteditor/".into();
+    let read = |id: &str| Fact::read("hello", block_evidence(&page, id), FactReader::JevChoice);
+    let (first, second) = (read("s0"), read("s1"));
+    let basis = vec![crate::memory::fact_id(&first), crate::memory::fact_id(&second)];
+    let joined = Fact { answers: true, text: "hello".into(), evidence: None, basis, reader: FactReader::JevChoice };
+    state.record_read(&page, vec![first, second, joined], false);
+    assert!(state.notes.answered());
+    let outcome = super::finishing::outcome_notes(&state);
+    let answer = crate::retrieval::draft_answer(&outcome).expect("the joined fact answers the task");
+    assert_eq!(answer.answer.trim(), "hello");
+    // Read before the step, the same fact is what the step changed, not its outcome.
+    state.history.push(executed(Some(Operation::Enter), Some("textbox"), true));
+    assert!(crate::retrieval::draft_answer(&super::finishing::outcome_notes(&state)).is_none());
+}
+
+/// #1343: a DONE with nothing read, turned back until recovery ran out, ends `unverified` with the unanswered error,
+/// as the documented status says, not `stuck`.
+#[tokio::test]
+async fn a_text_task_done_on_nothing_read_ends_unverified_once_recovery_runs_out() {
+    let page = Screenshots(Default::default(), false, Default::default(), true, None, Default::default(), false, false);
+    let agent = Agent::new(Arc::new(page), Arc::new(IntentJev::new("text")), Arc::new(ScriptedLLM));
+    let mut state = run_state();
+    state.recoveries = agent.config.stall.max_recoveries;
+    let result = agent.finish(&mut state, &observation(&[]), None, None).await;
+    assert!(
+        matches!(&result, Err(Flow::Stop(stop))
+            if stop.status == Status::Unverified && stop.error.as_deref() == Some(super::finishing::UNANSWERED)),
+        "{result:?}"
+    );
+}
+
+/// #1343: a task that wants to be told something and ends with nothing answering it is not `complete`.
+#[tokio::test]
+async fn a_text_task_concluded_with_no_answer_is_not_complete() {
+    let agent = Agent::new(Arc::new(Screenshots::default()), Arc::new(IntentJev::new("text")), Arc::new(ScriptedLLM));
+    let result = agent.conclude(&mut run_state(), &observation(&[]), None).await.unwrap();
+    assert_eq!(result.answer, None);
+    assert_eq!(result.status, Status::Unverified);
+    assert_eq!(result.error.as_deref(), Some(super::finishing::UNANSWERED));
 }
