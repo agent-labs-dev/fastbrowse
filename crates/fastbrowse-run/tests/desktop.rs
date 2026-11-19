@@ -377,10 +377,9 @@ async fn a_frame_after_an_action_that_reveals_a_secret_is_never_filmed() {
 
 #[tokio::test]
 async fn a_film_frame_leaves_no_png_in_deskpilots_cache() {
-    let program = filmed("frames-on-disk");
+    let fake = filmed("frames-on-disk");
     let (film, _) = frames();
-    let page =
-        DeskpilotPage::open(program.to_str().unwrap(), &command(), View::Hidden).await.unwrap().filmed(film).await;
+    let page = open(&fake).await.filmed(film).await;
     let before = page.observe().await.unwrap();
     page.withhold_frames(false);
     page.wait(&Action::new(Operation::Wait), &before, 0.0).await.unwrap();
