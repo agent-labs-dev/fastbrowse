@@ -49,8 +49,8 @@ Some flags are refused together, with exit status 1 before the run starts. `--fe
 can only follow links, so it refuses every browser flag (`--browser`, `--cloud`, `--local`, `--extension`,
 `--extension-browser`, `--headed`, `--profile`, `--cloud-profile`, `--cdp-url`, `--cdp-port`, `--attach`,
 `--target-match`, `--foreground`, `--proxy-country`, `--viewport`, `--record`, `--recipe`, `--save-recipe`,
-`--downloads`, `--cursor`) and every flag that types, attaches or submits (`--secret`, `--input`, `--file`,
-`--authorize`). `--cloud` refuses `--headed`, `--profile`, `--cdp-url`, `--cdp-port`, `--extension`,
+`--downloads`, `--cursor`) and every flag that types, attaches or submits (`--secret`, `--bitwarden`, `--input`,
+`--file`, `--authorize`). `--cloud` refuses `--headed`, `--profile`, `--cdp-url`, `--cdp-port`, `--extension`,
 `--extension-browser`, `--attach`, `--target-match` and `--desktop`. `--desktop` refuses `--start`, `--fetch` and the
 browser flags. `fastbrowse --help` ends with the same list.
 

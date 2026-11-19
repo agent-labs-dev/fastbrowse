@@ -525,7 +525,7 @@ pub fn configure(
         extension_browser: args.extension_browser.clone(),
         ..RunTask::default()
     };
-    fastbrowse_run::check(&operator).map_err(|error| ConfigurationError(error.to_string()))?;
+    fastbrowse_run::check(&operator, false).map_err(|error| ConfigurationError(error.to_string()))?;
     if !options::on_cloud(&operator) && chrome.profile.is_some() && args.max_concurrent > 1 {
         return refuse("a --profile can be open in one Chrome at a time: drop --max-concurrent or --profile".into());
     }

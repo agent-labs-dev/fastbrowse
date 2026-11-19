@@ -524,8 +524,10 @@ fn local_uses_the_extension_unless_a_launch_is_asked_for() {
     ] {
         assert!(!task(launched).wants_extension());
     }
-    assert!(fastbrowse_run::check(&task(RunTask { local: true, extension: true, ..RunTask::default() })).is_ok());
-    let refused = |given: RunTask| fastbrowse_run::check(&task(given)).unwrap_err().to_string();
+    assert!(
+        fastbrowse_run::check(&task(RunTask { local: true, extension: true, ..RunTask::default() }), false).is_ok()
+    );
+    let refused = |given: RunTask| fastbrowse_run::check(&task(given), false).unwrap_err().to_string();
     let error = refused(RunTask { local: true, viewport: Some((640, 480)), ..RunTask::default() });
     assert!(error.contains("pass launch") && error.contains("viewport"), "{error}");
     assert!(
@@ -549,20 +551,19 @@ fn local_uses_the_extension_unless_a_launch_is_asked_for() {
 fn a_viewport_is_local_or_cloud_and_rejects_handed_browsers() {
     let local =
         RunTask { task: "read the page".into(), launch: true, viewport: Some((640, 480)), ..RunTask::default() };
-    assert!(fastbrowse_run::check(&local).is_ok());
+    assert!(fastbrowse_run::check(&local, false).is_ok());
     let handed = RunTask {
         task: "read the page".into(),
         cdp_port: Some(9222),
         viewport: Some((640, 480)),
         ..RunTask::default()
     };
-    let error = fastbrowse_run::check(&handed).unwrap_err().to_string();
+    let error = fastbrowse_run::check(&handed, false).unwrap_err().to_string();
     assert!(error.contains("viewport"), "{error}");
-    let error = fastbrowse_run::check(&RunTask {
-        task: "read the page".into(),
-        viewport: Some((0, 480)),
-        ..RunTask::default()
-    })
+    let error = fastbrowse_run::check(
+        &RunTask { task: "read the page".into(), viewport: Some((0, 480)), ..RunTask::default() },
+        false,
+    )
     .unwrap_err()
     .to_string();
     assert!(error.contains("greater than zero"), "{error}");
@@ -571,16 +572,19 @@ fn a_viewport_is_local_or_cloud_and_rejects_handed_browsers() {
 #[test]
 fn a_desktop_run_refuses_browser_options_and_recipes() {
     let desktop = |app: &str| RunTask { task: "fill the form".into(), desktop: Some(app.into()), ..RunTask::default() };
-    assert!(fastbrowse_run::check(&desktop("gnome-text-editor --new-window")).is_ok());
+    assert!(fastbrowse_run::check(&desktop("gnome-text-editor --new-window"), false).is_ok());
     for app in [" ", "gedit 'unclosed"] {
-        let error = fastbrowse_run::check(&desktop(app)).unwrap_err().to_string();
+        let error = fastbrowse_run::check(&desktop(app), false).unwrap_err().to_string();
         assert!(error.contains("must name an app to start"), "{app:?}: {error}");
     }
-    let error = fastbrowse_run::check(&RunTask {
-        start: Some("https://example.com".into()),
-        recipe: Some("steps.json".into()),
-        ..desktop("gnome-text-editor")
-    })
+    let error = fastbrowse_run::check(
+        &RunTask {
+            start: Some("https://example.com".into()),
+            recipe: Some("steps.json".into()),
+            ..desktop("gnome-text-editor")
+        },
+        false,
+    )
     .unwrap_err()
     .to_string();
     assert!(error.contains("drop start, recipe"), "{error}");
@@ -940,7 +944,7 @@ async fn a_run_cancelled_while_its_browser_opens_keeps_what_the_fetched_read_spe
 fn an_empty_task_is_refused_before_provider_or_browser_setup() {
     for text in ["", " ", "\n\t"] {
         let (task, _) = task(|task, _| task.task = text.into());
-        let result = fastbrowse_run::check(&task);
+        let result = fastbrowse_run::check(&task, false);
         assert!(
             matches!(result, Err(RunError::Invalid(ref message)) if message == "task must not be empty"),
             "{result:?}"

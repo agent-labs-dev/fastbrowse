@@ -194,6 +194,9 @@ async fn test_fetch_refuses_flags_that_shape_a_browser() {
         (&["--input", "name=Ada"], "inputs"),
         (&["--file", "Cargo.toml"], "attachments"),
         (&["--authorize"], "authorization"),
+        // Refused before either is resolved: an unset variable or a vault lookup was reported in its place.
+        (&["--secret", "p=NOT_SET"], "secrets"),
+        (&["--bitwarden", "vault-item"], "secrets"),
     ] {
         let mut argv = vec!["t", "--start", "https://example.com", "--fetch"];
         argv.extend_from_slice(flag);

@@ -465,8 +465,6 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         })
         .transpose()?;
     let limits = limits(args)?;
-    // Check secrets before browser setup so a missing credential names what the operator needs to supply.
-    let secrets = secrets(&args.secret, args.bitwarden.as_deref(), args.start.as_deref(), &context.environ)?;
     let settings = (context.settings)()?;
     let chrome = if args.cloud {
         None
@@ -508,7 +506,10 @@ pub async fn run(args: &Args, context: &Context) -> Result<i32, ConfigurationErr
         desktop: args.desktop.clone(),
         ..RunTask::default()
     };
-    fastbrowse_run::check(&task).map_err(|error| ConfigurationError(error.to_string()))?;
+    let secrets_given = !args.secret.is_empty() || args.bitwarden.is_some();
+    fastbrowse_run::check(&task, secrets_given).map_err(|error| ConfigurationError(error.to_string()))?;
+    // Check secrets before browser setup so a missing credential names what the operator needs to supply.
+    let secrets = secrets(&args.secret, args.bitwarden.as_deref(), args.start.as_deref(), &context.environ)?;
     let extension = task.wants_extension();
     let recipe_sink =
         (args.recipe.is_some() || args.save_recipe.is_some()).then(fastbrowse_agent::agent::RecipeSink::default);
