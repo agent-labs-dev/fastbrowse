@@ -200,7 +200,18 @@ impl Submitted {
             .as_deref()
             .filter(|value| !value.is_empty() && !target.sensitive && target.role != "button")
             .map(|value| format!("{} holds {}", text::repr(&target.label), text::repr(value)));
-        let held = own.into_iter().chain(fastbrowse_core::safety::form_held(target, &observation.controls)).collect();
+        // A masked field is said to hold a value without the value, so a form whose only entry was a password is not
+        // told as empty.
+        let masked = observation.controls.iter().filter(|c| {
+            c.sensitive
+                && c.value.as_deref().is_some_and(|value| !value.is_empty())
+                && (&c.frame_id, &c.form_id) == (&target.frame_id, &target.form_id)
+        });
+        let held = own
+            .into_iter()
+            .chain(fastbrowse_core::safety::form_held(target, &observation.controls))
+            .chain(masked.map(|c| format!("{} holds a masked value", text::repr(&c.label))))
+            .collect();
         Some(Submitted {
             document: (observation.url.clone(), observation.document_key.clone()),
             frame_id: target.frame_id.clone(),

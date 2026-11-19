@@ -1662,6 +1662,16 @@ async fn test_the_condition_check_is_told_which_form_an_earlier_submission_sent(
         "the same form the action now asked about submits; in it, 'Comment text area' holds 'Thanks for the log'"
     );
     assert!(actions[2]["form"].as_str().is_some_and(|form| form.starts_with("a different form")), "{actions}");
+    let mut password = in_form(Control::new("p", "textbox", "Password", [Operation::Fill]), "top");
+    (password.sensitive, password.value) = (true, Some("hunter2".into()));
+    let signed = observation(&[password, top.clone()]);
+    let masked = crate::policy::Submitted::of(Operation::Click, &top, &signed).expect("a submission");
+    let told = HistoryEntry { submitted: Some(masked), ..executed(Some(Operation::Click), Some("Post"), false) }
+        .shown_beside(Some(&top), &signed);
+    assert_eq!(
+        told["form"],
+        "the same form the action now asked about submits; in it, 'Password' holds a masked value"
+    );
 }
 
 fn run_task() -> &'static str {
