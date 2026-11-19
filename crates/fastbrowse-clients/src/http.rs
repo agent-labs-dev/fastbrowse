@@ -5,7 +5,9 @@
 //! handle a run shares between its clients: the transport, and the trace its retries and spans are written to.
 
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -15,11 +17,12 @@ use fastbrowse_core::telemetry::{Trace, monotonic};
 use http_body_util::{BodyExt, Full};
 use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::Client;
-use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::connect::proxy::Tunnel;
+use hyper_util::client::legacy::connect::{Connected, Connection, HttpConnector};
 use hyper_util::client::proxy::matcher::{Intercept, Matcher};
 use hyper_util::rt::TokioExecutor;
 use serde_json::{Map, Value};
+use tower_service::Service;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
@@ -239,7 +242,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_host_no_proxy_exempts_and_an_http_endpoint_are_reached_directly() {
+    async fn a_host_no_proxy_exempts_and_a_destination_the_proxy_does_not_cover_is_reached_directly() {
         for url in ["https://localhost:1/", "http://localhost:1/"] {
             let (address, seen) = refusing_proxy().await;
             let matcher = Matcher::builder().https(format!("http://{address}")).no("localhost").build();
@@ -420,6 +423,80 @@ impl Http {
 
 type HyperClient = Client<HttpsConnector<HttpConnector>, Full<Bytes>>;
 type TunnelClient = Client<HttpsConnector<Tunnel<HttpsConnector<HttpConnector>>>, Full<Bytes>>;
+type ForwardClient = Client<Forward<HttpsConnector<HttpConnector>>, Full<Bytes>>;
+
+/// How a request the environment's proxy covers reaches it: an https destination through a CONNECT tunnel, an http one
+/// by forwarding it to the proxy in absolute form (a CONNECT to a plain-http endpoint would default to port 443, and
+/// many forward proxies refuse CONNECT outside 443). The login rides on the tunnel, or on the forwarded request.
+#[derive(Clone)]
+enum Route {
+    Tunnel(TunnelClient),
+    Forward(ForwardClient, Option<hyper::header::HeaderValue>),
+}
+
+/// A proxy's address, its login, and whether the destination is https.
+type RouteKey = (String, Option<String>, bool);
+
+/// A connector that opens the proxy's connection whatever the destination, and marks it as a proxy connection so the
+/// client writes the request line in absolute form.
+#[derive(Clone)]
+struct Forward<C> {
+    proxy: hyper::Uri,
+    inner: C,
+}
+
+struct Forwarded<T>(T);
+
+impl<T: hyper::rt::Read + Unpin> hyper::rt::Read for Forwarded<T> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: hyper::rt::ReadBufCursor<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.0).poll_read(cx, buf)
+    }
+}
+
+impl<T: hyper::rt::Write + Unpin> hyper::rt::Write for Forwarded<T> {
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.0).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.0).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.0).poll_shutdown(cx)
+    }
+}
+
+impl<T: Connection> Connection for Forwarded<T> {
+    fn connected(&self) -> Connected {
+        self.0.connected().proxy(true)
+    }
+}
+
+impl<C> Service<hyper::Uri> for Forward<C>
+where
+    C: Service<hyper::Uri>,
+    C::Future: Send + 'static,
+    C::Response: Send + 'static,
+    C::Error: Send + 'static,
+{
+    type Response = Forwarded<C::Response>;
+    type Error = C::Error;
+    type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, _destination: hyper::Uri) -> Self::Future {
+        let connecting = self.inner.call(self.proxy.clone());
+        Box::pin(async move { connecting.await.map(Forwarded) })
+    }
+}
 
 /// The production transport: HTTP/1.1 with a keep-alive pool, TLS through rustls. An https destination the environment's
 /// `HTTPS_PROXY` / `ALL_PROXY` covers (and `NO_PROXY` does not exempt) goes through that proxy with an
@@ -428,7 +505,7 @@ pub struct HyperTransport {
     client: HyperClient,
     proxy: Matcher,
     /// One keep-alive pool per proxy, built when a request first needs it.
-    tunnels: Mutex<HashMap<(String, Option<String>), TunnelClient>>,
+    tunnels: Mutex<HashMap<RouteKey, Route>>,
 }
 
 impl Default for HyperTransport {
@@ -452,19 +529,26 @@ impl HyperTransport {
         }
     }
 
-    fn tunnel_client(&self, proxy: &Intercept) -> TunnelClient {
+    fn route(&self, proxy: &Intercept, https: bool) -> Route {
         let auth = proxy.basic_auth().map(|auth| String::from_utf8_lossy(auth.as_bytes()).into_owned());
-        let mut tunnels = self.tunnels.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        tunnels
-            .entry((proxy.uri().to_string(), auth))
+        let mut routes = self.tunnels.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        routes
+            .entry((proxy.uri().to_string(), auth, https))
             .or_insert_with(|| {
-                // The connector under the tunnel reaches the proxy itself, over TLS when its URL is https.
-                let inner = hyper_rustls::HttpsConnectorBuilder::new()
+                // The connector that reaches the proxy does TLS when the proxy's own URL is https.
+                let to_proxy = hyper_rustls::HttpsConnectorBuilder::new()
                     .with_webpki_roots()
                     .https_or_http()
                     .enable_http1()
                     .build();
-                let mut tunnel = Tunnel::new(proxy.uri().clone(), inner);
+                if !https {
+                    let forward = Forward { proxy: proxy.uri().clone(), inner: to_proxy };
+                    return Route::Forward(
+                        Client::builder(TokioExecutor::new()).build(forward),
+                        proxy.basic_auth().cloned(),
+                    );
+                }
+                let mut tunnel = Tunnel::new(proxy.uri().clone(), to_proxy);
                 if let Some(auth) = proxy.basic_auth() {
                     tunnel = tunnel.with_auth(auth.clone());
                 }
@@ -473,7 +557,7 @@ impl HyperTransport {
                     .https_or_http()
                     .enable_http1()
                     .wrap_connector(tunnel);
-                Client::builder(TokioExecutor::new()).build(connector)
+                Route::Tunnel(Client::builder(TokioExecutor::new()).build(connector))
             })
             .clone()
     }
@@ -482,15 +566,9 @@ impl HyperTransport {
 impl Transport for HyperTransport {
     fn send(&self, request: Request) -> BoxFuture<'static, Result<Response, TransportError>> {
         let client = self.client.clone();
-        // Only an https destination is tunnelled: CONNECT to a default-port http one would go to 443, and an http model
-        // endpoint is a local or private one that a proxy variable is not meant for.
-        let tunnel = request
-            .url
-            .parse::<hyper::Uri>()
-            .ok()
-            .filter(|uri| uri.scheme_str() == Some("https"))
-            .and_then(|uri| self.proxy.intercept(&uri))
-            .map(|proxy| self.tunnel_client(&proxy));
+        let route = request.url.parse::<hyper::Uri>().ok().and_then(|uri| {
+            self.proxy.intercept(&uri).map(|proxy| self.route(&proxy, uri.scheme_str() == Some("https")))
+        });
         Box::pin(async move {
             let uri: hyper::Uri = request.url.parse().map_err(|_| TransportError::Fatal("InvalidURL"))?;
             if !matches!(uri.scheme_str(), Some("http" | "https")) {
@@ -503,14 +581,18 @@ impl Transport for HyperTransport {
             let (request_max, silence) = (request.max_bytes, request.timeout);
             let stalled = |_| TransportError::Timeout("TimeoutError");
             let mut builder = hyper::Request::builder().method(method).uri(uri);
+            if let Some(Route::Forward(_, Some(auth))) = &route {
+                builder = builder.header(hyper::header::PROXY_AUTHORIZATION, auth.clone());
+            }
             for (name, value) in &request.headers {
                 builder = builder.header(name.as_str(), value.as_str());
             }
             let outgoing =
                 builder.body(Full::new(Bytes::from(request.body))).map_err(|_| TransportError::Fatal("InvalidURL"))?;
             let sent = async {
-                match &tunnel {
-                    Some(tunnel) => tunnel.request(outgoing).await,
+                match &route {
+                    Some(Route::Tunnel(tunnel)) => tunnel.request(outgoing).await,
+                    Some(Route::Forward(forward, _)) => forward.request(outgoing).await,
                     None => client.request(outgoing).await,
                 }
             };

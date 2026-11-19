@@ -21,6 +21,7 @@ hyper-util = { version = "0.1.21", features = ["client-legacy", "client-proxy", 
 # ring rather than aws-lc-rs, which compiles C; the webpki roots are the Mozilla bundle, as certifi is for httpx.
 hyper-rustls = { version = "0.27.10", default-features = false, features = ["http1", "tls12", "ring", "webpki-tokio"] }
 http-body-util = "0.1.5"
+tower-service = "0.3.3"
 bytes = "1.12.1"
 
 [dev-dependencies]
