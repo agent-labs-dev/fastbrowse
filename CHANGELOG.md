@@ -11,6 +11,8 @@ release. Older entries are kept verbatim rather than rewritten as the product mo
 
 ## [Unreleased]
 
+- An answer cites the page a search reports on, not the search. A run that read a search results page and then the page it pointed to cited the results page and its generated summary beside the page it named as its source ([#1332](https://github.com/agent-labs-dev/fastbrowse/issues/1332)).
+
 - A run that reads pages over HTTP and chose its own start page opens another one when the first is built by scripts. `--fetch` with no `--start` began on a search results page whose markup holds no text and ended `blocked` before its first step, though the project page it needed was readable. The start page is now proposed again, told which address was unreadable, and the run ends `blocked` only when no readable page is known ([#1330](https://github.com/agent-labs-dev/fastbrowse/issues/1330)).
 
 - A run in your own Chrome opens a link's new tab behind your current tab. Chrome raised and activated its window for a tab the page opened, so on a desktop that gives focus to an activated window, such as Hyprland with `misc:focus_on_activate = true`, each link the run followed to a new tab took your keyboard focus. A tab a page script opens still activates the window; [Your own Chrome](docs/cli.md#your-own-chrome) names those cases and the desktop setting ([#1348](https://github.com/agent-labs-dev/fastbrowse/issues/1348)).
