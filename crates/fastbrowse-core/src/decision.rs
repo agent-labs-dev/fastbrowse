@@ -742,8 +742,15 @@ mod tests {
 
     #[test]
     fn an_images_tokens_are_counted_as_jev_counted_them() {
-        let measured = [((280, 280), 215), ((560, 280), 415), ((800, 600), 1291), ((1000, 1000), 2607)];
-        for ((width, height), tokens) in measured.into_iter().chain([((1568, 882), 3599), ((1568, 1568), 6287)]) {
+        let measured = [
+            ((280, 280), 215),
+            ((560, 280), 415),
+            ((800, 600), 1291),
+            ((1000, 1000), 2607),
+            ((1568, 882), 3599),
+            ((1568, 1568), 6287),
+        ];
+        for ((width, height), tokens) in measured {
             assert_eq!(jev_image_tokens(&png(width, height)), tokens, "{width}x{height}");
         }
         assert_eq!(jev_image_tokens(b"not a png"), 0);
