@@ -277,8 +277,14 @@ fn checked(task: &RunTask) -> Result<Checked, RunError> {
             return refuse(format!("fetch starts no browser, so it cannot be combined with {}", browser.join(", ")));
         }
     }
+    if task.desktop.is_none() && !task.desktop_apps.is_empty() {
+        return refuse("desktop_apps are started beside desktop, so name the first app in desktop".into());
+    }
     if let Some(app) = &task.desktop {
-        if shlex::split(app).is_none_or(|words| words.is_empty()) {
+        if std::iter::once(app)
+            .chain(&task.desktop_apps)
+            .any(|app| shlex::split(app).is_none_or(|words| words.is_empty()))
+        {
             return refuse("desktop must name an app to start, as a command line".into());
         }
         // A desktop run opens no browser and no address. Recipes key their steps by web address, so a desktop run
@@ -970,8 +976,9 @@ async fn run_unboxed(mut task: RunTask, mut host: Host) -> Result<RunResult, Run
     let mut resume = None;
     let told: Told = Arc::default();
     if let Some(app) = task.desktop.clone() {
+        let apps: Vec<String> = std::iter::once(app).chain(task.desktop_apps.iter().cloned()).collect();
         let on_event = noting(host.on_event.clone(), &told);
-        return desktop(&task, &app, &host, schema, &config, &http, (jev, llm), on_event, &told).await;
+        return desktop(&task, &apps, &host, schema, &config, &http, (jev, llm), on_event, &told).await;
     }
     if task.recipe.is_none() && task.save_recipe.is_none() && reads_first(&task, &chrome) {
         let on_event = noting(host.on_event.clone(), &told);
@@ -1408,7 +1415,7 @@ async fn fetched(
 #[allow(clippy::too_many_arguments)]
 async fn desktop(
     task: &RunTask,
-    app: &str,
+    apps: &[String],
     host: &Host,
     schema: Option<Arc<RecordSchema>>,
     config: &Config,
@@ -1429,12 +1436,22 @@ async fn desktop(
         }
     };
     let ledger = Arc::new(Ledger::new(task.limits.clone().unwrap_or_default()));
-    // Kept outside the run, so the video is finished however the run ends, after the app has closed.
+    // Kept outside the run, so the video is finished however the run ends, after the apps have closed.
     let recording: Filming = Arc::default();
+    // Kept outside the run too, so the apps are closed however it ends, a cancel included: a server dropped with the
+    // run is killed before it closes them, which left a run's apps open after it (#1345).
+    let server: Arc<tokio::sync::Mutex<Option<Arc<desktop::Deskpilot>>>> = Arc::default();
     let run = async {
         // `check` refused a command line that does not split into words.
-        let command = shlex::split(app).unwrap_or_default();
-        let page = match desktop::DeskpilotPage::open(&program, &command, view).await {
+        let commands: Vec<Vec<String>> = apps.iter().map(|app| shlex::split(app).unwrap_or_default()).collect();
+        let opened = match desktop::connect(&program, view).await {
+            Ok(client) => {
+                *server.lock().await = Some(client.clone());
+                desktop::DeskpilotPage::open(client, &commands, view).await
+            }
+            Err(error) => Err(error),
+        };
+        let page = match opened {
             Ok(page) => page,
             Err(desktop::OpenError::Invalid(message)) => return Err(RunError::Invalid(message)),
             // A deskpilot that cannot start or answer is an outage, as a cloud browser that cannot start is.
@@ -1496,8 +1513,13 @@ async fn desktop(
         }
         Ok(result)
     };
-    // Starting deskpilot is inside the guard too, so a cancel drops a startup that hangs and its child with it.
+    // Starting deskpilot is inside the guard too, so a cancel drops a startup that hangs.
     let outcome = host.cancel.guard(run).await;
+    // The run's outcome is decided by now: a `stop` deskpilot refused changes nothing the run reports.
+    let client = server.lock().await.take();
+    if let Some(client) = client {
+        let _ = client.close().await;
+    }
     let filming = recording.lock().await.take();
     let recordings = match filming {
         Some(filming) => filming.finish().await,

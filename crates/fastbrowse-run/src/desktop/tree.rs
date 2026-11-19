@@ -83,7 +83,7 @@ impl Window {
     /// read of a dialog marked the main window's facts superseded (#1343). The title is the page's title, not its
     /// address: it changes as the app's state does.
     pub fn url(&self) -> String {
-        let class = utf8_percent_encode(&self.class.to_lowercase(), CLASS_KEPT);
+        let class = utf8_percent_encode(&self.class.to_lowercase(), CLASS_KEPT).to_string();
         format!("desktop://{class}/{}", utf8_percent_encode(&self.address, CLASS_KEPT))
     }
 }
@@ -303,8 +303,10 @@ pub fn texts(root: &Element) -> (String, String) {
 }
 
 /// The window as an observation. `page_key` is the snapshot, which deskpilot refuses ids from once a newer one
-/// replaces it; a peek's observation has no snapshot and so can never be acted on.
-pub fn observation(window: &Window, root: &Element) -> Observation {
+/// replaces it; a peek's observation has no snapshot and so can never be acted on. Every window of the run is a tab,
+/// as a browser's tabs are, with this one active, so the model moves between apps and dialogs as it moves between
+/// tabs.
+pub fn observation(window: &Window, root: &Element, windows: &[Window]) -> Observation {
     let snapshot = root.snapshot.clone().unwrap_or_default();
     let url = window.url();
     let (viewport_text, offscreen_text) = texts(root);
@@ -328,12 +330,33 @@ pub fn observation(window: &Window, root: &Element) -> Observation {
         visual_content: false,
         modal: None,
         media: Vec::new(),
-        tabs: vec![Tab { id: window.address.clone(), url, title: window.title.clone(), active: true, opener_id: None }],
+        tabs: tabs(window, windows),
         dialog: None,
         inaccessible_frames: 0,
         can_go_back: false,
         history_entry: None,
     }
+}
+
+/// `windows` as tabs, with `active` among them however the list was read.
+pub fn tabs(active: &Window, windows: &[Window]) -> Vec<Tab> {
+    let listed = windows.iter().any(|window| window.address == active.address);
+    let windows = if listed { windows.to_vec() } else { [windows, std::slice::from_ref(active)].concat() };
+    windows
+        .iter()
+        .map(|window| {
+            let current = window.address == active.address;
+            // The active window as just read, so its tab's title is the observation's.
+            let window = if current { active } else { window };
+            Tab {
+                id: window.address.clone(),
+                url: window.url(),
+                title: window.title.clone(),
+                active: current,
+                opener_id: None,
+            }
+        })
+        .collect()
 }
 
 fn kind(role: &str) -> BlockKind {
@@ -476,9 +499,28 @@ mod tests {
     }
 
     #[test]
+    fn every_window_of_the_run_is_a_tab_with_the_one_read_active() {
+        let (window, root) = form();
+        let dialog = Window { address: "0xdef".into(), class: "dptest-Order".into(), title: "Confirm".into() };
+        let stale = Window { title: "Order form (old title)".into(), ..window.clone() };
+        let observation = observation(&window, &root, &[stale, dialog]);
+        let tabs: Vec<_> =
+            observation.tabs.iter().map(|tab| (tab.id.as_str(), tab.title.as_str(), tab.active)).collect();
+        assert_eq!(tabs, [("0xabc", "Order form", true), ("0xdef", "Confirm", false)]);
+        assert_eq!(observation.tabs[1].url, "desktop://dptest-order/0xdef");
+        // A window list read before the window opened still has it.
+        let alone = observation_tabs(&window, &[]);
+        assert_eq!(alone, [("0xabc".to_string(), true)]);
+    }
+
+    fn observation_tabs(window: &Window, windows: &[Window]) -> Vec<(String, bool)> {
+        tabs(window, windows).into_iter().map(|tab| (tab.id, tab.active)).collect()
+    }
+
+    #[test]
     fn a_window_reads_as_its_shown_enabled_controls_with_the_apps_own_states() {
         let (window, root) = form();
-        let observation = observation(&window, &root);
+        let observation = observation(&window, &root, &[]);
         assert_eq!(observation.url, "desktop://dptest-order/0xabc");
         assert_eq!(observation.page_key, "abc-1");
         // The combo box's value is the item its selection reports, not its name, which is its label.
@@ -542,7 +584,7 @@ mod tests {
         );
         let window =
             Window { address: "0xabc".into(), class: "org.gnome.TextEditor".into(), title: "Text Editor".into() };
-        let ids: Vec<String> = observation(&window, &root).controls.into_iter().map(|c| c.id).collect();
+        let ids: Vec<String> = observation(&window, &root, &[]).controls.into_iter().map(|c| c.id).collect();
         assert_eq!(ids, ["e2", "e3"]);
     }
 
@@ -566,7 +608,7 @@ mod tests {
         );
         let window = Window { address: "0xabc".into(), class: "org.gnome.TextEditor".into(), title: "x".into() };
         let controls: Vec<(String, String, Option<String>)> =
-            observation(&window, &root).controls.into_iter().map(|c| (c.role, c.label, c.value)).collect();
+            observation(&window, &root, &[]).controls.into_iter().map(|c| (c.role, c.label, c.value)).collect();
         let row = |role: &str, label: &str, value: Option<&str>| (role.into(), label.into(), value.map(Into::into));
         assert_eq!(
             controls,
@@ -583,7 +625,7 @@ mod tests {
     fn a_peek_binds_no_snapshot_and_a_capture_never_holds_a_password() {
         let (window, mut root) = form();
         root.snapshot = None;
-        let peeked = observation(&window, &root);
+        let peeked = observation(&window, &root, &[]);
         assert_eq!(peeked.page_key, "");
         let capture = capture(&window, &root);
         assert!(capture.text.contains("Scrolled away") && capture.text.contains("Place order"));
