@@ -45,27 +45,34 @@ const SUGGESTION_SECONDS: f64 = 1.2;
 const POPUP_SECONDS: f64 = 1.2;
 /// Hold back the new tab a click on `id`'s link would open, when it is a plain http(s) link to a new browsing context.
 /// The listener sits on the window, after the page's own handlers: a handler that cancels the click keeps it
-/// cancelled, and only a click the page left to the browser is held. `releaseNewTab` removes it and answers the
-/// address held, if any.
+/// cancelled, one that stops it propagating leaves it to Chrome, and the link is checked again as the click left it.
+/// It handles only the next trusted click, the one the run dispatches, so a step that never reads it back leaves
+/// later clicks alone. `releaseNewTab` removes it and answers the address held, if any.
 const HOLD_NEW_TAB_JS: &str = "(id => { \
     const r = window.__fastbrowse; \
     const e = r?.nodes.get(id); \
     const link = e?.closest('a[href],area[href]'); \
-    if (!link) return false; \
-    const name = (link.hasAttribute('target') ? link.getAttribute('target') \
-        : e.ownerDocument.querySelector('base[target]')?.getAttribute('target')) ?? ''; \
-    if (name.trim().toLowerCase() !== '_blank' || !['http:', 'https:'].includes(link.protocol)) return false; \
+    const opens = () => { \
+        const name = (link.hasAttribute('target') ? link.getAttribute('target') \
+            : link.ownerDocument.querySelector('base[target]')?.getAttribute('target')) ?? ''; \
+        return name.trim().toLowerCase() === '_blank' && !link.hasAttribute('download') \
+            && ['http:', 'https:'].includes(link.protocol); \
+    }; \
+    if (!link || !opens()) return false; \
     r.releaseNewTab?.(); \
-    const view = e.ownerDocument.defaultView; \
+    const view = link.ownerDocument.defaultView; \
     let url = null; \
+    const answer = () => { view.removeEventListener('click', listener); \
+        if (r.releaseNewTab === answer) delete r.releaseNewTab; return url; }; \
     const listener = event => { \
-        if (url !== null || !event.isTrusted || event.button !== 0 || event.defaultPrevented \
-            || !event.composedPath().includes(link)) return; \
+        if (!event.isTrusted) return; \
+        view.removeEventListener('click', listener); \
+        if (event.button !== 0 || event.defaultPrevented || !event.composedPath().includes(link) || !opens()) return; \
         event.preventDefault(); \
         url = link.href; \
     }; \
     view.addEventListener('click', listener); \
-    r.releaseNewTab = () => { view.removeEventListener('click', listener); delete r.releaseNewTab; return url; }; \
+    r.releaseNewTab = answer; \
     return true; \
 })";
 const RELEASE_NEW_TAB_JS: &str = "window.__fastbrowse?.releaseNewTab?.() ?? null";
@@ -580,16 +587,21 @@ impl CdpPage {
         } else {
             self.dispatch(action, target.as_ref(), point, drawn).await
         };
+        // A dialog the click opened holds the page's renderer, and the listener has then not run.
         let held = match (&target, holding) {
-            (Some(target), true) => {
+            (Some(target), true) if self.session.pending_dialog().is_none() => {
                 self.evaluate(&target.0, RELEASE_NEW_TAB_JS).await.ok().and_then(|url| url.as_str().map(str::to_owned))
             }
             _ => None,
         };
         let (outcome, mut detail, failure) = dispatched?;
         if outcome == StepOutcome::Executed
-            && let Some(url) = held
+            // The page's own script can answer for the listener, so the address is checked here too.
+            && let Some(url) = held.filter(|url| url.starts_with("http://") || url.starts_with("https://"))
         {
+            if self.session.grant().is_some_and(|grant| !grant.allows(&url)) {
+                return Err(BrowserError::OriginNotAllowed);
+            }
             self.session.open_owned_tab("about:blank").await?;
             match self.navigate(&url, None).await {
                 Err(error @ (BrowserError::OriginNotAllowed | BrowserError::PageUnresponsive(_))) => return Err(error),
