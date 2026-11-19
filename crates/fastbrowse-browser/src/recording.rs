@@ -623,9 +623,11 @@ fn cursor_ass(marks: &[PointerMark], origin: Instant, until: Instant, width: u32
         // settle back, as deskpilot's agent cursor does; a hover only glides.
         let animation = if mark.pressed {
             let scale = |percent: f64| format!("\\fscx{0}\\fscy{0}", (size * percent).round());
-            let (land, settle) = ((glide - LOCK_MS).max(0), glide + SQUEEZE_MS);
+            // The first mark has no glide, so its brackets close in after it appears.
+            let arrive = glide.max(LOCK_MS);
+            let (land, settle) = (arrive - LOCK_MS, arrive + SQUEEZE_MS);
             format!(
-                "{}\\t({land},{glide},{})\\t({glide},{settle},{})\\t({settle},{},{})",
+                "{}\\t({land},{arrive},{})\\t({arrive},{settle},{})\\t({settle},{},{})",
                 scale(LOCK_FROM),
                 scale(1.0),
                 scale(PRESSED),
@@ -788,7 +790,7 @@ mod tests {
         let lines: Vec<&str> = ass.lines().filter(|line| line.starts_with("Dialogue: 2,")).collect();
         // 140 is the resting scale at this width: wide at the start, tight on landing, squeezed, then back.
         assert!(lines[0].contains(
-            "\\fscx280\\fscy280\\t(0,0,\\fscx140\\fscy140)\\t(0,100,\\fscx98\\fscy98)\\t(100,200,\\fscx140\\fscy140)"
+            "\\fscx280\\fscy280\\t(0,160,\\fscx140\\fscy140)\\t(160,260,\\fscx98\\fscy98)\\t(260,360,\\fscx140\\fscy140)"
         ));
         assert!(lines[1].contains("\\fscx140\\fscy140\\p1") && !lines[1].contains("\\t("));
     }
